@@ -1,0 +1,807 @@
+<!doctype html>
+<!-- Charter — Room 常驻实时预览(讨论稿)。NOT product code.
+     背景:ADR-0022 把预览锁在验收门里,用户实测两次都没找到入口(Full 模式直接跳过门)。
+     业界对照(v0 Design Mode / Lovable preview toolbar / Windsurf Send element / Replit Agent
+     self-test)的共性:预览是常驻主平面,反馈=点住页面上的东西+一句话,落回同一个对话输入框。
+     本稿提案:预览从「门内证据」升级为「房间的窗户」——检测只点亮徽章,点开成右栏常驻,
+     任何状态可用(进行中/待审查/Full);反馈以附件 chip 落进 Room composer,不开第二输入口。
+     影片可播放:▶ / ⏸ / 章节直达。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 房间的窗户 — Room 常驻实时预览(讨论稿)</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #eceae5; color: #201e1a; padding: 30px 26px 70px;
+        --side: #f6f5f1; --main: #fbfaf7; --card: #ffffff;
+        --border: #e5e1d8; --border-soft: #edeae3;
+        --text: #201e1a; --text2: #6e6a61; --text3: #a39e94;
+        --chip: #f0eee8; --hover: #e8e5de; --active: #e2dfd7;
+        --accent: #1b1a16; --accent-text: #fff;
+        --ok: #2f9e63; --ok-bg: #e7f5ec;
+        --run: #3f7bd9; --run-bg: #e9f1fd;
+        --warn: #b06f10; --warn-bg: #faf0dc;
+        --danger: #c4453d; --danger-bg: #fbeae9;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      .pagehead { max-width: 1280px; margin: 0 auto 8px; }
+      .pagehead h1 { font-size: 19px; letter-spacing: -0.01em; }
+      .pagehead p { color: var(--text2); font-size: 13px; margin-top: 5px; line-height: 1.7; max-width: 1040px; }
+      .pagehead b { color: var(--text); }
+      .meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+      .stage { max-width: 1280px; margin: 14px auto 0; position: relative; }
+      .win {
+        background: var(--main); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22); overflow: hidden;
+        display: flex; flex-direction: column; height: 720px; position: relative;
+      }
+      .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .traffic { display: flex; gap: 7px; }
+      .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+      .titlebar .brand { font-weight: 650; font-size: 12.5px; margin-left: 4px; }
+      .titlebar .proj { font-size: 11.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 11px; }
+      .titlebar .sp { flex: 1; }
+      /* 预览徽章:检测只点亮它,布局永不自动动 */
+      .pvbadge {
+        display: none; align-items: center; gap: 7px; font-size: 11.5px; font-weight: 650;
+        color: var(--run); background: var(--run-bg); border: 1px solid #cdddf5;
+        border-radius: 999px; padding: 3px 12px; cursor: pointer;
+      }
+      .pvbadge.show { display: inline-flex; animation: badgein 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+      .pvbadge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--run); animation: pulse 1.6s ease-in-out infinite; }
+      .pvbadge.live { color: var(--ok); background: var(--ok-bg); border-color: #bfe3cd; }
+      .pvbadge.live .dot { background: var(--ok); }
+      @keyframes badgein { from { transform: scale(0.85); opacity: 0; } }
+      @keyframes pulse { 50% { opacity: 0.35; } }
+
+      .split { flex: 1; min-height: 0; display: flex; }
+      /* ── 左:Room 对话列 ─────────────────────── */
+      .roomcol { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; padding: 14px 0 0; position: relative; }
+      .roomhead { width: 92%; max-width: 640px; display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
+      .roomhead .t { font-weight: 650; font-size: 13.5px; }
+      .state-chip { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 650; background: var(--run-bg); color: var(--run); }
+      .state-chip.review { background: var(--warn-bg); color: var(--warn); }
+      .state-chip.done { background: var(--ok-bg); color: var(--ok); }
+      .spine { width: 92%; max-width: 640px; flex: 1; min-height: 0; overflow: hidden; position: relative; padding-left: 28px; }
+      .spine::before { content: ''; position: absolute; left: 7px; top: 4px; bottom: 0; width: 1px; background: var(--border); }
+      .trow { position: relative; padding-bottom: 12px; }
+      .trow .glyph { position: absolute; left: -28px; top: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--main); border: 1px solid var(--border); color: var(--text3); font-size: 9px; display: flex; align-items: center; justify-content: center; }
+      .trow .who { font-size: 10px; letter-spacing: 0.08em; color: var(--text3); font-weight: 650; margin-bottom: 3px; font-family: var(--mono); }
+      .trow .prose { font-family: 'Songti SC', 'Noto Serif CJK SC', Georgia, serif; font-size: 13.5px; line-height: 1.75; max-width: 540px; }
+      .worklog { background: var(--side); border: 1px solid var(--border-soft); border-radius: 10px; font-family: var(--mono); font-size: 10.6px; color: var(--text2); padding: 7px 12px; line-height: 1.9; max-width: 540px; }
+      .worklog .clock { color: var(--text3); margin-right: 8px; }
+      .worklog .live { color: var(--run); }
+      .fb-bubble { background: var(--chip); border: 1px solid var(--border-soft); border-radius: 12px; padding: 8px 12px; max-width: 420px; font-size: 12.5px; line-height: 1.6; }
+      .fb-bubble .fb-thumb { display: block; margin-top: 6px; width: 190px; border: 1px solid var(--border); border-radius: 7px; }
+      .fb-bubble .fb-meta { display: block; margin-top: 3px; font-size: 9.5px; color: var(--text3); font-family: var(--mono); }
+      .milestone { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--ok); font-weight: 700; padding-bottom: 12px; }
+      .milestone::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
+
+      /* composer + 附件 chip(反馈落在这,不开第二输入口) */
+      .composer { width: 92%; max-width: 640px; flex: none; margin: 8px 0 14px; background: var(--card); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow); padding: 9px 12px; }
+      .composer .chips { display: none; gap: 6px; margin-bottom: 7px; flex-wrap: wrap; }
+      .composer .chips.show { display: flex; animation: barin 0.3s; }
+      .att-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #e7c9c5; background: var(--danger-bg); border-radius: 9px; padding: 4px 9px; font-size: 11px; color: var(--text); }
+      .att-chip img { width: 34px; height: 24px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); }
+      .att-chip .sel { font-family: var(--mono); font-size: 10px; color: var(--danger); }
+      .att-chip .x { color: var(--text3); font-size: 11px; }
+      .composer .input { font-size: 12.5px; color: var(--text3); min-height: 18px; }
+      .composer .input .typed { color: var(--text); }
+      .composer .input .caret { display: inline-block; width: 1px; height: 12px; background: var(--text); animation: blink 1s steps(1) infinite; vertical-align: -2px; }
+      @keyframes blink { 50% { opacity: 0; } }
+      .composer .row2 { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+      .pill { font-size: 10.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 2px 9px; }
+      .send { margin-left: auto; width: 24px; height: 24px; border-radius: 8px; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; font-size: 12px; }
+      @keyframes barin { from { transform: translateY(6px); opacity: 0; } }
+
+      /* ── 右:常驻预览栏 ───────────────────────── */
+      .pvrail {
+        width: 0; flex: none; border-left: 1px solid var(--border-soft); background: var(--side);
+        display: flex; flex-direction: column; overflow: hidden; transition: width 0.45s cubic-bezier(0.25, 0.9, 0.3, 1);
+      }
+      .pvrail.open { width: 46%; }
+      .pvtool { display: flex; align-items: center; gap: 5px; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); flex: none; white-space: nowrap; }
+      .pvtool .port { font-family: var(--mono); font-size: 10.5px; font-weight: 700; color: var(--run); background: var(--run-bg); border-radius: 999px; padding: 2px 9px; }
+      .pvtool .modes { display: flex; gap: 2px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 9px; padding: 2px; margin-left: 4px; }
+      .pvtool .mode { font-size: 10.5px; color: var(--text2); border-radius: 7px; padding: 3px 9px; cursor: pointer; }
+      .pvtool .mode.on { background: var(--card); color: var(--text); font-weight: 650; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+      .pvtool .mode kbd { font-family: var(--mono); font-size: 8.5px; color: var(--text3); margin-left: 3px; }
+      .pvtool .spx { flex: 1; }
+      .pvtool .ext { font-size: 10.5px; color: var(--text2); }
+      .errchip { display: none; align-items: center; gap: 4px; font-size: 10px; font-weight: 700; color: var(--danger); background: var(--danger-bg); border: 1px solid #e7c9c5; border-radius: 999px; padding: 2px 8px; margin-left: 4px; }
+      .errchip.show { display: inline-flex; animation: badgein 0.35s; }
+      .errchip.clear { color: var(--ok); background: var(--ok-bg); border-color: #bfe3cd; }
+      .pvbody { flex: 1; min-height: 0; margin: 10px; border: 1px solid var(--border); border-radius: 11px; background: #fff; position: relative; overflow: hidden; }
+      .pviso { position: absolute; top: 7px; right: 7px; z-index: 6; font-size: 8.5px; font-weight: 700; color: var(--warn); background: var(--warn-bg); border: 1px solid #ecd9ae; border-radius: 99px; padding: 1px 7px; }
+      .pvflash { position: absolute; inset: 0; z-index: 5; background: var(--run-bg); opacity: 0; pointer-events: none; transition: opacity 0.18s; }
+      .pvfoot { flex: none; padding: 0 12px 9px; font-size: 9.5px; color: var(--text3); line-height: 1.5; }
+      .pvfoot b { color: var(--text2); font-weight: 600; }
+
+      /* 预览页内容(结算页 demo) */
+      .page { position: absolute; inset: 0; padding: 16px 20px; overflow: hidden; }
+      .page h5 { font-size: 14.5px; margin-bottom: 11px; }
+      .ordbox { border: 1px solid #ddd; border-radius: 10px; padding: 9px 12px; font-size: 11.5px; color: #555; margin-bottom: 11px; display: flex; justify-content: space-between; }
+      .cprow { display: flex; gap: 7px; align-items: flex-start; margin-bottom: 8px; }
+      .cpfield { flex: 1; border: 1px solid #ccc; border-radius: 8px; padding: 6px 10px; font-family: var(--mono); font-size: 10.5px; color: #222; background: #fff; }
+      .cpapply { border: 1px solid #ccc; border-radius: 8px; padding: 6px 12px; font-size: 11px; color: #444; background: #f4f4f4; flex: none; }
+      .hintline { font-size: 10.5px; color: #b06f10; background: #faf0dc; border: 1px solid #ecd9ae; border-radius: 7px; padding: 5px 9px; margin-bottom: 9px; }
+      .page.bug .hintline { width: 118px; line-height: 1.45; }
+      .page.fixed .hintline { width: auto; }
+      .submitbtn { width: 100%; border-radius: 9px; padding: 9px 0; text-align: center; font-size: 12px; font-weight: 650; background: #1b1a16; color: #fff; }
+      .page.fixed .submitbtn { opacity: 0.4; }
+      .page.fixed .submitbtn::after { content: '(优惠券已过期)'; font-size: 10px; font-weight: 400; }
+
+      /* 元素拾取:hover 高亮 + 选中框 */
+      .pickhalo { position: absolute; z-index: 7; border: 1.5px solid var(--run); background: rgba(63, 123, 217, 0.10); border-radius: 5px; display: none; pointer-events: none; }
+      .pickhalo.show { display: block; }
+      .pickhalo .tag { position: absolute; top: -17px; left: -1px; font-family: var(--mono); font-size: 8.5px; background: var(--run); color: #fff; border-radius: 4px 4px 4px 0; padding: 1px 6px; white-space: nowrap; }
+      .pickhalo.locked { border-color: var(--danger); background: rgba(196, 69, 61, 0.08); }
+      .pickhalo.locked .tag { background: var(--danger); }
+      .pickhint { position: absolute; z-index: 8; top: 8px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 999px; padding: 3px 11px; box-shadow: 0 4px 14px rgba(0,0,0,0.14); display: none; white-space: nowrap; }
+      .pickhint.show { display: block; }
+
+      /* ── 验收门(简化版,证明 tab 还在) ────────── */
+      .gate { position: absolute; inset: 16px 24px; z-index: 30; background: var(--main); border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 40px 110px rgba(30, 26, 18, 0.4); display: none; flex-direction: column; overflow: hidden; }
+      .gate.show { display: flex; animation: ovin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.06); }
+      @keyframes ovin { from { transform: translateY(16px) scale(0.985); opacity: 0; } }
+      .gatehead { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .gatehead .t { font-weight: 700; font-size: 13px; }
+      .gatehead .evc { font-size: 10.5px; color: var(--text2); background: var(--chip); border-radius: 999px; padding: 2px 9px; }
+      .gatehead .accept { margin-left: auto; background: var(--accent); color: var(--accent-text); border-radius: 8px; padding: 5px 14px; font-size: 12px; font-weight: 650; }
+      .gtabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--border-soft); flex: none; }
+      .gtab { font-size: 11.8px; padding: 6px 14px 7px; border-radius: 8px 8px 0 0; color: var(--text3); }
+      .gtab.on { background: var(--main); color: var(--text); border: 1px solid var(--border-soft); border-bottom-color: var(--main); font-weight: 650; }
+      .gtab .same { font-size: 8.5px; background: var(--ok-bg); color: var(--ok); border-radius: 99px; padding: 0 5px; font-weight: 700; vertical-align: 2px; margin-left: 4px; }
+      .gbody { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--text3); font-size: 12px; }
+
+      /* ── 影片设施(同系列) ─────────────────────── */
+      .toast { position: absolute; right: 16px; top: 48px; z-index: 50; max-width: 340px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 11px; box-shadow: var(--shadow); font-size: 12px; padding: 9px 13px; opacity: 0; transform: translateY(-8px); transition: all 0.3s; pointer-events: none; }
+      .toast.show { opacity: 1; transform: none; }
+      .subs { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 60; max-width: 860px; width: max-content; background: rgba(20, 18, 14, 0.92); color: #f4f2ec; border-radius: 10px; padding: 9px 16px; font-size: 13px; line-height: 1.65; text-align: center; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
+      .subs.show { opacity: 1; }
+      .subs b { color: #ffd89b; }
+      .fakecur { position: absolute; z-index: 70; left: 0; top: 0; transform: translate(620px, 320px); transition: transform 0.65s cubic-bezier(0.3, 0.7, 0.3, 1); pointer-events: none; }
+      .fakecur .ring { position: absolute; left: -7px; top: -7px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(27, 26, 22, 0.55); opacity: 0; }
+      .fakecur.click .ring { animation: ripple 0.32s ease-out; }
+      @keyframes ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1.15); opacity: 0; } }
+      .vbar { max-width: 1280px; margin: 12px auto 0; display: flex; align-items: center; gap: 10px; }
+      .vbtn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+      .vbtn:hover { background: var(--hover); }
+      .vprog { flex: 1; height: 7px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .vfill { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.15s linear; }
+      .vtime { font-family: var(--mono); font-size: 11px; color: var(--text2); min-width: 84px; text-align: right; }
+      .chaps { max-width: 1280px; margin: 8px auto 0; display: flex; gap: 6px; flex-wrap: wrap; }
+      .chap { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 11.5px; cursor: pointer; }
+      .chap:hover { background: var(--hover); }
+      .chap.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .chap.done { color: var(--text3); }
+      .sect { max-width: 1280px; margin: 34px auto 0; }
+      .sect h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+      .sect h2 span { color: var(--text3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); }
+      .card h3 { font-size: 12.8px; margin-bottom: 7px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+      .card p, .card li { font-size: 12px; color: var(--text2); line-height: 1.75; }
+      .card ul { padding-left: 16px; }
+      .card code { font-family: var(--mono); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px; }
+      .tag { font-size: 9.5px; border-radius: 99px; padding: 1px 8px; font-weight: 700; letter-spacing: 0.04em; }
+      .tag.new { background: var(--run-bg); color: var(--run); }
+      .tag.keep { background: var(--ok-bg); color: var(--ok); }
+      .tag.skip { background: var(--danger-bg); color: var(--danger); }
+      .tag.src { background: var(--warn-bg); color: var(--warn); }
+      table.map { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+      table.map th, table.map td { text-align: left; font-size: 12px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; line-height: 1.7; }
+      table.map th { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; background: var(--side); }
+      table.map td:first-child { width: 26%; color: var(--text); font-weight: 600; }
+      table.map td:nth-child(2) { width: 36%; color: var(--text2); }
+      table.map td:last-child { color: var(--text2); }
+      .foot { max-width: 1280px; margin: 30px auto 0; font-size: 11.5px; color: var(--text3); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="pagehead">
+      <h1>房间的窗户 — Room 常驻实时预览(讨论稿)</h1>
+      <p>
+        实测两次都没找到预览:它锁在验收门里,而 Full 模式压根不经过门。业界(v0 / Lovable /
+        Windsurf / Replit)给出一致答案:<b>预览是常驻主平面,不是评审时刻的证据附件</b>;
+        反馈=<b>点住页面上的东西 + 一句话</b>,落回<b>同一个对话输入框</b>。本稿把预览升级为
+        Room 右栏:检测只点亮徽章(布局不自动动),点开常驻,任何状态可用——agent 写一笔你看一笔,
+        看到问题按 <b>S</b> 拾取元素(或 <b>R</b> 圈选区域),chip 落进 composer,一句话发回。
+        验收门里的 Preview tab 保留,变成同一扇窗在评审时刻的投影。
+      </p>
+      <div class="meta">讨论稿 v2 · 2026-07-16 · 竞品对照:v0 Design Mode · Lovable preview toolbar(四模式)· Windsurf Send element / console · Replit Agent self-test · 新增:console 自愈 + Full 模式闭环 · 仅浅色 · 影片约 87s</div>
+    </div>
+
+    <div class="stage">
+      <div class="win" id="app">
+        <div class="titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span class="brand">Charter</span>
+          <span class="proj">fable5 · t-508</span>
+          <span class="sp"></span>
+          <span class="pvbadge" id="pvbadge"><span class="dot"></span><span id="pvbadgetext">预览 :4173 可用</span></span>
+        </div>
+        <div class="split">
+          <!-- Room 列 -->
+          <div class="roomcol">
+            <div class="roomhead">
+              <span class="t">t-508 · 优惠券过期交互</span>
+              <span class="state-chip" id="roomstate">进行中</span>
+            </div>
+            <div class="spine" id="spine">
+              <div class="trow">
+                <span class="glyph">◦</span>
+                <div class="who">YOU</div>
+                <div class="prose">优惠券过期时给行内提示,并禁用提交按钮。</div>
+              </div>
+              <div class="trow">
+                <span class="glyph">⚙</span>
+                <div class="worklog" id="wl1">
+                  <div><span class="clock">00:12</span>读 public/index.html</div>
+                  <div id="wl-live"><span class="clock">00:31</span><span class="live">写 public/index.html +18 −3 …</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="composer" id="composer">
+              <div class="chips" id="chips">
+                <span class="att-chip" id="attchip">
+                  <img id="attthumb" alt="" />
+                  <span>
+                    <span class="sel">.coupon-hint</span> · 118×46
+                  </span>
+                  <span class="x">✕</span>
+                </span>
+              </div>
+              <div class="input" id="cinput"><span id="ctyped"></span><span class="caret" id="ccaret" style="display:none"></span><span id="cplaceholder">回复 agent,或 @ 引用文件…</span></div>
+              <div class="row2">
+                <span class="pill">受控修改</span><span class="pill">claude-sonnet-5 · 中</span><span class="send" id="csend">↑</span>
+              </div>
+            </div>
+          </div>
+          <!-- 预览右栏 -->
+          <div class="pvrail" id="pvrail">
+            <div class="pvtool">
+              <span class="port">:4173</span>
+              <span class="modes">
+                <span class="mode on" id="m-int">交互</span>
+                <span class="mode" id="m-pick">元素<kbd>S</kbd></span>
+                <span class="mode" id="m-draw">圈选<kbd>R</kbd></span>
+              </span>
+              <span class="errchip" id="errchip">⚠ <b id="errcount">1</b></span>
+              <span class="spx"></span>
+              <span class="ext">⧉ 浏览器</span>
+            </div>
+            <div class="pvbody" id="pvbody">
+              <span class="pviso">任务树 · 隔离</span>
+              <div class="pvflash" id="pvflash"></div>
+              <div class="page bug" id="page">
+                <h5>结算</h5>
+                <div class="ordbox"><span>商品小计(2 件)</span><b>¥ 468.00</b></div>
+                <div class="cprow">
+                  <span class="cpfield">SUMMER-20 <span style="color:#999">(已过期)</span></span>
+                  <span class="cpapply">应用优惠券</span>
+                </div>
+                <div class="hintline" id="hintline">该优惠券已于 6 月 30 日过期,请更换或移除</div>
+                <div class="submitbtn" id="submitbtn">提交订单</div>
+              </div>
+              <div class="pickhint" id="pickhint">元素拾取 — 点住要说的东西,Esc 退出</div>
+              <div class="pickhalo" id="pickhalo"><span class="tag" id="picktag">.coupon-hint</span></div>
+            </div>
+            <div class="pvfoot">同一探测、同一边界:端口来自<b>任务自己的树</b>;门内 Preview tab = 这扇窗的评审投影。</div>
+          </div>
+        </div>
+
+        <!-- 验收门(简化示意) -->
+        <div class="gate" id="gate">
+          <div class="gatehead">
+            <span class="t">验收门 · t-508</span>
+            <span class="evc">±21 · 1 文件</span>
+            <span class="evc">检查 2/2 绿</span>
+            <span class="accept">接受并应用</span>
+          </div>
+          <div class="gtabs">
+            <span class="gtab on">改动</span>
+            <span class="gtab">预览<span class="same">同一扇窗</span></span>
+            <span class="gtab">检查</span>
+          </div>
+          <div class="gbody">(评审细节从略——预览 tab 与右栏共享同一探测与选取,只是评审时刻的投影)</div>
+        </div>
+
+        <div class="toast" id="toast"></div>
+        <div class="subs" id="subs"></div>
+        <div class="fakecur" id="fakecur">
+          <span class="ring"></span>
+          <svg width="20" height="21" viewBox="0 0 20 21"><path d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z" fill="#fff" stroke="#1b1a16" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>业界怎么做 <span>四家对照 → Charter 落法(改造点加粗)</span></h2>
+      <table class="map">
+        <tr><th>产品 · 交互</th><th>要点</th><th>Charter 落法</th></tr>
+        <tr>
+          <td>v0 · Design Mode</td>
+          <td>对话 + 预览<b>双栏常驻</b>;⌘I 切换「交互 / 选取」;点选元素后既有属性面板也有自然语言输入,自动附元素截图;针对性 patch 而非全量重生成</td>
+          <td>双栏常驻照搬为 <b>Room 右栏</b>;「交互/选取」双态照搬(S 键);属性面板<b>不搬</b>——Charter 不是设计工具,一切表达走语言</td>
+        </tr>
+        <tr>
+          <td>Lovable · Preview toolbar</td>
+          <td>工具条<b>贴在预览上</b>,四模式:选元素(S)/ 行内改文字(T)/ <b>画批注</b> / 评论(C);选中的元素以<b>引用形式落进主聊天输入框</b>,多选可叠加</td>
+          <td><b>chip 落 composer</b> 全盘照搬——不开第二输入口,反馈就是一条普通消息+附件;圈选(R)= 它的画批注;行内改文字需注入回写,V1 不搬</td>
+        </tr>
+        <tr>
+          <td>Windsurf · Send element</td>
+          <td>预览里「Send element」点选元素 → 以 <b>@ mention 进 prompt</b>,带文本+元素截图;console 错误也可一键回送</td>
+          <td>选中打包 <b>selector + 截图 + rect</b> 三件套给 agent(selector 让它秒定位代码);console 回送列为后续增量</td>
+        </tr>
+        <tr>
+          <td>Replit · Agent self-test</td>
+          <td>agent 自己开浏览器点一遍并截图自检;人可「接管」帮它过登录;评审阶段有 preview</td>
+          <td><b>不搬</b>自动化自测(那是 VER 验证轴的事,已有);「随时可看 agent 干到哪」的体感用<b>常驻窗 + HMR 实时刷新</b>达成</td>
+        </tr>
+        <tr>
+          <td>Windsurf · console 回送(手动)</td>
+          <td>预览页的 console 错误可一键发给 Cascade 作上下文</td>
+          <td><b>升级为自动</b>:主进程 console-message 事件天然覆盖全部 frame(零注入),按端口归属任务;error 级且发生在 agent 刚写入后 → <b>自动 steer 自愈</b>(去重、限频、可关);告警级只亮 ⚠ 角标,手点再发</td>
+        </tr>
+        <tr>
+          <td>cmux→manaflow(前稿已借)</td>
+          <td>预览贴着代码;preview comment 另起修复 run;一键 PR</td>
+          <td>端口探测/边界/PR 草稿<b>保留</b>(ADR-0022);「评论另起 run」依旧不搬——一条对话</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 预览是房间的窗户 <span class="tag new">NEW</span></h3>
+          <p>
+            不再是门内证据:任务<b>任何状态</b>(进行中 / 待审查 / Full 模式 / 已接受)右栏都可用。
+            agent 写一笔、HMR 刷一笔,你<b>实时看着页面长出来</b>——这是 Full 模式用户唯一的观察窗,
+            也是本次两个实测坑(找不到入口、Full 跳过门)的结构性解法。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 反馈落回同一个 composer <span class="tag new">NEW</span><span class="tag src">Lovable/Windsurf</span></h3>
+          <p>
+            选中元素(S)或圈选区域(R)后<b>不弹便签窗</b>——chip(截图缩略 + selector + 尺寸)落进
+            Room composer,你在熟悉的输入框里说话,回车即回炉。一个输入口,一条对话,
+            附件语义与 @ 文件一致;门内旧便签流程随之退役。
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · 检测只点亮,展开靠意图 <span class="tag keep">KEEP</span></h3>
+          <p>
+            端口探测到只在标题栏亮一枚徽章(外部 CLI 检测的教训:<b>布局永不因弱信号自动动</b>);
+            点徽章右栏滑出,再点收回,宽度可拖,记住偏好。空态一键起服务(am.1)原样保留。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分与刻意不搬的</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>边界原样 <span class="tag keep">KEEP</span></h3>
+          <p>
+            端口归属=任务自己的树(cwd 判定);iframe 沙箱 + loopback CSP;门内三 tab 保留,
+            Preview tab 变成右栏的评审投影(同组件同探测);PR 草稿、GIT-007、
+            superseded/stale/Unverified 语义一字不改。
+          </p>
+        </div>
+        <div class="card">
+          <h3>元素拾取的实现注记 <span class="tag new">NEW · 需 ADR</span></h3>
+          <p>
+            跨源 iframe 拿不到 DOM——方案:主进程 <code>webFrameMain.executeJavaScript</code>
+            只对<b>loopback 任务树页面</b>注入拾取器(hover 高亮,点选 postMessage 回
+            {selector, rect, text}),失败或用户拒绝时<b>自动退回圈选</b>(零注入,任何页面可用)。
+            注入范围与开关写进 ADR。
+          </p>
+        </div>
+        <div class="card">
+          <h3>console 自愈的护栏 <span class="tag new">NEW</span></h3>
+          <p>
+            捕获零注入(主进程 <code>console-message</code> 按来源端口过滤);
+            <b>自动转发仅限 error 级</b>且落在 agent 最近一次写入的时间窗内(它弄坏的它自己修);
+            同一错误去重、每次写入至多回传一批、每 run 限频;warning 只计数;
+            设置项 <code>preview.consoleToAgent</code>(auto / manual / off)。
+            页面里第三方脚本的既有报错不在时间窗内,不会冤枉 agent。
+          </p>
+        </div>
+        <div class="card">
+          <h3>不搬 <span class="tag skip">SKIP</span></h3>
+          <p>
+            v0 属性面板(margin/color 可视化调参)——表达一律走语言;Lovable 行内改文字(T)——
+            需注入回写文件,归属语义复杂,V1 不做;Replit agent 自测截图——已有 VER 轴,不混;
+            云端分享预览 URL——仍是独立 ADR。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      讨论稿 · 采纳流程:讨论 → ADR-0022 修正案 2(右栏布局与状态可用性、拾取器注入边界、composer 附件 chip 形态、门内 tab 复用同组件)→ 实现 → E2E(徽章不自动改布局、右栏任意状态可用、S 拾取回退圈选、chip 走 task.message v2、Full 模式回归)。
+      来源:v0 Design Mode 文档 · Lovable preview-toolbar 文档 · Windsurf Browser Previews 文档 · Replit Agent App Testing 文档。
+      同系列:inspo-cmux-preview-gate-pr.html(前稿,门内验收视角)。
+    </div>
+
+    <script>
+      const pvbadge = document.getElementById('pvbadge');
+      const pvbadgetext = document.getElementById('pvbadgetext');
+      const pvrail = document.getElementById('pvrail');
+      const pvbody = document.getElementById('pvbody');
+      const pvflash = document.getElementById('pvflash');
+      const page = document.getElementById('page');
+      const hintline = document.getElementById('hintline');
+      const pickhalo = document.getElementById('pickhalo');
+      const pickhint = document.getElementById('pickhint');
+      const picktag = document.getElementById('picktag');
+      const mInt = document.getElementById('m-int');
+      const mPick = document.getElementById('m-pick');
+      const chips = document.getElementById('chips');
+      const attthumb = document.getElementById('attthumb');
+      const ctyped = document.getElementById('ctyped');
+      const ccaret = document.getElementById('ccaret');
+      const cplaceholder = document.getElementById('cplaceholder');
+      const roomstate = document.getElementById('roomstate');
+      const wl1 = document.getElementById('wl1');
+      const wlLive = document.getElementById('wl-live');
+      const spine = document.getElementById('spine');
+      const gate = document.getElementById('gate');
+      const toast = document.getElementById('toast');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+      const stage = document.querySelector('.stage');
+
+      // ── 影片引擎(同系列) ──────────────────────
+      const ABORT = Symbol('abort');
+      let token = 0; let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms; let last = performance.now();
+          const tick = () => {
+            if (my !== token) { reject(ABORT); return; }
+            const n = performance.now();
+            if (!paused) { left -= n - last; clock.inScene += n - last; }
+            last = n;
+            if (left <= 0) resolve(); else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = stage.getBoundingClientRect();
+        cursor.style.transform = `translate(${r.left - box.left + r.width * fx}px, ${r.top - box.top + r.height * fy}px)`;
+        await wait(660);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click');
+        await wait(260);
+      }
+      function say(html) { subs.innerHTML = html; subs.classList.add('show'); }
+      let toastTimer = null;
+      function showToast(msg) {
+        toast.textContent = msg; toast.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+      }
+      function haloOn(el, label, locked) {
+        const pr = pvbody.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        pickhalo.style.left = r.left - pr.left - 4 + 'px';
+        pickhalo.style.top = r.top - pr.top - 4 + 'px';
+        pickhalo.style.width = r.width + 8 + 'px';
+        pickhalo.style.height = r.height + 8 + 'px';
+        picktag.textContent = label;
+        pickhalo.classList.add('show');
+        pickhalo.classList.toggle('locked', Boolean(locked));
+      }
+      function hmrFlash() {
+        pvflash.style.opacity = '0.5';
+        setTimeout(() => { pvflash.style.opacity = '0'; }, 220);
+      }
+      async function typeInto(text) {
+        ccaret.style.display = 'inline-block'; cplaceholder.style.display = 'none';
+        for (const ch of text) { ctyped.textContent += ch; await wait(55); }
+      }
+      // 附件缩略图:用 canvas 画一个带红框的迷你截图
+      function drawThumb() {
+        const c = document.createElement('canvas'); c.width = 68; c.height = 48;
+        const x = c.getContext('2d');
+        x.fillStyle = '#fff'; x.fillRect(0, 0, 68, 48);
+        x.fillStyle = '#eee'; x.fillRect(8, 6, 52, 7);
+        x.fillStyle = '#faf0dc'; x.fillRect(8, 18, 26, 14);
+        x.strokeStyle = '#d63c32'; x.setLineDash([3, 2]); x.lineWidth = 1.5;
+        x.strokeRect(6, 16, 30, 18);
+        x.fillStyle = '#1b1a16'; x.fillRect(8, 37, 52, 7);
+        return c.toDataURL();
+      }
+
+      // ── 分镜 ──────────────────────────────────
+      const SCENES = [
+        {
+          label: '① 检测只点亮徽章',
+          est: 9000,
+          async play() {
+            say('任务在跑,agent 正在写结算页。dev server 起来的瞬间——<b>标题栏亮一枚徽章</b>,布局纹丝不动。');
+            await wait(1400);
+            pvbadge.classList.add('show');
+            showToast('检测到 :4173(任务树进程)— 点徽章打开预览');
+            await wait(3600);
+            say('这是外部 CLI 检测学来的教训:<b>弱信号只装饰,布局变化永远等你的手</b>。');
+            await wait(3600);
+          },
+          snap() { pvbadge.classList.add('show'); },
+        },
+        {
+          label: '② 点开:窗随人动',
+          est: 10000,
+          async play() {
+            await moveCursorTo(pvbadge);
+            await clickCursor();
+            pvrail.classList.add('open');
+            pvbadge.classList.add('live'); pvbadgetext.textContent = '预览 · 直播中';
+            say('右栏滑出,<b>任务自己的树</b>里的页面直播在旁边——注意左边对话没被挤走,这是分屏不是跳转。');
+            await wait(3400);
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">00:58</span>写 public/index.html +6 −1';
+            wl1.appendChild(d);
+            hmrFlash();
+            say('agent 每写一笔,HMR 刷一笔——<b>页面是看着长出来的</b>,不用等 DONE。');
+            await wait(4000);
+          },
+          snap() {
+            SCENES[0].snap();
+            pvrail.classList.add('open'); pvbadge.classList.add('live');
+            pvbadgetext.textContent = '预览 · 直播中';
+          },
+        },
+        {
+          label: '③ S · 元素拾取',
+          est: 13500,
+          async play() {
+            say('提示压成三行了,提交按钮还能点。不用开任何门——按 <b>S</b> 进元素拾取。');
+            await wait(2200);
+            mInt.classList.remove('on'); mPick.classList.add('on');
+            pickhint.classList.add('show');
+            await wait(1200);
+            await moveCursorTo(document.querySelector('.cpapply'), 0.5, 0.5);
+            haloOn(document.querySelector('.cpapply'), 'button.apply');
+            await wait(900);
+            await moveCursorTo(hintline, 0.4, 0.5);
+            haloOn(hintline, '.coupon-hint');
+            say('hover 到哪,<b>selector 亮到哪</b>(v0 的 Design Mode、Windsurf 的 Send element 同款体感)。点住它——');
+            await wait(2600);
+            await clickCursor();
+            haloOn(hintline, '.coupon-hint', true);
+            pickhint.classList.remove('show');
+            await wait(500);
+            attthumb.src = drawThumb();
+            chips.classList.add('show');
+            say('选中的元素变成 <b>chip 落进 composer</b>:截图缩略 + selector + 尺寸。没有第二个输入框,反馈就是一条普通消息。');
+            await wait(4600);
+          },
+          snap() {
+            SCENES[1].snap();
+            mInt.classList.remove('on'); mPick.classList.add('on');
+            haloOn(hintline, '.coupon-hint', true);
+            attthumb.src = drawThumb();
+            chips.classList.add('show');
+          },
+        },
+        {
+          label: '④ 一句话回炉',
+          est: 12000,
+          async play() {
+            await moveCursorTo(document.getElementById('cinput'));
+            await typeInto('提示别换行;过期时禁用提交按钮');
+            await wait(500);
+            await moveCursorTo(document.getElementById('csend'));
+            await clickCursor();
+            chips.classList.remove('show');
+            ctyped.textContent = ''; ccaret.style.display = 'none'; cplaceholder.style.display = 'inline';
+            pickhalo.classList.remove('show');
+            mPick.classList.remove('on'); mInt.classList.add('on');
+            const fb = document.createElement('div');
+            fb.className = 'trow';
+            fb.innerHTML = '<span class="glyph">◦</span><div class="who">YOU</div><div class="fb-bubble">提示别换行;过期时禁用提交按钮<img class="fb-thumb" src="' + drawThumb() + '"/><span class="fb-meta">.coupon-hint · 118×46 · :4173/</span></div>';
+            spine.appendChild(fb);
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">01:22</span><span class="live">收到选区反馈(.coupon-hint)→ 修复中…</span>';
+            wl1.appendChild(d);
+            say('回车即回炉:<b>selector + 截图 + 你的话</b>走 steer 打断当前 run——agent 拿着精确定位掉头去修,对话仍是同一条。');
+            await wait(5200);
+          },
+          snap() {
+            SCENES[2].snap();
+            chips.classList.remove('show'); pickhalo.classList.remove('show');
+            mPick.classList.remove('on'); mInt.classList.add('on');
+            if (!document.getElementById('fb-snap')) {
+              const fb = document.createElement('div');
+              fb.className = 'trow'; fb.id = 'fb-snap';
+              fb.innerHTML = '<span class="glyph">◦</span><div class="who">YOU</div><div class="fb-bubble">提示别换行;过期时禁用提交按钮<img class="fb-thumb" src="' + drawThumb() + '"/><span class="fb-meta">.coupon-hint · 118×46 · :4173/</span></div>';
+              spine.appendChild(fb);
+            }
+          },
+        },
+        {
+          label: '⑤ 看着它修好',
+          est: 9500,
+          async play() {
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">01:47</span>写 public/index.html +9 −4';
+            wl1.appendChild(d);
+            hmrFlash();
+            await wait(500);
+            page.classList.remove('bug'); page.classList.add('fixed');
+            say('HMR 刷新——提示一行、按钮已禁用。<b>你看着问题修好</b>,而不是等一份"我修好了"的报告。');
+            await wait(4200);
+            roomstate.textContent = '待审查'; roomstate.className = 'state-chip review';
+            showToast('t-508 完成 — 待审查(2/2 检查通过)');
+            say('任务收束到「待审查」——接下来才轮到门。');
+            await wait(3000);
+          },
+          snap() {
+            SCENES[3].snap();
+            page.classList.remove('bug'); page.classList.add('fixed');
+            roomstate.textContent = '待审查'; roomstate.className = 'state-chip review';
+          },
+        },
+        {
+          label: '⑥ console 自愈',
+          est: 12000,
+          async play() {
+            say('另一种问题:页面<b>直接报错</b>。agent 刚写完一笔,HMR 一刷——');
+            const d0 = document.createElement('div');
+            d0.innerHTML = '<span class="clock">02:03</span>写 public/index.html +4 −1';
+            wl1.appendChild(d0);
+            hmrFlash();
+            await wait(900);
+            const errchip = document.getElementById('errchip');
+            errchip.classList.add('show');
+            showToast('预览 console:TypeError: coupon is undefined(index.html:42)');
+            say('主进程本来就听得到每个 frame 的 console(<b>零注入</b>)。错误按来源端口归给任务,工具条亮 ⚠。');
+            await wait(3600);
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">02:05</span><span class="live">预览报错自动回传(与上笔写入 2s 内)→ 修复中…</span>';
+            wl1.appendChild(d);
+            say('它刚写完就冒的错 → <b>自动转发 steer,agent 自己掉头修</b>——不用你搬。告警级只计数不打扰;可在设置关掉。');
+            await wait(4200);
+            const d2 = document.createElement('div');
+            d2.innerHTML = '<span class="clock">02:19</span>写 public/index.html +2 −2';
+            wl1.appendChild(d2);
+            hmrFlash();
+            errchip.classList.add('clear'); errchip.innerHTML = '✓ 0';
+            say('修完再刷:console 干净,角标翻绿。<b>报错 → 感知 → 修复</b>,闭环不经过人。');
+            await wait(3000);
+          },
+          snap() {
+            SCENES[4].snap();
+            const errchip = document.getElementById('errchip');
+            errchip.classList.add('show', 'clear'); errchip.innerHTML = '✓ 0';
+          },
+        },
+        {
+          label: '⑦ 门还是那扇门',
+          est: 8500,
+          async play() {
+            gate.classList.add('show');
+            say('验收门照旧:改动 / <b>预览</b> / 检查——预览 tab 现在是右栏这扇窗的<b>评审投影</b>(同组件、同探测、同边界),不再是唯一入口。');
+            await wait(5200);
+            gate.classList.remove('show');
+            roomstate.textContent = '已接受'; roomstate.className = 'state-chip done';
+            const ms = document.createElement('div');
+            ms.className = 'milestone'; ms.textContent = '✓ DONE — 已接受,PR 草稿在时间线';
+            spine.appendChild(ms);
+            await wait(2400);
+          },
+          snap() {
+            SCENES[5].snap();
+            roomstate.textContent = '已接受'; roomstate.className = 'state-chip done';
+          },
+        },
+        {
+          label: '⑧ Full 模式:有窗有自愈',
+          est: 10500,
+          async play() {
+            say('关键差别:<b>Full 模式没有门</b>(auto-accept),但右栏与自愈照常——报错自动修完才收束,你随时能看、能圈。');
+            await wait(4400);
+            say('auto-accept 之后任务已关闭?圈选照样落 composer,回车变成<b>接续任务的种子</b>(带截图与 selector)。');
+            await wait(3400);
+            say('预览从「门内证据」变成「<b>房间的窗户</b>」:门是时刻,窗是常驻。');
+            await wait(2400);
+          },
+          snap() { SCENES[6].snap(); },
+        },
+      ];
+
+      // ── 播放器(同系列) ────────────────────────
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+      function resetAll() {
+        pvbadge.classList.remove('show', 'live'); pvbadgetext.textContent = '预览 :4173 可用';
+        pvrail.classList.remove('open');
+        const errchip = document.getElementById('errchip');
+        errchip.classList.remove('show', 'clear'); errchip.innerHTML = '⚠ <b id="errcount">1</b>';
+        page.classList.add('bug'); page.classList.remove('fixed');
+        pickhalo.classList.remove('show', 'locked'); pickhint.classList.remove('show');
+        mPick.classList.remove('on'); mInt.classList.add('on');
+        chips.classList.remove('show');
+        ctyped.textContent = ''; ccaret.style.display = 'none'; cplaceholder.style.display = 'inline';
+        roomstate.textContent = '进行中'; roomstate.className = 'state-chip';
+        gate.classList.remove('show');
+        document.getElementById('fb-snap')?.remove();
+        [...spine.querySelectorAll('.trow')].slice(2).forEach((el) => el.remove());
+        [...spine.querySelectorAll('.milestone')].forEach((el) => el.remove());
+        wl1.innerHTML = '<div><span class="clock">00:12</span>读 public/index.html</div>'
+          + '<div><span class="clock">00:31</span><span class="live">写 public/index.html +18 −3 …</span></div>';
+        toast.classList.remove('show'); subs.classList.remove('show');
+        cursor.style.transform = 'translate(620px, 320px)';
+      }
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i; clock.inScene = 0; markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est;
+          await wait(1500);
+          if (my === token) seek(0);
+        } catch (e) { if (e !== ABORT) throw e; }
+      }
+      function seek(n) {
+        token += 1; resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n; clock.inScene = 0; markChap(n);
+        void run(n);
+      }
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap'; b.textContent = s.label; b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+      const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+      playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停'; };
+      document.getElementById('vreplay').onclick = () => { paused = false; playBtn.textContent = '⏸ 暂停'; seek(0); };
+
+      seek(0);
+    </script>
+  </body>
+</html>

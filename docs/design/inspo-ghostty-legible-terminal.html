@@ -1,0 +1,738 @@
+<!doctype html>
+<!-- Charter — 竞品移植研究 · Ghostty ②「读得懂的终端」(docs/design). NOT product code.
+     Discussion artifact: 把 Ghostty 的 shell integration 语义（OSC 133 块 / 提示符跳转 /
+     选中命令输出）、进度上报（OSC 9;4）、命令完成通知与失焦调暗移植进 Charter 底部坞：
+     滚动缓冲变成「块」，长命令有进度环 + Dock 进度 + 完成通知，失败块一键直达与重跑，
+     外置 claude/codex 会话的回合同样成块。影片可播放：▶ / ⏸ / 章节直达。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 读得懂的终端 — Ghostty 移植研究 ②</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #eceae5; color: #201e1a; padding: 30px 26px 70px;
+        --side: #f6f5f1; --main: #fbfaf7; --card: #ffffff;
+        --border: #e5e1d8; --border-soft: #edeae3;
+        --text: #201e1a; --text2: #6e6a61; --text3: #a39e94;
+        --chip: #f0eee8; --hover: #e8e5de; --active: #e2dfd7;
+        --accent: #1b1a16; --accent-text: #fff;
+        --ok: #2f9e63; --ok-bg: #e7f5ec;
+        --run: #3f7bd9; --run-bg: #e9f1fd;
+        --warn: #b06f10; --warn-bg: #faf0dc;
+        --danger: #c4453d; --danger-bg: #fbeae9;
+        --term: #24231f; --term2: #2d2b27; --term-ink: #dcd7cd; --term-dim: #8f8a7f;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      .pagehead { max-width: 1260px; margin: 0 auto 8px; }
+      .pagehead h1 { font-size: 19px; letter-spacing: -0.01em; }
+      .pagehead p { color: var(--text2); font-size: 13px; margin-top: 5px; line-height: 1.7; max-width: 1020px; }
+      .pagehead b { color: var(--text); }
+      .meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+      .stage { max-width: 1260px; margin: 14px auto 0; position: relative; }
+      .win {
+        background: var(--main); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22); overflow: hidden;
+        display: flex; flex-direction: column; height: 680px; position: relative;
+      }
+      .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .traffic { display: flex; gap: 7px; }
+      .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+      .titlebar .brand { font-weight: 650; font-size: 12.5px; margin-left: 4px; }
+      .titlebar .proj { font-size: 11.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 11px; }
+      .titlebar .k { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--card); }
+
+      .body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+      /* ── 编辑器区 ─────────────────────────────── */
+      .edwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--border); position: relative; }
+      .edwrap.focus { box-shadow: inset 0 0 0 2px rgba(63, 123, 217, 0.35); }
+      .edtabs { display: flex; gap: 2px; padding: 7px 12px 0; background: var(--side); border-bottom: 1px solid var(--border-soft); flex: none; }
+      .edtab { font-size: 11.5px; padding: 5px 13px 6px; border-radius: 8px 8px 0 0; color: var(--text3); }
+      .edtab.on { background: var(--main); color: var(--text); border: 1px solid var(--border-soft); border-bottom-color: var(--main); }
+      .code { flex: 1; min-height: 0; font-family: var(--mono); font-size: 12px; line-height: 1.8; padding: 12px 18px; overflow: hidden; }
+      .code .ln { white-space: pre; }
+      .code .lno { display: inline-block; width: 26px; color: var(--text3); }
+      .code .kw { color: #8a4fb0; } .code .st { color: #2f7d4f; } .code .fn { color: #2b6cb0; }
+      .code .typing { background: var(--warn-bg); }
+      .code .caret { display: inline-block; width: 1px; height: 13px; background: var(--text); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* ── 底部坞 ───────────────────────────────── */
+      .dock { flex: none; height: 318px; display: flex; flex-direction: column; background: var(--term); position: relative; }
+      .dockhead { display: flex; align-items: center; gap: 6px; padding: 7px 12px; background: var(--term2); flex: none; }
+      .dtab {
+        display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10.5px;
+        color: var(--term-dim); border: 1px solid #45423b; border-radius: 7px; padding: 3px 10px; position: relative;
+      }
+      .dtab.on { color: var(--term-ink); background: #3a3833; }
+      .dtab .ring { width: 12px; height: 12px; border-radius: 50%; background: conic-gradient(var(--run) 0%, #4a473f 0); display: none; }
+      .dtab.prog .ring { display: inline-block; }
+      .dtab .bell { display: none; color: #e8b96b; }
+      .dtab.bell .bell { display: inline; animation: bellpulse 1.2s ease-in-out 2; }
+      @keyframes bellpulse { 0%,100% { transform: none; } 30% { transform: rotate(14deg); } 60% { transform: rotate(-10deg); } }
+      .dockhead .hint { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--term-dim); }
+      .termwrap { flex: 1; min-height: 0; position: relative; }
+      .termscroll { position: absolute; inset: 0 18px 0 0; overflow: hidden; padding: 10px 8px 10px 14px; font-family: var(--mono); font-size: 11.8px; line-height: 1.72; color: var(--term-ink); scroll-behavior: smooth; }
+      .dock.dim .termscroll, .dock.dim .dockhead { filter: brightness(0.82) saturate(0.85); }
+      .termscroll .dim { color: var(--term-dim); }
+      .okx { color: #7fce9e; } .errx { color: #e08a80; } .warnx { color: #e8b96b; } .runx { color: #8fb0e8; }
+      /* 语义块 */
+      .tblk { border-left: 2px solid #3d3b34; margin: 0 0 10px -14px; padding: 2px 0 4px 12px; border-radius: 2px; position: relative; }
+      .tblk.ok { border-left-color: #2f6c4b; }
+      .tblk.err { border-left-color: #9e4038; }
+      .tblk.run { border-left-color: #3f6cb0; }
+      .tblk.flash { animation: blkflash 1.4s ease-out; }
+      @keyframes blkflash { 0% { background: rgba(143, 176, 232, 0.28); } 100% { background: transparent; } }
+      .tblk.selected { background: rgba(107, 143, 209, 0.16); }
+      .tblk-head { display: flex; align-items: center; gap: 9px; }
+      .tblk-head .cmd { color: var(--term-ink); font-weight: 700; }
+      .tblk-head .meta2 { font-size: 10px; color: var(--term-dim); }
+      .tblk-head .ex { font-size: 9.5px; border-radius: 4px; padding: 0 5px; }
+      .tblk-head .ex.ok { background: rgba(47, 158, 99, 0.22); color: #7fce9e; }
+      .tblk-head .ex.err { background: rgba(196, 69, 61, 0.25); color: #e08a80; }
+      .tblk-head .acts { margin-left: auto; display: none; gap: 5px; }
+      .tblk:hover .tblk-head .acts, .tblk.showacts .tblk-head .acts { display: flex; }
+      .tblk-head .acts button {
+        font-family: -apple-system, 'PingFang SC', sans-serif; font-size: 10px; color: var(--term-ink);
+        background: #3a3833; border: 1px solid #4a473f; border-radius: 5px; padding: 1px 7px;
+      }
+      .tblk-out { margin-top: 2px; white-space: pre-wrap; }
+      .cur { display: inline-block; width: 7px; height: 12px; background: var(--term-ink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+      /* 滚动条标记轨 */
+      .rail { position: absolute; right: 4px; top: 8px; bottom: 8px; width: 8px; border-radius: 99px; background: #2d2b27; }
+      .rail .mk { position: absolute; left: 1px; width: 6px; height: 6px; border-radius: 50%; cursor: pointer; }
+      .rail .mk.ok { background: #2f9e63; }
+      .rail .mk.err { background: #d4655c; box-shadow: 0 0 0 2px rgba(212, 101, 92, 0.25); }
+      .rail .mk.run { background: #3f7bd9; animation: pulse2 1.4s infinite; }
+      .rail .mk.turn { background: #b08fd4; }
+      @keyframes pulse2 { 50% { box-shadow: 0 0 0 3px rgba(63, 123, 217, 0.25); } }
+      /* 状态栏 */
+      .statusbar { flex: none; display: flex; align-items: center; gap: 14px; padding: 5px 14px; background: var(--side); border-top: 1px solid var(--border-soft); font-size: 10.5px; color: var(--text2); font-family: var(--mono); }
+      .statusbar .prog { display: none; align-items: center; gap: 7px; }
+      .statusbar .prog.show { display: flex; }
+      .statusbar .bar { width: 90px; height: 5px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .statusbar .bar i { display: block; height: 100%; width: 0; background: var(--run); border-radius: 99px; transition: width 0.3s; }
+
+      /* ── 系统通知 / mini Dock ─────────────────── */
+      .notif {
+        position: absolute; top: 46px; right: 16px; z-index: 50; width: 320px;
+        background: rgba(250, 249, 246, 0.96); border: 1px solid var(--border); border-radius: 14px;
+        box-shadow: 0 22px 60px rgba(30, 26, 18, 0.3); padding: 11px 13px;
+        display: flex; gap: 10px; align-items: flex-start;
+        opacity: 0; transform: translateX(24px); transition: all 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.1); pointer-events: none;
+      }
+      .notif.show { opacity: 1; transform: none; }
+      .notif .appic { width: 34px; height: 34px; border-radius: 9px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 15px; flex: none; }
+      .notif .nt { font-size: 12.5px; font-weight: 650; }
+      .notif .nb { font-size: 11.5px; color: var(--text2); margin-top: 2px; line-height: 1.55; }
+      .notif .na { font-size: 10.5px; color: var(--run); margin-top: 4px; }
+      .minidock {
+        position: absolute; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(26px);
+        z-index: 45; display: flex; gap: 9px; align-items: flex-end;
+        background: rgba(246, 245, 241, 0.85); border: 1px solid var(--border);
+        border-radius: 16px; padding: 8px 12px 6px; box-shadow: 0 24px 60px rgba(30, 26, 18, 0.3);
+        opacity: 0; transition: all 0.4s; pointer-events: none; backdrop-filter: blur(6px);
+      }
+      .minidock.show { opacity: 1; transform: translateX(-50%); }
+      .minidock .ic { width: 34px; height: 34px; border-radius: 9px; background: var(--border); }
+      .minidock .charter { position: relative; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+      .minidock .charter .p { position: absolute; left: 3px; right: 3px; bottom: -5px; height: 4px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .minidock .charter .p i { display: block; height: 100%; width: 0; background: var(--run); transition: width 0.3s; }
+      .minidock .lbl { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 9.5px; color: var(--text3); white-space: nowrap; }
+
+      /* ── 影片附件 ─────────────────────────────── */
+      .keyhud { position: absolute; top: 14px; right: 18px; z-index: 55; display: flex; gap: 6px; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
+      .keyhud.show { opacity: 1; }
+      .keyhud span { font-family: var(--mono); font-size: 12px; background: #14130f; color: #fff; border-radius: 8px; padding: 5px 10px; border: 1px solid #3c3a33; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35); }
+      .subs {
+        position: absolute; left: 50%; bottom: 46px; transform: translateX(-50%); z-index: 60;
+        max-width: 800px; width: max-content; background: rgba(20, 18, 14, 0.92); color: #f4f2ec;
+        border-radius: 10px; padding: 9px 16px; font-size: 13px; line-height: 1.65; text-align: center;
+        opacity: 0; transition: opacity 0.25s; pointer-events: none;
+      }
+      .subs.show { opacity: 1; }
+      .subs b { color: #ffd89b; }
+      .fakecur { position: absolute; z-index: 70; left: 0; top: 0; transform: translate(640px, 320px); transition: transform 0.65s cubic-bezier(0.3, 0.7, 0.3, 1); pointer-events: none; }
+      .fakecur .ring { position: absolute; left: -7px; top: -7px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(27, 26, 22, 0.55); opacity: 0; }
+      .fakecur.click .ring { animation: ripple 0.32s ease-out; }
+      @keyframes ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1.15); opacity: 0; } }
+
+      /* ── 播放器 / 论述区（同系列约定） ─────────── */
+      .vbar { max-width: 1260px; margin: 12px auto 0; display: flex; align-items: center; gap: 10px; }
+      .vbtn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+      .vbtn:hover { background: var(--hover); }
+      .vprog { flex: 1; height: 7px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .vfill { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.15s linear; }
+      .vtime { font-family: var(--mono); font-size: 11px; color: var(--text2); min-width: 84px; text-align: right; }
+      .chaps { max-width: 1260px; margin: 8px auto 0; display: flex; gap: 6px; flex-wrap: wrap; }
+      .chap { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 11.5px; cursor: pointer; }
+      .chap:hover { background: var(--hover); }
+      .chap.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .chap.done { color: var(--text3); }
+      .sect { max-width: 1260px; margin: 34px auto 0; }
+      .sect h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+      .sect h2 span { color: var(--text3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); }
+      .card h3 { font-size: 12.8px; margin-bottom: 7px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+      .card p, .card li { font-size: 12px; color: var(--text2); line-height: 1.75; }
+      .card ul { padding-left: 16px; }
+      .card code { font-family: var(--mono); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px; }
+      .tag { font-size: 9.5px; border-radius: 99px; padding: 1px 8px; font-weight: 700; letter-spacing: 0.04em; }
+      .tag.new { background: var(--run-bg); color: var(--run); }
+      .tag.keep { background: var(--ok-bg); color: var(--ok); }
+      .tag.skip { background: var(--danger-bg); color: var(--danger); }
+      .tag.src { background: var(--warn-bg); color: var(--warn); }
+      table.map { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+      table.map th, table.map td { text-align: left; font-size: 12px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; line-height: 1.7; }
+      table.map th { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; background: var(--side); }
+      table.map td:first-child { width: 30%; color: var(--text); font-weight: 600; }
+      table.map td:nth-child(2) { width: 34%; color: var(--text2); }
+      table.map td:last-child { color: var(--text2); }
+      .foot { max-width: 1260px; margin: 30px auto 0; font-size: 11.5px; color: var(--text3); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="pagehead">
+      <h1>读得懂的终端 — 把 Ghostty 的 shell 语义 / 进度 / 通知移植进 Charter（研究稿 ②）</h1>
+      <p>
+        Ghostty 靠 shell integration 把滚动缓冲从「一坨字符」变成<b>有结构的块</b>：提示符可跳转、命令输出可整选、
+        长命令的进度（OSC 9;4）直接画在 UI 上、跑完在你没看着的时候发通知。Charter 的坞今天还是一坨字符——
+        E2E 跑十分钟，你只能盯着或反复切回来看。这份研究稿把这四件事移植过来，并延伸到我们独有的场景：
+        <b>外置 claude / codex 会话的「回合」同样成块</b>，任何一块输出都能一步「发给 Room」。
+      </p>
+      <div class="meta">讨论稿 · 2026-07-16 · 竞品移植研究（Ghostty：OSC 133 / OSC 9;4 进度（1.2）/ notify-on-command-finish（1.3）/ 失焦调暗 · cmux：窗格通知环 + 未读徽章）· 仅浅色 · 影片约 55s</div>
+    </div>
+
+    <div class="stage">
+      <div class="win" id="app">
+        <div class="titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span class="brand">Charter</span>
+          <span class="proj">checkout-web · main · 编辑器</span>
+          <span class="k">⌘↑ / ⌘↓ 块间跳转</span>
+        </div>
+        <div class="body">
+          <div class="edwrap" id="edwrap">
+            <div class="edtabs">
+              <span class="edtab on">CouponField.tsx</span>
+              <span class="edtab">checkout.spec.ts</span>
+            </div>
+            <div class="code" id="code">
+              <div class="ln"><span class="lno">40</span><span class="kw">export function</span> <span class="fn">CouponField</span>({ coupon }: Props) {</div>
+              <div class="ln"><span class="lno">41</span>  <span class="kw">const</span> expired = isExpired(coupon);</div>
+              <div class="ln"><span class="lno">42</span>  <span class="kw">if</span> (expired) {</div>
+              <div class="ln"><span class="lno">43</span>    <span class="kw">return</span> &lt;InlineHint tone=<span class="st">"warn"</span>&gt;{t(<span class="st">'coupon.expired'</span>)}&lt;/InlineHint&gt;;</div>
+              <div class="ln"><span class="lno">44</span>  }</div>
+              <div class="ln" id="typeline"><span class="lno">45</span>  <span class="kw">return</span> &lt;Field …/&gt;;</div>
+              <div class="ln"><span class="lno">46</span>}</div>
+            </div>
+          </div>
+          <div class="dock" id="dock">
+            <div class="dockhead">
+              <span class="dtab on" id="tab-zsh"><span class="ring" id="ring"></span>zsh · test:e2e<span class="bell">◐</span></span>
+              <span class="dtab" id="tab-claude">✳ claude <b style="color:#e8b96b">EXT</b></span>
+              <span class="hint">shell 集成 ✓ zsh（可关）· 块 = OSC 133</span>
+            </div>
+            <div class="termwrap">
+              <div class="termscroll" id="term"></div>
+              <div class="rail" id="rail"></div>
+            </div>
+          </div>
+        </div>
+        <div class="statusbar">
+          <span>main · ✓ 工作区干净</span>
+          <span class="prog" id="sbprog"><span id="sblabel">test:e2e</span><span class="bar"><i id="sbbar"></i></span><span id="sbpct">0%</span></span>
+          <span style="margin-left:auto">TS 5.9 · UTF-8</span>
+        </div>
+
+        <div class="notif" id="notif">
+          <div class="appic">C</div>
+          <div>
+            <div class="nt" id="nt">test:e2e 通过</div>
+            <div class="nb" id="nb">96 通过 · 0 失败 · 2m14s · checkout-web</div>
+            <div class="na">点击回到这条命令 ↩</div>
+          </div>
+        </div>
+        <div class="minidock" id="minidock">
+          <span class="ic"></span>
+          <span class="ic charter">C<span class="lbl">Dock 进度（macOS）</span><span class="p"><i id="dockbar"></i></span></span>
+          <span class="ic"></span>
+        </div>
+        <div class="keyhud" id="keyhud"><span>⌘</span><span>↑</span></div>
+        <div class="subs" id="subs"></div>
+        <div class="fakecur" id="fakecur">
+          <span class="ring"></span>
+          <svg width="20" height="21" viewBox="0 0 20 21"><path d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z" fill="#fff" stroke="#1b1a16" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>借了什么、怎么落地 <span>Ghostty 行为 → Charter 落法</span></h2>
+      <table class="map">
+        <tr><th>Ghostty 原样</th><th>用户为什么爱</th><th>Charter 落法</th></tr>
+        <tr>
+          <td>OSC 133 语义提示符：⌘↑/⌘↓ 跳上一条/下一条命令，三击选整段输出</td>
+          <td>十分钟的滚动缓冲不再靠肉眼考古；「上一条命令输出在哪」变成一个按键</td>
+          <td><b>块模型</b>：每条命令 = 一个块（命令行 + 输出 + 退出码 + 用时），⌘↑/⌘↓ 块间跳、整块选中；块头悬停出动作：<b>复制输出 / 存为附件 / ⤴ 发给 Room / ↻ 重跑</b>。「发给 Room」复用 @-ref 机制，署名 YOU（TERM-006）</td>
+        </tr>
+        <tr>
+          <td>⌃⇧↑/⌃⇧↓（<code style="font-family:var(--mono);font-size:10.5px">jump_to_prompt</code>）：逐个跳到上一步/下一步提示符——纯键盘，Ghostty 本身没有滚动条标记（1.3 前无滚动条；1.3 起有也是系统原生单色，不按命令结果着色）</td>
+          <td>不用在滚动缓冲里肉眼找上一条命令在哪，一个键位直接跳过去；至于「哪里失败了」，Ghostty 里还是得一条条跳着看</td>
+          <td><b>标记轨</b>（Charter 原创视觉，非 Ghostty 既有 UI）：绿点 = 成功块、红点 = 非零退出码、蓝点 = 运行中、紫点 = 外置会话回合；点标记直达该块并闪烁定位——把 jump_to_prompt 的「键盘可达」升级成「肉眼 + 点击可达」（这层视觉的先行者：VS Code 终端的 overview-ruler 命令装饰——走同一语义提示符谱系的 OSC 633，按退出码着色；更字面的「滚动区打标」先例是 iTerm2 的 SetMark）</td>
+        </tr>
+        <tr>
+          <td>进度上报（OSC 9;4）：1.2 起把进度条画在每个分屏顶上（macOS 终端首家），支持 进行中 / 错误 / 不确定 三种语义态</td>
+          <td>长命令不再是黑箱——不用盯着刷屏猜进度</td>
+          <td>三层同源进度：<b>坞 tab 进度环</b> → <b>状态栏进度条</b> → <b>macOS Dock 图标进度</b>。没有 OSC 9;4 的命令，识别 vitest/playwright 等已知输出格式做解析降级；都没有则诚实显示「运行中」不装进度。再借 Ghostty 一手：进度<b>过期 + keep-alive</b>（Ghostty 用 14s）——进程崩了，绝不留一根卡死的进度条</td>
+        </tr>
+        <tr>
+          <td>命令完成通知（1.3 <code style="font-family:var(--mono);font-size:10.5px">notify-on-command-finish</code>：never / unfocused / always，动作 bell/notify 可组合，最短时长默认 5s）+ bell 注意力提示</td>
+          <td>「跑着长命令去干别的」终于安全——完成/失败会来找你</td>
+          <td>失焦时长命令（&gt;15s，可设）结束发一条系统通知，点击<b>跳回该块首</b>；聚焦时只打 tab 铃铛标记不弹通知。一次边沿一条，延续 PIVOT-014 的通知卫生</td>
+        </tr>
+        <tr>
+          <td>cmux（Ghostty 内核的 agent 终端，同一命题的佐证）：需要输入的窗格亮「通知环」、侧栏未读徽章 + 通知面板、⌘⇧U 一键直达未读（聚焦该窗格即自动清除）；触发走 OSC 9/99/777 与 agent hooks</td>
+          <td>并行跑几个 agent 时「谁在等我」一眼可见——这几乎是 cmux 存在的全部理由</td>
+          <td>同一条注意力主线不另起炉灶：铃铛/进度环挂在坞 tab 与任务行上，全局未读继续由既有 Inbox / Needs You 承担；外置会话「需要输入」的边沿走同一路径（OSC 9/777 是事实标准，cmux 同用）</td>
+        </tr>
+        <tr>
+          <td>失焦分屏调暗（unfocused-split-opacity）</td>
+          <td>多窗格时焦点永远一眼可辨，误输入归零</td>
+          <td>坞失焦时整体轻微降亮、编辑器聚焦描边——同一条「焦点确定性」规则同时用于坞 ⇄ 编辑器 ⇄ 速召台（研究稿 ①）</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 终端输出是结构，不是墙纸 <span class="tag new">NEW</span><span class="tag src">源自 Ghostty</span></h3>
+          <p>
+            块是新的最小单位：跳转按块、选择按块、引用按块、重跑按块。外置 claude / codex 会话里
+            「回合」即块（沿 ADR-0017 已知 CLI 解析路径）——<b>同一套手势覆盖普通命令与 agent 会话</b>。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 进度只有一个来源 <span class="tag new">NEW</span></h3>
+          <p>
+            tab 环、状态栏、Dock 图标画的是<b>同一个数</b>（OSC 9;4 或已知格式解析），永不编造。
+            解析不到就显示「运行中 · 已用时」，不画假进度条——与「验证未跑就标 Unverified」（VER-007）同一种诚实。
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · 通知拉你回到「块」，不是回到 app <span class="tag new">NEW</span></h3>
+          <p>
+            点通知落点是<b>那条命令的块首</b>（滚动定位 + 闪烁），不是泛泛把窗口带到前台。
+            与任务通知「点击直达 Room」的既有肌理一致（PIVOT-014），只是粒度从任务细到命令。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分（安全语义原样）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>域分离 <span class="tag keep">KEEP</span></h3>
+          <p>
+            这一切都发生在<b>用户终端域</b>（TERM-005）：重跑是用户动作、无 agent 审批；
+            agent 命令的输出仍走专用 Output/Test 视图（TERM-006），不会混进坞里冒充手工输入。
+          </p>
+        </div>
+        <div class="card">
+          <h3>通知卫生 <span class="tag keep">KEEP</span></h3>
+          <p>
+            每个状态边沿一条、聚焦窗口抑制、Settings 可关——命令级通知加入同一套规则与同一个开关面板，
+            不另起炉灶。E2E 下继续全体静音（PI_IDE_E2E）。
+          </p>
+        </div>
+        <div class="card">
+          <h3>shell 集成可关、可降级 <span class="tag keep">KEEP</span></h3>
+          <p>
+            集成脚本按 shell 注入（zsh/bash/fish），Settings 一键关闭；关闭或第三方 shell 下，
+            终端退回今天的纯滚动形态——功能消失但绝不出错，启动环境保持可诊断（TERM-003）。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>刻意不搬的（以及为什么）</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>Kitty 图形协议（终端内渲染图片） <span class="tag skip">SKIP</span></h3>
+          <p>
+            Ghostty 靠它在终端里显示图片；Charter 是 IDE——图片有真正的查看器与批注器（PIVOT-020），
+            在终端里再造一个次等图片通道是重复建设。
+          </p>
+        </div>
+        <div class="card">
+          <h3>GLSL 光标拖尾 / 自定义着色器 <span class="tag skip">SKIP</span></h3>
+          <p>
+            Ghostty 社区最出圈的玩具，但它服务「终端即个人空间」的情绪；Charter 的房间气质是安静工坊，
+            光标烟花与之相抵。动效预算已由 Live Board 一处统管（PIVOT-025r），不再添第二个动效系统。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      研究稿 ② / ④ · 源：Ghostty shell integration（OSC 133 提示符语义 / 输出选择 / cwd 继承）、OSC 9;4 进度、
+      完成通知与 bell、unfocused-split 调暗 · 同系列：① inspo-ghostty-quick-console.html · ③ inspo-cmux-parallel-attempts.html ·
+      ④ inspo-cmux-preview-gate-pr.html · 采纳流程：讨论 → ADR（shell 集成注入与块模型）→ 实现 → E2E（块跳转/标记轨直达/
+      进度三层同源/失焦通知一次一条/降级形态）。
+    </div>
+
+    <script>
+      const dock = document.getElementById('dock');
+      const term = document.getElementById('term');
+      const rail = document.getElementById('rail');
+      const ring = document.getElementById('ring');
+      const tabZsh = document.getElementById('tab-zsh');
+      const tabClaude = document.getElementById('tab-claude');
+      const edwrap = document.getElementById('edwrap');
+      const typeline = document.getElementById('typeline');
+      const sbprog = document.getElementById('sbprog');
+      const sbbar = document.getElementById('sbbar');
+      const sbpct = document.getElementById('sbpct');
+      const notif = document.getElementById('notif');
+      const minidock = document.getElementById('minidock');
+      const dockbar = document.getElementById('dockbar');
+      const keyhud = document.getElementById('keyhud');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+      const stage = document.querySelector('.stage');
+
+      // ── 素材：zsh 块 ──────────────────────────
+      const PS1 = '<span class="dim">checkout-web %</span> ';
+      const BLK_LINT = {
+        cls: 'err', cmd: 'npm run lint', meta: '3.8s', exit: 'exit 1',
+        out: 'src/checkout/CouponField.tsx\n  <span class="warnx">41:9</span>  no-unused-vars  ‘expiredAt’ is assigned a value but never used\n<span class="errx">✖ 1 problem (1 error)</span>',
+      };
+      const BLK_GIT = { cls: 'ok', cmd: 'git status -sb', meta: '0.1s', exit: '✓', out: '<span class="dim">## main…origin/main\n M src/checkout/CouponField.tsx</span>' };
+      const E2E_LINES = [
+        '<span class="runx">RUN</span> playwright test — 96 specs',
+        '<span class="dim">checkout › coupon.spec.ts</span>  <span class="okx">✓</span> expired coupon shows inline hint',
+        '<span class="dim">checkout › coupon.spec.ts</span>  <span class="okx">✓</span> submit disabled while expired',
+        '<span class="dim">checkout › summary.spec.ts</span>  <span class="okx">✓</span> totals reflow on discount',
+        '<span class="dim">review › gate.spec.ts</span>  <span class="okx">✓</span> hunk decisions persist',
+      ];
+      // claude 会话回合
+      const TURNS = [
+        { cls: 'ok', cmd: '回合 1 · 你：优惠券过期要行内提示', meta: '02:11', exit: '✓', out: '<span class="dim">✳ 读取 CouponField.tsx · 读取 validate.ts</span>' },
+        { cls: 'ok', cmd: '回合 2 · ✳ claude：Edit CouponField.tsx', meta: '02:24', exit: '+31 −4', out: '<span class="dim">⏺ Edit CouponField.tsx — InlineHint 分支 + disable 提交</span>' },
+        { cls: 'ok', cmd: '回合 3 · ✳ claude：写测试并自查', meta: '02:31', exit: '+58 −0', out: '<span class="dim">⏺ Write CouponField.test.tsx · Bash vitest run — 8 passed</span>' },
+      ];
+
+      let zshBlocks = []; // {cls, cmd, meta, exit, out, live}
+      let view = 'zsh';
+      function blkHtml(b, i) {
+        const acts = '<span class="acts"><button>复制输出</button><button>⤴ 发给 Room</button><button id="rerun' + i + '">↻ 重跑</button></span>';
+        const ex = b.exit ? `<span class="ex ${b.cls === 'err' ? 'err' : 'ok'}">${b.exit}</span>` : '';
+        return `<div class="tblk ${b.cls}${b.showacts ? ' showacts' : ''}${b.sel ? ' selected' : ''}" id="blk${i}">
+          <div class="tblk-head"><span class="dim">%</span> <span class="cmd">${b.cmd}</span>${ex}<span class="meta2">${b.meta || ''}</span>${acts}</div>
+          <div class="tblk-out">${b.out}</div></div>`;
+      }
+      function renderTerm(cursorOn = true) {
+        const blocks = view === 'zsh' ? zshBlocks : TURNS;
+        term.innerHTML = blocks.map(blkHtml).join('') + (cursorOn && view === 'zsh' ? `<div>${PS1}<span class="cur"></span></div>` : '');
+        renderRail();
+      }
+      function renderRail() {
+        const blocks = view === 'zsh' ? zshBlocks : TURNS;
+        rail.innerHTML = blocks
+          .map((b, i) => {
+            const cls = view === 'claude' ? 'turn' : b.cls === 'err' ? 'err' : b.cls === 'run' ? 'run' : 'ok';
+            const top = 6 + (i * 88) / Math.max(blocks.length, 1);
+            return `<span class="mk ${cls}" style="top:${top}%" data-i="${i}"></span>`;
+          })
+          .join('');
+      }
+      function setProgress(pct) {
+        const on = pct != null;
+        tabZsh.classList.toggle('prog', on);
+        sbprog.classList.toggle('show', on);
+        if (on) {
+          ring.style.background = `conic-gradient(var(--run) ${pct}%, #4a473f 0)`;
+          sbbar.style.width = pct + '%';
+          sbpct.textContent = pct + '%';
+          dockbar.style.width = pct + '%';
+        }
+      }
+
+      // ── 影片引擎 ──────────────────────────────
+      const ABORT = Symbol('abort');
+      let token = 0; let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms; let last = performance.now();
+          const tick = () => {
+            if (my !== token) { reject(ABORT); return; }
+            const n = performance.now();
+            if (!paused) { left -= n - last; clock.inScene += n - last; }
+            last = n;
+            if (left <= 0) resolve(); else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = stage.getBoundingClientRect();
+        cursor.style.transform = `translate(${r.left - box.left + r.width * fx}px, ${r.top - box.top + r.height * fy}px)`;
+        await wait(660);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click');
+        await wait(260);
+      }
+      function say(html) { subs.innerHTML = html; subs.classList.add('show'); }
+      async function hud(html) {
+        keyhud.innerHTML = html; keyhud.classList.add('show');
+        await wait(650); keyhud.classList.remove('show');
+      }
+
+      // ── 分镜 ──────────────────────────────────
+      const SCENES = [
+        {
+          label: '① 长命令起跑',
+          est: 7500,
+          async play() {
+            zshBlocks = [BLK_GIT, BLK_LINT]; renderTerm();
+            say('坞里已经躺着两个<b>块</b>——lint 那块是红的（exit 1）。现在起跑一条长命令。');
+            await wait(2200);
+            let typed = '';
+            for (const ch of 'npm run test:e2e') {
+              typed += ch;
+              term.innerHTML = zshBlocks.map(blkHtml).join('') + `<div>${PS1}${typed}<span class="cur"></span></div>`;
+              await wait(52);
+            }
+            await wait(300);
+            zshBlocks = [...zshBlocks, { cls: 'run', cmd: 'npm run test:e2e', meta: '运行中', exit: '', out: E2E_LINES[0] }];
+            renderTerm(false);
+            say('shell 集成（OSC 133）把它登记成新块：滚动条标记轨上多了一颗<b>蓝点</b>。');
+            await wait(3200);
+          },
+          snap() {
+            zshBlocks = [BLK_GIT, BLK_LINT, { cls: 'run', cmd: 'npm run test:e2e', meta: '运行中', exit: '', out: E2E_LINES[0] }];
+            renderTerm(false);
+          },
+        },
+        {
+          label: '② 进度环 + 失焦调暗',
+          est: 10500,
+          async play() {
+            say('测试框架的进度（OSC 9;4，vitest/playwright 可解析降级）流进三个地方：<b>tab 进度环、状态栏、Dock 图标</b>。');
+            setProgress(8);
+            await wait(1600);
+            say('你不用等——点回编辑器继续写。坞<b>轻微调暗</b>（Ghostty 的失焦调暗），焦点在哪一眼可辨。');
+            await moveCursorTo(typeline, 0.42, 0.5);
+            await clickCursor();
+            dock.classList.add('dim');
+            edwrap.classList.add('focus');
+            minidock.classList.add('show');
+            let pct = 12;
+            const outIdx = [1, 2, 3];
+            for (let i = 0; i < 3; i++) {
+              pct += 21; setProgress(pct);
+              zshBlocks[2].out = E2E_LINES.slice(0, 2 + i).join('\n');
+              zshBlocks[2].meta = Math.round((pct / 100) * 96) + '/96';
+              renderTerm(false);
+              typeline.innerHTML = `<span class="lno">45</span>  <span class="kw">return</span> &lt;Field disabled={expired} …/&gt;<span class="typing">${'·'.repeat(i + 1)}</span><span class="caret"></span>`;
+              await wait(1900);
+            }
+            await wait(1300);
+          },
+          snap() {
+            this._ = null;
+            zshBlocks = [BLK_GIT, BLK_LINT, { cls: 'run', cmd: 'npm run test:e2e', meta: '68/96', exit: '', out: E2E_LINES.slice(0, 4).join('\n') }];
+            renderTerm(false);
+            setProgress(72); dock.classList.add('dim'); edwrap.classList.add('focus'); minidock.classList.add('show');
+          },
+        },
+        {
+          label: '③ 完成通知 → 直达块首',
+          est: 9800,
+          async play() {
+            setProgress(100);
+            await wait(500);
+            zshBlocks[2] = { cls: 'ok', cmd: 'npm run test:e2e', meta: '2m14s', exit: '96 ✓', out: E2E_LINES.slice(0, 5).join('\n') + '\n<span class="okx">96 passed</span> <span class="dim">(2m14s)</span>' };
+            renderTerm(); setProgress(null);
+            minidock.classList.remove('show');
+            notif.classList.add('show');
+            say('跑完了，而你正看着编辑器——<b>一条系统通知</b>（失焦才发、一次边沿一条，延续 PIVOT-014 卫生规则）。');
+            await wait(3400);
+            say('点通知，落点不是「把 app 带到前台」，而是<b>这条命令的块首</b>。');
+            await moveCursorTo(notif, 0.5, 0.55);
+            await clickCursor();
+            notif.classList.remove('show');
+            dock.classList.remove('dim'); edwrap.classList.remove('focus');
+            const blk = document.getElementById('blk2');
+            if (blk) { blk.classList.add('flash'); blk.scrollIntoView({ block: 'nearest' }); }
+            await wait(3200);
+          },
+          snap() {
+            zshBlocks = [BLK_GIT, BLK_LINT, { cls: 'ok', cmd: 'npm run test:e2e', meta: '2m14s', exit: '96 ✓', out: E2E_LINES.slice(0, 5).join('\n') + '\n<span class="okx">96 passed</span> <span class="dim">(2m14s)</span>' }];
+            renderTerm(); setProgress(null);
+          },
+        },
+        {
+          label: '④ 块间跳转 · 红点直达',
+          est: 9200,
+          async play() {
+            say('滚动缓冲的考古时代结束：<b>⌘↑</b> 逐块上跳——');
+            await hud('<span>⌘</span><span>↑</span>');
+            zshBlocks[2].sel = true; renderTerm(); await wait(900);
+            zshBlocks[2].sel = false;
+            await hud('<span>⌘</span><span>↑</span>');
+            zshBlocks[1].sel = true; renderTerm(); await wait(1100);
+            say('或者直接点标记轨上的<b>红点</b>——非零退出码的块一眼可见、一步直达。');
+            zshBlocks[1].sel = false; renderTerm();
+            const mk = rail.querySelector('.mk.err');
+            await moveCursorTo(mk, 0.5, 0.5);
+            await clickCursor();
+            zshBlocks[1].sel = true; zshBlocks[1].showacts = true; renderTerm();
+            const b1 = document.getElementById('blk1');
+            if (b1) b1.classList.add('flash');
+            say('块选中即整段输出选中；块头动作：<b>复制输出 / ⤴ 发给 Room / ↻ 重跑</b>。「发给 Room」= 研究稿 ① 里那枚引用附件。');
+            await wait(4200);
+          },
+          snap() {
+            zshBlocks = [BLK_GIT, { ...BLK_LINT, sel: true, showacts: true }, { cls: 'ok', cmd: 'npm run test:e2e', meta: '2m14s', exit: '96 ✓', out: '<span class="okx">96 passed</span> <span class="dim">(2m14s)</span>' }];
+            renderTerm();
+          },
+        },
+        {
+          label: '⑤ 失败块一键重跑',
+          est: 7800,
+          async play() {
+            say('修完代码回来，不用重敲命令——失败块上直接 <b>↻ 重跑</b>（用户域动作，无审批）。');
+            const btn = document.getElementById('rerun1');
+            if (btn) { await moveCursorTo(btn); await clickCursor(); }
+            zshBlocks[1].sel = false; zshBlocks[1].showacts = false;
+            zshBlocks = [...zshBlocks, { cls: 'run', cmd: 'npm run lint', meta: '重跑 ↰', exit: '', out: '<span class="dim">&gt; eslint . --max-warnings 0</span>' }];
+            renderTerm(false);
+            await wait(2200);
+            zshBlocks[3] = { cls: 'ok', cmd: 'npm run lint', meta: '重跑 ↰ · 3.1s', exit: '✓', out: '<span class="okx">✓ clean — 0 problems</span>' };
+            renderTerm();
+            say('新块与原失败块<b>互相链接</b>（重跑 ↰）；标记轨长出一颗绿点。历史不被覆盖——旧失败还在，只是有了下文（同 VER-005 的 superseded 语义）。');
+            await wait(3800);
+          },
+          snap() {
+            zshBlocks = [BLK_GIT, BLK_LINT, { cls: 'ok', cmd: 'npm run test:e2e', meta: '2m14s', exit: '96 ✓', out: '<span class="okx">96 passed</span>' }, { cls: 'ok', cmd: 'npm run lint', meta: '重跑 ↰ · 3.1s', exit: '✓', out: '<span class="okx">✓ clean — 0 problems</span>' }];
+            renderTerm();
+          },
+        },
+        {
+          label: '⑥ 外置会话：回合即块',
+          est: 9200,
+          async play() {
+            say('切到 <b>✳ claude</b> 的外置会话——同一套语义：<b>回合即块</b>（沿 ADR-0017 已知 CLI 的解析路径）。');
+            await moveCursorTo(tabClaude);
+            await clickCursor();
+            tabZsh.classList.remove('on'); tabClaude.classList.add('on');
+            view = 'claude'; renderTerm(false);
+            await wait(2400);
+            say('紫点 = 回合。⌘↑ 跳回合、整回合选中、<b>把某个回合的输出发给 Room</b>——agent 会话的滚动缓冲同样不再是考古现场。');
+            await hud('<span>⌘</span><span>↑</span>');
+            const b1 = document.getElementById('blk1');
+            if (b1) { b1.classList.add('selected', 'flash'); }
+            await wait(4200);
+          },
+          snap() {
+            tabZsh.classList.remove('on'); tabClaude.classList.add('on');
+            view = 'claude'; renderTerm(false);
+          },
+        },
+        {
+          label: '⑦ 收束',
+          est: 6200,
+          async play() {
+            say('四件套一起落地：<b>块模型 × 标记轨 × 三层同源进度 × 命令级通知</b>。终端从「一坨字符」变成「读得懂的记录」——普通命令与 agent 会话，同一套手势。');
+            await wait(6000);
+          },
+          snap() {},
+        },
+      ];
+
+      // ── 播放器 ────────────────────────────────
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+      function resetAll() {
+        zshBlocks = []; view = 'zsh';
+        tabZsh.classList.add('on'); tabClaude.classList.remove('on');
+        tabZsh.classList.remove('bell');
+        renderTerm(); setProgress(null);
+        dock.classList.remove('dim'); edwrap.classList.remove('focus');
+        notif.classList.remove('show'); minidock.classList.remove('show');
+        typeline.innerHTML = '<span class="lno">45</span>  <span class="kw">return</span> &lt;Field …/&gt;;';
+        keyhud.classList.remove('show');
+        subs.classList.remove('show');
+        cursor.style.transform = 'translate(640px, 320px)';
+      }
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i; clock.inScene = 0; markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est;
+          await wait(1500);
+          if (my === token) seek(0);
+        } catch (e) { if (e !== ABORT) throw e; }
+      }
+      function seek(n) {
+        token += 1; resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n; clock.inScene = 0; markChap(n);
+        void run(n);
+      }
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap'; b.textContent = s.label; b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+      const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+      playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停'; };
+      document.getElementById('vreplay').onclick = () => { paused = false; playBtn.textContent = '⏸ 暂停'; seek(0); };
+
+      seek(0);
+    </script>
+  </body>
+</html>

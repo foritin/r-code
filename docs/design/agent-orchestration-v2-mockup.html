@@ -1,0 +1,573 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 会话编排（agent 互控）— v2 mockup · 三个本质变体</title>
+    <style>
+      /* Tokens mirror apps/desktop-renderer/src/styles/theme.css (studio light).
+         Shell likeness mirrors session-workbench.css (rail) + room.css (room). */
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --danger-bg: #fdecea;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --radius-card: 14px;
+        --radius-chip: 9px;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg-app); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+
+      /* ---------- mockup 导航（非产品 UI） ---------- */
+      .mockbar { max-width: 1240px; margin: 24px auto 6px; padding: 0 20px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      .mockbar h1 { font-family: var(--font-display); font-size: 21px; font-weight: 600; margin: 0; }
+      .mockbar .sub { color: var(--fg-muted); font-size: 12.5px; }
+      .vswitch { margin-left: auto; display: inline-flex; gap: 6px; }
+      .vswitch button { font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: var(--radius-chip); border: 1px solid var(--border); background: var(--bg-card); color: var(--fg-muted); cursor: pointer; }
+      .vswitch button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+      .vdesc { max-width: 1240px; margin: 0 auto 12px; padding: 0 20px; color: var(--fg-muted); font-size: 12.5px; }
+      .vdesc b { color: var(--fg); }
+
+      /* ---------- 壳复刻 ---------- */
+      .frame { max-width: 1240px; margin: 0 auto 26px; padding: 0 20px; }
+      .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 584px; background: var(--bg-editor); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+
+      /* rail（镜像 .sr-rail：44px 活动列 + 面板） */
+      .rail { display: grid; grid-template-columns: 44px minmax(0, 1fr); border-right: 1px solid var(--border); background: var(--bg-sidebar); min-height: 0; }
+      .rail-strip { border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 6px; }
+      .rail-strip .brand { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-family: var(--font-display); font-size: 13px; margin-bottom: 8px; }
+      .rail-strip .it { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-faint); font-size: 14px; position: relative; }
+      .rail-strip .it.active { background: var(--bg-active); color: var(--fg); }
+      .rail-strip .it .mini { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+      .rail-panel { display: flex; flex-direction: column; min-height: 0; }
+      .rail-head { padding: 12px 12px 8px; }
+      .rail-head .hrow { display: flex; align-items: baseline; gap: 6px; }
+      .rail-head strong { font-size: 14px; }
+      .rail-head small { color: var(--fg-faint); font-size: 10.5px; margin-left: auto; }
+      .rail-search { margin-top: 8px; display: flex; gap: 6px; }
+      .rail-search .box { flex: 1; display: flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--fg-faint); font-size: 11.5px; }
+      .rail-search .needs { padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--fg-muted); font-size: 11.5px; cursor: pointer; }
+      .rail-scroll { flex: 1; min-height: 0; overflow: auto; padding: 6px 9px 14px; }
+      .grp-head { min-height: 32px; display: flex; align-items: center; gap: 6px; padding-left: 6px; color: var(--fg-muted); }
+      .grp-head strong { font: 650 11.5px var(--font-ui); color: var(--fg); }
+      .grp-head .cnt { margin-left: auto; color: var(--fg-faint); font: 9px var(--font-mono); padding-right: 6px; }
+      .grp-items { margin: 0 0 6px 8px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+      /* 会话行（镜像 .sr-session：25px 图标列 + 文案，58px 高） */
+      .srow { position: relative; width: 100%; min-height: 56px; display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 7px; margin-bottom: 2px; padding: 7px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; align-items: start; }
+      .srow:hover { background: var(--bg-hover); }
+      .srow.selected { background: var(--bg-active); border-color: var(--border); }
+      .srow .ic { width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; background: var(--bg-chip); color: var(--fg-muted); }
+      .srow .t { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; min-width: 0; }
+      .srow .t .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .srow .d { margin-top: 2px; color: var(--fg-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); opacity: 0.5; flex: none; }
+      .ldot.live { background: var(--success); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+      .ldot.hold { background: var(--warning); opacity: 1; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .badge { flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 6px; background: var(--bg-chip); color: var(--fg-muted); font-weight: 600; }
+      .badge.warn { background: var(--warning-bg); color: var(--warning); }
+      .badge.ok { background: var(--success-bg); color: var(--success); }
+      .badge.info { background: var(--info-bg); color: var(--info); }
+      /* 变体一：家谱缩进（复用组内缩进的既有习语） */
+      .kids { margin: 0 0 4px 19px; padding-left: 7px; border-left: 1px solid var(--border-soft); }
+      .kids .srow { min-height: 44px; }
+      .kids .srow .ic { width: 21px; height: 21px; font-size: 10.5px; }
+
+      /* ---------- 房间复刻 ---------- */
+      .room { display: flex; flex-direction: column; min-height: 0; background: var(--bg-editor); }
+      .room-head { display: flex; align-items: center; gap: 9px; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); }
+      .room-head .back { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); font-size: 12px; cursor: pointer; }
+      .room-head .rt { font-family: var(--font-display); font-size: 15px; font-weight: 600; }
+      .room-head .proj { color: var(--fg-faint); font-size: 11.5px; }
+      .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: var(--radius-chip); background: var(--bg-chip); color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+      .chip.ctl { background: var(--info-bg); color: var(--info); }
+      .chip.warn { background: var(--warning-bg); color: var(--warning); }
+      .spacer { flex: 1; }
+      .ghost { border: none; background: transparent; color: var(--fg-faint); font: inherit; font-size: 12px; cursor: pointer; padding: 3px 7px; border-radius: 7px; }
+      .ghost:hover { background: var(--bg-hover); color: var(--fg); }
+
+      /* 受控/接管横带 */
+      .band { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12px; border-bottom: 1px solid var(--border-soft); }
+      .band.ctl { background: var(--info-bg); color: var(--info); }
+      .band.taken { background: var(--info-bg); color: var(--info); }
+      .band .act { margin-left: auto; font-size: 11.5px; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 7px; padding: 2px 9px; cursor: pointer; }
+
+      /* 终端体 */
+      .term { flex: 1; min-height: 0; overflow: auto; padding: 12px 18px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.66; color: var(--fg-muted); white-space: pre-wrap; cursor: text; }
+      .term .cmd { color: var(--fg); }
+      .term .ok { color: var(--success); }
+      .term .err { color: var(--danger); }
+      .term .dim { color: var(--fg-faint); }
+
+      /* 审批卡（Needs-you 家族） */
+      .approval { margin: 10px 16px; border: 1px solid var(--warning); background: var(--warning-bg); border-radius: 12px; padding: 10px 13px; }
+      .approval .q { font-size: 12.5px; }
+      .approval .q b { font-weight: 650; }
+      .approval code { font-family: var(--font-mono); font-size: 11px; background: rgba(255, 255, 255, 0.7); padding: 1px 6px; border-radius: 5px; }
+      .approval .acts { display: flex; gap: 6px; margin-top: 9px; }
+      .approval .acts button { font: inherit; font-size: 11.5px; padding: 3.5px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .approval .acts .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      /* CLI 输入行（外部房间的对话入口，ADR-0030） */
+      .cli-input { margin: 10px 16px 14px; display: flex; align-items: center; gap: 8px; max-width: 760px; align-self: center; width: calc(100% - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); padding: 10px 14px; color: var(--fg-faint); font-family: var(--font-mono); font-size: 12px; }
+      .cli-input .caret { color: var(--fg); }
+
+      /* 变体二：编队区（主指挥房间内嵌瓦片） */
+      .fleet-sec { border-top: 1px solid var(--border-soft); padding: 10px 16px 14px; }
+      .fleet-sec h4 { margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); display: flex; align-items: center; gap: 8px; }
+      .fleet-sec h4 .spacer { flex: 1; }
+      .ftiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .ftile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; cursor: pointer; }
+      .ftile.pending { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+      .ftile .fh { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); background: var(--bg-titlebar); font-size: 11.5px; font-weight: 600; }
+      .ftile .fb { padding: 7px 11px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--fg-muted); white-space: pre-wrap; min-height: 66px; }
+      .ftile .fa { padding: 0 10px 9px; display: flex; gap: 6px; }
+      .ftile .fa button { font: inherit; font-size: 11px; padding: 2.5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .ftile .fa .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      /* 变体三：时间线房间（rt-col 760px 中栏） */
+      .rt-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 20px 8px; }
+      .rt-col { position: relative; width: min(760px, 100%); margin: 0 auto; }
+      .ms { display: flex; align-items: center; gap: 8px; margin: 12px 0; min-height: 28px; font-size: 12.5px; color: var(--fg-muted); }
+      .ms .msdot { width: 8px; height: 8px; border-radius: 50%; background: var(--bg-chip); border: 1.5px solid var(--border-strong); flex: none; }
+      .ms .msdot.ctl { border-color: var(--info); background: var(--info-bg); }
+      .ms .msdot.warn { border-color: var(--warning); background: var(--warning-bg); }
+      .ms code { font-family: var(--font-mono); font-size: 11px; color: var(--fg); }
+      .ms time { margin-left: auto; color: var(--fg-faint); font: 10px var(--font-mono); flex: none; }
+      .prose { margin: 4px 0 16px; max-width: 100%; font-family: var(--font-display); font-size: 14.5px; line-height: 1.72; color: var(--fg); }
+      .wlog { margin: 2px 0 14px 16px; padding: 9px 12px; border-left: 2px solid var(--border); background: color-mix(in srgb, var(--bg-chip) 45%, transparent); border-radius: 0 9px 9px 0; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.62; color: var(--fg-muted); white-space: pre-wrap; }
+      .wlog .wh { display: flex; align-items: center; gap: 7px; font-family: var(--font-ui); font-size: 11px; font-weight: 600; color: var(--fg-muted); margin-bottom: 5px; cursor: pointer; }
+      .wlog .wh .open { margin-left: auto; color: var(--info); font-weight: 500; cursor: pointer; }
+      .composer { margin: 6px auto 16px; width: min(760px, calc(100% - 8px)); background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); padding: 11px 13px 9px; color: var(--fg-faint); font-size: 12.5px; }
+      .composer .cfoot { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+      .composer .cfoot .chip { font-size: 10.5px; }
+      .composer .send { margin-left: auto; width: 26px; height: 26px; border-radius: 8px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-size: 12px; }
+
+      /* ---------- 设计说明 ---------- */
+      .notes { max-width: 1240px; margin: 4px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .note-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px 18px; }
+      .note-card.wide { grid-column: 1 / -1; }
+      .note-card h2 { font-family: var(--font-display); font-size: 15px; margin: 0 0 8px; }
+      .note-card ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
+      .note-card li { margin: 4px 0; }
+      .note-card li b { color: var(--fg); }
+      table.cmp { width: 100%; border-collapse: collapse; font-size: 12px; }
+      table.cmp th, table.cmp td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+      table.cmp th { color: var(--fg-faint); font-weight: 600; font-size: 11px; white-space: nowrap; }
+      table.cmp td b { font-weight: 650; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="mockbar">
+      <h1>会话编排 · v2</h1>
+      <span class="sub">长在现有壳（rail + 房间）里 · 三个本质不同的心智模型</span>
+      <div class="vswitch">
+        <button id="sw1" class="on">① 家谱在侧栏</button>
+        <button id="sw2">② 指挥室</button>
+        <button id="sw3">③ 编排即工具流</button>
+      </div>
+    </div>
+    <div class="vdesc" id="vdesc">
+      <b>变体一「子会话 = 会话」：</b>rail 长出父子缩进（沿用组内缩进的既有习语），房间本身几乎不变——被指挥的房间只多一条 ⌁ 横带。感知中心 = rail。中间演示的是被指挥的 t9 房间（审批卡 + 点终端正文试试接管）。
+    </div>
+
+    <!-- ================= 变体一：家谱在侧栏 ================= -->
+    <div class="frame" id="v1">
+      <div class="app">
+        <aside class="rail">
+          <div class="rail-strip">
+            <div class="brand">C</div>
+            <div class="it active">▤<span class="mini"></span></div>
+            <div class="it">▦</div>
+            <div class="it">◈</div>
+          </div>
+          <div class="rail-panel">
+            <div class="rail-head">
+              <div class="hrow"><strong>Sessions</strong><small>今天 · 4 live</small></div>
+              <div class="rail-search"><span class="box">⌕ 搜索会话…</span><span class="needs">Needs 1</span></div>
+            </div>
+            <div class="rail-scroll">
+              <div class="grp-head"><strong>pay-service</strong><span class="cnt">4</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">✳</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">claude · 支付超时排查</span><span class="badge info">⌁ 指挥 2</span></span>
+                    <span class="d">外部会话 · 正在协调评审与测试</span>
+                  </span>
+                </div>
+                <div class="kids">
+                  <div class="srow">
+                    <span class="ic">▷</span>
+                    <span>
+                      <span class="t"><span class="ldot live"></span><span class="nm">codex · 方案评审</span></span>
+                      <span class="d">由主会话开启 · 输出中</span>
+                    </span>
+                  </div>
+                  <div class="srow selected" id="v1RowT9">
+                    <span class="ic">✳</span>
+                    <span>
+                      <span class="t"><span class="ldot hold" id="v1T9dot"></span><span class="nm">claude · 跑测试</span><span class="badge warn" id="v1T9badge">待审批</span></span>
+                      <span class="d">由主会话开启 · 请求重装依赖</span>
+                    </span>
+                  </div>
+                </div>
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">购物车折扣</span><span class="badge ok">Review</span></span>
+                    <span class="d">任务 · 等你验收 · 26 分钟前</span>
+                  </span>
+                </div>
+              </div>
+              <div class="grp-head"><strong>charter-site</strong><span class="cnt">1</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">首页文案微调</span></span>
+                    <span class="d">History · 昨天</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="room">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 跑测试</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="band ctl" id="v1Band">⌁ 由「claude · 支付超时排查」指挥 · 本会话的输入可能来自它<button class="act" id="v1BandBtn">暂停对它的遥控</button></div>
+          <div class="band taken hidden" id="v1Taken">✋ 你已接管 · 主会话的 2 条注入已暂挂<button class="act" id="v1GiveBack">归还控制</button></div>
+          <div class="term" id="v1Term" title="点击正文演示接管"><span class="cmd">$ npm test</span>
+<span class="err">✗ 12 passed · 2 failed</span>
+<span class="dim">  ELIFECYCLE 依赖损坏（sharp 二进制缺失）</span>
+<span class="cmd">▍</span></div>
+          <div class="approval" id="v1Approval">
+            <div class="q"><b>主会话</b> 请求向本终端注入高危命令（R3）：<code>rm -rf node_modules && npm ci</code></div>
+            <div class="acts"><button class="allow" id="v1Allow">允许一次</button><button>本任务内总是允许</button><button id="v1Deny">拒绝</button></div>
+          </div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与本会话对话（CLI 输入行）…</div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ================= 变体二：指挥室 ================= -->
+    <div class="frame hidden" id="v2">
+      <div class="app">
+        <aside class="rail">
+          <div class="rail-strip">
+            <div class="brand">C</div>
+            <div class="it active">▤<span class="mini"></span></div>
+            <div class="it">▦</div>
+            <div class="it">◈</div>
+          </div>
+          <div class="rail-panel">
+            <div class="rail-head">
+              <div class="hrow"><strong>Sessions</strong><small>今天 · 4 live</small></div>
+              <div class="rail-search"><span class="box">⌕ 搜索会话…</span><span class="needs">Needs 1</span></div>
+            </div>
+            <div class="rail-scroll">
+              <div class="grp-head"><strong>pay-service</strong><span class="cnt">4</span></div>
+              <div class="grp-items">
+                <div class="srow selected">
+                  <span class="ic">✳</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">claude · 支付超时排查</span><span class="badge warn">1 needs</span></span>
+                    <span class="d">外部会话 · 编队 ×2</span>
+                  </span>
+                </div>
+                <div class="srow">
+                  <span class="ic">▷</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">codex · 方案评审 <span style="color: var(--info)">⌁</span></span></span>
+                    <span class="d">外部会话 · 输出中</span>
+                  </span>
+                </div>
+                <div class="srow">
+                  <span class="ic">✳</span>
+                  <span>
+                    <span class="t"><span class="ldot hold"></span><span class="nm">claude · 跑测试 <span style="color: var(--info)">⌁</span></span><span class="badge warn">待审批</span></span>
+                    <span class="d">外部会话 · 请求重装依赖</span>
+                  </span>
+                </div>
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">购物车折扣</span><span class="badge ok">Review</span></span>
+                    <span class="d">任务 · 等你验收 · 26 分钟前</span>
+                  </span>
+                </div>
+              </div>
+              <div class="grp-head"><strong>charter-site</strong><span class="cnt">1</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">首页文案微调</span></span>
+                    <span class="d">History · 昨天</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="room">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 支付超时排查</span>
+            <span class="proj">pay-service</span>
+            <span class="chip ctl">⌁ 指挥 2 个会话</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="term" style="flex: 1"><span class="cmd">✻ 已把方案交给 codex 评审，测试窗依赖损坏，正申请重装。</span>
+<span class="dim">⏳ wait codex（静默判定）· wait 测试窗（exit 码）</span>
+<span class="cmd">▍</span></div>
+          <div class="fleet-sec">
+            <h4>编队 · 2<span class="spacer"></span><span class="ghost" style="font-size: 11px">⏸ 暂停全部遥控</span></h4>
+            <div class="ftiles">
+              <div class="ftile">
+                <div class="fh"><span class="ldot live"></span>codex · 方案评审<span class="spacer"></span><span class="badge">输出中</span></div>
+                <div class="fb">② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+▍</div>
+              </div>
+              <div class="ftile pending" id="v2TileT9">
+                <div class="fh"><span class="ldot hold" id="v2T9dot"></span>claude · 跑测试<span class="spacer"></span><span class="badge warn" id="v2T9badge">待审批 R3</span></div>
+                <div class="fb" id="v2T9body">请求注入：rm -rf node_modules && npm ci</div>
+                <div class="fa" id="v2T9acts"><button class="allow" id="v2Allow">允许一次</button><button id="v2Deny">拒绝</button><button>打开房间</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与主会话对话…</div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ================= 变体三：编排即工具流 ================= -->
+    <div class="frame hidden" id="v3">
+      <div class="app">
+        <aside class="rail">
+          <div class="rail-strip">
+            <div class="brand">C</div>
+            <div class="it active">▤<span class="mini"></span></div>
+            <div class="it">▦</div>
+            <div class="it">◈</div>
+          </div>
+          <div class="rail-panel">
+            <div class="rail-head">
+              <div class="hrow"><strong>Sessions</strong><small>今天 · 2 live</small></div>
+              <div class="rail-search"><span class="box">⌕ 搜索会话…</span><span class="needs">Needs 1</span></div>
+            </div>
+            <div class="rail-scroll">
+              <div class="grp-head"><strong>pay-service</strong><span class="cnt">2</span></div>
+              <div class="grp-items">
+                <div class="srow selected">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">支付超时排查</span><span class="badge warn">1 needs</span></span>
+                    <span class="d">任务 · ⌁ 2 个工作终端 · 进行中</span>
+                  </span>
+                </div>
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">购物车折扣</span><span class="badge ok">Review</span></span>
+                    <span class="d">任务 · 等你验收 · 26 分钟前</span>
+                  </span>
+                </div>
+              </div>
+              <div class="grp-head"><strong>charter-site</strong><span class="cnt">1</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">首页文案微调</span></span>
+                    <span class="d">History · 昨天</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <main class="room">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">支付超时排查</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">在编辑器打开</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="rt-scroll">
+            <div class="rt-col">
+              <div class="prose">复现了：支付回调在冷启动时偶发 3.2s，超过网关 3s 限制。我准备两条线并行——把修复方案交给一个 codex 评审，同时在干净环境重跑测试确认基线。</div>
+              <div class="ms"><span class="msdot ctl"></span>⌁ 开启工作终端 <code>codex · 方案评审</code> · R2 · 自动放行<time>21:04</time></div>
+              <div class="ms"><span class="msdot ctl"></span>⌁ 注入 <code>请 review docs/plan.md，意见写到 review.md</code> · R1<time>21:04</time></div>
+              <div class="wlog" id="v3Wlog">
+                <div class="wh" id="v3WlogHead"><span class="ldot live"></span>codex · 方案评审 — 实时输出<span class="open">打开房间 ›</span></div><span id="v3WlogBody">② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+▍</span>
+              </div>
+              <div class="ms"><span class="msdot ctl"></span>⌁ 工作终端 <code>claude · 跑测试</code> 命令结束 <code>exit 1</code>（依赖损坏）<time>21:08</time></div>
+              <div class="prose">测试窗的失败是 sharp 二进制缺失，不是代码问题。我需要重装依赖后再跑一遍——这条命令有破坏性，等你放行。</div>
+              <div class="ms" id="v3PendingMs"><span class="msdot warn"></span>⌁ 请求注入 <code>rm -rf node_modules && npm ci</code> · <b>R3 待审批</b><time>21:09</time></div>
+              <div class="approval" style="margin: 4px 0 14px" id="v3Approval">
+                <div class="q">向工作终端「claude · 跑测试」注入高危命令：<code>rm -rf node_modules && npm ci</code></div>
+                <div class="acts"><button class="allow" id="v3Allow">允许一次</button><button>本任务内总是允许</button><button id="v3Deny">拒绝</button></div>
+              </div>
+            </div>
+          </div>
+          <div class="composer">和 agent 继续讨论，或直接下新指令…
+            <div class="cfoot"><span class="chip">pay-service · main</span><span class="chip">Approve changes</span><span class="send">↑</span></div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ================= 设计说明 ================= -->
+    <div class="notes">
+      <div class="note-card wide">
+        <h2>三个变体到底哪里"本质"不同</h2>
+        <table class="cmp">
+          <tr><th></th><th>① 家谱在侧栏</th><th>② 指挥室</th><th>③ 编排即工具流</th></tr>
+          <tr><td><b>子会话是什么</b></td><td>一等公民的会话，只是有了父子关系</td><td>主指挥房间的"舷窗"——编队瓦片</td><td>一次长时工具调用——时间线里的证据块</td></tr>
+          <tr><td><b>感知中心</b></td><td>rail（rail 本身就是指挥树）</td><td>主指挥的房间（一处看全编队）</td><td>对话叙事（读故事顺带看现场）</td></tr>
+          <tr><td><b>rail 变化</b></td><td>长出缩进层级 + needs 冒泡</td><td>不动，仅加 ⌁ 记号</td><td>子会话不上 rail（被任务收编）</td></tr>
+          <tr><td><b>房间变化</b></td><td>被指挥房间加一条 ⌁ 横带</td><td>主指挥房间长出编队区</td><td>时间线多 ⌁ 条目 + 内嵌实时块</td></tr>
+          <tr><td><b>最适配的司机</b></td><td>外部 CLI（claude/codex 互相指挥）</td><td>外部 CLI</td><td>托管 agent（有产品时间线可长）</td></tr>
+          <tr><td><b>主要代价</b></td><td>rail 行进一步变挤；层级与项目分组要商量共存</td><td>房间变复杂；围观和对话抢同一屏</td><td>"实时围观感"最弱；外部 CLI 当司机时没有时间线可挂</td></tr>
+        </table>
+      </div>
+      <div class="note-card">
+        <h2>全变体共享的不变量（不随选型变）</h2>
+        <ul>
+          <li><b>审批三入口同一事件</b>：mission control「Needs you」卡、房间内联卡、系统通知——全部走 PIVOT-013/014 既有管道；三处任一处理，其余同步消失。</li>
+          <li><b>敲字即接管</b>：在被指挥终端输入，遥控注入自动暂挂（变体一里点终端正文可试）。人永远赢过 agent。</li>
+          <li><b>⌁ 事件进账本</b>：开窗/注入/等到 exit 码/关闭全部入 tool_calls，replay 免费回放；变体三的时间线渲染即是 replay 的实时形态。</li>
+          <li>全部界面无 Pi 字样；会话名沿用「CLI 名 · 意图」惯例。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>我的倾向与请你拍的两个开关</h2>
+        <ul>
+          <li>三者可组合：<b>①为骨</b>（rail 是家谱）+ <b>③免费送</b>（托管 agent 当司机时时间线天然长这样）+ <b>②降级为主指挥房间里可折叠的编队区</b>。</li>
+          <li><b>开关一：子会话上不上 rail？</b>上（①②）= 每个子会话可直达、可单独围观；不上（③）= rail 干净，但子会话只能从主会话进。</li>
+          <li><b>开关二：rail 长不长层级？</b>长（①）= 指挥关系一眼可见；不长（②③）= rail 结构不动，关系靠 ⌁ 记号与房间表达。</li>
+          <li>看的时候请重点感受：哪个变体让你<b>最不需要学新东西</b>就明白"谁在指挥谁、谁需要我"。</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const descs = {
+        v1: '<b>变体一「子会话 = 会话」：</b>rail 长出父子缩进（沿用组内缩进的既有习语），房间本身几乎不变——被指挥的房间只多一条 ⌁ 横带。感知中心 = rail。中间演示的是被指挥的 t9 房间（审批卡 + 点终端正文试试接管）。',
+        v2: '<b>变体二「子会话 = 主指挥房间的舷窗」：</b>rail 保持平铺（只加 ⌁ 记号），主指挥的房间长出「编队区」——子会话以实时瓦片内嵌，审批直接在瓦片上处理。感知中心 = 主指挥的房间。',
+        v3: '<b>变体三「子会话 = 工具调用」：</b>子会话不上 rail（被任务收编），编排以 ⌁ 条目 + 内嵌实时块的形式流进任务时间线，审批是时间线里的一张卡。感知中心 = 对话叙事。最适配托管 agent 当司机；也是 replay 的天然形态。',
+      };
+      for (const id of ['1', '2', '3']) {
+        $('#sw' + id).onclick = () => {
+          for (const j of ['1', '2', '3']) {
+            $('#v' + j).classList.toggle('hidden', j !== id);
+            $('#sw' + j).classList.toggle('on', j === id);
+          }
+          $('#vdesc').innerHTML = descs['v' + id];
+        };
+      }
+
+      /* 变体一：审批 + 接管 */
+      const v1Resolve = (allowed) => {
+        $('#v1Approval').remove();
+        $('#v1T9badge').remove();
+        $('#v1T9dot').className = allowed ? 'ldot live' : 'ldot';
+        if (allowed) {
+          $('#v1Term').innerHTML = '<span class="cmd">$ rm -rf node_modules && npm ci</span>\n重装依赖中……\n<span class="cmd">▍</span>';
+          setTimeout(() => { $('#v1Term').innerHTML = '<span class="cmd">$ npm test</span>\n<span class="ok">✓ 14 passed · exit 0</span>'; }, 2400);
+        } else {
+          $('#v1Term').innerHTML += '<span class="dim">（注入被你拒绝，主会话已收到回执）</span>';
+        }
+      };
+      $('#v1Allow').onclick = () => v1Resolve(true);
+      $('#v1Deny').onclick = () => v1Resolve(false);
+      $('#v1Term').onclick = () => { $('#v1Taken').classList.remove('hidden'); $('#v1Band').classList.add('hidden'); };
+      $('#v1GiveBack').onclick = () => { $('#v1Taken').classList.add('hidden'); $('#v1Band').classList.remove('hidden'); };
+
+      /* 变体二：瓦片上的审批 */
+      $('#v2Allow').onclick = () => {
+        $('#v2TileT9').classList.remove('pending');
+        $('#v2T9badge').remove();
+        $('#v2T9acts').remove();
+        $('#v2T9dot').className = 'ldot live';
+        $('#v2T9body').innerHTML = '$ rm -rf node_modules && npm ci\n重装依赖中……▍';
+        setTimeout(() => { $('#v2T9body').innerHTML = '$ npm test\n✓ 14 passed · exit 0'; }, 2400);
+      };
+      $('#v2Deny').onclick = () => {
+        $('#v2TileT9').classList.remove('pending');
+        $('#v2T9badge').textContent = '已拒绝';
+        $('#v2T9acts').remove();
+      };
+
+      /* 变体三：时间线里的审批 */
+      $('#v3Allow').onclick = () => {
+        $('#v3Approval').remove();
+        $('#v3PendingMs').innerHTML = '<span class="msdot ctl"></span>⌁ 注入 <code>rm -rf node_modules && npm ci</code> · R3 · <b>你已批准</b><time>刚刚</time>';
+        const ms = document.createElement('div');
+        ms.className = 'ms';
+        ms.innerHTML = '<span class="msdot ctl"></span>⌁ 工作终端命令结束 <code>exit 0</code> · 14 passed<time>+2s</time>';
+        setTimeout(() => $('#v3PendingMs').after(ms), 2400);
+      };
+      $('#v3Deny').onclick = () => {
+        $('#v3Approval').remove();
+        $('#v3PendingMs').innerHTML = '<span class="msdot warn"></span>⌁ 注入请求被你<b>拒绝</b> · agent 将改走别的路<time>刚刚</time>';
+      };
+      /* 变体三：worklog 折叠 */
+      let v3open = true;
+      $('#v3WlogHead').onclick = (e) => {
+        if (e.target.classList.contains('open')) return;
+        v3open = !v3open;
+        $('#v3WlogBody').style.display = v3open ? '' : 'none';
+      };
+    </script>
+  </body>
+</html>

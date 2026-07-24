@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>会话回放 D — 纪录片式事件流</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="replay-page">
+    <main class="mock-window" data-replay data-duration="38" data-autoplay="true">
+      <header class="appbar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <a class="brand" href="./session-replay-directions.html">C</a>
+        <div class="title-block">
+          <h1>客户退款异常调查</h1>
+          <p>今天 15:25 · Agent 工作了 38 秒 · 纪录片视图</p>
+        </div>
+        <div class="appbar-spacer"></div>
+        <nav class="direction-nav" aria-label="回放方向">
+          <a href="./session-replay-a-cinematic.html">A</a
+          ><a href="./session-replay-b-causal-map.html">B</a
+          ><a href="./session-replay-c-spatial.html">C</a
+          ><a class="on" href="./session-replay-d-documentary.html">D</a
+          ><a href="./session-replay-e-audit.html">E</a>
+        </nav>
+        <button class="top-action" data-toast="已复制带当前时间点的链接">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+            <path d="M5 12v7h14v-7" /></svg
+          >分享</button
+        ><button class="icon-button" data-toast="可导出带字幕的 MP4 或事件清单" aria-label="更多">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      </header>
+      <div class="workspace docu-layout">
+        <aside class="docu-feed">
+          <div class="feed-head">
+            <h2>过程</h2>
+            <span>11 个事件</span>
+          </div>
+          <div class="feed-scroll" data-sequence>
+            <div class="feed-line"></div>
+            <div class="feed-event" data-at="0">
+              <time class="feed-time">00:00</time>
+              <div class="feed-copy"><b>收到调查请求</b><span>退款率高于基线 2.4 倍</span></div>
+            </div>
+            <div class="feed-event" data-at="3">
+              <time class="feed-time">00:03</time>
+              <div class="feed-copy"><b>读取退款明细</b><span>refunds-july.csv · 124 行</span></div>
+            </div>
+            <div class="feed-event" data-at="7">
+              <time class="feed-time">00:07</time>
+              <div class="feed-copy">
+                <b>清理重复记录</b><span>发现并排除 17 个重复 webhook</span>
+              </div>
+            </div>
+            <div class="feed-event" data-at="11">
+              <time class="feed-time">00:11</time>
+              <div class="feed-copy"><b>按来源聚类</b><span>API、后台、客服三条路径</span></div>
+            </div>
+            <div class="feed-event" data-at="15">
+              <time class="feed-time">00:15</time>
+              <div class="feed-copy"><b>形成第一假设</b><span>问题集中在客服批量操作</span></div>
+            </div>
+            <div class="feed-event" data-at="19">
+              <time class="feed-time">00:19</time>
+              <div class="feed-copy"><b>检查帮助中心更新</b><span>流程说明于昨日被修改</span></div>
+            </div>
+            <div class="feed-event" data-at="23">
+              <time class="feed-time">00:23</time>
+              <div class="feed-copy"><b>验证权限边界</b><span>Agent 未访问支付卡数据</span></div>
+            </div>
+            <div class="feed-event" data-at="27">
+              <time class="feed-time">00:27</time>
+              <div class="feed-copy"><b>计算真实异常率</b><span>排重后仅高于基线 18%</span></div>
+            </div>
+            <div class="feed-event" data-at="31">
+              <time class="feed-time">00:31</time>
+              <div class="feed-copy"><b>写入调查报告</b><span>结论、影响和后续动作</span></div>
+            </div>
+            <div class="feed-event" data-at="35">
+              <time class="feed-time">00:35</time>
+              <div class="feed-copy"><b>提出而非执行修复</b><span>等待运营负责人确认</span></div>
+            </div>
+          </div>
+        </aside>
+        <section class="docu-stage">
+          <div
+            class="capture-limit"
+            data-capture-note
+            data-pi=""
+            data-claude="Claude Terminal 当前未持久化 PTY；加入 ANSI 流录像即可回放画面，语义筛选仍需 stream-json / hooks。"
+            data-codex="Codex Terminal 当前未持久化 PTY；加入 ANSI 流录像即可回放画面，语义筛选仍需 JSON / app-server。"
+          ></div>
+          <div class="docu-stage-head">
+            <div class="live-tag"><i></i><span>当时画面</span></div>
+            <span class="mono">evidence-linked · read only</span>
+          </div>
+          <div class="preview-stack">
+            <article class="preview-card" data-window="0-7">
+              <div class="preview-toolbar">
+                <i></i><i></i><i></i><span>Refund investigation request</span>
+              </div>
+              <div class="preview-body">
+                <div class="research-sheet">
+                  <h3>退款率异常</h3>
+                  <p>
+                    过去 24 小时的退款率达到 6.1%，基线为
+                    2.5%。请确认这是真实客户行为，还是数据或流程问题。
+                  </p>
+                  <div class="quote-block">
+                    约束：不要直接修改退款流程；先给出可追溯的调查结论。
+                  </div>
+                </div>
+              </div>
+            </article>
+            <article class="preview-card" data-window="7-19">
+              <div class="preview-toolbar">
+                <i></i><i></i><i></i><span>refunds-july.csv · analysis</span>
+              </div>
+              <div class="preview-body">
+                <div class="sheet-grid" style="font-size: 8px">
+                  <span>ID</span><span>Source</span><span>Amount</span><span>Status</span
+                  ><span>Dup?</span><span>R-882</span><span>Webhook</span><span>$129</span
+                  ><span>Done</span><span class="hot">Yes</span><span>R-883</span
+                  ><span>Support</span><span>$89</span><span>Done</span><span>No</span
+                  ><span>R-884</span><span>Support</span><span>$260</span><span>Done</span
+                  ><span>No</span><span>R-885</span><span>Webhook</span><span>$129</span
+                  ><span>Done</span><span class="hot">Yes</span>
+                </div>
+                <div style="margin-top: 14px; font-size: 9px; color: var(--muted)">
+                  17 / 124 条记录共享相同事件 ID 与时间戳，被标记为重复而非删除。
+                </div>
+              </div>
+            </article>
+            <article class="preview-card" data-window="19-31">
+              <div class="preview-toolbar">
+                <i></i><i></i><i></i><span>Help center · Refund flow</span>
+              </div>
+              <div class="preview-body">
+                <div class="research-sheet">
+                  <h3>客服批量退款流程</h3>
+                  <p>
+                    更新于昨天 17:40。批量操作会先创建退款请求，再由 webhook
+                    同步状态。重复回调不会产生第二笔真实退款。
+                  </p>
+                  <div class="quote-block">
+                    关键证据：报表把“状态回调”误计为新增退款；支付系统只有一笔交易。
+                  </div>
+                </div>
+              </div>
+            </article>
+            <article class="preview-card" data-window="31-39">
+              <div class="preview-toolbar">
+                <i></i><i></i><i></i><span>Investigation report.md</span>
+              </div>
+              <div class="preview-body">
+                <div class="research-sheet">
+                  <h3>调查结论</h3>
+                  <p>
+                    <b>观察值 6.1% 被高估。</b> 17 个重复 webhook
+                    事件造成报表重复计数。排重后的真实退款率为 2.95%，较基线高 18%。
+                  </p>
+                  <div class="quote-block">
+                    建议：修正报表去重逻辑，并由运营确认是否调整客服批量流程。Agent
+                    未直接执行外部变更。
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+          <div class="docu-subtitle">
+            <b class="js-scene-title">收到调查请求</b
+            ><span class="js-scene-detail truncate"
+              >先固定问题定义与“不得直接修改流程”的边界。</span
+            >
+          </div>
+        </section>
+        <aside class="docu-filters">
+          <div class="filter-title">
+            <b>只看什么</b><button data-toast="筛选已重置">清除</button>
+          </div>
+          <div class="filter-search">搜索事件</div>
+          <div class="filter-option on"><i></i>全部事件</div>
+          <div class="filter-option"><i style="--filter: var(--blue)"></i>输入与读取</div>
+          <div class="filter-option"><i style="--filter: var(--amber)"></i>判断与假设</div>
+          <div class="filter-option"><i style="--filter: var(--green)"></i>输出与变更</div>
+          <div class="filter-option"><i style="--filter: var(--violet)"></i>网页与文件</div>
+          <div class="filter-option"><i style="--filter: var(--coral)"></i>权限与边界</div>
+          <div style="border-top: 1px solid var(--line); margin: 10px 0"></div>
+          <div class="filter-option"><i style="--filter: #aaa"></i>仅显示有证据</div>
+        </aside>
+        <section class="replay-transport">
+          <div class="transport-row">
+            <button class="icon-button js-restart" aria-label="重新播放">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 4v6h6" />
+                <path d="M5.5 15a7.5 7.5 0 1 0 1-8" />
+              </svg></button
+            ><button class="play-button js-play" aria-label="播放或暂停">
+              <svg class="play-icon" viewBox="0 0 20 20"><path d="M5 3.5v13l11-6.5z" /></svg
+              ><svg class="pause-icon" viewBox="0 0 20 20">
+                <path d="M4.5 3.5h4v13h-4zm7 0h4v13h-4z" />
+              </svg></button
+            ><span class="transport-time"
+              ><span class="js-current-time">00:00</span> /
+              <span class="js-duration">00:38</span></span
+            >
+            <div class="scrub-wrap">
+              <div class="scrub-bg"></div>
+              <span
+                class="timeline-marker"
+                style="left: 18%; --marker: var(--green)"
+                data-at="7"
+                data-seek="7"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 39%; --marker: var(--amber)"
+                data-at="15"
+                data-seek="15"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 50%; --marker: var(--violet)"
+                data-at="19"
+                data-seek="19"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 61%; --marker: var(--coral)"
+                data-at="23"
+                data-seek="23"
+              ></span
+              ><span class="timeline-marker" style="left: 82%" data-at="31" data-seek="31"></span>
+              <div class="scrub-head"></div>
+              <input class="js-scrubber" type="range" aria-label="回放时间轴" />
+            </div>
+            <button class="soft-button speed-button js-speed">1×</button
+            ><button class="icon-button js-fullscreen" aria-label="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="transport-caption">
+            <i class="pulse-dot"></i><b class="js-caption-title">收到调查请求</b
+            ><span class="js-caption-detail truncate">先区分真实客户行为、数据问题和流程问题</span>
+          </div>
+        </section>
+        <div class="toast"></div>
+        <div
+          hidden
+          data-caption-at="0"
+          data-title="收到调查请求"
+          data-detail="先区分真实客户行为、数据问题和流程问题"
+        ></div>
+        <div
+          hidden
+          data-caption-at="7"
+          data-title="异常里有重复事件"
+          data-detail="17 条记录拥有相同事件 ID，先标记而不是破坏原数据"
+        ></div>
+        <div
+          hidden
+          data-caption-at="15"
+          data-title="第一假设形成"
+          data-detail="客服批量操作与异常高度相关，但还不能证明因果"
+        ></div>
+        <div
+          hidden
+          data-caption-at="19"
+          data-title="流程文档补上关键解释"
+          data-detail="webhook 回调被报表当成了新的退款事件"
+        ></div>
+        <div
+          hidden
+          data-caption-at="23"
+          data-title="权限边界被明确记录"
+          data-detail="调查无需访问卡号，也没有直接改动支付或退款流程"
+        ></div>
+        <div
+          hidden
+          data-caption-at="27"
+          data-title="重新计算真实异常"
+          data-detail="排重后为 2.95%，仍略高但不是最初看到的 6.1%"
+        ></div>
+        <div
+          hidden
+          data-caption-at="31"
+          data-title="把结论和建议分开"
+          data-detail="报告说明事实、推断与建议，修复动作等待负责人确认"
+        ></div>
+      </div>
+    </main>
+    <script src="./session-replay-lab.js"></script>
+    <script>
+      const replay = document.querySelector('[data-replay]');
+      replay.querySelectorAll('.filter-option').forEach((el) =>
+        el.addEventListener('click', () => {
+          replay.querySelectorAll('.filter-option').forEach((x) => x.classList.remove('on'));
+          el.classList.add('on');
+        }),
+      );
+      replay.addEventListener('replaytick', ({ detail }) => {
+        const active = replay.querySelector('.feed-event.active'),
+          scroll = replay.querySelector('.feed-scroll');
+        if (active) {
+          scroll.style.transform = `translateY(${-Math.max(0, active.offsetTop - 220)}px)`;
+          replay.querySelector('.js-scene-title').textContent =
+            active.querySelector('b').textContent;
+          replay.querySelector('.js-scene-detail').textContent =
+            active.querySelector('span').textContent;
+        }
+      });
+    </script>
+  </body>
+</html>

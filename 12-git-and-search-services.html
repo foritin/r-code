@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Git 与搜索服务 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="git-与搜索服务">Git 与搜索服务</h1>
+<h2 id="1-git-服务">1. Git 服务</h2>
+<h3 id="1-1-概述">1.1 概述</h3>
+<p>Git 服务提供仓库检测、状态查询、差异比较、暂存/取消暂存、<br>丢弃、提交、分支切换等能力。</p>
+<h3 id="1-2-当前实现">1.2 当前实现</h3>
+<ul><li>使用 Node git 库。</li><li>提供 detect/status/diff/stage/unstage/discard/commit/branch 操作。</li></ul>
+<h3 id="1-3-rust-替代">1.3 Rust 替代</h3>
+<ul><li>使用 <code>git2</code> crate（libgit2 绑定）。</li><li>异步封装避免阻塞。</li></ul>
+<h3 id="1-4-核心能力">1.4 核心能力</h3>
+<table><thead><tr><th>能力</th><th>说明</th></tr></thead><tbody><tr><td>detect</td><td>检测目录是否为 git 仓库</td></tr><tr><td>status</td><td>获取工作区状态（porcelain v2 格式）</td></tr><tr><td>diff</td><td>获取文件差异</td></tr><tr><td>stage</td><td>暂存文件</td></tr><tr><td>unstage</td><td>取消暂存</td></tr><tr><td>discard</td><td>丢弃更改（需确认）</td></tr><tr><td>commit</td><td>提交</td></tr><tr><td>branch</td><td>分支切换/创建/删除</td></tr><tr><td>worktree</td><td>worktree 管理</td></tr></tbody></table>
+<h3 id="1-5-worktree-隔离">1.5 Worktree 隔离</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">git worktree add -b charter/&lt;taskId&gt; &lt;userData&gt;/worktrees/&lt;wsId&gt;/&lt;taskId&gt; HEAD</code></pre></div>
+<ul><li>每任务独立 worktree</li><li>合并回主分支在归档时或显式操作时</li></ul>
+<h3 id="1-6-快照机制">1.6 快照机制</h3>
+<div class="code-block"><span class="code-block__lang">bash</span><button class="copy-code" type="button">复制</button><pre><code class="language-bash"># 创建临时索引
+GIT_INDEX_FILE=$(mktemp) git add -A
+git write-tree  # 生成 tree hash</code></pre></div>
+<h3 id="1-7-rust-实现要点">1.7 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">use git2::{Repository, StatusOptions, DiffOptions};
+
+struct GitService {
+    repo: Repository,
+}
+
+impl GitService {
+    fn detect(path: &amp;Path) -&gt; bool {
+        Repository::discover(path).is_ok()
+    }
+    
+    fn status(&amp;self) -&gt; Result&lt;Vec&lt;GitStatus&gt;, GitError&gt; {
+        let mut opts = StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = self.repo.statuses(Some(&amp;mut opts))?;
+        // 转换为内部 GitStatus
+    }
+    
+    fn diff(&amp;self, path: &amp;Path) -&gt; Result&lt;Diff, GitError&gt; {
+        let mut opts = DiffOptions::new();
+        opts.pathspec(path);
+        let diff = self.repo.diff_index_to_workdir(None, Some(&amp;mut opts))?;
+        Ok(Diff::from(diff))
+    }
+    
+    fn stage(&amp;self, paths: &amp;[PathBuf]) -&gt; Result&lt;(), GitError&gt; {
+        let mut index = self.repo.index()?;
+        for path in paths {
+            index.add_path(path)?;
+        }
+        index.write()?;
+        Ok(())
+    }
+    
+    fn commit(&amp;self, message: &amp;str, author: &amp;Signature) -&gt; Result&lt;Oid, GitError&gt; {
+        let mut index = self.repo.index()?;
+        let tree_id = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_id)?;
+        let parent = self.repo.head()?.peel_to_commit()?;
+        let signature = Signature::now(author.name(), author.email())?;
+        let oid = self.repo.commit(
+            Some(&quot;HEAD&quot;),
+            &amp;signature,
+            &amp;signature,
+            message,
+            &amp;tree,
+            &amp;[&amp;parent],
+        )?;
+        Ok(oid)
+    }
+}</code></pre></div>
+<h2 id="2-搜索服务">2. 搜索服务</h2>
+<h3 id="2-1-概述">2.1 概述</h3>
+<p>搜索服务提供 Quick Open（快速打开文件）和全局搜索能力。<br>支持正则、大小写敏感、文件包含/排除。</p>
+<h3 id="2-2-当前实现">2.2 当前实现</h3>
+<ul><li>解析顺序：env 覆盖 → @vscode/ripgrep 二进制 → 系统 PATH 中的 rg → JS 兜底扫描器。</li><li>Quick Open 服务侧 fuzzy + 最近文件提升。</li><li>全局搜索：rg candidates + JS offsets 引擎，支持取消。</li></ul>
+<h3 id="2-3-rust-替代">2.3 Rust 替代</h3>
+<ul><li>直接调用 <code>rg</code> 二进制（已是 Rust）。</li><li>或使用 <code>grep-matcher</code> + <code>grep-regex</code> + <code>grep-searcher</code> crates 自行实现。</li></ul>
+<h3 id="2-4-quick-open">2.4 Quick Open</h3>
+<ul><li>服务侧模糊匹配。</li><li>最近文件提升。</li><li>首批 2000 条，p95 ≤ 300ms。</li></ul>
+<h3 id="2-5-全局搜索">2.5 全局搜索</h3>
+<ul><li>首批 200 条，p95 ≤ 1s。</li><li>可取消：pre-aborted 在 &lt;1ms 内返回。</li><li>超大文件跳过（per-file cap）。</li></ul>
+<h3 id="2-6-搜索架构">2.6 搜索架构</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">┌─────────────────────────────────────────────┐
+│  SearchService                              │
+│  ┌───────────────────────────────────────┐ │
+│  │  Quick Open                           │ │
+│  │  - 模糊匹配                           │ │
+│  │  - 最近文件提升                       │ │
+│  │  - 首屏 2000 条                       │ │
+│  └───────────────────────────────────────┘ │
+│  ┌───────────────────────────────────────┐ │
+│  │  Global Search                        │ │
+│  │  - ripgrep 子进程                     │ │
+│  │  - JS offsets 兜底                    │ │
+│  │  - 流式结果                           │ │
+│  │  - 支持取消                           │ │
+│  └───────────────────────────────────────┘ │
+└─────────────────────────────────────────────┘</code></pre></div>
+<h3 id="2-7-rust-实现要点">2.7 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">use std::process::Command;
+use grep_matcher::Matcher;
+use grep_regex::RegexMatcher;
+use grep_searcher::Searcher;
+
+struct SearchService {
+    rg_path: PathBuf,
+}
+
+struct SearchOptions {
+    pattern: String,
+    path: PathBuf,
+    case_sensitive: bool,
+    regex: bool,
+    include_glob: Option&lt;String&gt;,
+    exclude_glob: Option&lt;String&gt;,
+    max_results: usize,
+}
+
+struct SearchResult {
+    path: PathBuf,
+    line_number: Option&lt;u64&gt;,
+    column: Option&lt;u64&gt;,
+    text: String,
+    context_before: Vec&lt;String&gt;,
+    context_after: Vec&lt;String&gt;,
+}
+
+impl SearchService {
+    fn search(&amp;self, opts: SearchOptions, cancel: &amp;CancellationToken) -&gt; Result&lt;Vec&lt;SearchResult&gt;, SearchError&gt; {
+        let output = Command::new(&amp;self.rg_path)
+            .arg(&quot;--json&quot;)
+            .arg(&quot;--line-number&quot;)
+            .arg(&quot;--column&quot;)
+            .arg(if opts.case_sensitive { &quot;--case-sensitive&quot; } else { &quot;--ignore-case&quot; })
+            .arg(&quot;--glob&quot;)
+            .arg(opts.include_glob.as_deref().unwrap_or(&quot;*&quot;))
+            .arg(&quot;--glob&quot;)
+            .arg(format!(&quot;!{}&quot;, opts.exclude_glob.as_deref().unwrap_or(&quot;&quot;)))
+            .arg(&amp;opts.pattern)
+            .arg(&amp;opts.path)
+            .output()?;
+        
+        // 解析 JSON 输出
+        self.parse_results(&amp;output.stdout)
+    }
+    
+    fn quick_open(&amp;self, query: &amp;Path) -&gt; Vec&lt;SearchResult&gt; {
+        // 模糊匹配
+    }
+}</code></pre></div>
+<h2 id="3-changeservice">3. ChangeService</h2>
+<h3 id="3-1-概述">3.1 概述</h3>
+<p>ChangeService 管理文件基线和变更记录，支持任务级净 Diff 投影和回滚。</p>
+<h3 id="3-2-核心概念">3.2 核心概念</h3>
+<ul><li><strong>BlobStore</strong>：内容寻址 blob 存储，去重。</li><li><strong>FileBaseline</strong>：文件基线，capture-once。</li><li><strong>FileChange</strong>：文件变更记录（create/modify/delete/rename）。</li><li><strong>ChangeSet</strong>：任务级净 Diff 投影。</li></ul>
+<h3 id="3-3-变更检测">3.3 变更检测</h3>
+<ul><li>中间补丁折叠。</li><li>净效果计算。</li></ul>
+<h3 id="3-4-回滚引擎">3.4 回滚引擎</h3>
+<ul><li>创建/修改/删除/重命名。</li><li>预检外部变更冲突。</li><li>byte-exact 恢复。</li></ul>
+<h3 id="3-5-rust-实现要点">3.5 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// 内容寻址 Blob
+struct BlobStore {
+    db: Arc&lt;Database&gt;,
+    blobs_dir: PathBuf,
+}
+
+impl BlobStore {
+    fn put(&amp;self, content: &amp;[u8]) -&gt; Result&lt;String, BlobError&gt; {
+        let hash = blake3::hash(content).to_hex().to_string();
+        // 去重
+        if self.exists(&amp;hash)? {
+            self.increment_ref(&amp;hash)?;
+        } else {
+            self.write_blob(&amp;hash, content)?;
+        }
+        Ok(hash)
+    }
+    
+    fn get(&amp;self, hash: &amp;str) -&gt; Result&lt;Vec&lt;u8&gt;, BlobError&gt; {
+        let path = self.blobs_dir.join(hash);
+        Ok(std::fs::read(path)?)
+    }
+}
+
+// 变更集
+struct ChangeSet {
+    task_id: String,
+    changes: Vec&lt;FileChange&gt;,
+}
+
+impl ChangeSet {
+    fn net_diff(&amp;self) -&gt; NetDiff {
+        // 折叠中间补丁
+    }
+    
+    fn rollback(&amp;self) -&gt; Result&lt;(), RollbackError&gt; {
+        // 按逆序恢复
+    }
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

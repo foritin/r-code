@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>会话回放 — 五个方向</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="index-page">
+    <main class="index-wrap">
+      <header class="index-head">
+        <div>
+          <h1>会话回放的五种本质</h1>
+          <p>
+            它不是“把 diff
+            按顺序播出来”，而是帮助人快速恢复上下文、理解因果、检查边界并信任结果。进入任一 mock
+            后可以切换 Pi Home、Claude Terminal、Codex
+            Terminal，直接看到完整记录与观察模式的真实差别。
+          </p>
+        </div>
+        <div class="index-note">SPACE 播放 / 暂停<br />← → 前后 2 秒<br />支持拖拽与倍速</div>
+      </header>
+      <section class="direction-list">
+        <a class="direction-row" href="./session-replay-a-cinematic.html"
+          ><span class="direction-letter">A</span>
+          <div class="direction-name">
+            <h2>影像化证据台</h2>
+            <p>用“前后版本 + 章节胶片 + 证据轨”把工作过程拍成一支可拖动的短片。</p>
+          </div>
+          <div class="direction-answer">
+            <b>回答：Agent 做了什么？</b>Pi 可直接实现；Terminal 需补逐次文件版本才能做到真正逐帧。
+          </div>
+          <span class="open-direction"
+            >打开 38 秒演示
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 12h14m-5-5 5 5-5 5" /></svg></span
+        ></a>
+        <a class="direction-row" href="./session-replay-b-causal-map.html"
+          ><span class="direction-letter">B</span>
+          <div class="direction-name">
+            <h2>因果故事图</h2>
+            <p>不是按工具排序，而是把输入、判断、行动、输出连接成一张可追踪的推理地图。</p>
+          </div>
+          <div class="direction-answer">
+            <b>回答：为什么这样做？</b>Pi 可基于已记录动作构建；普通 Terminal 不能可靠推断内部决策。
+          </div>
+          <span class="open-direction"
+            >打开 38 秒演示
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 12h14m-5-5 5 5-5 5" /></svg></span
+        ></a>
+        <a class="direction-row" href="./session-replay-c-spatial.html"
+          ><span class="direction-letter">C</span>
+          <div class="direction-name">
+            <h2>空间桌面重建</h2>
+            <p>把邮件、网页、表格、文档、日历还原在一张工作台上，动作在应用间流动。</p>
+          </div>
+          <div class="direction-answer">
+            <b>回答：工作在哪发生？</b>需要来源应用/资源身份；仅靠 PTY 和文件监听无法还原。
+          </div>
+          <span class="open-direction"
+            >打开 38 秒演示
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 12h14m-5-5 5 5-5 5" /></svg></span
+        ></a>
+        <a class="direction-row" href="./session-replay-d-documentary.html"
+          ><span class="direction-letter">D</span>
+          <div class="direction-name">
+            <h2>纪录片式事件流</h2>
+            <p>左侧是语义化事件流，中间是当时画面，筛选器让人只看决定、变更或沟通。</p>
+          </div>
+          <div class="direction-answer">
+            <b>回答：过程是怎样推进的？</b>最适合 Terminal 降级：先录 PTY，再用结构化事件解锁筛选。
+          </div>
+          <span class="open-direction"
+            >打开 38 秒演示
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 12h14m-5-5 5 5-5 5" /></svg></span
+        ></a>
+        <a class="direction-row" href="./session-replay-e-audit.html"
+          ><span class="direction-letter">E</span>
+          <div class="direction-name">
+            <h2>结果审计账本</h2>
+            <p>先展示结论、置信度和边界，再让每一个结论下钻到证据与可恢复检查点。</p>
+          </div>
+          <div class="direction-answer">
+            <b>回答：结果值得信吗？</b>Pi 可覆盖权限与验证；Terminal 当前只能审计快照、净 diff
+            和回滚。
+          </div>
+          <span class="open-direction"
+            >打开 38 秒演示
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path d="M5 12h14m-5-5 5 5-5 5" /></svg></span
+        ></a>
+      </section>
+    </main>
+  </body>
+</html>

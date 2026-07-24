@@ -1,0 +1,2310 @@
+<!doctype html>
+<!--
+  Charter — Skills main-page usage mockup. Design artifact only; not product code.
+
+  Product split demonstrated here:
+  - Main workspace: discover, compare, run, and decide what earns its place.
+  - Settings: source folders, trust, auto-enable, import, audit, and destructive actions.
+  - Source and consumer are separate dimensions.
+  - Codex evidence is labelled as session activation when exact invocation events are unavailable.
+  - Agent/system skills are visible but read-only and never offered for deletion.
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter — Skills 使用与整理 mockup</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-card: #ffffff;
+        --bg-input: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --bg-selected: #e9e6df;
+        --bg-overlay: rgba(32, 30, 26, 0.42);
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --danger-bg: #fdecea;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --pi: #6ca1e8;
+        --claude: #e0876a;
+        --codex: #46b477;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --shadow-menu: 0 30px 90px rgba(30, 26, 18, 0.22);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+      }
+
+      body {
+        background: var(--bg-app);
+        color: var(--fg);
+        font-family: var(--font-ui);
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+        outline-offset: 2px;
+      }
+
+      .icon-sprite {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+
+      .icon {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .app {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-template-columns: 44px 230px minmax(0, 1fr);
+        grid-template-rows: 38px minmax(0, 1fr) 22px;
+        background: var(--bg-editor);
+      }
+
+      .titlebar {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+        padding: 0 13px 0 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        color: var(--fg-muted);
+        user-select: none;
+      }
+
+      .brand {
+        color: var(--fg);
+        font-family: var(--font-display);
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: 0.015em;
+      }
+
+      .crumb {
+        min-width: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 24px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--bg-card) 62%, transparent);
+        font-size: 11px;
+      }
+
+      .crumb .icon {
+        width: 12px;
+        height: 12px;
+      }
+
+      .title-spacer {
+        flex: 1;
+      }
+
+      .title-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 24px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: transparent;
+        color: var(--fg-muted);
+        font-size: 11px;
+      }
+
+      .title-action .icon {
+        width: 12px;
+        height: 12px;
+      }
+
+      .activity {
+        grid-column: 1;
+        grid-row: 2;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 9px 5px 8px;
+        border-right: 1px solid var(--border-soft);
+        background: var(--bg-titlebar);
+      }
+
+      .activity-brand,
+      .activity-item {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        flex: none;
+        padding: 0;
+        border-radius: 8px;
+      }
+
+      .activity-brand {
+        width: 30px;
+        height: 30px;
+        margin-bottom: 8px;
+        border: 0;
+        background: var(--fg);
+        color: var(--bg-editor);
+        box-shadow: 0 5px 15px color-mix(in srgb, var(--fg) 15%, transparent);
+      }
+
+      .activity-item {
+        position: relative;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: default;
+      }
+
+      .activity-item:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .activity-item.active {
+        border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+        background: var(--bg-card);
+        color: var(--accent);
+        box-shadow: inset 2px 0 0 var(--accent), var(--shadow-card);
+      }
+
+      .activity-spacer {
+        flex: 1;
+      }
+
+      .mini-badge {
+        position: absolute;
+        top: 0;
+        right: 0;
+        min-width: 15px;
+        height: 15px;
+        display: grid;
+        place-items: center;
+        padding: 0 3px;
+        border: 2px solid var(--bg-titlebar);
+        border-radius: 999px;
+        background: var(--warning);
+        color: #fff;
+        font: 700 8px var(--font-mono);
+      }
+
+      .side {
+        grid-column: 2;
+        grid-row: 2;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        background: var(--bg-sidebar);
+        user-select: none;
+      }
+
+      .side-head {
+        display: grid;
+        gap: 4px;
+        padding: 15px 14px 13px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .side-head strong {
+        font-family: var(--font-display);
+        font-size: 15px;
+        font-weight: 650;
+      }
+
+      .side-head small {
+        color: var(--fg-faint);
+        font-size: 10.5px;
+        line-height: 1.45;
+      }
+
+      .side-nav {
+        display: grid;
+        gap: 2px;
+        padding: 10px 8px;
+      }
+
+      .side-nav button,
+      .side-settings {
+        width: 100%;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 9px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--fg-muted);
+        text-align: left;
+        font-size: 12px;
+        cursor: pointer;
+      }
+
+      .side-nav button:hover,
+      .side-settings:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .side-nav button.on {
+        background: var(--bg-active);
+        color: var(--fg);
+        font-weight: 650;
+      }
+
+      .side-count {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font: 600 10px var(--font-mono);
+      }
+
+      .side-section {
+        padding: 11px 16px 5px;
+        color: var(--fg-faint);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .coverage-list {
+        display: grid;
+        gap: 8px;
+        padding: 3px 16px 12px;
+      }
+
+      .coverage-line {
+        display: grid;
+        grid-template-columns: 7px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 7px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .coverage-line i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+
+      .coverage-line small {
+        color: var(--fg-faint);
+        font-size: 9px;
+      }
+
+      .side-bottom {
+        margin-top: auto;
+        padding: 9px 8px 10px;
+        border-top: 1px solid var(--border-soft);
+      }
+
+      .main {
+        grid-column: 3;
+        grid-row: 2;
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        background: var(--bg-editor);
+      }
+
+      .main-inner {
+        width: min(1120px, calc(100% - 46px));
+        margin: 0 auto;
+        padding: 27px 0 40px;
+      }
+
+      .page-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 18px;
+        margin-bottom: 23px;
+      }
+
+      .page-head-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .page-head h1 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 24px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+
+      .page-head p {
+        max-width: 700px;
+        margin: 4px 0 0;
+        color: var(--fg-muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .page-actions {
+        display: flex;
+        gap: 8px;
+        padding-top: 2px;
+      }
+
+      .btn {
+        min-height: 31px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 11px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 11.5px;
+        font-weight: 560;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background: var(--bg-hover);
+      }
+
+      .btn.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-fg);
+      }
+
+      .btn.quiet {
+        background: transparent;
+      }
+
+      .btn.danger {
+        border-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+        color: var(--danger);
+      }
+
+      .btn .icon {
+        width: 13px;
+        height: 13px;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-bottom: 15px;
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .stat {
+        min-width: 0;
+        padding: 14px 17px 13px;
+        border-right: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--bg-card) 34%, transparent);
+        text-align: left;
+      }
+
+      button.stat {
+        border-left: 0;
+        border-top: 0;
+        border-bottom: 0;
+        cursor: pointer;
+      }
+
+      .stat:last-child {
+        border-right: 0;
+      }
+
+      .stat:hover {
+        background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+      }
+
+      .stat strong {
+        display: block;
+        color: var(--fg);
+        font-family: var(--font-display);
+        font-size: 19px;
+        font-weight: 650;
+        line-height: 1.1;
+      }
+
+      .stat span {
+        display: block;
+        margin-top: 4px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .stat small {
+        color: var(--fg-faint);
+        font-size: 9.5px;
+      }
+
+      .coverage-banner {
+        min-height: 42px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 8px 12px;
+        margin-bottom: 18px;
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--bg-card) 64%, transparent);
+      }
+
+      .coverage-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .coverage-title .icon {
+        width: 13px;
+        height: 13px;
+      }
+
+      .coverage-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--fg-muted);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+
+      .coverage-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+
+      .coverage-item b {
+        color: var(--fg);
+        font-weight: 650;
+      }
+
+      .coverage-info {
+        margin-left: auto;
+        padding: 4px 5px;
+        border: 0;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 10px;
+      }
+
+      .tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 3px;
+        border-radius: 9px;
+        background: var(--bg-chip);
+      }
+
+      .tabs button {
+        min-height: 27px;
+        padding: 0 10px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        cursor: pointer;
+      }
+
+      .tabs button.on {
+        background: var(--bg-card);
+        color: var(--fg);
+        box-shadow: 0 1px 2px rgba(30, 26, 18, 0.09);
+        font-weight: 650;
+      }
+
+      .search {
+        width: min(250px, 26vw);
+        min-width: 150px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        height: 33px;
+        margin-left: auto;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-input);
+        color: var(--fg-faint);
+      }
+
+      .search .icon {
+        width: 13px;
+        height: 13px;
+      }
+
+      .search input {
+        min-width: 0;
+        flex: 1;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--fg);
+        font-size: 11px;
+      }
+
+      .search input::placeholder {
+        color: var(--fg-faint);
+      }
+
+      .select {
+        height: 33px;
+        padding: 0 28px 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-input);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        cursor: pointer;
+      }
+
+      .table-frame {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 11px;
+        background: var(--bg-card);
+        box-shadow: 0 1px 2px rgba(30, 26, 18, 0.03);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      col.skill-col {
+        width: 25%;
+      }
+
+      col.installs-col {
+        width: 22%;
+      }
+
+      col.usage-rollup-col {
+        width: 21%;
+      }
+
+      col.last-col {
+        width: 10%;
+      }
+
+      col.cost-col {
+        width: 10%;
+      }
+
+      col.decision-col {
+        width: 12%;
+      }
+
+      thead th {
+        height: 46px;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border);
+        background: color-mix(in srgb, var(--bg-sidebar) 74%, var(--bg-card));
+        color: var(--fg-muted);
+        text-align: left;
+        font-size: 9.5px;
+        font-weight: 650;
+        letter-spacing: 0.015em;
+        vertical-align: middle;
+      }
+
+      thead th.numeric-head {
+        text-align: right;
+      }
+
+      .agent-head {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .agent-head i {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+      }
+
+      .th-sub {
+        display: block;
+        margin-top: 2px;
+        color: var(--fg-faint);
+        font-size: 8.5px;
+        font-weight: 500;
+        letter-spacing: 0;
+      }
+
+      tbody tr {
+        height: 58px;
+        border-bottom: 1px solid var(--border-soft);
+        transition: background 0.12s ease;
+      }
+
+      tbody tr:last-child {
+        border-bottom: 0;
+      }
+
+      tbody tr:hover {
+        background: color-mix(in srgb, var(--bg-hover) 48%, transparent);
+      }
+
+      tbody tr.is-off {
+        opacity: 0.56;
+      }
+
+      td {
+        padding: 8px 10px;
+        overflow: hidden;
+        vertical-align: middle;
+      }
+
+      .skill-cell {
+        display: grid;
+        gap: 3px;
+      }
+
+      .skill-name-row {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .skill-name {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--fg);
+        font: 650 11.5px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .source,
+      .tag {
+        flex: none;
+        padding: 2px 6px;
+        border-radius: 999px;
+        font-size: 8.5px;
+        font-weight: 650;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .source {
+        background: var(--bg-chip);
+        color: var(--fg-muted);
+      }
+
+      .source.claude {
+        background: color-mix(in srgb, var(--claude) 13%, white);
+        color: #9c4f39;
+      }
+
+      .source.codex,
+      .source.system {
+        background: color-mix(in srgb, var(--codex) 12%, white);
+        color: #287650;
+      }
+
+      .source.agent {
+        background: color-mix(in srgb, var(--pi) 12%, white);
+        color: #356ba9;
+      }
+
+      .tag.system {
+        border: 1px solid color-mix(in srgb, var(--codex) 28%, var(--border));
+        background: transparent;
+        color: #287650;
+      }
+
+      .tag.explicit {
+        background: var(--info-bg);
+        color: var(--info);
+      }
+
+      .skill-desc {
+        overflow: hidden;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .install-pills,
+      .usage-rollup {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+
+      .agent-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        min-height: 21px;
+        padding: 0 7px;
+        border: 1px solid var(--border-soft);
+        border-radius: 999px;
+        background: var(--bg-sidebar);
+        color: var(--fg-muted);
+        font-size: 9px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .agent-pill::before,
+      .usage-unit::before {
+        width: 6px;
+        height: 6px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--agent-color, var(--fg-faint));
+        content: '';
+      }
+
+      .agent-pill.off {
+        border-style: dashed;
+        color: var(--warning);
+      }
+
+      .agent-pill.locked {
+        color: var(--fg-faint);
+      }
+
+      .agent-pill.deleted {
+        opacity: 0.45;
+        text-decoration: line-through;
+      }
+
+      .usage-unit {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--fg-muted);
+        font-size: 9px;
+        white-space: nowrap;
+      }
+
+      .usage-unit b {
+        color: var(--fg);
+        font: 650 10.5px var(--font-mono);
+      }
+
+      .usage-unit small {
+        color: var(--fg-faint);
+        font-size: 8px;
+      }
+
+      .metric {
+        text-align: right;
+      }
+
+      .metric strong {
+        color: var(--fg);
+        font: 650 12px var(--font-mono);
+      }
+
+      .metric small {
+        display: block;
+        margin-top: 2px;
+        color: var(--fg-faint);
+        font-size: 8.5px;
+        white-space: nowrap;
+      }
+
+      .metric.zero strong,
+      .metric.zero small {
+        color: var(--fg-faint);
+      }
+
+      .confidence {
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        margin-right: 4px;
+        border-radius: 50%;
+        vertical-align: 1px;
+      }
+
+      .last,
+      .cost {
+        color: var(--fg-muted);
+        text-align: right;
+        font: 10px var(--font-mono);
+        white-space: nowrap;
+      }
+
+      .last.never {
+        color: var(--warning);
+      }
+
+      .cost small {
+        display: block;
+        margin-top: 2px;
+        color: var(--fg-faint);
+        font: 8.5px var(--font-ui);
+      }
+
+      .decision {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .decision-label {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--fg-muted);
+        font-size: 9.5px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .decision-label.keep {
+        color: var(--success);
+      }
+
+      .decision-label.review {
+        color: var(--warning);
+      }
+
+      .decision-label.system {
+        color: #287650;
+      }
+
+      .row-action {
+        flex: none;
+        margin-left: auto;
+        padding: 5px 8px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-input);
+        color: var(--fg-muted);
+        font-size: 9.5px;
+        cursor: pointer;
+      }
+
+      .row-action:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .empty {
+        display: none;
+        padding: 58px 20px;
+        color: var(--fg-muted);
+        text-align: center;
+      }
+
+      .empty strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--fg);
+        font-family: var(--font-display);
+        font-size: 16px;
+      }
+
+      .statusbar {
+        grid-column: 1 / -1;
+        grid-row: 3;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 11px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        color: var(--fg-faint);
+        font-size: 9px;
+      }
+
+      .statusbar .spacer {
+        flex: 1;
+      }
+
+      .statusbar i {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      .scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        background: var(--bg-overlay);
+      }
+
+      .scrim.open {
+        display: block;
+      }
+
+      .drawer {
+        position: fixed;
+        top: 38px;
+        right: 0;
+        bottom: 22px;
+        z-index: 30;
+        width: min(520px, calc(100vw - 64px));
+        display: flex;
+        flex-direction: column;
+        transform: translateX(102%);
+        border-left: 1px solid var(--border);
+        background: var(--bg-card);
+        box-shadow: var(--shadow-menu);
+        transition: transform 0.18s ease;
+      }
+
+      .drawer.open {
+        transform: translateX(0);
+      }
+
+      .drawer-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 18px 18px 15px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .drawer-head-copy {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .drawer-head h2 {
+        margin: 0;
+        font: 650 16px var(--font-mono);
+      }
+
+      .drawer-head p {
+        margin: 5px 0 0;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.5;
+      }
+
+      .icon-btn {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-input);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .drawer-body {
+        min-height: 0;
+        display: grid;
+        gap: 17px;
+        overflow: auto;
+        padding: 16px 18px 24px;
+      }
+
+      .drawer-section h3 {
+        margin: 0 0 9px;
+        color: var(--fg-faint);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .evidence-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        overflow: hidden;
+      }
+
+      .evidence {
+        min-width: 0;
+        padding: 10px;
+        border-right: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--bg-sidebar) 48%, white);
+      }
+
+      .evidence:last-child {
+        border-right: 0;
+      }
+
+      .evidence span {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--fg-muted);
+        font-size: 9px;
+      }
+
+      .evidence i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+
+      .evidence strong {
+        display: block;
+        margin-top: 6px;
+        font: 650 17px var(--font-display);
+      }
+
+      .evidence small {
+        display: block;
+        margin-top: 2px;
+        color: var(--fg-faint);
+        font-size: 8.5px;
+        line-height: 1.35;
+      }
+
+      .recommendation {
+        padding: 11px 12px;
+        border: 1px solid color-mix(in srgb, var(--warning) 28%, var(--border));
+        border-left: 3px solid var(--warning);
+        border-radius: 8px;
+        background: var(--warning-bg);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.55;
+      }
+
+      .recommendation strong {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--fg);
+        font-size: 11px;
+      }
+
+      .facts {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+      }
+
+      .facts div {
+        display: grid;
+        grid-template-columns: 106px 1fr;
+        gap: 12px;
+        padding-bottom: 7px;
+        border-bottom: 1px solid var(--border-soft);
+        font-size: 10px;
+      }
+
+      .facts dt {
+        color: var(--fg-faint);
+      }
+
+      .facts dd {
+        min-width: 0;
+        margin: 0;
+        overflow-wrap: anywhere;
+        color: var(--fg-muted);
+      }
+
+      .drawer-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .installations {
+        display: grid;
+        overflow: hidden;
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+      }
+
+      .install-row {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: 10px 11px;
+        border-bottom: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--bg-sidebar) 35%, white);
+      }
+
+      .install-row:last-child {
+        border-bottom: 0;
+      }
+
+      .install-row.is-disabled {
+        background: var(--warning-bg);
+      }
+
+      .install-row.is-protected {
+        background: var(--bg-sidebar);
+      }
+
+      .install-title {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .install-title strong {
+        font-size: 10.5px;
+      }
+
+      .install-title .source {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .install-copy {
+        min-width: 0;
+        margin-top: 4px;
+        overflow: hidden;
+        color: var(--fg-faint);
+        font: 8.5px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .install-method {
+        margin-top: 4px;
+        color: var(--fg-muted);
+        font-size: 8.5px;
+        line-height: 1.35;
+      }
+
+      .install-state {
+        align-self: center;
+        color: var(--success);
+        font-size: 9px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .install-state.off {
+        color: var(--warning);
+      }
+
+      .install-state.locked {
+        color: var(--fg-faint);
+      }
+
+      .scope-box {
+        padding: 11px;
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        background: var(--bg-sidebar);
+      }
+
+      .scope-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+      }
+
+      .scope-option {
+        min-height: 27px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        font-size: 9.5px;
+        cursor: pointer;
+      }
+
+      .scope-option.on {
+        border-color: var(--fg);
+        background: var(--fg);
+        color: var(--bg-card);
+      }
+
+      .scope-summary {
+        margin: 8px 0 0;
+        color: var(--fg-muted);
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
+      .drawer-actions .btn:disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
+      }
+
+      .modal {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        z-index: 40;
+        width: min(720px, calc(100vw - 44px));
+        display: none;
+        transform: translate(-50%, -50%);
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-menu);
+      }
+
+      .modal.open {
+        display: block;
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 15px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .modal-head h2 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 15px;
+      }
+
+      .modal-head span {
+        color: var(--fg-faint);
+        font-size: 10px;
+      }
+
+      .modal-head .icon-btn {
+        margin-left: auto;
+      }
+
+      .modal-body {
+        padding: 14px 16px 16px;
+      }
+
+      .source-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 12px;
+        min-height: 51px;
+        padding: 8px 2px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .source-row:last-child {
+        border-bottom: 0;
+      }
+
+      .source-main {
+        min-width: 0;
+      }
+
+      .source-main strong {
+        display: block;
+        font-size: 11px;
+      }
+
+      .source-main small {
+        display: block;
+        margin-top: 3px;
+        overflow: hidden;
+        color: var(--fg-faint);
+        font: 9px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .source-found {
+        color: var(--success);
+        font-size: 9px;
+      }
+
+      .switch-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--fg-muted);
+        font-size: 9px;
+      }
+
+      .switch {
+        position: relative;
+        width: 29px;
+        height: 17px;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: var(--bg-chip);
+      }
+
+      .switch::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--bg-card);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+      }
+
+      .switch.on {
+        border-color: var(--success);
+        background: var(--success);
+      }
+
+      .switch.on::after {
+        transform: translateX(12px);
+      }
+
+      .modal-note {
+        margin-top: 12px;
+        padding: 9px 10px;
+        border-radius: 8px;
+        background: var(--bg-sidebar);
+        color: var(--fg-muted);
+        font-size: 9.5px;
+        line-height: 1.5;
+      }
+
+      .mini-action {
+        min-height: 27px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        font-size: 9px;
+        cursor: pointer;
+      }
+
+      .delete-modal {
+        width: min(540px, calc(100vw - 44px));
+      }
+
+      .delete-intro {
+        margin: 0 0 11px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.5;
+      }
+
+      .delete-targets {
+        display: grid;
+        overflow: hidden;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+      }
+
+      .delete-target {
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--border-soft);
+        font-size: 9.5px;
+      }
+
+      .delete-target:last-child {
+        border-bottom: 0;
+      }
+
+      .delete-target strong {
+        font-size: 10px;
+      }
+
+      .delete-target code {
+        overflow: hidden;
+        color: var(--fg-faint);
+        font: 8.5px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .delete-target span {
+        color: var(--danger);
+        white-space: nowrap;
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 13px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 38px;
+        z-index: 60;
+        max-width: calc(100vw - 40px);
+        transform: translate(-50%, 18px);
+        opacity: 0;
+        padding: 8px 12px;
+        border: 1px solid color-mix(in srgb, var(--fg) 22%, var(--border));
+        border-radius: 8px;
+        background: var(--fg);
+        color: var(--bg-editor);
+        box-shadow: var(--shadow-menu);
+        font-size: 10.5px;
+        pointer-events: none;
+        transition: opacity 0.15s ease, transform 0.15s ease;
+      }
+
+      .toast.show {
+        transform: translate(-50%, 0);
+        opacity: 1;
+      }
+
+      @media (max-width: 1120px) {
+        .app {
+          grid-template-columns: 44px minmax(0, 1fr);
+        }
+
+        .side {
+          display: none;
+        }
+
+        .main {
+          grid-column: 2;
+        }
+
+        .main-inner {
+          width: calc(100% - 34px);
+          padding-top: 21px;
+        }
+
+        .page-head {
+          margin-bottom: 18px;
+        }
+
+        .coverage-banner {
+          gap: 10px;
+        }
+
+        .controls {
+          flex-wrap: wrap;
+        }
+
+        .search {
+          order: -1;
+          width: 100%;
+          margin-left: 0;
+        }
+
+        .last-col,
+        th.last-head,
+        td.last {
+          display: none;
+        }
+
+        col.skill-col {
+          width: 27%;
+        }
+
+        col.decision-col {
+          width: 14%;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .main-inner {
+          width: calc(100% - 24px);
+        }
+
+        .title-action:first-of-type,
+        .page-head p,
+        .coverage-title,
+        .coverage-item:nth-of-type(2) {
+          display: none;
+        }
+
+        .page-head {
+          align-items: center;
+        }
+
+        .page-head h1 {
+          font-size: 21px;
+        }
+
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .stat:nth-child(2) {
+          border-right: 0;
+        }
+
+        .stat:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--border-soft);
+        }
+
+        .cost-col,
+        th.cost-head,
+        td.cost {
+          display: none;
+        }
+
+        col.skill-col {
+          width: 36%;
+        }
+
+        col.installs-col {
+          width: 24%;
+        }
+
+        col.usage-rollup-col {
+          width: 25%;
+        }
+
+        col.decision-col {
+          width: 25%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="i-flag" viewBox="0 0 24 24">
+        <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+        <line x1="4" y1="22" x2="4" y2="15" />
+      </symbol>
+      <symbol id="i-terminal" viewBox="0 0 24 24">
+        <polyline points="4 17 10 11 4 5" /><line x1="12" x2="20" y1="19" y2="19" />
+      </symbol>
+      <symbol id="i-inbox" viewBox="0 0 24 24">
+        <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+      </symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24">
+        <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+      </symbol>
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+      </symbol>
+      <symbol id="i-brain" viewBox="0 0 24 24">
+        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+        <path d="M12 5v13" />
+      </symbol>
+      <symbol id="i-zap" viewBox="0 0 24 24">
+        <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />
+      </symbol>
+      <symbol id="i-layout" viewBox="0 0 24 24">
+        <rect width="18" height="18" x="3" y="3" rx="2" /><path d="M3 9h18" /><path d="M9 21V9" />
+      </symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24">
+        <line x1="21" x2="14" y1="4" y2="4" /><line x1="10" x2="3" y1="4" y2="4" />
+        <line x1="21" x2="12" y1="12" y2="12" /><line x1="8" x2="3" y1="12" y2="12" />
+        <line x1="21" x2="16" y1="20" y2="20" /><line x1="12" x2="3" y1="20" y2="20" />
+        <line x1="14" x2="14" y1="2" y2="6" /><line x1="8" x2="8" y1="10" y2="14" /><line x1="16" x2="16" y1="18" y2="22" />
+      </symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24">
+        <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" />
+        <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" />
+      </symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+      </symbol>
+      <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18" /><path d="m6 6 12 12" /></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0" /><circle cx="12" cy="12" r="3" /></symbol>
+      <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" /><path d="m4.9 4.9 14.2 14.2" /></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24">
+        <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+        <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" />
+      </symbol>
+    </svg>
+
+    <div class="app">
+      <header class="titlebar">
+        <span class="brand">Charter</span>
+        <span class="crumb"><svg class="icon"><use href="#i-zap"></use></svg>Skills</span>
+        <span class="title-spacer"></span>
+        <span class="title-action"><svg class="icon"><use href="#i-terminal"></use></svg>⌥Space 速召台</span>
+        <span class="title-action">⌘⇧P Commands</span>
+      </header>
+
+      <nav class="activity" aria-label="Application">
+        <button class="activity-brand" aria-label="Charter"><svg class="icon"><use href="#i-flag"></use></svg></button>
+        <button class="activity-item" aria-label="Sessions" title="Sessions"><svg class="icon"><use href="#i-terminal"></use></svg></button>
+        <button class="activity-item" aria-label="Needs attention" title="Needs attention"><svg class="icon"><use href="#i-inbox"></use></svg><span class="mini-badge">2</span></button>
+        <button class="activity-item" aria-label="Projects" title="Projects"><svg class="icon"><use href="#i-folder"></use></svg></button>
+        <button class="activity-item" aria-label="Search" title="Search"><svg class="icon"><use href="#i-search"></use></svg></button>
+        <button class="activity-item" aria-label="Memory" title="Memory"><svg class="icon"><use href="#i-brain"></use></svg></button>
+        <button class="activity-item active" aria-current="page" aria-label="Skills" title="Skills"><svg class="icon"><use href="#i-zap"></use></svg><span class="mini-badge">3</span></button>
+        <span class="activity-spacer"></span>
+        <button class="activity-item" aria-label="Editor" title="Editor"><svg class="icon"><use href="#i-layout"></use></svg></button>
+        <button class="activity-item" id="activity-settings" aria-label="Settings" title="Settings"><svg class="icon"><use href="#i-sliders"></use></svg></button>
+      </nav>
+
+      <aside class="side">
+        <div class="side-head">
+          <strong>Skills</strong>
+          <small>使用、成本和跨 Agent 证据</small>
+        </div>
+        <nav class="side-nav" aria-label="Skills sections">
+          <button class="on" data-tab="all"><svg class="icon"><use href="#i-zap"></use></svg>All skills <span class="side-count">28</span></button>
+          <button data-tab="active"><svg class="icon"><use href="#i-check"></use></svg>In use <span class="side-count">19</span></button>
+          <button data-tab="review"><svg class="icon"><use href="#i-eye"></use></svg>Review queue <span class="side-count">3</span></button>
+          <button data-tab="off"><svg class="icon"><use href="#i-clock"></use></svg>Disabled anywhere <span class="side-count">6</span></button>
+        </nav>
+        <div class="side-section">Data coverage</div>
+        <div class="coverage-list">
+          <div class="coverage-line"><i style="background: var(--pi)"></i><span>Pi</span><small>exact</small></div>
+          <div class="coverage-line"><i style="background: var(--claude)"></i><span>Claude Code</span><small>transcripts</small></div>
+          <div class="coverage-line"><i style="background: var(--codex)"></i><span>Codex</span><small>17 / 48</small></div>
+          <div class="coverage-line"><i style="background: var(--fg-faint)"></i><span>Future agents</span><small>adapter-ready</small></div>
+        </div>
+        <div class="side-bottom">
+          <button class="side-settings" id="side-settings"><svg class="icon"><use href="#i-shield"></use></svg>Sources &amp; trust <span class="side-count">Settings</span></button>
+        </div>
+      </aside>
+
+      <main class="main" id="main">
+        <div class="main-inner">
+          <header class="page-head">
+            <div class="page-head-copy">
+              <h1>Skills</h1>
+              <p>把同名 Skill 聚合起来，看清它装在哪些 Agent、分别被谁使用，再按单个 Agent 或全部 Agent 禁用与删除。</p>
+            </div>
+            <div class="page-actions">
+              <button class="btn quiet" id="rescan"><svg class="icon"><use href="#i-refresh"></use></svg>Rescan</button>
+              <button class="btn primary" id="run-skill"><svg class="icon"><use href="#i-play"></use></svg>Run a skill</button>
+            </div>
+          </header>
+
+          <section class="stats" aria-label="Skills summary">
+            <button class="stat" data-tab="all"><strong>34</strong><span>installations <small>· 28 unique skills</small></span></button>
+            <button class="stat" data-tab="active"><strong>19</strong><span>used in 90 days <small>· across agents</small></span></button>
+            <div class="stat"><strong>1,842</strong><span>Pi tokens / turn <small>· −312 after review</small></span></div>
+            <button class="stat" data-tab="review"><strong>3</strong><span>need review <small>· no auto-delete</small></span></button>
+          </section>
+
+          <section class="coverage-banner" aria-label="Counting coverage">
+            <span class="coverage-title"><svg class="icon"><use href="#i-shield"></use></svg>Counting coverage</span>
+            <span class="coverage-item"><i class="coverage-dot" style="background: var(--pi)"></i><b>Pi</b> exact calls</span>
+            <span class="coverage-item"><i class="coverage-dot" style="background: var(--claude)"></i><b>Claude</b> transcript calls</span>
+            <span class="coverage-item"><i class="coverage-dot" style="background: var(--codex)"></i><b>Codex</b> active sessions · partial</span>
+            <button class="coverage-info" id="coverage-info" aria-label="How counting works" title="How counting works"><svg class="icon"><use href="#i-info"></use></svg></button>
+          </section>
+
+          <div class="controls">
+            <div class="tabs" aria-label="Status filter">
+              <button class="on" data-tab="all">All 28</button>
+              <button data-tab="active">In use 19</button>
+              <button data-tab="review">Review 3</button>
+              <button data-tab="off">Disabled 6</button>
+            </div>
+            <label class="search"><svg class="icon"><use href="#i-search"></use></svg><input id="search" type="search" placeholder="Search skills or sources" aria-label="Search skills or sources" /></label>
+            <select class="select" id="consumer" aria-label="Used by filter">
+              <option value="all">Used by: anyone</option>
+              <option value="pi">Used by: Pi</option>
+              <option value="claude">Used by: Claude</option>
+              <option value="codex">Used by: Codex</option>
+              <option value="kimi" disabled>Used by: Kimi Code · not connected</option>
+            </select>
+            <select class="select" id="source" aria-label="Source filter">
+              <option value="all">Any source</option>
+              <option value="managed">Charter Managed</option>
+              <option value="agent">Agent Skills</option>
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex</option>
+              <option value="system">System skills</option>
+            </select>
+            <select class="select" id="window" aria-label="Time window">
+              <option>Last 90 days</option>
+              <option>Last 180 days</option>
+              <option>All history</option>
+            </select>
+          </div>
+
+          <section class="table-frame" aria-label="Skills usage table">
+            <table>
+              <colgroup>
+                <col class="skill-col" /><col class="installs-col" /><col class="usage-rollup-col" />
+                <col class="last-col" /><col class="cost-col" /><col class="decision-col" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>Skill <span class="th-sub">one identity, grouped copies</span></th>
+                  <th>Installed in<span class="th-sub">status per agent</span></th>
+                  <th>Usage by agent<span class="th-sub">calls · Codex sessions labelled</span></th>
+                  <th class="last-head numeric-head">Last used<span class="th-sub">any consumer</span></th>
+                  <th class="cost-head numeric-head">Pi context<span class="th-sub">tokens / turn</span></th>
+                  <th>Manage<span class="th-sub">choose scope</span></th>
+                </tr>
+              </thead>
+              <tbody id="skill-rows"></tbody>
+            </table>
+            <div class="empty" id="empty"><strong>No matching skills</strong>Try another source, consumer, or search term.</div>
+          </section>
+        </div>
+      </main>
+
+      <footer class="statusbar"><i></i><span>Usage index ready</span><span>34 catalog entries</span><span>90-day window</span><span class="spacer"></span><span>Mockup · no files will be changed</span></footer>
+    </div>
+
+    <div class="scrim" id="scrim"></div>
+
+    <aside class="drawer" id="drawer" aria-hidden="true" aria-label="Skill evidence">
+      <header class="drawer-head">
+        <div class="drawer-head-copy">
+          <h2 id="drawer-name">repo-analysis</h2>
+          <p id="drawer-summary">Evidence and a safe recommendation for this skill.</p>
+        </div>
+        <button class="icon-btn" id="drawer-close" aria-label="Close details"><svg class="icon"><use href="#i-x"></use></svg></button>
+      </header>
+      <div class="drawer-body">
+        <section class="drawer-section">
+          <h3>Usage evidence · last 90 days</h3>
+          <div class="evidence-grid" id="drawer-evidence"></div>
+        </section>
+        <section class="drawer-section">
+          <h3>Recommendation</h3>
+          <div class="recommendation" id="drawer-recommendation"></div>
+        </section>
+        <section class="drawer-section">
+          <h3>Agent installations</h3>
+          <div class="installations" id="drawer-installations"></div>
+        </section>
+        <section class="drawer-section">
+          <h3>Apply action to</h3>
+          <div class="scope-box">
+            <div class="scope-options" id="scope-options"></div>
+            <p class="scope-summary" id="scope-summary"></p>
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>Manage selected agents</h3>
+          <div class="drawer-actions">
+            <button class="btn" id="drawer-toggle"><svg class="icon"><use href="#i-ban"></use></svg><span>Disable selected</span></button>
+            <button class="btn danger" id="drawer-delete"><svg class="icon"><use href="#i-trash"></use></svg>Delete copies…</button>
+          </div>
+        </section>
+      </div>
+    </aside>
+
+    <section class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <header class="modal-head">
+        <h2 id="settings-title">Settings → Skill sources</h2>
+        <span>trust, discovery and imports stay here</span>
+        <button class="icon-btn" id="settings-close" aria-label="Close settings"><svg class="icon"><use href="#i-x"></use></svg></button>
+      </header>
+      <div class="modal-body">
+        <div class="source-row">
+          <div class="source-main"><strong>Charter Managed</strong><small>~/Library/Application Support/Charter/skills</small></div>
+          <span class="source-found">5 found</span><span class="switch-label">managed copies</span>
+        </div>
+        <div class="source-row">
+          <div class="source-main"><strong>Agent Skills</strong><small>~/.agents/skills</small></div>
+          <span class="source-found">11 found</span><span class="switch-label"><span class="switch on"></span>Trusted</span>
+        </div>
+        <div class="source-row">
+          <div class="source-main"><strong>Claude Code</strong><small>~/.claude/skills</small></div>
+          <span class="source-found">8 found</span><span class="switch-label"><span class="switch on"></span>Trusted</span>
+        </div>
+        <div class="source-row">
+          <div class="source-main"><strong>Codex</strong><small>~/.codex/skills</small></div>
+          <span class="source-found">5 found</span><span class="switch-label"><span class="switch on"></span>Trusted</span>
+        </div>
+        <div class="source-row">
+          <div class="source-main"><strong>Codex System</strong><small>~/.codex/skills/.system</small></div>
+          <span class="source-found">5 found</span><span class="switch-label">read-only</span>
+        </div>
+        <div class="source-row">
+          <div class="source-main"><strong>More agent adapters</strong><small>Kimi Code and future agent-specific skill roots</small></div>
+          <span class="source-found">not connected</span><button class="mini-action" id="add-agent">Add agent…</button>
+        </div>
+        <div class="modal-note">One logical Skill can have several Agent-specific copies. Main-page actions may target one Agent or all manageable Agents. Disable is reversible and takes effect in new external-agent sessions; delete moves only the selected mutable copies to Trash. Built-in copies are always skipped.</div>
+      </div>
+    </section>
+
+    <section class="modal delete-modal" id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+      <header class="modal-head">
+        <h2 id="delete-title">Delete selected Skill copies?</h2>
+        <span>agent-specific and recoverable</span>
+        <button class="icon-btn" id="delete-close" aria-label="Close delete confirmation"><svg class="icon"><use href="#i-x"></use></svg></button>
+      </header>
+      <div class="modal-body">
+        <p class="delete-intro" id="delete-intro"></p>
+        <div class="delete-targets" id="delete-targets"></div>
+        <div class="modal-note" id="delete-note"></div>
+        <div class="modal-actions">
+          <button class="btn" id="delete-cancel">Cancel</button>
+          <button class="btn danger" id="delete-confirm"><svg class="icon"><use href="#i-trash"></use></svg><span>Move copies to Trash</span></button>
+        </div>
+      </div>
+    </section>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      const agentRegistry = {
+        pi: {
+          label: 'Pi', short: 'Pi', color: 'var(--pi)', unit: 'calls',
+          evidence: 'exact invocation ledger',
+          disableMethod: 'Local deny rule · reversible immediately'
+        },
+        claude: {
+          label: 'Claude Code', short: 'Claude', color: 'var(--claude)', unit: 'calls',
+          evidence: 'timestamped transcript calls',
+          disableMethod: 'Move to Charter Disabled · applies to new sessions'
+        },
+        codex: {
+          label: 'Codex', short: 'Codex', color: 'var(--codex)', unit: 'sessions',
+          evidence: 'active sessions · partial coverage',
+          disableMethod: 'Move to Charter Disabled · applies to new sessions'
+        }
+      };
+
+      function copy(agent, source, sourceKind, path, options = {}) {
+        return { agent, source, sourceKind, path, state: 'enabled', protected: false, ...options };
+      }
+
+      const skills = [
+        {
+          id: 'document-review', name: 'document-review', desc: 'Review long documents with traceable evidence.',
+          usage: { pi: 18, claude: 7, codex: 5 }, confidence: 'high', last: '2h ago', cost: 186,
+          tab: 'active', decision: 'Keep', decisionTone: 'keep', recommendation: 'Used across all three agents. Keep the copies, but manage each Agent independently if their needs diverge.',
+          installs: [
+            copy('pi', 'Charter Managed', 'managed', '~/Library/Application Support/Charter/skills/document-review'),
+            copy('claude', 'Claude Code', 'claude', '~/.claude/skills/document-review'),
+            copy('codex', 'Codex', 'codex', '~/.codex/skills/document-review')
+          ]
+        },
+        {
+          id: 'openai-docs', name: 'openai-docs', desc: 'Official OpenAI product and API guidance.',
+          usage: { pi: 4, claude: 0, codex: 9 }, confidence: 'medium', last: 'today', cost: 52,
+          tab: 'active', decision: 'Built-in locked', decisionTone: 'system', recommendation: 'This identity currently resolves to a Codex built-in copy. It stays measurable, but Agent-owned built-ins cannot be disabled, moved, or deleted by Charter.',
+          installs: [copy('codex', 'Codex System', 'system', '~/.codex/skills/.system/openai-docs', { protected: true, builtIn: true })]
+        },
+        {
+          id: 'writing-style', name: 'writing-style', desc: 'Apply the preferred writing and editing conventions.',
+          usage: { pi: 0, claude: 13, codex: 0 }, confidence: 'high', last: 'yesterday', cost: 164,
+          tab: 'review', decision: 'Mixed state', decisionTone: 'review', recommendation: 'Claude uses this often, while Pi does not. Keep the Claude copy and leave only the Pi copy disabled.',
+          installs: [
+            copy('pi', 'Agent Skills', 'agent', '~/.agents/skills/writing-style', { state: 'disabled' }),
+            copy('claude', 'Claude Code', 'claude', '~/.claude/skills/writing-style')
+          ]
+        },
+        {
+          id: 'pdf', name: 'pdf', desc: 'Read, generate, inspect, and edit PDF files.',
+          usage: { pi: 8, claude: 21, codex: 3 }, confidence: 'medium', last: '3d ago', cost: 214,
+          tab: 'active', decision: 'Keep', decisionTone: 'keep', recommendation: 'High cross-agent activity. Keep all three copies, while preserving the ability to disable or delete only one Agent installation.',
+          installs: [
+            copy('pi', 'Charter Managed', 'managed', '~/Library/Application Support/Charter/skills/pdf'),
+            copy('claude', 'Claude Code', 'claude', '~/.claude/skills/pdf'),
+            copy('codex', 'Codex', 'codex', '~/.codex/skills/pdf')
+          ]
+        },
+        {
+          id: 'release-check', name: 'release-check', desc: 'Run the release readiness checklist on demand.',
+          usage: { pi: 2, claude: 0, codex: 0 }, confidence: 'high', last: '31d ago', cost: 0,
+          tab: 'active', decision: 'Keep · periodic', decisionTone: 'keep', explicit: true, recommendation: 'Low frequency is expected for a release workflow. It costs nothing between invocations, so keep it.',
+          installs: [copy('pi', 'Charter Managed', 'managed', '~/Library/Application Support/Charter/skills/release-check')]
+        },
+        {
+          id: 'plugin-creator', name: 'plugin-creator', desc: 'Create and scaffold Codex plugin bundles.',
+          usage: { pi: 0, claude: 0, codex: 1 }, confidence: 'medium', last: '42d ago', cost: 0,
+          tab: 'active', decision: 'Mixed protection', decisionTone: 'review', recommendation: 'The Claude copy is user-managed; the Codex copy is built in. A bulk action may change Claude while always skipping Codex System.',
+          installs: [
+            copy('claude', 'Claude Code', 'claude', '~/.claude/skills/plugin-creator'),
+            copy('codex', 'Codex System', 'system', '~/.codex/skills/.system/plugin-creator', { protected: true, builtIn: true })
+          ]
+        },
+        {
+          id: 'repo-analysis', name: 'repo-analysis', desc: 'Analyze repository structure and architectural boundaries.',
+          usage: { pi: 0, claude: 0, codex: 0 }, confidence: 'low', last: '112d ago', cost: 248,
+          tab: 'review', decision: 'Review evidence', decisionTone: 'review', recommendation: 'No observed use, but Codex coverage is partial. Disable the Pi copy first; wait for better evidence before deleting either Agent copy.',
+          installs: [
+            copy('pi', 'Agent Skills', 'agent', '~/.agents/skills/repo-analysis'),
+            copy('codex', 'Codex', 'codex', '~/.codex/skills/repo-analysis')
+          ]
+        },
+        {
+          id: 'legacy-deploy', name: 'legacy-deploy', desc: 'Deploy the retired staging stack.',
+          usage: { pi: 0, claude: 0, codex: 0 }, confidence: 'high', last: 'never', cost: 302,
+          tab: 'review', decision: 'Deletion watch', decisionTone: 'review', recommendation: 'No use across covered consumers and a high Pi cost. Disable all manageable copies, then review before deleting them.',
+          installs: [
+            copy('pi', 'Charter Managed', 'managed', '~/Library/Application Support/Charter/skills/legacy-deploy'),
+            copy('claude', 'Claude Code', 'claude', '~/.claude/skills/legacy-deploy')
+          ]
+        },
+        {
+          id: 'old-lint-rules', name: 'old-lint-rules', desc: 'Legacy lint migration guide retained for reference.',
+          usage: { pi: 0, claude: 0, codex: 0 }, confidence: 'high', last: '148d ago', cost: 0,
+          tab: 'off', decision: 'Off in Pi', decisionTone: '', recommendation: 'Already disabled in Pi and costs nothing. Leave it off until its only copy is explicitly reviewed.',
+          installs: [copy('pi', 'Charter Managed', 'managed', '~/Library/Application Support/Charter/skills/old-lint-rules', { state: 'disabled' })]
+        }
+      ];
+
+      const state = { tab: 'all', search: '', consumer: 'all', source: 'all', selected: null, scope: 'all', pendingDelete: [] };
+      const rows = document.getElementById('skill-rows');
+      const empty = document.getElementById('empty');
+      const toast = document.getElementById('toast');
+      let toastTimer = null;
+
+      function sourceClass(kind) {
+        return ['claude', 'codex', 'system', 'agent'].includes(kind) ? kind : '';
+      }
+
+      function liveInstalls(skill) {
+        return skill.installs.filter((install) => install.state !== 'deleted');
+      }
+
+      function agentPill(install) {
+        const agent = agentRegistry[install.agent];
+        const stateClass = install.protected ? 'locked' : install.state === 'disabled' ? 'off' : '';
+        const stateLabel = install.protected ? ' locked' : install.state === 'disabled' ? ' off' : '';
+        return `<span class="agent-pill ${stateClass}" style="--agent-color:${agent.color}" title="${install.path}">${agent.short}${stateLabel}</span>`;
+      }
+
+      function usageRollup(skill) {
+        const used = Object.entries(agentRegistry).filter(([key]) => skill.usage[key] > 0);
+        if (!used.length) return '<span class="usage-unit">No observed use</span>';
+        return used.map(([key, agent]) => {
+          const unit = key === 'codex' ? 'sess' : 'calls';
+          return `<span class="usage-unit" style="--agent-color:${agent.color}"><b>${agent.short} ${skill.usage[key]}</b><small>${unit}</small></span>`;
+        }).join('');
+      }
+
+      function filteredSkills() {
+        return skills.filter((skill) => {
+          const installs = liveInstalls(skill);
+          if (state.tab === 'active' && Object.values(skill.usage).reduce((sum, value) => sum + value, 0) === 0) return false;
+          if (state.tab === 'review' && skill.tab !== 'review') return false;
+          if (state.tab === 'off' && !installs.some((install) => install.state === 'disabled')) return false;
+          if (state.consumer !== 'all' && (skill.usage[state.consumer] ?? 0) === 0) return false;
+          if (state.source !== 'all' && !installs.some((install) => install.sourceKind === state.source)) return false;
+          const searchable = `${skill.name} ${skill.desc} ${installs.map((install) => `${install.source} ${install.path} ${agentRegistry[install.agent].label}`).join(' ')}`.toLowerCase();
+          if (state.search && !searchable.includes(state.search)) return false;
+          return true;
+        });
+      }
+
+      function render() {
+        const data = filteredSkills();
+        rows.innerHTML = data.map((skill) => {
+          const installs = liveInstalls(skill);
+          const isOff = !installs.length || installs.every((install) => install.state === 'disabled');
+          const hasProtected = installs.some((install) => install.protected);
+          return `
+          <tr class="${isOff ? 'is-off' : ''}" data-row="${skill.id}">
+            <td>
+              <div class="skill-cell">
+                <div class="skill-name-row">
+                  <span class="skill-name">${skill.name}</span>
+                  ${hasProtected ? '<span class="tag system">built-in</span>' : ''}
+                  ${skill.explicit ? '<span class="tag explicit">explicit-only</span>' : ''}
+                </div>
+                <div class="skill-desc">${skill.desc}</div>
+              </div>
+            </td>
+            <td><div class="install-pills">${installs.length ? installs.map(agentPill).join('') : '<span class="agent-pill deleted">No installs</span>'}</div></td>
+            <td><div class="usage-rollup">${usageRollup(skill)}</div></td>
+            <td class="last ${skill.last === 'never' ? 'never' : ''}">${skill.last}</td>
+            <td class="cost">${skill.cost ? `~${skill.cost}` : '—'}<small>${skill.cost ? 'tok / turn' : skill.explicit ? 'on demand' : 'no Pi cost'}</small></td>
+            <td>
+              <div class="decision">
+                <span class="decision-label ${skill.decisionTone}">${skill.decision}</span>
+                <button class="row-action" data-open="${skill.id}">Manage</button>
+              </div>
+            </td>
+          </tr>
+        `}).join('');
+        empty.style.display = data.length ? 'none' : 'block';
+        document.querySelectorAll('[data-tab]').forEach((el) => el.classList.toggle('on', el.dataset.tab === state.tab));
+        document.querySelectorAll('[data-open]').forEach((button) => button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openDrawer(button.dataset.open);
+        }));
+        document.querySelectorAll('[data-row]').forEach((row) => row.addEventListener('dblclick', () => openDrawer(row.dataset.row)));
+      }
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 2400);
+      }
+
+      function setTab(tab) {
+        state.tab = tab;
+        render();
+      }
+
+      function selectedInstalls() {
+        if (!state.selected) return [];
+        const installs = liveInstalls(state.selected);
+        return state.scope === 'all' ? installs : installs.filter((install) => install.agent === state.scope);
+      }
+
+      function renderInstallations() {
+        const skill = state.selected;
+        if (!skill) return;
+        const installs = liveInstalls(skill);
+        document.getElementById('drawer-installations').innerHTML = installs.length ? installs.map((install) => {
+          const agent = agentRegistry[install.agent];
+          const stateClass = install.protected ? 'is-protected' : install.state === 'disabled' ? 'is-disabled' : '';
+          const stateLabel = install.protected ? 'Built-in · locked' : install.state === 'disabled' ? 'Disabled' : 'Enabled';
+          const stateTone = install.protected ? 'locked' : install.state === 'disabled' ? 'off' : '';
+          const method = install.protected ? 'Agent-owned copy · Charter cannot disable, move, or delete it' : agent.disableMethod;
+          return `<div class="install-row ${stateClass}" data-install-agent="${install.agent}">
+            <div>
+              <div class="install-title"><strong>${agent.label}</strong><span class="source ${sourceClass(install.sourceKind)}">${install.source}</span></div>
+              <div class="install-copy">${install.path}</div>
+              <div class="install-method">${method}</div>
+            </div>
+            <span class="install-state ${stateTone}">${stateLabel}</span>
+          </div>`;
+        }).join('') : '<div class="install-row"><div><div class="install-title"><strong>No active installations</strong></div><div class="install-method">All manageable copies were moved to Trash in this mock state.</div></div></div>';
+      }
+
+      function renderScope() {
+        const skill = state.selected;
+        if (!skill) return;
+        const installs = liveInstalls(skill);
+        if (state.scope !== 'all' && !installs.some((install) => install.agent === state.scope)) state.scope = 'all';
+        const availableAgents = [...new Set(installs.map((install) => install.agent))];
+        document.getElementById('scope-options').innerHTML = [
+          `<button class="scope-option ${state.scope === 'all' ? 'on' : ''}" data-scope="all">All agents · ${availableAgents.length}</button>`,
+          ...availableAgents.map((key) => `<button class="scope-option ${state.scope === key ? 'on' : ''}" data-scope="${key}">${agentRegistry[key].label}</button>`)
+        ].join('');
+        document.querySelectorAll('[data-scope]').forEach((button) => button.addEventListener('click', () => {
+          state.scope = button.dataset.scope;
+          renderScope();
+        }));
+
+        const selected = selectedInstalls();
+        const mutable = selected.filter((install) => !install.protected);
+        const protectedCount = selected.length - mutable.length;
+        const scopeName = state.scope === 'all' ? 'All agents' : agentRegistry[state.scope].label;
+        let summary = `${scopeName} selects ${selected.length} installed ${selected.length === 1 ? 'copy' : 'copies'}.`;
+        if (protectedCount) summary += ` ${protectedCount} built-in ${protectedCount === 1 ? 'copy is' : 'copies are'} locked and will be skipped.`;
+        if (mutable.length && state.scope !== 'pi') summary += ' External-agent changes apply to new sessions.';
+        if (!mutable.length && selected.length) summary += ' No management action is available for this scope.';
+        if (!selected.length) summary = 'No installed copies remain in this scope.';
+        document.getElementById('scope-summary').textContent = summary;
+
+        const toggle = document.getElementById('drawer-toggle');
+        const allDisabled = mutable.length > 0 && mutable.every((install) => install.state === 'disabled');
+        toggle.disabled = mutable.length === 0;
+        toggle.querySelector('span').textContent = allDisabled ? 'Enable selected' : 'Disable selected';
+        const deleteButton = document.getElementById('drawer-delete');
+        deleteButton.disabled = mutable.length === 0;
+      }
+
+      function openDrawer(id) {
+        const skill = skills.find((item) => item.id === id);
+        if (!skill) return;
+        state.selected = skill;
+        state.scope = 'all';
+        document.getElementById('drawer-name').textContent = skill.name;
+        document.getElementById('drawer-summary').textContent = `${liveInstalls(skill).length} Agent installations · ${skill.desc}`;
+        document.getElementById('drawer-evidence').innerHTML = `
+          ${Object.entries(agentRegistry).map(([key, agent]) => `<div class="evidence"><span><i style="background:${agent.color}"></i>${agent.short}</span><strong>${skill.usage[key]}</strong><small>${agent.evidence}${key === 'codex' ? ` · ${skill.confidence} confidence` : ''}</small></div>`).join('')}`;
+        document.getElementById('drawer-recommendation').innerHTML = `<strong>${skill.decision}</strong>${skill.recommendation}`;
+        renderInstallations();
+        renderScope();
+        document.getElementById('drawer').classList.add('open');
+        document.getElementById('drawer').setAttribute('aria-hidden', 'false');
+        document.getElementById('scrim').classList.add('open');
+      }
+
+      function closeDrawer() {
+        document.getElementById('drawer').classList.remove('open');
+        document.getElementById('drawer').setAttribute('aria-hidden', 'true');
+        if (!document.getElementById('settings-modal').classList.contains('open') && !document.getElementById('delete-modal').classList.contains('open')) document.getElementById('scrim').classList.remove('open');
+      }
+
+      function closeDelete() {
+        document.getElementById('delete-modal').classList.remove('open');
+        state.pendingDelete = [];
+        if (!document.getElementById('drawer').classList.contains('open') && !document.getElementById('settings-modal').classList.contains('open')) document.getElementById('scrim').classList.remove('open');
+      }
+
+      function openDelete() {
+        if (!state.selected) return;
+        const selected = selectedInstalls();
+        const targets = selected.filter((install) => !install.protected);
+        const skipped = selected.filter((install) => install.protected);
+        if (!targets.length) return;
+        state.pendingDelete = targets;
+        document.getElementById('delete-title').textContent = `Delete ${state.selected.name} copies?`;
+        document.getElementById('delete-intro').textContent = `${state.selected.name} is one logical Skill with separate Agent installations. Only the selected mutable copies below will be moved to Trash.`;
+        document.getElementById('delete-targets').innerHTML = [
+          ...targets.map((install) => `<div class="delete-target"><strong>${agentRegistry[install.agent].label}</strong><code>${install.path}</code><span>Move to Trash</span></div>`),
+          ...skipped.map((install) => `<div class="delete-target"><strong>${agentRegistry[install.agent].label}</strong><code>${install.path}</code><span style="color:var(--fg-faint)">Skip · built-in</span></div>`)
+        ].join('');
+        document.getElementById('delete-note').textContent = `Unselected Agent copies stay installed. ${skipped.length ? `${skipped.length} protected built-in ${skipped.length === 1 ? 'copy is' : 'copies are'} skipped. ` : ''}External agents pick up the change in new sessions.`;
+        document.getElementById('delete-confirm').querySelector('span').textContent = `Move ${targets.length} ${targets.length === 1 ? 'copy' : 'copies'} to Trash`;
+        document.getElementById('delete-modal').classList.add('open');
+        document.getElementById('scrim').classList.add('open');
+      }
+
+      function openSettings() {
+        closeDrawer();
+        closeDelete();
+        document.getElementById('settings-modal').classList.add('open');
+        document.getElementById('scrim').classList.add('open');
+      }
+
+      function closeSettings() {
+        document.getElementById('settings-modal').classList.remove('open');
+        if (!document.getElementById('drawer').classList.contains('open') && !document.getElementById('delete-modal').classList.contains('open')) document.getElementById('scrim').classList.remove('open');
+      }
+
+      document.querySelectorAll('[data-tab]').forEach((el) => el.addEventListener('click', () => setTab(el.dataset.tab)));
+      document.getElementById('search').addEventListener('input', (event) => { state.search = event.target.value.trim().toLowerCase(); render(); });
+      document.getElementById('consumer').addEventListener('change', (event) => { state.consumer = event.target.value; render(); });
+      document.getElementById('source').addEventListener('change', (event) => { state.source = event.target.value; render(); });
+      document.getElementById('window').addEventListener('change', (event) => showToast(`Usage window changed to ${event.target.value.toLowerCase()}.`));
+      document.getElementById('rescan').addEventListener('click', () => showToast('Skill sources and usage evidence rescanned.'));
+      document.getElementById('run-skill').addEventListener('click', () => showToast('Composer opened with the Skill picker ready.'));
+      document.getElementById('coverage-info').addEventListener('click', () => openDrawer('repo-analysis'));
+      document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+      document.getElementById('drawer-toggle').addEventListener('click', () => {
+        if (!state.selected) return;
+        const selected = selectedInstalls();
+        const mutable = selected.filter((install) => !install.protected);
+        if (!mutable.length) return;
+        const shouldEnable = mutable.every((install) => install.state === 'disabled');
+        mutable.forEach((install) => { install.state = shouldEnable ? 'enabled' : 'disabled'; });
+        const scopeName = state.scope === 'all' ? 'all manageable agents' : agentRegistry[state.scope].label;
+        const suffix = state.scope === 'all'
+          ? (selected.some((install) => install.protected) ? ' Protected built-ins were skipped.' : '')
+          : ' Other Agent copies were not changed.';
+        showToast(`${state.selected.name} ${shouldEnable ? 'enabled for' : 'disabled in'} ${scopeName}.${suffix}`);
+        render(); renderInstallations(); renderScope();
+      });
+      document.getElementById('drawer-delete').addEventListener('click', openDelete);
+      document.getElementById('delete-close').addEventListener('click', closeDelete);
+      document.getElementById('delete-cancel').addEventListener('click', closeDelete);
+      document.getElementById('delete-confirm').addEventListener('click', () => {
+        if (!state.selected || !state.pendingDelete.length) return;
+        const count = state.pendingDelete.length;
+        const protectedCount = selectedInstalls().filter((install) => install.protected).length;
+        const scopeWasAll = state.scope === 'all';
+        state.pendingDelete.forEach((install) => { install.state = 'deleted'; });
+        closeDelete();
+        const suffix = scopeWasAll
+          ? (protectedCount ? ' Protected built-ins were skipped.' : '')
+          : ' Other Agent copies were not changed.';
+        showToast(`${count} ${state.selected.name} ${count === 1 ? 'copy' : 'copies'} moved to Trash.${suffix}`);
+        render(); renderInstallations(); renderScope();
+      });
+      document.getElementById('side-settings').addEventListener('click', openSettings);
+      document.getElementById('activity-settings').addEventListener('click', openSettings);
+      document.getElementById('settings-close').addEventListener('click', closeSettings);
+      document.getElementById('add-agent').addEventListener('click', () => showToast('Agent adapter picker opened. Kimi Code can be added without changing this layout.'));
+      document.getElementById('scrim').addEventListener('click', () => { closeDelete(); closeDrawer(); closeSettings(); });
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeDelete(); closeDrawer(); closeSettings(); } });
+
+      render();
+    </script>
+  </body>
+</html>

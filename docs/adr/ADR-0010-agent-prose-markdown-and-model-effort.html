@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0010 — Agent-prose Markdown rendering and per-model reasoning effort · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0010-agent-prose-markdown-rendering-and-per-model-reasoning-effort">ADR-0010 — Agent-prose Markdown rendering and per-model reasoning effort</h1>
+<p>Status: accepted<br>Date: 2026-07-14<br>Related: ADR-0007 (rich markdown file editor), spec §8 (agent contract), MOD-001, PIVOT-032 (room timeline)</p>
+<h2 id="context">Context</h2>
+<ol><li><strong>Agent replies rendered as plain text.</strong> Models emit GitHub-flavoured markdown<br>(tables, fences, emphasis); the Task Room bubbles, editor agent panel, plan summaries, report narratives and question cards all rendered raw source. A simple table reply read as line noise (user-reported).</li><li><strong>Reasoning effort was model-blind.</strong> The composer offered one fixed 6-level<br>list (<code>off…max</code>) to every model. Pi&#39;s contract is 7 levels (<code>xhigh</code> exists); models differ in what they accept (non-reasoning models: nothing; GPT-5 family: <code>xhigh</code>; Anthropic: <code>max</code>). Users could ask for effort the provider call would silently drop, and could not pick <code>xhigh</code> at all.</li></ol>
+<h2 id="decision">Decision</h2>
+<h3 id="markdown-for-agent-authored-prose-only">Markdown for agent-authored prose only</h3>
+<ul><li>New dependencies, exact-pinned in <code>desktop-renderer</code>: **react-markdown@10.1.0 +<br>remark-gfm@4.0.1<strong>. Chosen over <code>marked</code>/<code>dangerouslySetInnerHTML</code> because output is a React element tree: </strong>no raw-HTML rendering path exists at all** (we do not install <code>rehype-raw</code>), URL schemes go through react-markdown&#39;s default sanitiser, and link clicks are routed to <code>app.openExternal</code> (main-process checked opener).</li><li>One shared <code>&lt;Markdown&gt;</code> component (<code>views/Markdown.tsx</code>) used by: agent bubbles<br>(timeline + streaming), plan summaries, final-report agent narrative, question cards. <strong>User-authored text stays plain</strong> (<code>user.message</code> bubbles) so a user pasting markdown/HTML is never interpreted.</li><li>Fenced code blocks colorize via Monaco&#39;s tokenizer (<code>monaco.editor.colorize</code>,<br>already bundled — zero new highlight dependency; token spans only) with a copy affordance.</li></ul>
+<h3 id="per-model-effort-levels">Per-model effort levels</h3>
+<ul><li><code>agent-contract</code>: <code>ThinkingLevel</code> gains <code>&#39;xhigh&#39;</code>; <code>ModelDescriptor</code> gains<br><code>supportedThinkingLevels: ThinkingLevel[]</code>.</li><li><code>agent-runtime-pi</code> computes the list with <code>getSupportedThinkingLevels</code> and clamps<br>at <code>createSession</code> with <code>clampThinkingLevel</code> from <strong>@earendil-works/pi-ai@0.80.6</strong>, now an exact-pinned direct dependency of that package (the same version pi-coding-agent@0.80.6 ships; pure functions over model metadata). The boundary rule is unchanged: only <code>packages/agent-runtime-pi</code> may import <code>@earendil-works/*</code>.</li><li>Composer: the effort select shows <strong>only</strong> the selected model&#39;s supported levels<br>(unsupported levels are hidden, per product decision); switching models clamps the current choice to the nearest supported level (higher first — mirrors the runtime clamp). Non-reasoning models disable the control (&quot;no thinking&quot;).</li><li>Gateway-listed models (custom endpoints) expose no reasoning metadata → they offer<br>the full range and rely on the runtime clamp.</li><li>Settings keeps the full-range default preference; every dispatch path clamps.</li></ul>
+<h2 id="consequences">Consequences</h2>
+<ul><li>Two renderer dependencies and one adapter dependency to track at Pi SDK upgrades<br>(pi-ai must move in lockstep with pi-coding-agent — release checklist item).</li><li>Old persisted <code>ModelDescriptor</code> snapshots lack <code>supportedThinkingLevels</code>; the DTO<br>schema defaults the field to the full list, so stale catalogs degrade to the old behaviour (runtime still clamps).</li><li>Timeline text assertions in tests keep working: rendered markdown preserves text<br>content (<code>toContainText</code> semantics), only markup changes.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

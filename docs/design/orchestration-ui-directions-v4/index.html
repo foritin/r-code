@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 编队 UI 设计方向</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">Charter · 编队 UI</a>
+        <a class="nav-link" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">HTML mock · 不是产品代码</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="index-hero">
+        <p class="eyebrow">Orchestration UI / Four directions + synthesis</p>
+        <h1>不要把四块终端<br />继续塞进聊天页面。</h1>
+        <p>
+          前四个方向分别代表全局协调、顺手观察、深度介入和异常处理；第五个方向把它们收敛成一个完整工作流。点击任一方向进入可交互 Mock。
+        </p>
+      </section>
+
+      <section class="index-grid" aria-label="五个设计方向">
+        <a class="direction-card" href="./01-control-room.html">
+          <span class="direction-number">DIRECTION 01</span>
+          <h2>独立指挥舱</h2>
+          <p>给多 worker 一块真正的工作面：左边选人，中间看一条直播，右边只放决策。适合 4–8 个并行 worker。</p>
+          <div class="direction-meta">
+            <span class="pill">新一级页面</span>
+            <span class="pill">全局态势</span>
+            <span class="pill">重度用户</span>
+          </div>
+          <div class="miniature" aria-hidden="true">
+            <div class="mini-grid control"><span></span><span></span><span></span></div>
+          </div>
+        </a>
+
+        <a class="direction-card" href="./02-command-drawer.html">
+          <span class="direction-number">DIRECTION 02</span>
+          <h2>任务页浮动抽屉</h2>
+          <p>聊天页默认保持干净，只留一枚“3 个 worker / 1 个待处理”入口；需要时抽屉覆盖打开，不永久挤压正文。</p>
+          <div class="direction-meta">
+            <span class="pill">留在当前页面</span>
+            <span class="pill">渐进披露</span>
+            <span class="pill">轻量协调</span>
+          </div>
+          <div class="miniature" aria-hidden="true">
+            <div class="mini-grid drawer"><span></span><span></span></div>
+          </div>
+        </a>
+
+        <a class="direction-card" href="./03-focus-theater.html">
+          <span class="direction-number">DIRECTION 03</span>
+          <h2>单路聚焦剧场</h2>
+          <p>彻底放弃监视墙：任何时刻只看一个 worker，其余 worker 退化成顶部胶片条。适合阅读、接管和精细指挥。</p>
+          <div class="direction-meta">
+            <span class="pill">全屏模式</span>
+            <span class="pill">一次看一路</span>
+            <span class="pill">人工介入</span>
+          </div>
+          <div class="miniature" aria-hidden="true">
+            <div class="mini-grid theater"><span></span><span></span></div>
+          </div>
+        </a>
+
+        <a class="direction-card" href="./04-activity-inbox.html">
+          <span class="direction-number">DIRECTION 04</span>
+          <h2>事件流收件箱</h2>
+          <p>默认不展示终端，把 worker 输出压缩成“待审批、已完成、被阻塞、改了哪些文件”。终端只是按需展开的证据。</p>
+          <div class="direction-meta">
+            <span class="pill">活动页 / 新 Tab</span>
+            <span class="pill">异常优先</span>
+            <span class="pill">异步管理</span>
+          </div>
+          <div class="miniature" aria-hidden="true">
+            <div class="mini-grid inbox"><span></span><span></span></div>
+          </div>
+        </a>
+
+        <a class="direction-card recommended-direction" href="./05-hybrid-command-center.html">
+          <span class="direction-number">DIRECTION 05 · RECOMMENDED SYNTHESIS</span>
+          <h2>指挥舱 + 事件语义 + 聚焦下钻</h2>
+          <p>01 作为稳定主架构，04 负责告诉你什么值得关注，03 只在阅读长输出或人工介入时出现。</p>
+          <div class="direction-meta">
+            <span class="pill">稳定三栏</span>
+            <span class="pill">事件优先</span>
+            <span class="pill">按需全屏</span>
+          </div>
+          <div class="miniature" aria-hidden="true">
+            <div class="mini-grid control"><span></span><span></span><span></span></div>
+          </div>
+        </a>
+      </section>
+    </main>
+  </body>
+</html>

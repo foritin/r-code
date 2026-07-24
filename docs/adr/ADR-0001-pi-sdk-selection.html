@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0001: Pi SDK 选型与锁定 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0001-pi-sdk-选型与锁定">ADR-0001: Pi SDK 选型与锁定</h1>
+<ul><li>状态：Accepted</li><li>日期：2026-07-12</li><li>关联需求：AG-013、§8 全部、M6-01</li></ul>
+<h2 id="背景">背景</h2>
+<p>规格 §8.1 指定依赖 <code>@earendil-works/pi-coding-agent</code>。npm 上该包真实存在（earendil-works/pi monorepo，MIT），<br>按规格预期拆分为 <code>pi-agent-core</code> / <code>pi-ai</code> / <code>pi-tui</code>，SDK 提供 <code>createAgentSession</code>、<code>AgentSession</code>（subscribe/prompt/steer 语义）、<br><code>AuthStorage</code>（含 InMemory 后端）、<code>ModelRegistry</code>、<code>SessionManager</code>、<code>ToolDefinition</code> 注入等能力。</p>
+<h2 id="决策">决策</h2>
+<ol><li>精确锁定 <code>@earendil-works/pi-coding-agent@0.80.6</code>（engines: node&gt;=22.19，Electron 43 内置 Node 24.18 满足）。</li><li>Adapter 通过 <code>createAgentSession({ noTools: &#39;all&#39;, customTools: [...] })</code> 完全禁用 Pi 内置 read/bash/edit/write，<br>只注入产品 Tool Gateway 代理工具 —— Pi 进程内不存在任何直接文件/命令执行路径（TOOL-001 的实现基础）。</li><li><code>AuthStorage</code> 使用内存后端，由产品 Secret Store 在 Worker 启动时注入凭据；Pi 不落盘任何密钥。</li><li><code>SessionManager</code> 指向 AppData/runtime 下的产品管理目录；Pi session 文件仅作为恢复引用（HIST-003）。</li><li><code>cwd</code> 传入产品控制的目录：未信任项目一律传空目录，阻止 Pi 自动发现项目扩展/技能（AG-014）。</li></ol>
+<h2 id="替代方案">替代方案</h2>
+<ul><li>直接调用各 Provider SDK：放弃，规格明确 Pi 为第一 Runtime。</li><li>Fork Pi：无必要，公开 API 满足全部已编号需求。</li></ul>
+<h2 id="安全与数据影响">安全与数据影响</h2>
+<p>Pi 无内建权限隔离（官方声明），本决策把工具面收敛到产品网关，是 §12 威胁模型的前提。</p>
+<h2 id="验证证据">验证证据</h2>
+<ul><li>packages/agent-runtime-pi 的 contract tests（M6）。</li><li>边界 lint：仅 agent-runtime-pi 可 import <code>@earendil-works/*</code>（scripts/check-boundaries.mjs + tests/unit/boundaries.test.ts）。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

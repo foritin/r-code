@@ -1,0 +1,260 @@
+<!doctype html>
+<!-- Charter CodeContextRef · Phase 1 discussion mock. NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Code Context 第一阶段</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      .phase-one-selection {
+        top: 142px;
+      }
+
+      .sent-entry {
+        animation: entry-in 180ms ease-out;
+      }
+
+      @keyframes entry-in {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .phase-note {
+        color: #cbb79d;
+        font-size: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="mock-shell">
+      <nav class="mock-controls" aria-label="Mock 状态切换">
+        <strong>第一阶段 · Diff → Agent Context</strong>
+        <span class="explain">上方控制只用于查看三个关键状态，不属于产品界面</span>
+        <span class="spacer"></span>
+        <button type="button" data-stage="selection" class="active">1 选中代码</button>
+        <button type="button" data-stage="attached">2 加入 Composer</button>
+        <button type="button" data-stage="sent">3 时间线留证</button>
+      </nav>
+
+      <section class="app-window" aria-label="Charter Session mock">
+        <aside class="session-rail">
+          <div class="rail-head">
+            <div class="rail-title"><span>SESSIONS</span><span>搜索</span></div>
+            <button class="new-session" type="button">新建 Session</button>
+          </div>
+          <div class="rail-scroll">
+            <div class="needs-you">
+              <span>Needs you</span><span>打开收件箱</span><b class="count-badge">2</b>
+            </div>
+            <div class="project-label"><span>展开</span><span>charter</span><small>1</small></div>
+            <div class="session-row active">
+              <span class="agent-mark">π</span>
+              <span class="session-copy">
+                <strong>完善代码引用能力</strong>
+                <span>main · anthropic</span>
+                <small>正在审阅 public/index.html</small>
+              </span>
+              <span class="live-label">LIVE</span>
+            </div>
+            <div class="project-label"><span>展开</span><span>fable5</span><small>3</small></div>
+            <div class="session-row">
+              <span class="agent-mark">C</span>
+              <span class="session-copy">
+                <strong>external session</strong>
+                <span>main · Claude</span>
+                <small>Ready to review</small>
+              </span>
+              <span class="live-label">REVIEW</span>
+            </div>
+            <div class="session-row">
+              <span class="agent-mark">C</span>
+              <span class="session-copy">
+                <strong>修正订单提交状态</strong>
+                <span>main · Codex</span>
+                <small>Answered · no file changes</small>
+              </span>
+              <span class="live-label">DONE</span>
+            </div>
+            <div class="rail-rule"></div>
+            <div class="history-label"><span>折叠</span><span>History</span><small>4</small></div>
+          </div>
+          <div class="working-context">
+            <strong>charter</strong><span>main</span>
+            <small>working context · ~/git/charter</small>
+          </div>
+        </aside>
+
+        <header class="session-head">
+          <span class="back-link">返回 All Sessions</span>
+          <div class="session-identity">
+            <div class="session-name">
+              <h1>完善代码引用能力</h1>
+              <span class="status-pill">Working</span>
+            </div>
+            <div class="session-meta">
+              <span class="meta-chip">charter</span>
+              <span class="meta-chip">main</span>
+              <span class="meta-chip">anthropic</span>
+            </div>
+          </div>
+          <span class="spacer"></span>
+          <button class="quiet-button" type="button">More</button>
+        </header>
+
+        <section class="conversation" aria-label="Session conversation">
+          <div class="conversation-scroll" id="conversation-scroll">
+            <div class="timeline" id="timeline">
+              <article class="timeline-entry user">
+                <div class="timeline-label">你 · 10:24</div>
+                <div class="timeline-copy">把 Diff 审阅做得更像真正的代码工作台。</div>
+              </article>
+
+              <article class="timeline-entry agent">
+                <div class="timeline-label">Agent · 10:25</div>
+                <div class="timeline-copy">
+                  Diff 已经支持逐行审阅。下一步我会把你选中的具体代码变成可检查的上下文，而不是把整份文件塞进消息。
+                </div>
+                <div class="worklog">
+                  <strong>10:25:13</strong> 读取 public/index.html<br />
+                  <strong>10:25:18</strong> 更新主题变量<br />
+                  <strong>10:25:21</strong> 运行静态检查 · passed
+                </div>
+              </article>
+
+              <article class="timeline-entry agent">
+                <div class="timeline-label">Agent · 10:26</div>
+                <div class="timeline-copy">
+                  右侧是本轮变更。你可以直接指出某几行，我会把它当成下一条指令的精确引用。
+                </div>
+              </article>
+
+              <article class="timeline-entry user sent-entry hidden" id="sent-entry">
+                <div class="timeline-label">你 · 刚刚</div>
+                <div class="timeline-copy" id="sent-copy">把这两个颜色调整得更符合现在的品牌色。</div>
+                <details class="timeline-context" open>
+                  <summary>代码引用 · public/index.html · 新版本 L16–17</summary>
+                  <pre>--success: #2f9e63;
+--success-hover: #278554;</pre>
+                </details>
+              </article>
+
+              <article class="timeline-entry agent sent-entry hidden" id="agent-followup">
+                <div class="timeline-label">Agent · 刚刚</div>
+                <div class="timeline-copy">
+                  收到。我会只调整这两个成功态变量，并保持警告和错误色不变。
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="working-line">
+            <span class="working-dot"></span>
+            <span id="working-copy">等待你的审阅上下文…</span>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <div class="context-shelf" id="context-shelf">
+                <div class="context-summary">
+                  <span>本条消息的上下文</span><span>1 个引用 · 2 行</span>
+                </div>
+                <div class="code-context-card" id="context-card">
+                  <span>
+                    <strong>public/index.html · 新版本 L16–17</strong>
+                    <small>待审批变更 · 2 lines · 选中时快照</small>
+                  </span>
+                  <button class="context-action" id="remove-context" type="button">移除</button>
+                  <pre class="context-preview">--success: #2f9e63;
+--success-hover: #278554;</pre>
+                </div>
+              </div>
+              <textarea
+                id="composer-input"
+                rows="2"
+                placeholder="你希望 Agent 对这段代码做什么？"
+                aria-label="给 Agent 的指令"
+              ></textarea>
+              <div class="composer-footer">
+                <span class="composer-meta">Auto · anthropic/claude · effort medium</span>
+                <span class="spacer"></span>
+                <button class="send-button" id="send-button" type="button" disabled>发送</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="tool-panel" aria-label="Session tools">
+          <nav class="tool-tabs" aria-label="Session tool tabs">
+            <button type="button">File</button>
+            <button type="button" class="active">Diff</button>
+            <button type="button">Preview</button>
+            <button type="button">Terminal</button>
+            <button type="button">Review</button>
+            <span class="spacer"></span>
+            <button type="button">Expand</button>
+          </nav>
+
+          <div class="tool-body">
+            <div class="diff-review">
+              <div class="surface-title">
+                <h2>1 file changed</h2>
+                <span class="spacer"></span>
+                <span class="diff-total"><span class="plus">+5</span>&nbsp; <span class="minus">−2</span></span>
+              </div>
+
+              <button type="button" class="changed-file">
+                <span>public/index.html</span>
+                <small><span style="color: var(--success)">+5</span>&nbsp; <span style="color: var(--danger)">−2</span></small>
+              </button>
+
+              <section class="code-frame" aria-label="public/index.html diff">
+                <header class="code-head">
+                  <strong>public/index.html</strong><span class="spacer"></span>
+                  <button type="button">复制</button><button type="button">高级审阅</button>
+                </header>
+                <div class="hunk-head">@@ -12,8 +12,10 @@</div>
+                <div class="code-lines" id="diff-lines">
+                  <div class="code-line"><span class="line-number">12</span><span class="line-marker"></span><span class="code-text">  --text-sub: #6b7280;</span></div>
+                  <div class="code-line"><span class="line-number">13</span><span class="line-marker"></span><span class="code-text">  --border: #e5e7eb;</span></div>
+                  <div class="code-line"><span class="line-number">14</span><span class="line-marker"></span><span class="code-text">  --accent: #2563eb;</span></div>
+                  <div class="code-line"><span class="line-number">15</span><span class="line-marker"></span><span class="code-text">  --accent-hover: #1d4ed8;</span></div>
+                  <div class="code-line add selected"><span class="line-number">16</span><span class="line-marker">+</span><span class="code-text">  --success: #2f9e63;</span></div>
+                  <div class="code-line add selected"><span class="line-number">17</span><span class="line-marker">+</span><span class="code-text">  --success-hover: #278554;</span></div>
+                  <div class="code-line"><span class="line-number">18</span><span class="line-marker"></span><span class="code-text">  --warn-bg: #fff7ed;</span></div>
+                  <div class="code-line"><span class="line-number">19</span><span class="line-marker"></span><span class="code-text">  --warn-text: #b45309;</span></div>
+                  <div class="selection-action phase-one-selection" id="selection-action">
+                    <span>已选 2 行 · 新版本</span>
+                    <button type="button" id="attach-selection">添加到上下文</button>
+                  </div>
+                </div>
+                <div class="hunk-head">@@ -105,23 +107,24 @@</div>
+                <div class="code-lines">
+                  <div class="code-line"><span class="line-number">107</span><span class="line-marker"></span><span class="code-text">  color: var(--warn-text);</span></div>
+                  <div class="code-line"><span class="line-number">108</span><span class="line-marker"></span><span class="code-text">  background: var(--warn-bg);</span></div>
+                  <div class="code-line"><span class="line-number">109</span><span class="line-marker"></span><span class="code-text">  border: 1px solid var(--warn-border);</span></div>
+                  <div class="code-line add"><span class="line-number">111</span><span class="line-marker">+</span><span class="code-text">  border-left: 4px solid #dc2626;</span></div>
+                </div>
+              </section>
+
+              <section class="verification-card">
+                <div><strong>Verification</strong><span class="spacer"></span><b>12 tests passed</b></div>
+                <div><small>Executed 12 tests in 2.4s</small></div>
+              </section>
+            </div>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script src="./phase-1.js"></script>
+  </body>
+</html>

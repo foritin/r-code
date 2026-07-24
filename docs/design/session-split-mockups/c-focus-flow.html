@@ -1,0 +1,201 @@
+<!doctype html>
+<!-- Charter session split · Variant C discussion mock. NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 分栏方案 C：焦点跟随</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      .split-zone {
+        --ease: 240ms cubic-bezier(0.3, 0.9, 0.3, 1);
+      }
+
+      .pane-main {
+        transition: width var(--ease);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .pane-main {
+          transition: none;
+        }
+      }
+
+      .divider {
+        cursor: default;
+      }
+
+      .divider-cluster {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 8px;
+      }
+
+      .divider-cluster button {
+        width: 27px;
+        height: 27px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--border-strong);
+        border-radius: 50%;
+        background: var(--card);
+        color: var(--muted);
+        box-shadow: 0 2px 8px rgba(62, 40, 25, 0.14);
+        font-size: 13px;
+      }
+
+      .divider-cluster button:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+
+      .divider-cluster button.on {
+        border-color: #3b5942;
+        background: #2e4634;
+        color: #e1ecdf;
+      }
+
+      .mode-chip {
+        position: absolute;
+        z-index: 30;
+        top: 12px;
+        padding: 4px 10px;
+        border: 1px solid var(--bark-edge);
+        border-radius: 999px;
+        background: var(--bark);
+        color: var(--bark-fg);
+        box-shadow: 0 8px 22px rgba(45, 33, 27, 0.24);
+        font: 10.5px var(--font-sans);
+        white-space: nowrap;
+        transform: translateX(-50%);
+        transition: left var(--ease);
+        pointer-events: none;
+      }
+
+      .mode-chip.pinned {
+        border-color: #3b5942;
+        background: #2e4634;
+        color: #e1ecdf;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .mode-chip {
+          transition: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="mock-shell">
+      <nav class="mock-controls" aria-label="Mock 说明">
+        <strong>方案 C · 焦点跟随</strong>
+        <span class="explain">在哪边工作哪边就自动变宽（点击/停留）· ⇄ 立即对调 · 图钉冻结当前比例</span>
+        <span class="spacer"></span>
+        <span class="ratio-readout" id="ratio">AUTO · 对话 56% · 工具 44%</span>
+      </nav>
+
+      <section class="app-window">
+        <aside class="session-rail">
+          <button class="new-session" type="button">＋ New Session</button>
+          <div class="rail-label"><span>fable5</span><small>3</small></div>
+          <div class="session-row active">
+            <i>✳</i>
+            <span><strong>Session 4ed53b65-…fdf4c7</strong><span>claude terminal output · 23m</span></span>
+          </div>
+          <div class="session-row">
+            <i>✳</i>
+            <span><strong>Session 4ed53b65-…</strong><span>Answered · no file changes</span></span>
+          </div>
+          <div class="rail-label"><span>charter</span><small>1</small></div>
+          <div class="session-row">
+            <i>π</i>
+            <span><strong>hi</strong><span>Answered · no file changes</span></span>
+          </div>
+        </aside>
+
+        <section class="split-zone" id="split-zone">
+          <section class="pane pane-main" id="pane-main" aria-label="Session conversation">
+            <header class="session-head-mini">
+              <b>✳ claude</b><span class="ext">EXT · unmanaged</span><span class="live">LIVE · following</span>
+            </header>
+            <div class="terminal-block">有序列表：
+1. 有序列表项一
+2. 有序列表项二
+渲染为：
+1. 有序列表项一
+2. 有序列表项二
+
+区别：
+<table>
+  <tr><td>特性</td><td>无序列表</td><td>有序列表</td></tr>
+  <tr><td>符号</td><td>- / * / +</td><td>数字 + .</td></tr>
+  <tr><td>用途</td><td>项目无顺序关系</td><td>项目有先后顺序</td></tr>
+  <tr><td>视觉效果</td><td>圆点/方块</td><td>1. 2. 3. 等编号</td></tr>
+</table>
+这段代码就是在演示这两种最基本的列表格式。
+
+<span class="dim">✳ Cogitated for 6s</span>
+
+<span class="dim">※ recap: Created and polished a moon rotation HTML
+visualization with 3D effects, star field, and interactive
+controls.                                    56238 tokens</span>
+
+❯
+<span class="statusline"><span class="accent">[Haiku 4.5]</span> fable5 · master
+28% (55k/200k) · $0.31 · 105m38s
+▸▸ bypass permissions on (shift+tab to cycle)</span></div>
+            <div class="composer-mini">Reply — steer the agent or add context…（点这里试试，对话面会自动变宽）</div>
+          </section>
+
+          <div class="divider" role="separator" aria-orientation="vertical" aria-label="布局由焦点驱动">
+            <div class="divider-cluster">
+              <button type="button" id="flip" title="立即对调宽窄">⇄</button>
+              <button type="button" id="pin" title="钉住当前比例，停止自动调整" aria-pressed="false">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                  <path d="M9 4h6l-1 7 3 3H7l3-3z" />
+                  <line x1="12" y1="14" x2="12" y2="20" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <aside class="pane pane-tools" id="pane-tools" aria-label="Session tools">
+            <nav class="tool-tabs-mini">
+              <span>Summary</span><b>Diff</b><span>Preview</span><span>Terminal</span><span>Review</span>
+              <button class="expand" type="button" title="打开 Diff = 聚焦工具，右侧自动变宽">Balance</button>
+            </nav>
+            <div class="tool-body-mini">
+              <h2>1 file changed</h2>
+              <div class="changed-file"><span>example.md</span><small>+36&nbsp; −0</small></div>
+              <div class="diff-card">
+                <header>example.md（点这里试试，工具面会自动变宽）</header>
+                <div class="hunk-head">@@ -1,0 +1,36 @@</div>
+                <div class="diff-line"><span class="no">1</span><span class="mark">+</span><span class="code"><span class="md"># 示例文档</span></span></div>
+                <div class="diff-line"><span class="no">2</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">3</span><span class="mark">+</span><span class="code">这是一个简单的 Markdown 文件，展示常用语法。</span></div>
+                <div class="diff-line"><span class="no">4</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">5</span><span class="mark">+</span><span class="code"><span class="md">## 文本样式</span></span></div>
+                <div class="diff-line"><span class="no">6</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">7</span><span class="mark">+</span><span class="code">普通文字、**加粗**、*斜体*、`行内代码`、~~删除线~~。</span></div>
+                <div class="diff-line"><span class="no">8</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">9</span><span class="mark">+</span><span class="code"><span class="md">## 列表</span></span></div>
+                <div class="diff-line"><span class="no">10</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">11</span><span class="mark">+</span><span class="code">- 无序列表项一</span></div>
+                <div class="diff-line"><span class="no">12</span><span class="mark">+</span><span class="code">- 无序列表项二</span></div>
+                <div class="diff-line"><span class="no">13</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">14</span><span class="mark">+</span><span class="code">1. 有序列表项一</span></div>
+                <div class="diff-line"><span class="no">15</span><span class="mark">+</span><span class="code">2. 有序列表项二</span></div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="mode-chip" id="mode-chip">AUTO · 初始 56 / 44</div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./c-focus-flow.js"></script>
+  </body>
+</html>

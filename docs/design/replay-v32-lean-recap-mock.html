@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay V3.2 概念稿 · 小任务瘦身（mock，非实现）</title>
+<style>
+  /* ---- product theme tokens (light warm), same as replay-v4-recap-mock ---- */
+  :root {
+    --bg-editor: #fbfaf7;
+    --bg-card: #ffffff;
+    --border: #e5e1d8;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --blue: #3d78e6;
+    --green: #3a9b62;
+    --amber: #d99025;
+    --red: #c94f3d;
+    --violet: #7b5bd6;
+    --blue-soft: #eef3fd;
+    --green-soft: #ecf6f0;
+    --amber-soft: #fbf3e4;
+    --red-soft: #faeeec;
+    --violet-soft: #f2eefb;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font: 13px/1.55 -apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+    color: var(--fg);
+    background: #efede8;
+  }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; text-align: left; }
+
+  /* ---- mock banner ---- */
+  .mock-banner {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px;
+    background: #2c2440; color: #e9e4f7;
+    font-size: 12px;
+    position: sticky; top: 0; z-index: 50;
+  }
+  .mock-banner strong { color: #cfc2f4; font-weight: 650; }
+  .mock-banner .pts { opacity: .92; }
+  .mock-banner label {
+    margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px;
+    background: #453a63; border-radius: 20px; padding: 4px 12px; cursor: pointer;
+  }
+
+  /* ---- annotation toggle (same pattern as v4 mock) ---- */
+  .new { position: relative; }
+  body:has(#ann:checked) .new {
+    outline: 1.5px dashed var(--violet);
+    outline-offset: 3px;
+    border-radius: 8px;
+  }
+  body:has(#ann:checked) .new::after {
+    content: "规则 " attr(data-n);
+    position: absolute; top: -9px; right: 8px; z-index: 5;
+    background: var(--violet); color: #fff;
+    font-size: 10px; font-weight: 650; line-height: 1;
+    padding: 3px 7px; border-radius: 8px;
+    pointer-events: none;
+  }
+
+  /* ---- plain-talk rules strip ---- */
+  .rules {
+    padding: 14px 20px 4px;
+    max-width: 1180px; margin: 0 auto;
+  }
+  .rules h2 { margin: 0 0 4px; font-size: 15px; }
+  .rules p.sub { margin: 0 0 10px; color: var(--fg-muted); font-size: 12.5px; }
+  .rules ol {
+    margin: 0; padding: 0; list-style: none;
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
+  }
+  .rules li {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 11px; font-size: 12px;
+  }
+  .rules li b { display: block; margin-bottom: 3px; font-size: 12.2px; }
+  .rules li b i { font-style: normal; display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--violet); color: #fff; font-size: 10px; margin-right: 5px; vertical-align: -3px; }
+  .rules li span { color: var(--fg-muted); }
+  .ledger-note {
+    margin: 10px 0 0; font-size: 12px; color: #5b3fb0;
+    background: var(--violet-soft); border-left: 3px solid var(--violet);
+    border-radius: 8px; padding: 8px 12px;
+  }
+
+  /* ---- compare grid ---- */
+  .compare {
+    max-width: 1180px; margin: 14px auto 30px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    padding: 0 20px;
+    align-items: start;
+  }
+  .panel {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 11px 16px; border-bottom: 1px solid var(--border);
+  }
+  .panel-head strong { font-size: 13.5px; }
+  .panel-head .tag { font-size: 10.5px; font-weight: 700; border-radius: 10px; padding: 2px 9px; }
+  .panel.before .panel-head .tag { background: var(--red-soft); color: #8a3d31; }
+  .panel.after  .panel-head .tag { background: var(--green-soft); color: #22713f; }
+  .panel-head .count { margin-left: auto; font-size: 11.5px; color: var(--fg-muted); }
+  .panel-body { padding: 10px 16px 14px; }
+  .panel-foot {
+    padding: 8px 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted); display: flex; justify-content: space-between; gap: 10px;
+  }
+
+  /* ---- conversation bubbles ---- */
+  .msg { display: flex; gap: 10px; margin: 12px 0; }
+  .msg .ava {
+    flex: none; width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .msg.user .ava { background: #4a4640; }
+  .msg.agent .ava { background: var(--blue); }
+  .msg .body-t { min-width: 0; flex: 1; }
+  .msg .who { font-size: 10.5px; color: var(--fg-muted); letter-spacing: .5px; margin-bottom: 3px; }
+  .msg .who b { color: var(--fg); font-weight: 650; margin-right: 6px; }
+  .msg .text {
+    background: var(--bg-editor); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 11px; font-size: 12.8px;
+  }
+  .msg.user .text { background: #f3f1ec; }
+
+  /* ---- action rows ---- */
+  .act {
+    display: flex; align-items: center; gap: 9px;
+    width: 100%;
+    padding: 6px 8px; margin: 2px 0;
+    border-radius: 8px; font-size: 12.3px;
+  }
+  .act:hover { background: var(--bg-editor); }
+  .act .dot {
+    flex: none; width: 22px; height: 22px; border-radius: 6px;
+    display: grid; place-items: center; font-size: 11px;
+    background: var(--bg-editor); border: 1px solid var(--border); color: var(--fg-muted);
+  }
+  .act.err .dot { background: var(--red-soft); border-color: #eccbc4; color: var(--red); }
+  .act.ok .dot { background: var(--green-soft); border-color: #cbe5d4; color: var(--green); }
+  .act .t { min-width: 0; flex: 1; }
+  .act .t b { font-weight: 600; }
+  .act .t small { color: var(--fg-muted); }
+  .act time { flex: none; font-size: 10.5px; color: var(--fg-muted); }
+  .lvl { flex: none; font-size: 10px; padding: 1.5px 7px; border-radius: 10px; font-weight: 600; }
+  .lvl.rec { background: var(--blue-soft); color: #2b5cb8; }
+  .lvl.inf { background: var(--violet-soft); color: #5b3fb0; }
+  .diffstat b { color: var(--green); font-weight: 650; }
+  .diffstat em { color: var(--red); font-style: normal; }
+
+  /* approval chip inline on target fact (rule 3) */
+  .ok-chip {
+    flex: none; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10.5px; font-weight: 600; color: #22713f;
+    background: var(--green-soft); border: 1px solid #cbe5d4;
+    border-radius: 12px; padding: 1.5px 8px; cursor: pointer;
+  }
+
+  /* ---- fold bar (before) ---- */
+  .fold { margin: 4px 0; }
+  .fold summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--fg-muted); font-size: 11.5px;
+    padding: 5px 8px; border-radius: 8px;
+  }
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary:hover { background: var(--bg-editor); color: var(--fg); }
+  .fold summary .line { flex: 1; border-top: 1px dashed var(--border); }
+  .fold summary .hint { flex: none; color: var(--blue); }
+
+  /* self-healed soft notice (after, rule 4) */
+  .notice {
+    margin: 6px 0; font-size: 11.8px;
+  }
+  .notice summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: baseline; gap: 7px;
+    color: #9a6410; background: var(--amber-soft);
+    border: 1px solid #f0dcb6; border-radius: 8px; padding: 6px 10px;
+  }
+  .notice summary::-webkit-details-marker { display: none; }
+  .notice summary .exp { margin-left: auto; color: var(--blue); font-size: 10.5px; flex: none; }
+  .notice .raw {
+    margin: 4px 0 0; padding: 7px 10px;
+    background: var(--bg-editor); border: 1px dashed var(--border); border-radius: 8px;
+    font-size: 11px; color: var(--fg-muted);
+  }
+
+  /* per-row problem callouts on the before panel */
+  .flag {
+    margin: 0 0 8px 8px; padding-left: 10px;
+    border-left: 2px solid #eccbc4;
+    font-size: 11px; color: #8a3d31;
+  }
+
+  /* verdict strip under compare */
+  .verdict {
+    max-width: 1180px; margin: 0 auto 40px; padding: 0 20px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .verdict .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px 16px; font-size: 12.5px;
+  }
+  .verdict h3 { margin: 0 0 6px; font-size: 12px; color: var(--fg-muted); letter-spacing: .4px; }
+  .verdict ul { margin: 0; padding-left: 18px; }
+  .verdict li { margin: 3px 0; }
+
+  @media (max-width: 960px) {
+    .rules ol { grid-template-columns: 1fr 1fr; }
+    .compare, .verdict { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="mock-banner">
+  <strong>Replay V3.2 概念稿 · 小任务瘦身</strong>
+  <span class="pts">同一个真实会话（"写一个 add 函数"）的两种投影 · 只改渲染规则，账本一条不少 · 大任务（如 replay-v4 mock 的 401 修复）不受影响</span>
+  <label><input type="checkbox" id="ann" checked> 标注规则编号</label>
+</header>
+
+<!-- ================= 大白话规则 ================= -->
+<section class="rules">
+  <h2>五条投影规则（大白话版）</h2>
+  <p class="sub">问题不是"记多了"，是"全都端上桌了"。记录照旧全记，默认视图只按下面五条挑着显示：</p>
+  <ol>
+    <li><b><i>1</i>折叠条别比内容多</b><span>藏 1~2 条还立一块牌子，等于占一行去省一行。少于 3 条：要么直接显示，要么写进邻居的小字里。</span></li>
+    <li><b><i>2</i>排场跟着任务大小走</b><span>语义节点 ≤ 6 的小会话进"紧凑模式"：没有折叠条、没有章节，就是一条能一眼读完的流水。</span></li>
+    <li><b><i>3</i>"你批准了"是贴纸，不是一张卡</b><span>批准是对某件事的回应，贴在那件事上（✓ 已批准 19:13），点开看审计详情。不再单独占两行。</span></li>
+    <li><b><i>4</i>错误说人话，红色留给真出事的</b><span>WS_DIR_UNREADABLE 这种自己恢复了的小毛病，降级成黄色一行"目录暂不可读（已恢复）"，原始错误码收进展开详情。</span></li>
+    <li><b><i>5</i>徽章反着打</b><span>行行都写"结构化记录"等于没写。默认不打标，只有例外才打：推导叙事 / 引自最终报告 / 观察记录。</span></li>
+  </ol>
+  <p class="ledger-note">⛃ 账本不动：权限审计、settlement、原始错误码全部照记，探究层 / 核验层照样能看到每一条。改的只是"回顾"这一层给谁看多少。</p>
+</section>
+
+<!-- ================= 对比 ================= -->
+<div class="compare">
+
+  <!-- ---------- 现状（还原截图） ---------- -->
+  <section class="panel before">
+    <div class="panel-head">
+      <strong>现状</strong>
+      <span class="tag">截图还原</span>
+      <span class="count">13 行 · 其中 5 根折叠条、4 个重复徽章</span>
+    </div>
+    <div class="panel-body">
+
+      <div class="msg user">
+        <span class="ava">你</span>
+        <div class="body-t">
+          <div class="who"><b>YOU</b>19:13</div>
+          <div class="text">写一个简单的python文件，内部有add函数</div>
+        </div>
+      </div>
+
+      <details class="fold">
+        <summary><span class="line"></span><span>折叠了 1 条：1 次状态</span><span class="hint">展开样例</span><span class="line"></span></summary>
+      </details>
+      <div class="flag">一整行牌子，藏的是 1 条状态心跳 → 负压缩</div>
+
+      <button class="act err">
+        <span class="dot">📄</span>
+        <span class="t"><b>Listed "" · WS_DIR_UNREADABLE</b></span>
+        <span class="lvl rec">结构化记录</span>
+        <time>19:13</time>
+      </button>
+      <div class="flag">空字符串 + 原始错误码 + 红图标，任务其实成功了 → 像出了事故</div>
+
+      <button class="act">
+        <span class="dot">🗺</span>
+        <span class="t"><b>Proposed a plan (1 step)</b> <small>· 创建一个简单的Python文件，包含一个add函数</small></span>
+        <span class="lvl rec">结构化记录</span>
+        <time>19:13</time>
+      </button>
+
+      <details class="fold">
+        <summary><span class="line"></span><span>折叠了 2 条：2 次状态</span><span class="hint">展开样例</span><span class="line"></span></summary>
+      </details>
+
+      <button class="act ok">
+        <span class="dot">✓</span>
+        <span class="t"><b>Plan approved</b></span>
+        <span class="lvl rec">结构化记录</span>
+        <time>19:13</time>
+      </button>
+      <div class="flag">批准单独占一张卡（下面 Approved: Create add.py 又一张）</div>
+
+      <details class="fold">
+        <summary><span class="line"></span><span>折叠了 3 条：2 次状态、1 次 permission · 3s</span><span class="hint">展开样例</span><span class="line"></span></summary>
+      </details>
+
+      <button class="act">
+        <span class="dot">🛡</span>
+        <span class="t"><b>Approved: Create add.py</b></span>
+        <span class="lvl rec">结构化记录</span>
+        <time>19:13</time>
+      </button>
+
+      <details class="fold">
+        <summary><span class="line"></span><span>折叠了 1 条：1 次状态</span><span class="hint">展开样例</span><span class="line"></span></summary>
+      </details>
+
+      <button class="act">
+        <span class="dot">✎</span>
+        <span class="t"><b>写入 add.py</b> <small class="diffstat">· <b>+4</b></small></span>
+        <span class="lvl rec">结构化记录</span>
+        <time>19:14</time>
+      </button>
+
+      <details class="fold">
+        <summary><span class="line"></span><span>折叠了 1 条：1 次状态</span><span class="hint">展开样例</span><span class="line"></span></summary>
+      </details>
+
+      <div class="msg agent">
+        <span class="ava">C</span>
+        <div class="body-t">
+          <div class="who"><b>AGENT</b>19:14 · <span style="color:#2b5cb8">结构化记录</span></div>
+          <div class="text">已创建 add.py，包含 add(a, b) 函数并附简单示例。</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="panel-foot">
+      <span>30 秒的任务，13 行仪式</span>
+      <span>"结构化记录"×4，全都一样 → 没有信息量</span>
+    </div>
+  </section>
+
+  <!-- ---------- 改造后（同一会话） ---------- -->
+  <section class="panel after">
+    <div class="panel-head">
+      <strong>改造后</strong>
+      <span class="tag">同一份账本 · 紧凑模式</span>
+      <span class="count">5 行 · 0 根折叠条</span>
+    </div>
+    <div class="panel-body">
+
+      <div class="msg user">
+        <span class="ava">你</span>
+        <div class="body-t">
+          <div class="who"><b>YOU</b>19:13</div>
+          <div class="text">写一个简单的python文件，内部有add函数</div>
+        </div>
+      </div>
+
+      <details class="notice new" data-n="4">
+        <summary>
+          <span>⚠</span>
+          <span>开场时工作目录暂不可读，已自动恢复，不影响结果</span>
+          <span class="exp">原始记录 ▾</span>
+        </summary>
+        <div class="raw mono">fact#3 · fs.list path="" → WS_DIR_UNREADABLE · 19:13:02 · 结构化记录</div>
+      </details>
+
+      <button class="act new" data-n="3">
+        <span class="dot">🗺</span>
+        <span class="t"><b>计划（1 步）</b> <small>· 创建一个简单的 Python 文件，包含一个 add 函数</small></span>
+        <span class="ok-chip">✓ 你批准了 19:13</span>
+        <time>19:13</time>
+      </button>
+
+      <button class="act new" data-n="2">
+        <span class="dot">✎</span>
+        <span class="t"><b>写入 add.py</b> <small class="diffstat">· <b>+4</b> · 新建文件</small></span>
+        <span class="ok-chip">✓ 你批准了 19:13</span>
+        <time>19:14</time>
+      </button>
+
+      <div class="msg agent new" data-n="5">
+        <span class="ava">C</span>
+        <div class="body-t">
+          <div class="who"><b>AGENT</b>19:14 · <span class="lvl inf">引自最终报告</span></div>
+          <div class="text">已创建 add.py，包含 add(a, b) 函数并附简单示例。</div>
+        </div>
+      </div>
+
+    </div>
+    <div class="panel-foot new" data-n="1">
+      <span>4 个语义节点</span>
+      <span>期间 6 次状态心跳未显示 · 在探究层查看全部 13 条 →</span>
+    </div>
+  </section>
+
+</div>
+
+<!-- ================= 判断依据 ================= -->
+<div class="verdict">
+  <div class="card">
+    <h3>用户什么时候真会看这些记录</h3>
+    <ul>
+      <li><b>99% 的时候</b>：只想确认"干了什么、成了没"。看结论 + diff + 有没有黄色/红色，10 秒离开。</li>
+      <li><b>1% 的时候</b>（它干了不该干的 / 审计）："我批准过什么？"这时带时间戳的批准记录是黄金——所以它要<b>记全</b>，但不需要<b>平时摆出来</b>。</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3>大任务不受影响</h3>
+    <ul>
+      <li>语义节点 &gt; 6 的会话（如 replay-v4 mock 里的 401 修复，14 节点）保持现有章节 + 折叠条形态——那个规模下折叠条是正压缩（一行藏 87 条）。</li>
+      <li>规则 1/3/4/5 对大小任务统一生效；只有规则 2（紧凑模式）按规模分档。</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>

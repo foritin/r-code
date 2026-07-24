@@ -1,0 +1,458 @@
+<!doctype html>
+<!-- Charter · 上下文附件 方案 B+D「常驻树融合」= B 的 Files 页签 + D 的落点。NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 方案 B+D 常驻树融合</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      /* ------------------------------------ 侧栏双页签 + 常驻树(来自方案 B) */
+
+      .rail-tabs {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 10px;
+        padding: 3px;
+        border-radius: 9px;
+        background: var(--bg-chip);
+      }
+
+      .rail-tabs button {
+        flex: 1;
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 26px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: var(--fg-muted);
+        font-size: 11px;
+      }
+
+      .rail-tabs button .ci {
+        font-size: 11px;
+      }
+
+      .rail-tabs button.active {
+        border-color: var(--border-strong);
+        background: var(--bg-input);
+        color: var(--fg);
+        font-weight: 700;
+      }
+
+      .tab-dot {
+        width: 7px;
+        height: 7px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--warning);
+      }
+
+      body.panel-sessions .files-pane,
+      body.panel-files .sessions-pane {
+        display: none;
+      }
+
+      .files-pane {
+        min-height: 0;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .files-project-row {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 2px 8px 10px;
+        color: var(--fg);
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .files-project-row .ci {
+        color: var(--warning);
+        font-size: 13px;
+      }
+
+      .files-project-row small {
+        color: var(--fg-faint);
+        font-size: 10px;
+        font-weight: 400;
+      }
+
+      .files-scroll {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 2px 8px 10px;
+      }
+
+      .files-tip {
+        flex: none;
+        display: flex;
+        gap: 8px;
+        margin: 0;
+        padding: 10px 13px 12px;
+        border-top: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--bg-sidebar) 60%, var(--bg-card));
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.6;
+      }
+
+      .files-tip .ci {
+        margin-top: 2px;
+        color: var(--fg-faint);
+      }
+
+      /* -------------------------------------------- 全区落点(来自方案 D) */
+
+      .conversation .conv-dropveil {
+        position: absolute;
+        z-index: 30;
+        inset: 12px 14px 14px;
+        display: none;
+        align-items: flex-end;
+        justify-content: center;
+        padding-bottom: 30px;
+        border: 1.5px dashed var(--accent);
+        border-radius: 14px;
+        background: color-mix(in srgb, var(--accent) 5%, transparent);
+        color: var(--accent);
+        font-size: 12.5px;
+        pointer-events: none;
+      }
+
+      .conversation.drag-over .conv-dropveil {
+        display: flex;
+      }
+
+      .conv-dropveil span {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        max-width: 88%;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: var(--bg-input);
+        box-shadow: var(--shadow-card);
+      }
+
+      /* ------------------------------------- 发送后的时间线引用卡(同 D) */
+
+      .sent-entry {
+        animation: chip-in 180ms ease;
+      }
+
+      .sent-refs {
+        width: fit-content;
+        max-width: 82%;
+        margin: -8px 0 16px auto;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 10px 4px 10px 10px;
+        background: var(--bg-card);
+      }
+
+      .sent-refs-caption {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+      }
+
+      .sent-refs-caption .ci {
+        font-size: 10px;
+      }
+
+      .sent-refs .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        justify-content: flex-end;
+      }
+
+      .sent-refs .ref-chip {
+        min-height: 24px;
+        background: var(--bg-editor);
+      }
+    </style>
+  </head>
+  <body class="panel-files">
+    <div class="mock-shell">
+      <header class="mock-controls">
+        <strong>方案 B+D · 常驻树融合</strong>
+        <span class="explain"
+          >与 D 唯一的分歧=拖源:左侧 Files 页签常驻树(一次拖拽直达);落点机制与 D
+          完全一致(chips/粘贴/项目外→附件/发送闭环)。Sessions 页签带动态徽标。</span
+        >
+        <span class="spacer"></span>
+        <button type="button" data-act="files">Files 页签</button>
+        <button type="button" data-act="sessions">Sessions 页签</button>
+        <button type="button" data-act="demo">演示:拖入 3 项</button>
+        <button type="button" data-act="paste">演示:粘贴截图</button>
+        <button type="button" data-act="send">演示:发送</button>
+        <button type="button" data-act="reset">重置</button>
+        <a href="./d-hybrid.html">对比方案 D</a>
+        <a href="./index.html">方案总览</a>
+      </header>
+
+      <div class="app-window">
+        <nav class="activity-rail" aria-label="Activity">
+          <div class="app-mark">C</div>
+          <button type="button" class="rail-icon" title="Sessions" data-act="sessions">
+            <span class="ci ci-terminal"></span>
+          </button>
+          <button type="button" class="rail-icon" title="Inbox">
+            <span class="ci ci-inbox"></span>
+          </button>
+          <button type="button" class="rail-icon active" title="Files" data-act="files">
+            <span class="ci ci-folder"></span>
+          </button>
+          <button type="button" class="rail-icon" title="Search">
+            <span class="ci ci-search"></span>
+          </button>
+          <span class="spacer"></span>
+          <button type="button" class="rail-icon" title="Layout">
+            <span class="ci ci-layout"></span>
+          </button>
+        </nav>
+
+        <aside class="session-rail">
+          <div class="rail-head">
+            <div class="rail-tabs">
+              <button type="button" id="tabSessions">
+                <span class="ci ci-terminal"></span>Sessions<span
+                  class="tab-dot"
+                  title="1 个会话在等你 — 在 Files 页签下也不会错过"
+                ></span>
+              </button>
+              <button type="button" id="tabFiles" class="active">
+                <span class="ci ci-folder"></span>Files
+              </button>
+            </div>
+            <label class="rail-search">
+              <span class="ci ci-search"></span>
+              <input id="railSearch" placeholder="在 fable5 中搜索文件…" />
+            </label>
+          </div>
+
+          <div class="sessions-pane rail-scroll">
+            <div class="rail-group-label">
+              <span class="ci ci-chevron-down"></span>
+              <span class="ci ci-folder"></span>
+              <span>fable5</span>
+              <span class="spacer"></span>
+              <small>3</small>
+            </div>
+            <div class="session-row">
+              <span class="dot warn"></span>
+              <div class="session-copy">
+                <strong>Session 4ed53b65-…fdf4c7</strong>
+                <span>等待权限确认 · claude terminal</span>
+              </div>
+              <div class="session-side"><time>now</time></div>
+            </div>
+            <div class="session-row">
+              <span class="dot"></span>
+              <div class="session-copy">
+                <strong>Session 4ed53b65-…</strong>
+                <span>Answered · no file changes</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Answered</span>
+                <time>54m</time>
+              </div>
+            </div>
+            <div class="rail-rule"></div>
+            <div class="rail-group-label">
+              <span class="ci ci-history"></span>
+              <span>History</span>
+              <span class="spacer"></span>
+              <small>4</small>
+            </div>
+            <div class="session-row active">
+              <span class="dot live"></span>
+              <div class="session-copy">
+                <strong>把「提交订单」按钮…</strong>
+                <span>fable5 · Accepted</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Accepted</span>
+                <time>50m</time>
+              </div>
+            </div>
+            <div class="session-row">
+              <span class="dot"></span>
+              <div class="session-copy">
+                <strong>hi</strong>
+                <span>fable5 · Accepted</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Accepted</span>
+                <time>15h</time>
+              </div>
+            </div>
+          </div>
+
+          <div class="files-pane">
+            <div class="files-project-row">
+              <span class="ci ci-folder-opened"></span>
+              <span>fable5</span>
+              <small>~/git/fable5 · 14 文件</small>
+            </div>
+            <div class="files-scroll">
+              <div class="file-tree" id="filesTree"></div>
+            </div>
+            <p class="files-tip">
+              <span class="ci ci-attach"></span>
+              <span
+                >把文件、文件夹拖到右侧<strong>输入框或对话区</strong>加入上下文;悬停行上的
+                ＋ 直接加入。Finder 拖放 / 粘贴截图同样有效。</span
+              >
+            </p>
+          </div>
+        </aside>
+
+        <header class="session-head">
+          <a class="back-link" href="#"><span class="ci ci-arrow-right"></span>All Sessions</a>
+          <div class="session-identity">
+            <h1>把「提交订单」按钮底色改成绿色(#2f9e63),优惠券过期提示加一条红色左…</h1>
+            <div class="head-chips">
+              <span class="meta-chip"><span class="ci ci-folder"></span>fable5</span>
+              <span class="meta-chip"><span class="ci ci-git-branch"></span>main</span>
+              <span class="meta-chip"><span class="ci ci-target"></span>anthropic</span>
+            </div>
+          </div>
+          <span class="head-status"><span class="ci ci-check"></span>Accepted</span>
+          <button type="button" class="quiet-icon"><span class="ci ci-kebab"></span></button>
+        </header>
+
+        <main class="conversation" id="conversation">
+          <div class="conv-dropveil">
+            <span>
+              <span class="ci ci-attach"></span>
+              松开,加入这条 follow-up 的上下文 · 项目外文件会复制进任务附件
+            </span>
+          </div>
+          <div class="conversation-scroll" id="conversationScroll">
+            <div class="thread" id="thread">
+              <p>
+                也就是说,这是一个纯前端样式微调任务:改一个按钮颜色 +
+                给一个提示加边框,且改动范围锁定在
+                <span class="code-token">public/index.html</span>。
+              </p>
+              <div class="done-line">
+                <span class="ci ci-check"></span>
+                <strong>完成</strong>
+                <span>1 个文件 +5 −2 · 未验证</span>
+              </div>
+              <div class="user-bubble">hi</div>
+              <p>
+                Hi! 之前你问的"提交订单"按钮改绿色 +
+                优惠券过期提示加红色左边框的任务,要现在开始吗?我可以先看一下
+                <span class="code-token">public/index.html</span>
+                的相关代码,然后提出修改计划。
+              </p>
+              <div class="done-line">
+                <span class="ci ci-check-all"></span>
+                <strong>Changes accepted</strong>
+                <span>accepting is not a git commit</span>
+              </div>
+              <p class="run-detail">运行详情</p>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer" id="composer">
+              <div class="composer-top">
+                <span class="project-chip"><span class="ci ci-folder"></span>fable5</span>
+              </div>
+              <div class="context-shelf" id="shelf">
+                <div class="shelf-caption">
+                  <span class="ci ci-references"></span>
+                  <span id="shelfCount">0 项引用 · 随这条消息一起发送</span>
+                  <span class="spacer"></span>
+                  <button type="button" id="shelfClear">清空</button>
+                </div>
+              </div>
+              <textarea
+                id="draft"
+                rows="2"
+                placeholder="Follow up — starts a new Session in this project…"
+              ></textarea>
+              <div class="composer-footer">
+                <button
+                  type="button"
+                  class="tool-button"
+                  id="mentionButton"
+                  title="引用项目文件(@,保持现有搜索拾取器)"
+                >
+                  <span class="ci ci-mention"></span>
+                </button>
+                <div class="mode-track">
+                  <button type="button">Read</button>
+                  <button type="button">Approve</button>
+                  <button type="button" class="active">Auto</button>
+                  <button type="button">Full</button>
+                </div>
+                <span class="spacer"></span>
+                <button type="button" class="model-pick">
+                  <span class="ci ci-zap"></span>Claude Sonnet 5<small>· medium</small
+                  ><span class="ci ci-chevron-down"></span>
+                </button>
+                <button type="button" class="send-button" id="sendButton" title="Send">
+                  <span class="ci ci-arrow-up"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <section class="tool-panel">
+          <div class="tool-tabs">
+            <button type="button" class="active"><span class="ci ci-book"></span>Summary</button>
+            <button type="button">Diff</button>
+            <button type="button">Preview</button>
+            <button type="button">Terminal</button>
+          </div>
+          <div class="tool-body">
+            <div class="status-block">
+              <span class="ring"><span class="ci ci-check"></span></span>
+              <dl>
+                <dt>Session status</dt>
+                <dd>Accepted</dd>
+                <small>No action is currently running.</small>
+              </dl>
+            </div>
+            <div class="panel-section">
+              <header>
+                <h3>Changed files</h3>
+                <span class="tab-count">0</span>
+              </header>
+              <p class="empty-note">Nothing touched yet.</p>
+            </div>
+            <div class="panel-section">
+              <header>
+                <h3>Verification</h3>
+                <span class="tab-count">0</span>
+              </header>
+              <p class="empty-note">No verification configured.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="./shared.js"></script>
+    <script src="./bd-fusion.js"></script>
+  </body>
+</html>

@@ -1,0 +1,1350 @@
+<!doctype html>
+<!-- Charter — 终端长在哪 + 进入 Claude Code/Codex 交互态：方向 1/2/3 对比 mockup (docs/design). NOT product code.
+     与 external-cli-terminal-directions.html 正交：那稿回答「和产品能力怎么勾」（集成深度 A–D），
+     这稿回答「终端摆在哪、敲 claude/codex 进入 TUI 后 UI 怎么反应」。
+     1 = 底部终端坞（经典，演示 TUI 在矮坞里的窘境 + 迁移提示） · 2 = 右侧竖栏（chat TUI 的天然形状）
+     3 = 检测升格（位置跟随 PTY 里跑的东西：shell 在底、agent 升到右侧，退出即归位）
+     TUI 画面为示意，非逐像素还原。每个演示滚动进视口自动循环播放，可点重播。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — 终端长在哪：方向 1 / 2 / 3（可交互演示）</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--page);
+        color: var(--text);
+        padding: 30px 26px 110px;
+        --page: #eceae5;
+        --side: #f6f5f1;
+        --main: #fbfaf7;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --text: #201e1a;
+        --text2: #6e6a61;
+        --text3: #a39e94;
+        --chip: #f0eee8;
+        --hover: #e8e5de;
+        --active: #e2dfd7;
+        --accent: #1b1a16;
+        --accent-text: #fff;
+        --ok: #2f9e63;
+        --ok-bg: #e7f5ec;
+        --run: #3f7bd9;
+        --run-bg: #e9f1fd;
+        --warn: #b06f10;
+        --warn-bg: #faf0dc;
+        --danger: #c4453d;
+        --code-bg: #fcfbf8;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        transition: background 0.25s;
+      }
+      body.dark {
+        --page: #16140f;
+        --side: #1d1a15;
+        --main: #211e18;
+        --card: #262219;
+        --border: #3a352a;
+        --border-soft: #302b21;
+        --text: #ece8de;
+        --text2: #a49e90;
+        --text3: #746e60;
+        --chip: #2c2820;
+        --hover: #2e2a21;
+        --active: #363126;
+        --accent: #ece8de;
+        --accent-text: #1b1a16;
+        --ok: #4cba7d;
+        --ok-bg: #22301f;
+        --run: #6f9fe8;
+        --run-bg: #1e2738;
+        --warn: #d9a04a;
+        --warn-bg: #362b16;
+        --danger: #e06a60;
+        --code-bg: #1d1a14;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .pagehead {
+        max-width: 1180px;
+        margin: 0 auto 30px;
+      }
+      .pagehead h1 {
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .pagehead p {
+        color: var(--text2);
+        font-size: 14px;
+        line-height: 1.75;
+        margin-top: 10px;
+        max-width: 880px;
+      }
+      .pagehead .meta {
+        margin-top: 8px;
+        font-size: 12px;
+        color: var(--text3);
+      }
+      .pagehead b {
+        color: var(--text);
+      }
+
+      .ctl {
+        position: fixed;
+        top: 12px;
+        right: 18px;
+        z-index: 99;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        background: #fff8dc;
+        border: 1px solid #e6d693;
+        color: #6b5d1f;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      }
+      .ctl button {
+        border: none;
+        background: transparent;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: #6b5d1f;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .ctl button:hover {
+        background: #f3e9bd;
+      }
+
+      .dir {
+        max-width: 1180px;
+        margin: 0 auto 64px;
+      }
+      .dir-head {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        flex-wrap: wrap;
+        margin-bottom: 6px;
+      }
+      .dir-head .badge {
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        background: var(--accent);
+        color: var(--accent-text);
+        border-radius: 8px;
+        padding: 4px 10px;
+      }
+      .dir-head h2 {
+        font-size: 19px;
+        font-weight: 700;
+      }
+      .dir-head .one {
+        color: var(--text2);
+        font-size: 13.5px;
+      }
+      .dir-notes {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin: 10px 0 16px;
+      }
+      .note {
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: var(--text2);
+        max-width: 540px;
+      }
+      .note b {
+        color: var(--text);
+      }
+      .note.good::before {
+        content: '✓ ';
+        color: var(--ok);
+        font-weight: 700;
+      }
+      .note.bad::before {
+        content: '✕ ';
+        color: var(--danger);
+        font-weight: 700;
+      }
+
+      /* ---------- window frame ---------- */
+      .win {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        height: 560px;
+      }
+      .titlebar {
+        height: 38px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--side);
+        gap: 8px;
+      }
+      .dots {
+        display: flex;
+        gap: 6px;
+      }
+      .dots i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #d9d5cc;
+      }
+      body.dark .dots i {
+        background: #3f3a2f;
+      }
+      .titlebar .t {
+        font-size: 12px;
+        color: var(--text3);
+        margin: 0 auto;
+      }
+      .winbody {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+
+      .tree {
+        width: 210px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border-soft);
+        padding: 10px 8px;
+        font-size: 12px;
+        font-family: var(--mono);
+      }
+      .tr {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3.5px 8px;
+        border-radius: 6px;
+        color: var(--text2);
+      }
+      .tr .ind {
+        width: 12px;
+        flex: none;
+      }
+      .tr .badge-ext {
+        margin-left: auto;
+        font-size: 9.5px;
+        font-weight: 800;
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-radius: 4px;
+        padding: 1px 5px;
+        opacity: 0;
+        transform: scale(0.7);
+        transition: all 0.35s;
+      }
+      .tr .badge-ext.in {
+        opacity: 1;
+        transform: none;
+      }
+      .tr.flash {
+        animation: rowflash 1.6s;
+      }
+      @keyframes rowflash {
+        0% {
+          background: var(--warn-bg);
+        }
+        100% {
+          background: transparent;
+        }
+      }
+
+      .edpane {
+        flex: 1;
+        min-width: 0;
+        background: var(--code-bg);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.8;
+        padding: 12px 16px;
+        color: var(--text2);
+        overflow: hidden;
+        white-space: pre;
+      }
+
+      /* ---------- terminal / TUI ---------- */
+      .term {
+        background: #14120d;
+        color: #d8d4c8;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.72;
+        padding: 10px 14px;
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+      }
+      body.dark .term {
+        background: #0f0e0a;
+      }
+      .term .ln {
+        white-space: pre-wrap;
+        word-break: break-all;
+        min-height: 1.72em;
+      }
+      .t-dim {
+        color: #7d7869;
+      }
+      .t-ok {
+        color: #6fcf97;
+      }
+      .t-run {
+        color: #7aa7f0;
+      }
+      .t-warn {
+        color: #e0b35a;
+      }
+      .t-path {
+        color: #c9b8ff;
+      }
+      .t-prompt {
+        color: #6fcf97;
+        font-weight: 700;
+      }
+      .t-claude {
+        color: #e8956b;
+      }
+      .t-codex {
+        color: #7fd4d4;
+      }
+      .t-cursor {
+        display: inline-block;
+        width: 7px;
+        height: 14px;
+        background: #d8d4c8;
+        vertical-align: -2px;
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      /* TUI input box (claude/codex style) */
+      .tui-box {
+        border: 1px solid #4a4536;
+        border-radius: 6px;
+        padding: 5px 10px;
+        margin: 6px 0 2px;
+        color: #d8d4c8;
+      }
+      .tui-hint {
+        color: #57523f;
+        font-size: 10.5px;
+      }
+      .tui-wipe {
+        animation: wipe 0.35s;
+      }
+      @keyframes wipe {
+        0% {
+          opacity: 0;
+          transform: translateY(6px);
+        }
+        100% {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .dock {
+        flex: none;
+        border-top: 1px solid var(--border-soft);
+        display: flex;
+        flex-direction: column;
+        background: #14120d;
+        height: 178px;
+        transition: height 0.5s cubic-bezier(0.3, 0.9, 0.3, 1);
+        overflow: hidden;
+      }
+      .dock.mini {
+        height: 32px;
+      }
+      .dock-tabs {
+        height: 32px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 8px;
+        background: #1d1a14;
+        border-bottom: 1px solid #2c2820;
+      }
+      .dtab {
+        font-size: 11px;
+        font-family: var(--mono);
+        color: #7d7869;
+        padding: 4px 12px;
+        border-radius: 6px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .dtab.on {
+        background: #14120d;
+        color: #d8d4c8;
+      }
+      .agdot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--run);
+        animation: livepulse 1.2s infinite;
+      }
+      @keyframes livepulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.25;
+        }
+      }
+
+      /* right terminal panel */
+      .rpanel {
+        width: 340px;
+        flex: none;
+        border-left: 1px solid var(--border-soft);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        background: #14120d;
+        transition: width 0.55s cubic-bezier(0.3, 0.9, 0.3, 1);
+        overflow: hidden;
+      }
+      .rpanel.closed {
+        width: 0;
+        border-left: none;
+      }
+      .rpanel-h {
+        height: 32px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        background: #1d1a14;
+        border-bottom: 1px solid #2c2820;
+        color: #a49e90;
+        font-size: 11px;
+        font-family: var(--mono);
+        white-space: nowrap;
+      }
+      .rpanel-h .ext {
+        font-size: 9.5px;
+        font-weight: 800;
+        color: var(--warn);
+        background: rgba(224, 179, 90, 0.15);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+      .focus-ring {
+        outline: 2px solid var(--run);
+        outline-offset: -2px;
+      }
+      .rpanel-h .esc {
+        margin-left: auto;
+        color: #57523f;
+        font-size: 10px;
+      }
+
+      /* toast */
+      .toast {
+        position: absolute;
+        right: 16px;
+        bottom: 196px;
+        z-index: 5;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        padding: 12px 14px;
+        width: 300px;
+        font-size: 12.5px;
+        opacity: 0;
+        transform: translateY(10px);
+        transition: all 0.4s;
+      }
+      .toast.in {
+        opacity: 1;
+        transform: none;
+      }
+      .toast .tt {
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 4px;
+      }
+      .toast .tt .agdot {
+        background: #e8956b;
+      }
+      .toast p {
+        color: var(--text2);
+        line-height: 1.6;
+        margin-bottom: 9px;
+      }
+      .toast .acts {
+        display: flex;
+        gap: 6px;
+      }
+      .toast .acts span {
+        font-size: 11.5px;
+        border-radius: 7px;
+        padding: 4px 10px;
+        background: var(--chip);
+        color: var(--text2);
+      }
+      .toast .acts span.pri {
+        background: var(--accent);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+      .toast .acts span.hl {
+        outline: 2px solid var(--run);
+      }
+
+      /* demo chrome */
+      .demo-bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 10px;
+      }
+      .caption {
+        flex: 1;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 14px;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        box-shadow: var(--shadow);
+      }
+      .caption .step-no {
+        font-size: 10.5px;
+        font-weight: 800;
+        color: var(--text3);
+        margin-right: 10px;
+        letter-spacing: 0.06em;
+        flex: none;
+      }
+      .replay {
+        flex: none;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text2);
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 8px 16px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .replay:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+
+      /* decisions & summary */
+      .ideas {
+        max-width: 1180px;
+        margin: 0 auto 60px;
+      }
+      .ideas h2 {
+        font-size: 19px;
+        font-weight: 700;
+        margin-bottom: 4px;
+      }
+      .ideas > p {
+        color: var(--text2);
+        font-size: 13.5px;
+        margin-bottom: 16px;
+      }
+      .idea-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+        gap: 14px;
+      }
+      .idea {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        box-shadow: var(--shadow);
+      }
+      .idea h3 {
+        font-size: 14px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+      .idea p {
+        font-size: 12.5px;
+        line-height: 1.7;
+        color: var(--text2);
+      }
+      .idea code {
+        font-family: var(--mono);
+        font-size: 11px;
+        background: var(--chip);
+        border-radius: 4px;
+        padding: 1px 5px;
+      }
+
+      .summary {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+      .summary h2 {
+        font-size: 19px;
+        font-weight: 700;
+        margin-bottom: 12px;
+      }
+      table.cmp {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+        font-size: 12.5px;
+      }
+      .cmp th,
+      .cmp td {
+        text-align: left;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--border-soft);
+        vertical-align: top;
+        line-height: 1.6;
+      }
+      .cmp th {
+        background: var(--side);
+        font-size: 11px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text3);
+      }
+      .cmp td:first-child {
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .cmp .rec {
+        color: var(--ok);
+        font-weight: 700;
+      }
+      .verdict {
+        margin-top: 18px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-left: 4px solid var(--accent);
+        border-radius: 12px;
+        padding: 16px 20px;
+        font-size: 13.5px;
+        line-height: 1.85;
+        box-shadow: var(--shadow);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="ctl">
+      <span>mockup 控制</span>
+      <button onclick="document.body.classList.toggle('dark')">🌓 主题</button>
+      <button onclick="window.scrollTo({ top: 0, behavior: 'smooth' })">↑ 顶部</button>
+    </div>
+
+    <div class="pagehead">
+      <h1>终端长在哪 · 进入 Claude Code / Codex 交互态之后</h1>
+      <p>
+        关键洞察：<b>终端不是一直是「agent 终端」</b>——它是一个 shell，agent 会话在里面
+        <b>开始和结束</b>。敲 <code>claude</code> / <code>codex</code> 的瞬间，PTY 从「命令行」
+        变成一个<b>竖排的聊天式 TUI</b>（欢迎横幅、输入框、流式回答）。所以「放哪」的答案
+        取决于「里面正在跑什么」：shell 是<b>横的</b>（矮宽舒服），chat TUI 是<b>竖的</b>
+        （高窄舒服）。三个方向按这个矛盾展开。检测手段：PTY 子进程名 / OSC 标题变化 /
+        alternate-screen 切换——三者都能可靠感知「进入了交互态」。
+      </p>
+      <div class="meta">
+        docs/design · 2026-07 · 与 external-cli-terminal-directions.html（集成深度 A–D）正交；TUI
+        画面为示意。
+      </div>
+    </div>
+
+    <!-- ============================ 方向 1 ============================ -->
+    <section class="dir" id="dir1">
+      <div class="dir-head">
+        <span class="badge">方向 1</span>
+        <h2>底部终端坞 — 经典位置，直接进 TUI</h2>
+        <span class="one"
+          >VS Code 式底部 dock；演示重点：chat TUI 在矮坞里的真实窘境，以及 IDE
+          检测到后给出的迁移提示</span
+        >
+      </div>
+      <div class="dir-notes">
+        <div class="note good">
+          <b>零学习成本</b>：所有人都知道终端在下面；跑 shell 命令（build、git）时这个形状是对的。
+        </div>
+        <div class="note bad">
+          <b>chat TUI 被压扁</b>：Claude Code 舒适高度 ≳20 行，dock 默认 ~12
+          行——历史看不了几行、输入框贴底；宽度过剩、高度稀缺，形状完全错配。
+        </div>
+      </div>
+      <div class="win">
+        <div class="titlebar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <span class="t">Charter — bullpen · 编辑器</span>
+        </div>
+        <div class="winbody" style="flex-direction: column">
+          <div style="flex: 1; display: flex; min-height: 0">
+            <div class="tree">
+              <div class="tr"><span>▾ src/components</span></div>
+              <div class="tr" id="p1-f1">
+                <span class="ind"></span><span>Composer.tsx</span
+                ><span class="badge-ext" id="p1-b1">外部改动</span>
+              </div>
+              <div class="tr"><span class="ind"></span><span>Timeline.tsx</span></div>
+              <div class="tr"><span>▸ packages/runtime</span></div>
+            </div>
+            <div class="edpane">
+              // Timeline.tsx — 用户正在看的文件 export function Timeline({ events }: Props) {
+              return events.map(renderEvent) }
+            </div>
+          </div>
+          <div class="dock" id="p1-dock">
+            <div class="dock-tabs">
+              <span class="dtab on" id="p1-tab">zsh</span>
+              <span class="dtab">zsh · 2</span>
+            </div>
+            <div class="term" id="p1-term"></div>
+          </div>
+          <div class="toast" id="p1-toast">
+            <div class="tt"><span class="agdot"></span>检测到 Claude Code 会话</div>
+            <p>chat 型 TUI 在底部坞里高度不够。移到更合适的位置？</p>
+            <div class="acts">
+              <span class="pri" id="p1-act1">移到右侧竖栏</span><span>升级为房间</span
+              ><span>留在这</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-bar">
+        <div class="caption">
+          <span class="step-no" id="step1">·</span><span id="cap1">演示即将开始…</span>
+        </div>
+        <button class="replay" onclick="play('1')">↻ 重播</button>
+      </div>
+    </section>
+
+    <!-- ============================ 方向 2 ============================ -->
+    <section class="dir" id="dir2">
+      <div class="dir-head">
+        <span class="badge">方向 2</span>
+        <h2>右侧竖栏 — chat TUI 的天然形状</h2>
+        <span class="one"
+          >终端固定在右侧高窄栏；进入 codex/claude 后就是「用真终端实现的 chat
+          侧栏」，编辑器始终在中央</span
+        >
+      </div>
+      <div class="dir-notes">
+        <div class="note good">
+          <b>形状匹配</b>：TUI 的会话流、输入框、状态行都是竖排的，高窄栏正好；和 Cursor/Copilot 的
+          chat 侧栏站位相同，用户直觉零迁移——只是这个「chat」是货真价实的终端。
+        </div>
+        <div class="note bad">
+          <b>跑 shell 命令时形状又错了</b>（长日志被窄栏折行）；宽度挤占编辑器；键盘焦点冲突（Esc/⌘K
+          被终端吃掉）需要焦点边框 + 显式跳出键。
+        </div>
+      </div>
+      <div class="win">
+        <div class="titlebar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <span class="t">Charter — bullpen · 编辑器</span>
+        </div>
+        <div class="winbody">
+          <div class="tree">
+            <div class="tr"><span>▾ src/components</span></div>
+            <div class="tr" id="p2-f1">
+              <span class="ind"></span><span>Composer.tsx</span
+              ><span class="badge-ext" id="p2-b1">外部改动</span>
+            </div>
+            <div class="tr" id="p2-f2">
+              <span class="ind"></span><span>composer.css</span
+              ><span class="badge-ext" id="p2-b2">外部改动</span>
+            </div>
+            <div class="tr"><span class="ind"></span><span>Timeline.tsx</span></div>
+          </div>
+          <div class="edpane">
+            // Timeline.tsx — 用户继续自己的活，互不打扰 export function Timeline({ events }: Props)
+            { return events.map(renderEvent) }
+          </div>
+          <div class="rpanel" id="p2-panel">
+            <div class="rpanel-h">
+              <span class="agdot" style="background: #7fd4d4"></span
+              ><span id="p2-ph">终端 · pty #1</span
+              ><span class="ext" id="p2-ext" style="display: none">EXT</span
+              ><span class="esc">⌘⇧L 跳出</span>
+            </div>
+            <div class="term" id="p2-term"></div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-bar">
+        <div class="caption">
+          <span class="step-no" id="step2">·</span><span id="cap2">演示即将开始…</span>
+        </div>
+        <button class="replay" onclick="play('2')">↻ 重播</button>
+      </div>
+    </section>
+
+    <!-- ============================ 方向 3 ============================ -->
+    <section class="dir" id="dir3">
+      <div class="dir-head">
+        <span class="badge">方向 3</span>
+        <h2>检测升格 — 位置跟随 PTY 里跑的东西</h2>
+        <span class="one"
+          >shell 平时住在底部坞；检测到进入 agent TUI → 该 pane 自动升到右侧竖栏（同一个
+          PTY，不断线）；会话退出 → 归位回底部</span
+        >
+      </div>
+      <div class="dir-notes">
+        <div class="note good">
+          <b>两种形状都对</b>：shell 用横的、agent 用竖的，规则一句话讲清；xterm.js
+          实例换容器挂载是零成本的，PTY 全程不断。这是 1 和 2 的合题。
+        </div>
+        <div class="note bad">
+          <b>自动移动 UI 有惊吓风险</b
+          >：必须有明确动效交代「谁去了哪」，且首次询问、可设为「总是/从不」；边界情况（同时多个
+          agent、dock 里还有别的 tab）要想清楚。
+        </div>
+      </div>
+      <div class="win">
+        <div class="titlebar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <span class="t">Charter — bullpen · 编辑器</span>
+        </div>
+        <div class="winbody">
+          <div style="flex: 1; display: flex; flex-direction: column; min-width: 0">
+            <div style="flex: 1; display: flex; min-height: 0">
+              <div class="tree">
+                <div class="tr"><span>▾ src/components</span></div>
+                <div class="tr" id="p3-f1">
+                  <span class="ind"></span><span>Composer.tsx</span
+                  ><span class="badge-ext" id="p3-b1">外部改动</span>
+                </div>
+                <div class="tr"><span class="ind"></span><span>Timeline.tsx</span></div>
+              </div>
+              <div class="edpane">
+                // 编辑器保持中央；右侧栏只在有 agent 会话时存在 export function Timeline({ events
+                }: Props) { return events.map(renderEvent) }
+              </div>
+              <div class="rpanel closed" id="p3-panel">
+                <div class="rpanel-h">
+                  <span class="agdot" style="background: #e8956b"></span
+                  ><span>✳ claude · pty #1</span><span class="ext">EXT</span
+                  ><span class="esc">⌘⇧L 跳出</span>
+                </div>
+                <div class="term" id="p3-rterm"></div>
+              </div>
+            </div>
+            <div class="dock" id="p3-dock">
+              <div class="dock-tabs">
+                <span class="dtab on" id="p3-tab">zsh</span>
+                <span class="dtab">zsh · 2</span>
+              </div>
+              <div class="term" id="p3-term"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="demo-bar">
+        <div class="caption">
+          <span class="step-no" id="step3">·</span><span id="cap3">演示即将开始…</span>
+        </div>
+        <button class="replay" onclick="play('3')">↻ 重播</button>
+      </div>
+    </section>
+
+    <!-- ============================ 决策要点 ============================ -->
+    <section class="ideas">
+      <h2>无论选哪个方向，都要回答的细节</h2>
+      <p>这些决策与位置无关，三个方向共用。</p>
+      <div class="idea-grid">
+        <div class="idea">
+          <h3>怎么知道「进入了交互态」</h3>
+          <p>
+            三个信号按可靠度排：① PTY 前台子进程名（<code>claude</code>/<code>codex</code>，node-pty
+            可查）；② 进程切换到 alternate screen / 改写 OSC 0 标题；③ 输出特征（欢迎横幅）。①+②
+            组合即可驱动 tab 改名、EXT 徽章、升格提示。
+          </p>
+        </div>
+        <div class="idea">
+          <h3>键盘焦点边界</h3>
+          <p>
+            TUI 需要吃掉几乎所有按键（Esc 是打断 agent、⌘K
+            可能是它的快捷键）。终端聚焦时显示焦点描边，保留一个不可覆盖的跳出键（如
+            <code>⌘⇧L</code>），全局快捷键表在终端聚焦态自动收缩到白名单。
+          </p>
+        </div>
+        <div class="idea">
+          <h3>尺寸底线</h3>
+          <p>
+            Claude Code / Codex 的 TUI 舒适高度 ≳ 20 行、宽度 ≳ 80 列。右侧竖栏默认 340–420px（够 80
+            列的 11px 等宽）；底部坞若容纳 TUI 至少要能一键「拉高到 60%」。
+          </p>
+        </div>
+        <div class="idea">
+          <h3>多会话并存</h3>
+          <p>
+            右侧栏 tab 化：<code>✳ claude</code> 和
+            <code>◆ codex</code> 并列，各自带活动呼吸点；底部坞继续放普通 shell。agent tab 空闲 N
+            分钟后淡化，会话结束变成「已结束 · 查看改动」入口。
+          </p>
+        </div>
+        <div class="idea">
+          <h3>与上一稿（A–D）的关系</h3>
+          <p>
+            位置 × 集成深度是正交矩阵：比如「右侧竖栏 + FS watcher 改动提升（A）」或「升格为房间（=
+            上一稿方向 A 的完全体）」。本稿的「升级为房间」按钮就是两稿的接缝。
+          </p>
+        </div>
+        <div class="idea">
+          <h3>安全语义不变</h3>
+          <p>
+            不管终端在哪，外部 CLI 都在 Tool Gateway 之外：进入交互态即挂 EXT 徽章、自动
+            snapshot、FS watcher 开始记账——这三件事跟着「检测到 agent」信号走，而不是跟着位置走。
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 总结 ============================ -->
+    <section class="summary">
+      <h2>对比与推荐</h2>
+      <table class="cmp">
+        <tr>
+          <th>方向</th>
+          <th>shell 体验</th>
+          <th>agent TUI 体验</th>
+          <th>实现成本</th>
+          <th>主要风险</th>
+        </tr>
+        <tr>
+          <td>1 · 底部坞</td>
+          <td class="rec">最好（形状对）</td>
+          <td>差（被压扁）</td>
+          <td class="rec">最低</td>
+          <td>用户长期在窘迫的 TUI 里干活</td>
+        </tr>
+        <tr>
+          <td>2 · 右侧竖栏</td>
+          <td>差（窄栏折行）</td>
+          <td class="rec">最好（形状对）</td>
+          <td>低</td>
+          <td>shell 场景别扭；挤占编辑器宽度</td>
+        </tr>
+        <tr>
+          <td>3 · 检测升格</td>
+          <td class="rec">最好</td>
+          <td class="rec">最好</td>
+          <td>中（检测 + 迁移动效）</td>
+          <td>自动移动需驯化：动效交代 + 首次询问</td>
+        </tr>
+      </table>
+      <div class="verdict">
+        <b>推荐：方向 3 作为目标，1 + 2 是它的两个静态退化形态。</b><br />
+        实施顺序：先落底部坞（方向 1，基础设施）+ 右侧竖栏容器（方向 2，纯布局）；再加检测信号
+        （前台进程名 + alternate screen），把「移到右侧」先做成 <b>toast 里的一键动作</b>（方向 1
+        演示的样子）——不自动移动，先收集使用习惯；确认大家总是点它之后，再把默认值翻成自动升格
+        （方向 3），并保留「总是问我 / 总是移 / 从不移」设置。「升级为房间」按钮始终存在，
+        通往上一稿的方向 A。
+      </div>
+    </section>
+
+    <script>
+      /* ------------ demo engine（与 external-cli-terminal-directions.html 同款） ------------ */
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const runToken = {};
+      const initialHTML = {};
+      function $(id) {
+        return document.getElementById(id);
+      }
+      function stale(name, token) {
+        return runToken[name] !== token;
+      }
+
+      async function typeCmd(term, promptHtml, text, token, name) {
+        const ln = document.createElement('div');
+        ln.className = 'ln';
+        ln.innerHTML = promptHtml + '<span class="typed"></span><span class="t-cursor"></span>';
+        term.appendChild(ln);
+        const typed = ln.querySelector('.typed');
+        for (const ch of text) {
+          if (stale(name, token)) return;
+          typed.textContent += ch;
+          term.scrollTop = term.scrollHeight;
+          await sleep(30 + Math.random() * 40);
+        }
+        await sleep(380);
+        ln.querySelector('.t-cursor')?.remove();
+      }
+
+      function termLine(term, html, cls) {
+        const ln = document.createElement('div');
+        ln.className = 'ln' + (cls ? ' ' + cls : '');
+        ln.innerHTML = html;
+        term.appendChild(ln);
+        term.scrollTop = term.scrollHeight;
+        return ln;
+      }
+
+      async function streamLines(term, lines, token, name, gap = 260) {
+        for (const l of lines) {
+          if (stale(name, token)) return;
+          termLine(term, l);
+          await sleep(gap);
+        }
+      }
+
+      function cap(n, no, text) {
+        $('step' + n).textContent = no;
+        $('cap' + n).textContent = text;
+      }
+
+      const PROMPT =
+        '<span class="t-prompt">➜</span> <span class="t-run">bullpen</span> <span class="t-dim">git:(main)</span> ';
+
+      /* ---- TUI renderers（示意） ---- */
+      function bootClaudeTui(term) {
+        term.innerHTML = '';
+        term.classList.add('tui-wipe');
+        setTimeout(() => term.classList.remove('tui-wipe'), 400);
+        termLine(term, '<span class="t-claude">✻</span> <b>Welcome to Claude Code!</b>');
+        termLine(term, '');
+        termLine(term, '<span class="t-dim">  /help for help · cwd: ~/git/bullpen</span>');
+        termLine(term, '');
+        const box = document.createElement('div');
+        box.className = 'tui-box';
+        box.innerHTML =
+          '<span class="t-dim">&gt;</span> <span class="tui-input"></span><span class="t-cursor"></span>';
+        term.appendChild(box);
+        termLine(term, '<span class="tui-hint">? for shortcuts</span>');
+        return box;
+      }
+
+      function bootCodexTui(term) {
+        term.innerHTML = '';
+        term.classList.add('tui-wipe');
+        setTimeout(() => term.classList.remove('tui-wipe'), 400);
+        termLine(
+          term,
+          '<span class="t-codex">◆</span> <b>Codex</b> <span class="t-dim">· gpt-5.4-codex · ~/git/bullpen</span>',
+        );
+        termLine(term, '<span class="t-dim">  /model 切换模型 · /approvals 审批模式</span>');
+        termLine(term, '');
+        const box = document.createElement('div');
+        box.className = 'tui-box';
+        box.innerHTML =
+          '<span class="t-codex">›</span> <span class="tui-input"></span><span class="t-cursor"></span>';
+        term.appendChild(box);
+        termLine(term, '<span class="tui-hint">⏎ send · esc interrupt</span>');
+        return box;
+      }
+
+      async function typeInTui(term, box, text, token, name) {
+        const input = box.querySelector('.tui-input');
+        for (const ch of text) {
+          if (stale(name, token)) return;
+          input.textContent += ch;
+          term.scrollTop = term.scrollHeight;
+          await sleep(30 + Math.random() * 35);
+        }
+        await sleep(420);
+        // submit: move text above the box as a user line
+        const sym = box.textContent.trim().startsWith('›') ? '›' : '>';
+        const userLn = document.createElement('div');
+        userLn.className = 'ln';
+        userLn.innerHTML = '<span class="t-dim">' + sym + ' ' + text + '</span>';
+        term.insertBefore(userLn, box);
+        input.textContent = '';
+        term.scrollTop = term.scrollHeight;
+      }
+
+      function tuiLineBefore(term, box, html) {
+        const ln = document.createElement('div');
+        ln.className = 'ln';
+        ln.innerHTML = html;
+        term.insertBefore(ln, box);
+        term.scrollTop = term.scrollHeight;
+        return ln;
+      }
+
+      /* ------------ 方向 1：底部坞 ------------ */
+      async function demo1(token) {
+        const N = '1',
+          term = $('p1-term');
+        cap(1, '①', '起点：底部就是普通 shell，形状舒服，跑什么都行。');
+        await sleep(1200);
+        if (stale(N, token)) return;
+        termLine(term, PROMPT + '<span>npm run check</span>');
+        termLine(
+          term,
+          '<span class="t-ok">✓</span> <span class="t-dim">typecheck · lint · 3.2s</span>',
+        );
+        await sleep(1300);
+        if (stale(N, token)) return;
+
+        cap(
+          1,
+          '②',
+          '敲 claude —— PTY 切到 alternate screen，整个 pane 变成 Claude Code 的交互式 TUI。',
+        );
+        await typeCmd(term, PROMPT, 'claude', token, N);
+        if (stale(N, token)) return;
+        const box = bootClaudeTui(term);
+        $('p1-tab').innerHTML = '<span class="agdot" style="background:#e8956b"></span>✳ claude';
+        await sleep(1500);
+        if (stale(N, token)) return;
+
+        cap(1, '③', '在 TUI 里下任务。注意窘境：矮坞里输入框贴底，历史只剩几行可见。');
+        await typeInTui(term, box, '给 composer 占位符加淡入动效', token, N);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-claude">✻</span> <span class="t-dim">Pondering… (esc to interrupt)</span>',
+        );
+        await sleep(1100);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-claude">⏺</span> Read(src/components/Composer.tsx)',
+        );
+        tuiLineBefore(term, box, '<span class="t-dim">  ⎿ Read 214 lines</span>');
+        await sleep(1000);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-claude">⏺</span> Update(src/components/Composer.tsx)',
+        );
+        tuiLineBefore(term, box, '<span class="t-dim">  ⎿ +18 −2</span>');
+        $('p1-f1').classList.add('flash');
+        $('p1-b1').classList.add('in');
+        await sleep(1400);
+        if (stale(N, token)) return;
+
+        cap(1, '④', 'IDE 检测到「chat TUI 在矮坞里」→ 给一次性迁移提示，用户一键把这个 PTY 移走。');
+        $('p1-toast').classList.add('in');
+        await sleep(1200);
+        if (stale(N, token)) return;
+        $('p1-act1').classList.add('hl');
+        await sleep(2600);
+      }
+
+      /* ------------ 方向 2：右侧竖栏 ------------ */
+      async function demo2(token) {
+        const N = '2',
+          term = $('p2-term');
+        cap(2, '①', '终端住在右侧高窄栏。先是普通 shell —— 敲 codex 进入交互态。');
+        await sleep(1200);
+        if (stale(N, token)) return;
+        await typeCmd(term, PROMPT, 'codex', token, N);
+        if (stale(N, token)) return;
+
+        cap(2, '②', 'TUI 接管整个竖栏：会话流从上往下长，输入框在底部 —— 高窄形状天然合身。');
+        const box = bootCodexTui(term);
+        $('p2-ph').textContent = '◆ codex · pty #1';
+        $('p2-ext').style.display = '';
+        $('p2-term').classList.add('focus-ring');
+        await sleep(1600);
+        if (stale(N, token)) return;
+
+        cap(
+          2,
+          '③',
+          '下任务。用户同时在中央编辑器里继续自己的活 —— 这就是「真终端实现的 chat 侧栏」。',
+        );
+        await typeInTui(term, box, '把 composer 的占位符做淡入，改完跑 check', token, N);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-codex">▌</span> <span class="t-dim">Working…</span>',
+        );
+        await sleep(1200);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-ok">✎</span> <span class="t-path">Composer.tsx</span> <span class="t-dim">+18 −2</span>',
+        );
+        $('p2-f1').classList.add('flash');
+        $('p2-b1').classList.add('in');
+        await sleep(1100);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-ok">✎</span> <span class="t-path">composer.css</span> <span class="t-dim">+6 −0</span>',
+        );
+        $('p2-f2').classList.add('flash');
+        $('p2-b2').classList.add('in');
+        await sleep(1100);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          term,
+          box,
+          '<span class="t-ok">✓</span> <span class="t-dim">npm run check — passed</span>',
+        );
+
+        cap(
+          2,
+          '④',
+          'FS watcher 照常记账：文件树打「外部改动」徽章 —— 与集成深度稿（A–D）任意组合。',
+        );
+        await sleep(1400);
+        if (stale(N, token)) return;
+
+        cap(2, '⑤', '焦点细节：终端聚焦时有描边，Esc 归 TUI 用；⌘⇧L 是保留的跳出键。');
+        await sleep(2600);
+      }
+
+      /* ------------ 方向 3：检测升格 ------------ */
+      async function demo3(token) {
+        const N = '3',
+          term = $('p3-term');
+        cap(3, '①', 'shell 平时住底部坞 —— 这时右侧栏根本不存在。');
+        await sleep(1200);
+        if (stale(N, token)) return;
+        termLine(term, PROMPT + '<span>git status</span>');
+        termLine(term, '<span class="t-dim">On branch main · nothing to commit</span>');
+        await sleep(1200);
+        if (stale(N, token)) return;
+
+        cap(
+          3,
+          '②',
+          '敲 claude —— IDE 从前台进程名 + alternate screen 检测到「进入 agent 交互态」。',
+        );
+        await typeCmd(term, PROMPT, 'claude', token, N);
+        if (stale(N, token)) return;
+        $('p3-tab').innerHTML = '<span class="agdot" style="background:#e8956b"></span>✳ claude';
+        await sleep(900);
+        if (stale(N, token)) return;
+
+        cap(
+          3,
+          '③',
+          '升格动效：同一个 PTY 不断线，pane 从底部飞到右侧竖栏；底部坞收起只剩 tab 条。',
+        );
+        $('p3-panel').classList.remove('closed');
+        $('p3-dock').classList.add('mini');
+        $('p3-tab').innerHTML = 'zsh';
+        await sleep(700);
+        if (stale(N, token)) return;
+        const rterm = $('p3-rterm');
+        const box = bootClaudeTui(rterm);
+        await sleep(1300);
+        if (stale(N, token)) return;
+
+        cap(3, '④', '竖栏里正常干活：下任务、看流式输出，改动照常被 watcher 提升。');
+        await typeInTui(rterm, box, '清理 runtime 的 deprecated 字段', token, N);
+        if (stale(N, token)) return;
+        tuiLineBefore(
+          rterm,
+          box,
+          '<span class="t-claude">⏺</span> Update(packages/runtime/types.ts)',
+        );
+        tuiLineBefore(rterm, box, '<span class="t-dim">  ⎿ +0 −14</span>');
+        $('p3-f1').classList.add('flash');
+        $('p3-b1').classList.add('in');
+        await sleep(1500);
+        if (stale(N, token)) return;
+
+        cap(
+          3,
+          '⑤',
+          '会话结束（/exit 或进程退出）→ pane 归位回底部坞，变回普通 shell。位置始终跟随内容。',
+        );
+        await typeInTui(rterm, box, '/exit', token, N);
+        if (stale(N, token)) return;
+        await sleep(500);
+        if (stale(N, token)) return;
+        $('p3-panel').classList.add('closed');
+        $('p3-dock').classList.remove('mini');
+        termLine(term, '<span class="t-dim">✻ session ended · 1 file changed — 查看改动 ↗</span>');
+        termLine(term, PROMPT + '<span class="t-cursor"></span>');
+        await sleep(2800);
+      }
+
+      /* ------------ runner ------------ */
+      const demos = { 1: demo1, 2: demo2, 3: demo3 };
+
+      async function play(name) {
+        const token = (runToken[name] || 0) + 1;
+        runToken[name] = token;
+        const sec = document.getElementById('dir' + name);
+        const win = sec.querySelector('.win');
+        win.innerHTML = initialHTML[name];
+        await sleep(60);
+        if (stale(name, token)) return;
+        await demos[name](token);
+        if (stale(name, token)) return;
+        await sleep(2200);
+        if (stale(name, token)) return;
+        play(name);
+      }
+
+      for (const name of ['1', '2', '3']) {
+        initialHTML[name] = document.querySelector('#dir' + name + ' .win').innerHTML;
+      }
+      const started = {};
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            const name = e.target.id.replace('dir', '');
+            if (e.isIntersecting && !started[name]) {
+              started[name] = true;
+              play(name);
+            }
+          }
+        },
+        { threshold: 0.35 },
+      );
+      for (const name of ['1', '2', '3']) io.observe(document.getElementById('dir' + name));
+    </script>
+  </body>
+</html>

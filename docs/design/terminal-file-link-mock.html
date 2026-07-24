@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mockup — 终端文件链接：点击直接在浏览器打开 HTML</title>
+<style>
+  :root {
+    --bg: #101418;
+    --panel: #171d24;
+    --panel-border: #2a333d;
+    --text: #d8dee6;
+    --text-dim: #8a95a3;
+    --accent: #4da3ff;
+    --term-bg: #0c0f13;
+    --term-fg: #cfd6dd;
+    --radius: 10px;
+    font-size: 15px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 64px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    display: flex; flex-direction: column; align-items: center; gap: 20px;
+  }
+  h1 { font-size: 1.15rem; font-weight: 600; margin: 0; }
+  h1 small { color: var(--text-dim); font-weight: 400; font-size: .8rem; margin-left: 8px; }
+
+  /* ── 交互变体切换 ─────────────────────────── */
+  .controls {
+    display: flex; gap: 24px; flex-wrap: wrap; justify-content: center;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: var(--radius); padding: 12px 18px;
+  }
+  .control { display: flex; align-items: center; gap: 10px; }
+  .control > label { color: var(--text-dim); font-size: .85rem; }
+  .seg { display: inline-flex; background: #0d1117; border: 1px solid var(--panel-border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--text-dim);
+    padding: 6px 14px; font-size: .85rem; cursor: pointer; font-family: inherit;
+  }
+  .seg button.on { background: #1f2a36; color: var(--accent); font-weight: 600; }
+
+  .stage { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+
+  /* ── 终端窗口 ─────────────────────────────── */
+  .term-win {
+    width: 640px; max-width: 94vw;
+    background: var(--term-bg); border: 1px solid var(--panel-border);
+    border-radius: var(--radius); overflow: hidden;
+    box-shadow: 0 18px 48px rgba(0,0,0,.45);
+  }
+  .win-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; background: #161b21; border-bottom: 1px solid var(--panel-border);
+  }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; } .dot.y { background: #febc2e; } .dot.g { background: #28c840; }
+  .win-title { flex: 1; text-align: center; color: var(--text-dim); font-size: .78rem; }
+  .term-body {
+    padding: 18px 20px 22px;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 13.5px; line-height: 1.75; color: var(--term-fg);
+    white-space: pre-wrap;
+  }
+  .bullet { color: #e8eef4; }
+  .dim { color: var(--text-dim); }
+  .b { font-weight: 700; color: #eef3f8; }
+
+  /* 文件链接 token —— 核心交互 */
+  .file-link {
+    color: var(--accent); text-decoration: underline;
+    text-underline-offset: 3px; text-decoration-thickness: 1px;
+    cursor: pointer; border-radius: 3px; padding: 0 2px;
+    transition: background .12s;
+  }
+  .file-link:hover { background: rgba(77,163,255,.14); text-decoration-thickness: 2px; }
+
+  /* hover 提示 */
+  #tooltip {
+    position: fixed; z-index: 50; pointer-events: none;
+    background: #232c36; border: 1px solid #37424e; color: var(--text);
+    font-size: .76rem; padding: 5px 10px; border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4); display: none; white-space: nowrap;
+  }
+  #tooltip kbd {
+    font-family: inherit; background: #0d1117; border: 1px solid #37424e;
+    border-radius: 4px; padding: 0 5px; margin-right: 4px; color: var(--accent);
+  }
+
+  /* toast */
+  #toast {
+    position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%) translateY(20px);
+    background: #232c36; border: 1px solid #37424e; color: var(--text);
+    padding: 10px 18px; border-radius: 8px; font-size: .85rem;
+    opacity: 0; transition: all .25s; pointer-events: none; z-index: 60;
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  /* ── 打开结果：浏览器 / Live Preview ───────── */
+  .result-win {
+    width: 380px; max-width: 94vw; border-radius: var(--radius); overflow: hidden;
+    border: 1px solid var(--panel-border); box-shadow: 0 18px 48px rgba(0,0,0,.45);
+    opacity: 0; transform: translateY(14px) scale(.98); transition: all .3s;
+    display: none;
+  }
+  .result-win.show { display: block; animation: pop .3s forwards; }
+  @keyframes pop { to { opacity: 1; transform: none; } }
+
+  .browser-bar {
+    display: flex; align-items: center; gap: 8px;
+    background: #2b3138; padding: 8px 10px; border-bottom: 1px solid #3a424b;
+  }
+  .addr {
+    flex: 1; background: #1c2127; border-radius: 6px; padding: 4px 10px;
+    font-size: .72rem; color: var(--text-dim);
+    font-family: "SF Mono", Menlo, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .preview-bar {
+    display: flex; align-items: center; gap: 8px;
+    background: #1a2028; padding: 8px 12px; border-bottom: 1px solid var(--panel-border);
+    font-size: .78rem; color: var(--text-dim);
+  }
+  .preview-bar .tag {
+    background: rgba(77,163,255,.15); color: var(--accent);
+    border-radius: 4px; padding: 1px 7px; font-size: .7rem; font-weight: 600;
+  }
+
+  /* 火箭动画（模拟 rocket.html 的实际效果） */
+  .sky {
+    height: 300px; position: relative; overflow: hidden;
+    background: linear-gradient(#0b1026 0%, #1b2447 70%, #2c3866 100%);
+  }
+  .star { position: absolute; width: 2px; height: 2px; background: #fff; border-radius: 50%; animation: tw 2s infinite alternate; }
+  @keyframes tw { from { opacity: .2; } to { opacity: 1; } }
+  .rocket { position: absolute; left: 50%; bottom: -80px; transform: translateX(-50%); animation: launch 3.5s ease-in infinite; font-size: 46px; }
+  @keyframes launch {
+    0% { bottom: -80px; } 12% { bottom: 16px; } 30% { bottom: 22px; }
+    100% { bottom: 340px; }
+  }
+  .flame {
+    position: absolute; top: 40px; left: 50%; transform: translateX(-50%);
+    width: 10px; height: 22px; border-radius: 50% 50% 50% 50% / 30% 30% 70% 70%;
+    background: linear-gradient(#ffd166, #ef476f); animation: fl .12s infinite alternate;
+  }
+  @keyframes fl { from { height: 18px; opacity: .8; } to { height: 26px; opacity: 1; } }
+
+  .note {
+    width: 640px; max-width: 94vw; color: var(--text-dim); font-size: .82rem; line-height: 1.7;
+    background: var(--panel); border: 1px solid var(--panel-border);
+    border-radius: var(--radius); padding: 14px 18px;
+  }
+  .note b { color: var(--text); }
+  .note .file-link { font-family: "SF Mono", Menlo, monospace; font-size: .78rem; }
+</style>
+</head>
+<body>
+
+<h1>终端文件链接 · 点击直接打开 HTML <small>Charter 内嵌终端（Claude Code / Codex）· 交互 mockup</small></h1>
+
+<div class="controls">
+  <div class="control">
+    <label>触发方式</label>
+    <span class="seg" id="segTrigger">
+      <button data-v="cmd" class="on">⌘ + 单击（推荐）</button>
+      <button data-v="plain">直接单击</button>
+    </span>
+  </div>
+  <div class="control">
+    <label>.html 打开目标</label>
+    <span class="seg" id="segTarget">
+      <button data-v="browser" class="on">系统默认浏览器</button>
+      <button data-v="preview">内置 Live Preview</button>
+    </span>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="term-win">
+    <div class="win-bar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="win-title">Claude Code — ~/playground</span>
+    </div>
+    <div class="term-body"><span class="bullet">⏺</span> 搞定！我为你创建了一个火箭升空的 HTML 动画，包含：
+
+  - <span class="b">火箭设计</span> — 带窗口和尾翼的火箭模型
+  - <span class="b">火焰动画</span> — 喷火闪烁效果
+  - <span class="b">烟雾效果</span> — 升空时的白烟
+  - <span class="b">星空背景</span> — 夜间升空场景
+  - <span class="b">自动循环</span> — 每 3.5 秒火箭自动升空一次
+
+  在浏览器中打开 <span class="file-link" data-file="rocket.html">rocket.html</span>
+  就能看到效果。想要调整什么吗？比如颜色、速度、或者加入声音效果？
+
+<span class="dim">✳ Sautéed for 21s</span><span class="dim" style="float:right">54872 tokens</span></div>
+  </div>
+
+  <div class="result-win" id="resultWin">
+    <div class="browser-bar" id="browserBar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="addr" id="addrText">file:///Users/edy/playground/rocket.html</span>
+    </div>
+    <div class="preview-bar" id="previewBar" style="display:none">
+      <span class="tag">Live Preview</span> rocket.html
+      <span style="flex:1"></span><span>⤢ 在浏览器打开</span>
+    </div>
+    <div class="sky" id="sky">
+      <div class="rocket">🚀<div class="flame"></div></div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>交互规则（实现即按此）</b><br>
+  · 识别来源：Claude Code 的 OSC 8 超链接优先（准确带绝对路径）；正则识别裸文件名兜底（Codex 及截图这类输出），按终端 cwd 解析并验证文件存在。<br>
+  · <span class="file-link" data-demo="editor" data-file="src/rocket.css">src/rocket.css</span> ← 非 .html 文件点击试试：在 Monaco 编辑器打开（带 :行号 时跳行）。<br>
+  · 安全：新增版本化 IPC <code>terminal.openPath@1</code>，主进程校验路径在该终端 cwd/工作区内 + 扩展名白名单，再 <code>shell.openExternal</code>。<br>
+  · Hover 显示操作提示；未按修饰键（若选 ⌘ 模式）点击时给出气泡提示，不与选中文本冲突。
+</div>
+
+<div id="tooltip"></div>
+<div id="toast"></div>
+
+<script>
+  let trigger = 'cmd';
+  let target = 'browser';
+
+  function bindSeg(id, cb) {
+    const seg = document.getElementById(id);
+    seg.addEventListener('click', (e) => {
+      const btn = e.target.closest('button'); if (!btn) return;
+      seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === btn));
+      cb(btn.dataset.v);
+    });
+  }
+  bindSeg('segTrigger', v => { trigger = v; hideResult(); });
+  bindSeg('segTarget', v => { target = v; hideResult(); });
+
+  const tooltip = document.getElementById('tooltip');
+  const toast = document.getElementById('toast');
+  const resultWin = document.getElementById('resultWin');
+
+  function tooltipText(el) {
+    const kbd = trigger === 'cmd' ? '<kbd>⌘</kbd>+ 点击' : '点击';
+    if (el.dataset.demo === 'editor') return kbd + ' 在编辑器打开';
+    return kbd + (target === 'browser' ? ' 在浏览器打开' : ' 在 Live Preview 打开');
+  }
+  function showToast(msg) {
+    toast.textContent = msg; toast.classList.add('show');
+    clearTimeout(showToast.t); showToast.t = setTimeout(() => toast.classList.remove('show'), 2200);
+  }
+  function hideResult() { resultWin.classList.remove('show'); }
+
+  document.querySelectorAll('.file-link').forEach(el => {
+    el.addEventListener('mousemove', (e) => {
+      tooltip.innerHTML = tooltipText(el);
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 16) + 'px';
+    });
+    el.addEventListener('mouseleave', () => tooltip.style.display = 'none');
+    el.addEventListener('click', (e) => {
+      if (trigger === 'cmd' && !(e.metaKey || e.ctrlKey)) {
+        showToast('按住 ⌘ 再点击打开 ' + el.dataset.file);
+        return;
+      }
+      if (el.dataset.demo === 'editor') {
+        hideResult();
+        showToast('已在编辑器打开 ' + el.dataset.file);
+        return;
+      }
+      document.getElementById('browserBar').style.display = target === 'browser' ? 'flex' : 'none';
+      document.getElementById('previewBar').style.display = target === 'preview' ? 'flex' : 'none';
+      resultWin.classList.remove('show');
+      void resultWin.offsetWidth;
+      resultWin.classList.add('show');
+      showToast(target === 'browser'
+        ? '已在系统默认浏览器打开 rocket.html'
+        : '已在 Live Preview 面板打开 rocket.html');
+    });
+  });
+
+  // 星空
+  const sky = document.getElementById('sky');
+  for (let i = 0; i < 40; i++) {
+    const s = document.createElement('div');
+    s.className = 'star';
+    s.style.left = Math.random() * 100 + '%';
+    s.style.top = Math.random() * 100 + '%';
+    s.style.animationDelay = Math.random() * 2 + 's';
+    sky.appendChild(s);
+  }
+</script>
+</body>
+</html>

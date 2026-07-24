@@ -1,0 +1,557 @@
+<!doctype html>
+<!-- Charter CodeContextRef · unified source mock. NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Unified CodeContextRef</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      body.scene-editor .app-window {
+        grid-template-columns: 238px minmax(355px, 0.62fr) minmax(650px, 1.38fr);
+      }
+
+      .source-surface {
+        display: none;
+      }
+
+      body.scene-file .file-peek,
+      body.scene-editor .editor-surface,
+      body.scene-search .search-surface {
+        display: block;
+      }
+
+      .source-chip {
+        min-height: 23px;
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--editor);
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .peek-selection {
+        top: 132px;
+      }
+
+      .editor-selection {
+        top: 178px;
+      }
+
+      .peek-context-note {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 13px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .peek-context-note b {
+        color: var(--info);
+        font: 9px var(--font-mono);
+      }
+
+      .editor-surface {
+        padding: 0 0 70px;
+        background: #fff5e3;
+      }
+
+      .editor-tabs {
+        min-height: 38px;
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid var(--border);
+        background: var(--panel);
+      }
+
+      .editor-tabs button {
+        min-width: 142px;
+        padding: 0 13px;
+        border: 0;
+        border-right: 1px solid var(--border);
+        background: transparent;
+        color: var(--muted);
+        font: 10px var(--font-mono);
+        text-align: left;
+      }
+
+      .editor-tabs button.active {
+        border-top: 2px solid var(--accent);
+        background: #fff5e3;
+        color: var(--text);
+      }
+
+      .editor-breadcrumbs {
+        min-height: 33px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 15px;
+        border-bottom: 1px solid var(--border-soft);
+        color: var(--faint);
+        font: 9.5px var(--font-mono);
+      }
+
+      .editor-code {
+        position: relative;
+        padding: 12px 0 36px;
+      }
+
+      .editor-code .code-line {
+        min-height: 25px;
+        grid-template-columns: 50px 20px minmax(0, 1fr);
+      }
+
+      .editor-code .line-number {
+        border-right: 1px solid var(--border-soft);
+      }
+
+      .editor-status {
+        position: sticky;
+        bottom: 0;
+        min-height: 25px;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 14px;
+        padding: 0 12px;
+        border-top: 1px solid var(--border);
+        background: var(--panel);
+        color: var(--muted);
+        font: 9px var(--font-mono);
+      }
+
+      .search-surface {
+        background: var(--card);
+      }
+
+      .search-box {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        margin-bottom: 18px;
+      }
+
+      .search-box input {
+        min-height: 36px;
+        padding: 0 11px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--input);
+        font: 10.5px var(--font-mono);
+      }
+
+      .search-box button {
+        padding: 0 12px;
+        border: 1px solid var(--text);
+        border-radius: 8px;
+        background: var(--text);
+        color: var(--card);
+        font-size: 10px;
+      }
+
+      .search-meta {
+        margin-bottom: 10px;
+        color: var(--faint);
+        font-size: 10px;
+      }
+
+      .search-results {
+        display: grid;
+        gap: 10px;
+      }
+
+      .search-result {
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: #fff5e3;
+      }
+
+      .search-result header {
+        min-height: 39px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 10px 0 12px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .search-result header strong {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        font: 10px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .search-result header small {
+        color: var(--faint);
+        font: 9px var(--font-mono);
+      }
+
+      .source-toggle {
+        min-height: 25px;
+        padding: 0 8px;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: var(--card);
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .source-toggle.attached {
+        border-color: #7d9b82;
+        background: var(--success-bg);
+        color: var(--success);
+      }
+
+      .search-snippet {
+        padding: 6px 0 8px;
+      }
+
+      .search-snippet .code-line {
+        min-height: 22px;
+      }
+
+      .search-match {
+        background: #f3e0b6;
+        color: var(--warning);
+      }
+
+      .unified-shelf .code-context-card {
+        border-left-color: var(--info);
+      }
+
+      .unified-shelf .code-context-card[data-source='editor'] {
+        border-left-color: var(--accent);
+      }
+
+      .unified-shelf .code-context-card[data-source='search'] {
+        border-left-color: var(--warning);
+      }
+
+      .empty-context {
+        display: none;
+        padding: 7px 9px;
+        border: 1px dashed var(--border-strong);
+        border-radius: 7px;
+        color: var(--faint);
+        font-size: 10px;
+        text-align: center;
+      }
+
+      .context-shelf.visible.empty .context-summary,
+      .context-shelf.visible.empty .code-context-card {
+        display: none;
+      }
+
+      .context-shelf.visible.empty .empty-context {
+        display: block;
+      }
+
+      .unified-timeline-ref {
+        display: grid;
+        gap: 5px;
+        margin-top: 8px;
+      }
+
+      .unified-timeline-ref span {
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: #f7ead3;
+        color: var(--muted);
+        font: 9px var(--font-mono);
+      }
+
+      @media (max-width: 1080px) {
+        body.scene-editor .app-window {
+          grid-template-columns: 172px minmax(298px, 0.65fr) minmax(430px, 1.35fr);
+        }
+
+        .mock-controls .scene-word {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body class="scene-file">
+    <main class="mock-shell">
+      <nav class="mock-controls" aria-label="Mock 场景切换">
+        <strong>成熟态 · Unified CodeContextRef</strong>
+        <span class="explain">三个入口，共用一套引用对象；场景切换只属于 mock</span>
+        <span class="spacer"></span>
+        <span class="scene-word">查看来源</span>
+        <button type="button" data-scene="file" class="active">File Peek</button>
+        <button type="button" data-scene="editor">完整 Editor</button>
+        <button type="button" data-scene="search">搜索结果</button>
+        <button type="button" id="reset-refs">清空引用</button>
+      </nav>
+
+      <section class="app-window" aria-label="Charter unified code context mock">
+        <aside class="session-rail">
+          <div class="rail-head">
+            <div class="rail-title"><span>SESSIONS</span><span>搜索</span></div>
+            <button class="new-session" type="button">新建 Session</button>
+          </div>
+          <div class="rail-scroll">
+            <div class="needs-you">
+              <span>Needs you</span><span>打开收件箱</span><b class="count-badge">2</b>
+            </div>
+            <div class="project-label"><span>展开</span><span>charter</span><small>1</small></div>
+            <div class="session-row active">
+              <span class="agent-mark">π</span>
+              <span class="session-copy">
+                <strong>统一代码上下文</strong>
+                <span>main · anthropic</span>
+                <small>3 个引用等待发送</small>
+              </span>
+              <span class="live-label">LIVE</span>
+            </div>
+            <div class="project-label"><span>展开</span><span>fable5</span><small>3</small></div>
+            <div class="session-row">
+              <span class="agent-mark">C</span>
+              <span class="session-copy">
+                <strong>external session</strong>
+                <span>main · Claude</span>
+                <small>Ready to review</small>
+              </span>
+              <span class="live-label">REVIEW</span>
+            </div>
+            <div class="session-row">
+              <span class="agent-mark">C</span>
+              <span class="session-copy">
+                <strong>修正订单提交状态</strong>
+                <span>main · Codex</span>
+                <small>Answered · no file changes</small>
+              </span>
+              <span class="live-label">DONE</span>
+            </div>
+            <div class="rail-rule"></div>
+            <div class="history-label"><span>折叠</span><span>History</span><small>4</small></div>
+          </div>
+          <div class="working-context">
+            <strong>charter</strong><span>main</span>
+            <small>working context · ~/git/charter</small>
+          </div>
+        </aside>
+
+        <header class="session-head">
+          <span class="back-link">返回 All Sessions</span>
+          <div class="session-identity">
+            <div class="session-name">
+              <h1>统一代码上下文</h1>
+              <span class="status-pill">Working</span>
+            </div>
+            <div class="session-meta">
+              <span class="meta-chip">charter</span>
+              <span class="meta-chip">main</span>
+              <span class="meta-chip">anthropic</span>
+            </div>
+          </div>
+          <span class="spacer"></span>
+          <button class="quiet-button" type="button">More</button>
+        </header>
+
+        <section class="conversation" aria-label="Session conversation">
+          <div class="conversation-scroll" id="unified-conversation-scroll">
+            <div class="timeline">
+              <article class="timeline-entry user">
+                <div class="timeline-label">你 · 11:02</div>
+                <div class="timeline-copy">所有代码表面都应该能把精确选区交给同一个 Agent。</div>
+              </article>
+              <article class="timeline-entry agent">
+                <div class="timeline-label">Agent · 11:03</div>
+                <div class="timeline-copy">
+                  可以。File Peek、Editor 和搜索结果只负责产生引用；当前 Session 的 Composer 负责汇总和发送。
+                </div>
+                <div class="worklog">
+                  <strong>SourceRangeRef</strong> 解析 path · range · version · snapshot<br />
+                  <strong>Draft context</strong> 跨工具状态保持<br />
+                  <strong>Message ledger</strong> 发送后固化
+                </div>
+              </article>
+              <article class="timeline-entry agent">
+                <div class="timeline-label">Agent · 11:04</div>
+                <div class="timeline-copy">
+                  右侧切换来源时，对话和草稿都不会消失。下面已经预置了三个来源的引用，你可以逐个移除或重新加入。
+                </div>
+              </article>
+              <article class="timeline-entry user hidden" id="unified-sent-entry">
+                <div class="timeline-label">你 · 刚刚</div>
+                <div class="timeline-copy" id="unified-sent-copy"></div>
+                <div class="unified-timeline-ref" id="unified-timeline-refs"></div>
+              </article>
+            </div>
+          </div>
+
+          <div class="working-line">
+            <span class="working-dot"></span>
+            <span id="unified-working-copy">3 个代码引用等待发送</span>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer">
+              <div class="context-shelf unified-shelf visible" id="unified-context-shelf">
+                <div class="context-summary">
+                  <span>本条消息的代码上下文</span><span id="ref-summary">3 个引用 · 13 行</span>
+                </div>
+                <div class="empty-context">从右侧任意代码表面选择内容，引用会汇总到这里。</div>
+
+                <div class="code-context-card" data-ref="file" data-source="file">
+                  <span>
+                    <strong>src/theme.css · 当前文件 L42–44</strong>
+                    <small>File Peek · working tree · 3 lines</small>
+                  </span>
+                  <button class="context-action remove-ref" type="button">移除</button>
+                  <pre class="context-preview">--success: #4f754d;
+--success-bg: #dde8d2;
+--info: #3f6674;</pre>
+                </div>
+
+                <div class="code-context-card" data-ref="editor" data-source="editor">
+                  <span>
+                    <strong>src/components/Button.tsx · 编辑器 L18–24</strong>
+                    <small>Editor · working tree · 7 lines</small>
+                  </span>
+                  <button class="context-action remove-ref" type="button">移除</button>
+                  <pre class="context-preview">const toneClass = tone === 'success'
+  ? styles.success
+  : styles.neutral;</pre>
+                </div>
+
+                <div class="code-context-card" data-ref="search" data-source="search">
+                  <span>
+                    <strong>public/index.html · 搜索结果 L16–18</strong>
+                    <small>Search · working tree · 3 lines</small>
+                  </span>
+                  <button class="context-action remove-ref" type="button">移除</button>
+                  <pre class="context-preview">--success: #2f9e63;
+--success-hover: #278554;
+--success-border: #86b594;</pre>
+                </div>
+              </div>
+
+              <textarea id="unified-composer-input" rows="2" aria-label="给 Agent 的指令">统一这些交互状态的颜色和反馈文案，但不要改变现有布局。</textarea>
+              <div class="composer-footer">
+                <span class="composer-meta">Auto · anthropic/claude · effort medium</span>
+                <span class="spacer"></span>
+                <button class="send-button" id="unified-send-button" type="button">发送</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="tool-panel" aria-label="Session tools">
+          <nav class="tool-tabs" aria-label="Session tool tabs">
+            <button type="button" id="file-tab" class="active">File</button>
+            <button type="button">Diff</button>
+            <button type="button" id="search-tab" class="hidden">Search</button>
+            <button type="button">Preview</button>
+            <button type="button">Terminal</button>
+            <button type="button">Review</button>
+            <span class="spacer"></span>
+            <button type="button" id="expand-label">Expand</button>
+          </nav>
+
+          <div class="tool-body">
+            <section class="file-peek source-surface">
+              <div class="surface-title">
+                <h2>src/theme.css</h2><span class="source-chip">File Peek</span>
+                <span class="spacer"></span><button class="quiet-button" type="button">在 Editor 中展开</button>
+              </div>
+              <div class="peek-context-note"><b>当前文件</b><span>选择内容后加入当前 Session，不离开对话。</span></div>
+              <section class="code-frame" aria-label="src/theme.css file peek">
+                <header class="code-head"><strong>src/theme.css</strong><span class="spacer"></span><button type="button">复制路径</button></header>
+                <div class="code-lines">
+                  <div class="code-line"><span class="line-number">38</span><span class="line-marker"></span><span class="code-text">  --accent: #b94e32;</span></div>
+                  <div class="code-line"><span class="line-number">39</span><span class="line-marker"></span><span class="code-text">  --accent-fg: #fffaf0;</span></div>
+                  <div class="code-line"><span class="line-number">40</span><span class="line-marker"></span><span class="code-text">  --danger: #a43129;</span></div>
+                  <div class="code-line"><span class="line-number">41</span><span class="line-marker"></span><span class="code-text">  --danger-bg: #f5d7ce;</span></div>
+                  <div class="code-line selected"><span class="line-number">42</span><span class="line-marker"></span><span class="code-text">  --success: #4f754d;</span></div>
+                  <div class="code-line selected"><span class="line-number">43</span><span class="line-marker"></span><span class="code-text">  --success-bg: #dde8d2;</span></div>
+                  <div class="code-line selected"><span class="line-number">44</span><span class="line-marker"></span><span class="code-text">  --info: #3f6674;</span></div>
+                  <div class="code-line"><span class="line-number">45</span><span class="line-marker"></span><span class="code-text">  --info-bg: #dbe7e6;</span></div>
+                  <div class="selection-action attached peek-selection" data-source-action="file">
+                    <span>当前文件 · L42–44</span><button type="button" class="source-action-button">已在上下文</button>
+                  </div>
+                </div>
+              </section>
+            </section>
+
+            <section class="editor-surface source-surface">
+              <div class="editor-tabs">
+                <button type="button" class="active">Button.tsx</button>
+                <button type="button">theme.css</button>
+              </div>
+              <div class="editor-breadcrumbs">src · components · Button.tsx · Button</div>
+              <div class="editor-code code-lines">
+                <div class="code-line"><span class="line-number">14</span><span class="line-marker"></span><span class="code-text">export function Button(props: ButtonProps) {</span></div>
+                <div class="code-line"><span class="line-number">15</span><span class="line-marker"></span><span class="code-text">  const { tone = 'neutral', children } = props;</span></div>
+                <div class="code-line"><span class="line-number">16</span><span class="line-marker"></span><span class="code-text"></span></div>
+                <div class="code-line"><span class="line-number">17</span><span class="line-marker"></span><span class="code-text">  const toneClass =</span></div>
+                <div class="code-line selected"><span class="line-number">18</span><span class="line-marker"></span><span class="code-text">    tone === 'success'</span></div>
+                <div class="code-line selected"><span class="line-number">19</span><span class="line-marker"></span><span class="code-text">      ? styles.success</span></div>
+                <div class="code-line selected"><span class="line-number">20</span><span class="line-marker"></span><span class="code-text">      : tone === 'danger'</span></div>
+                <div class="code-line selected"><span class="line-number">21</span><span class="line-marker"></span><span class="code-text">        ? styles.danger</span></div>
+                <div class="code-line selected"><span class="line-number">22</span><span class="line-marker"></span><span class="code-text">        : styles.neutral;</span></div>
+                <div class="code-line selected"><span class="line-number">23</span><span class="line-marker"></span><span class="code-text"></span></div>
+                <div class="code-line selected"><span class="line-number">24</span><span class="line-marker"></span><span class="code-text">  return (</span></div>
+                <div class="code-line"><span class="line-number">25</span><span class="line-marker"></span><span class="code-text">    &lt;button className={toneClass}&gt;{children}&lt;/button&gt;</span></div>
+                <div class="code-line"><span class="line-number">26</span><span class="line-marker"></span><span class="code-text">  );</span></div>
+                <div class="selection-action attached editor-selection" data-source-action="editor">
+                  <span>Editor · L18–24</span><button type="button" class="source-action-button">已在上下文</button>
+                </div>
+              </div>
+              <div class="editor-status"><span>Ln 18, Col 5</span><span>Spaces: 2</span><span>TypeScript React</span></div>
+            </section>
+
+            <section class="search-surface source-surface">
+              <div class="surface-title"><h2>Search results</h2><span class="source-chip">当前 Session 的项目</span></div>
+              <div class="search-box"><input value="--success" aria-label="搜索代码" /><button type="button" id="mock-search-button">搜索</button></div>
+              <div class="search-meta">8 results in 4 files · 选中的结果可以直接成为代码上下文</div>
+              <div class="search-results">
+                <article class="search-result">
+                  <header>
+                    <strong>public/index.html</strong><small>L16–18</small>
+                    <button type="button" class="source-toggle attached" data-source-action="search">已在上下文</button>
+                  </header>
+                  <div class="search-snippet">
+                    <div class="code-line selected"><span class="line-number">16</span><span class="line-marker"></span><span class="code-text">  <mark class="search-match">--success</mark>: #2f9e63;</span></div>
+                    <div class="code-line selected"><span class="line-number">17</span><span class="line-marker"></span><span class="code-text">  <mark class="search-match">--success</mark>-hover: #278554;</span></div>
+                    <div class="code-line selected"><span class="line-number">18</span><span class="line-marker"></span><span class="code-text">  <mark class="search-match">--success</mark>-border: #86b594;</span></div>
+                  </div>
+                </article>
+                <article class="search-result">
+                  <header><strong>src/theme.css</strong><small>L42–43</small><button type="button" class="source-toggle" disabled>同一范围已引用</button></header>
+                  <div class="search-snippet">
+                    <div class="code-line"><span class="line-number">42</span><span class="line-marker"></span><span class="code-text">  <mark class="search-match">--success</mark>: #4f754d;</span></div>
+                    <div class="code-line"><span class="line-number">43</span><span class="line-marker"></span><span class="code-text">  <mark class="search-match">--success</mark>-bg: #dde8d2;</span></div>
+                  </div>
+                </article>
+                <article class="search-result">
+                  <header><strong>src/components/Button.module.css</strong><small>L8–10</small><span class="source-chip">另一个匹配</span></header>
+                  <div class="search-snippet">
+                    <div class="code-line"><span class="line-number">8</span><span class="line-marker"></span><span class="code-text">.success {</span></div>
+                    <div class="code-line"><span class="line-number">9</span><span class="line-marker"></span><span class="code-text">  color: var(<mark class="search-match">--success</mark>);</span></div>
+                    <div class="code-line"><span class="line-number">10</span><span class="line-marker"></span><span class="code-text">}</span></div>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="toast" id="unified-toast" role="status" aria-live="polite"></div>
+
+    <script src="./unified.js"></script>
+  </body>
+</html>

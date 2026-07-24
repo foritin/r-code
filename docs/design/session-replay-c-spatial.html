@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>会话回放 C — 空间桌面重建</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="replay-page">
+    <main class="mock-window" data-replay data-duration="38" data-autoplay="true">
+      <header class="appbar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <a class="brand" href="./session-replay-directions.html">C</a>
+        <div class="title-block">
+          <h1>新客户入职：资料、欢迎邮件与启动会</h1>
+          <p>今天 14:47 · Agent 工作了 38 秒 · 空间视图</p>
+        </div>
+        <div class="appbar-spacer"></div>
+        <nav class="direction-nav" aria-label="回放方向">
+          <a href="./session-replay-a-cinematic.html">A</a
+          ><a href="./session-replay-b-causal-map.html">B</a
+          ><a class="on" href="./session-replay-c-spatial.html">C</a
+          ><a href="./session-replay-d-documentary.html">D</a
+          ><a href="./session-replay-e-audit.html">E</a>
+        </nav>
+        <button class="top-action" data-toast="空间回放链接已复制">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+            <path d="M5 12v7h14v-7" /></svg
+          >分享</button
+        ><button class="icon-button" data-toast="可隐藏应用或按资料类型着色" aria-label="更多">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      </header>
+      <div class="workspace spatial-layout">
+        <section class="spatial-canvas">
+          <div
+            class="capture-limit"
+            data-capture-note
+            data-pi=""
+            data-claude="Claude Terminal 只知道 PTY 与文件路径，无法可靠证明 Mail、Calendar、Web 等外部应用之间的流转。"
+            data-codex="Codex Terminal 只知道 PTY 与文件路径，无法可靠证明 Mail、Calendar、Web 等外部应用之间的流转。"
+          ></div>
+          <div class="space-head">
+            <h2>Agent 的工作空间</h2>
+            <p>数据如何在应用之间移动，比“调用了什么工具”更重要。</p>
+          </div>
+          <svg class="space-lines" viewBox="0 0 800 560" preserveAspectRatio="none">
+            <path d="M175 150C310 170 270 300 390 280S560 120 650 170" />
+            <path d="M390 280C450 370 610 330 650 450" />
+            <path d="M390 280C300 400 220 390 165 450" />
+          </svg>
+          <article class="space-app" data-at="0" style="left: 7%; top: 16%">
+            <header class="app-chrome">
+              <i></i><i></i><i></i><span>Mail · Welcome request</span>
+            </header>
+            <div class="app-screen">
+              <div class="mail-line"><b>Subject</b><span>Onboard Northstar Labs</span></div>
+              <div class="mail-line"><b>From</b><span>Customer Success</span></div>
+              <div class="mail-line"><b>Need</b><span>Docs, email, kickoff</span></div>
+              <div class="mail-line"><b>Due</b><span>Today 17:00</span></div>
+            </div>
+          </article>
+          <article class="space-app" data-at="6" style="left: 37%; top: 37%">
+            <header class="app-chrome"><i></i><i></i><i></i><span>Customers.xlsx</span></header>
+            <div class="app-screen">
+              <div class="sheet-grid">
+                <span></span><span>Name</span><span>Plan</span><span>Owner</span><span>Start</span
+                ><span>14</span><span>Northstar</span><span class="hot">Scale</span><span>Mina</span
+                ><span>Jul 21</span><span>15</span><span>Acme</span><span>Pro</span><span>Leo</span
+                ><span>Jul 23</span><span>16</span><span>Orchid</span><span>Scale</span
+                ><span>Aya</span><span>Jul 25</span>
+              </div>
+            </div>
+          </article>
+          <article class="space-app" data-at="12" style="right: 6%; top: 17%">
+            <header class="app-chrome"><i></i><i></i><i></i><span>Onboarding.docx</span></header>
+            <div class="app-screen">
+              <b style="font-size: 10px; color: #2d322f">Welcome, Northstar Labs</b>
+              <div class="doc-lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <span style="color: var(--green)">✓ Company details merged</span>
+            </div>
+          </article>
+          <article class="space-app" data-at="19" style="left: 7%; bottom: 9%">
+            <header class="app-chrome"><i></i><i></i><i></i><span>Web · Setup guide</span></header>
+            <div class="app-screen">
+              <div class="browser-result">
+                <b>SSO setup for Scale plans</b><span>docs.product.com</span>
+              </div>
+              <div class="browser-result">
+                <b>Invite workspace owners</b><span>help.product.com</span>
+              </div>
+              <div class="browser-result">
+                <b>Data import checklist</b><span>docs.product.com</span>
+              </div>
+            </div>
+          </article>
+          <article class="space-app" data-at="26" style="right: 6%; bottom: 9%">
+            <header class="app-chrome"><i></i><i></i><i></i><span>Calendar · July</span></header>
+            <div class="app-screen">
+              <div class="calendar-grid">
+                <span>20</span><span class="on">21</span><span>22</span><span>23</span
+                ><span>24</span><span>25</span><span>26</span><span>27</span><span>28</span
+                ><span>29</span><span>30</span><span>31</span><span>1</span><span>2</span>
+              </div>
+              <p style="font-size: 7px"><b>16:00</b> Northstar kickoff · 45m</p>
+            </div>
+          </article>
+          <div class="route-dot" style="left: 16%; top: 26%"></div>
+        </section>
+        <aside class="spatial-rail">
+          <div class="rail-head">
+            <h3>流动中的证据</h3>
+            <span class="rail-count">6 项</span>
+          </div>
+          <div data-sequence>
+            <div class="space-evidence" data-at="0">
+              <div class="kind-icon">M</div>
+              <div><b>入职请求</b><small>目标、截止时间、负责人</small></div>
+            </div>
+            <div class="space-evidence" data-at="6">
+              <div class="kind-icon green">S</div>
+              <div><b>客户主数据</b><small>Northstar · Scale plan</small></div>
+            </div>
+            <div class="space-evidence" data-at="12">
+              <div class="kind-icon">D</div>
+              <div><b>欢迎资料包</b><small>6 个变量已合并</small></div>
+            </div>
+            <div class="space-evidence" data-at="19">
+              <div class="kind-icon violet">W</div>
+              <div><b>适用的设置指南</b><small>SSO、导入与成员邀请</small></div>
+            </div>
+            <div class="space-evidence" data-at="26">
+              <div class="kind-icon amber">C</div>
+              <div><b>推荐会议时段</b><small>3 人均空闲 · 16:00</small></div>
+            </div>
+            <div class="space-evidence" data-at="34">
+              <div class="kind-icon coral">✓</div>
+              <div><b>待用户确认</b><small>邮件和日程均未擅自发送</small></div>
+            </div>
+          </div>
+        </aside>
+        <section class="replay-transport">
+          <div class="transport-row">
+            <button class="icon-button js-restart" aria-label="重新播放">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 4v6h6" />
+                <path d="M5.5 15a7.5 7.5 0 1 0 1-8" />
+              </svg></button
+            ><button class="play-button js-play" aria-label="播放或暂停">
+              <svg class="play-icon" viewBox="0 0 20 20"><path d="M5 3.5v13l11-6.5z" /></svg
+              ><svg class="pause-icon" viewBox="0 0 20 20">
+                <path d="M4.5 3.5h4v13h-4zm7 0h4v13h-4z" />
+              </svg></button
+            ><span class="transport-time"
+              ><span class="js-current-time">00:00</span> /
+              <span class="js-duration">00:38</span></span
+            >
+            <div class="scrub-wrap">
+              <div class="scrub-bg"></div>
+              <span
+                class="timeline-marker"
+                style="left: 16%; --marker: var(--green)"
+                data-at="6"
+                data-seek="6"
+              ></span
+              ><span class="timeline-marker" style="left: 32%" data-at="12" data-seek="12"></span
+              ><span
+                class="timeline-marker"
+                style="left: 50%; --marker: var(--violet)"
+                data-at="19"
+                data-seek="19"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 68%; --marker: var(--amber)"
+                data-at="26"
+                data-seek="26"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 89%; --marker: var(--coral)"
+                data-at="34"
+                data-seek="34"
+              ></span>
+              <div class="scrub-head"></div>
+              <input class="js-scrubber" type="range" aria-label="回放时间轴" />
+            </div>
+            <button class="soft-button speed-button js-speed">1×</button
+            ><button class="icon-button js-fullscreen" aria-label="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="transport-caption">
+            <i class="pulse-dot"></i><b class="js-caption-title">读取入职请求</b
+            ><span class="js-caption-detail truncate"
+              >工作从邮件开始，目标是完成资料、欢迎邮件与启动会</span
+            >
+          </div>
+        </section>
+        <div class="toast"></div>
+        <div
+          hidden
+          data-caption-at="0"
+          data-title="读取入职请求"
+          data-detail="工作从邮件开始，目标是完成资料、欢迎邮件与启动会"
+        ></div>
+        <div
+          hidden
+          data-caption-at="6"
+          data-title="从主数据取客户信息"
+          data-detail="名称、套餐、负责人和开始日期从表格进入文档"
+        ></div>
+        <div
+          hidden
+          data-caption-at="12"
+          data-title="生成个性化资料"
+          data-detail="模板保持不变，只合并经过验证的客户字段"
+        ></div>
+        <div
+          hidden
+          data-caption-at="19"
+          data-title="补齐适用指南"
+          data-detail="根据 Scale 套餐选择 SSO、导入与成员邀请文档"
+        ></div>
+        <div
+          hidden
+          data-caption-at="26"
+          data-title="寻找共同空闲时间"
+          data-detail="查询三位参与者的日历，推荐最早的 45 分钟窗口"
+        ></div>
+        <div
+          hidden
+          data-caption-at="34"
+          data-title="停在外部动作之前"
+          data-detail="资料已准备好；发送邮件与创建日程仍等待用户确认"
+        ></div>
+      </div>
+    </main>
+    <script src="./session-replay-lab.js"></script>
+    <script>
+      const replay = document.querySelector('[data-replay]'),
+        apps = [...replay.querySelectorAll('.space-app')],
+        positions = [
+          [16, 26],
+          [46, 49],
+          [82, 27],
+          [16, 80],
+          [82, 80],
+          [50, 92],
+        ];
+      replay.addEventListener('replaytick', ({ detail }) => {
+        let i = 0;
+        apps.forEach((app, index) => {
+          if (detail.current >= +app.dataset.at) i = index;
+          app.classList.remove('active');
+        });
+        apps[i].classList.add('active');
+        const dot = replay.querySelector('.route-dot'),
+          pos = positions[detail.current >= 34 ? 5 : i];
+        dot.style.left = pos[0] + '%';
+        dot.style.top = pos[1] + '%';
+      });
+    </script>
+  </body>
+</html>

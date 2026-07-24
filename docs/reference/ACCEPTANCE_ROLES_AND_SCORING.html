@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Charter · 验收角色与评分标准 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="charter-验收角色与评分标准">Charter · 验收角色与评分标准</h1>
+<p>版本 v1.0 · 2026-07-22</p>
+<blockquote><p>适用对象：Charter 桌面 Agent IDE。<br>核心验收闭环：<strong>选择真实项目 → 建立 Session → 受控执行 → 观察与接管 → 验证与审查 → 接受或回滚</strong>。</p></blockquote>
+<p>本文沿用参考方案的五类验收角色，但所有评分维度、实跑任务、证据要求和红线均按 Charter 的产品模型重写。它补充而不替代 <code>PRODUCT_ENGINEERING_SPEC.md</code> 第 16 章的发布门槛；人格化评分通过，不能抵消安全、数据完整性或发布门禁失败。</p>
+<hr>
+<h2 id="一-用法">一、用法</h2>
+<p>每完成一个可运行的开发阶段，由 <strong>5 个独立 subagent</strong> 分别扮演下列角色，基于同一份候选版本进行验收。实现该阶段的 Agent 不得给自己打分，五名验收者在首轮结论提交前不得互相参考分数。</p>
+<p>每个角色必须：</p>
+<ol><li>实跑该角色的核心任务，不得只读代码或只看静态截图；</li><li>按自己的 5 个维度逐项评分，每项 20 分，满分 100 分；</li><li>每项至少引用一条可复核证据，并说明扣分原因；</li><li>明确列出“<strong>阻碍达到 90 分的具体项</strong>”，不得只写“继续优化体验”；</li><li>检查本角色红线及全局红线，命中任一项即判不通过；</li><li>区分本阶段缺陷与明确属于后续阶段的能力，不因未进入本阶段的功能扣分，也不得把已交付但不可用的功能标成“待后续”。</li></ol>
+<h3 id="通过标准">通过标准</h3>
+<ul><li>五个角色总分全部 <strong>≥ 90 分</strong>；</li><li>任一已评分维度不得 <strong>&lt; 14 分</strong>；</li><li>无角色红线、无全局红线；</li><li>本阶段约定的自动化门禁全部通过；</li><li>所有产品完成主张都能回指到运行证据、状态记录或测试结果。</li></ul>
+<p>任一条件不满足即为不通过。根据“阻碍 90 分”的清单修复后，使用同一验收范围重新评估；不得只重评已经修过的一项而忽略其回归影响。</p>
+<h3 id="统一评分锚点">统一评分锚点</h3>
+<table><thead><tr><th>分数</th><th>判定</th><th>证据要求</th></tr></thead><tbody><tr><td>20</td><td>发布级完成；正常、边界和恢复路径均无实质问题</td><td>有真实交互、可观察结果和自动化/故障证据</td></tr><tr><td>18–19</td><td>已可日常使用；仅有轻微且不影响决策或心流的问题</td><td>核心路径完整，至少覆盖一个失败或恢复路径</td></tr><tr><td>16–17</td><td>基本可用，但存在明显摩擦、信息缺口或证据不足</td><td>通常会成为“阻碍 90 分”的项目</td></tr><tr><td>14–15</td><td>勉强成立；需要绕路、猜测或频繁容错</td><td>不足以支撑终态通过</td></tr><tr><td>0–13</td><td>核心路径缺失、错误、不可验证或不可信</td><td>该维度直接不合格</td></tr></tbody></table>
+<p>附加约束：</p>
+<ul><li>只做代码审查而未运行真实 Electron 界面，该角色总分上限为 70；</li><li>只看截图而未完成主交互路径，相关维度上限为 12；</li><li>仅由 Mock Runtime 证明的模型能力，不得写成“真实 Provider 已通过”；</li><li>无法复现或未保存证据的主张，不得获得 18 分以上；</li><li>“没有报错”不等于通过，必须验证目标状态、持久化结果和副作用。</li></ul>
+<hr>
+<h2 id="二-统一验收环境与证据合同">二、统一验收环境与证据合同</h2>
+<h3 id="候选版本冻结">候选版本冻结</h3>
+<p>每轮验收先记录：</p>
+<ul><li>Git commit、未提交 diff 或构建编号；</li><li>本轮功能范围及明确不在范围内的能力；</li><li>操作系统、架构、Node/Electron 版本；</li><li>使用的 Agent 后端、模型、权限模式和项目 fixture；</li><li>是否为源码运行、目录包、安装包，以及签名状态；</li><li>已知限制和本轮允许的豁免；豁免必须由产品 Owner 明确批准，红线不可豁免。</li></ul>
+<h3 id="electron-ui-证据">Electron UI 证据</h3>
+<p>Charter 是 Electron 桌面应用，UI 验收必须使用仓库自己的 Playwright Electron 工作流：</p>
+<div class="code-block"><span class="code-block__lang">bash</span><button class="copy-code" type="button">复制</button><pre><code class="language-bash">npm run build
+npx playwright test \
+  --config tests/e2e/playwright.config.ts \
+  tests/e2e/&lt;target&gt;.spec.ts</code></pre></div>
+<ul><li>Renderer、Preload、Main、Worker 或共享包源码变化后，先运行 <code>npm run build</code>；</li><li>使用 <code>tests/e2e/helpers/launch.ts</code> 和隔离的 user-data 目录；</li><li>视觉变更至少检查目标桌面视口和一个较窄视口，建议为 1440 × 1000 与 980 × 760；</li><li>涉及主题时同时检查浅色、深色及系统跟随；</li><li>检查页面身份、非空渲染、Vite/React 覆盖层、console/page errors 和主交互路径；</li><li>涉及无障碍或 M11 硬化时，补查纯键盘路径、可见焦点、200% 缩放、可访问名称和 reduced-motion；</li><li>临时截图、trace、录像和临时 spec 放在 <code>/tmp</code>，除非产品 Owner 明确要求，不提交到仓库；</li><li>不使用普通浏览器页面代替 Electron 成品验收。</li></ul>
+<h3 id="最小证据包">最小证据包</h3>
+<p>每名验收者至少提交：</p>
+<ol><li><strong>运行证据</strong>：执行过的场景、输入、预期、实际结果；</li><li><strong>界面证据</strong>：关键状态截图，必要时附短录像或 trace；</li><li><strong>技术证据</strong>：相关测试命令与结果，或故障注入记录；</li><li><strong>状态证据</strong>：项目、Session、worktree、权限、验证、Review 的最终状态；</li><li><strong>副作用检查</strong>：磁盘内容、Git 状态、子进程、凭据暴露和持久化结果；</li><li><strong>问题定位</strong>：每个扣分项包含复现步骤、影响、严重度和建议修复方向。</li></ol>
+<p>基础工程命令按风险选用：</p>
+<div class="code-block"><span class="code-block__lang">bash</span><button class="copy-code" type="button">复制</button><pre><code class="language-bash">npm run check
+npm test
+npm run build
+npm run test:e2e
+npm run test:security
+npm run test:perf
+npm run test:soak</code></pre></div>
+<p>目标测试用于迭代，全量门禁用于阶段收口。发布候选还必须执行 <code>release:verify</code>、安装包测试以及对应平台的安装/升级/卸载检查。</p>
+<hr>
+<h2 id="三-五个验收角色">三、五个验收角色</h2>
+<h2 id="①-重度-vibe-coder-项目-owner-画像-自用准星">① 重度 vibe coder（项目 Owner 画像）—— 自用准星</h2>
+<blockquote><p><strong>你是谁</strong>：你同时维护多个真实项目，也同时使用 Charter Agent、Claude Code、Codex、终端和编辑器。你对上下文切换、重复说明和“Agent 说完成但没有证明”零容忍。Charter 的价值不是多一个聊天框，而是让你在不失去控制权的情况下，更快地把任务从意图推进到可信决策。</p></blockquote>
+<table><thead><tr><th>维度</th><th>看什么</th><th>20 分</th></tr></thead><tbody><tr><td>发车效率</td><td>从选项目、写意图、附上下文、选 Agent/模型/权限到 Session 真正开始，需要几步；Simple/Advanced 是否兼顾快与准</td><td></td></tr><tr><td>可见与接管</td><td>现在谁在做什么、在哪个项目/worktree、是否等我、下一步是什么是否一眼明确；暂停、批准、拒绝、追问、steer、接管是否立即生效</td><td></td></tr><tr><td>上下文连续</td><td>文件、代码选区、终端输出、图片、预览反馈能否准确进入同一 Session；切项目、切 Session、开 File/Diff/Preview/Terminal 后草稿与位置是否保留</td><td></td></tr><tr><td>验货与决策</td><td>改了什么、为什么改、跑了什么、结果是否过期、有哪些产物与风险是否在同一处说清；请求修改、接受、部分接受和回滚是否顺手</td><td></td></tr><tr><td>并行心流</td><td>多项目、多 Session、外部 CLI 或工人同时运行时，Needs You、优先级、通知和回看是否降低切屏与记忆负担</td><td></td></tr></tbody></table>
+<p><strong>最少实跑任务</strong>：在两个真实 Git fixture 间切换；创建一个只读 Session 和一个会改动至少 3 个文件的 Session；附加至少两种上下文；处理中途审批或追问；打开 Diff/Terminal/Preview；完成验证、请求一次修改，并分别演练接受与回滚。</p>
+<p><strong>90 分门槛</strong>：从“我想完成一项工程任务”到“我有足够证据决定保留或撤销”，主循环可留在 Charter 内完成；目标项目、执行者、权限、进度和结果始终明确，整体明显少于“IDE + 终端 + Agent 聊天窗口 + 手工记账”的切换成本。</p>
+<p><strong>阻碍 90 的典型项</strong>：创建 Session 字段重复；关键操作藏在二级界面；Needs You 不可靠；切换后草稿、滚动或工具状态丢失；证据散落；完成报告与真实 Diff/验证不一致；接受/回滚需要猜后果。</p>
+<p><strong>红线</strong>：</p>
+<ul><li>用户无法确认 Agent 正在哪个项目、分支或 worktree 中操作；</li><li>Session 切换后输入、审批或上下文发给了错误对象；</li><li>Agent 宣称完成，但界面无法直接到达真实 Diff、命令结果或验证证据；</li><li>核心循环频繁迫使用户回到外部工具查状态、找证据或完成决策；</li><li>并行任务把待处理事项静默淹没，或已处理事项继续重复提醒。</li></ul>
+<hr>
+<h2 id="②-macos-原生审美设计师-视觉审美守门人">② macOS 原生审美设计师 —— 视觉审美守门人</h2>
+<blockquote><p><strong>你是谁</strong>：你打磨过 Linear、Things、Warp 一类高密度生产力产品，对“网页套壳感”、装饰性动效和信息层级混乱非常敏感。你不仅看静态截图，还看窗口、滚动、聚焦、分栏、等待与错误状态在真实 Electron 应用中的质感。</p></blockquote>
+<table><thead><tr><th>维度</th><th>看什么</th><th>20 分</th></tr></thead><tbody><tr><td>原生质感</td><td>窗口标题栏、拖拽区、菜单、弹层、焦点、滚动、阴影、圆角和系统通知是否像一款成熟桌面应用</td><td></td></tr><tr><td>信息建筑</td><td>Session Rail、对话时间线、上下文工具画布与 Composer 的主次是否稳定；高密度证据是否可扫读而不嘈杂</td><td></td></tr><tr><td>排版与配色</td><td>字体层级、行长、数字/代码排版、间距、对齐、Agent 色、风险色、浅/深主题是否克制且语义一致</td><td></td></tr><tr><td>动效与状态</td><td>启动、切 Session、展开证据、分栏、拖拽、写入 glow、等待与完成反馈是否连贯；reduced-motion 下是否仍清楚</td><td></td></tr><tr><td>一致与适配</td><td>图标、按钮、空/载入/错误/禁用态、Preview/Terminal/Review/Settings 是否同属一套语言；桌面与窄视口是否都成立</td><td></td></tr></tbody></table>
+<p><strong>最少实跑任务</strong>：在浅色和深色主题下检查空项目、运行中、等待计划、等待权限、验证失败、Review Ready、错误恢复七类状态；分别在目标桌面和窄视口完成一次 Session 主流程，并观察打开/关闭上下文工具画布的布局变化。</p>
+<p><strong>90 分门槛</strong>：任何核心状态截图都具有清晰的产品身份和视觉秩序；真实交互中没有壳层碰撞、跳变或割裂，Terminal、Preview、Diff、Review 与主时间线看起来属于同一个桌面产品，而不是拼接的网页面板。</p>
+<p><strong>阻碍 90 的典型项</strong>：标题和正文抢层级；Rail/画布密度失衡；浅深主题语义漂移；弹层遮挡主操作；窄屏只是裁切；动效造成布局抖动；状态只靠颜色；终端或 PDF/Preview 像嵌入的异物。</p>
+<p><strong>红线</strong>：</p>
+<ul><li>真实 Electron 页面空白、出现框架错误覆盖层或核心区域明显错位；</li><li>关键按钮、审批、风险或 Review 结论被遮挡、截断或在窄视口不可达；</li><li>生硬阴影、廉价渐变、混乱圆角、字体或图标体系让产品呈现明显网页模板感；</li><li>动效暗示了错误状态、持续抢注意力，或 reduced-motion 下丢失必要反馈；</li><li>用户可见界面暴露原始状态枚举、内部工具字符串或以 emoji 代替产品图标。</li><li>产品标题、菜单、对话框、错误文案或 Agent 前言仍把用户可见产品称为“Pi”而不是 Charter。</li></ul>
+<hr>
+<h2 id="③-首次上手的新用户-可用性-可学习性">③ 首次上手的新用户 —— 可用性（可学习性）</h2>
+<blockquote><p><strong>你是谁</strong>：你第一次打开 Charter，没有读 README，但理解 Git、终端和编码 Agent。你愿意学习一个新概念，却不愿猜 Project、Session、Agent、worktree、Review 之间的关系，也不会默认相信一次模糊的“Done”。</p></blockquote>
+<table><thead><tr><th>维度</th><th>看什么</th><th>20 分</th></tr></thead><tbody><tr><td>心智模型</td><td>Project、Session、Agent、上下文工具和 Review 的关系是否从布局与文案中自然显现；Ask/Edit/Auto 的后果是否可预期</td><td></td></tr><tr><td>可发现性</td><td>打开项目、配置模型、创建 Session、附加上下文、查看待处理项、进入 Diff/Terminal/Preview/Review 的入口是否一眼可找；纯键盘路径与焦点顺序是否成立</td><td></td></tr><tr><td>即时反馈</td><td>发送、加载、执行、写文件、等待审批、失败、验证、完成、接受和回滚是否都有及时且可信的反馈</td><td></td></tr><tr><td>防错与恢复</td><td>无项目、无模型、无网络、无 CLI、权限拒绝、冲突、错误输入和误触时，是否说明影响并提供下一步；危险决定是否讲人话</td><td></td></tr><tr><td>首次成功</td><td>不读文档，能否在 10 分钟内打开仓库，完成一次 Ask 或小型 Edit，看懂证据，并做出接受/回滚决定</td><td></td></tr></tbody></table>
+<p><strong>最少实跑任务</strong>：使用全新 user-data 目录启动；不读取项目文档，完成首次打开项目、Mock Runtime 或真实 Provider 配置、创建 Session、响应一次计划/权限、查看一个文件证据和一次验证，最后完成接受或回滚。记录每次停顿、误点、回退和求助。</p>
+<p><strong>90 分门槛</strong>：新用户在 10 分钟内独立完成首次价值闭环；核心概念在需要时出现，文案明确区分“Agent 已回答”“改动待审”“验证通过”“未验证”“已接受”，全程无需猜系统是否生效。</p>
+<p><strong>阻碍 90 的典型项</strong>：首次空态不给下一步；Agent/模式术语没有后果说明；设置模型后不知如何返回；Session 状态靠内部枚举；错误只说失败不说影响；接受与 Git commit 混淆；worktree 隔离对用户不可见。</p>
+<p><strong>红线</strong>：</p>
+<ul><li>第一次核心任务必须查文档、问开发者或依赖隐藏快捷键才能完成；</li><li>权限卡、危险操作、接受、回滚或冲突处理的后果不清楚；</li><li>操作无反馈，用户无法判断是未触发、仍在运行还是已经失败；</li><li>界面把“Agent 自述完成”呈现为“已经验证”或“已经接受”；</li><li>错误路径形成死路，只能重启、删除数据或转到外部工具恢复。</li><li>核心流程存在键盘陷阱、焦点丢失，或关键控件没有可识别的名称与状态。</li></ul>
+<hr>
+<h2 id="④-终端重度用户-资深工程师-工程深度与终端保真">④ 终端重度用户 / 资深工程师 —— 工程深度与终端保真</h2>
+<blockquote><p><strong>你是谁</strong>：你在终端和 IDE 中工作了十年，熟悉 vim、tmux、Git、测试、语言服务以及 Claude Code/Codex。你能立刻看出一个 PTY 是真的还是玩具，也能发现 cwd、worktree、exit code、Diff 和验证状态之间的技术谎言。你接受产品简化，但不接受语义失真。</p></blockquote>
+<table><thead><tr><th>维度</th><th>看什么</th><th>20 分</th></tr></thead><tbody><tr><td>终端保真</td><td>真实 PTY、TUI、ANSI/真彩色、中文宽度、复制粘贴、组合键、滚动、resize、链接和长输出是否正确</td><td></td></tr><tr><td>IDE 基线</td><td>文件树、Quick Open、搜索、编辑/保存/冲突、Problems/LSP、Git status/Diff 和多终端是否足以处理真实仓库</td><td></td></tr><tr><td>Agent 与控制</td><td>Charter Agent、Claude Code、Codex 的身份和信任边界是否清楚；输入所有权、暂停/接管、外部 CLI attach 和编队控制是否可靠</td><td></td></tr><tr><td>技术真实性</td><td>cwd、项目、branch/worktree、文件版本、命令、exit code、耗时、Diff、diagnostic、验证 stale/superseded 状态是否与磁盘和 Git CLI 一致</td><td></td></tr><tr><td>性能与生命周期</td><td>大仓库、10k Timeline、大输出、多终端、多 Session 和长时间运行时是否流畅；切换/折叠不误重建会话，退出无孤儿进程</td><td></td></tr></tbody></table>
+<p><strong>最少实跑任务</strong>：运行 vim 或等价 TUI、中文与真彩色输出、50 行快速粘贴、至少 5,000 行输出、长进程 resize/中断；打开两个终端确认 cwd 隔离；用 Git CLI 对照 Charter 的状态与 Diff；让 managed Agent 或外部 CLI 完成一轮修改与验证；切换 Session 后确认 PTY 未被误杀或重建。</p>
+<p><strong>90 分门槛</strong>：可以在 Charter 中连续完成真实工程任务而不因终端、编辑器或 Git 语义退回原工具；任何 Agent 动作都能被工程师用 cwd、文件、命令、Diff 和验证结果独立核对。</p>
+<p><strong>阻碍 90 的典型项</strong>：TUI 小瑕疵；快捷键冲突；终端 resize 丢上下文；Git 状态延迟；验证结果不标 stale；外部 CLI 与 managed Agent 权限边界说不清；切换工具画布导致 PTY 重挂；大输出拖慢输入。</p>
+<p><strong>红线</strong>：</p>
+<ul><li>花屏、乱码、粘贴丢字符、Ctrl-C/Ctrl-D 失效、resize 崩溃或 TUI 不可用；</li><li>命令在错误 cwd、错误 worktree 或错误项目执行；</li><li>本地键盘输入与远程注入重复、乱序或在用户接管时仍偷偷发送；</li><li>exit code、测试、Git/Diff 或验证状态与实际结果不一致；</li><li>关闭 Session、Terminal 或应用后遗留不可控的 PTY、Agent、LSP 或命令进程；</li><li>并行 Session 之间串输出、串输入、串权限或串文件状态。</li></ul>
+<hr>
+<h2 id="⑤-破坏性可靠性质量官-健壮性与数据安全底线">⑤ 破坏性可靠性质量官 —— 健壮性与数据安全底线</h2>
+<blockquote><p><strong>你是谁</strong>：你假设模型、用户、仓库、网络和操作系统都会在最糟糕的时刻出错。你专门制造并发写入、磁盘失败、数据库迁移失败、进程崩溃、路径逃逸和恢复冲突。对你而言，Charter 最重要的承诺不是“能改代码”，而是“未经允许不乱改，出事后不撒谎，并且能恢复”。</p></blockquote>
+<table><thead><tr><th>维度</th><th>看什么</th><th>20 分</th></tr></thead><tbody><tr><td>代码与数据可逆</td><td>基线、快照、原子写、版本冲突、worktree 隔离、部分接受和回滚能否保护字节、存在性、编码、换行与权限位</td><td></td></tr><tr><td>权限与安全边界</td><td>R0–R4、IPC schema、真实路径/符号链接、命令策略、Preview/CSP、Renderer 隔离和外部 CLI 边界是否按合同执行</td><td></td></tr><tr><td>故障恢复</td><td>Worker、Renderer、Main、PTY、LSP、网络、Provider、磁盘、数据库和迁移失败时是否进入可理解、可恢复且不重复执行的状态</td><td></td></tr><tr><td>状态一致性</td><td>Timeline、证据账本、任务投影、磁盘、Git、验证、通知和重启恢复是否一致；多项目/多 Session 不互相污染</td><td></td></tr><tr><td>资源、隐私与发布</td><td>子进程、监听器、缓存和大文件是否受控；密钥/Prompt/代码不进入错误位置；支持包脱敏；安装、升级、卸载和发布声明真实</td><td></td></tr></tbody></table>
+<p><strong>最少实跑任务</strong>：至少执行 20 个边界或破坏性动作，必须包含用户与 Agent 并发编辑、符号链接逃逸、R3 拒绝、R4 尝试、写入中强杀进程、等待权限时重启、验证中断、网络/Provider 失败、数据库或磁盘写失败、回滚创建/修改/删除/重命名文件，以及应用退出后的进程检查。</p>
+<p><strong>90 分门槛</strong>：20 个破坏性动作无数据丢失、无越权副作用、无不可恢复崩溃、无静默失败；每次失败都明确说明发生位置、已产生的影响、当前可信状态和可执行的恢复动作。终态/发布阶段还必须满足产品规格中的完整回滚、安全、可靠性、性能与迁移矩阵。</p>
+<p><strong>阻碍 90 的典型项</strong>：错误可恢复但文案含糊；恢复后留下陈旧通知；缓存无上限；失败事件缺少审计字段；支持包仍含不必要路径；退出清理依赖超时碰运气；打包态与开发态行为不一致。</p>
+<p><strong>红线</strong>：</p>
+<ul><li>用户编辑或项目文件永久丢失、被静默覆盖，或回滚不能恢复承诺范围；</li><li>未批准的 R3 动作执行，任何 R4 动作被 managed Tool Gateway 执行，或路径逃逸成功；</li><li>API Key、Secret、私有代码、Prompt 或完整命令输出泄露到 Renderer、普通日志、支持包或错误上报；</li><li>写入失败、验证失败、迁移失败或恢复失败却被记录为成功；</li><li>崩溃/重启后重复执行具有副作用的工具，或状态恢复到错误项目/worktree；</li><li>Renderer、Main 或数据库进入不可恢复状态，只能删除用户数据才能继续；</li><li>未签名、未公证或未完成固定评估的构建被标记为 Stable。</li></ul>
+<hr>
+<h2 id="四-全局红线-任一角色发现即可硬否决">四、全局红线（任一角色发现即可硬否决）</h2>
+<ol><li><strong>错目标</strong>：任何写入、命令、审批、接受或回滚作用于错误项目、Session、branch 或 worktree；</li><li><strong>丢数据</strong>：用户内容、Agent 变更、任务历史、证据或恢复基线发生不可解释的永久丢失；</li><li><strong>越权限</strong>：高风险操作未获批准执行，禁止操作被执行，或拒绝后仍有副作用；</li><li><strong>假证据</strong>：UI、Final Report、Review、验证或通知声称的状态与磁盘、Git、命令结果不一致；</li><li><strong>泄密</strong>：凭据、私有代码或 Prompt 出现在不应出现的进程、界面、日志、包或外部传输中；</li><li><strong>不可恢复</strong>：核心流程导致窗口崩溃、白屏、数据库损坏、重复执行或只能清空用户数据恢复；</li><li><strong>边界伪装</strong>：把外部 Claude Code/Codex 的权限与联网行为描述成受 Charter Tool Gateway 完整约束；</li><li><strong>发布失实</strong>：已知不满足签名、公证、迁移、固定任务或平台门禁，却使用 Stable/已完成的发布声明。</li></ol>
+<hr>
+<h2 id="五-阶段适配">五、阶段适配</h2>
+<p>本标准描述的是终态质量。阶段验收只评价本阶段已交付能力及其必经相邻路径；尚未进入范围的能力标注“待后续阶段”，不扣分。以下红线在任何阶段都不豁免：数据丢失、错项目写入、越权执行、密钥泄露、假证据、不可恢复崩溃。</p>
+<table><thead><tr><th>阶段</th><th>主要交付</th><th>验收重点角色</th></tr></thead><tbody><tr><td>M1–M2 · 工程基线、壳层、设置与持久化</td><td>Electron 边界、启动、主题、IPC、数据库、设置、错误页</td><td>②视觉一致性 · ③首次启动 · ⑤隔离/迁移</td></tr><tr><td>M3–M5 · 传统 IDE 基线</td><td>项目、文件、编辑、搜索、LSP、Terminal、Git、ChangeService</td><td>④工程与终端 · ③可学习性 · ⑤数据一致性 · ①日常效率</td></tr><tr><td>M6–M7 · Agent Runtime、Tool Gateway 与权限</td><td>Ask、Timeline、工具合同、风险分级、审批、Worker 隔离</td><td>⑤权限安全 · ④技术真实性 · ①可见接管 · ③权限理解</td></tr><tr><td>M8–M9 · 写入、验证与 Review 闭环</td><td>计划、Edit/Auto、Diff、部分接受、回滚、Verification、Final Report</td><td>①验货决策 · ③闭环理解 · ⑤可逆性 · 五角色全查</td></tr><tr><td>M10–M11 · 恢复与硬化</td><td>崩溃恢复、诊断、安全、性能、隐私、无障碍</td><td>⑤破坏性可靠性 · ④性能生命周期 · ③失败恢复 · ②状态表达</td></tr><tr><td>Session-first UX · Replay · 外部 CLI · 编队 · 产物</td><td>Rail、Room、上下文工具画布、Replay、Claude/Codex、并行控制、Artifacts</td><td>五角色全员；①②③为体验主审，④⑤验证语义与隔离</td></tr><tr><td>M12 · Beta/Stable 发布</td><td>打包、安装、升级、卸载、SBOM、签名/公证、发布证据</td><td>五角色全员，⑤拥有发布红线否决权</td></tr><tr><td>终态</td><td>日常真实项目完整闭环</td><td>五角色全部 ≥ 90，且产品规格全部 Release Gates 通过</td></tr></tbody></table>
+<p>阶段验收不得用以下理由放宽标准：</p>
+<ul><li>“只是开发版”不能豁免安全和数据完整性；</li><li>“自动化测试过了”不能替代真实 Electron 主流程与视觉检查；</li><li>“人工看起来没问题”不能替代回滚、权限、迁移和状态一致性证据；</li><li>“模型偶发”不能掩盖产品层未正确记录、恢复或解释失败；</li><li>“以后会重做 UI”不能豁免当前已交付流程不可达、无反馈或误导。</li></ul>
+<hr>
+<h2 id="六-每轮验收输出模板">六、每轮验收输出模板</h2>
+<div class="code-block"><span class="code-block__lang">markdown</span><button class="copy-code" type="button">复制</button><pre><code class="language-markdown"># Charter 验收结果 · &lt;阶段/功能&gt; · R&lt;轮次&gt;
+
+- 候选版本：&lt;commit / diff / build&gt;
+- 环境：&lt;OS / arch / Electron / viewport&gt;
+- 验收范围：&lt;本轮交付&gt;
+- 不在范围：&lt;明确的后续能力&gt;
+- 证据目录：&lt;/tmp/...&gt;
+- 自动化结果：&lt;命令与 pass/fail&gt;
+
+| 角色 | 维度 1 | 维度 2 | 维度 3 | 维度 4 | 维度 5 | 总分 | 红线 | 结论 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| ① 重度 vibe coder |  |  |  |  |  |  | 无/有 | 通过/不通过 |
+| ② macOS 原生审美设计师 |  |  |  |  |  |  | 无/有 | 通过/不通过 |
+| ③ 首次上手的新用户 |  |  |  |  |  |  | 无/有 | 通过/不通过 |
+| ④ 终端重度用户 / 资深工程师 |  |  |  |  |  |  | 无/有 | 通过/不通过 |
+| ⑤ 破坏性可靠性质量官 |  |  |  |  |  |  | 无/有 | 通过/不通过 |
+
+## 各角色详细结论
+
+### &lt;角色&gt;
+
+- 实跑路径：
+- 逐项评分与证据：
+- 阻碍达到 90 分的具体项：
+- 红线检查：
+- 建议修复顺序：P0 / P1 / P2
+- 未覆盖风险：
+
+## 总结
+
+- 本轮结论：通过 / 不通过
+- 必修清单：
+- 回归范围：
+- 下一轮必须补齐的证据：</code></pre></div>
+<h3 id="缺陷写法要求">缺陷写法要求</h3>
+<p>每个扣分项使用可执行描述：</p>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">[严重度] 场景 → 操作 → 实际结果 → 预期结果 → 证据 → 为什么阻碍 90 分</code></pre></div>
+<p>示例：</p>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">[P1] Session A 正在等待权限 → 切到 Session B 再返回 → Rail 已无 Needs You 标记，
+但权限卡仍在等待 → Rail 与任务状态不一致 → trace + screenshot-04.png →
+用户会漏掉阻塞任务，①“可见与接管”和③“即时反馈”均不能超过 16 分。</code></pre></div>
+<p>不得使用“体验一般”“不够高级”“可能有问题”“建议再优化”这类无法复现、无法关闭的表述。</p>
+<hr>
+<h2 id="七-终态判定">七、终态判定</h2>
+<p>Charter 只有同时满足以下条件，才能宣告该候选版本达到本标准：</p>
+<ol><li>五名独立验收者全部达到 90 分，且无单项低于 14 分；</li><li>无角色红线和全局红线；</li><li><code>PRODUCT_ENGINEERING_SPEC.md</code> 的数据完整性、安全、性能、可靠性和发布门槛全部满足；</li><li>真实 Electron 桌面与窄视口主路径均有可复核证据；</li><li>Mock Runtime 的确定性闭环和约定范围内的真实 Provider/外部 CLI 验证均完成；</li><li>从 Session 建立到接受/回滚的状态、磁盘、Git、证据账本和用户可见结论完全一致；</li><li>所有未通过项均有明确处置，不以“已知问题”替代红线修复。</li></ol>
+<p><strong>最终原则：不是 Agent 说做完了，也不是界面看起来做完了；只有用户能看见证据、理解风险、掌握控制权，并能安全保留或撤销结果，Charter 才算完成。</strong></p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

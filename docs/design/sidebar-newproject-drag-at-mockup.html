@@ -1,0 +1,883 @@
+<!doctype html>
+<!-- Charter — sidebar "New project" entry + drag tree items into composer (@refs).
+     Design mockup (docs/design). NOT product code. Open in a browser.
+     The tree rows are actually draggable — try dropping them on the composer card. -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — New project + drag-to-@ mockup</title>
+    <style>
+      :root {
+        --radius: 12px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--backdrop);
+        padding: 64px 24px 48px;
+        min-height: 100vh;
+      }
+      body[data-theme='light'] {
+        --backdrop: #e8e6e2;
+        --side: #f7f6f3;
+        --main: #ffffff;
+        --card: #ffffff;
+        --border: #e7e4df;
+        --border-soft: #eeece7;
+        --text: #1c1b19;
+        --text2: #71706b;
+        --text3: #a3a19b;
+        --chip: #f1efeb;
+        --chip-hover: #e9e6e1;
+        --active: #e9e6e0;
+        --accent: #151515;
+        --accent-text: #ffffff;
+        --card-shadow: 0 1px 2px rgba(20, 18, 12, 0.05), 0 12px 32px rgba(20, 18, 12, 0.07);
+        --win-shadow: 0 24px 80px rgba(20, 18, 12, 0.28);
+        --ok: #2e9e5b;
+        --run: #3b82f6;
+        --warn: #b06a00;
+        --danger: #c02b2b;
+      }
+      body[data-theme='dark'] {
+        --backdrop: #101012;
+        --side: #1d1e20;
+        --main: #161719;
+        --card: #1e1f23;
+        --border: #2c2d31;
+        --border-soft: #26272b;
+        --text: #ececea;
+        --text2: #9d9c97;
+        --text3: #6c6b67;
+        --chip: #26272c;
+        --chip-hover: #2e3035;
+        --active: #2c2e33;
+        --accent: #ececea;
+        --accent-text: #161719;
+        --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+        --win-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+        --ok: #4ade80;
+        --run: #60a5fa;
+        --warn: #f0a840;
+        --danger: #f87171;
+      }
+
+      /* ---------- mock control bar ---------- */
+      .bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 50;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 16px;
+        background: var(--side);
+        border-bottom: 1px solid var(--border);
+        font-size: 12.5px;
+        color: var(--text2);
+      }
+      .bar b {
+        color: var(--text);
+      }
+      .bar button {
+        font: inherit;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      .note {
+        max-width: 1060px;
+        margin: 0 auto 14px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text2);
+        background: var(--side);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px 16px;
+      }
+      .note b {
+        color: var(--text);
+      }
+      .tag {
+        display: inline-block;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--accent-text);
+        background: var(--accent);
+        border-radius: 5px;
+        padding: 1px 6px;
+        vertical-align: 1px;
+      }
+
+      /* ---------- window ---------- */
+      .win {
+        max-width: 1060px;
+        margin: 0 auto;
+        height: 660px;
+        display: flex;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        box-shadow: var(--win-shadow);
+        background: var(--main);
+      }
+
+      /* ---------- sidebar ---------- */
+      .side {
+        width: 244px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border);
+        padding: 40px 10px 12px;
+        display: flex;
+        flex-direction: column;
+        font-size: 13px;
+        color: var(--text);
+        overflow-y: auto;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        padding: 0 8px 14px;
+        font-size: 13.5px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+        color: var(--text);
+        border: none;
+        background: none;
+        font: inherit;
+        width: 100%;
+        text-align: left;
+      }
+      .row:hover {
+        background: var(--chip-hover);
+      }
+      .row.active {
+        background: var(--active);
+        border-radius: 10px;
+        font-weight: 600;
+      }
+      .row .muted {
+        color: var(--text2);
+      }
+      .row svg {
+        flex: none;
+        color: var(--text2);
+      }
+      .kbd {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text3);
+      }
+      .sec {
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text3);
+        padding: 16px 8px 6px;
+      }
+      .caret {
+        margin-left: auto;
+        color: var(--text3);
+        transition: transform 0.15s;
+      }
+      .caret.open {
+        transform: rotate(90deg);
+      }
+
+      /* tree */
+      .tree {
+        padding: 2px 0 4px;
+      }
+      .trow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: var(--text2);
+        font-size: 12px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        cursor: grab;
+        font: inherit;
+        font-size: 12px;
+        text-align: left;
+      }
+      .trow:hover {
+        background: var(--chip-hover);
+        color: var(--text);
+      }
+      .trow:active {
+        cursor: grabbing;
+      }
+      .trow.dragging {
+        opacity: 0.45;
+      }
+      .trow svg {
+        flex: none;
+        color: var(--text3);
+      }
+      .tcaret {
+        width: 12px;
+        flex: none;
+        display: flex;
+        color: var(--text3);
+      }
+
+      .grow {
+        flex: 1;
+      }
+
+      /* ---------- main ---------- */
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 90px 40px 0;
+        background: var(--main);
+      }
+      h1 {
+        font-family: 'New York', 'Iowan Old Style', Georgia, serif;
+        font-weight: 600;
+        font-size: 30px;
+        margin: 0 0 6px;
+        color: var(--text);
+      }
+      .sub {
+        color: var(--text2);
+        font-size: 13.5px;
+        margin-bottom: 26px;
+      }
+
+      .composer {
+        width: 100%;
+        max-width: 620px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: var(--card-shadow);
+        padding: 12px 14px;
+        transition:
+          border-color 0.12s,
+          box-shadow 0.12s;
+      }
+      .card.drop {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px var(--accent);
+      }
+      .chiprow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-height: 26px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        border-radius: 999px;
+        padding: 3px 10px;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .chip svg {
+        color: var(--text2);
+      }
+      .refchip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11.5px;
+        font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+        border: 1px solid var(--border);
+        background: var(--chip);
+        border-radius: 999px;
+        padding: 2px 8px;
+        color: var(--text);
+        max-width: 260px;
+        animation: pop 0.18s ease-out;
+      }
+      @keyframes pop {
+        from {
+          transform: scale(0.85);
+          opacity: 0;
+        }
+      }
+      .refchip span {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .refchip button {
+        border: none;
+        background: transparent;
+        color: var(--text3);
+        cursor: pointer;
+        padding: 0;
+        display: inline-flex;
+        font: inherit;
+      }
+      .refchip button:hover {
+        color: var(--text);
+      }
+      .refchip svg {
+        color: var(--text3);
+        flex: none;
+      }
+      textarea {
+        display: block;
+        width: 100%;
+        border: none;
+        outline: none;
+        resize: none;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-size: 14.5px;
+        line-height: 1.5;
+        padding: 10px 2px 14px;
+        min-height: 64px;
+      }
+      textarea::placeholder {
+        color: var(--text3);
+      }
+      .btmrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text2);
+        font-size: 12.5px;
+      }
+      .iconbtn {
+        border: none;
+        background: none;
+        color: var(--text2);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 7px;
+        display: flex;
+      }
+      .iconbtn:hover {
+        background: var(--chip-hover);
+      }
+      .seg {
+        display: flex;
+        background: var(--chip);
+        border-radius: 999px;
+        padding: 2px;
+      }
+      .seg button {
+        border: none;
+        background: none;
+        font: inherit;
+        font-size: 12px;
+        color: var(--text2);
+        padding: 3px 11px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .seg button.on.danger {
+        background: var(--card);
+        color: var(--danger);
+        font-weight: 700;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+      .spacer {
+        flex: 1;
+      }
+      .send {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: none;
+        background: var(--chip);
+        color: var(--text3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--text3);
+        padding: 10px 6px 0;
+        text-align: center;
+      }
+      .hint.drophint {
+        color: var(--run);
+      }
+
+      /* new-project dialog (existing component, opened from the new entry) */
+      .scrim {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 90;
+      }
+      .scrim.on {
+        display: flex;
+      }
+      .dlg {
+        width: 460px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--win-shadow);
+        padding: 18px 20px;
+        color: var(--text);
+        font-size: 13px;
+      }
+      .dlg h3 {
+        margin: 0 0 4px;
+        font-size: 15px;
+      }
+      .dlg p {
+        margin: 0 0 12px;
+        color: var(--text2);
+        font-size: 12.5px;
+      }
+      .dlg .fake {
+        border: 1px dashed var(--border);
+        border-radius: 10px;
+        padding: 22px;
+        text-align: center;
+        color: var(--text3);
+      }
+    </style>
+  </head>
+  <body data-theme="light">
+    <div class="bar">
+      <b>Mockup</b>
+      <span>① 侧边栏 Projects 区新增 “New project…” 入口（复用已有 NewProjectDialog）</span>
+      <span>·</span>
+      <span>② 左侧文件树可拖拽 → 拖到 composer 自动 @ 文件/目录</span>
+      <span style="flex: 1"></span>
+      <button
+        onclick="
+          document.body.dataset.theme = document.body.dataset.theme === 'light' ? 'dark' : 'light'
+        "
+      >
+        ☀/☾ 主题
+      </button>
+    </div>
+
+    <div class="note">
+      <b>试一下：</b>按住左侧树里的文件或目录（如 <code>OPUS.md</code> 或
+      <code>.claude/</code>）拖到右侧输入卡片上 — 卡片出现高亮描边，松手后生成
+      <code>@路径</code> 引用 chip（目录带 <code>/</code> 后缀、文件夹图标）。点
+      <b>New project…</b> 可以看到它打开的就是现有的 New Project 对话框。 产品实现中同样适用于
+      Editor 界面的文件树 → Task Room 追问输入框（同一套拖拽数据格式）。
+    </div>
+
+    <div class="win">
+      <!-- ================= sidebar ================= -->
+      <aside class="side">
+        <div class="brand">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path
+              d="M4 21V4m0 0s1.5-1.5 5-1.5S15 4 15 4s2.5 1 5 .5V14c-2.5.5-5-.5-5-.5s-2.5-1.5-6-1.5-5 1.5-5 1.5"
+            />
+          </svg>
+          Charter
+        </div>
+
+        <button class="row">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+          </svg>
+          New task <span class="kbd">⌘N</span>
+        </button>
+        <button class="row">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+            <path
+              d="M5.4 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.4-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.8 1.1z"
+            />
+          </svg>
+          Inbox
+        </button>
+
+        <div class="sec">Projects</div>
+
+        <button class="row active">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          fable5
+          <span class="caret open">
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="m9 18 6-6-6-6" />
+            </svg>
+          </span>
+        </button>
+
+        <!-- file tree: rows are draggable -->
+        <div class="tree" id="tree">
+          <button
+            class="trow"
+            draggable="true"
+            data-path=".claude"
+            data-dir="1"
+            style="padding-left: 10px"
+          >
+            <span class="tcaret"
+              ><svg
+                width="11"
+                height="11"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="m9 18 6-6-6-6" /></svg
+            ></span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+            >
+              <path
+                d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+              />
+            </svg>
+            .claude
+          </button>
+          <button class="trow" draggable="true" data-path="OPUS.md" style="padding-left: 10px">
+            <span class="tcaret"></span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            OPUS.md
+          </button>
+          <button
+            class="trow"
+            draggable="true"
+            data-path="prompt-templates.md"
+            style="padding-left: 10px"
+          >
+            <span class="tcaret"></span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            prompt-templates.md
+          </button>
+          <button
+            class="trow"
+            draggable="true"
+            data-path="USAGE-GUIDE.md"
+            style="padding-left: 10px"
+          >
+            <span class="tcaret"></span>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            USAGE-GUIDE.md
+          </button>
+        </div>
+
+        <!-- ① the two footer entries of the Projects section -->
+        <button class="row" title="Open an existing folder as a project">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+          </svg>
+          <span class="muted">Open folder…</span>
+        </button>
+        <button class="row" id="newproj" title="Create an empty project or clone a repository">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          <span class="muted">New project…</span>
+          <span class="tag" style="margin-left: auto">NEW</span>
+        </button>
+
+        <div class="grow"></div>
+        <button class="row">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <path d="M9 3v18" />
+          </svg>
+          Editor <span class="kbd">⌘E</span>
+        </button>
+        <button class="row">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+          >
+            <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+          </svg>
+          Settings
+        </button>
+      </aside>
+
+      <!-- ================= main ================= -->
+      <main class="main">
+        <h1>What should we build?</h1>
+        <div class="sub">
+          Describe the outcome — plans, diffs and verification all wait for your OK.
+        </div>
+
+        <div class="composer">
+          <div class="card" id="card">
+            <div class="chiprow" id="chiprow">
+              <button class="chip">
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                >
+                  <path
+                    d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"
+                  />
+                </svg>
+                fable5
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <!-- ② dropped refs appear here as chips -->
+            </div>
+            <textarea placeholder="Describe a task, ask a question, or paste an error…"></textarea>
+            <div class="btmrow">
+              <button class="iconbtn" title="Attach project files (or drop them here)">
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                >
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+                </svg>
+              </button>
+              <div class="seg">
+                <button>Read</button><button>Approve</button><button>Auto</button>
+                <button class="on danger">Full</button>
+              </div>
+              <button class="chip" style="border: none; background: none; color: var(--text2)">
+                Advanced
+              </button>
+              <span class="spacer"></span>
+              <span>✦ medium</span>
+              <span>No model — add a key in Settings</span>
+              <button class="send">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="hint" id="hint">⏎ to start · ⇧⏎ new line</div>
+        </div>
+      </main>
+    </div>
+
+    <!-- existing NewProjectDialog, opened by the new sidebar entry -->
+    <div class="scrim" id="scrim" onclick="this.classList.remove('on')">
+      <div class="dlg" onclick="event.stopPropagation()">
+        <h3>New project</h3>
+        <p>← 就是现有的 New Project 对话框（空项目 / 克隆仓库），这里只示意打开来源。</p>
+        <div class="fake">Empty project · Clone repository …（现有对话框内容）</div>
+      </div>
+    </div>
+
+    <script>
+      // ② drag tree rows → drop on composer → auto-@ ref chip
+      const card = document.getElementById('card');
+      const chiprow = document.getElementById('chiprow');
+      const hint = document.getElementById('hint');
+      const refs = new Set();
+
+      document.querySelectorAll('.trow').forEach((row) => {
+        row.addEventListener('dragstart', (e) => {
+          const isDir = row.dataset.dir === '1';
+          const rel = row.dataset.path + (isDir ? '/' : '');
+          // product: e.dataTransfer.setData('application/x-charter-ref', rel)
+          e.dataTransfer.setData('text/x-mock-ref', rel);
+          e.dataTransfer.effectAllowed = 'copy';
+          row.classList.add('dragging');
+        });
+        row.addEventListener('dragend', () => row.classList.remove('dragging'));
+      });
+
+      card.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        card.classList.add('drop');
+        hint.textContent = '松手把它加入任务上下文（@ 引用）';
+        hint.classList.add('drophint');
+      });
+      card.addEventListener('dragleave', () => {
+        card.classList.remove('drop');
+        hint.textContent = '⏎ to start · ⇧⏎ new line';
+        hint.classList.remove('drophint');
+      });
+      card.addEventListener('drop', (e) => {
+        e.preventDefault();
+        card.classList.remove('drop');
+        hint.textContent = '⏎ to start · ⇧⏎ new line';
+        hint.classList.remove('drophint');
+        const rel = e.dataTransfer.getData('text/x-mock-ref');
+        if (!rel || refs.has(rel)) return;
+        refs.add(rel);
+        const isDir = rel.endsWith('/');
+        const chip = document.createElement('span');
+        chip.className = 'refchip';
+        chip.innerHTML =
+          (isDir
+            ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>'
+            : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>') +
+          '<span>' +
+          rel +
+          '</span>' +
+          '<button title="Remove">✕</button>';
+        chip.querySelector('button').onclick = () => {
+          refs.delete(rel);
+          chip.remove();
+        };
+        chiprow.appendChild(chip);
+      });
+
+      // ① sidebar New project… opens the existing dialog
+      document.getElementById('newproj').onclick = () =>
+        document.getElementById('scrim').classList.add('on');
+    </script>
+  </body>
+</html>

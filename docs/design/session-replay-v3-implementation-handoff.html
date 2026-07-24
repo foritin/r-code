@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agent Replay V3 — Production Implementation Handoff · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="agent-replay-v3-production-implementation-handoff">Agent Replay V3 — Production Implementation Handoff</h1>
+<blockquote><p>用途：供新的实现 Session 直接接手。本文是 Replay V3 的实现交接主文档。<br>日期：2026-07-15<br>仓库基线：<code>e584d3c</code>，工作区存在大量用户未提交改动，<strong>禁止 reset、checkout 或覆盖无关文件</strong>。<br>产品决定：A–E 不再作为五个并列入口；最终产品是 <strong>Recap / Explore / Verify 三层深度，共用一份事件与证据记录</strong>。</p></blockquote>
+<h2 id="实际完成状态-2026-07-15-phase-0-3-已实施">实际完成状态（2026-07-15，Phase 0–3 已实施）</h2>
+<ul><li><strong>已交付</strong>：ADR-0017 Amendment 8；共享投影引擎 <code>packages/ipc-contracts/src/replay.ts</code>（逐事实 evidence level、Story Time、语义章节、区间 coverage、id-backed relations）；<code>ReplayView</code> 重构为一个 controller + Recap/Explore/Verify（<code>views/replay/</code>）；显式 <code>ReplayRequest</code>（含 result/fact/change/path/actual-time anchor + liveFollow）；Main 侧 <code>ReplayService</code> + <code>task.replaySession</code>/<code>task.replayEvents</code>(分页≤500)/<code>task.replayEvidence</code>/<code>task.replayAsk</code>(fail-closed 引用)/<code>task.replayReceipt</code>(HTML+JSON+manifest SHA-256，明示未签名)；事件广播驱动刷新取代 2s 全量轮询；renderer registry（file/document/spreadsheet/terminal/approval/verification/message/web/generic，未覆盖域诚实降级）；入口：Home 卡片、Changes 行、已决审批卡 → Verify、Task Room/Agent Panel。</li><li><strong>测试证据</strong>：unit 398/398；<code>tests/e2e/replay-v3.spec.ts</code> 4/4（含 10k 账本搜索/scrub、1024/390 响应式、console health）；p2/external 回放回归已适配并通过；tsc/boundaries/build 干净。见 <a href="../reference/TEST_REPORT.html"><code>docs/TEST_REPORT.html</code></a>。</li><li><strong>已知边界</strong>：receipt 未签名（不声称防篡改）；外部 recorder 尚未记录逐事件 redaction reason（以 boundary note 呈现）；<code>task.replayAsk</code> 为确定性账本叙事（模型管线可在同一 fail-closed 合同后接入）；<code>npm run check</code> 的 prettier 步骤在本 handoff 之前提交的 <code>docs/design/*</code> 原型文件上失败（与本实现无关）；本机 3 个 external-cli E2E 因真实 Claude Code 安装抢占测试 shim 而失败（环境问题，先于本实现存在），⌘K 为已记录 flake。</li><li><strong>ADR 注意</strong>：本文第 9 节所述“Amendment 7”落地时已存在（terminal contexts），V3 决策实际记录为 <strong>Amendment 8</strong>。</li></ul>
+<h2 id="0-给新-session-的直接任务">0. 给新 Session 的直接任务</h2>
+<p>在现有 Replay V2/A–E 基础上完成 Replay V3 的生产实现，不要另起一套 mock 数据或第二份回放数据库。</p>
+<p>最终体验必须满足：</p>
+<ul><li>用户打开回放后，十秒内先看懂结果、重要变化和待处理风险。</li><li>用户可以播放一段不超过 90 秒的 Story Time 回顾，也可以切换到真实时间。</li><li>Recap、Explore、Verify 切换时，当前任务、playhead、选中事件和证据上下文保持不变。</li><li>Pi Home、Claude Terminal、Codex Terminal 和未来非编程 Agent 都进入同一事件/证据模型。</li><li>普通 Claude/Codex TUI 只能标记为 Observed；只有真实结构化事件才能标记为 Recorded。</li><li>永远不展示或重建隐藏 chain-of-thought；不能确认时必须明确说“记录无法确认”。</li><li>不再展示启发式 numeric confidence；只展示 Verified / Recorded / Observed / Inferred / Missing 和可测量的 coverage。</li></ul>
+<p>开始实现前，按顺序阅读：</p>
+<ol><li><a href="session-replay-unified-experience-v3.html">V3 产品决策</a></li><li><a href="session-replay-v3-prototype/README.html">完整交互 prototype</a></li><li><a href="session-replay-v3-prototype/design-qa.html">prototype 设计 QA</a></li><li><a href="../adr/ADR-0017-external-cli-agent-sessions.html">外部 CLI 会话 ADR</a>，特别是 Amendment 6</li><li><span class="source-ref">当前生产 Replay <code>../../apps/desktop-renderer/src/views/ReplayView.tsx</code></span></li><li><span class="source-ref">当前 Replay model <code>../../apps/desktop-renderer/src/views/replay-model.ts</code></span></li><li><span class="source-ref">Activity 投影合同 <code>../../packages/ipc-contracts/src/activity.ts</code></span></li><li><span class="source-ref">外部 structured parser <code>../../apps/desktop-main/src/services/external-replay-parser.ts</code></span></li><li><span class="source-ref">外部会话记录服务 <code>../../apps/desktop-main/src/services/external-session-service.ts</code></span></li></ol>
+<p>prototype 是交互与信息架构合同，不是可直接复制进生产的数据实现。不要把 <code>src/data.js</code> 的演示事件带进正式产品。</p>
+<h2 id="1-已确认的产品方向">1. 已确认的产品方向</h2>
+<h3 id="1-1-三层深度">1.1 三层深度</h3>
+<table><thead><tr><th>深度</th><th>用户问题</th><th>吸收的原方向</th><th>默认内容</th></tr></thead><tbody><tr><td>Recap</td><td>结果是什么，重要吗？</td><td>A</td><td>Session contract、结果卡、语义章节、自适应产物、Story Time</td></tr><tr><td>Explore</td><td>这一刻前后发生了什么？</td><td>D + B/C 的有效部分</td><td>虚拟化事件列表、问题式过滤、应用/资源、明确关系、周围上下文</td></tr><tr><td>Verify</td><td>什么证据支持这项主张？</td><td>E</td><td>主张、证据链、完整性、审批、可逆性、导出凭证</td></tr></tbody></table>
+<p>B 和 C 不消失，但不再成为导航模式：</p>
+<ul><li>B 的价值进入 <code>requested-by</code>、<code>produced</code>、<code>verified-by</code> 等<strong>明确关系</strong>。</li><li>C 的价值进入应用 lanes、artifact renderer 和应用过滤。</li><li>时间相邻不等于因果；没有 relation id 时只能显示 surrounding context。</li></ul>
+<h3 id="1-2-默认打开状态">1.2 默认打开状态</h3>
+<p>Replay 不从第一个低层事件开始，也不自动播放。默认停在稳定的结果帧：</p>
+<ul><li>原始目标：<code>TaskDto.goalMd</code></li><li>结果：Task state、<code>report.final</code>、结构化 result event 与系统证据共同派生</li><li>重要变化：高影响产物、审批、外部状态变化或文件 change set</li><li>需要注意：失败、拒绝、未验证、不可逆操作、缺失证据</li><li>验证状态：verified / partly verified / not verified</li><li>实际耗时与压缩回顾时长</li><li>按时间区间计算的证据 coverage band</li></ul>
+<p>“Agent 自己说成功”不能变成绿色 Verified。</p>
+<h3 id="1-3-evidence-language">1.3 Evidence language</h3>
+<table><thead><tr><th>Level</th><th>严格含义</th></tr></thead><tbody><tr><td>Verified</td><td>直接产物或结果，并有成功验证、签名审批或可校验回执支持</td></tr><tr><td>Recorded</td><td>Pi、provider、MCP、审批系统或应用发出的结构化事件</td></tr><tr><td>Observed</td><td>仅由 PTY、进程、文件系统或外部变化观察到，缺少语义确认</td></tr><tr><td>Inferred</td><td>基于事实生成的可替换叙事，必须带 citations，绝不是原始证据</td></tr><tr><td>Missing</td><td>已知时间段或主张没有足够记录</td></tr></tbody></table>
+<p><code>captureGrade</code> 描述采集来源，不等于 evidence level。Evidence level 必须逐事件/逐主张计算，不能用一个 session badge 升级全场。</p>
+<h2 id="2-当前仓库里的真实基础">2. 当前仓库里的真实基础</h2>
+<p>当前工作区已经包含 Replay V2 的大量未提交实现。新 Session 必须保留并演进这些改动。</p>
+<h3 id="已具备">已具备</h3>
+<ul><li><span class="source-ref"> <code>../../packages/persistence/src/migrations.ts</code></span> 是不可变顺序 ledger；Replay 和 Home activity 都从它投影。</li><li><span class="source-ref"> <code>../../packages/persistence/src/migrations.ts</code></span> 保存 change id、before/after hash、patch、author 和 tool call 关系。</li><li><span class="source-ref"> <code>../../packages/change-service/src/blob-store.ts</code></span> 以 SHA-256 内容寻址保存文件版本和大输出。</li><li><span class="source-ref"> <code>../../apps/desktop-main/src/services/task-service.ts</code></span> 将事件投影成 <code>ActivityItem</code>，补充工具 duration、diffstat 和 change ids。</li><li><span class="source-ref"> /  <code>../../apps/desktop-main/src/ipc/activity-handlers.ts</code></span> 可以按 change id 读取 patch 和 before/after text。</li><li>Pi managed run 的 message、plan、tool、permission、verification、report 等事件已经存在。</li><li>外部 Claude/Codex 会话已记录：入口快照、文件版本、脱敏 PTY 文本、结构化 observation 和结束状态。</li><li>外部 PTY 文本上限为 2 MiB；达到上限后文件与 structured evidence 继续记录。</li><li>Claude parser 已识别 <code>system/init</code>、assistant text、<code>tool_use</code>、<code>tool_result</code>、result，并丢弃 thinking/redacted thinking。</li><li>Codex parser 已识别 thread/turn/item、command、file change、web search、MCP、plan update、approval，并丢弃 reasoning item。</li><li>当前生产 UI 已有 A–E、1–16×、scrubber、文件 before/after、详情、审计和外部 capture boundary。</li></ul>
+<h3 id="当前实现必须修正">当前实现必须修正</h3>
+<ol><li><span class="source-ref"> <code>../../apps/desktop-renderer/src/views/ReplayView.tsx</code></span> 仍暴露 A/B/C/D/E 五个设计方向。</li><li><code>AuditView</code> 和 <code>confidenceForActivity()</code> 使用 58/86/96% 一类启发式置信度，违反 V3 决策。</li><li><code>replayGrade()</code> 只要看到一条 structured event 就把整个 session 提升为 structured，混合证据会被错误升级。</li><li><code>CausalView</code> 主要按顺序画节点，容易暗示不存在的因果。</li><li><code>SpatialView</code> 把应用事件文案写成 <code>verified event</code>，即使来源可能只是 observed。</li><li><code>chapterItems()</code> 按数量抽样，不按影响、风险、审批、失败和验证选章节。</li><li><code>buildReplayTimeline()</code> 只有真实墙钟时间，没有 Story Time、idle folding、grouping 或 coverage interval。</li><li><code>ReplayView</code> 每两秒重新读取完整 activity；<code>TaskService.activity()</code> 又固定 <code>LIMIT 5000</code>，不满足 10k event gate。</li><li>当前默认从 step 1 打开，不是 result-first。</li><li>当前 <code>openReplay()</code> 只是 boolean，无法表达 task、入口深度、change/event anchor 或 live-follow。</li><li>当前 stage 仍偏 file/code，并含装饰性 orbit；缺少 domain renderer registry。</li><li>当前没有 Ask Replay、证据 export、Story/Real 切换、区间 coverage 或 mobile Verify sheet。</li></ol>
+<p>这些不是重新推倒的理由；它们正好定义了 V2 → V3 的改造边界。</p>
+<h2 id="3-当前技术能力与不能承诺的部分">3. 当前技术能力与不能承诺的部分</h2>
+<table><thead><tr><th>来源</th><th>当前可以可靠实现</th><th>当前只能降级实现</th><th>当前不能实现/不能声称</th></tr></thead><tbody><tr><td>Pi managed Agent</td><td>用户目标、可观察消息、计划、工具调用、权限、文件、验证、final report</td><td>非文件 domain 需要 adapter 才能提供丰富 preview</td><td>隐藏思维链</td></tr><tr><td>Claude/Codex 普通 TUI</td><td>进程时间、脱敏终端输出、入口快照、每次观察到的文件版本</td><td>行为语义、决策原因、应用身份只能标 Observed/Unknown</td><td>仅凭终端像素证明内部工具、因果、审批或隐藏推理</td></tr><tr><td>Claude structured stream</td><td>parser 已能消费真实 JSON envelope 中的 tool/result/message</td><td>普通交互 TUI 不会自动变成 stream-json；当前是 opportunistic capture</td><td>将未真实收到的事件标成 Recorded</td></tr><tr><td>Codex structured JSONL/app-server event</td><td>command/file/web/MCP/plan/approval 等可结构化</td><td>普通 TUI 默认路径仍可能只有 observed PTY</td><td>reasoning item、私有内部状态</td></tr><tr><td>MCP / app connector</td><td>如果事件带 server/tool/app/resource，可以展示跨应用记录</td><td>需要 connector 提供稳定 resource id 和 relation id</td><td>从屏幕或时间相邻推断跨应用关系</td></tr><tr><td>非编程工作</td><td>UI 和 event model 可以支持文档、表格、研究、邮件、日历、审批</td><td>正式 recorder/adapter 尚未覆盖每个应用</td><td>prototype 的假数据不代表生产已经采集到这些证据</td></tr></tbody></table>
+<p>结论：V3 在当前技术基础上可实现，但必须诚实降级。真正的“跨应用回放”取决于 MCP/provider/application adapter 发出结构化事件，而不是 Replay UI 自己猜。</p>
+<h2 id="4-目标架构">4. 目标架构</h2>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">Pi events / Claude-Codex structured events / PTY+FS observations / app connectors
+                                  │
+                                  ▼
+        task_events + file_changes + blobs + verification_runs
+                   （唯一 durable source of truth）
+                                  │
+                                  ▼
+                    ReplayService（Main 进程）
+          facts · evidence · relations · chapters · coverage · summary
+                                  │
+                                  ▼
+              versioned IPC：session / events / evidence / ask
+                                  │
+                                  ▼
+           Replay controller（一个 task、一个 playhead、一个 selection）
+                       │          │          │
+                       ▼          ▼          ▼
+                    Recap      Explore     Verify</code></pre></div>
+<p>不要在 React component 内继续堆 provider 解析、证据等级、章节排序和关系推断。可复用且影响信任的逻辑应放在 Main 或纯 model 层，并有单元测试。</p>
+<h3 id="4-1-推荐新增的-ipc-dto">4.1 推荐新增的 IPC DTO</h3>
+<p>在 <span class="source-ref"> <code>../../packages/ipc-contracts/src</code></span> 中加入独立 Replay DTO；<code>ActivityItem</code> 继续服务 Home/mission control，不要被迫承担全部审计语义。</p>
+<div class="code-block"><span class="code-block__lang">ts</span><button class="copy-code" type="button">复制</button><pre><code class="language-ts">type ReplayDepth = &#39;recap&#39; | &#39;explore&#39; | &#39;verify&#39;;
+type ReplayEvidenceLevel = &#39;verified&#39; | &#39;recorded&#39; | &#39;observed&#39; | &#39;inferred&#39; | &#39;missing&#39;;
+type ReplayLane = &#39;intent&#39; | &#39;actions&#39; | &#39;artifacts&#39; | &#39;risk&#39;;
+
+interface ReplayFactDto {
+  id: string;                  // stable event/fact id
+  sequence: number;
+  startedAt: string;
+  endedAt?: string;
+  storyStartMs: number;
+  storyEndMs: number;
+  lane: ReplayLane;
+  actor: { kind: &#39;user&#39; | &#39;agent&#39; | &#39;application&#39; | &#39;system&#39;; label: string };
+  action: string;
+  target?: { type: string; label: string; app?: string; resource?: string };
+  result?: { status: string; summary?: string };
+  level: ReplayEvidenceLevel;
+  capture: &#39;full&#39; | &#39;structured&#39; | &#39;observed&#39;;
+  evidenceRefs: string[];
+  relations: Array&lt;{
+    type: &#39;requested-by&#39; | &#39;produced&#39; | &#39;verified-by&#39;;
+    factId: string;
+  }&gt;;
+  risk: &#39;none&#39; | &#39;low&#39; | &#39;medium&#39; | &#39;high&#39;;
+  reversibility: &#39;reversible&#39; | &#39;compensatable&#39; | &#39;irreversible&#39; | &#39;unknown&#39;;
+}
+
+interface ReplayEvidenceDto {
+  id: string;
+  type: &#39;event&#39; | &#39;file-version&#39; | &#39;tool-result&#39; | &#39;verification&#39; | &#39;permission&#39; | &#39;terminal&#39; | &#39;application&#39;;
+  source: string;
+  capturedAt: string;
+  integrityHash?: string;
+  beforeRef?: string;
+  afterRef?: string;
+  previewAdapter: string;
+  redactions: Array&lt;{ reason: string }&gt;;
+}
+
+interface ReplaySessionDto {
+  taskId: string;
+  goal: string;
+  outcome: &#39;completed&#39; | &#39;partial&#39; | &#39;attention&#39; | &#39;stopped&#39; | &#39;running&#39;;
+  verification: &#39;verified&#39; | &#39;partial&#39; | &#39;unverified&#39;;
+  actualDurationMs: number;
+  storyDurationMs: number;
+  eventCount: number;
+  summary: {
+    result: string;
+    changed: string[];
+    attention: string[];
+    citations: string[];
+  };
+  chapters: Array&lt;{ id: string; label: string; factId: string; storyStartMs: number }&gt;;
+  coverage: Array&lt;{
+    actualStartMs: number;
+    actualEndMs: number;
+    storyStartMs: number;
+    storyEndMs: number;
+    level: ReplayEvidenceLevel;
+  }&gt;;
+}</code></pre></div>
+<p>字段命名可以调整，但必须保留：稳定 id、实际时间、Story Time、逐事实 evidence level、evidence refs、明确 relations、risk、reversibility。</p>
+<h3 id="4-2-推荐-ipc">4.2 推荐 IPC</h3>
+<ul><li><code>task.replaySession { taskId }</code>：返回 session contract、summary、chapters、coverage、event count 和最新 sequence。</li><li><code>task.replayEvents { taskId, afterSequence?, cursor?, limit, filters? }</code>：分页返回 facts；默认 200，上限 500。</li><li><code>task.replayEvidence { taskId, evidenceId }</code>：按需读取 preview 和 integrity metadata；大文本不要塞进 session payload。</li><li><code>task.replayAsk { taskId, factId, question }</code>：Pass 3 才开放；返回 <code>{ text, citations, boundary }</code>。</li></ul>
+<p>Live mode 复用现有 <code>task.event</code> broadcast 或按 sequence 增量读取，不再每两秒拉全量 5000 条。</p>
+<h3 id="4-3-明确关系的来源">4.3 明确关系的来源</h3>
+<p>只允许以下关系进入 B 的遗产能力：</p>
+<ul><li>permission/request event 与相同 <code>callId</code> 的 tool call：<code>requested-by</code></li><li>tool call 与 <code>file_changes.tool_call_id</code>：<code>produced</code></li><li>verification run 与被验证的 code revision/change/fact：<code>verified-by</code></li><li>provider/MCP event 中真实给出的 parent/call/resource id</li></ul>
+<p>禁止用数组相邻、时间接近或文案相似生成 causal edge。</p>
+<h2 id="5-数据派生规则">5. 数据派生规则</h2>
+<h3 id="5-1-result-card">5.1 Result card</h3>
+<p>Pass 1 先使用 deterministic templates，避免无引用模型总结：</p>
+<table><thead><tr><th>字段</th><th>正式来源</th></tr></thead><tbody><tr><td>Original goal</td><td><code>TaskDto.goalMd</code>，external task 缺失时明确显示“未记录原始目标”</td></tr><tr><td>Outcome</td><td>Task state + final report + failed/interrupted events；REVIEW_READY 表示“Agent finished, awaiting review”，不是已批准</td></tr><tr><td>Changed</td><td>net change set + produced application artifacts；按风险/影响排序，最多 3 条</td></tr><tr><td>Attention</td><td>error/denied/warn、失败验证、Observed/Missing 关键结论、不可逆动作</td></tr><tr><td>Verification</td><td><code>verification_runs</code> 的成功、失败、stale、superseded 状态</td></tr><tr><td>Actual duration</td><td>第一条到最后一条 event 的墙钟时间，live 时到 now</td></tr><tr><td>Story duration</td><td>Story Time projection 的最终长度</td></tr></tbody></table>
+<p>后续模型 narrative 必须保存 citations 和生成版本；叙事不能覆盖或伪装成 evidence。</p>
+<h3 id="5-2-evidence-level">5.2 Evidence level</h3>
+<p>推荐优先级：</p>
+<ol><li>与成功且未 stale 的 verification/签名审批直接关联 → Verified</li><li><code>captureGrade=full|structured</code> 且存在真实 evidence ref → Recorded</li><li><code>captureGrade=observed</code> → Observed</li><li>Replay 生成的 result/chapter/answer narrative → Inferred，且 citations 非空</li><li>明知存在结果或区间但没有 evidence ref → Missing</li></ol>
+<p>文件 change 本身不是 Verified；Pi 或 structured write 通常是 Recorded，外部 watcher write 是 Observed。只有验证结果或签名回执可以进一步支持 Verified claim。</p>
+<h3 id="5-3-story-time">5.3 Story Time</h3>
+<p>现有 real-time timeline 保留为投影之一，新增 Story Time mapping：</p>
+<ol><li>将同一 kind/app/resource、短时间内重复且低影响的 read/search/terminal refresh 分组。</li><li>将长 idle gap 折叠为 0.5–1.0 秒的 gap marker。</li><li>以下事件不可跳过：error、denied、approval、high risk、irreversible、material change、verification、final result。</li><li>普通事件分配短 frame；高影响事件分配较长 frame。</li><li>目标总长 20–90 秒；短任务不得被强行拉长到 60 秒。</li><li>每个 Story segment 保留 actual start/end，切换 Real Time 时同一 selected fact 不变。</li></ol>
+<p>不要只把真实总时长线性缩放成 60 秒；那会让重复 refresh 与审批拥有相同注意力。</p>
+<h3 id="5-4-semantic-chapters">5.4 Semantic chapters</h3>
+<p>替换 <code>chapterItems()</code> 的等距抽样。每类最多选最重要的事实：</p>
+<ul><li>Request</li><li>Approach</li><li>Discovery</li><li>Decision / approval</li><li>Material change</li><li>Problem / recovery</li><li>Verification</li><li>Result</li></ul>
+<p>排序分数只能用于选择章节，不显示给用户。建议加权：failure、approval、high risk、irreversible、produced artifact、verification、result 优先；重复和纯状态噪声降权。总数最多 8。</p>
+<h3 id="5-5-coverage-band">5.5 Coverage band</h3>
+<p>Coverage 是真实采集覆盖，不是置信度：</p>
+<ul><li>按 actual interval 计算来源等级，再投影到 Story interval。</li><li>一个 strong event 不能把前后 observed gap 染成 Recorded。</li><li>已知 session 活跃但没有任何 event 的长区间标 Missing 或 folded idle，不能静默延伸上一事件等级。</li><li>可显示“82% structured/full coverage”，但文案必须写 coverage，不得写 confidence。</li></ul>
+<h2 id="6-production-ui-改造">6. Production UI 改造</h2>
+<h3 id="6-1-组件边界">6.1 组件边界</h3>
+<p>将 800+ 行的 <code>ReplayView.tsx</code> 拆成可测试组件；推荐结构：</p>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">apps/desktop-renderer/src/views/replay/
+  ReplayShell.tsx
+  ReplayHeader.tsx
+  SessionContract.tsx
+  RecapDepth.tsx
+  ExploreDepth.tsx
+  VerifyDepth.tsx
+  SemanticTimeline.tsx
+  EvidenceDrawer.tsx
+  ArtifactStage.tsx
+  replay-controller.ts
+  replay-model.ts
+  renderers/
+    FileRenderer.tsx
+    DocumentRenderer.tsx
+    SpreadsheetRenderer.tsx
+    WebSourceRenderer.tsx
+    MessageRenderer.tsx
+    CalendarTaskRenderer.tsx
+    ApprovalRenderer.tsx
+    TerminalRenderer.tsx
+    GenericActionRenderer.tsx</code></pre></div>
+<p>可以分批移动，但最终 <code>ReplayView.tsx</code> 只负责装配和 overlay 生命周期。</p>
+<h3 id="6-2-一个-controller">6.2 一个 controller</h3>
+<p>三层深度必须共享：</p>
+<ul><li><code>taskId</code></li><li><code>depth</code></li><li><code>selectedFactId</code></li><li><code>actual/story time mode</code></li><li><code>playhead</code></li><li><code>playing</code></li><li><code>speed</code></li><li><code>liveFollow</code> / detached</li><li>filters/search</li><li>selected evidence</li></ul>
+<p>Depth change 不能 reset playhead。Real/Story change 不能改变 selected fact。</p>
+<h3 id="6-3-replay-entry-state">6.3 Replay entry state</h3>
+<p>把 <code>taskStore.replayOpen: boolean</code> 改为显式 request：</p>
+<div class="code-block"><span class="code-block__lang">ts</span><button class="copy-code" type="button">复制</button><pre><code class="language-ts">interface ReplayRequest {
+  taskId: string;
+  depth?: &#39;recap&#39; | &#39;explore&#39; | &#39;verify&#39;;
+  anchor?:
+    | { type: &#39;result&#39; }
+    | { type: &#39;fact&#39;; id: string }
+    | { type: &#39;change&#39;; id: string }
+    | { type: &#39;actual-time&#39;; ms: number };
+  liveFollow?: boolean;
+}</code></pre></div>
+<p>入口映射：</p>
+<ul><li>Home completed card → Recap/result</li><li>Home running card → Recap/live-follow</li><li>Task Room Replay → Recap/result</li><li>Changes panel play → Recap/该 change 的 first fact</li><li>External session ended toast → Recap/result</li><li>Approval/high-risk notification → Verify/该 fact</li><li>Evidence share link → Verify/该 claim</li></ul>
+<p>Replay overlay 必须绑定 request.taskId，不能依赖用户之后是否切换了 <code>activeTaskId</code>。</p>
+<h3 id="6-4-artifact-renderer-registry">6.4 Artifact renderer registry</h3>
+<p>renderer 的选择依据是 evidence/target type，不是 agent 名称：</p>
+<ul><li>file/code → before/after、patch、verification</li><li>document → version passages</li><li>spreadsheet → changed cells/formulas/chart impact</li><li>web/research → source、captured excerpt、citation、resulting claim</li><li>message/email → draft/final、recipient、delivery state，正文按 policy redacted</li><li>calendar/task → before/new state、participants、due time</li><li>approval/purchase → request、policy/checkpoint、approver、disposition</li><li>MCP/application → normalized request/result、named app/resource</li><li>unknown → generic observable action card</li></ul>
+<p>Pass 2 可以先让未实现 renderer 落到 GenericActionRenderer，但不能伪造 preview。</p>
+<h3 id="6-5-视觉实现约束">6.5 视觉实现约束</h3>
+<ul><li>以 prototype 的层级、密度、状态语言为准，但使用产品现有 theme/skin tokens，不复制 Google Font <code>@import</code>。</li><li>使用现有 <code>Ic</code> icon family；不要 emoji、文本箭头或手写 SVG/CSS illustration。</li><li>删除装饰性 orbit、没有 relation id 的连线和无证据的空间节点。</li><li>1440px：chapter rail + stage + evidence drawer。</li><li>1024px：chapter 横向 strip，evidence overlay/sheet。</li><li>mobile：Recap 垂直 feed，Verify receipt 与 evidence drawer 必须可达。</li><li><code>prefers-reduced-motion</code>、keyboard、focus-visible、screen-reader live announcement 是验收项。</li></ul>
+<h2 id="7-ask-this-replay-实现要求">7. “Ask this replay”实现要求</h2>
+<p>不要在前端根据 event 文案拼一个看似聪明的答案。Pass 3 的正确流程：</p>
+<ol><li>renderer 只提交 <code>taskId + factId + question</code>。</li><li>Main 读取允许的 facts/evidence，构造有界 context。</li><li>将 evidence text 当作不可信输入，防止 prompt injection。</li><li>模型输出结构必须包含 answer、citation ids、boundary。</li><li>Main 校验每个 citation id 真实存在且属于该 task；无合法 citation 则拒绝答案。</li><li>Ledger 无法回答“为什么”时，返回确定性 boundary：“记录只能确认 X，无法确认内部原因。”</li><li>answer 是 Inferred narrative；不得写回原始 evidence，也不得升级 evidence level。</li></ol>
+<p>在这条链路完成前，UI 可以显示受限 deterministic explanation，但不能放一个假 AI answer。</p>
+<h2 id="8-evidence-receipt-的诚实边界">8. Evidence receipt 的诚实边界</h2>
+<p>当前 blob 有 SHA-256，但 <code>task_events</code> 不是签名或 hash-chained ledger。因此第一版只能叫“Evidence export / evidence receipt”，不能声称第三方不可篡改或 cryptographically sealed。</p>
+<p>可实现的 receipt：</p>
+<ul><li>task/session metadata</li><li>event id + sequence + payload hash</li><li>evidence id + blob hash</li><li>redaction metadata</li><li>verification/approval disposition</li><li>app version、export time</li><li>manifest SHA-256</li><li>HTML + JSON 文件</li></ul>
+<p>如果以后要声称 signed/immutable，需要额外的签名密钥、hash chain 或远端 append-only/notary 设计；不属于纯 UI 工作。</p>
+<h2 id="9-分阶段实施清单">9. 分阶段实施清单</h2>
+<h3 id="phase-0-保护现有基础">Phase 0 — 保护现有基础</h3>
+<ul><li>先运行 <code>git status --short</code>，记录现有 dirty files；不要清理用户改动。</li><li>运行当前 Replay focused tests，确认 V2 基线是否仍绿。</li><li>为 V3 新 model/DTO 先写 failing tests，再改 UI。</li><li>如需更新 ADR，新增 Amendment 7 说明 A–E 被三深度取代，不要删除 Amendment 6 的历史。</li></ul>
+<h3 id="phase-1-完成-v3-信息架构">Phase 1 — 完成 V3 信息架构</h3>
+<ul><li><code>ReplayMode A–E</code> → <code>ReplayDepth recap/explore/verify</code></li><li>新 Replay request/store，支持 task/depth/anchor/liveFollow</li><li>Session contract + result-first default</li><li>一个共享 controller，切 depth 不丢位置</li><li>去掉 numeric confidence 和 session-global upgrade</li><li>新 evidence level mapping 与 coverage band</li><li>Story/Real time 和 semantic timeline</li><li>A stage 迁入 Recap；D list 迁入 Explore；E evidence table 迁入 Verify</li><li>B 只保留 explicit relations；C 只保留 app/resource lanes/filters</li><li>保持现有 diff、change evidence、keyboard 和 external boundary 能力</li></ul>
+<p>Phase 1 完成后，核心产品才算从“五选一”变成“一段故事三层深度”。</p>
+<h3 id="phase-2-可扩展数据与非编程任务">Phase 2 — 可扩展数据与非编程任务</h3>
+<ul><li>新 Main-side ReplayService 和 versioned IPC</li><li>事件分页/增量；移除每 2 秒全量 polling</li><li>支持 10k events 的 virtualization、search、filters</li><li>semantic chapter ranking 与 Story Time grouping</li><li>artifact renderer registry</li><li>最少交付 file/code、document/generic、terminal、web/source、spreadsheet、approval renderer</li><li>用真实 normalized fixtures 覆盖研究、表格、消息/日历、审批任务；不要直接复用 prototype 假数据</li></ul>
+<h3 id="phase-3-信任-协作与-live">Phase 3 — 信任、协作与 Live</h3>
+<ul><li>evidence-bounded Ask Replay</li><li>running session Watch live + detach/follow</li><li>Evidence receipt HTML+JSON export</li><li>redaction reasons 与 missing evidence 展示</li><li>explicit relations 从 Pi、MCP、Claude/Codex structured stream 持久化</li><li>Home、Changes、external toast、approval 的全部入口</li></ul>
+<p>若某个 adapter 没有真实数据，允许 GenericActionRenderer + Missing/Observed 降级，不允许伪造完成。</p>
+<h2 id="10-测试计划">10. 测试计划</h2>
+<h3 id="unit-contract">Unit / contract</h3>
+<p>扩展或新增：</p>
+<ul><li><code>replay-model.test.ts</code></li></ul>
+<ul><li>real/story mapping 保持同一 fact</li><li>idle folding、repeat grouping、mandatory event 不丢</li><li>mixed coverage 不发生 session upgrade</li><li>evidence level mapping</li><li>semantic chapters &lt;= 8 且失败/审批/验证优先</li><li>无 relation id 不产生 causal edge</li><li>10k facts 的 projection 性能</li></ul>
+<ul><li><code>activity.test.ts</code></li></ul>
+<ul><li>Pi/full、external observed、structured event 的 provenance</li><li>verification 与 change evidence refs</li></ul>
+<ul><li><code>external-replay-parser.test.ts</code></li></ul>
+<ul><li>partial JSON 不泄露</li><li>thinking/reasoning 永不进入 observation 或 terminal documentary text</li><li>secret redaction</li><li>app/resource/relation id 仅来自真实字段</li></ul>
+<ul><li>IPC schema tests</li></ul>
+<ul><li>pagination cursor、limits、invalid task/evidence isolation</li></ul>
+<ul><li>ReplayService tests</li></ul>
+<ul><li>result card deterministic citations</li><li>event/evidence belongs-to-task boundary</li><li>receipt manifest hash reproducible</li><li>Ask citations fail closed</li></ul>
+<h3 id="electron-e2e">Electron E2E</h3>
+<p>建议新增 <code>tests/e2e/replay-v3.spec.ts</code>，并保留现有 replay/external regression：</p>
+<ol><li>Managed Pi task 打开时先见结果卡，不 autoplay。</li><li>UI 不再出现 A/B/C/D/E peer navigation 或 numeric confidence。</li><li>Play、pause、scrub、1–16×、Story/Real 可用。</li><li>Recap → Explore → Verify 保持同一 fact 和 playhead。</li><li>result claim 三次交互内到达 evidence。</li><li>change anchor 从 Changes 打开到正确 fact。</li><li>普通 external TUI 仍显示 Observed 和能力边界。</li><li>structured Claude/Codex event 才显示 Recorded app/tool evidence。</li><li>失败、审批、不可逆动作、verification 在 90 秒 recap 中不被跳过。</li><li>10k fixture 可以搜索和 scrub，renderer 不出现长任务阻塞。</li><li>1440、1024、390 三个宽度无 persistent control overflow；mobile Verify evidence 可达。</li><li>keyboard、focus、reduced motion、console/pageerror 全绿。</li></ol>
+<h3 id="建议命令">建议命令</h3>
+<div class="code-block"><span class="code-block__lang">bash</span><button class="copy-code" type="button">复制</button><pre><code class="language-bash"># 先跑 focused baseline
+npx vitest run \
+  apps/desktop-renderer/src/views/replay-model.test.ts \
+  apps/desktop-main/src/services/external-replay-parser.test.ts \
+  packages/ipc-contracts/src/activity.test.ts
+
+# 新 V3 focused E2E
+npx playwright test --config tests/e2e/playwright.config.ts \
+  tests/e2e/replay-v3.spec.ts \
+  tests/e2e/p2-parallel-replay.spec.ts \
+  tests/e2e/external-cli.spec.ts
+
+npm run check
+npm test
+node scripts/build.mjs</code></pre></div>
+<p>最终交付前再跑完整 E2E。不要只靠 prototype 浏览器测试证明 production Electron 功能完成。</p>
+<h2 id="11-definition-of-done">11. Definition of Done</h2>
+<ul><li><input class="task-checkbox" type="checkbox" disabled>A–E 不再作为 peer navigation 暴露；Recap / Explore / Verify 正式落地。</li><li><input class="task-checkbox" type="checkbox" disabled>默认 frame 是 result-first，且不自动播放。</li><li><input class="task-checkbox" type="checkbox" disabled>三层深度共享 task、playhead、selected fact、selected evidence。</li><li><input class="task-checkbox" type="checkbox" disabled>Story Time 不是线性缩短；mandatory events 永不省略。</li><li><input class="task-checkbox" type="checkbox" disabled>Real Time 可以还原实际 wall-clock gap。</li><li><input class="task-checkbox" type="checkbox" disabled>每个 fact 有独立 evidence level，timeline 有 interval coverage。</li><li><input class="task-checkbox" type="checkbox" disabled>全产品没有启发式 numeric confidence。</li><li><input class="task-checkbox" type="checkbox" disabled>无 relation id 不显示因果关系。</li><li><input class="task-checkbox" type="checkbox" disabled>Plain TUI 永不被升级为 structured/recorded。</li><li><input class="task-checkbox" type="checkbox" disabled>Pi、plain Claude/Codex、structured Claude/Codex 均有测试。</li><li><input class="task-checkbox" type="checkbox" disabled>文件、generic document/action、terminal、web/source、spreadsheet、approval renderer 可用或诚实降级。</li><li><input class="task-checkbox" type="checkbox" disabled>10k events 可搜索、虚拟化、scrub，不阻塞 renderer。</li><li><input class="task-checkbox" type="checkbox" disabled>Ask Replay 只返回带合法 citations 的答案，否则明确无法确认。</li><li><input class="task-checkbox" type="checkbox" disabled>Receipt 不声称超出实际 integrity 能力。</li><li><input class="task-checkbox" type="checkbox" disabled>Home、Task Room、Changes、external toast、approval 入口传递正确 anchor/depth。</li><li><input class="task-checkbox" type="checkbox" disabled>1440/1024/mobile、keyboard、a11y、reduced-motion、console health 通过。</li><li><input class="task-checkbox" type="checkbox" disabled><code>npm run check</code>、unit、focused E2E、full E2E、production build 通过。</li><li><input class="task-checkbox" type="checkbox" disabled>更新 ADR、IMPLEMENTATION<em>STATUS、TEST</em>REPORT 和本 handoff 的实际完成状态。</li></ul>
+<h2 id="12-明确非目标与禁止事项">12. 明确非目标与禁止事项</h2>
+<ul><li>不展示、存储或重建 hidden chain-of-thought。</li><li>不把终端像素、时间相邻或文案相似当成因果。</li><li>不把 coverage percentage 命名为 confidence。</li><li>不建立第二份 transcript/replay 数据库取代 <code>task_events</code>。</li><li>不让 Replay 播放修改真实工作区；Replay 默认只读，rollback 必须走已有授权/Review 路径。</li><li>不把 external unmanaged CLI 描述成 Tool Gateway 管理的 Agent。</li><li>不复制 prototype 的静态场景作为生产数据。</li><li>不为了 Replay 清理或 reset 当前 dirty worktree。</li><li>不在没有签名基础设施时声称 receipt “不可篡改”或“已签名”。</li></ul>
+<h2 id="13-新-session-的第一段执行顺序">13. 新 Session 的第一段执行顺序</h2>
+<ol><li>读本文和第 0 节列出的文件。</li><li><code>git status --short</code>，确认现有 V2/外部会话改动仍在。</li><li>跑 focused unit baseline；若红，先区分 pre-existing failure 与本功能问题。</li><li>先实现 Replay DTO、evidence-level mapping、Story projection 和 tests。</li><li>再把 <code>ReplayView</code> 重构成三层共享 controller；不要先从 CSS 开始。</li><li>完成 Phase 1 production Electron E2E 后再进入 domain adapters。</li><li>每个阶段都更新测试证据；不要等最后一次性补测试。</li><li>继续执行 Phase 2/3，直到 Definition of Done，除非用户明确缩小范围。</li></ol>
+<p>可以把下面这段直接作为新 Session 的开场指令：</p>
+<blockquote><p>请阅读 <a href="session-replay-v3-implementation-handoff.html"><code>docs/design/session-replay-v3-implementation-handoff.html</code></a>，在当前 dirty worktree 上继续实现 Agent Replay V3。不要 reset 或覆盖无关改动。以 <code>session-replay-unified-experience-v3.md</code> 和可交互 prototype 为产品合同，以现有 Replay V2、task<em>events、file</em>changes/blobs、ExternalSessionService 和 structured parser 为技术基础。按 handoff 的 Phase 0→3 执行并完成测试；不要停在方案说明，也不要重新实现第二份 mock 数据层。</p></blockquote></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

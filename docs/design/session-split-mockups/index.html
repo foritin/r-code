@@ -1,0 +1,124 @@
+<!doctype html>
+<!-- Charter session split mockups · entry page. NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 会话分栏宽度：三个设计方向</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      body {
+        overflow: auto;
+      }
+
+      .index-wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 44px 24px 80px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 26px;
+        font-weight: 650;
+        letter-spacing: -0.018em;
+      }
+
+      .lede {
+        margin: 0 0 30px;
+        color: var(--muted);
+        font-size: 13.5px;
+        line-height: 1.8;
+      }
+
+      .lede code {
+        font: 11px var(--font-mono);
+        background: var(--chip);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
+      .variant {
+        display: block;
+        margin-bottom: 16px;
+        padding: 18px 20px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        color: inherit;
+        text-decoration: none;
+        box-shadow: 0 1px 1px rgba(62, 40, 25, 0.06);
+      }
+
+      .variant:hover {
+        border-color: var(--border-strong);
+        background: #fffdf4;
+      }
+
+      .variant h2 {
+        margin: 0 0 6px;
+        font-size: 16px;
+        font-weight: 650;
+      }
+
+      .variant h2 small {
+        margin-left: 8px;
+        color: var(--faint);
+        font: 10px var(--font-mono);
+        font-weight: 400;
+      }
+
+      .variant p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12.5px;
+        line-height: 1.75;
+      }
+
+      .variant .try {
+        margin-top: 8px;
+        color: var(--info);
+        font-size: 11.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="index-wrap">
+      <h1>会话分栏宽度 · 三个设计方向</h1>
+      <p class="lede">
+        现状：对话列与工具画布是固定比例（56/44），只有 Expand 一个开关切到
+        38/62，且打开 Diff 时会自动切过去——这正是「中间有时候太窄」的来源。
+        以下三个方向都能解决它，但世界观不同。每个 mock 都可以真实交互，直接拖/点试试。
+      </p>
+
+      <a class="variant" href="./a-free-drag.html">
+        <h2>方案 A · 自由拖拽把手<small>a-free-drag.html</small></h2>
+        <p>
+          最直觉的答案：分界线就是把手。悬停出现胶囊状 grip，拖到哪算哪；双击复位
+          56/44；触到最小宽度会有阻尼提示；宽度按 Session 记忆，下次回来还是你的布局。
+        </p>
+        <p class="try">试：拖动中缝 · 双击复位 · 键盘 ←/→ 微调</p>
+      </a>
+
+      <a class="variant" href="./b-snap-stops.html">
+        <h2>方案 B · 磁吸档位<small>b-snap-stops.html</small></h2>
+        <p>
+          不给无限自由，给三个有名字的好位置：对话优先 62、均衡 50、工具优先 38。
+          拖动时靠近档位会被磁吸，松手一定落在档上；点分界线上的圆点直达；双击轮换。
+          与现有 Expand 的两档世界观兼容——等于把两档扩成三档并且可视化。
+        </p>
+        <p class="try">试：拖动感受磁吸 · 点圆点直达 · 双击轮换档位</p>
+      </a>
+
+      <a class="variant" href="./c-focus-flow.html">
+        <h2>方案 C · 焦点跟随<small>c-focus-flow.html</small></h2>
+        <p>
+          宽度跟着注意力走：在哪边点击/停留，哪边就自动放宽到 62%，动画 240ms。
+          分界线上只有两个控件：⇄ 立即对调宽窄，图钉冻结当前比例（钉住后自动调整停止，
+          chip 变绿）。「太窄」的瞬间会自愈——你去中间打字，中间就宽了。
+        </p>
+        <p class="try">试：分别点击左右两边 · 点 ⇄ 对调 · 点图钉冻结</p>
+      </a>
+    </div>
+  </body>
+</html>

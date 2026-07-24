@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>方案 B — Atelier 印刷工作室</title>
+<style>
+  /* ============================================================
+     方案 B — Atelier
+     主张：全行业 AI 工具都在做深色赛博玻璃，Charter 反着走。
+     把已有的 editorial DNA 推到「精装刊物」级别 —— 巨大的衬线、
+     真实纸感、铅字印章、墨水动效。晨报式版面：头条是等你的
+     决定，专栏是正在写作的智能体，账本是今日的印刷记录。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --paper: #f6f2e8;
+    --paper-deep: #efe9da;
+    --paper-card: #fbf8f0;
+    --ink: #211d16;
+    --ink-soft: #57503f;
+    --ink-faint: #99907a;
+    --rust: #a8442e;
+    --rust-soft: rgba(168, 68, 46, 0.09);
+    --sage: #4d6b4a;
+    --sage-soft: rgba(77, 107, 74, 0.12);
+    --hairline: #d8cfba;
+    --hairline-strong: #b5a98c;
+    --serif: 'Charter', 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Songti SC', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--serif);
+    background: var(--paper);
+    color: var(--ink);
+    overflow: hidden;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 纸张纤维纹理：两层极淡的噪点渐变 */
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      repeating-linear-gradient(2deg, rgba(120, 100, 60, 0.016) 0 2px, transparent 2px 5px),
+      repeating-linear-gradient(92deg, rgba(120, 100, 60, 0.012) 0 3px, transparent 3px 7px);
+  }
+
+  .app {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-columns: 252px 1fr;
+    height: 100vh;
+  }
+
+  /* ---------- 目录页边栏（Session Rail 纸化） ---------- */
+  .rail {
+    background: var(--paper-deep);
+    border-right: 1px solid var(--hairline);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .rail-head {
+    padding: 16px 18px 12px;
+    display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .rail-head .t { font-size: 12px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-soft); }
+  .rail-head .k { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); }
+
+  .needs-row {
+    margin: 12px 14px 4px; padding: 9px 12px 8px;
+    border: 1px solid rgba(168, 68, 46, 0.45);
+    background: var(--rust-soft);
+    border-radius: 3px;
+    display: flex; align-items: baseline; gap: 8px;
+    cursor: pointer;
+  }
+  .needs-row .no { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--rust); }
+  .needs-row b { font-size: 13px; font-weight: 600; color: var(--rust); font-style: italic; }
+  .needs-row span { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--rust); }
+
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 8px 6px 10px; }
+  .rail-scroll::-webkit-scrollbar { width: 8px; }
+  .rail-scroll::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.2); border-radius: 4px; }
+
+  .tocgroup { margin: 6px 8px 14px; }
+  .tocgroup-head {
+    display: flex; align-items: baseline; gap: 8px;
+    font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--ink-faint); padding: 4px 8px 6px;
+    border-bottom: 1px solid var(--hairline);
+    margin-bottom: 4px;
+  }
+  .tocgroup-head .cnt { margin-left: auto; font-family: var(--mono); font-size: 9.5px; }
+  .tocrow {
+    display: flex; align-items: baseline; gap: 9px;
+    padding: 6px 8px; border-radius: 3px; cursor: pointer;
+    position: relative;
+  }
+  .tocrow:hover { background: rgba(120, 100, 60, 0.07); }
+  .tocrow.sel { background: rgba(120, 100, 60, 0.1); }
+  .tocrow .ord { font-family: var(--mono); font-size: 9px; color: var(--ink-faint); width: 14px; flex-shrink: 0; }
+  .tocrow .tt { flex: 1; min-width: 0; }
+  .tocrow .name { display: block; font-size: 13px; line-height: 1.35; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tocrow .st { display: block; font-size: 10.5px; font-style: italic; color: var(--ink-faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tocrow .st.live { color: var(--sage); }
+  .tocrow .st.wait { color: var(--rust); }
+  /* 墨点：正在写作 */
+  .inkdot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--sage);
+    flex-shrink: 0; align-self: center;
+    animation: inkBreathe 2.8s ease-in-out infinite;
+  }
+  @keyframes inkBreathe {
+    0%, 100% { transform: scale(0.75); opacity: 0.55; }
+    50% { transform: scale(1.15); opacity: 1; }
+  }
+  .inkdot.wait { background: var(--rust); animation-duration: 1.9s; }
+  .inkdot.done { background: transparent; border: 1.5px solid var(--ink-faint); animation: none; width: 6px; height: 6px; }
+
+  .rail-foot {
+    border-top: 1px solid var(--hairline);
+    padding: 11px 18px;
+    font-size: 11px; letter-spacing: 0.06em;
+    color: var(--ink-soft); font-style: italic;
+  }
+  .rail-foot b { font-style: normal; font-weight: 600; }
+
+  /* ---------- 主版面 ---------- */
+  .main { overflow-y: auto; position: relative; }
+  .main::-webkit-scrollbar { width: 10px; }
+  .main::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.22); border-radius: 5px; }
+  .sheet { max-width: 1150px; margin: 0 auto; padding: 30px 48px 60px; }
+
+  /* Masthead */
+  .masthead { text-align: center; margin-bottom: 6px; }
+  .mast-date {
+    display: flex; align-items: center; gap: 16px;
+    font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.24em;
+    text-transform: uppercase; color: var(--ink-faint);
+    margin-bottom: 14px;
+  }
+  .mast-date::before, .mast-date::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+  .mast-brand {
+    font-size: 44px; font-weight: 500; letter-spacing: 0.015em; line-height: 1;
+    margin-bottom: 12px;
+  }
+  .mast-brand .tm { font-size: 12px; vertical-align: 26px; color: var(--ink-faint); }
+  .mast-rule {
+    height: 3px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink);
+    margin: 0 0 3px; transform-origin: center;
+    animation: ruleOpen 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+  .mast-rule + .mast-rule { height: 1px; border-bottom: none; animation-delay: 0.08s; }
+  @keyframes ruleOpen { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+  /* Composer：巨大衬线的一行 */
+  .composer { padding: 40px 60px 34px; text-align: center; }
+  .composer-line { position: relative; display: inline-block; width: 100%; }
+  .composer input {
+    width: 100%;
+    border: none; outline: none; background: transparent;
+    font-family: var(--serif); font-size: 34px; font-weight: 400;
+    color: var(--ink); text-align: center;
+    caret-color: var(--rust);
+  }
+  .composer input::placeholder { color: #b7ac93; }
+  .composer .underline {
+    margin: 16px auto 0; height: 1px; width: 62%;
+    background: var(--hairline-strong);
+    position: relative; overflow: visible;
+  }
+  .composer .underline::after {
+    content: ""; position: absolute; inset: -0.5px 0; height: 2px;
+    background: var(--rust);
+    transform: scaleX(0); transform-origin: left;
+    transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .composer-line:focus-within .underline::after { transform: scaleX(1); }
+
+  .composer-meta {
+    margin-top: 22px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+  }
+  .type-chip {
+    font-family: var(--sans); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 5px 13px; border: 1px solid var(--hairline-strong); border-radius: 2px;
+    color: var(--ink-soft); cursor: pointer; background: var(--paper-card);
+    box-shadow: 0 1px 0 rgba(120,100,60,0.15);
+  }
+  .type-chip:hover { border-color: var(--ink-soft); }
+  .type-chip.accent { color: var(--rust); border-color: rgba(168,68,46,0.5); }
+  .dispatch {
+    width: 44px; height: 44px; border-radius: 50%;
+    border: none; cursor: pointer;
+    background: var(--ink); color: var(--paper);
+    display: inline-flex; align-items: center; justify-content: center;
+    margin-left: 8px;
+    box-shadow: 0 3px 0 rgba(33, 29, 22, 0.25), 0 10px 26px rgba(33, 29, 22, 0.22);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .dispatch:hover { transform: translateY(-1px); }
+  .dispatch:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(33,29,22,0.25); }
+
+  /* ---------- 版面区 ---------- */
+  .paper-grid {
+    display: grid; grid-template-columns: 1fr 330px; gap: 0;
+    border-top: 1px solid var(--ink);
+    position: relative;
+  }
+  .paper-grid::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: var(--ink); transform: translateY(3px);
+  }
+  .col-main { padding: 26px 34px 10px 4px; border-right: 1px solid var(--hairline); }
+  .col-side { padding: 26px 4px 10px 28px; }
+
+  .section-label {
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.26em;
+    text-transform: uppercase; color: var(--rust);
+    display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+  }
+  .section-label::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+  .section-label.quiet { color: var(--ink-faint); }
+
+  /* 头条：等你的决定 */
+  .headline {
+    display: grid; grid-template-columns: 64px 1fr; gap: 18px;
+    padding-bottom: 22px; margin-bottom: 20px;
+    border-bottom: 1px solid var(--hairline);
+    cursor: pointer;
+  }
+  .headline:hover .hl-title { color: var(--rust); }
+  .stamp {
+    width: 64px; height: 64px; border: 2px solid var(--rust); border-radius: 4px;
+    color: var(--rust);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: var(--mono); transform: rotate(-3deg);
+    animation: stampIn 0.5s cubic-bezier(0.3, 1.6, 0.5, 1) both 0.35s;
+    background: var(--paper-card);
+  }
+  @keyframes stampIn {
+    from { transform: rotate(-14deg) scale(1.6); opacity: 0; }
+    to { transform: rotate(-3deg) scale(1); opacity: 1; }
+  }
+  .stamp b { font-size: 17px; line-height: 1; }
+  .stamp i { font-style: normal; font-size: 7.5px; letter-spacing: 0.14em; margin-top: 3px; }
+  .stamp.second { border-color: var(--ink-soft); color: var(--ink-soft); transform: rotate(2deg); animation-delay: 0.5s; }
+  @keyframes stampIn2 { from { transform: rotate(11deg) scale(1.5); opacity: 0; } to { transform: rotate(2deg) scale(1); opacity: 1; } }
+  .stamp.second { animation-name: stampIn2; }
+
+  .hl-kicker {
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--rust); margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .hl-title { font-size: 24px; font-weight: 500; line-height: 1.22; margin-bottom: 7px; transition: color 0.15s; }
+  .hl-dek { font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); margin-bottom: 10px; max-width: 60ch; }
+  .hl-dek .mono { font-family: var(--mono); font-size: 12px; }
+  .hl-dek .add { color: var(--sage); } .hl-dek .del { color: var(--rust); }
+  .hl-byline { font-family: var(--sans); font-size: 10.5px; color: var(--ink-faint); letter-spacing: 0.04em; margin-bottom: 12px; }
+  .press-acts { display: flex; gap: 9px; }
+  .press {
+    font-family: var(--sans); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 7px 16px; cursor: pointer;
+    border: 1px solid var(--ink); background: transparent; color: var(--ink);
+    border-radius: 2px;
+    box-shadow: 2px 2px 0 rgba(33, 29, 22, 0.9);
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  .press:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 rgba(33,29,22,0.9); }
+  .press:active { transform: translate(2px, 2px); box-shadow: 0 0 0 rgba(33,29,22,0.9); }
+  .press.ink { background: var(--ink); color: var(--paper); }
+  .press.rust { border-color: var(--rust); color: var(--rust); box-shadow: 2px 2px 0 rgba(168, 68, 46, 0.85); }
+  .press.rust:hover { box-shadow: 3px 3px 0 rgba(168,68,46,0.85); }
+  .press.quiet { border-color: var(--hairline-strong); color: var(--ink-faint); box-shadow: none; }
+
+  /* 专栏：正在写作的智能体 */
+  .columnist {
+    display: grid; grid-template-columns: 64px 1fr auto; gap: 18px; align-items: start;
+    padding: 16px 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .columnist:last-child { border-bottom: none; }
+  .col-ord {
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    padding-top: 3px; text-align: center;
+  }
+  .col-ord .inkdot { margin: 7px auto 0; display: block; }
+  .col-title { font-size: 17px; font-weight: 500; margin-bottom: 4px; }
+  .col-writing {
+    font-size: 13px; font-style: italic; color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .col-writing .path { font-family: var(--mono); font-style: normal; font-size: 11.5px; color: var(--sage); }
+  .quill {
+    display: inline-block; width: 1px; height: 13px; background: var(--sage);
+    vertical-align: -2px; margin-left: 1px;
+    animation: quill 1.05s steps(1) infinite;
+  }
+  @keyframes quill { 50% { opacity: 0; } }
+  .col-gates {
+    font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); margin-top: 8px;
+    display: flex; gap: 14px;
+  }
+  .col-gates .g::before { content: "✓ "; color: var(--sage); }
+  .col-gates .g.now { color: var(--sage); font-weight: 600; }
+  .col-gates .g.now::before { content: "❧ "; }
+  .col-meta { text-align: right; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); padding-top: 4px; }
+  .col-meta .wt { display: block; margin-top: 5px; color: var(--ink-soft); }
+
+  /* ---------- 右栏：账本 ---------- */
+  .ledger-table { width: 100%; border-collapse: collapse; margin-bottom: 26px; }
+  .ledger-table th {
+    font-family: var(--sans); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-faint); text-align: left; font-weight: 600;
+    padding: 0 0 8px; border-bottom: 1px solid var(--ink);
+  }
+  .ledger-table th:last-child, .ledger-table td:last-child { text-align: right; }
+  .ledger-table td {
+    padding: 8px 0; border-bottom: 1px solid var(--hairline);
+    font-size: 12.5px; vertical-align: baseline;
+  }
+  .ledger-table td:first-child { max-width: 170px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 10px; }
+  .ledger-table .num { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .ledger-table .add { color: var(--sage); }
+  .ledger-table .del { color: var(--rust); }
+  .ledger-sum {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 0 0;
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .ledger-sum b { font-family: var(--serif); font-size: 26px; letter-spacing: 0; color: var(--ink); font-weight: 500; }
+  .ledger-sum .u { font-size: 9px; color: var(--ink-faint); letter-spacing: 0.1em; }
+
+  /* 大数字行 */
+  .figures { display: flex; gap: 0; margin-bottom: 28px; border-bottom: 1px solid var(--hairline); }
+  .figure { flex: 1; padding: 2px 0 14px; text-align: center; }
+  .figure + .figure { border-left: 1px solid var(--hairline); }
+  .figure b { display: block; font-size: 30px; font-weight: 500; line-height: 1.1; }
+  .figure.rust b { color: var(--rust); }
+  .figure.sage b { color: var(--sage); }
+  .figure span { font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); }
+
+  /* 版权页 */
+  .colophon {
+    border: 1px solid var(--hairline); border-radius: 3px;
+    padding: 14px 16px; background: var(--paper-card);
+    font-size: 11.5px; line-height: 1.75; color: var(--ink-soft);
+  }
+  .colophon .t { font-family: var(--sans); font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 7px; }
+  .colophon .mono { font-family: var(--mono); font-size: 10.5px; }
+  .colophon .ok { color: var(--sage); }
+
+  /* 页脚题词 */
+  .folio {
+    margin-top: 34px; text-align: center;
+    font-style: italic; font-size: 12.5px; color: var(--ink-faint);
+  }
+  .folio::before { content: "❦"; display: block; font-style: normal; margin-bottom: 8px; color: var(--hairline-strong); font-size: 15px; }
+
+  /* ---------- 注解条 ---------- */
+  .annot {
+    position: fixed; right: 16px; bottom: 14px; z-index: 90;
+    max-width: 380px; padding: 11px 14px;
+    background: rgba(33, 29, 22, 0.93); color: #d8cfba;
+    border-radius: 8px; font-family: var(--sans);
+    font-size: 11.5px; line-height: 1.6;
+    box-shadow: 0 18px 50px rgba(33,29,22,0.35);
+  }
+  .annot b { color: #f3c8ab; font-weight: 600; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: #99907a; font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: #f6f2e8; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 目录页边栏 -->
+  <aside class="rail">
+    <div class="rail-head"><span class="t">Contents</span><span class="k">⌘K</span></div>
+
+    <div class="needs-row"><span class="no">FRONT PAGE</span><b>Awaiting your hand</b><span>2</span></div>
+
+    <div class="rail-scroll">
+      <div class="tocgroup">
+        <div class="tocgroup-head">desktop-app <span class="cnt">iv</span></div>
+        <div class="tocrow sel">
+          <span class="ord">i.</span>
+          <span class="tt"><span class="name">Migrate settings storage to SQLite</span>
+          <span class="st live">writing settings-store.ts</span></span>
+          <span class="inkdot"></span>
+        </div>
+        <div class="tocrow">
+          <span class="ord">ii.</span>
+          <span class="tt"><span class="name">Rework onboarding trust prompt copy</span>
+          <span class="st wait">plan awaits approval</span></span>
+          <span class="inkdot wait"></span>
+        </div>
+        <div class="tocrow">
+          <span class="ord">iii.</span>
+          <span class="tt"><span class="name">Chase flaky external-cli e2e retry</span>
+          <span class="st live">tests 9 of 24</span></span>
+          <span class="inkdot"></span>
+        </div>
+        <div class="tocrow">
+          <span class="ord">iv.</span>
+          <span class="tt"><span class="name">Terminal env fallback for zsh users</span>
+          <span class="st">answered</span></span>
+          <span class="inkdot done"></span>
+        </div>
+      </div>
+
+      <div class="tocgroup">
+        <div class="tocgroup-head">charter-site <span class="cnt">ii</span></div>
+        <div class="tocrow">
+          <span class="ord">i.</span>
+          <span class="tt"><span class="name">Bundle terminal env fallback fix</span>
+          <span class="st wait">proofs ready for review</span></span>
+          <span class="inkdot wait"></span>
+        </div>
+        <div class="tocrow">
+          <span class="ord">ii.</span>
+          <span class="tt"><span class="name">Ship pricing page with annual toggle</span>
+          <span class="st live">writing pricing.astro</span></span>
+          <span class="inkdot"></span>
+        </div>
+      </div>
+
+      <div class="tocgroup">
+        <div class="tocgroup-head">Back issues <span class="cnt">xxxi</span></div>
+        <div class="tocrow">
+          <span class="ord">·</span>
+          <span class="tt"><span class="name">Harden IPC schema for task events</span>
+          <span class="st">accepted, 2h ago</span></span>
+          <span class="inkdot done"></span>
+        </div>
+        <div class="tocrow">
+          <span class="ord">·</span>
+          <span class="tt"><span class="name">Fix rail badge overflow at 100+</span>
+          <span class="st">accepted, yesterday</span></span>
+          <span class="inkdot done"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rail-foot">Set in <b>desktop-app</b> — main</div>
+  </aside>
+
+  <!-- 主版面 -->
+  <main class="main">
+    <div class="sheet">
+
+      <header class="masthead">
+        <div class="mast-date">
+          <span>Saturday, July 19, 2026</span>
+          <span>Vol. XII · No. 203</span>
+          <span>3 sessions writing — 2 await you</span>
+        </div>
+        <h1 class="mast-brand">Charter<span class="tm">®</span></h1>
+        <div class="mast-rule"></div>
+        <div class="mast-rule"></div>
+      </header>
+
+      <!-- Composer -->
+      <section class="composer">
+        <div class="composer-line">
+          <input placeholder="What should we build?" />
+          <div class="underline"></div>
+        </div>
+        <div class="composer-meta">
+          <span class="type-chip">desktop-app · main</span>
+          <span class="type-chip">Approve changes</span>
+          <span class="type-chip">claude-fable-5</span>
+          <span class="type-chip accent">Advanced</span>
+          <button class="dispatch" title="Dispatch">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- 版面 -->
+      <div class="paper-grid">
+        <div class="col-main">
+          <div class="section-label">Awaiting your hand</div>
+
+          <!-- 头条 1 -->
+          <article class="headline">
+            <div class="stamp"><b>No.1</b><i>PLAN</i></div>
+            <div>
+              <div class="hl-kicker">A plan awaits approval — 21 seconds ago</div>
+              <h2 class="hl-title">Rework the onboarding trust prompt copy</h2>
+              <p class="hl-dek">Three steps proposed: inventory every trust-prompt string in the
+              first-run and folder-open flows; rewrite to the humane-language dictionary;
+              update e2e assertions and the copy snapshot suite.</p>
+              <div class="hl-byline">DESKTOP-APP · MAIN — the session holds until you decide</div>
+              <div class="press-acts">
+                <button class="press ink">Approve plan</button>
+                <button class="press">Edit plan</button>
+                <button class="press quiet">Cancel session</button>
+              </div>
+            </div>
+          </article>
+
+          <!-- 头条 2 -->
+          <article class="headline" style="border-bottom:none; margin-bottom:6px;">
+            <div class="stamp second"><b>No.2</b><i>PROOF</i></div>
+            <div>
+              <div class="hl-kicker" style="color:var(--ink-soft)">Ready for review — every check passed</div>
+              <h2 class="hl-title">Bundle the terminal env fallback fix</h2>
+              <p class="hl-dek"><span class="mono"><span class="add">+214</span> <span class="del">−89</span> across 12 files</span> — proofs pulled
+              clean: <span class="mono">npm run check ✓ · test ✓ · e2e external-cli ✓</span>.
+              Set in worktree <span class="mono">ws/env-fallback</span>; the main tree is untouched until you accept.</p>
+              <div class="hl-byline">CHARTER-SITE · WORKTREE — merge or rollback, file by file</div>
+              <div class="press-acts">
+                <button class="press rust">Open review</button>
+                <button class="press">Peek changes</button>
+                <button class="press quiet">Rollback</button>
+              </div>
+            </div>
+          </article>
+
+          <div class="section-label quiet" style="margin-top:26px">In the writing room</div>
+
+          <!-- 专栏 -->
+          <article class="columnist">
+            <div class="col-ord">No.3<span class="inkdot"></span></div>
+            <div>
+              <h3 class="col-title">Migrate settings storage to SQLite</h3>
+              <p class="col-writing">now revising <span class="path" id="w-1">apps/desktop-main/src/services/settings-store.ts</span><span class="quill"></span></p>
+              <div class="col-gates"><span class="g">Plan</span><span class="g">Permissions · 2</span><span class="g now">Verify — npm run check</span></div>
+            </div>
+            <div class="col-meta">12m 34s<span class="wt">⎇ ws/settings-sqlite</span></div>
+          </article>
+
+          <article class="columnist">
+            <div class="col-ord">No.4<span class="inkdot"></span></div>
+            <div>
+              <h3 class="col-title">Ship pricing page with annual toggle</h3>
+              <p class="col-writing">now drafting <span class="path" id="w-2">src/pages/pricing.astro</span><span class="quill"></span></p>
+              <div class="col-gates"><span class="g">Plan</span><span class="g now">Working</span></div>
+            </div>
+            <div class="col-meta">4m 03s<span class="wt">charter-site</span></div>
+          </article>
+
+          <article class="columnist">
+            <div class="col-ord">No.5<span class="inkdot"></span></div>
+            <div>
+              <h3 class="col-title">Chase flaky external-cli e2e retry</h3>
+              <p class="col-writing">proofing <span class="path" id="w-3">npm run test:e2e — 9 of 24 passed</span><span class="quill"></span></p>
+              <div class="col-gates"><span class="g">Plan</span><span class="g">Permissions · 1</span><span class="g now">Verify — e2e</span></div>
+            </div>
+            <div class="col-meta">18m 42s<span class="wt">desktop-app</span></div>
+          </article>
+        </div>
+
+        <!-- 右栏 -->
+        <aside class="col-side">
+          <div class="section-label quiet">Today's figures</div>
+          <div class="figures">
+            <div class="figure sage"><b>14</b><span>Verified</span></div>
+            <div class="figure"><b>31</b><span>Accepted / wk</span></div>
+            <div class="figure rust"><b>1</b><span>Rolled back</span></div>
+          </div>
+
+          <div class="section-label quiet">The ledger</div>
+          <table class="ledger-table">
+            <thead><tr><th>Session</th><th>Set</th><th>Net</th></tr></thead>
+            <tbody>
+              <tr><td>Harden IPC schema for task events</td><td class="num">14:22</td><td class="num"><span class="add">+96</span> <span class="del">−31</span></td></tr>
+              <tr><td>Fix rail badge overflow at 100+</td><td class="num">11:05</td><td class="num"><span class="add">+18</span> <span class="del">−6</span></td></tr>
+              <tr><td>Dedupe review comment threads</td><td class="num">09:47</td><td class="num"><span class="add">+42</span> <span class="del">−58</span></td></tr>
+              <tr><td>Answer: why zsh drops PATH</td><td class="num">09:12</td><td class="num">—</td></tr>
+              <tr><td>Rename launcher board tokens</td><td class="num">08:30</td><td class="num"><span class="add">+7</span> <span class="del">−7</span></td></tr>
+            </tbody>
+          </table>
+          <div class="ledger-sum"><span>Net lines shipped today</span><b>+163</b><span class="u">all verified</span></div>
+
+          <div class="colophon" style="margin-top:26px">
+            <div class="t">Colophon</div>
+            Composed with <span class="mono">claude-fable-5</span>, proofs by
+            <span class="mono">npm run check · test · e2e</span>.<br/>
+            Three providers configured — anthropic <span class="ok">●</span>, openrouter <span class="ok">●</span>, local gateway <span class="ok">●</span>.<br/>
+            Every change reviewed before it is bound.
+          </div>
+        </aside>
+      </div>
+
+      <div class="folio">Nothing enters the book unread — every line is proofed, then bound.</div>
+    </div>
+  </main>
+</div>
+
+<!-- 注解 -->
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').remove()">✕</button>
+  <b>方案 B · Atelier 印刷工作室</b><br/>
+  全行业都在做深色赛博玻璃，Charter 反向走「精装刊物」：晨报 masthead + 巨大衬线 composer、
+  等你的决定是「头条 + 铅字印章」、写作中的智能体是「专栏 + 羽毛笔光标」、右栏是今日账本与版权页。
+  按钮是活字凸版（按下有铅字手感）。差异化立场：给有品味的人的智能体工作室。
+</aside>
+
+<script>
+  // 专栏动作行：羽笔在不同文件间移动
+  (function () {
+    const feeds = {
+      'w-1': [
+        'apps/desktop-main/src/services/settings-store.ts',
+        'apps/desktop-main/src/services/settings-migration.ts',
+        'packages/ipc-contracts/src/channels.ts'
+      ],
+      'w-2': [
+        'src/pages/pricing.astro',
+        'src/components/PlanToggle.tsx',
+        'src/styles/pricing.css'
+      ],
+      'w-3': [
+        'npm run test:e2e — 9 of 24 passed',
+        'reading tests/e2e/external-cli.spec.ts:214',
+        'npm run test:e2e — 11 of 24 passed'
+      ]
+    };
+    Object.keys(feeds).forEach((id, k) => {
+      let i = 0;
+      setInterval(() => {
+        i = (i + 1) % feeds[id].length;
+        const el = document.getElementById(id);
+        if (el) {
+          el.style.transition = 'opacity 0.25s';
+          el.style.opacity = 0;
+          setTimeout(() => { el.textContent = feeds[id][i]; el.style.opacity = 1; }, 260);
+        }
+      }, 3100 + k * 800);
+    });
+  })();
+</script>
+</body>
+</html>

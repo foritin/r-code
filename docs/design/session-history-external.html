@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — History 收录已退出的 Claude/Codex 会话</title>
+<style>
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', Consolas, monospace;
+    --bg-app: #eceae5;
+    --bg-editor: #fbfaf7;
+    --bg-sidebar: #f6f5f1;
+    --bg-input: #ffffff;
+    --bg-card: #ffffff;
+    --bg-chip: #edeae3;
+    --bg-hover: #e8e5de;
+    --border: #e5e1d8;
+    --border-soft: #edeae3;
+    --border-strong: #cfcabf;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --fg-faint: #a39e94;
+    --accent: #1b1a16;
+    --success: #3d7a44;
+    --success-bg: #e6efe4;
+    --warning: #9a6b1f;
+    --warning-bg: #f5ecd8;
+    --info: #34608e;
+    --info-bg: #e4ecf5;
+  }
+  [data-theme='dark'] {
+    --bg-app: #171614;
+    --bg-editor: #1a1917;
+    --bg-sidebar: #1d1c19;
+    --bg-input: #24231f;
+    --bg-card: #21201c;
+    --bg-chip: #292823;
+    --bg-hover: #292823;
+    --border: #33312b;
+    --border-soft: #2a2924;
+    --border-strong: #4a473f;
+    --fg: #e8e6e0;
+    --fg-muted: #a29d92;
+    --fg-faint: #6e6a61;
+    --accent: #e8e6e0;
+    --success: #7fb586;
+    --success-bg: #24312a;
+    --warning: #cfa25c;
+    --warning-bg: #363023;
+    --info: #7fa3c9;
+    --info-bg: #232c37;
+  }
+  * { box-sizing: border-box; }
+  body {
+    display: flex;
+    gap: 34px;
+    margin: 0;
+    padding: 26px 30px 60px;
+    font-family: var(--font-ui);
+    background: var(--bg-editor);
+    color: var(--fg);
+    font-size: 13px;
+  }
+  .theme-toggle {
+    position: fixed; top: 14px; right: 16px; z-index: 9;
+    border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg);
+    border-radius: 9px; padding: 4px 11px; font: 600 12px var(--font-ui); cursor: pointer;
+  }
+
+  /* ── 说明 ── */
+  .notes { max-width: 520px; display: grid; gap: 12px; align-content: start; }
+  .note {
+    border: 1px dashed var(--border-strong); border-radius: 12px;
+    background: var(--bg-card); padding: 12px 16px;
+    color: var(--fg-muted); font-size: 12.5px; line-height: 1.75;
+  }
+  .note b { color: var(--fg); }
+  .note .tag {
+    display: inline-block; min-width: 18px; text-align: center;
+    border-radius: 999px; background: var(--accent); color: var(--bg-input);
+    font: 700 10.5px/1.7 var(--font-mono); padding: 0 6px; margin-right: 4px;
+  }
+
+  /* ── Session Rail（贴产品样式） ── */
+  .rail {
+    width: 300px; flex: none;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 8px 16px;
+    align-self: start;
+  }
+  .sr-group { margin-bottom: 3px; }
+  .sr-group-head {
+    min-height: 34px; display: flex; align-items: center; gap: 6px;
+    padding: 0 6px; color: var(--fg-muted); border-radius: 7px;
+  }
+  .sr-group-head strong { color: var(--fg); font: 650 11.5px var(--font-ui); }
+  .sr-group-head .chev { font-size: 9px; color: var(--fg-faint); }
+  .sr-group-head .cnt { margin-left: auto; color: var(--fg-faint); font: 9px var(--font-mono); }
+  .sr-group-items { margin: 0 0 6px 8px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+  .sr-row-wrap { position: relative; }
+  .sr-session {
+    width: 100%; min-height: 58px;
+    display: grid; grid-template-columns: 25px minmax(0, 1fr); align-items: start; gap: 7px;
+    margin-bottom: 2px; padding: 7px;
+    border: 1px solid transparent; border-radius: 8px;
+    background: transparent; color: var(--fg); font-family: var(--font-ui);
+    text-align: left; cursor: pointer;
+  }
+  .sr-session:hover { background: var(--bg-hover); }
+  .prov {
+    width: 24px; height: 24px; display: grid; place-items: center;
+    font-size: 15px; font-weight: 700;
+  }
+  .prov.claude { color: #d97757; }
+  .prov.codex, .prov.pi { color: var(--fg); }
+  .copy { min-width: 0; display: grid; gap: 5px; }
+  .t1 { min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .t1 b {
+    min-width: 0; flex: 1; overflow: hidden;
+    font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--fg-faint); }
+  .dot.live { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
+  .pill {
+    min-height: 18px; display: inline-flex; align-items: center; flex: none;
+    padding: 0 6px; border-radius: 999px; font: 700 9px var(--font-ui);
+  }
+  .pill.review { background: var(--warning-bg); color: var(--warning); }
+  .pill.neutral { background: var(--bg-chip); color: var(--fg-muted); }
+  .pill.answered { background: var(--success-bg); color: var(--success); }
+  .t2 { min-width: 0; display: flex; align-items: center; gap: 6px; color: var(--fg-muted); font-size: 10.5px; }
+  .t2 > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .t2 time { flex: none; color: var(--fg-faint); }
+
+  /* hover 动作：Resume（新增） + Archive（已有） */
+  .row-actions {
+    position: absolute; right: 7px; bottom: 4px;
+    display: flex; gap: 3px; opacity: 0;
+  }
+  .sr-row-wrap:hover .row-actions, .sr-row-wrap.force-hover .row-actions { opacity: 1; }
+  .sr-row-wrap.force-hover .sr-session { background: var(--bg-hover); }
+  .ico {
+    width: 22px; height: 22px; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg-card); color: var(--fg-muted);
+    font-size: 11px; cursor: pointer;
+  }
+  .ico:hover { color: var(--fg); border-color: var(--border-strong); }
+  .ico.resume:hover { color: var(--success); }
+  .callout {
+    position: absolute; left: calc(100% + 14px); top: 50%; transform: translateY(-50%);
+    white-space: nowrap; color: var(--fg-faint); font-size: 11px;
+  }
+  .callout::before { content: '⟵ '; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">☾ 深/浅色</button>
+
+<div class="rail">
+  <!-- 项目组：活着的、和还需要处理的，照旧留在这 -->
+  <div class="sr-group">
+    <div class="sr-group-head"><span class="chev">▼</span><strong>Pi_Agentic_IDE_Spec</strong><span class="cnt">3</span></div>
+    <div class="sr-group-items">
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov claude">✳</span>
+          <span class="copy">
+            <span class="t1"><span class="dot live"></span><b>修 memory 弹窗滚动问题</b></span>
+            <span class="t2"><span>Terminal session is live</span><time>now</time></span>
+          </span>
+        </button>
+      </div>
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov pi">◆</span>
+          <span class="copy">
+            <span class="t1"><span class="dot live"></span><b>补 History 分组的 e2e</b></span>
+            <span class="t2"><span>Editing task-service.ts…</span><time>2m</time></span>
+          </span>
+        </button>
+      </div>
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov claude">✳</span>
+          <span class="copy">
+            <span class="t1"><span class="dot"></span><b>重构 SessionRail 分组</b><span class="pill review">Review</span></span>
+            <span class="t2"><span>Session ended · 4 files changed</span><time>18m</time></span>
+          </span>
+        </button>
+        <span class="callout">退出但改动还没审 → 不进 History</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- History：产品内启动、已退出、不需要再决策的会话 + 原有的已收尾任务 -->
+  <div class="sr-group">
+    <div class="sr-group-head"><span class="chev">▼</span><strong>History</strong><span class="cnt">4</span></div>
+    <div class="sr-group-items">
+      <div class="sr-row-wrap force-hover">
+        <button class="sr-session">
+          <span class="prov claude">✳</span>
+          <span class="copy">
+            <span class="t1"><span class="dot"></span><b>排查 CDP 后台标签冻结</b><span class="pill neutral">Ended</span></span>
+            <span class="t2"><span>Pi_Agentic_IDE_Spec · Session ended · no file changes</span><time>2h</time></span>
+          </span>
+        </button>
+        <span class="row-actions">
+          <span class="ico resume" title="Resume this session">↻</span>
+          <span class="ico" title="Archive session">▣̲</span>
+        </span>
+        <span class="callout">hover：↻ Resume（新增）+ 归档（已有）</span>
+      </div>
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov codex">▣</span>
+          <span class="copy">
+            <span class="t1"><span class="dot"></span><b>对比 app-server 协议差异</b><span class="pill neutral">Ended</span></span>
+            <span class="t2"><span>charter-site · Session ended · no file changes</span><time>5h</time></span>
+          </span>
+        </button>
+      </div>
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov claude">✳</span>
+          <span class="copy">
+            <span class="t1"><span class="dot"></span><b>调研 esbuild 插件写法</b><span class="pill answered">Accepted</span></span>
+            <span class="t2"><span>Pi_Agentic_IDE_Spec · 2 files changed · accepted</span><time>1d</time></span>
+          </span>
+        </button>
+        <span class="callout">退出后审完接受 → 也进 History（原有行为）</span>
+      </div>
+      <div class="sr-row-wrap">
+        <button class="sr-session">
+          <span class="prov pi">◆</span>
+          <span class="copy">
+            <span class="t1"><span class="dot"></span><b>升级 vite 到 8.1</b><span class="pill answered">Accepted</span></span>
+            <span class="t2"><span>charter-site · 6 files changed · accepted</span><time>2d</time></span>
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note">
+    <b>Mockup：History 收录「在 Charter 里开的、已退出」的 Claude/Codex 会话。</b><br />
+    <span class="tag">1</span>会话退出且<b>不需要你再做决定</b>（没改文件，或改动已接受/回滚）→ 自动挪进 History，不再堆在项目组里。<br />
+    <span class="tag">2</span>退出但<b>改动还没审</b>的，仍留在项目组并亮 Review 徽章——History 永远不藏需要决定的东西（沿用现有原则）。<br />
+    <span class="tag">3</span>History 行 hover 出现 <b>↻ Resume</b>：点击开新终端接着原对话继续聊（产品记着每个会话的精确 ID，`claude --resume` / `codex resume` 直达）；旁边是已有的归档按钮。<br />
+    <span class="tag">4</span>点行本身照旧打开该会话的房间回看；归档语义不变（archive 后彻底收起）。<br />
+    <span class="tag">5</span>只收产品内启动的会话；你在外面终端跑的不扫、不进来。
+  </div>
+  <div class="note">
+    行样式完全沿用现有 rail：品牌标（✳ Claude 橙 / ▣ Codex / ◆ Charter）、灰点=已结束、绿点=活着、「Ended」灰徽章。History 里的行会多显示项目名前缀（已有行为，右侧第二行灰字）。
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,1172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>组合方案 · Atelier 底座 — Deck 新入口 + 密度切换 + 胶片缩略</title>
+<style>
+  /* ============================================================
+     组合方案 2 — Atelier 印刷工作室底座
+     与 fusion-obsidian 完全同构（Deck 新入口 / Cards ⇄ Rows /
+     Room 底部胶片缩略），只换气质语言，便于二选一：
+     - 态势带 → 报纸「今日数字栏」
+     - Rows 密度 → 「印刷账本」行情表
+     - mini reel → 「装订线」时间带（红棕缝针播放头）
+     试试：点 rail 第一行进 Room；点 ◎ 回 Deck；Fleet 右上切
+     Rows；Room 底部装订线 hover 升起后拖动。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --paper: #f6f2e8;
+    --paper-deep: #efe9da;
+    --paper-card: #fbf8f0;
+    --ink: #211d16;
+    --ink-soft: #57503f;
+    --ink-faint: #99907a;
+    --rust: #a8442e;
+    --rust-soft: rgba(168, 68, 46, 0.09);
+    --sage: #4d6b4a;
+    --sage-soft: rgba(77, 107, 74, 0.13);
+    --hairline: #d8cfba;
+    --hairline-strong: #b5a98c;
+    --serif: 'Charter', 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Songti SC', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--serif); background: var(--paper); color: var(--ink);
+    overflow: hidden; font-size: 13.5px; -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background-image:
+      repeating-linear-gradient(2deg, rgba(120, 100, 60, 0.016) 0 2px, transparent 2px 5px),
+      repeating-linear-gradient(92deg, rgba(120, 100, 60, 0.012) 0 3px, transparent 3px 7px);
+  }
+
+  .app {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-rows: 42px 1fr;
+    grid-template-columns: 50px 240px 1fr;
+    grid-template-areas: "titlebar titlebar titlebar" "activity rail main";
+    height: 100vh;
+  }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar {
+    grid-area: titlebar; display: flex; align-items: center; gap: 13px; padding: 0 14px;
+    border-bottom: 1px solid var(--hairline); background: var(--paper-deep);
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #d3c9b2; }
+  .tb-brand { font-size: 16px; letter-spacing: 0.01em; }
+  .tb-ctx { display: flex; align-items: baseline; gap: 8px; font-family: var(--sans); font-size: 11.5px; color: var(--ink-soft); }
+  .tb-ctx .sep { color: var(--ink-faint); }
+  .tb-ctx b { font-family: var(--serif); font-size: 13px; color: var(--ink); font-weight: 600; }
+  .tb-ctx .k { font-family: var(--mono); font-size: 9.5px; color: var(--ink-faint); }
+  .state-chip {
+    display: none; align-items: center; gap: 7px; padding: 3px 11px;
+    border: 1px solid var(--hairline-strong); border-radius: 2px;
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-soft); background: var(--paper-card);
+  }
+  .state-chip .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--sage); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.45; } 50% { opacity: 1; } }
+  body[data-scene='room'] .state-chip { display: inline-flex; }
+  .room-only { display: none !important; }
+  body[data-scene='room'] .room-only { display: inline-flex !important; }
+  .deck-only { display: none !important; }
+  body[data-scene='deck'] .deck-only { display: inline-flex !important; }
+  .tb-right { margin-left: auto; display: flex; gap: 8px; }
+  .press {
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 5px 13px; cursor: pointer; border-radius: 2px;
+    border: 1px solid var(--hairline-strong); background: var(--paper-card); color: var(--ink-soft);
+    box-shadow: 1.5px 1.5px 0 rgba(120, 100, 60, 0.25);
+  }
+  .press:hover { border-color: var(--ink-soft); transform: translate(-0.5px,-0.5px); }
+  .press:active { transform: translate(1px,1px); box-shadow: none; }
+  .press.ink { background: var(--ink); border-color: var(--ink); color: var(--paper); box-shadow: 2px 2px 0 rgba(33,29,22,0.4); }
+
+  /* ---------- Activity 列（新增 Deck 入口） ---------- */
+  .activity {
+    grid-area: activity;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 10px 0;
+    background: var(--paper-deep); border-right: 1px solid var(--hairline);
+  }
+  .act-brand { margin-bottom: 6px; color: var(--rust); }
+  .act-item {
+    position: relative;
+    width: 34px; height: 34px; border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--ink-faint); cursor: pointer; border: 1px solid transparent;
+  }
+  .act-item:hover { color: var(--ink-soft); background: rgba(120,100,60,0.08); }
+  .act-item.active {
+    color: var(--rust); background: var(--paper-card);
+    border-color: rgba(168, 68, 46, 0.5);
+    box-shadow: 1.5px 1.5px 0 rgba(168, 68, 46, 0.28);
+  }
+  .act-item .badge {
+    position: absolute; top: 2px; right: 2px;
+    min-width: 13px; height: 13px; border-radius: 7px;
+    background: var(--rust); color: var(--paper);
+    font-family: var(--mono); font-size: 8px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  }
+  .act-item.is-new { margin-bottom: 7px; }
+  .act-item.is-new::after {
+    content: "NEW"; position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 6.5px; letter-spacing: 0.1em; color: var(--rust);
+  }
+  .act-spacer { flex: 1; }
+
+  /* ---------- Rail（目录页边栏，零新增） ---------- */
+  .rail {
+    grid-area: rail; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--paper-deep); border-right: 1px solid var(--hairline);
+  }
+  .rail-head {
+    padding: 13px 15px 9px; display: flex; align-items: baseline; gap: 10px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .rail-tab { font-family: var(--sans); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-faint); cursor: pointer; }
+  .rail-tab.on { color: var(--ink); border-bottom: 1.5px solid var(--rust); padding-bottom: 2px; }
+  .rail-head .k { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); }
+  .needs-row {
+    margin: 10px 12px 4px; padding: 8px 11px;
+    border: 1px solid rgba(168, 68, 46, 0.45); background: var(--rust-soft); border-radius: 3px;
+    display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+  }
+  .needs-row b { font-size: 12.5px; font-weight: 600; color: var(--rust); font-style: italic; }
+  .needs-row span { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--rust); }
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 6px 6px 8px; }
+  .rail-scroll::-webkit-scrollbar { width: 7px; }
+  .rail-scroll::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.2); border-radius: 4px; }
+  .tocgroup { margin: 4px 8px 12px; }
+  .tocgroup-head {
+    display: flex; align-items: baseline;
+    font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--ink-faint); padding: 4px 8px 5px;
+    border-bottom: 1px solid var(--hairline); margin-bottom: 3px;
+  }
+  .tocgroup-head .cnt { margin-left: auto; font-family: var(--mono); font-size: 9px; }
+  .tocrow {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5.5px 8px; border-radius: 3px; cursor: pointer;
+  }
+  .tocrow:hover { background: rgba(120, 100, 60, 0.07); }
+  .tocrow.sel { background: rgba(120, 100, 60, 0.11); }
+  .tocrow .tt { flex: 1; min-width: 0; }
+  .tocrow .name { display: block; font-size: 12.5px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tocrow .st { display: block; font-size: 10px; font-style: italic; color: var(--ink-faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tocrow .st.live { color: var(--sage); }
+  .tocrow .st.wait { color: var(--rust); }
+  .inkdot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); flex-shrink: 0; animation: inkB 2.8s ease-in-out infinite; }
+  @keyframes inkB { 0%,100% { transform: scale(0.75); opacity: 0.55; } 50% { transform: scale(1.15); opacity: 1; } }
+  .inkdot.wait { background: var(--rust); animation-duration: 1.9s; }
+  .inkdot.done { background: transparent; border: 1.5px solid var(--ink-faint); animation: none; width: 6px; height: 6px; }
+  .rail-foot {
+    border-top: 1px solid var(--hairline); padding: 10px 15px;
+    font-size: 11px; font-style: italic; color: var(--ink-soft);
+  }
+  .rail-foot b { font-style: normal; font-weight: 600; }
+
+  /* ---------- 主区 ---------- */
+  .main { grid-area: main; position: relative; min-width: 0; background: var(--paper); }
+  .scene { position: absolute; inset: 0; display: none; }
+  body[data-scene='home'] .scene-home { display: flex; }
+  body[data-scene='deck'] .scene-deck { display: flex; flex-direction: column; }
+  body[data-scene='room'] .scene-room { display: grid; }
+
+  /* ===== Home 场景（主页 = Chat 输入，保持现状不动） ===== */
+  .scene-home {
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 0; padding: 0 70px 56px;
+  }
+  .home-mast { text-align: center; width: min(760px, 94%); margin-bottom: 40px; }
+  .home-date {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--sans); font-size: 9px; letter-spacing: 0.24em;
+    text-transform: uppercase; color: var(--ink-faint); margin-bottom: 13px;
+  }
+  .home-date::before, .home-date::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+  .home-brand { font-size: 40px; font-weight: 500; letter-spacing: 0.015em; line-height: 1; margin-bottom: 11px; }
+  .home-brand .tm { font-size: 11px; vertical-align: 24px; color: var(--ink-faint); }
+  .home-rule { height: 3px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); margin-bottom: 3px; }
+  .home-rule2 { height: 1px; background: var(--ink); }
+  .home-compose { width: min(760px, 94%); text-align: center; }
+  .home-compose input {
+    width: 100%; border: none; outline: none; background: transparent;
+    font-family: var(--serif); font-size: 31px; font-weight: 400;
+    color: var(--ink); text-align: center; caret-color: var(--rust);
+  }
+  .home-compose input::placeholder { color: #b7ac93; }
+  .home-under { margin: 15px auto 0; height: 1px; width: 62%; background: var(--hairline-strong); position: relative; }
+  .home-under::after {
+    content: ""; position: absolute; inset: -0.5px 0; height: 2px; background: var(--rust);
+    transform: scaleX(0); transform-origin: left; transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .home-compose:focus-within .home-under::after { transform: scaleX(1); }
+  .home-chips { margin-top: 21px; display: flex; align-items: center; justify-content: center; gap: 9px; }
+  /* 谦逊的一行态势摘要——督战去 Deck，主页保持安静 */
+  .home-glance {
+    margin-top: 36px;
+    display: inline-flex; align-items: baseline; gap: 10px;
+    padding: 7px 16px; cursor: pointer;
+    border: 1px solid var(--hairline); border-radius: 2px; background: var(--paper-card);
+    font-size: 12.5px; font-style: italic; color: var(--ink-soft);
+  }
+  .home-glance:hover { border-color: var(--hairline-strong); }
+  .home-glance .dot-g { width: 6px; height: 6px; border-radius: 50%; align-self: center; }
+  .home-glance .dot-g.run { background: var(--sage); animation: inkB 2.8s infinite; }
+  .home-glance .dot-g.attn { background: var(--rust); animation: inkB 1.9s infinite; }
+  .home-glance .go { font-style: normal; font-family: var(--sans); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--rust); margin-left: 4px; }
+  .home-hint { margin-top: 14px; font-size: 11px; font-style: italic; color: var(--ink-faint); }
+
+  /* ===== Deck 场景（今日版面） ===== */
+  .deck-scroll { flex: 1; overflow-y: auto; padding: 22px 36px 12px; }
+  .deck-scroll::-webkit-scrollbar { width: 9px; }
+  .deck-scroll::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.22); border-radius: 5px; }
+
+  .deck-mast { display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; }
+  .deck-mast h1 { font-size: 22px; font-weight: 500; }
+  .deck-mast .date { font-family: var(--sans); font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-faint); }
+  .deck-rule { height: 3px; border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); margin-bottom: 2px; }
+  .deck-rule + .deck-rule2 { height: 1px; background: var(--ink); opacity: 0.9; margin-bottom: 14px; }
+
+  /* 今日数字栏 */
+  .situation { display: flex; border-bottom: 1px solid var(--hairline); margin-bottom: 18px; }
+  .figure { flex: 1; padding: 6px 0 13px; text-align: center; }
+  .figure + .figure { border-left: 1px solid var(--hairline); }
+  .figure b { display: block; font-size: 27px; font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .figure b em { font-style: normal; font-size: 12px; color: var(--ink-faint); }
+  .figure.rust b { color: var(--rust); }
+  .figure.sage b { color: var(--sage); }
+  .figure span { font-family: var(--sans); font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-faint); }
+  .figure .inkwave { display: flex; align-items: flex-end; gap: 1.5px; height: 22px; justify-content: center; margin: 4px auto 2px; width: 82%; }
+  .figure .inkwave i { flex: 1; max-width: 4px; background: var(--sage); opacity: 0.4; border-radius: 1px 1px 0 0; animation: pulse 2.8s ease-in-out infinite; }
+
+  .zone-label {
+    font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.24em; text-transform: uppercase;
+    color: var(--rust); display: flex; align-items: center; gap: 10px; margin-bottom: 13px;
+  }
+  .zone-label::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+  .zone-label.quiet { color: var(--ink-faint); }
+  .zone-label .density {
+    display: inline-flex; border: 1px solid var(--hairline-strong); border-radius: 2px; overflow: hidden;
+    letter-spacing: 0; text-transform: none;
+  }
+  .zone-label .density button {
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    padding: 3px 11px; border: none; cursor: pointer; background: var(--paper-card); color: var(--ink-faint);
+  }
+  .zone-label .density button.on { background: var(--ink); color: var(--paper); }
+
+  /* 头条双栏 */
+  .needs-lane { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: 20px; }
+  .headline { display: grid; grid-template-columns: 56px 1fr; gap: 14px; padding: 2px 22px 6px 0; cursor: pointer; }
+  .headline + .headline { border-left: 1px solid var(--hairline); padding-left: 22px; padding-right: 0; }
+  .headline:hover .hl-title { color: var(--rust); }
+  .stamp {
+    width: 54px; height: 54px; border: 2px solid var(--rust); border-radius: 4px; color: var(--rust);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-family: var(--mono); transform: rotate(-3deg); background: var(--paper-card);
+  }
+  .stamp b { font-size: 14px; line-height: 1; }
+  .stamp i { font-style: normal; font-size: 7px; letter-spacing: 0.13em; margin-top: 2px; }
+  .stamp.second { border-color: var(--ink-soft); color: var(--ink-soft); transform: rotate(2deg); }
+  .hl-kicker { font-family: var(--sans); font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--rust); margin-bottom: 5px; font-weight: 600; }
+  .hl-kicker.quiet { color: var(--ink-soft); }
+  .hl-title { font-size: 18.5px; font-weight: 500; line-height: 1.25; margin-bottom: 5px; transition: color 0.15s; }
+  .hl-dek { font-size: 12px; line-height: 1.6; color: var(--ink-soft); margin-bottom: 9px; font-family: var(--sans); }
+  .hl-dek .mono { font-family: var(--mono); font-size: 11px; }
+  .add { color: var(--sage); } .del { color: var(--rust); }
+  .press-acts { display: flex; gap: 8px; }
+  .press-sm {
+    font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 5.5px 13px; cursor: pointer; border-radius: 2px;
+    border: 1px solid var(--ink); background: transparent; color: var(--ink);
+    box-shadow: 2px 2px 0 rgba(33, 29, 22, 0.85);
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+  .press-sm:hover { transform: translate(-1px,-1px); box-shadow: 3px 3px 0 rgba(33,29,22,0.85); }
+  .press-sm:active { transform: translate(2px,2px); box-shadow: none; }
+  .press-sm.ink { background: var(--ink); color: var(--paper); }
+  .press-sm.rust { border-color: var(--rust); color: var(--rust); box-shadow: 2px 2px 0 rgba(168,68,46,0.8); }
+  .press-sm.quiet { border-color: var(--hairline-strong); color: var(--ink-faint); box-shadow: none; }
+
+  /* 专栏卡（Cards 密度） */
+  .fleet-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+  .colcard {
+    padding: 14px 16px 12px; background: var(--paper-card);
+    border: 1px solid var(--hairline); border-radius: 4px;
+    box-shadow: 0 1px 0 rgba(120,100,60,0.18), 0 10px 26px rgba(62, 40, 25, 0.06);
+    transition: transform 0.15s, box-shadow 0.15s;
+  }
+  .colcard:hover { transform: translateY(-2px); box-shadow: 0 2px 0 rgba(120,100,60,0.18), 0 16px 34px rgba(62,40,25,0.1); }
+  .colcard .top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); }
+  .colcard .top .no { color: var(--rust); }
+  .colcard .top .elapsed { margin-left: auto; }
+  .colcard h3 { font-size: 15.5px; font-weight: 500; line-height: 1.3; margin-bottom: 7px; }
+  .col-writing { font-size: 12px; font-style: italic; color: var(--ink-soft); line-height: 1.5; }
+  .col-writing .path { font-family: var(--mono); font-style: normal; font-size: 10.5px; color: var(--sage); }
+  .quill { display: inline-block; width: 1px; height: 12px; background: var(--sage); vertical-align: -2px; margin-left: 1px; animation: blink 1.05s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .col-gates {
+    font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); margin-top: 9px; display: flex; gap: 12px;
+  }
+  .col-gates .g::before { content: "✓ "; color: var(--sage); }
+  .col-gates .g.now { color: var(--sage); font-weight: 700; }
+  .col-gates .g.now::before { content: "❧ "; }
+  .col-verify { margin-top: 9px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); }
+  .vbar { flex: 1; height: 3px; background: var(--paper-deep); border: 1px solid var(--hairline); border-radius: 2px; overflow: hidden; position: relative; }
+  .vbar i { position: absolute; inset: 0; width: 40%; background: var(--sage); opacity: 0.7; animation: sweep 1.8s ease-in-out infinite; }
+  @keyframes sweep { 0% { left: -40%; } 100% { left: 100%; } }
+  .vbar.det i { animation: none; left: 0; }
+
+  .settled-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 14px; }
+  .settled-item {
+    display: flex; align-items: baseline; gap: 10px; padding: 7px 4px;
+    border-bottom: 1px solid var(--hairline); cursor: pointer;
+  }
+  .settled-item:hover b { color: var(--rust); }
+  .s-mark { font-family: var(--mono); font-size: 10px; color: var(--sage); flex-shrink: 0; }
+  .s-mark.bad { color: var(--rust); }
+  .s-mark.none { color: var(--ink-faint); }
+  .settled-item b { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .settled-item .when { font-family: var(--mono); font-size: 9px; color: var(--ink-faint); }
+  .settled-item .net { font-family: var(--mono); font-size: 10px; }
+
+  /* Rows 密度 → 印刷账本 */
+  .fleet-rows { display: none; margin-bottom: 20px; }
+  .deck-scroll[data-density='rows'] .fleet-rows { display: block; }
+  .deck-scroll[data-density='rows'] .fleet-cards,
+  .deck-scroll[data-density='rows'] .needs-lane,
+  .deck-scroll[data-density='rows'] .nh-needs,
+  .deck-scroll[data-density='rows'] .settled-wrap { display: none; }
+  .ledger { border-top: 2px solid var(--ink); }
+  .lhead {
+    display: flex; align-items: baseline; gap: 10px; padding: 8px 6px 4px;
+    font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--ink-faint);
+  }
+  .lhead.attn { color: var(--rust); }
+  .lhead .line { flex: 1; height: 1px; background: var(--hairline); }
+  .lrow {
+    display: grid;
+    grid-template-columns: 22px minmax(190px, 1.1fr) 88px 116px minmax(165px, 1fr) 58px 84px 44px 128px;
+    gap: 9px; align-items: baseline;
+    padding: 6px 6px; font-size: 12px;
+    border-bottom: 1px solid var(--hairline);
+    border-left: 2px solid transparent;
+    cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .lrow:hover { background: rgba(120, 100, 60, 0.05); }
+  .lrow.kb { background: rgba(168, 68, 46, 0.05); border-left-color: var(--rust); }
+  .lrow.checked { background: rgba(77, 107, 74, 0.06); }
+  .lrow.settled { opacity: 0.55; }
+  .cbox {
+    width: 12px; height: 12px; border-radius: 2px; border: 1px solid var(--hairline-strong);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 8px; color: transparent; background: var(--paper-card);
+    align-self: center;
+  }
+  .lrow.checked .cbox { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+  .l-title { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+  .l-mark { font-family: var(--mono); font-size: 9.5px; flex-shrink: 0; width: 10px; }
+  .l-mark.run { color: var(--sage); } .l-mark.attn { color: var(--rust); }
+  .l-mark.done { color: var(--ink-faint); } .l-mark.fail { color: var(--rust); }
+  .l-title .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  .l-proj, .l-branch { font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-branch { color: var(--ink-faint); } .l-branch.wt { color: var(--rust); }
+  .l-act { font-size: 11px; font-style: italic; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-act.attn { color: var(--rust); }
+  .l-act.idle { color: var(--ink-faint); }
+  .l-act .path { font-family: var(--mono); font-style: normal; font-size: 10px; color: var(--sage); }
+  .l-gates { display: flex; gap: 3px; align-self: center; }
+  .gseg { width: 13px; height: 4px; border-radius: 1px; background: var(--hairline); }
+  .gseg.done { background: var(--sage); opacity: 0.75; }
+  .gseg.now { background: var(--ink); animation: pulse 1.6s infinite; }
+  .gseg.wait { background: var(--rust); animation: pulse 1.2s infinite; }
+  .gseg.fail { background: var(--rust); }
+  .l-diff { font-family: var(--mono); font-size: 10px; text-align: right; white-space: nowrap; }
+  .l-diff.none { color: var(--ink-faint); }
+  .l-time { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); text-align: right; }
+  .l-keys { display: flex; gap: 4px; justify-content: flex-end; align-self: center; }
+  .kact {
+    font-family: var(--sans); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--ink-faint); border: 1px solid var(--hairline); border-radius: 2px; padding: 1.5px 5px; white-space: nowrap;
+    background: var(--paper-card);
+  }
+  .kact.hot { color: var(--rust); border-color: rgba(168, 68, 46, 0.45); }
+  .ledger-bulk {
+    display: flex; align-items: center; gap: 10px; padding: 9px 6px;
+    border-bottom: 2px solid var(--ink);
+    font-family: var(--sans);
+  }
+  .ledger-bulk .n { font-family: var(--mono); font-size: 10px; color: var(--rust); }
+  .ledger-bulk .hint { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); }
+
+  /* 发射台（衬线一行） */
+  .launchpad { padding: 12px 36px 14px; border-top: 1px solid var(--hairline); background: var(--paper-deep); }
+  .pad-line { display: flex; align-items: center; gap: 14px; }
+  .pad-line input {
+    flex: 1; background: transparent; border: none; outline: none;
+    font-family: var(--serif); font-size: 19px; color: var(--ink); caret-color: var(--rust);
+  }
+  .pad-line input::placeholder { color: #b7ac93; }
+  .type-chip {
+    font-family: var(--sans); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 4px 10px; border: 1px solid var(--hairline-strong); border-radius: 2px;
+    color: var(--ink-soft); cursor: pointer; background: var(--paper-card); white-space: nowrap;
+  }
+  .dispatch {
+    width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--ink); color: var(--paper);
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    box-shadow: 0 2px 0 rgba(33, 29, 22, 0.3), 0 8px 20px rgba(33, 29, 22, 0.2);
+  }
+  .dispatch:active { transform: translateY(1px); box-shadow: 0 1px 0 rgba(33,29,22,0.3); }
+  .pad-under { margin-top: 6px; height: 1px; background: var(--hairline-strong); position: relative; }
+  .pad-under::after {
+    content: ""; position: absolute; inset: -0.5px 0; height: 2px; background: var(--rust);
+    transform: scaleX(0); transform-origin: left; transition: transform 0.5s cubic-bezier(0.2,0.8,0.2,1);
+  }
+  .launchpad:focus-within .pad-under::after { transform: scaleX(1); }
+
+  /* ===== Room 场景 ===== */
+  .scene-room {
+    grid-template-rows: 1fr auto;
+    grid-template-columns: minmax(430px, 47%) 1fr;
+    grid-template-areas: "convo canvas" "reel reel";
+  }
+  .convo { grid-area: convo; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--hairline); }
+  .timeline { flex: 1; overflow-y: auto; padding: 20px 24px 8px; }
+  .timeline::-webkit-scrollbar { width: 8px; }
+  .timeline::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.22); border-radius: 4px; }
+  .timeline [data-t].dimmed { opacity: 0.2; filter: saturate(0.3); }
+  .ms { display: flex; align-items: center; gap: 10px; margin: 13px 0 11px; color: var(--ink-faint); font-family: var(--sans); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .ms::before, .ms::after { content: ""; flex: 1; height: 1px; background: var(--hairline); }
+  .ms .ok { color: var(--sage); } .ms .bad { color: var(--rust); }
+  .you {
+    margin: 8px 0 12px; padding: 2px 0 2px 14px;
+    border-left: 3px solid var(--ink);
+    font-size: 13.5px; line-height: 1.6;
+  }
+  .you .who { font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.16em; color: var(--ink-faint); margin-bottom: 3px; }
+  .agent { margin: 4px 0 11px; font-size: 13.5px; line-height: 1.65; }
+  .agent .who { font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.16em; color: var(--rust); margin-bottom: 4px; font-weight: 700; }
+  .agent .dim { color: var(--ink-soft); font-family: var(--mono); font-size: 12px; }
+  .plan-card { margin: 4px 0 12px; padding: 11px 14px; background: var(--paper-card); border: 1px solid var(--hairline); border-radius: 3px; }
+  .plan-card .head { display: flex; gap: 9px; align-items: baseline; margin-bottom: 7px; font-size: 13.5px; font-weight: 600; }
+  .plan-card .head .ok { margin-left: auto; font-family: var(--sans); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--sage); }
+  .plan-card ol { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .plan-card li { display: flex; gap: 9px; font-size: 12px; color: var(--ink-soft); font-family: var(--sans); }
+  .plan-card li b { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--hairline-strong); font-family: var(--mono); font-size: 8.5px; font-weight: 400; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .plan-card li.done b { border-color: var(--sage); color: var(--sage); }
+  .plan-card li.now { color: var(--ink); }
+  .plan-card li.now b { border-color: var(--rust); color: var(--rust); }
+  .trow {
+    display: flex; align-items: center; gap: 8px; padding: 5px 9px; margin: 2px 0;
+    font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft);
+    border-left: 2px solid var(--hairline);
+  }
+  .trow:hover { background: rgba(120,100,60,0.06); }
+  .trow .verb { color: var(--ink-faint); width: 36px; flex-shrink: 0; }
+  .trow .target { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trow .ok { color: var(--sage); } .trow .fail { color: var(--rust); }
+  .trow.active { border-left-color: var(--sage); background: var(--sage-soft); color: var(--ink); }
+  .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(77,107,74,0.3); border-top-color: var(--sage); animation: rot 1s linear infinite; flex-shrink: 0; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .composer { padding: 10px 16px 13px; border-top: 1px solid var(--hairline); background: var(--paper-deep); }
+  .comp-line { display: flex; align-items: center; gap: 10px; }
+  .comp-line input { flex: 1; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: 14px; color: var(--ink); caret-color: var(--rust); }
+  .comp-line input::placeholder { color: #b7ac93; }
+  .ref-chip { font-family: var(--mono); font-size: 9px; padding: 2.5px 8px; border: 1px solid var(--hairline-strong); border-radius: 2px; color: var(--ink-soft); background: var(--paper-card); white-space: nowrap; }
+  .send-mini { width: 27px; height: 27px; border-radius: 50%; border: none; cursor: pointer; background: var(--ink); color: var(--paper); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+  .canvas { grid-area: canvas; display: flex; flex-direction: column; min-height: 0; background: var(--paper-card); }
+  .canvas-tabs { display: flex; gap: 0; padding: 9px 14px 0; border-bottom: 1px solid var(--hairline); }
+  .ctab {
+    padding: 6px 13px; font-family: var(--sans); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-faint); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .ctab.on { color: var(--ink); border-bottom-color: var(--rust); }
+  .ctab .n { font-family: var(--mono); font-size: 9px; color: var(--rust); margin-left: 4px; }
+  .canvas-head {
+    padding: 8px 16px; display: flex; align-items: center; gap: 10px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .canvas-head .path { font-family: var(--mono); font-size: 10.5px; color: var(--ink); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .canvas-head .stat { font-family: var(--mono); font-size: 10px; }
+  .following {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-family: var(--sans); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--sage); padding: 2px 8px; border: 1px solid rgba(77,107,74,0.4); border-radius: 2px;
+  }
+  .following i { width: 5px; height: 5px; border-radius: 50%; background: var(--sage); animation: pulse 1.4s infinite; }
+  .diff-body { flex: 1; overflow-y: auto; font-family: var(--mono); font-size: 11px; line-height: 1.75; padding: 8px 0; }
+  .diff-body::-webkit-scrollbar { width: 8px; }
+  .diff-body::-webkit-scrollbar-thumb { background: rgba(120,100,60,0.22); border-radius: 4px; }
+  .dl { display: flex; white-space: pre; }
+  .dl .no { width: 42px; flex-shrink: 0; text-align: right; padding-right: 11px; color: var(--ink-faint); font-size: 9.5px; line-height: 2; user-select: none; }
+  .dl .code { flex: 1; color: var(--ink-soft); }
+  .dl.ctx .code { color: var(--ink-faint); }
+  .dl.add { background: rgba(77, 107, 74, 0.1); } .dl.add .code { color: #3c5c3a; }
+  .dl.del { background: rgba(168, 68, 46, 0.08); } .dl.del .code { color: #94503e; text-decoration: line-through; text-decoration-color: rgba(168,68,46,0.35); }
+  .dl.hunk { color: var(--rust); padding: 5px 14px 3px; font-size: 9.5px; opacity: 0.8; }
+
+  /* ---- mini reel → 装订线时间带 ---- */
+  .reel {
+    grid-area: reel;
+    background: var(--paper-deep); border-top: 1px solid var(--hairline-strong);
+    padding: 6px 16px 8px;
+    user-select: none; position: relative;
+  }
+  .reel .meta {
+    display: flex; align-items: baseline; gap: 12px;
+    font-family: var(--mono); font-size: 8.5px; color: var(--ink-faint); margin-bottom: 5px;
+  }
+  .reel .meta .rec { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-soft); }
+  .reel .meta .rec i { width: 5px; height: 5px; border-radius: 50%; background: var(--rust); animation: pulse 1.4s infinite; }
+  .reel .meta .cursor-t { color: var(--rust); min-width: 108px; }
+  .reel .meta .cursor-t.live { color: var(--sage); }
+  .reel .meta .expand { margin-left: auto; font-family: var(--sans); letter-spacing: 0.04em; font-style: italic; }
+  .rtrack { position: relative; height: 12px; cursor: crosshair; transition: height 0.22s ease; }
+  .reel:hover .rtrack { height: 42px; }
+  .rchapters { position: absolute; inset: 0 0 auto; height: 100%; display: flex; border-radius: 2px; overflow: hidden; transition: height 0.22s ease; border: 1px solid var(--hairline-strong); }
+  .reel:hover .rchapters { height: 11px; }
+  .rchapter { height: 100%; opacity: 0.5; }
+  .rchapter.plan { background: repeating-linear-gradient(45deg, #c99b4a 0 3px, #e3c893 3px 6px); }
+  .rchapter.work { background: repeating-linear-gradient(45deg, #7d9a7b 0 3px, #c3d2be 3px 6px); }
+  .rchapter.crisis { background: repeating-linear-gradient(45deg, #b06045 0 3px, #dcae9c 3px 6px); }
+  .rchapter.verify { background: repeating-linear-gradient(45deg, #4d6b4a 0 3px, #a9c0a3 3px 6px); }
+  .rticks { position: absolute; left: 0; right: 0; top: 16px; height: 15px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .reel:hover .rticks { opacity: 1; }
+  .rtick { position: absolute; bottom: 0; width: 1.5px; background: var(--ink-faint); }
+  .rtick.edit { background: var(--sage); } .rtick.run { background: var(--ink-soft); }
+  .rtick.fail { background: var(--rust); } .rtick.gate { background: var(--rust); width: 2.5px; }
+  .rflags { position: absolute; left: 0; right: 0; top: 33px; height: 9px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .reel:hover .rflags { opacity: 1; }
+  .rflag { position: absolute; transform: translateX(-50%); font-family: var(--mono); font-size: 7.5px; color: var(--ink-faint); white-space: nowrap; }
+  .rflag.g { color: var(--sage); } .rflag.r { color: var(--rust); } .rflag.a { color: #a2731c; }
+  .rplayhead {
+    position: absolute; top: -3px; bottom: -1px; width: 2px;
+    background: var(--rust); pointer-events: none; z-index: 3;
+  }
+  .rplayhead::before { content: ""; position: absolute; top: -4px; left: 50%; transform: translateX(-50%); border: 4.5px solid transparent; border-top-color: var(--rust); }
+  .rlive-end { position: absolute; right: 0; top: -1px; bottom: 0; width: 3px; background: var(--sage); opacity: 0.7; }
+  .jump-live {
+    display: none; position: absolute; right: 14px; top: -32px;
+    font-family: var(--sans); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 4px 11px; border-radius: 2px; border: 1px solid var(--rust); cursor: pointer;
+    background: var(--rust); color: var(--paper); font-weight: 700;
+    box-shadow: 2px 2px 0 rgba(168, 68, 46, 0.4); z-index: 5;
+  }
+  .jump-live.show { display: block; }
+
+  /* ---------- 注解（默认收起为胶囊，点击展开） ---------- */
+  .annot-pill {
+    position: fixed; right: 16px; top: 52px; z-index: 91;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 13px; border-radius: 2px; cursor: pointer;
+    background: var(--ink); color: var(--paper); border: none;
+    font-family: var(--sans); font-size: 10px; letter-spacing: 0.08em;
+    box-shadow: 2px 2px 0 rgba(33, 29, 22, 0.35);
+  }
+  .annot-pill:active { transform: translate(1px,1px); box-shadow: none; }
+  .annot {
+    display: none;
+    position: fixed; right: 16px; top: 88px; z-index: 90;
+    max-width: 370px; padding: 11px 14px;
+    background: rgba(33, 29, 22, 0.95); color: #d8cfba;
+    border-radius: 8px; font-family: var(--sans); font-size: 11.5px; line-height: 1.62;
+    box-shadow: 0 18px 50px rgba(33,29,22,0.4);
+  }
+  .annot.open { display: block; }
+  .annot b { color: #f3c8ab; font-weight: 600; }
+  .annot .hl { color: #e8b45a; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: #99907a; font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: #f6f2e8; }
+</style>
+</head>
+<body data-scene="home">
+<div class="app">
+
+  <!-- Titlebar -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="tb-brand">Charter</span>
+    <div class="tb-ctx" id="tb-ctx-home">
+      <b>Home</b>
+    </div>
+    <div class="tb-ctx" id="tb-ctx-deck" style="display:none">
+      <b>The Deck</b><span class="sep">—</span><span>all projects · 3 writing · 2 await you</span>
+    </div>
+    <div class="tb-ctx" id="tb-ctx-room" style="display:none">
+      <span>desktop-app</span><span class="sep">/</span><b>Migrate settings storage to SQLite</b>
+      <span class="k">⎇ ws/settings-sqlite</span>
+    </div>
+    <span class="state-chip"><span class="pulse"></span>Verifying — npm run check</span>
+    <div class="tb-right">
+      <button class="press deck-only" id="new-session">＋ New session</button>
+      <button class="press room-only">Peek changes</button>
+      <button class="press ink room-only">Open review</button>
+      <button class="press">⌘E</button>
+    </div>
+  </header>
+
+  <!-- Activity 列：Home（主页=Chat 输入）与新增 Deck 并列，其余四入口原样 -->
+  <nav class="activity">
+    <div class="act-brand" id="act-brand">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 21V4l7 4 9-5v13l-9 5-7-4Z"/></svg>
+    </div>
+    <div class="act-item active" id="act-home" title="Home — start a session">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 11 9-8 9 8"/><path d="M5 9v11h14V9"/></svg>
+    </div>
+    <div class="act-item is-new" id="act-deck" title="Deck — today's sheet (new)">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 12 17 7"/><path d="M12 3v2M21 12h-2M12 21v-2M3 12h2"/></svg>
+    </div>
+    <div class="act-item" id="act-sessions" title="Sessions">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m5 7 5 5-5 5M12 19h7"/></svg>
+    </div>
+    <div class="act-item" title="Needs attention">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 6h14l2 7v6H3v-6l2-7Z"/></svg>
+      <span class="badge">2</span>
+    </div>
+    <div class="act-item" title="Projects">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+    </div>
+    <div class="act-item" title="Search everything · ⌘K">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </div>
+    <span class="act-spacer"></span>
+    <div class="act-item" title="Editor · ⌘E">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M3 9h6"/></svg>
+    </div>
+    <div class="act-item" title="Settings">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="15" cy="8" r="2"/><circle cx="7" cy="16" r="2"/></svg>
+    </div>
+  </nav>
+
+  <!-- Rail：目录页边栏（零新增） -->
+  <aside class="rail">
+    <div class="rail-head">
+      <span class="rail-tab on">Contents</span>
+      <span class="rail-tab">Files</span>
+      <span class="k">⌘K</span>
+    </div>
+    <div class="needs-row"><b>Awaiting your hand</b><span>2</span></div>
+    <div class="rail-scroll">
+      <div class="tocgroup">
+        <div class="tocgroup-head">desktop-app <span class="cnt">iv</span></div>
+        <div class="tocrow" data-open-room>
+          <span class="tt"><span class="name">Migrate settings storage to SQLite</span>
+          <span class="st live">writing settings-store.ts</span></span>
+          <span class="inkdot"></span>
+        </div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Rework onboarding trust prompt copy</span>
+          <span class="st wait">plan awaits approval</span></span>
+          <span class="inkdot wait"></span>
+        </div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Chase flaky external-cli e2e retry</span>
+          <span class="st live">tests 9 of 24</span></span>
+          <span class="inkdot"></span>
+        </div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Terminal env fallback for zsh users</span>
+          <span class="st">answered</span></span>
+          <span class="inkdot done"></span>
+        </div>
+      </div>
+      <div class="tocgroup">
+        <div class="tocgroup-head">charter-site <span class="cnt">ii</span></div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Bundle terminal env fallback fix</span>
+          <span class="st wait">proofs ready for review</span></span>
+          <span class="inkdot wait"></span>
+        </div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Ship pricing page with annual toggle</span>
+          <span class="st live">writing pricing.astro</span></span>
+          <span class="inkdot"></span>
+        </div>
+      </div>
+      <div class="tocgroup">
+        <div class="tocgroup-head">Back issues <span class="cnt">xxxi</span></div>
+        <div class="tocrow">
+          <span class="tt"><span class="name">Harden IPC schema for task events</span>
+          <span class="st">accepted, 2h ago</span></span>
+          <span class="inkdot done"></span>
+        </div>
+      </div>
+    </div>
+    <div class="rail-foot">Set in <b>desktop-app</b> — main</div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+
+    <!-- ===== Home 场景：主页就是 Chat 输入，保持现状 ===== -->
+    <section class="scene scene-home">
+      <div class="home-mast">
+        <div class="home-date">
+          <span>Saturday, July 19, 2026</span>
+          <span>Vol. XII · No. 203</span>
+        </div>
+        <h1 class="home-brand">Charter<span class="tm">®</span></h1>
+        <div class="home-rule"></div>
+        <div class="home-rule2"></div>
+      </div>
+      <div class="home-compose">
+        <input placeholder="What should we build?" />
+        <div class="home-under"></div>
+        <div class="home-chips">
+          <span class="type-chip">desktop-app · main</span>
+          <span class="type-chip">Approve changes</span>
+          <span class="type-chip">claude-fable-5</span>
+          <span class="type-chip" style="color:var(--rust);border-color:rgba(168,68,46,0.5)">Advanced</span>
+          <button class="dispatch"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+        </div>
+      </div>
+      <div class="home-glance" data-goto-deck title="Open the Deck">
+        <span class="dot-g run"></span>3 writing
+        <span class="dot-g attn"></span>2 await you
+        <span class="go">Open the Deck →</span>
+      </div>
+      <div class="home-hint">主页保持安静 — 督战在 Deck，回看在 Room</div>
+    </section>
+
+    <!-- ===== Deck 场景：今日版面（纯监控，无输入框） ===== -->
+    <section class="scene scene-deck">
+      <div class="deck-scroll" id="deck-scroll" data-density="cards">
+
+        <div class="deck-mast">
+          <h1>The Deck</h1>
+          <span class="date">Saturday, July 19, 2026 · Vol. XII · No. 203</span>
+        </div>
+        <div class="deck-rule"></div>
+        <div class="deck-rule2"></div>
+
+        <!-- 今日数字栏 -->
+        <div class="situation">
+          <div class="figure sage"><b>3</b><span>Writing</span></div>
+          <div class="figure rust"><b>2</b><span>Await you</span></div>
+          <div class="figure sage"><b>14</b><span>Verified today</span></div>
+          <div class="figure"><b id="g-files">27</b><span>Files in motion</span></div>
+          <div class="figure"><b>31<em>/33</em></b><span>Accepted / wk</span></div>
+          <div class="figure">
+            <div class="inkwave" id="inkwave"></div>
+            <span>Press activity</span>
+          </div>
+        </div>
+
+        <div class="zone-label nh-needs">Awaiting your hand</div>
+        <section class="needs-lane">
+          <article class="headline">
+            <div class="stamp"><b>No.1</b><i>PLAN</i></div>
+            <div>
+              <div class="hl-kicker">A plan awaits approval — 21s ago</div>
+              <h2 class="hl-title">Rework the onboarding trust prompt copy</h2>
+              <p class="hl-dek">Three steps: inventory trust-prompt strings, rewrite to the
+              humane-language dictionary, refresh e2e assertions. <span class="mono">desktop-app · main</span></p>
+              <div class="press-acts">
+                <button class="press-sm ink">Approve plan</button>
+                <button class="press-sm">Edit plan</button>
+                <button class="press-sm quiet">Cancel</button>
+              </div>
+            </div>
+          </article>
+          <article class="headline">
+            <div class="stamp second"><b>No.2</b><i>PROOF</i></div>
+            <div>
+              <div class="hl-kicker quiet">Ready for review — every check passed</div>
+              <h2 class="hl-title">Bundle the terminal env fallback fix</h2>
+              <p class="hl-dek"><span class="mono"><span class="add">+214</span> <span class="del">−89</span> · 12 files</span> — proofs clean:
+              <span class="mono">check ✓ · test ✓ · e2e ✓</span>. Worktree <span class="mono">ws/env-fallback</span>, main untouched.</p>
+              <div class="press-acts">
+                <button class="press-sm rust">Open review</button>
+                <button class="press-sm">Peek changes</button>
+                <button class="press-sm quiet">Rollback</button>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <div class="zone-label quiet">In the writing room
+          <span style="flex:1"></span>
+          <span class="density" id="density">
+            <button class="on" data-mode="cards">Columns</button>
+            <button data-mode="rows">Ledger</button>
+          </span>
+        </div>
+
+        <!-- Cards（专栏）密度 -->
+        <section class="fleet-cards">
+          <article class="colcard">
+            <div class="top"><span class="no">No.3</span><span>desktop-app · ⎇ ws/settings-sqlite</span><span class="elapsed">12m 34s</span></div>
+            <h3>Migrate settings storage to SQLite</h3>
+            <p class="col-writing">now revising <span class="path" id="act-1">settings-store.ts</span><span class="quill"></span></p>
+            <div class="col-gates"><span class="g">Plan</span><span class="g">Perms · 2</span><span class="g now">Verify</span></div>
+            <div class="col-verify"><span>npm run check</span><div class="vbar"><i></i></div></div>
+          </article>
+          <article class="colcard">
+            <div class="top"><span class="no">No.4</span><span>charter-site</span><span class="elapsed">4m 03s</span></div>
+            <h3>Ship pricing page with annual toggle</h3>
+            <p class="col-writing">now drafting <span class="path" id="act-2">pricing.astro</span><span class="quill"></span></p>
+            <div class="col-gates"><span class="g">Plan</span><span class="g now">Working</span></div>
+            <div class="col-verify"><span>verification armed</span><div class="vbar det"><i style="width:0"></i></div></div>
+          </article>
+          <article class="colcard">
+            <div class="top"><span class="no">No.5</span><span>desktop-app</span><span class="elapsed">18m 42s</span></div>
+            <h3>Chase flaky external-cli e2e retry</h3>
+            <p class="col-writing">proofing <span class="path" id="act-3">test:e2e — 9 of 24</span><span class="quill"></span></p>
+            <div class="col-gates"><span class="g">Plan</span><span class="g">Perms · 1</span><span class="g now">Verify</span></div>
+            <div class="col-verify"><span>test:e2e</span><div class="vbar det"><i style="width:38%"></i></div></div>
+          </article>
+        </section>
+
+        <div class="settled-wrap">
+          <div class="zone-label quiet">Bound today</div>
+          <section class="settled-strip">
+            <div class="settled-item"><span class="s-mark">✓</span><b>Harden IPC schema for task events</b><span class="when">14:22</span><span class="net"><span class="add">+96</span> <span class="del">−31</span></span></div>
+            <div class="settled-item"><span class="s-mark">✓</span><b>Dedupe review comment threads</b><span class="when">09:47</span><span class="net"><span class="add">+42</span> <span class="del">−58</span></span></div>
+            <div class="settled-item"><span class="s-mark none">—</span><b>Answer: why zsh drops PATH</b><span class="when">09:12</span><span class="net" style="color:var(--ink-faint)">no changes</span></div>
+            <div class="settled-item"><span class="s-mark bad">✗</span><b>Probe: Electron 33 upgrade</b><span class="when">1d</span><span class="net" style="color:var(--ink-faint)">rolled back</span></div>
+          </section>
+        </div>
+
+        <!-- Rows（账本）密度 -->
+        <section class="fleet-rows">
+          <div class="ledger">
+            <div class="lhead attn"><span>Awaiting your hand</span><span class="line"></span><span>3</span></div>
+            <div class="lrow checked">
+              <span class="cbox">✓</span>
+              <span class="l-title"><span class="l-mark attn">◆</span><span class="t">Rework onboarding trust prompt copy</span></span>
+              <span class="l-proj">desktop-app</span><span class="l-branch">main</span>
+              <span class="l-act attn">plan awaits approval — 3 steps · 21s</span>
+              <span class="l-gates"><span class="gseg wait"></span><span class="gseg"></span><span class="gseg"></span></span>
+              <span class="l-diff none">—</span><span class="l-time">0:21</span>
+              <span class="l-keys"><span class="kact hot">a approve</span><span class="kact">e edit</span></span>
+            </div>
+            <div class="lrow checked kb">
+              <span class="cbox">✓</span>
+              <span class="l-title"><span class="l-mark attn">◆</span><span class="t">Grant: npm run db:migrate on staging</span></span>
+              <span class="l-proj">api-gateway</span><span class="l-branch wt">⎇ ws/db-migrate</span>
+              <span class="l-act attn">permission requested — outside sandbox</span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg wait"></span><span class="gseg"></span></span>
+              <span class="l-diff"><span class="add">+38</span> <span class="del">−4</span></span><span class="l-time">2:04</span>
+              <span class="l-keys"><span class="kact hot">g grant</span><span class="kact">d deny</span></span>
+            </div>
+            <div class="lrow">
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark attn">◆</span><span class="t">Bundle terminal env fallback fix</span></span>
+              <span class="l-proj">charter-site</span><span class="l-branch wt">⎇ ws/env-fallback</span>
+              <span class="l-act attn">review ready — all checks passed</span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg wait"></span></span>
+              <span class="l-diff"><span class="add">+214</span> <span class="del">−89</span></span><span class="l-time">31:40</span>
+              <span class="l-keys"><span class="kact hot">r review</span><span class="kact">p peek</span></span>
+            </div>
+            <div class="lhead"><span>In the writing room</span><span class="line"></span><span>3</span></div>
+            <div class="lrow" data-open-room>
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark run">❧</span><span class="t">Migrate settings storage to SQLite</span></span>
+              <span class="l-proj">desktop-app</span><span class="l-branch wt">⎇ ws/settings-sqlite</span>
+              <span class="l-act">revising <span class="path">settings-store.ts</span> · check 41s</span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+              <span class="l-diff"><span class="add">+96</span> <span class="del">−12</span></span><span class="l-time">12:34</span>
+              <span class="l-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="lrow">
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark run">❧</span><span class="t">Ship pricing page with annual toggle</span></span>
+              <span class="l-proj">charter-site</span><span class="l-branch">main</span>
+              <span class="l-act">drafting <span class="path">pricing.astro</span></span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg now"></span><span class="gseg"></span></span>
+              <span class="l-diff"><span class="add">+152</span> <span class="del">−9</span></span><span class="l-time">4:03</span>
+              <span class="l-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="lrow">
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark run">❧</span><span class="t">Chase flaky external-cli e2e retry</span></span>
+              <span class="l-proj">desktop-app</span><span class="l-branch">main</span>
+              <span class="l-act">proofing <span class="path">test:e2e · 9/24</span></span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+              <span class="l-diff"><span class="add">+31</span> <span class="del">−17</span></span><span class="l-time">18:42</span>
+              <span class="l-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="lhead"><span>Bound</span><span class="line"></span><span>4 today · 31 this week</span></div>
+            <div class="lrow settled">
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark done">✓</span><span class="t">Harden IPC schema for task events</span></span>
+              <span class="l-proj">desktop-app</span><span class="l-branch">main</span>
+              <span class="l-act idle">accepted · merged clean</span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg done"></span></span>
+              <span class="l-diff"><span class="add">+96</span> <span class="del">−31</span></span><span class="l-time">2h</span>
+              <span class="l-keys"><span class="kact">⏎ replay</span></span>
+            </div>
+            <div class="lrow settled">
+              <span class="cbox"></span>
+              <span class="l-title"><span class="l-mark fail">✗</span><span class="t">Probe: Electron 33 upgrade (rolled back)</span></span>
+              <span class="l-proj">desktop-app</span><span class="l-branch wt">⎇ ws/electron-33</span>
+              <span class="l-act idle">rolled back · main untouched</span>
+              <span class="l-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg fail"></span></span>
+              <span class="l-diff none">—</span><span class="l-time">1d</span>
+              <span class="l-keys"><span class="kact">⏎ replay</span></span>
+            </div>
+            <div class="ledger-bulk">
+              <span class="n">2 selected</span>
+              <button class="press-sm ink">Resolve both ⏎</button>
+              <button class="press-sm">Approve plan · a</button>
+              <button class="press-sm">Grant once · g</button>
+              <span class="hint">j/k navigate · x select · esc clear</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Deck 是纯监控页：发起会话回 Home（titlebar ＋ New session），这里没有输入框 -->
+    </section>
+
+    <!-- ===== Room 场景 ===== -->
+    <section class="scene scene-room">
+      <div class="convo">
+        <div class="timeline" id="timeline">
+          <div class="ms" data-t="0"><span class="ok">✓</span> Plan approved · 14:02</div>
+          <div class="you" data-t="0">
+            <div class="who">YOU</div>
+            Move settings persistence off scattered JSON files onto SQLite. Keep migration transparent.
+          </div>
+          <div class="plan-card" data-t="18">
+            <div class="head">Plan — 4 steps <span class="ok">✓ approved</span></div>
+            <ol>
+              <li class="done"><b>✓</b>settings-store.ts with versioned SQLite schema, WAL mode</li>
+              <li class="done"><b>✓</b>One-shot migration from legacy JSON + snapshot</li>
+              <li class="now"><b>3</b>Swap readers/writers behind the IPC contract</li>
+              <li><b>4</b>Verification — check, unit suite, settings e2e</li>
+            </ol>
+          </div>
+          <div class="trow" data-t="150"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+58</span> <span class="del">−0</span></span></div>
+          <div class="trow" data-t="230"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-migration.ts</span><span><span class="add">+64</span> <span class="del">−0</span></span></div>
+          <div class="agent" data-t="290">
+            <div class="who">CHARTER</div>
+            Legacy files already carry a <span class="dim">schemaVersion</span> field — keying the migration off it, snapshot beside the database.
+          </div>
+          <div class="trow" data-t="572"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="fail">✗ 2 failed</span></div>
+          <div class="ms" data-t="574"><span class="bad">✗</span> Tests failed — journal table · 14:11</div>
+          <div class="trow" data-t="640"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+9</span> <span class="del">−4</span></span></div>
+          <div class="trow" data-t="700"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="ok">✓ 18 passed</span></div>
+          <div class="ms" data-t="702"><span class="ok">✓</span> Steps 1–3 landed · +182 −54 · 6 files</div>
+          <div class="agent" data-t="720">
+            <div class="who">CHARTER</div>
+            Readers and writers are swapped. Starting full verification now.
+          </div>
+          <div class="trow active" data-t="740"><span class="spin"></span><span class="verb">run</span><span class="target">npm run check</span><span id="check-s">41s</span></div>
+        </div>
+        <div class="composer">
+          <div class="comp-line">
+            <input placeholder="Reply — steer, ask, or add context…" />
+            <span class="ref-chip">⌘ settings-store.ts ✕</span>
+            <button class="send-mini"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="canvas">
+        <div class="canvas-tabs">
+          <span class="ctab">Summary</span>
+          <span class="ctab on">Changes <span class="n">6</span></span>
+          <span class="ctab">Preview</span>
+          <span class="ctab">Terminal</span>
+          <span class="ctab">Review</span>
+        </div>
+        <div class="canvas-head">
+          <span class="path">apps/desktop-main/src/services/settings-store.ts</span>
+          <span class="stat"><span class="add">+96</span> <span class="del">−12</span></span>
+          <span class="following" id="follow-badge"><i></i>live following</span>
+        </div>
+        <div class="diff-body">
+          <div class="dl hunk">@@ -1,9 +1,14 @@ bootstrap precedes prepare()</div>
+          <div class="dl ctx"><span class="no">5</span><span class="code">const DB_FILE = 'charter-settings.db'</span></div>
+          <div class="dl add"><span class="no">6</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+          <div class="dl add"><span class="no">7</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+          <div class="dl add"><span class="no">8</span><span class="code">bootstrapSchema(db) // tables exist before any prepare()</span></div>
+          <div class="dl add"><span class="no">9</span><span class="code">const readStmt = db.prepare('SELECT payload FROM settings WHERE scope = ?')</span></div>
+          <div class="dl ctx"><span class="no">10</span><span class="code"></span></div>
+          <div class="dl hunk">@@ -18,11 +23,19 @@ read path</div>
+          <div class="dl ctx"><span class="no">23</span><span class="code">export function readSettings(scope: SettingsScope): SettingsShape {</span></div>
+          <div class="dl del"><span class="no">24</span><span class="code">  const raw = await fs.readFile(settingsPath, 'utf8')</span></div>
+          <div class="dl del"><span class="no">25</span><span class="code">  return JSON.parse(raw) as SettingsShape</span></div>
+          <div class="dl add"><span class="no">24</span><span class="code">  const row = readStmt.get(scope)</span></div>
+          <div class="dl add"><span class="no">25</span><span class="code">  if (!row) return defaultsFor(scope)</span></div>
+          <div class="dl add"><span class="no">26</span><span class="code">  return migrate(JSON.parse(row.payload), CURRENT_SCHEMA_VERSION)</span></div>
+          <div class="dl ctx"><span class="no">27</span><span class="code">}</span></div>
+          <div class="dl hunk">@@ -41,6 +52,21 @@ write path — the quill is here</div>
+          <div class="dl ctx"><span class="no">52</span><span class="code">export function writeSettings(scope: SettingsScope, next: SettingsShape) {</span></div>
+          <div class="dl add"><span class="no">53</span><span class="code">  const tx = db.transaction(() => {</span></div>
+          <div class="dl add"><span class="no">54</span><span class="code">    writeStmt.run(scope, JSON.stringify(next), Date.now())</span></div>
+          <div class="dl add"><span class="no">55</span><span class="code">    journalStmt.run(scope, revisionOf(next))</span></div>
+          <div class="dl add"><span class="no">56</span><span class="code">  })</span></div>
+          <div class="dl add"><span class="no">57</span><span class="code">  tx()</span></div>
+          <div class="dl ctx"><span class="no">58</span><span class="code">}</span></div>
+        </div>
+      </div>
+
+      <!-- 装订线时间带（D 缩略版） -->
+      <footer class="reel" id="reel">
+        <button class="jump-live" id="jump-live">Return to now</button>
+        <div class="meta">
+          <span class="rec"><i></i>recording</span>
+          <span class="cursor-t live" id="cursor-t">T+12:34 · now</span>
+          <span>24 events · 4 gates · 1 failure recovered</span>
+          <span class="expand">hover 展开 · 拖动缝针回看 — 完整体验见 d-reel</span>
+        </div>
+        <div class="rtrack" id="rtrack">
+          <div class="rchapters">
+            <div class="rchapter plan" style="width:9%"></div>
+            <div class="rchapter work" style="width:52%"></div>
+            <div class="rchapter crisis" style="width:17%"></div>
+            <div class="rchapter verify" style="width:22%"></div>
+          </div>
+          <div class="rticks" id="rticks"></div>
+          <div class="rflags">
+            <div class="rflag a" style="left:5.4%">◆ approved</div>
+            <div class="rflag a" style="left:30%">◆ permission</div>
+            <div class="rflag r" style="left:75.5%">✗ tests</div>
+            <div class="rflag g" style="left:92.5%">✓ tests</div>
+          </div>
+          <div class="rlive-end"></div>
+          <div class="rplayhead" id="rplayhead" style="left:100%"></div>
+        </div>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<!-- 注解 -->
+<button class="annot-pill" onclick="document.getElementById('annot').classList.toggle('open')">ⓘ 方案说明</button>
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').classList.remove('open')">✕</button>
+  <b>组合方案 · Atelier 底座</b>（2026-07-19 二稿：按反馈拆分主页）<br/>
+  与 Obsidian 版<span class="hl">完全同构</span>：<span class="hl">Home = 主页就是 Chat 输入</span>
+  （默认打开，masthead + 巨大衬线 composer，保持现状），<span class="hl">Deck = 纯监控新入口</span>
+  （「今日版面」，无任何输入框），Room 底部胶片转译为<span class="hl">装订线</span>（缝针播放头可拖动）。
+  Rows 密度转译为印刷账本。现有四入口零改动。<br/>
+  试试：Home 摘要行 → Deck → 切 Ledger → rail 首行进 Room → ⌂ 回 Home。
+</aside>
+
+<script>
+(function () {
+  // ---- 场景切换：Home（默认，Chat 输入）⇄ Deck（纯监控）⇄ Room ----
+  const body = document.body;
+  const ctxHome = document.getElementById('tb-ctx-home');
+  const ctxDeck = document.getElementById('tb-ctx-deck');
+  const ctxRoom = document.getElementById('tb-ctx-room');
+  const actHome = document.getElementById('act-home');
+  const actDeck = document.getElementById('act-deck');
+  const actSessions = document.getElementById('act-sessions');
+  function show (scene) {
+    body.dataset.scene = scene;
+    ctxHome.style.display = scene === 'home' ? 'flex' : 'none';
+    ctxDeck.style.display = scene === 'deck' ? 'flex' : 'none';
+    ctxRoom.style.display = scene === 'room' ? 'flex' : 'none';
+    actHome.classList.toggle('active', scene === 'home');
+    actDeck.classList.toggle('active', scene === 'deck');
+    document.querySelectorAll('.tocrow').forEach(r => r.classList.toggle('sel', scene === 'room' && r.hasAttribute('data-open-room')));
+  }
+  actHome.addEventListener('click', () => show('home'));
+  document.getElementById('act-brand').addEventListener('click', () => show('home'));
+  actDeck.addEventListener('click', () => show('deck'));
+  actSessions.addEventListener('click', () => show('home'));
+  document.getElementById('new-session').addEventListener('click', () => show('home'));
+  document.querySelectorAll('[data-goto-deck]').forEach(el => el.addEventListener('click', () => show('deck')));
+  document.querySelectorAll('[data-open-room]').forEach(el => el.addEventListener('click', () => show('room')));
+
+  // ---- 密度切换 ----
+  const deckScroll = document.getElementById('deck-scroll');
+  document.querySelectorAll('#density button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#density button').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      deckScroll.dataset.density = btn.dataset.mode;
+    });
+  });
+
+  // ---- 墨柱活动图 + 羽笔轮换 ----
+  const inkwave = document.getElementById('inkwave');
+  for (let i = 0; i < 14; i++) {
+    const bar = document.createElement('i');
+    bar.style.height = (15 + Math.random() * 80) + '%';
+    bar.style.animationDelay = (Math.random() * 2.4) + 's';
+    inkwave.appendChild(bar);
+  }
+  setInterval(() => {
+    inkwave.children[Math.floor(Math.random() * inkwave.children.length)].style.height = (15 + Math.random() * 85) + '%';
+  }, 240);
+  const feeds = {
+    'act-1': ['settings-store.ts', 'settings-migration.ts', 'ipc-contracts/channels.ts'],
+    'act-2': ['pricing.astro', 'PlanToggle.tsx'],
+    'act-3': ['test:e2e — 9 of 24', 'external-cli.spec.ts:214', 'test:e2e — 11 of 24']
+  };
+  Object.keys(feeds).forEach((id, k) => {
+    let i = 0;
+    setInterval(() => {
+      i = (i + 1) % feeds[id].length;
+      const el = document.getElementById(id);
+      if (el) { el.style.transition = 'opacity 0.25s'; el.style.opacity = 0; setTimeout(() => { el.textContent = feeds[id][i]; el.style.opacity = 1; }, 260); }
+    }, 3000 + k * 800);
+  });
+
+  // ---- 装订线拖动回看 ----
+  const TOTAL = 754;
+  const rtrack = document.getElementById('rtrack');
+  const rplayhead = document.getElementById('rplayhead');
+  const cursorT = document.getElementById('cursor-t');
+  const jumpLive = document.getElementById('jump-live');
+  const followBadge = document.getElementById('follow-badge');
+  const timed = Array.from(document.querySelectorAll('#timeline [data-t]'));
+  const rticks = document.getElementById('rticks');
+  [[2,'gate'],[5.4,'gate'],[10,'edit'],[16,'run'],[22,'edit'],[30,'gate'],[36,'edit'],[44,'edit'],[52,'edit'],[60,'run'],[68,'edit'],[75.5,'fail'],[82,'edit'],[92.5,'run'],[97,'run']].forEach(([pct, cls]) => {
+    const t = document.createElement('i');
+    t.className = 'rtick ' + cls;
+    t.style.left = pct + '%';
+    t.style.height = (cls === 'gate' ? 14 : 6 + Math.random() * 8) + 'px';
+    rticks.appendChild(t);
+  });
+  function fmt (s) {
+    const m = Math.floor(s / 60), r = Math.floor(s % 60).toString().padStart(2, '0');
+    return 'T+' + String(m).padStart(2, '0') + ':' + r;
+  }
+  let cur = TOTAL;
+  function setTime (sec) {
+    cur = Math.max(0, Math.min(TOTAL, sec));
+    rplayhead.style.left = (cur / TOTAL * 100) + '%';
+    const live = cur >= TOTAL - 0.5;
+    cursorT.textContent = live ? fmt(TOTAL) + ' · now' : fmt(cur) + ' · replay';
+    cursorT.classList.toggle('live', live);
+    jumpLive.classList.toggle('show', !live);
+    followBadge.style.opacity = live ? 1 : 0.35;
+    timed.forEach(el => el.classList.toggle('dimmed', parseFloat(el.dataset.t) > cur));
+  }
+  let dragging = false;
+  function posToSec (x) { const r = rtrack.getBoundingClientRect(); return (x - r.left) / r.width * TOTAL; }
+  rtrack.addEventListener('mousedown', e => { dragging = true; setTime(posToSec(e.clientX)); });
+  window.addEventListener('mousemove', e => { if (dragging) setTime(posToSec(e.clientX)); });
+  window.addEventListener('mouseup', () => { dragging = false; });
+  jumpLive.addEventListener('click', () => setTime(TOTAL));
+
+  const checkS = document.getElementById('check-s');
+  let s = 41;
+  setInterval(() => { if (cur >= TOTAL - 0.5) { s += 1; checkS.textContent = s + 's'; } }, 1000);
+})();
+</script>
+</body>
+</html>

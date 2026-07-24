@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Memory IA v2 — 项目优先的信息架构(用户反馈迭代)</title>
+<style>
+  :root {
+    --font-ui: 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Songti SC', serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Songti SC', serif;
+    --font-mono: 'SF Mono', ui-monospace, Menlo, monospace;
+    --bg-app: #ded2bc; --bg-sidebar: #f5ead5; --bg-input: #fffaf0; --bg-card: #fff8e9;
+    --bg-chip: #eadbc2; --bg-hover: #eee0c8; --bg-active: #e3d0b0;
+    --border: #d8c4a3; --border-soft: #e9d9bd; --border-strong: #b99d78;
+    --fg: #392a21; --fg-muted: #795f4f; --fg-faint: #a48570;
+    --accent: #b94e32; --accent-fg: #fffaf0; --success: #4f754d; --warn: #8a6a1f; --info: #4a6d8c;
+    --shadow-card: 0 1px 1px rgba(62,40,25,.06), 0 12px 32px rgba(62,40,25,.1);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { padding: 40px 48px 90px; background: var(--bg-app); color: var(--fg); font: 14px/1.6 var(--font-ui); }
+  h1 { font: 650 24px/1.3 var(--font-display); }
+  .sub { max-width: 880px; margin: 10px 0 26px; color: var(--fg-muted); }
+  .stage { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; }
+  .notes { width: 290px; flex: none; display: grid; gap: 9px; }
+  .note { padding: 10px 13px; border: 1px solid var(--border-soft); border-left: 3px solid var(--border-strong); border-radius: 8px; background: var(--bg-card); font-size: 12.5px; color: var(--fg-muted); }
+  .note b { color: var(--fg); }
+  .note.q { border-left-color: var(--accent); }
+  .note.q::before { content: '待确认 · '; color: var(--accent); font-weight: 640; }
+
+  .win { width: 1020px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-sidebar); box-shadow: var(--shadow-card); overflow: hidden; }
+  .win-title { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border-soft); color: var(--fg-muted); font-size: 12.5px; }
+  .dots { display: flex; gap: 6px; margin-right: 6px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--bg-chip); border: 1px solid var(--border); }
+  .body { display: flex; min-height: 560px; }
+
+  /* left nav: GLOBAL + PROJECTS */
+  .nav { width: 230px; flex: none; border-right: 1px solid var(--border-soft); background: var(--bg-sidebar); padding: 12px 8px; overflow: auto; }
+  .nav-group { font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--fg-faint); padding: 12px 10px 4px; }
+  .nav-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; border: 0; background: none; color: var(--fg-muted); font: inherit; font-size: 13px; padding: 7px 10px; border-radius: 8px; cursor: pointer; }
+  .nav-item:hover { background: var(--bg-hover); color: var(--fg); }
+  .nav-item.on { background: var(--bg-active); color: var(--fg); font-weight: 640; }
+  .nav-item .logo { width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); display: grid; place-items: center; font-size: 11px; flex: none; }
+  .nav-item .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nav-item .n { font: 600 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+  .nav-item .badge { min-width: 16px; text-align: center; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font: 640 10px/1.5 var(--font-mono); padding: 0 4px; }
+  .nav-item .cur { font-size: 9.5px; color: var(--success); border: 1px solid #b6c6a8; border-radius: 999px; padding: 0 6px; }
+
+  /* right pane */
+  .main { flex: 1; min-width: 0; background: var(--bg-input); display: flex; flex-direction: column; }
+  .crumb { display: flex; align-items: baseline; gap: 10px; padding: 13px 20px 0; }
+  .crumb b { font: 640 15px/1.3 var(--font-display); }
+  .crumb .path { font: 11px var(--font-mono); color: var(--fg-faint); }
+  .tabs { display: flex; gap: 4px; padding: 10px 20px 0; border-bottom: 1px solid var(--border-soft); }
+  .tabs button { border: 0; background: none; font: 600 12.5px/1 var(--font-ui); color: var(--fg-muted); padding: 8px 12px 10px; cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs button.on { color: var(--fg); border-bottom-color: var(--accent); }
+  .tabs button .mini { font: 600 10px/1 var(--font-mono); color: var(--fg-faint); margin-left: 4px; }
+  .content { flex: 1; overflow: auto; padding: 16px 20px 24px; display: grid; gap: 11px; align-content: start; max-width: 720px; }
+  .stats { display: flex; gap: 20px; font-size: 11.5px; color: var(--fg-muted); }
+  .stats b { display: block; font-size: 16px; color: var(--fg); }
+  .card { border: 1px solid var(--border-soft); border-radius: 11px; background: var(--bg-card); padding: 11px 14px; }
+  .cand { border-left: 3px solid var(--warn); display: grid; gap: 7px; }
+  .cand .o { font-size: 11px; color: var(--fg-faint); }
+  .cand textarea { border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg-input); font: 13px/1.55 var(--font-ui); color: var(--fg); padding: 7px 10px; resize: vertical; }
+  .rule { display: flex; gap: 10px; align-items: flex-start; }
+  .rule .t { flex: 1; font-size: 13px; }
+  .rule .meta { font-size: 10.5px; color: var(--fg-faint); margin-top: 3px; display: flex; gap: 8px; }
+  .rule .meta .src { border: 1px solid var(--border-soft); border-radius: 999px; padding: 0 7px; background: var(--bg-input); }
+  .toggle { position: relative; width: 34px; height: 19px; flex: none; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--success); cursor: pointer; }
+  .toggle::after { content: ''; position: absolute; top: 1px; left: 16px; width: 15px; height: 15px; border-radius: 50%; background: #fff; border: 1px solid var(--border-strong); }
+  .btn { padding: 4px 11px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: 600 12px/1.4 var(--font-ui); cursor: pointer; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .btn.quiet { border-color: var(--border-soft); color: var(--fg-muted); }
+  .row-actions { display: flex; gap: 7px; }
+  .hint { font-size: 11px; color: var(--fg-faint); line-height: 1.6; }
+  .file { display: grid; gap: 3px; }
+  .file .h { display: flex; gap: 9px; align-items: baseline; }
+  .file .h .label { font: 640 12.5px var(--font-mono); }
+  .file .h .scope { border: 1px solid var(--border-soft); border-radius: 999px; padding: 0 7px; font-size: 10px; color: var(--fg-faint); }
+  .file .h .when { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); }
+  .file .s { font-size: 12px; color: var(--fg-muted); }
+  .file .p { font: 10.5px var(--font-mono); color: var(--fg-faint); }
+</style>
+</head>
+<body>
+
+<h1>Memory IA v2 — 项目优先(按你的反馈重排)</h1>
+<p class="sub">变更:左列不再是功能分区,而是 <b>GLOBAL(全局记忆)+ PROJECTS(所有打开过的项目)</b>。点一个项目 → 右区显示它的三块内容(Rules / Sync / Private memory);点全局条目 → 显示该 CLI 的全局文件。不再依赖"当前打开的项目",Memory 自带项目选择。下面可点:左列切换、右区子页签切换。</p>
+
+<div class="stage">
+  <div class="win">
+    <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Memory</div>
+    <div class="body">
+      <nav class="nav">
+        <div class="nav-group">Global — all projects</div>
+        <button class="nav-item" data-v="gclaude"><span class="logo">✳</span><span class="t">Claude Code</span><span class="n">1</span></button>
+        <button class="nav-item" data-v="gcodex"><span class="logo">▣</span><span class="t">Codex</span><span class="n">1</span></button>
+        <div class="nav-group">Projects</div>
+        <button class="nav-item on" data-v="charter"><span class="logo">📁</span><span class="t">charter</span><span class="badge">2</span><span class="n">5</span></button>
+        <button class="nav-item" data-v="fable5"><span class="logo">📁</span><span class="t">fable5</span><span class="cur">current</span><span class="n">0</span></button>
+        <button class="nav-item" data-v="pi"><span class="logo">📁</span><span class="t">Pi_Agentic_IDE_Spec…</span><span class="n">3</span></button>
+      </nav>
+
+      <!-- project view -->
+      <div class="main" id="v-charter">
+        <div class="crumb"><b>charter</b><span class="path">~/git/charter-site</span></div>
+        <div class="tabs" id="tabs-charter">
+          <button class="on" data-t="rules">Rules<span class="mini">5</span></button>
+          <button data-t="sync">Sync & distribution</button>
+          <button data-t="priv">Private memory<span class="mini">3</span></button>
+        </div>
+        <div class="content" id="t-rules">
+          <div class="stats">
+            <span><b>5</b>enabled rules</span><span><b>12</b>tasks injected · 7d</span><span><b>3</b>slipped again</span><span><b>2</b>candidates</span>
+          </div>
+          <div class="card cand">
+            <div class="o">修复登录重定向 · Request fix · ×2 similar corrections</div>
+            <textarea rows="2">Never use default export — named exports only.</textarea>
+            <div class="row-actions"><button class="btn primary">Distill into a rule</button><button class="btn quiet">Not a rule</button></div>
+          </div>
+          <div class="card rule">
+            <div style="flex:1"><div class="t">Tests use vitest only; never introduce jest.</div>
+              <div class="meta"><span class="src">补边界测试 · Request fix</span><span style="color:var(--success)">injected into 12 tasks</span></div></div>
+            <div class="row-actions"><button class="btn quiet">Edit</button><div class="toggle"></div></div>
+          </div>
+          <div class="card rule">
+            <div style="flex:1"><div class="t">Do not touch src/legacy/** — read-only until the migration lands.</div>
+              <div class="meta"><span class="src">重构 util 模块 · Plan changes</span><span style="color:var(--warn)">slipped again ×2</span></div></div>
+            <div class="row-actions"><button class="btn quiet">Edit</button><div class="toggle"></div></div>
+          </div>
+          <div class="hint">Stored in ~/git/charter-site/.charter/rules.md — hand edits safe, git-shareable. <button class="btn quiet">Reveal in Finder</button></div>
+        </div>
+        <div class="content" id="t-sync" style="display:none">
+          <div class="card"><b style="font-size:13px">Charter · managed runs</b><div class="hint" style="margin-top:5px">Always on — rules ride every run &amp; reply, no project file involved.</div></div>
+          <div class="card"><b style="font-size:13px">Claude Code · CLAUDE.md</b> <span style="font:600 10px var(--font-mono);color:var(--success)">✓ synced</span><div class="hint" style="margin-top:5px">Managed block holds one @.charter/rules.md import line.</div></div>
+          <div class="card"><b style="font-size:13px">Codex · AGENTS.md</b> <span style="font:600 10px var(--font-mono);color:var(--fg-faint)">off</span><div class="hint" style="margin-top:5px">Rendered rule list inside the managed block. Enable to project.</div></div>
+        </div>
+        <div class="content" id="t-priv" style="display:none">
+          <div class="hint">Claude Code auto-memory for THIS project (~/.claude/projects/…/memory). Read-only discovery; edits/deletes are explicit, deletes back up first; Promote copies into rule candidates (one-way). Codex keeps no per-project auto-memory in this version.</div>
+          <div class="card file"><div class="h"><span class="label">MEMORY.md</span><span class="scope">index</span><span class="when">yesterday</span></div><div class="s">Memory Index — deploy-process, api-conventions…</div><div class="p">~/.claude/projects/-Users-edy-git-charter-site/memory/MEMORY.md</div></div>
+          <div class="card file"><div class="h"><span class="label">deploy-process.md</span><span class="when">2d ago</span></div><div class="s">部署前要先跑 release:verify,产物只认 dist/…</div><div class="row-actions" style="margin-top:6px"><button class="btn quiet">View</button><button class="btn quiet">Edit</button><button class="btn">↑ Promote to rule</button><button class="btn quiet">Delete</button></div></div>
+        </div>
+      </div>
+
+      <!-- global claude view -->
+      <div class="main" id="v-gclaude" style="display:none">
+        <div class="crumb"><b>Claude Code — global</b><span class="path">applies to every project</span></div>
+        <div class="content" style="padding-top:16px">
+          <div class="hint">Global instruction file — Claude Code reads it in every project. Managed here, never merged into project rules unless you promote a piece explicitly.</div>
+          <div class="card file"><div class="h"><span class="label">CLAUDE.md</span><span class="scope">global</span><span class="when">12d ago</span></div><div class="s"># Global hand-written instructions…</div><div class="p">~/.claude/CLAUDE.md</div><div class="row-actions" style="margin-top:6px"><button class="btn quiet">View</button><button class="btn quiet">Edit</button><button class="btn quiet">Delete</button></div></div>
+        </div>
+      </div>
+
+      <!-- global codex view -->
+      <div class="main" id="v-gcodex" style="display:none">
+        <div class="crumb"><b>Codex — global</b><span class="path">applies to every project</span></div>
+        <div class="content" style="padding-top:16px">
+          <div class="card file"><div class="h"><span class="label">AGENTS.md</span><span class="scope">global</span><span class="when">20d ago</span></div><div class="s"># Global hand-written instructions…</div><div class="p">~/.codex/AGENTS.md</div><div class="row-actions" style="margin-top:6px"><button class="btn quiet">View</button><button class="btn quiet">Edit</button></div></div>
+          <div class="hint" style="border:1px dashed var(--border-strong);border-radius:9px;padding:9px 12px">This Codex version keeps no auto-memory directory — only AGENTS.md files exist. Honest empty state, same read-only rules if a future version adds one.</div>
+        </div>
+      </div>
+
+      <!-- fable5 (empty project) view -->
+      <div class="main" id="v-fable5" style="display:none">
+        <div class="crumb"><b>fable5</b><span class="path">~/git/fable5</span></div>
+        <div class="tabs"><button class="on">Rules<span class="mini">0</span></button><button>Sync & distribution</button><button>Private memory<span class="mini">0</span></button></div>
+        <div class="content">
+          <div class="hint" style="border:1px dashed var(--border-strong);border-radius:9px;padding:12px 14px">No rules yet. Reject a hunk or send a request-fix note during review and Charter offers to distill it — or add one below.</div>
+          <div style="display:flex;gap:8px"><textarea rows="1" style="flex:1;border:1px solid var(--border-soft);border-radius:8px;background:var(--bg-input);font:13px var(--font-ui);padding:7px 10px" placeholder="New rule…"></textarea><button class="btn primary">Add rule</button></div>
+        </div>
+      </div>
+
+      <!-- pi project view (reuses charter layout conceptually) -->
+      <div class="main" id="v-pi" style="display:none">
+        <div class="crumb"><b>Pi_Agentic_IDE_Spec_Package_v1.0</b><span class="path">~/git/Pi_Agentic_IDE_Spec_Package_v1.0</span></div>
+        <div class="tabs"><button class="on">Rules<span class="mini">3</span></button><button>Sync & distribution</button><button>Private memory<span class="mini">14</span></button></div>
+        <div class="content">
+          <div class="stats"><span><b>3</b>enabled rules</span><span><b>4</b>tasks injected · 7d</span><span><b>0</b>slipped again</span><span><b>0</b>candidates</span></div>
+          <div class="card rule"><div style="flex:1"><div class="t">Run npm run check before marking anything DONE.</div><div class="meta"><span class="src">hand written</span></div></div><div class="row-actions"><button class="btn quiet">Edit</button><div class="toggle"></div></div></div>
+          <div class="hint">…(此项目真实的 Claude 自动记忆有 14 条,在 Private memory 页签)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <div class="note"><b>IA 变更(按你说的)。</b>左列=GLOBAL(Claude/Codex 全局文件,对所有项目生效)+ PROJECTS(所有打开过的项目全集,来自产品的 workspace 注册表,不是"当前项目")。点项目 → 右区三页签:Rules / Sync / Private memory(该项目的 Claude 自动记忆)。</div>
+    <div class="note"><b>徽章。</b>项目行:红点=待批候选数,灰数字=规则数;"current"=当前打开的项目(默认选中它,没有则选第一个)。全局行灰数字=文件数。</div>
+    <div class="note"><b>原来的五分区去哪了。</b>Project rules/Sync/Claude/Codex/Charter ledger 拆散重组:规则和同步归项目;私有记忆按"全局 vs 项目"归位;Charter ledger 说明并入项目视图底部一句话(它本来就只是解释)。</div>
+    <div class="note q">项目列表来源:mock 按「打开过的全部项目(workspace 注册表),按最近打开排序」。要不要仅显示"有记忆内容的项目"或提供过滤?</div>
+    <div class="note q">默认选中:mock 按「当前打开的项目,无则列表第一个」。可接受?</div>
+    <div class="note q">rail 里 Sessions 面板的项目分组(charter/fable5)与这里的项目列表是同一个来源,顺序保持一致——对吧?</div>
+  </div>
+</div>
+
+<script>
+  const views = ['gclaude','gcodex','charter','fable5','pi'];
+  document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(x => x.classList.toggle('on', x === item));
+    views.forEach(v => { document.getElementById('v-' + v).style.display = v === item.dataset.v ? '' : 'none'; });
+  }));
+  document.querySelectorAll('#tabs-charter button').forEach(tab => tab.addEventListener('click', () => {
+    document.querySelectorAll('#tabs-charter button').forEach(x => x.classList.toggle('on', x === tab));
+    ['rules','sync','priv'].forEach(t => { document.getElementById('t-' + t).style.display = t === tab.dataset.t ? '' : 'none'; });
+  }));
+</script>
+</body>
+</html>

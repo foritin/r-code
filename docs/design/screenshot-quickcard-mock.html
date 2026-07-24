@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Charter · 截屏浮卡 Mock（系统截屏落盘 → 一步喂给 agent）</title>
+<style>
+  /* ============ tokens：与 follow-mode-mock / theme.css 完全一致 ============ */
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', monospace;
+    --bg-app: #eceae5; --bg-sidebar: #f6f5f1; --bg-editor: #fbfaf7;
+    --bg-card: #ffffff; --bg-chip: #edeae3; --bg-hover: #e8e5de;
+    --bg-selected: #e9e6df; --border: #e5e1d8; --border-strong: #cfcabf;
+    --fg: #201e1a; --fg-muted: #5c584f; --fg-faint: #8a857a;
+    --accent: #1b1a16; --accent-fg: #fff;
+    --danger: #c4453d; --danger-bg: #fdecea;
+    --warning: #b06f10; --warning-bg: #faf0dc;
+    --success: #2f9e63; --success-bg: #e7f5ec;
+    --info: #3f7bd9; --info-bg: #e9f1fd;
+    --fs-body: 13px; --fs-secondary: 12px; --fs-min: 11px;
+    --fs-title: 15px; --fs-display: 20px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font-ui); font-size: var(--fs-body); color: var(--fg);
+    background: var(--bg-app); height: 100vh; display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ============ demo chrome（非产品 UI）============ */
+  .chrome {
+    display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+    background: #262420; color: #e8e5de; font-size: var(--fs-secondary); flex: none; z-index: 60;
+  }
+  .chrome b { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .chrome .tabs { display: flex; gap: 4px; }
+  .chrome .tabs button { padding: 5px 12px; border-radius: 6px; color: #b5b0a4; }
+  .chrome .tabs button.on { background: #3d3a33; color: #fff; }
+  .chrome .sp { flex: 1; }
+  .chrome .hint { color: #8a857a; }
+
+  .tag {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin: 0 3px; vertical-align: 2px;
+    border-radius: 8px; background: #7a5cc5; color: #fff;
+    font-size: 10px; font-style: normal; font-weight: 700; cursor: help;
+  }
+
+  /* ============ 应用布局（简化版主界面，仅作舞台）============ */
+  .app { flex: 1; display: flex; min-height: 0; position: relative; }
+  .abar {
+    width: 46px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    align-items: center; padding: 12px 0 10px; gap: 4px;
+  }
+  .abar button {
+    width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; color: var(--fg-muted); font-size: 15px;
+  }
+  .abar button.on { background: var(--bg-selected); color: var(--fg); }
+  .abar .grow { flex: 1; }
+
+  .rail {
+    width: 250px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    padding: 10px 8px 8px;
+  }
+  .rail-head { display: flex; align-items: center; padding: 2px 8px 10px; gap: 8px; }
+  .rail-head h1 { font-size: var(--fs-title); font-weight: 650; font-family: var(--font-display); }
+  .srow {
+    display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+    padding: 7px 10px 7px 22px; border-radius: 8px; position: relative;
+  }
+  .srow.sel { background: var(--bg-selected); }
+  .srow.sel::before { content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .srow .l1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .srow .tt { font-size: var(--fs-body); font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .l2 { font-size: var(--fs-secondary); color: var(--fg-muted); padding-left: 15px; white-space: nowrap; overflow: hidden; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.run { background: var(--success); animation: pulse 1.6s infinite; }
+  .dot.idle { background: var(--border-strong); }
+  @keyframes pulse { 50% { opacity: .45; } }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-editor); }
+  .room-head { flex: none; padding: 14px 24px 10px; border-bottom: 1px solid var(--border); }
+  .room-head h2 { font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; }
+  .room-head .meta { font-size: var(--fs-secondary); color: var(--fg-muted); margin-top: 4px; }
+
+  /* 会话流（示意） */
+  .flow { flex: 1; min-height: 0; overflow: hidden; padding: 18px 24px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 640px; }
+  .msg .who { font-size: var(--fs-min); font-weight: 700; color: var(--fg-faint); margin-bottom: 4px; letter-spacing: .3px; }
+  .msg .bub { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 13px; line-height: 1.55; }
+  .msg.me .bub { background: var(--bg-chip); }
+  .term-mini {
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6;
+    background: #201e1a; color: #d6d2c6; border-radius: 8px; padding: 10px 12px; margin-top: 8px;
+  }
+  .term-mini .err { color: #f2857c; }
+  .term-mini .dim { color: #8a857a; }
+
+  /* Composer */
+  .composer-wrap { flex: none; padding: 12px 24px 16px; }
+  .composer {
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 1px 3px rgba(30,26,18,.06); overflow: hidden;
+  }
+  .attach-strip { display: none; gap: 8px; padding: 10px 12px 0; flex-wrap: wrap; }
+  body.s3 .attach-strip { display: flex; }
+  .attach-chip {
+    display: flex; align-items: center; gap: 8px; background: var(--bg-chip);
+    border: 1px solid var(--border); border-radius: 8px; padding: 5px 9px 5px 5px;
+    font-size: var(--fs-secondary);
+  }
+  .attach-chip .thumb {
+    width: 34px; height: 24px; border-radius: 4px; overflow: hidden; flex: none;
+    border: 1px solid var(--border-strong); position: relative; background: #dcd9d1;
+  }
+  .attach-chip .thumb .shot-mini { transform: scale(.14); transform-origin: 0 0; }
+  .attach-chip .nm { font-weight: 600; }
+  .attach-chip .anno-badge { color: var(--danger); font-size: var(--fs-min); font-weight: 700; }
+  .attach-chip .x { color: var(--fg-faint); padding: 0 2px; }
+  .composer textarea {
+    width: 100%; border: none; outline: none; resize: none; font: inherit; color: inherit;
+    padding: 12px 14px 6px; background: transparent; height: 62px;
+  }
+  .composer-foot { display: flex; align-items: center; gap: 10px; padding: 6px 12px 10px; font-size: var(--fs-secondary); color: var(--fg-faint); }
+  .composer-foot .sp { flex: 1; }
+  .btn-send { background: var(--accent); color: var(--accent-fg); border-radius: 7px; padding: 5px 14px; font-weight: 600; font-size: var(--fs-secondary); }
+
+  /* ============ 假截屏内容（一个报错的终端窗口，当缩略图/标注底图用）============ */
+  .shot-mini {
+    width: 560px; height: 360px; background: #e8e6e1; border-radius: 10px;
+    padding: 26px 40px; font-family: var(--font-mono);
+  }
+  .shot-mini .win {
+    background: #1d1b17; border-radius: 9px; height: 100%; overflow: hidden;
+    box-shadow: 0 14px 34px rgba(0,0,0,.28); display: flex; flex-direction: column;
+  }
+  .shot-mini .bar { display: flex; gap: 6px; padding: 9px 11px; background: #2b2823; }
+  .shot-mini .bar i { width: 10px; height: 10px; border-radius: 50%; }
+  .shot-mini .bar i:nth-child(1){background:#f26257}.shot-mini .bar i:nth-child(2){background:#f5b944}.shot-mini .bar i:nth-child(3){background:#48ba61}
+  .shot-mini pre { flex: 1; padding: 12px 14px; font-size: 11px; line-height: 1.7; color: #c9c5b9; overflow: hidden; }
+  .shot-mini .err { color: #f2857c; } .shot-mini .dim { color: #7d786c; } .shot-mini .ok { color: #7fc98f; }
+
+  /* ============ ① 浮卡本体 ============ */
+  .quickcard {
+    position: absolute; right: 22px; bottom: 96px; width: 324px; z-index: 40;
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 13px;
+    box-shadow: 0 10px 34px rgba(30,26,18,.20), 0 2px 6px rgba(30,26,18,.08);
+    overflow: hidden; display: none;
+    animation: slidein .28s cubic-bezier(.2,.9,.3,1);
+  }
+  body.s1 .quickcard { display: block; }
+  @keyframes slidein { from { transform: translateY(14px); opacity: 0; } }
+
+  .qc-head { display: flex; align-items: center; gap: 8px; padding: 11px 12px 0; }
+  .qc-head .cam {
+    width: 26px; height: 26px; border-radius: 7px; background: var(--info-bg); color: var(--info);
+    display: flex; align-items: center; justify-content: center; font-size: 14px; flex: none;
+  }
+  .qc-head .t { font-weight: 650; font-size: var(--fs-body); }
+  .qc-head .sub { font-size: var(--fs-min); color: var(--fg-faint); margin-top: 1px; }
+  .qc-head .sp { flex: 1; }
+  .qc-head .x { color: var(--fg-faint); font-size: 15px; padding: 4px 6px; border-radius: 6px; }
+  .qc-head .x:hover { background: var(--bg-hover); color: var(--fg); }
+
+  .qc-shot {
+    margin: 10px 12px 0; border-radius: 9px; overflow: hidden; position: relative;
+    border: 1px solid var(--border); height: 176px; background: #dcd9d1; cursor: zoom-in;
+  }
+  .qc-shot .shot-mini { transform: scale(.535); transform-origin: 0 0; }
+  .qc-shot .fname {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 10px 7px;
+    background: linear-gradient(transparent, rgba(20,18,14,.72));
+    color: #f2efe8; font-size: var(--fs-min); font-family: var(--font-mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .qc-shot .stack-badge {
+    position: absolute; top: 8px; right: 8px; background: rgba(20,18,14,.72); color: #f2efe8;
+    border-radius: 6px; padding: 2px 8px; font-size: var(--fs-min); font-weight: 650;
+  }
+
+  .qc-actions { padding: 10px 12px 4px; display: flex; flex-direction: column; gap: 6px; }
+  .qc-btn {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px;
+  }
+  .qc-btn:hover { background: var(--bg-hover); }
+  .qc-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .qc-btn.primary:hover { background: #33312b; }
+  .qc-btn .ic { width: 18px; text-align: center; flex: none; font-size: 14px; }
+  .qc-btn .lbl { font-weight: 650; font-size: var(--fs-body); }
+  .qc-btn .desc { font-size: var(--fs-min); margin-top: 1px; opacity: .72; }
+  .qc-btn .kbd {
+    margin-left: auto; flex: none; font-family: var(--font-mono); font-size: 10px;
+    border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px; opacity: .55;
+  }
+
+  .qc-foot { padding: 8px 12px 10px; display: flex; align-items: center; gap: 8px; font-size: var(--fs-min); color: var(--fg-faint); }
+  .qc-foot .bar { flex: 1; height: 3px; border-radius: 2px; background: var(--bg-chip); overflow: hidden; }
+  .qc-foot .bar i { display: block; height: 100%; width: 100%; background: var(--border-strong); border-radius: 2px; animation: drain 8s linear infinite; }
+  @keyframes drain { from { width: 100%; } to { width: 0; } }
+
+  /* ============ ② 标注器（已有组件，浮卡只是入口）============ */
+  .anno-overlay {
+    position: absolute; inset: 0; z-index: 50; display: none;
+    background: rgba(26,24,20,.45); align-items: center; justify-content: center;
+  }
+  body.s2 .anno-overlay { display: flex; }
+  .anno-modal {
+    width: 680px; background: var(--bg-card); border-radius: 14px; overflow: hidden;
+    box-shadow: 0 22px 60px rgba(20,18,14,.35); display: flex; flex-direction: column;
+    animation: slidein .28s cubic-bezier(.2,.9,.3,1);
+  }
+  .anno-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .anno-head .t { font-weight: 650; }
+  .anno-head .fn { font-family: var(--font-mono); font-size: var(--fs-min); color: var(--fg-faint); }
+  .anno-head .sp { flex: 1; }
+  .anno-tools { display: flex; gap: 2px; background: var(--bg-chip); border-radius: 8px; padding: 3px; }
+  .anno-tools button { width: 30px; height: 26px; border-radius: 6px; font-size: 13px; color: var(--fg-muted); }
+  .anno-tools button.on { background: var(--bg-card); color: var(--fg); box-shadow: 0 1px 2px rgba(30,26,18,.10); }
+  .anno-canvas { position: relative; background: #dcd9d1; height: 400px; overflow: hidden; }
+  .anno-canvas .shot-mini { transform: scale(1.214); transform-origin: 0 0; }
+  .anno-rect {
+    position: absolute; border: 2.5px solid var(--danger); border-radius: 4px;
+    left: 128px; top: 208px; width: 388px; height: 58px;
+    box-shadow: 0 0 0 3px rgba(196,69,61,.18);
+  }
+  .anno-arrow { position: absolute; left: 372px; top: 122px; color: var(--danger); }
+  .anno-note {
+    position: absolute; left: 300px; top: 96px; background: var(--danger); color: #fff;
+    font-size: var(--fs-secondary); font-weight: 650; border-radius: 7px; padding: 4px 9px;
+    box-shadow: 0 3px 10px rgba(196,69,61,.4);
+  }
+  .anno-foot { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-top: 1px solid var(--border); }
+  .anno-foot .sp { flex: 1; }
+  .anno-foot .ghost { color: var(--fg-muted); padding: 6px 12px; border-radius: 7px; }
+  .anno-foot .ghost:hover { background: var(--bg-hover); }
+  .anno-foot .second { border: 1px solid var(--border-strong); border-radius: 7px; padding: 6px 13px; font-weight: 600; }
+  .anno-foot .go { background: var(--accent); color: var(--accent-fg); border-radius: 7px; padding: 6px 15px; font-weight: 650; }
+
+  /* ============ ③ 已附上 toast ============ */
+  .toast {
+    position: absolute; right: 22px; bottom: 96px; z-index: 40; display: none;
+    align-items: center; gap: 9px; background: var(--accent); color: var(--accent-fg);
+    border-radius: 10px; padding: 10px 14px; box-shadow: 0 8px 26px rgba(30,26,18,.28);
+    font-size: var(--fs-secondary); animation: slidein .28s cubic-bezier(.2,.9,.3,1);
+  }
+  body.s3 .toast { display: flex; }
+  .toast .ok { color: #8fdcae; font-size: 14px; }
+  .toast .undo { color: #d8d4c8; text-decoration: underline; text-underline-offset: 2px; }
+
+  /* 状态解说条 */
+  .caption {
+    position: absolute; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 55;
+    background: #262420; color: #d8d4c8; border-radius: 999px; padding: 7px 18px;
+    font-size: var(--fs-secondary); box-shadow: 0 6px 20px rgba(20,18,14,.3);
+    white-space: nowrap;
+  }
+  .caption b { color: #fff; }
+</style>
+</head>
+<body class="s1">
+
+<div class="chrome">
+  <b>Charter</b>
+  <span>截屏浮卡 · Screenshot Quick Card Mock</span>
+  <div class="tabs">
+    <button class="on" data-s="s1">① 截屏落盘 → 弹浮卡</button>
+    <button data-s="s2">② 先标注再发</button>
+    <button data-s="s3">③ 已附进 Composer</button>
+  </div>
+  <div class="sp"></div>
+  <span class="hint">watcher 监听 defaults read com.apple.screencapture location 目录</span>
+</div>
+
+<div class="app">
+  <div class="abar">
+    <button class="on">▤</button><button>⌕</button><button>⛁</button>
+    <div class="grow"></div><button>⚙</button>
+  </div>
+
+  <div class="rail">
+    <div class="rail-head"><h1>Sessions</h1></div>
+    <button class="srow sel">
+      <span class="l1"><span class="dot run"></span><span class="tt">修复 onboarding 空态崩溃</span></span>
+      <span class="l2">pi · 运行中 · 2 文件改动</span>
+    </button>
+    <button class="srow">
+      <span class="l1"><span class="dot idle"></span><span class="tt">终端文件链接 ADR-0033</span></span>
+      <span class="l2">claude · 待评审</span>
+    </button>
+    <button class="srow">
+      <span class="l1"><span class="dot idle"></span><span class="tt">replay v3.2 lean recap</span></span>
+      <span class="l2">pi · 已接受</span>
+    </button>
+  </div>
+
+  <main>
+    <div class="room-head">
+      <h2>修复 onboarding 空态崩溃</h2>
+      <div class="meta">pi · feature/onboarding-empty-state · 运行中</div>
+    </div>
+
+    <div class="flow">
+      <div class="msg me">
+        <div class="who">你</div>
+        <div class="bub">onboarding 页在没有任何项目时白屏了，帮我查一下。</div>
+      </div>
+      <div class="msg">
+        <div class="who">PI</div>
+        <div class="bub">
+          我先复现一下。已在 dev server 上跑起来，正在打开空态页面……如果你屏幕上有报错，
+          直接截屏发我就行。
+          <div class="term-mini">
+            <span class="dim">$ npm run dev</span><br>
+            <span class="ok">✓ renderer built in 1.2s</span><br>
+            <span class="err">TypeError: Cannot read properties of undefined (reading 'projectId')</span><br>
+            <span class="dim">    at OnboardingGate (src/views/OnboardingGate.tsx:48)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <div class="composer">
+        <div class="attach-strip">
+          <div class="attach-chip">
+            <span class="thumb"><span class="shot-mini shot-tpl"></span></span>
+            <span>
+              <span class="nm">截屏2026-07-20 15.42.31.png</span>
+              <span class="anno-badge">已标注</span>
+            </span>
+            <button class="x">✕</button>
+          </div>
+        </div>
+        <textarea id="ta" placeholder="回复 pi，或 ⌘K 唤起命令…"></textarea>
+        <div class="composer-foot">
+          <span>📎 拖入文件 · ⌘V 粘贴图片</span>
+          <div class="sp"></div>
+          <button class="btn-send">发送 ↵</button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ ① 浮卡 ============ -->
+  <div class="quickcard">
+    <div class="qc-head">
+      <span class="cam">📸</span>
+      <span>
+        <div class="t">检测到新截屏 <i class="tag" title="watcher 在主进程监听截屏目录，防抖 300ms，按 .png 落盘事件触发">1</i></div>
+        <div class="sub">刚刚 · ~/Desktop</div>
+      </span>
+      <span class="sp"></span>
+      <button class="x" title="忽略这张">✕</button>
+    </div>
+
+    <div class="qc-shot" title="点击可放大预览">
+      <span class="shot-mini shot-tpl"></span>
+      <span class="stack-badge">+2 更早 <i class="tag" title="连拍多张时堆叠收纳，只弹一张卡；点开可横向翻看选择">2</i></span>
+      <span class="fname">截屏2026-07-20 15.42.31.png · 1.2 MB</span>
+    </div>
+
+    <div class="qc-actions">
+      <button class="qc-btn primary">
+        <span class="ic">⚡</span>
+        <span>
+          <div class="lbl">喂给终端 agent</div>
+          <div class="desc">附到当前 Composer，聚焦输入框 <i class="tag" title="走现有 draftStore 附件链：与拖拽/⌘V 粘贴同一条路径，发送时随消息带给 pi">3</i></div>
+        </span>
+        <span class="kbd">↵</span>
+      </button>
+      <button class="qc-btn">
+        <span class="ic">✏️</span>
+        <span>
+          <div class="lbl">先标注再发</div>
+          <div class="desc">圈出重点、打码敏感信息，再附上</div>
+        </span>
+        <span class="kbd">E</span>
+      </button>
+      <button class="qc-btn">
+        <span class="ic">🗂</span>
+        <span>
+          <div class="lbl">收进项目素材</div>
+          <div class="desc">存入当前项目 assets/，不打断对话</div>
+        </span>
+        <span class="kbd">S</span>
+      </button>
+    </div>
+
+    <div class="qc-foot">
+      <div class="bar"><i></i></div>
+      <span>8s 后自动收起 · 悬停暂停 <i class="tag" title="超时静默收起，不产生任何副作用；最近一张仍可用 ⌘⇧V 找回">4</i></span>
+    </div>
+  </div>
+
+  <!-- ============ ② 标注器 ============ -->
+  <div class="anno-overlay">
+    <div class="anno-modal">
+      <div class="anno-head">
+        <span class="t">标注截屏</span>
+        <span class="fn">截屏2026-07-20 15.42.31.png</span>
+        <span class="sp"></span>
+        <div class="anno-tools">
+          <button title="矩形" class="on">▭</button>
+          <button title="箭头">↗</button>
+          <button title="文字">T</button>
+          <button title="打码">▩</button>
+          <button title="裁剪">✂</button>
+        </div>
+      </div>
+      <div class="anno-canvas">
+        <span class="shot-mini shot-tpl"></span>
+        <div class="anno-rect"></div>
+        <svg class="anno-arrow" width="90" height="86" viewBox="0 0 90 86" fill="none">
+          <path d="M6 6 C 40 10, 62 34, 70 68" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+          <path d="M56 62 L 71 72 L 74 54" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div class="anno-note">就是这个报错</div>
+      </div>
+      <div class="anno-foot">
+        <button class="ghost">取消</button>
+        <span class="sp"></span>
+        <button class="second">仅存入素材</button>
+        <button class="go">发给 agent ↵ <i class="tag" title="标注结果合成为新 png（原图保留），随 draftStore 附件链进入 Composer">5</i></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ③ toast ============ -->
+  <div class="toast">
+    <span class="ok">✓</span>
+    <span>已附到 Composer · 发送时随消息带给 pi</span>
+    <button class="undo">撤销</button>
+  </div>
+
+  <div class="caption" id="cap"></div>
+</div>
+
+<!-- 假截屏模板：一段报错终端 -->
+<template id="shot-template">
+  <span class="win">
+    <span class="bar"><i></i><i></i><i></i></span>
+    <pre>
+<span class="dim">$ npm run dev</span>
+<span class="dim">> charter@0.9.0 dev</span>
+<span class="ok">✓ main built in 0.8s</span>
+<span class="ok">✓ renderer built in 1.2s</span>
+
+<span class="err">Uncaught TypeError: Cannot read properties
+of undefined (reading 'projectId')</span>
+<span class="dim">    at OnboardingGate (OnboardingGate.tsx:48:31)</span>
+<span class="dim">    at renderWithHooks (react-dom.js:15486)</span>
+<span class="dim">    at mountIndeterminateComponent…</span></pre>
+  </span>
+</template>
+
+<script>
+  // 把假截屏模板灌进所有需要它的容器
+  const tpl = document.getElementById('shot-template');
+  document.querySelectorAll('.shot-tpl').forEach(el => {
+    el.appendChild(tpl.content.cloneNode(true));
+  });
+
+  const captions = {
+    s1: '<b>① 系统截屏一落盘</b>（⌘⇧4 等），右下角弹出浮卡 —— 不抢焦点，8 秒不理会就自动消失',
+    s2: '<b>② 点「先标注再发」</b>：复用 Charter 已有标注器，圈重点 / 打码后一键发给 agent',
+    s3: '<b>③ 截屏进入 Composer 附件链</b>：与拖拽、⌘V 同一条 draftStore 路径，随下一条消息发出',
+  };
+  const cap = document.getElementById('cap');
+  function setState(s) {
+    document.body.className = s;
+    document.querySelectorAll('.chrome .tabs button').forEach(b => b.classList.toggle('on', b.dataset.s === s));
+    cap.innerHTML = captions[s];
+    if (s === 's3') { const ta = document.getElementById('ta'); ta.value = ''; ta.focus(); }
+  }
+  document.querySelectorAll('.chrome .tabs button').forEach(b => b.addEventListener('click', () => setState(b.dataset.s)));
+  setState('s1');
+
+  // 浮卡上的按钮直接演示流转
+  document.querySelector('.qc-btn.primary').addEventListener('click', () => setState('s3'));
+  document.querySelectorAll('.qc-btn')[1].addEventListener('click', () => setState('s2'));
+  document.querySelector('.anno-foot .go').addEventListener('click', () => setState('s3'));
+  document.querySelector('.anno-foot .ghost').addEventListener('click', () => setState('s1'));
+</script>
+</body>
+</html>

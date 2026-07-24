@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Terminal Parallel vNext — grounded user story · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="terminal-parallel-vnext-grounded-user-story">Terminal Parallel vNext — grounded user story</h1>
+<p>Date: 2026-07-15<br>Status: design proposal grounded in the current TerminalPanel, ExternalPanel and ADR-0017 implementation</p>
+<h2 id="1-product-verdict">1. Product verdict</h2>
+<p>The terminal remains the primary container. Claude Code and Codex are programs that run inside independent terminal sessions; the product must not replace them with a separate, always-visible Sessions system.</p>
+<p>The editor remains a single focused-workspace lens. A terminal session owns its own working context and may belong to another project, task worktree or scratch directory without changing the editor focus.</p>
+<p>The right side is one optional focus slot. Moving a session there re-parents the same xterm element and preserves the PTY, scrollback, focus and process. It does not create a second session.</p>
+<h2 id="2-current-product-truths-that-must-be-preserved">2. Current product truths that must be preserved</h2>
+<ol><li>The Bottom Panel is the default home of user terminals.</li><li>Multiple terminals coexist and continue running when they are not selected.</li><li>Starting Claude Code or Codex inside a terminal is detected in place.</li><li>Detection adds the CLI badge, EXT boundary, snapshot, file count and action bar; it does not move or resize the terminal.</li><li>Moving to the side panel is a user action. Auto-move remains an opt-in setting and is off by default.</li><li>The promoted side panel is 600 px by default, resizable from 480 to 900 px, and preserves at least an 80-column TUI.</li><li>A promoted external terminal exclusively owns the right rail. The managed Agent Panel is hidden until the terminal returns.</li><li>Session exit moves nothing. The terminal stays where the user placed it and gains Review and Resume states.</li><li>Return to dock moves the same live xterm element back to the Bottom Panel.</li><li>Closing a terminal with a running process requires confirmation.</li></ol>
+<h2 id="3-vnext-changes">3. vNext changes</h2>
+<h3 id="3-1-terminal-working-context-becomes-independent-from-editor-focus">3.1 Terminal working context becomes independent from editor focus</h3>
+<p>Today, ordinary terminals are created under the focused workspace and are disposed when that workspace changes. vNext makes a terminal session belong to one server-resolved working context:</p>
+<ul><li>Focused workspace</li><li>Recent project</li><li>Task worktree</li><li>Scratch directory</li></ul>
+<p>The renderer sends a project, task or scratch identity. The host resolves and validates the absolute cwd. Arbitrary renderer-provided absolute paths are not trusted.</p>
+<p>Changing the focused editor workspace does not stop global terminal sessions. Explorer, Git and LSP remain bound to the focused workspace; the terminal manager and external-session accounting are bound to each terminal&#39;s own project context.</p>
+<h3 id="3-2-new-terminal-becomes-a-lightweight-context-chooser">3.2 New Terminal becomes a lightweight context chooser</h3>
+<p>The quick action still creates a shell immediately in the current focused workspace.</p>
+<p>The chevron next to New Terminal opens a sheet with:</p>
+<ul><li>Type: Shell, Claude Code or Codex</li><li>Working context: focused workspace, recent project, task worktree or scratch</li><li>Resolved cwd</li><li>Safety/accounting summary</li></ul>
+<p>Choosing Claude Code or Codex creates a normal terminal and launches the corresponding CLI command. Manual launch by typing claude or codex remains fully supported.</p>
+<h3 id="3-3-one-side-focus-slot-with-atomic-swap">3.3 One side focus slot, with atomic swap</h3>
+<p>Only one terminal can occupy the right-side focus slot.</p>
+<p>If the slot is empty, Move to side panel moves the selected terminal there.</p>
+<p>If the slot is occupied, another live terminal offers Replace in side panel. One click atomically returns the current side terminal to its prior dock position and moves the requested terminal into the side slot. Both PTYs keep running throughout the swap.</p>
+<p>This replaces the current disabled action when the side slot is taken, without introducing a second right rail or a separate session hub.</p>
+<h3 id="3-4-parallel-visibility">3.4 Parallel visibility</h3>
+<p>When Codex is in the side panel and Claude remains in the Bottom Panel:</p>
+<ul><li>Both terminals are visible and live.</li><li>The Bottom Panel terminal list shows Codex as In side panel.</li><li>The side header shows Codex, project, cwd, EXT status and Return to dock.</li><li>The Bottom Panel remains open whenever another terminal exists or the user pinned it.</li><li>The editor stays focused on its current workspace.</li></ul>
+<h2 id="4-primary-persona-and-goal">4. Primary persona and goal</h2>
+<p>As a developer working across several projects, I want Claude Code and Codex to run in independent terminals with independent working directories, so I can focus one session at the side while monitoring or interacting with the other at the bottom, without changing the editor&#39;s focused project or interrupting either process.</p>
+<h2 id="5-end-to-end-user-stories">5. End-to-end user stories</h2>
+<h3 id="us-01-open-the-terminal-without-making-a-new-directory-decision">US-01 — Open the terminal without making a new directory decision</h3>
+<p><strong>Given</strong> the editor is focused on Charter IDE<br><strong>When</strong> I press Ctrl+Backquote or choose Terminal<br><strong>Then</strong> the Bottom Panel opens<br><strong>And</strong> the most recent terminal for Charter IDE is selected<br><strong>And</strong> no modal appears unless I explicitly open the New Terminal menu.</p>
+<p>Health target: immediate, familiar, zero new friction.</p>
+<h3 id="us-02-create-claude-in-another-project">US-02 — Create Claude in another project</h3>
+<p><strong>Given</strong> the editor remains focused on Charter IDE<br><strong>When</strong> I open New Terminal options<br><strong>And</strong> choose Claude Code and Writing launch<br><strong>Then</strong> a normal terminal is created with cwd ~/Documents/ai-writing<br><strong>And</strong> Claude Code launches inside it<br><strong>And</strong> the editor remains focused on Charter IDE<br><strong>And</strong> the terminal row visibly shows Writing launch and its cwd.</p>
+<p>Health target: directory choice belongs to the new terminal, not the entire editor.</p>
+<h3 id="us-03-run-codex-and-claude-simultaneously">US-03 — Run Codex and Claude simultaneously</h3>
+<p><strong>Given</strong> Claude is running in Writing launch<br><strong>When</strong> I create a Codex terminal in Charter IDE<br><strong>Then</strong> both terminal rows show live activity<br><strong>And</strong> each row shows a different project and cwd<br><strong>And</strong> selecting one changes only the visible terminal pane<br><strong>And</strong> the other process continues running without losing scrollback.</p>
+<p>Health target: parallelism is visible without creating a new global Sessions surface.</p>
+<h3 id="us-04-detect-a-manually-launched-cli-in-place">US-04 — Detect a manually launched CLI in place</h3>
+<p><strong>Given</strong> I created a normal shell terminal<br><strong>When</strong> I type claude or codex<br><strong>Then</strong> the product detects the foreground CLI<br><strong>And</strong> decorates the terminal with an EXT session bar, snapshot reference and live file count<br><strong>And</strong> does not move the terminal, resize the layout or steal focus.</p>
+<p>Health target: weak detection signals may change decoration, never layout.</p>
+<h3 id="us-05-move-one-session-to-the-right">US-05 — Move one session to the right</h3>
+<p><strong>Given</strong> Codex and Claude are both running in the Bottom Panel<br><strong>When</strong> I choose Move to side panel on Codex<br><strong>Then</strong> the same Codex terminal appears in the right focus slot<br><strong>And</strong> its PTY, scrollback and input remain live<br><strong>And</strong> Claude stays in the Bottom Panel<br><strong>And</strong> the managed Agent Panel is temporarily hidden<br><strong>And</strong> the side panel starts at 600 px and can be resized between 480 and 900 px.</p>
+<p>Health target: one deliberate placement change, no process change.</p>
+<h3 id="us-06-replace-the-side-session-without-stopping-either-agent">US-06 — Replace the side session without stopping either Agent</h3>
+<p><strong>Given</strong> Codex occupies the side focus slot and Claude is in the Bottom Panel<br><strong>When</strong> I choose Replace in side panel on Claude<br><strong>Then</strong> Codex returns to its previous dock position<br><strong>And</strong> Claude moves to the side in the same transaction<br><strong>And</strong> neither PTY restarts or loses scrollback<br><strong>And</strong> focus lands in Claude only after the swap completes.</p>
+<p>Health target: switching attention is one action; placement remains exclusive.</p>
+<h3 id="us-07-return-the-side-session-to-the-dock">US-07 — Return the side session to the dock</h3>
+<p><strong>Given</strong> a session occupies the right side<br><strong>When</strong> I choose Return to dock<br><strong>Then</strong> the same terminal returns to its previous dock order<br><strong>And</strong> the right focus slot closes<br><strong>And</strong> the managed Agent Panel returns only if it was visible before promotion.</p>
+<p>Health target: the placement change is fully reversible.</p>
+<h3 id="us-08-open-a-changed-file-from-another-project">US-08 — Open a changed file from another project</h3>
+<p><strong>Given</strong> Claude runs in Writing launch while the editor focuses Charter IDE<br><strong>When</strong> I click product-note.md in Claude&#39;s Session changes<br><strong>Then</strong> a task-scoped Peek opens for that file<br><strong>And</strong> the focused editor workspace does not silently switch<br><strong>And</strong> an explicit Open project in editor action is available if I want to change focus.</p>
+<p>Health target: inspect first, switch project only by explicit intent.</p>
+<h3 id="us-09-end-review-and-resume">US-09 — End, review and resume</h3>
+<p><strong>Given</strong> an external CLI session is active in either placement<br><strong>When</strong> the CLI exits<br><strong>Then</strong> the terminal stays where I placed it<br><strong>And</strong> its header changes to ended<br><strong>And</strong> Review appears with the tracked file count<br><strong>And</strong> Resume uses Claude Code continue or Codex resume semantics for the same project context.</p>
+<p>Health target: lifecycle state and placement state remain independent.</p>
+<h3 id="us-10-handle-conflicts-honestly">US-10 — Handle conflicts honestly</h3>
+<p><strong>Given</strong> two external terminals target the same writable project tree<br><strong>When</strong> the second agent starts<br><strong>Then</strong> both may run, because these are user-controlled terminals<br><strong>And</strong> the product shows Same working tree: changes may overlap<br><strong>And</strong> it offers Launch in isolated worktree for supported Git projects<br><strong>And</strong> it never claims external terminal changes are isolated when they are not.</p>
+<p>Health target: truthful safety language.</p>
+<h3 id="us-11-close-a-running-terminal">US-11 — Close a running terminal</h3>
+<p><strong>Given</strong> Claude or Codex still has a foreground process<br><strong>When</strong> I close its terminal<br><strong>Then</strong> the product explains that the process tree will be terminated<br><strong>And</strong> requires Kill and close confirmation<br><strong>And</strong> removes the session bar and side placement only after confirmation.</p>
+<p>Health target: no accidental task termination.</p>
+<h3 id="us-12-recover-after-switching-editor-focus-or-restarting">US-12 — Recover after switching editor focus or restarting</h3>
+<p><strong>Given</strong> terminal sessions belong to background project contexts<br><strong>When</strong> I focus another project in the editor<br><strong>Then</strong> the terminals keep running and retain their placement<br><strong>And</strong> the Bottom Panel list still shows their project identities.</p>
+<p><strong>When</strong> the application restarts<br><strong>Then</strong> live OS processes that cannot be reattached are reported as interrupted<br><strong>And</strong> ended external tasks remain reviewable and resumable from their recorded cwd.</p>
+<p>Health target: never pretend a detached process is still live.</p>
+<h2 id="6-placement-state-model">6. Placement state model</h2>
+<table><thead><tr><th>Session state</th><th>Placement</th><th>Visible actions</th><th>Layout behavior</th></tr></thead><tbody><tr><td>Shell idle</td><td>Dock</td><td>Rename, split, close</td><td>No side panel</td></tr><tr><td>Agent active</td><td>Dock</td><td>Room, Move to side, close</td><td>Detection changes decoration only</td></tr><tr><td>Agent active</td><td>Side</td><td>Room, Return to dock, resize</td><td>Owns the single right rail</td></tr><tr><td>Agent active while side slot occupied</td><td>Dock</td><td>Replace in side panel</td><td>Atomic swap, no restart</td></tr><tr><td>Agent ended</td><td>Dock or Side</td><td>Review, Resume, Return if side, close</td><td>Session end never moves the terminal</td></tr><tr><td>Terminal closed</td><td>None</td><td>None</td><td>Prior Agent Panel layout is restored</td></tr></tbody></table>
+<h2 id="7-information-hierarchy">7. Information hierarchy</h2>
+<p>The same identity appears in three places:</p>
+<ol><li>Terminal row: Agent, task label, project, short cwd, live/ended status.</li><li>Session bar or side header: Agent, EXT boundary, project, full cwd, snapshot and file count.</li><li>Global status bar: focused editor workspace and number of live terminal contexts.</li></ol>
+<p>Project and cwd are always visible before a user sends input to a terminal.</p>
+<h2 id="8-accessibility-and-interaction-requirements">8. Accessibility and interaction requirements</h2>
+<ul><li>Side splitter has a 12 px hit target, pointer capture and keyboard controls.</li><li>Left and Right resize by 16 px; Home and End select minimum and maximum.</li><li>All placement actions expose visible text, not icon-only controls.</li><li>Live dots are redundant with text labels.</li><li>Motion respects reduced-motion preferences.</li><li>Focus returns to the terminal after mount, swap or return.</li><li>Toasts use a polite live region and never contain the only explanation of a state.</li><li>Terminal list rows remain keyboard navigable.</li></ul>
+<h2 id="9-required-implementation-delta">9. Required implementation delta</h2>
+<ol><li>Replace renderer-controlled cwd creation with host-resolved working-context identity.</li><li>Stop disposing global terminal sessions when the focused workspace changes.</li><li>Bind external session accounting to each terminal&#39;s ProjectContext rather than WorkspaceHost.current.</li><li>Add project and cwd metadata to terminal list DTOs and renderer state.</li><li>Add optional launch preset for shell, Claude Code and Codex.</li><li>Replace the side-slot disabled state with an atomic swap operation.</li><li>Keep current mountTerminal substrate, resize rules, SessionBar, exclusive right-rail ownership, Review and Resume semantics.</li></ol>
+<h2 id="10-non-goals">10. Non-goals</h2>
+<ul><li>No permanent Sessions right rail.</li><li>No transcript parsing into native chat cards.</li><li>No product composer bridge into external CLI stdin.</li><li>No claim that two external agents writing the same tree are isolated.</li><li>No automatic project-focus switch when a session edits another project.</li><li>No automatic movement on CLI detection or session exit.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

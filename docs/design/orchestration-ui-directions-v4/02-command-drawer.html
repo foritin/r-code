@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>方向 02 · 任务页浮动抽屉</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">Charter · 编队 UI</a>
+        <a class="nav-link" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link active" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">试试收起抽屉、展开单个 worker</span>
+      </div>
+    </header>
+
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">Direction 02 / Progressive disclosure</p>
+        <h1>任务页浮动抽屉</h1>
+      </div>
+      <p>
+        保留现有任务页，但编队默认只是一枚状态入口。抽屉打开时覆盖在右侧，不把聊天列永久压窄；worker 也先显示摘要，只有主动点击才展开实时输出。
+      </p>
+    </section>
+
+    <main class="canvas-wrap">
+      <div class="prototype drawer-open" id="drawerPrototype">
+        <div class="window-bar">
+          <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+          <span class="window-title">Charter — 支付超时排查</span>
+        </div>
+
+        <div class="task-app">
+          <aside class="session-list">
+            <div class="session-title"><div class="brandmark">C</div><strong>Sessions</strong></div>
+            <div class="session-search">⌕ 搜索会话…</div>
+            <p class="section-label">pay-service</p>
+            <div class="session-item active">
+              <strong>Claude · 支付超时排查</strong>
+              <small>⌁ 正在指挥 3 个 worker</small>
+            </div>
+            <div class="session-item"><strong>购物车折扣问题</strong><small>Review ready · 26 分钟前</small></div>
+            <div class="session-item"><strong>登录回调失败</strong><small>Codex · 昨天</small></div>
+            <p class="section-label" style="margin-top: 18px">Workers</p>
+            <div class="session-item"><strong>↳ Claude · 跑测试</strong><small>需要 1 个决策</small></div>
+            <div class="session-item"><strong>↳ Codex · 方案评审</strong><small>正在输出</small></div>
+          </aside>
+
+          <section class="task-room">
+            <header class="room-head">
+              <span style="color: var(--faint)">‹ Sessions</span>
+              <h2>支付超时排查</h2>
+              <span class="status live">Running</span>
+              <span class="spacer"></span>
+              <span class="pill">Claude Code</span>
+              <button class="btn">•••</button>
+            </header>
+
+            <div class="conversation">
+              <div class="message user"><p>帮我排查支付回调偶发超时。可以让 Codex 做代码评审，让另一个 Claude 跑完整测试。</p></div>
+              <div class="message">
+                <div class="who">Claude Code · Commander</div>
+                <p>我已经把任务拆成三个并行分支：</p>
+                <p>1. 我检查回调链路和数据库锁；2. Codex 审查并发边界；3. 测试 worker 跑单测和 Electron E2E。</p>
+              </div>
+              <div class="message">
+                <div class="who">Claude Code · Commander</div>
+                <p>目前主因很可能是幂等锁的租约短于第三方网关重试窗口。Codex 正在验证这个判断；测试 worker 需要安装 Playwright 浏览器依赖，等你确认后继续。</p>
+              </div>
+              <div class="message user"><p>先不要改代码，把证据收齐后一起汇报。</p></div>
+              <div class="message">
+                <div class="who">Claude Code · Commander</div>
+                <p>收到。我会保持只读分析，并在两个 worker 都返回后整理成一份结论。</p>
+              </div>
+            </div>
+
+            <div class="room-composer">
+              <input value="继续，优先说明风险和验证方式" aria-label="回复主会话" />
+              <span class="pill">Full access</span>
+              <button class="btn primary">↑</button>
+            </div>
+
+            <button class="fleet-dock" id="drawerOpen">
+              <span class="live-dot live"></span>
+              <span><b>3 个 worker</b><small>1 个需要你处理</small></span>
+              <span>⌁</span>
+            </button>
+
+            <div class="drawer-scrim"></div>
+            <aside class="command-drawer" aria-label="编队抽屉">
+              <header class="drawer-head">
+                <span class="live-dot live"></span>
+                <h3>编队</h3>
+                <span class="status wait">1 待处理</span>
+                <span class="spacer"></span>
+                <button class="btn" id="drawerClose">收起</button>
+              </header>
+
+              <div class="drawer-scroll">
+                <article class="decision-card" id="drawerDecision">
+                  <h3>测试 worker 请求安装依赖</h3>
+                  <p><code>npm install @playwright/test</code> · R3 · 将修改 lockfile</p>
+                  <div class="decision-actions">
+                    <button class="btn primary" id="drawerAllow">允许一次</button>
+                    <button class="btn">拒绝</button>
+                  </div>
+                </article>
+
+                <p class="section-label">Workers · 点击展开</p>
+                <article class="peek-card open">
+                  <button class="peek-head">
+                    <span class="live-dot wait"></span>
+                    <span><strong>Claude · 跑测试</strong><small>等待审批 · 队列 1</small></span>
+                    <span>⌃</span>
+                  </button>
+                  <pre class="terminal peek-body">单元测试 <span class="ok">829 passed</span>
+Electron E2E 等待浏览器依赖
+<span class="warn">approval required</span></pre>
+                </article>
+
+                <article class="peek-card">
+                  <button class="peek-head">
+                    <span class="live-dot live"></span>
+                    <span><strong>Codex · 方案评审</strong><small>输出中 · 01:48</small></span>
+                    <span>⌄</span>
+                  </button>
+                  <pre class="terminal peek-body"><span class="ok">✓</span> direct spawn path
+<span class="accent">→</span> checking takeover races
+Finding 1/3 ready</pre>
+                </article>
+
+                <article class="peek-card">
+                  <button class="peek-head">
+                    <span class="live-dot"></span>
+                    <span><strong>Claude · 文档同步</strong><small>完成 · 修改 4 个文件</small></span>
+                    <span>⌄</span>
+                  </button>
+                  <pre class="terminal peek-body"><span class="ok">Documentation complete.</span>
+README.zh-CN.md
+IMPLEMENTATION_STATUS.md</pre>
+                </article>
+              </div>
+            </aside>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <section class="mock-caption">
+      <article class="caption-card"><strong>解决什么</strong><span>日常聊天页恢复成单一主线；编队只有在用户想看或出现异常时才占用空间。</span></article>
+      <article class="caption-card"><strong>关键代价</strong><span>抽屉是覆盖层，无法同时精读聊天和 worker；超过 4 个 worker 后纵向列表也会变长。</span></article>
+      <article class="caption-card"><strong>适用边界</strong><span>1–3 个 worker、主会话仍是核心、用户偶尔审批或快速扫一眼进度。</span></article>
+    </section>
+
+    <script>
+      const prototype = document.getElementById('drawerPrototype');
+      document.getElementById('drawerOpen').addEventListener('click', () => prototype.classList.add('drawer-open'));
+      document.getElementById('drawerClose').addEventListener('click', () => prototype.classList.remove('drawer-open'));
+      document.querySelectorAll('.peek-head').forEach((button) => {
+        button.addEventListener('click', () => button.closest('.peek-card').classList.toggle('open'));
+      });
+      document.getElementById('drawerAllow').addEventListener('click', () => {
+        document.getElementById('drawerDecision').innerHTML = '<h3>已允许，worker 继续运行</h3><p>这个抽屉可以收起；新的异常会再次点亮入口。</p>';
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,413 @@
+<!doctype html>
+<!-- Charter · 上下文附件方案总览。NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 上下文附件 · 方案 D 终案 + 来源方向</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      html,
+      body {
+        overflow: auto;
+      }
+
+      .gallery {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 44px 28px 80px;
+      }
+
+      .gallery > header h1 {
+        margin: 0 0 10px;
+        font-family: var(--font-display);
+        font-size: 27px;
+        font-weight: 650;
+        letter-spacing: -0.015em;
+      }
+
+      .gallery > header p {
+        max-width: 760px;
+        margin: 0 0 6px;
+        color: var(--fg-muted);
+        font-size: 13.5px;
+        line-height: 1.8;
+      }
+
+      .problem {
+        margin: 18px 0 30px;
+        padding: 14px 18px;
+        border-left: 3px solid var(--accent);
+        border-radius: 0 10px 10px 0;
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 13px;
+        line-height: 1.8;
+      }
+
+      .problem b {
+        color: var(--accent);
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+        gap: 18px;
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 22px 24px 20px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-card);
+      }
+
+      .card .kicker {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .card .kicker .letter {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        border-radius: 9px;
+        background: var(--fg);
+        color: var(--fg-inverse);
+        font: 700 14px var(--font-display);
+      }
+
+      .card.featured {
+        grid-column: 1 / -1;
+        border: 1.5px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+        background: color-mix(in srgb, var(--accent) 3%, var(--bg-card));
+      }
+
+      .card.featured .kicker .letter {
+        background: var(--accent);
+        color: var(--accent-fg);
+      }
+
+      .reco-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-left: auto;
+        padding: 3px 10px;
+        border-radius: 999px;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 10.5px;
+      }
+
+      .status-note {
+        display: inline-flex;
+        margin-left: auto;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--bg-chip);
+        color: var(--fg-muted);
+        font-size: 10px;
+      }
+
+      .card.featured ul {
+        columns: 2;
+        column-gap: 28px;
+      }
+
+      .card.featured ul li {
+        break-inside: avoid;
+      }
+
+      .card h2 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 17px;
+        font-weight: 650;
+      }
+
+      .card .essence {
+        margin: 0;
+        color: var(--fg);
+        font-size: 12.5px;
+        line-height: 1.75;
+      }
+
+      .card ul {
+        margin: 2px 0 4px;
+        padding-left: 18px;
+        color: var(--fg-muted);
+        font-size: 12px;
+        line-height: 1.75;
+      }
+
+      .card ul li {
+        margin-bottom: 3px;
+      }
+
+      .tradeoff {
+        display: grid;
+        gap: 4px;
+        margin-top: auto;
+        padding-top: 10px;
+        border-top: 1px solid var(--border-soft);
+        font-size: 11.5px;
+        line-height: 1.65;
+      }
+
+      .tradeoff .good {
+        color: var(--success);
+      }
+
+      .tradeoff .cost {
+        color: var(--warning);
+      }
+
+      .card .open-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+      }
+
+      .open-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 33px;
+        padding: 0 15px;
+        border-radius: 9px;
+        background: var(--fg);
+        color: var(--fg-inverse);
+        font-size: 12px;
+        text-decoration: none;
+      }
+
+      .open-link:hover {
+        background: var(--accent);
+      }
+
+      .open-row small {
+        color: var(--fg-faint);
+        font-size: 10.5px;
+      }
+
+      .footnote {
+        margin-top: 30px;
+        padding: 16px 20px;
+        border: 1px solid var(--border-soft);
+        border-radius: 12px;
+        background: color-mix(in srgb, var(--bg-card) 55%, var(--bg-editor));
+        color: var(--fg-muted);
+        font-size: 12px;
+        line-height: 1.9;
+      }
+
+      .footnote b {
+        color: var(--fg);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="gallery">
+      <header>
+        <h1>Session 上下文附件 · 方案 D 终案 + 4 个来源方向</h1>
+        <p>
+          目标:在 Session 视图里能把<strong>文件、文件夹、图片</strong>作为上下文交给代理 ——
+          既支持拖拽,也要能看到项目里有什么。<strong>用户已拍板方案 B+D(常驻树融合,2026-07-18,
+          ADR-0024)</strong>,进入第一期实现;D(按需抽屉)落选,A / B / C / E 为来源方向,保留备查。
+        </p>
+      </header>
+
+      <div class="problem">
+        <b>现状问题:</b>「拖文件喂上下文」在 <b>Home</b> 已实现(PIVOT-015:侧栏项目树可拖、
+        接 Finder 拖放、落成 chips)——但你日常所在的 <b>Session 视图</b>是缺口:看不到任何文件树、
+        不接 Finder 拖放、@ 只会插行内 <span class="code-token">@path</span> 纯文本,也没有图片附件。
+        想把 <span class="code-token">public/index.html</span>、一张设计稿截图或整个
+        <span class="code-token">styles/</span> 目录交给代理时,无处可拖、无处可选。
+        四个方向 = 四种"补齐 + 统一两套现状模式"的策略。
+      </div>
+
+      <div class="cards">
+        <article class="card featured">
+          <div class="kicker">
+            <span class="letter">D</span>
+            <h2>混合方案 — A 的抽屉 + C 的落点</h2>
+            <span class="status-note">候选 1 · 未采用(抽屉形态落选)</span>
+          </div>
+          <p class="essence">
+            第一期终案:<strong>@ 打开文件抽屉</strong>(树 + 搜索 + 会话改动,拖或点 ＋),
+            <strong>输入框与对话区整体是拖放区</strong>(Finder 文件 / 文件夹 / 图片 + 粘贴截图),
+            引用一律落 chips;<strong>项目外文件自动复制进任务附件</strong>;发送后引用随消息进时间线
+            —— 本页可点「发送」看完整闭环。
+          </p>
+          <ul>
+            <li>拖放:对话列整体是靶区,不用瞄准输入框;拖进来立即变 chip</li>
+            <li>@ = 文件抽屉:浏览、搜索、会话改动分组,行内 ＋ 一键加入</li>
+            <li>图片一等:拖 / 粘贴 → 缩略图 chip;项目外自动复制进 attachments/&lt;taskId&gt;/</li>
+            <li>统一:@ 与拖拽同落 chips,Room 不再插行内 @path 纯文本</li>
+            <li>发送闭环:引用卡随消息进时间线(对齐 SentCodeContext 已确认样式)</li>
+            <li>第二期(不在本页):固定为项目上下文 + Context 页签,见方案 C</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ 布局零改动;拖、看、搜三个需求一次覆盖;全部复用既有链路(@ 拾取器 / Home 拖放 / previewRefs 缩略图)</span>
+            <span class="cost">△ "一直看着目录"仍需 Files 视图(活动栏文件夹图标);固定上下文延后</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./d-hybrid.html">打开方案 D</a>
+            <small>d-hybrid.html</small>
+          </div>
+        </article>
+
+        <article class="card featured">
+          <div class="kicker">
+            <span class="letter" style="width: auto; padding: 0 9px">B+D</span>
+            <h2>常驻树融合 — B 的 Files 页签 + D 的落点</h2>
+            <span class="reco-badge">已拍板 · 终案(2026-07-18 · ADR-0024)</span>
+          </div>
+          <p class="essence">
+            与 D 的<strong>唯一分歧是拖源形态</strong>:左侧栏分成 Sessions / Files
+            双页签,文件树<strong>常驻可见</strong>(边和代理聊边看目录,一次拖拽直达),不再需要抽屉;
+            落点机制与 D 完全一致 —— chips、粘贴截图、项目外复制进任务附件、发送后引用随消息进时间线。
+          </p>
+          <ul>
+            <li>树常驻:直接命中"看不到目录"的原始诉求;带会话改动徽标(+5 −2)</li>
+            <li>Sessions 页签带动态徽标 —— 在 Files 页签下也不会错过"需要你"的会话</li>
+            <li>@ 保持现有搜索拾取器(键盘路径);浏览交给常驻树,抽屉取消</li>
+            <li>树行悬停 ＋ 一键加入;拖到输入框或对话区任意位置均可</li>
+            <li>其余全部同 D:chips 统一、粘贴 → 缩略图、→ attachments/&lt;taskId&gt;/、发送闭环</li>
+            <li>代价:看树期间 Sessions 列表让位(徽标缓解);需一段 ADR 修订"无第二 Explorer"约束;树组件与 Home 树共用一份实现</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ 可见性最强;拖拽路径最短(无需先开抽屉);IDE 直觉</span>
+            <span class="cost">△ 侧栏在 Sessions/Files 间二选一;比 D 多一段 ADR 与页签状态管理</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./bd-fusion.html">打开方案 B+D</a>
+            <small>bd-fusion.html</small>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="kicker">
+            <span class="letter">A</span>
+            <h2>文件抽屉 — 挂在输入框上的目录树</h2>
+            <span class="status-note">已并入 D</span>
+          </div>
+          <p class="essence">
+            上下文属于输入框,浏览也发生在输入框旁:📎 打开一个悬浮抽屉(树 + 搜索 +
+            会话改动),拖或点 ＋ 落成输入框上方的引用条。
+          </p>
+          <ul>
+            <li>树行可拖到输入框;悬停出 ＋ 一键加入;文件夹整目录引用</li>
+            <li>输入框本身是 Finder 拖放区(文件/文件夹/图片,真实可试)</li>
+            <li>引用条沿用 CodeContextRef 已确认的「引用在正文之上」样式</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ 不动布局、按需出现;浏览与投放零距离;与 @ 天然互补</span>
+            <span class="cost">△ 抽屉是暂态的 —— 想"一直看着目录"的人不满足</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./a-composer-drawer.html">打开方案 A</a>
+            <small>a-composer-drawer.html</small>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="kicker">
+            <span class="letter">B</span>
+            <h2>会话内文件面板 — Sessions / Files 双页签</h2>
+            <span class="status-note">树形态由 B+D 继承</span>
+          </div>
+          <p class="essence">
+            左侧栏本身分成 Sessions 和 Files 两个页签:文件树<strong>常驻</strong>在会话旁边,任何行都能长途拖进输入框或对话区。
+          </p>
+          <ul>
+            <li>树常驻、带会话改动徽标(+5 −2),随时可见"项目里有什么"</li>
+            <li>拖放目标有两个:输入框、整个对话区(都会亮起投放框)</li>
+            <li>活动栏的文件夹图标即入口,与今早 Files 视图重构一脉相承</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ IDE 直觉、可见性最强;树 ↔ 会话来回最顺手</span>
+            <span class="cost">△ 占掉 Sessions 列表;背离"会话视图不放第二 Explorer"的既有约束,需要正式改约束</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./b-session-explorer.html">打开方案 B</a>
+            <small>b-session-explorer.html</small>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="kicker">
+            <span class="letter">C</span>
+            <h2>全窗拖放 + Context 页签 — 上下文一等公民</h2>
+            <span class="status-note">落点并入 D · 作用域=第二期</span>
+          </div>
+          <p class="essence">
+            不放树:文件从它们所在的地方(Finder / 截图)来。拖进窗口任意位置,浮层给两个投放目标 ——
+            <strong>这条消息</strong> 或 <strong>固定为项目上下文</strong>;右侧新增 Context 页签统一管理。
+          </p>
+          <ul>
+            <li>全窗都是靶区,目标大、不用瞄准输入框</li>
+            <li>首创"作用域":一次性(随消息)vs 固定(项目每个新 Session 自动带)</li>
+            <li>Context 页签汇总草稿引用、固定项、历史消息引用,可逐项移除</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ 上下文全生命周期可见可管;固定上下文是差异化能力</span>
+            <span class="cost">△ 概念最重;在应用内浏览/挑选项目文件仍需别的入口(可与 D 组合)</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./c-drop-anywhere.html">打开方案 C</a>
+            <small>c-drop-anywhere.html</small>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="kicker">
+            <span class="letter">E</span>
+            <h2>@ 内联引用 — 引用长在句子里</h2>
+            <span class="status-note">缓议</span>
+          </div>
+          <p class="essence">
+            零新面板:输入 <strong>@</strong> 在光标处唤起模糊搜索,引用作为
+            token 直接嵌进句子("对照 <span class="code-token">@设计稿.png</span> 改
+            <span class="code-token">@index.html</span>");拖拽落点同样变成句中 token。
+          </p>
+          <ul>
+            <li>@ 菜单分组:建议(会话改动)/ 文件 / 文件夹 / 图片,键盘全程可达</li>
+            <li>引用在语义位置上 —— 代理确切知道每个引用修饰哪句话</li>
+            <li>发送后 token 原样进时间线(见 mock 中已发送的示例消息)</li>
+          </ul>
+          <div class="tradeoff">
+            <span class="good">✓ 最快的键盘路径、零 UI 成本;心智与 Cursor/Claude Code 一致</span>
+            <span class="cost">△ 缓议原因:输入框需改 contenteditable,中文 IME × 原子 token 实现风险高;且只能搜不能浏览。D 落地后如仍想要句中语义再单独立项</span>
+          </div>
+          <div class="open-row">
+            <a class="open-link" href="./e-inline-mentions.html">打开方案 E</a>
+            <small>e-inline-mentions.html</small>
+          </div>
+        </article>
+      </div>
+
+      <div class="footnote">
+        <b>怎么看这些 mock:</b>每页顶部深色条是 mock 场景控制器(非产品 UI),含「演示 /
+        重置」;四页都接了真实拖放 ——
+        直接从 Finder 拖文件、文件夹或图片进页面即可看到落点行为。<br />
+        <b>与现有实现的关系:</b>A ≈ 升级现有 @ 文件拾取器(加树/拖拽/文件夹/图片);B ≈
+        把 Home 已有的可拖项目树(HomeProjectTree)搬进会话视图常驻;C ≈ 把 Home 已有的 OS
+        拖放补进 Room + 新增「固定为项目上下文」作用域(新概念,需定义持久化与权限边界);D ≈
+        把 Room 现有的行内 @path 纯文本升级为原子富 token。内部拖拽 MIME 与产品一致
+        (application/x-charter-ref)。<br />
+        <b>与既有决策的关系:</b>引用条样式沿用 CodeContextRef mock 已确认的「结构化引用位于正文之上」;方案
+        B 触碰"会话视图不引入第二 Explorer"约束(也是建议不采用的原因之一)。终案 D 对统一命题的回答:<b>@
+        与拖拽一律落 chips</b>,Room 不再插行内 @path 纯文本。所有页面均避免出现引擎品牌字样。
+      </div>
+    </div>
+  </body>
+</html>

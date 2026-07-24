@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Mock — 文件树状态徽章：新增 vs 修改（±行数）</title>
+<style>
+  /* ===== 产品真实色板（theme.css 摘录） ===== */
+  :root {
+    --bg-app: #eceae5;
+    --bg-sidebar: #f6f5f1;
+    --bg-input: #ffffff;
+    --bg-card: #ffffff;
+    --bg-hover: #e8e5de;
+    --bg-selected: #e9e6df;
+    --border: #e5e1d8;
+    --border-soft: #edeae3;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --fg-faint: #a39e94;
+    --accent: #1b1a16;
+    --danger: #c4453d;
+    --warning: #b06f10;
+    --warning-bg: #faf0dc;
+    --success: #2f9e63;
+    --success-bg: #e7f5ec;
+    --info: #3f7bd9;
+    --info-bg: #e9f1fd;
+  }
+  body.dark {
+    --bg-app: #171614;
+    --bg-sidebar: #1d1c19;
+    --bg-input: #24231f;
+    --bg-card: #21201c;
+    --bg-hover: #292823;
+    --bg-selected: #33322b;
+    --border: #33312b;
+    --border-soft: #2a2924;
+    --fg: #e8e6e0;
+    --fg-muted: #a29d92;
+    --fg-faint: #6e6a61;
+    --accent: #e8e6e0;
+    --danger: #e06b62;
+    --warning: #d29a3a;
+    --warning-bg: #342a14;
+    --success: #46b477;
+    --success-bg: #17301f;
+    --info: #6ca1e8;
+    --info-bg: #16243a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 28px 32px 48px;
+    background: var(--bg-app);
+    color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 6px; }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: var(--fg-muted); font-size: 12.5px; margin: 0 0 20px; }
+  #themeBtn {
+    margin-left: auto; font-size: 12px; padding: 4px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--bg-card); color: var(--fg); cursor: pointer;
+  }
+
+  .grid { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+
+  .variant { width: 300px; flex: none; }
+  .variant h2 { font-size: 13.5px; margin: 0 0 2px; }
+  .variant .desc { font-size: 11.5px; color: var(--fg-muted); margin: 0 0 10px; min-height: 51px; }
+
+  .pane {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06);
+  }
+  .pane-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px 8px;
+  }
+  .pane-head .root { font-weight: 700; font-size: 13px; }
+  .pane-head .path { color: var(--fg-faint); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .search {
+    margin: 0 10px 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--fg-faint);
+    font-size: 12px;
+    padding: 5px 10px;
+  }
+  .tree { padding: 2px 0 8px; }
+
+  /* ===== 与产品一致的行结构 ===== */
+  .row {
+    display: flex; align-items: center; gap: 5px;
+    height: 24px; padding-left: 8px; padding-right: 6px;
+    font-size: 12.5px; white-space: nowrap; cursor: pointer;
+  }
+  .row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  .row.selected { background: var(--bg-selected); }
+  .row .caret { width: 12px; text-align: center; flex: none; color: var(--fg-muted); font-size: 10px; }
+  .row .ficon { display: flex; color: var(--fg-muted); flex: none; }
+  .row .name { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .row.ignored .name { color: var(--fg-faint); }
+  .row .name.c-new { color: var(--success); }
+  .row .name.c-mod { color: var(--warning); }
+
+  /* hover 出现的「附到会话」+ 按钮（产品现状，用于检验与徽章的共存） */
+  .addbtn {
+    display: none; flex: none; place-items: center;
+    width: 18px; height: 18px;
+    border: 1px solid var(--border); border-radius: 5px;
+    background: var(--bg-card); color: var(--fg-muted); font-size: 12px; line-height: 1;
+  }
+  .row:hover .addbtn { display: grid; }
+
+  .dirdot { width: 5px; height: 5px; border-radius: 50%; background: var(--warning); opacity: .8; flex: none; margin-right: 4px; }
+
+  /* ===== 徽章通用 ===== */
+  .badge { flex: none; font-size: 10px; font-weight: 700; }
+  .plus { color: var(--success); }
+  .minus { color: var(--danger); }
+  .nums { flex: none; font-size: 10px; font-weight: 600; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+  .nums .minus { margin-left: 4px; }
+
+  .pill {
+    flex: none; font-size: 9px; font-weight: 700; line-height: 1;
+    padding: 2.5px 6px; border-radius: 999px; letter-spacing: .02em;
+  }
+  .pill.new { background: var(--success-bg); color: var(--success); }
+  .pill.mod { background: var(--warning-bg); color: var(--warning); }
+
+  /* 方案 C:GitHub 方块条 */
+  .blocks { display: flex; gap: 1.5px; flex: none; }
+  .blocks i { width: 6px; height: 6px; border-radius: 1.5px; background: var(--border); }
+  .blocks i.p { background: var(--success); }
+  .blocks i.m { background: var(--danger); }
+  .ctotal { flex: none; font-size: 10px; color: var(--fg-muted); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* 方案 D:默认圆点，hover 展开数字 */
+  .rowD .detail { display: none; }
+  .rowD .sdot { width: 6px; height: 6px; border-radius: 50%; flex: none; margin-right: 3px; }
+  .rowD .sdot.new { background: var(--success); }
+  .rowD .sdot.mod { background: var(--warning); }
+  .rowD:hover .detail, .rowD.force-hover .detail { display: inline-flex; }
+  .rowD:hover .sdot, .rowD.force-hover .sdot { display: none; }
+  .rowD.force-hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  .rowD.force-hover .addbtn { display: grid; }
+
+  .note {
+    margin-top: 28px; max-width: 720px;
+    font-size: 12px; color: var(--fg-muted);
+    background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px;
+  }
+  .note b { color: var(--fg); }
+  .note ul { margin: 6px 0 0; padding-left: 18px; }
+  .note li { margin: 3px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>文件树状态徽章 — 新增 vs 修改（± 行数）</h1>
+  <button id="themeBtn" onclick="document.body.classList.toggle('dark')">切换深色 / 浅色</button>
+</header>
+<p class="sub">把鼠标悬停到任意行上，检验徽章与「+ 附到会话」按钮的共存效果。四个方案数据相同：新增 5 个文件、修改 6 个（含大数字 +1204 −87 与超长文件名）。</p>
+
+<div class="grid" id="grid"></div>
+
+<div class="note">
+  <b>实现口径（四个方案共用）</b>
+  <ul>
+    <li>行数来自 <span class="mono">git diff --numstat</span>（工作区 vs HEAD，staged+unstaged 合并），跟随现有 watcher 400ms 防抖刷新，无额外轮询。</li>
+    <li>新增文件（untracked / added）不跑 numstat，直接给「新增」态；语义上 U 和 A 合并为一个「新增」视觉，不再暴露 git 内部区分。</li>
+    <li>删除文件不在树里出现（文件已不存在），冲突 C / 重命名 R 保持现有红/蓝字母不动。</li>
+    <li>二进制文件 numstat 返回 <span class="mono">-</span>：退化为只显示 M 态（方案 A/D）或「mod」pill（方案 B）。</li>
+    <li>大数字不缩写（+1204 −87 原样展示），列宽用 tabular-nums 保证对齐。</li>
+  </ul>
+</div>
+
+<script>
+  // ===== 共享样例数据 =====
+  const ROWS = [
+    { name: '.claude', dir: true, dirty: true },
+    { name: 'public', dir: true, dirty: true },
+    { name: 'add1.py', st: 'new' },
+    { name: 'earth-rotation.html', st: 'mod', p: 12, m: 4 },
+    { name: 'earth.html', st: 'mod', p: 3, m: 1 },
+    { name: 'example.md', st: 'new' },
+    { name: 'moon_rotation.html', st: 'mod', p: 58, m: 102 },
+    { name: 'moon-autobiography-and-memoirs.html', st: 'mod', p: 1204, m: 87 },
+    { name: 'OPUS.md', st: 'new' },
+    { name: 'package.json', st: 'mod', p: 2, m: 2 },
+    { name: 'prompt-templates.md', ignored: true },
+    { name: 'rocket.html', st: 'new', selected: true },
+    { name: 'server.mjs', st: 'mod', p: 214, m: 0 },
+  ];
+
+  const FOLDER = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.8 4.5c0-.7.6-1.3 1.3-1.3h3l1.5 1.6h5.3c.7 0 1.3.6 1.3 1.3v5.9c0 .7-.6 1.3-1.3 1.3H3.1c-.7 0-1.3-.6-1.3-1.3V4.5z"/></svg>';
+  const FILE = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M4 1.8h5.2L12.5 5v9.2H4z"/><path d="M9 2v3.2h3.3"/></svg>';
+
+  function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+  function rowShell(r, badgeHtml, opts = {}) {
+    const cls = ['row', r.selected ? 'selected' : '', r.ignored ? 'ignored' : '', opts.cls || ''].join(' ');
+    const nameCls = opts.plainName ? '' : (r.st === 'new' ? 'c-new' : r.st === 'mod' ? 'c-mod' : '');
+    return `<div class="${cls}">
+      <span class="caret">${r.dir ? '▸' : ''}</span>
+      <span class="ficon">${r.dir ? FOLDER : FILE}</span>
+      <span class="name ${nameCls}">${esc(r.name)}</span>
+      ${r.dir && r.dirty ? '<span class="dirdot"></span>' : (badgeHtml || '')}
+      <span class="addbtn">+</span>
+    </div>`;
+  }
+
+  function nums(r) {
+    return `<span class="nums mono"><span class="plus">+${r.p}</span><span class="minus">−${r.m}</span></span>`;
+  }
+
+  // ===== 方案 A:字母 + 行数（最贴近现状的增量改法）=====
+  function renderA(r) {
+    if (r.st === 'new') return rowShell(r, `<span class="badge mono" style="color:var(--success)">A</span>`);
+    if (r.st === 'mod') return rowShell(r, `${nums(r)}<span class="badge mono" style="color:var(--warning)">M</span>`);
+    return rowShell(r, '');
+  }
+
+  // ===== 方案 B:去字母，pill + 行数 =====
+  function renderB(r) {
+    if (r.st === 'new') return rowShell(r, `<span class="pill new">NEW</span>`);
+    if (r.st === 'mod') return rowShell(r, nums(r));
+    return rowShell(r, '');
+  }
+
+  // ===== 方案 C:GitHub 方块条 + 总变更数 =====
+  function blocks(p, m) {
+    const total = p + m;
+    let g = total === 0 ? 0 : Math.round((p / total) * 5);
+    if (p > 0 && g === 0) g = 1;
+    if (m > 0 && g === 5) g = 4;
+    let html = '';
+    for (let i = 0; i < 5; i++) html += `<i class="${i < g ? 'p' : 'm'}"></i>`;
+    return `<span class="ctotal mono">${total}</span><span class="blocks" title="+${p} −${m}">${html}</span>`;
+  }
+  function renderC(r) {
+    if (r.st === 'new') return rowShell(r, `<span class="blocks" title="new file"><i class="p"></i><i class="p"></i><i class="p"></i><i class="p"></i><i class="p"></i></span>`);
+    if (r.st === 'mod') return rowShell(r, blocks(r.p, r.m));
+    return rowShell(r, '');
+  }
+
+  // ===== 方案 D:默认圆点，hover 展开细节（文件名不再整行染色）=====
+  function renderD(r) {
+    if (r.st === 'new') return rowShell(r, `<span class="sdot new"></span><span class="detail pill new">NEW</span>`, { cls: 'rowD' + (r.name === 'example.md' ? ' force-hover' : ''), plainName: true });
+    if (r.st === 'mod') return rowShell(r, `<span class="sdot mod"></span><span class="detail">${nums(r)}</span>`, { cls: 'rowD' + (r.name === 'moon_rotation.html' ? ' force-hover' : ''), plainName: true });
+    return rowShell(r, '', { cls: 'rowD', plainName: true });
+  }
+
+  const VARIANTS = [
+    { title: '方案 A · 字母 + 行数', desc: '保留现有单字母语言：新增统一为绿色 A，修改文件在 M 前面加 +N −M。改动最小、和 VS Code 直觉一致，但右侧信息略密。', render: renderA },
+    { title: '方案 B · 行数即状态', desc: '去掉字母：修改文件只显示 +N −M（数字本身就说明是修改）；新增文件用绿色 NEW 胶囊。最直白，扫一眼就能分清两类。', render: renderB },
+    { title: '方案 C · GitHub 方块条', desc: '总变更数 + 五格红绿比例条（GitHub PR 风格），精确行数放 hover tooltip。宽度恒定、大数字不炸版，但精确值要 hover 才见。', render: renderC },
+    { title: '方案 D · 圆点 + hover 展开', desc: '平时只留一个状态圆点（绿=新增、琥珀=修改），文件名不再整行染色；hover 行时展开 +N −M / NEW。最安静，示例里两行是强制 hover 效果。', render: renderD },
+  ];
+
+  document.getElementById('grid').innerHTML = VARIANTS.map(v => `
+    <section class="variant">
+      <h2>${v.title}</h2>
+      <p class="desc">${v.desc}</p>
+      <div class="pane">
+        <div class="pane-head">${FOLDER}<span class="root">fable5</span><span class="path mono">/Users/edy/git/fa…</span></div>
+        <div class="search">🔍&nbsp; Search files in fable5...</div>
+        <div class="tree">${ROWS.map(v.render).join('')}</div>
+      </div>
+    </section>`).join('');
+</script>
+</body>
+</html>

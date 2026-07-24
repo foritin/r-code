@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0004 — Dual-form shell pivot (&quot;Charter&quot;), engine unchanged · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0004-dual-form-shell-pivot-charter-engine-unchanged">ADR-0004 — Dual-form shell pivot (&quot;Charter&quot;), engine unchanged</h1>
+<p>Date: 2026-07-13 · Status: ACCEPTED · Supersedes: spec §4 shell layout (UI form factor only)</p>
+<h2 id="context">Context</h2>
+<p>After trialing the M9 build, the product owner redirected the <strong>shell</strong>:</p>
+<ol><li>The default entry should feel like a task launcher (reference: Codex App home) —<br>one free-form input, inline project/model/approval selectors — not an IDE-first window with a form dialog.</li><li>The underlying agent engine must be <strong>invisible</strong>: no &quot;Pi&quot; in any user-visible<br>surface. Pi is the v1 engine choice, later to be extended/replaced with our own agent logic.</li><li>Settings must manage provider API keys and fetch live model lists.</li><li>The full IDE workbench remains available (dual form), because manual editing,<br>terminals and git review stay in scope.</li></ol>
+<p>The owner also asked whether the SDK is slower than &quot;using Pi directly&quot; and<br>whether to vendor Pi&#39;s source into the repo.</p>
+<h2 id="decision">Decision</h2>
+<ol><li><strong>Dual-surface shell</strong>: a new <code>home</code> surface (task launcher) is the default<br>entry; the existing workbench becomes the <code>workspace</code> surface. Opening a workspace auto-switches to <code>workspace</code>; a title-bar control switches back. Detailed behavior: <a href="../reference/UX_PIVOT_SPEC.html"><code>docs/UX_PIVOT_SPEC.html</code></a> (PIVOT-001..010).</li><li><strong>Product name: &quot;Charter&quot;</strong> (user-visible branding only). Rationale: a<br>charter <em>is</em> the product&#39;s task object — goal, boundaries, success criteria; noun+verb marketing (&quot;charter your agent&quot;); dictionary-word open-source branding precedent (Helm/Vault). Internal package scope <code>@pi-ide/*</code>, env vars <code>PI_IDE_*</code> and repo name stay unchanged — they are invisible to users and a rename would churn every import for zero user value.</li><li><strong>Keep the pinned Pi SDK; do NOT vendor Pi source.</strong> The npm package is the<br>same code that would be copied in; runtime cost of our isolation (worker process + one IPC hop per tool call) is milliseconds against seconds of model latency. Vendoring buys no speed and costs upstream maintenance. The fork trigger stays as spec §8.5: patch only when a numbered P0 requirement is blocked; consider a fork after 3+ standing core patches. Custom agent logic later lands as a new <code>AgentRuntime</code> implementation behind the existing contract (product principle #7, Runtime replaceable).</li><li><strong>Model catalog service (main process)</strong>: provider API keys via the existing<br>SecretService; <code>models.fetchRemote</code> calls the provider&#39;s public model-list endpoint (Anthropic/OpenAI v1) with the stored key, caches per session and merges into <code>models.list</code> output. The agent worker is not involved.</li><li><strong>Task fast path</strong>: submitting the Home input creates and starts a task with<br>a derived title and the raw intent as the goal. Meta-agent drafting of acceptance criteria/verification from the intent is <strong>phase 2</strong> (recorded, not implemented now).</li><li><strong>M10–M12 are deferred, not descoped.</strong> Recovery, hardening and packaging are<br>form-factor-agnostic and resume after the pivot ships.</li></ol>
+<h2 id="consequences">Consequences</h2>
+<ul><li>Spec §4&#39;s &quot;welcome page&quot; is replaced by the Home surface; E2E launch helper<br>dismisses Home for workbench-focused suites; new pivot E2E covers Home.</li><li><a href="../reference/PRODUCT_ENGINEERING_SPEC.html"><code>docs/PRODUCT_ENGINEERING_SPEC.html</code></a> remains the engine/security source of<br>truth; UI-shell conflicts resolve in favor of <a href="../reference/UX_PIVOT_SPEC.html"><code>docs/UX_PIVOT_SPEC.html</code></a>.</li><li>The trust dialog / preamble / crash copy no longer mention Pi; wording refers<br>to &quot;project agent resources&quot; and &quot;Charter&quot;.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

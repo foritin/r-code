@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0035 — Replay V3.2: lean recap — 排场跟着任务大小走，账本一条不少 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0035-replay-v3-2-lean-recap-排场跟着任务大小走-账本一条不少">ADR-0035 — Replay V3.2: lean recap — 排场跟着任务大小走，账本一条不少</h1>
+<ul><li>Status: Accepted (product owner approved the before/after mock)</li><li>Date: 2026-07-20</li><li>Extends: ADR-0031 (Replay V3.1 conversation-first recap), ADR-0017 Amendment 8</li><li>Mock: <code>docs/design/replay-v32-lean-recap-mock.html</code>（同一会话的现状/改造后对比）</li></ul>
+<h2 id="context">Context</h2>
+<p>Owner 用真实小任务（&quot;写一个 add 函数&quot;，30 秒、一次写入）审阅 V3.1 Recap，<br>结论：13 行里 5 根折叠条 + 4 个重复徽章，仪式多于内容 ——</p>
+<ol><li>折叠条负压缩：&quot;折叠了 1 条&quot; 用一整行去藏一行；</li><li>排场不随任务缩放：单步任务享受与 28 分钟多转折会话相同的章节仪式；</li><li>批准占两张卡：&quot;Plan approved&quot; 与 &quot;Approved: Create add.py&quot; 是对其他事实<br>的回应，不是独立故事节拍；</li><li>原始错误码吓人：<code>Listed &quot;&quot; · WS_DIR_UNREADABLE</code> 红图标出现在一次成功的<br>会话里，读起来像事故（对 spec 定义的非编程用户尤甚）；</li><li>&quot;结构化记录&quot; 徽章行行都有，等于没有。</li></ol>
+<p>判断依据：用户 99% 的时候只确认&quot;干了什么、成了没&quot;；1% 的审计时刻<br>（&quot;我批准过什么？&quot;）带时间戳的权限记录是黄金。所以<strong>账本层照记全量，<br>只改 Recap 投影层的默认展示</strong>。Explore / Verify 深度完全不变。</p>
+<h2 id="decisions-五条投影规则">Decisions（五条投影规则）</h2>
+<ol><li><strong>折叠条别比内容多。</strong> 两个保留节点之间的隐藏跨度：全是状态心跳<br>（kind <code>state</code>/<code>system</code>）→ 不立牌子，计入 footer 汇总（&quot;N 次状态记录 未占行 · 探究层可见全部&quot;）；实质记录 &lt; <code>FOLD_MIN</code>(3) 条 → 直接内联成 小字行；≥ 3 条 → 保留可展开折叠条（该跨度内的心跳也算进条内计数， 每条记录恰好被呈现一次：行 / 贴纸 / 条内 / footer 计数）。</li></ol>
+<ol><li><strong>紧凑模式是涌现的，不是开关。</strong> 小会话的跨度天然全是心跳或 &lt;3 条<br>实质记录，按规则 1 自动零折叠条；大会话（87 次读取的探索段）自动保留 正压缩的折叠条。无需按节点数分档的显式模式位。</li></ol>
+<ol><li><strong>批准是贴纸，不是卡。</strong> 新增 id-backed 关系 <code>resolves</code>：</li></ol>
+<ul><li>已允许的 permission 决定沿 requestId → pending 请求 → 记录的 callId<br>链接到被门禁的工具事实；</li><li>已批准的 plan-decision 按<strong>记录的计划版本号</strong>（<code>plan-v{version}</code>，<br>activity 投影在 planProposed/planDecision 两侧写入 parentKey，与 permission 的 requestId join 同构）链接到提案事实。</li></ul>
+<p>目标行可见时，批准（连同其 pending 请求）渲染为该行上的<br>&quot;✓ 你批准了 / 自动批准 HH:MM&quot; chip，点击打开该批准自身的审计详情。<br>拒绝永不 chip 化；链路 join 失败（如批准时编辑过计划导致版本 +1）<br>fail open 保持独立行 —— 相邻性永不造边的诚实不变量不动。</p>
+<ol><li><strong>错误说人话，红色留给真出事的。</strong> <code>read</code>/<code>search</code>/<code>state</code>/<code>system</code><br>类错误且会话 outcome === &#39;completed&#39;（两个都是记录值，无推断）→ 渲染为 amber 软提示行：&quot;过程性错误 · 会话仍完成&quot;，原始错误码降为 小字 mono；command/write/verification/permission 失败保持红色硬节拍。 attention 列表与账本不变。</li></ol>
+<ol><li><strong>徽章反着打。</strong> &#39;recorded&#39;（结构化记录）是默认态，Recap 故事行不再<br>渲染；只有例外等级打标：已验证 / 观察记录 / 推导叙事 / 证据缺失。 Explore/Verify 与 EvidenceDrawer 的等级展示不变。</li></ol>
+<h2 id="alternatives-rejected">Alternatives rejected</h2>
+<ul><li>显式&quot;紧凑模式&quot;开关（按语义节点数分档）——规则 1+3 已让小会话自然<br>归零折叠条，多一个模式位就多一个漂移点；</li><li>时间相邻推断 plan-decision → plan 的归属——违反&quot;关系只来自记录 id&quot;<br>不变量；改为在事件两侧补记录版本号 join 键；</li><li>错误码人话化字典（code → 文案映射表）——维护面大且是变相改写账本；<br>软提示行保留原文，只降视觉等级。</li></ul>
+<h2 id="security-and-data-impact">Security and data impact</h2>
+<p>无 schema 迁移、无新表。<code>ReplayRelationSchema.type</code> 增枚举值 <code>resolves</code><br>（向后兼容的加法变更）；activity 投影为 planProposed / planDecision 增<br><code>parentKey</code>（既有可选字段，复用 permission join 语义）。其余全部是<br>renderer 投影规则（<code>replay-model.ts</code> 纯函数 + RecapDepth 渲染），<br>账本与 IPC 面不变。</p>
+<h2 id="verification-evidence">Verification evidence</h2>
+<ul><li>Unit: <code>packages/ipc-contracts/src/replay.test.ts</code> +4（permission 链<br>resolves、denied 不生成、plan 版本 join、版本不匹配 fail open）； <code>activity.test.ts</code> 补 parentKey 断言（含无版本号不生成）； <code>apps/desktop-renderer/.../replay-model.test.ts</code> +7（心跳跨度零折叠条 且 footer 计数、&lt;3 内联、≥3 保条且条内全额记账、chip 排除不重复计数、 chip 收集含 pending 折入、denied/无目标不 chip、软错误分类边界）。 全量单测 667/667；<code>npm run check</code> 干净。</li><li>E2E: <code>tests/e2e/replay-v3.spec.ts</code> 5/5 — 新断言：小会话（edit-basic）<br>零折叠条、批准 chip 可见且点击进审计详情、故事列表无 &#39;结构化记录&#39; 徽章、plan-decision 无独立行；pivot 场景断言修订版计划的批准 chip 出现在转折卡上；10k 账本折叠条测试原样保留（大跨度仍是正压缩）。 <code>replay-semantic-ui.spec.ts</code> 3/3、<code>p2-parallel-replay</code> 3/3。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

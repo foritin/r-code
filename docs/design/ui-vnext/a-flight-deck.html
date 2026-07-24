@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>方案 A — Flight Deck 舰队指挥台</title>
+<style>
+  /* ============================================================
+     方案 A — Flight Deck
+     主张：Launcher 不再是「表单 + 列表」，而是一眼看清整个
+     智能体舰队态势的指挥台。发起只是一瞬，督战才是常态。
+     材质：航空蓝黑 + 冷青仪表光 + 衬线品牌字（Charter 血统不丢）。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg-void: #07090c;
+    --bg-app: #0b0e12;
+    --bg-rail: #0d1015;
+    --bg-card: #10141a;
+    --bg-card-hi: #131820;
+    --bg-inset: #0a0d11;
+    --border: #1c232d;
+    --border-soft: #151b23;
+    --border-lit: #2b3846;
+    --fg: #dbe6ee;
+    --fg-muted: #7d8b99;
+    --fg-faint: #46525f;
+    --ice: #9fd6f2;
+    --ice-dim: #5f92ad;
+    --amber: #e8b45a;
+    --amber-glow: rgba(232, 180, 90, 0.16);
+    --green: #55d488;
+    --green-dim: rgba(85, 212, 136, 0.14);
+    --red: #e46a63;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+    --mono: 'Berkeley Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg-void);
+    color: var(--fg);
+    overflow: hidden;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- 注解条（mock 说明，非产品 UI） ---------- */
+  .annot {
+    position: fixed; inset: auto 16px 14px auto; z-index: 90;
+    max-width: 380px; padding: 10px 14px 11px;
+    background: rgba(14, 18, 24, 0.92); border: 1px solid var(--border-lit);
+    border-radius: 10px; backdrop-filter: blur(10px);
+    font-size: 11.5px; line-height: 1.6; color: var(--fg-muted);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  }
+  .annot b { color: var(--ice); font-weight: 600; }
+  .annot .x {
+    position: absolute; top: 6px; right: 9px; cursor: pointer;
+    color: var(--fg-faint); font-size: 13px; background: none; border: none;
+  }
+  .annot .x:hover { color: var(--fg); }
+
+  /* ---------- 应用骨架 ---------- */
+  .app {
+    display: grid;
+    grid-template-rows: 40px 1fr;
+    grid-template-columns: 268px 1fr;
+    grid-template-areas: "titlebar titlebar" "rail main";
+    height: 100vh;
+    background:
+      radial-gradient(1100px 500px at 78% -8%, rgba(70, 120, 160, 0.10), transparent 60%),
+      radial-gradient(900px 420px at 12% 110%, rgba(60, 90, 130, 0.07), transparent 55%),
+      var(--bg-app);
+  }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar {
+    grid-area: titlebar;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--border-soft);
+    background: rgba(10, 13, 17, 0.7);
+    -webkit-app-region: drag;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #2a323c; }
+  .brand {
+    font-family: var(--serif); font-size: 15px; letter-spacing: 0.02em;
+    color: var(--fg); margin-left: 4px;
+  }
+  .brand span { color: var(--ice-dim); font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; margin-left: 10px; text-transform: uppercase; }
+  .tb-center {
+    flex: 1; display: flex; justify-content: center;
+  }
+  .tb-search {
+    display: flex; align-items: center; gap: 8px;
+    width: 420px; height: 26px; padding: 0 12px;
+    background: var(--bg-inset); border: 1px solid var(--border);
+    border-radius: 7px; color: var(--fg-faint); font-size: 12px;
+  }
+  .tb-search kbd {
+    margin-left: auto; font-family: var(--mono); font-size: 10px;
+    padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--fg-faint);
+  }
+  .tb-right { display: flex; align-items: center; gap: 10px; font-size: 11px; color: var(--fg-muted); }
+  .tb-model {
+    display: flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px;
+    font-family: var(--mono); font-size: 10.5px;
+  }
+  .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 8px rgba(85,212,136,0.7); }
+
+  /* ---------- Session Rail ---------- */
+  .rail {
+    grid-area: rail;
+    display: flex; flex-direction: column;
+    background: var(--bg-rail);
+    border-right: 1px solid var(--border-soft);
+    overflow: hidden;
+  }
+  .rail-tabs {
+    display: flex; gap: 2px; padding: 10px 12px 8px;
+  }
+  .rail-tab {
+    padding: 4px 12px; border-radius: 6px; font-size: 11.5px;
+    color: var(--fg-muted); cursor: pointer;
+  }
+  .rail-tab.on { background: var(--bg-card-hi); color: var(--fg); }
+  .needs-strip {
+    margin: 2px 12px 10px; padding: 8px 12px;
+    display: flex; align-items: center; gap: 9px;
+    background: linear-gradient(90deg, rgba(232,180,90,0.13), rgba(232,180,90,0.04));
+    border: 1px solid rgba(232, 180, 90, 0.35);
+    border-radius: 8px; cursor: pointer;
+    animation: needsPulse 3.2s ease-in-out infinite;
+  }
+  @keyframes needsPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(232,180,90,0); }
+    50% { box-shadow: 0 0 22px 0 rgba(232,180,90,0.14); }
+  }
+  .needs-strip .lamp {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--amber); box-shadow: 0 0 10px rgba(232,180,90,0.9);
+  }
+  .needs-strip b { font-size: 12px; color: var(--amber); font-weight: 600; }
+  .needs-strip span { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--amber); opacity: 0.85; }
+
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .rail-scroll::-webkit-scrollbar { width: 8px; }
+  .rail-scroll::-webkit-scrollbar-thumb { background: rgba(125,139,153,0.18); border-radius: 4px; }
+
+  .rgroup { margin-bottom: 6px; }
+  .rgroup-head {
+    display: flex; align-items: center; gap: 7px;
+    padding: 7px 8px 5px; font-size: 10.5px; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--fg-faint);
+  }
+  .rgroup-head .cnt { margin-left: auto; font-family: var(--mono); font-size: 10px; }
+  .rgroup-head .badge {
+    font-size: 9.5px; letter-spacing: 0; text-transform: none;
+    color: var(--amber); border: 1px solid rgba(232,180,90,0.4);
+    padding: 0.5px 6px; border-radius: 20px;
+  }
+  .srow {
+    position: relative;
+    display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center;
+    padding: 7px 9px; border-radius: 8px; cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .srow:hover { background: var(--bg-card); }
+  .srow.sel { background: var(--bg-card-hi); border-color: var(--border); }
+  .srow .st { display: flex; justify-content: center; }
+  .srow .name { font-size: 12.5px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .sub { grid-column: 2; font-size: 10.5px; color: var(--fg-faint); margin-top: 1px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+
+  /* 心电谱线：运行中的会话在行内有活的痕迹 */
+  .pulseline { display: flex; align-items: flex-end; gap: 1.5px; height: 14px; }
+  .pulseline i {
+    width: 2px; background: var(--green); border-radius: 1px; opacity: 0.85;
+    animation: ekg 1.4s ease-in-out infinite;
+  }
+  .pulseline i:nth-child(1) { height: 4px; animation-delay: 0s; }
+  .pulseline i:nth-child(2) { height: 9px; animation-delay: 0.12s; }
+  .pulseline i:nth-child(3) { height: 6px; animation-delay: 0.24s; }
+  .pulseline i:nth-child(4) { height: 11px; animation-delay: 0.36s; }
+  .pulseline i:nth-child(5) { height: 5px; animation-delay: 0.48s; }
+  @keyframes ekg {
+    0%, 100% { transform: scaleY(0.4); }
+    50% { transform: scaleY(1); }
+  }
+  .lamp-amber { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 9px rgba(232,180,90,0.8); }
+  .lamp-idle { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); opacity: 0.5; }
+  .lamp-green { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px rgba(85,212,136,0.6); }
+
+  .rail-foot {
+    padding: 10px 14px; border-top: 1px solid var(--border-soft);
+    display: flex; align-items: center; gap: 9px;
+    font-size: 11.5px; color: var(--fg-muted); cursor: pointer;
+  }
+  .rail-foot:hover { color: var(--fg); }
+  .rail-foot .ic { opacity: 0.7; }
+
+  /* ---------- 主区 ---------- */
+  .main {
+    grid-area: main;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  /* 底图：极淡的仪表网格 */
+  .main::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(125,150,175,0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(125,150,175,0.035) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(900px 460px at 50% 0%, rgba(0,0,0,0.8), transparent 75%);
+  }
+
+  .deck { flex: 1; overflow-y: auto; padding: 26px 34px 20px; position: relative; }
+  .deck::-webkit-scrollbar { width: 10px; }
+  .deck::-webkit-scrollbar-thumb { background: rgba(125,139,153,0.18); border-radius: 5px; }
+
+  /* ---------- 态势带 ---------- */
+  .situation {
+    display: grid; grid-template-columns: repeat(5, 1fr) 1.6fr; gap: 10px;
+    margin-bottom: 22px;
+  }
+  .gauge {
+    padding: 13px 16px 12px;
+    background: linear-gradient(180deg, var(--bg-card-hi), var(--bg-card));
+    border: 1px solid var(--border); border-radius: 12px;
+    position: relative; overflow: hidden;
+  }
+  .gauge::after {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(159,214,242,0.35), transparent);
+  }
+  .gauge .k {
+    font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--fg-faint); margin-bottom: 7px;
+  }
+  .gauge .v {
+    font-family: var(--mono); font-size: 26px; font-weight: 500;
+    color: var(--fg); font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .gauge .v em { font-style: normal; font-size: 12px; color: var(--fg-faint); margin-left: 5px; }
+  .gauge.hot .v { color: var(--amber); text-shadow: 0 0 22px rgba(232,180,90,0.45); }
+  .gauge.live .v { color: var(--ice); text-shadow: 0 0 22px rgba(159,214,242,0.35); }
+  .gauge.good .v { color: var(--green); text-shadow: 0 0 20px rgba(85,212,136,0.3); }
+  .gauge .trend { position: absolute; right: 13px; bottom: 12px; display: flex; align-items: flex-end; gap: 2px; height: 18px; }
+  .gauge .trend i { width: 3px; background: rgba(159,214,242,0.35); border-radius: 1px; }
+
+  /* 活动示波器（右侧宽块）：全舰队事件率 */
+  .oscillo {
+    padding: 12px 16px 10px;
+    background: linear-gradient(180deg, var(--bg-card-hi), var(--bg-card));
+    border: 1px solid var(--border); border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden; position: relative;
+  }
+  .oscillo .k { font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-faint); display: flex; justify-content: space-between; }
+  .oscillo .k b { color: var(--ice-dim); font-family: var(--mono); font-weight: 500; letter-spacing: 0.05em; }
+  .wave { flex: 1; display: flex; align-items: flex-end; gap: 2.5px; margin-top: 8px; }
+  .wave i {
+    flex: 1; border-radius: 1px 1px 0 0; min-height: 2px;
+    background: linear-gradient(180deg, rgba(159,214,242,0.75), rgba(159,214,242,0.12));
+    animation: waveB 2.6s ease-in-out infinite;
+  }
+  @keyframes waveB { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+  /* ---------- 区块标题 ---------- */
+  .zone-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 4px 2px 12px;
+  }
+  .zone-head h2 {
+    font-family: var(--serif); font-size: 17px; font-weight: 500;
+    letter-spacing: 0.01em; color: var(--fg);
+  }
+  .zone-head .rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--border), transparent); }
+  .zone-head .meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); letter-spacing: 0.08em; }
+
+  /* ---------- Needs You 通道 ---------- */
+  .needs-lane { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .ncard {
+    position: relative;
+    padding: 16px 18px 14px;
+    background: linear-gradient(180deg, #151310, #100f0d);
+    border: 1px solid rgba(232, 180, 90, 0.42);
+    border-radius: 13px;
+    overflow: hidden;
+    animation: needsPulse 3.2s ease-in-out infinite;
+  }
+  .ncard::before {
+    content: ""; position: absolute; inset: -40% -20% auto;
+    height: 90px; filter: blur(30px);
+    background: radial-gradient(closest-side, rgba(232,180,90,0.22), transparent);
+    pointer-events: none;
+  }
+  .ncard .tag {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--amber); margin-bottom: 9px;
+  }
+  .ncard .tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 10px rgba(232,180,90,1); }
+  .ncard h3 { font-family: var(--serif); font-size: 16.5px; font-weight: 500; margin-bottom: 4px; }
+  .ncard .proj { font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); margin-bottom: 11px; }
+  .ncard .body { font-size: 12px; color: var(--fg-muted); line-height: 1.55; }
+  .ncard .plan-steps { margin: 8px 0 0; display: flex; flex-direction: column; gap: 5px; }
+  .ncard .plan-steps li {
+    list-style: none; display: flex; gap: 9px; font-size: 12px; color: var(--fg-muted);
+  }
+  .ncard .plan-steps b {
+    font-family: var(--mono); font-size: 10px; color: var(--amber);
+    border: 1px solid rgba(232,180,90,0.4); border-radius: 50%;
+    width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0; margin-top: 1px; font-weight: 400;
+  }
+  .diffstat { font-family: var(--mono); font-size: 11.5px; margin: 10px 0 2px; }
+  .diffstat .add { color: var(--green); }
+  .diffstat .del { color: var(--red); }
+  .diffstat .files { color: var(--fg-muted); }
+  .checkrow { display: flex; gap: 14px; margin-top: 7px; font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted); }
+  .checkrow .ok::before { content: "✓ "; color: var(--green); }
+  .ncard .acts { display: flex; gap: 8px; margin-top: 13px; }
+  .btn {
+    padding: 6px 14px; border-radius: 7px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border-lit); background: var(--bg-card-hi); color: var(--fg);
+  }
+  .btn:hover { border-color: var(--fg-faint); }
+  .btn.primary {
+    background: var(--amber); border-color: var(--amber); color: #14100a; font-weight: 600;
+    box-shadow: 0 4px 18px rgba(232,180,90,0.25);
+  }
+  .btn.primary:hover { filter: brightness(1.06); }
+  .btn.ghost { background: transparent; }
+
+  /* ---------- 舰队网格 ---------- */
+  .fleet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 26px; }
+  .fcard {
+    position: relative;
+    padding: 15px 17px 13px;
+    background: linear-gradient(180deg, var(--bg-card-hi), var(--bg-card));
+    border: 1px solid var(--border); border-radius: 13px;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .fcard:hover { border-color: var(--border-lit); transform: translateY(-1px); }
+  .fcard.running { border-color: rgba(85, 212, 136, 0.28); }
+  .fcard.running::after {
+    content: ""; position: absolute; inset: 0; border-radius: 13px; pointer-events: none;
+    box-shadow: inset 0 0 34px rgba(85, 212, 136, 0.05);
+    animation: breathe 3.6s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%,100% { opacity: 0.4; } 50% { opacity: 1; } }
+  .fcard .top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .chip {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em;
+    padding: 2px 8px; border-radius: 5px;
+    background: var(--bg-inset); border: 1px solid var(--border);
+    color: var(--fg-muted);
+  }
+  .chip.wt { color: var(--ice); border-color: rgba(159,214,242,0.3); }
+  .fcard .elapsed { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+  .fcard h3 {
+    font-family: var(--serif); font-size: 15.5px; font-weight: 500;
+    margin-bottom: 10px; line-height: 1.3;
+  }
+  /* 现场动作行：像 tail -f 一样滚动 */
+  .action-line {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px; border-radius: 7px;
+    background: var(--bg-inset); border: 1px solid var(--border-soft);
+    font-family: var(--mono); font-size: 10.8px; color: var(--ice);
+    white-space: nowrap; overflow: hidden;
+  }
+  .action-line .verb { color: var(--fg-faint); flex-shrink: 0; }
+  .action-line .t { overflow: hidden; text-overflow: ellipsis; }
+  .caret { display: inline-block; width: 6px; height: 12px; background: var(--ice); margin-left: 2px;
+    animation: blink 1.1s steps(1) infinite; vertical-align: -2px; flex-shrink: 0;}
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* 门序列：plan → permissions → verify */
+  .gates { display: flex; align-items: center; gap: 0; margin-top: 11px; }
+  .gate { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--fg-faint); }
+  .gate i {
+    width: 8px; height: 8px; border-radius: 50%;
+    border: 1.5px solid var(--fg-faint); background: transparent;
+  }
+  .gate.done { color: var(--fg-muted); }
+  .gate.done i { border-color: var(--green); background: var(--green); box-shadow: 0 0 7px rgba(85,212,136,0.55); }
+  .gate.active { color: var(--ice); }
+  .gate.active i { border-color: var(--ice); animation: gatePulse 1.6s ease-in-out infinite; }
+  @keyframes gatePulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(159,214,242,0.5); }
+    50% { box-shadow: 0 0 0 4px rgba(159,214,242,0.08); }
+  }
+  .gate-link { width: 22px; height: 1px; background: var(--border-lit); margin: 0 7px; }
+
+  /* 验证进度 */
+  .verify {
+    margin-top: 11px; display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 10px; color: var(--fg-muted);
+  }
+  .vbar { flex: 1; height: 3px; border-radius: 2px; background: var(--bg-inset); overflow: hidden; position: relative; }
+  .vbar i { position: absolute; inset: 0; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--green), transparent);
+    width: 40%; animation: sweep 1.8s ease-in-out infinite; }
+  @keyframes sweep { 0% { left: -40%; } 100% { left: 100%; } }
+  .vbar.det i { animation: none; left: 0; width: 62%; background: var(--green); }
+
+  /* ---------- 今日已落地 ---------- */
+  .settled-strip { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; margin-bottom: 8px; }
+  .settled-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 9px 14px;
+    background: var(--bg-card); border: 1px solid var(--border-soft); border-radius: 10px;
+    opacity: 0.82; cursor: pointer;
+  }
+  .settled-item:hover { opacity: 1; border-color: var(--border); }
+  .s-lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
+  .s-lamp.ok { background: var(--green); box-shadow: 0 0 7px rgba(85,212,136,0.45); }
+  .s-lamp.bad { background: var(--red); }
+  .s-copy { flex: 1; min-width: 0; }
+  .s-copy b { display: block; font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .s-copy span { font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+  .s-diff { font-family: var(--mono); font-size: 10.5px; flex-shrink: 0; }
+  .s-diff .add { font-style: normal; color: var(--green); }
+  .s-diff .del { font-style: normal; color: var(--red); }
+  .s-diff.none { color: var(--fg-faint); }
+  .s-replay { font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); flex-shrink: 0; }
+  .settled-item:hover .s-replay { color: var(--ice); }
+
+  /* ---------- 发射台（composer 沉底） ---------- */
+  .launchpad {
+    border-top: 1px solid var(--border-soft);
+    background: linear-gradient(180deg, rgba(13,16,21,0.6), rgba(13,16,21,0.95));
+    backdrop-filter: blur(14px);
+    padding: 14px 34px 16px;
+  }
+  .pad-box {
+    display: flex; flex-direction: column; gap: 10px;
+    background: var(--bg-card-hi);
+    border: 1px solid var(--border-lit); border-radius: 13px;
+    padding: 13px 15px 11px;
+    box-shadow: 0 -8px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(159,214,242,0.06);
+  }
+  .pad-box:focus-within { border-color: var(--ice-dim); }
+  .pad-input { display: flex; align-items: center; gap: 10px; }
+  .pad-input input {
+    flex: 1; background: transparent; border: none; outline: none;
+    font-family: var(--serif); font-size: 15.5px; color: var(--fg);
+  }
+  .pad-input input::placeholder { color: var(--fg-faint); }
+  .pad-meta { display: flex; align-items: center; gap: 8px; }
+  .pad-meta .spacer { flex: 1; }
+  .launch {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 16px; border-radius: 8px; border: none; cursor: pointer;
+    background: linear-gradient(180deg, #cfe9f7, var(--ice));
+    color: #0a1017; font-weight: 650; font-size: 12.5px;
+    box-shadow: 0 4px 20px rgba(159,214,242,0.25);
+  }
+  .launch:hover { filter: brightness(1.05); }
+  .hint { font-size: 10.5px; color: var(--fg-faint); margin-top: 8px; text-align: center; letter-spacing: 0.02em; }
+  .hint kbd { font-family: var(--mono); border: 1px solid var(--border); padding: 0 4px; border-radius: 3px; font-size: 9.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 标题栏 -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <div class="brand">Charter <span>Flight Deck</span></div>
+    <div class="tb-center">
+      <div class="tb-search">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+        Search sessions, files, commands…
+        <kbd>⌘K</kbd>
+      </div>
+    </div>
+    <div class="tb-right">
+      <div class="tb-model"><span class="dot ok"></span>claude-fable-5</div>
+      <div class="tb-model">3 providers</div>
+    </div>
+  </header>
+
+  <!-- Session Rail：会话有了心跳 -->
+  <aside class="rail">
+    <div class="rail-tabs">
+      <div class="rail-tab on">Sessions</div>
+      <div class="rail-tab">Files</div>
+    </div>
+
+    <div class="needs-strip">
+      <span class="lamp"></span><b>Needs you</b><span>2</span>
+    </div>
+
+    <div class="rail-scroll">
+      <div class="rgroup">
+        <div class="rgroup-head">desktop-app <span class="badge">1 needs you</span><span class="cnt">4</span></div>
+        <div class="srow sel">
+          <span class="st"><span class="pulseline"><i></i><i></i><i></i><i></i><i></i></span></span>
+          <span class="name">Migrate settings storage to SQLite</span>
+          <span class="sub">editing settings-store.ts · verify queued</span>
+        </div>
+        <div class="srow">
+          <span class="st"><span class="lamp-amber"></span></span>
+          <span class="name">Rework onboarding trust prompt copy</span>
+          <span class="sub">plan awaiting approval · 21s</span>
+        </div>
+        <div class="srow">
+          <span class="st"><span class="pulseline"><i></i><i></i><i></i><i></i><i></i></span></span>
+          <span class="name">Chase flaky external-cli e2e retry</span>
+          <span class="sub">npm run test:e2e · 9/24 passed</span>
+        </div>
+        <div class="srow">
+          <span class="st"><span class="lamp-idle"></span></span>
+          <span class="name">Terminal env fallback for zsh users</span>
+          <span class="sub">answered · no file changes</span>
+        </div>
+      </div>
+
+      <div class="rgroup">
+        <div class="rgroup-head">charter-site <span class="badge">1 needs you</span><span class="cnt">2</span></div>
+        <div class="srow">
+          <span class="st"><span class="lamp-amber"></span></span>
+          <span class="name">Bundle terminal env fallback fix</span>
+          <span class="sub">review ready · +214 −89</span>
+        </div>
+        <div class="srow">
+          <span class="st"><span class="pulseline"><i></i><i></i><i></i><i></i><i></i></span></span>
+          <span class="name">Ship pricing page with annual toggle</span>
+          <span class="sub">writing pricing.astro</span>
+        </div>
+      </div>
+
+      <div class="rgroup">
+        <div class="rgroup-head">History<span class="cnt">31</span></div>
+        <div class="srow">
+          <span class="st"><span class="lamp-green"></span></span>
+          <span class="name">Harden IPC schema for task events</span>
+          <span class="sub">accepted · 2h ago</span>
+        </div>
+        <div class="srow">
+          <span class="st"><span class="lamp-green"></span></span>
+          <span class="name">Fix rail badge overflow at 100+ sessions</span>
+          <span class="sub">accepted · yesterday</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="rail-foot">
+      <svg class="ic" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7l9-4 9 4-9 4-9-4Z"/><path d="M3 12l9 4 9-4M3 17l9 4 9-4"/></svg>
+      Working in <b style="margin-left:2px">desktop-app</b>
+    </div>
+  </aside>
+
+  <!-- 主指挥区 -->
+  <main class="main">
+    <div class="deck">
+
+      <!-- 态势带 -->
+      <section class="situation">
+        <div class="gauge live"><div class="k">Running</div><div class="v" id="g-running">3</div></div>
+        <div class="gauge hot"><div class="k">Needs you</div><div class="v">2</div></div>
+        <div class="gauge good"><div class="k">Verified today</div><div class="v" id="g-verified">14</div></div>
+        <div class="gauge"><div class="k">Files in flight</div><div class="v" id="g-files">27</div>
+          <div class="trend"><i style="height:5px"></i><i style="height:9px"></i><i style="height:7px"></i><i style="height:12px"></i><i style="height:15px"></i></div>
+        </div>
+        <div class="gauge"><div class="k">Accepted this week</div><div class="v">31<em>/ 33</em></div></div>
+        <div class="oscillo">
+          <div class="k">Fleet activity <b>tool events / min</b></div>
+          <div class="wave" id="wave"></div>
+        </div>
+      </section>
+
+      <!-- Needs You 通道 -->
+      <div class="zone-head">
+        <h2>Needs you</h2>
+        <span class="rule"></span>
+        <span class="meta">DECISIONS BLOCK THE FLEET — CLEAR THEM FIRST</span>
+      </div>
+      <section class="needs-lane">
+        <article class="ncard">
+          <div class="tag"><i></i>Plan awaiting approval · 21s</div>
+          <h3>Rework onboarding trust prompt copy</h3>
+          <div class="proj">desktop-app · main</div>
+          <ul class="plan-steps">
+            <li><b>1</b>Inventory every trust-prompt string in first-run and folder-open flows</li>
+            <li><b>2</b>Rewrite copy to the humane-language dictionary, no raw state names</li>
+            <li><b>3</b>Update e2e assertions and the copy snapshot suite</li>
+          </ul>
+          <div class="acts">
+            <button class="btn primary">Approve plan</button>
+            <button class="btn">Edit plan</button>
+            <button class="btn ghost">Cancel session</button>
+          </div>
+        </article>
+
+        <article class="ncard">
+          <div class="tag"><i></i>Review ready · all checks passed</div>
+          <h3>Bundle terminal env fallback fix</h3>
+          <div class="proj">charter-site · worktree ws/env-fallback</div>
+          <div class="diffstat"><span class="add">+214</span> <span class="del">−89</span> <span class="files">· 12 files</span></div>
+          <div class="checkrow"><span class="ok">npm run check</span><span class="ok">npm run test</span><span class="ok">e2e external-cli</span></div>
+          <div class="acts">
+            <button class="btn primary">Open review</button>
+            <button class="btn">Peek changes</button>
+            <button class="btn ghost">Rollback</button>
+          </div>
+        </article>
+      </section>
+
+      <!-- 运行中舰队 -->
+      <div class="zone-head">
+        <h2>Running</h2>
+        <span class="rule"></span>
+        <span class="meta">LIVE — EVERY CARD IS A SESSION'S HEARTBEAT</span>
+      </div>
+      <section class="fleet">
+        <article class="fcard running">
+          <div class="top">
+            <span class="chip">desktop-app</span>
+            <span class="chip wt">⎇ ws/settings-sqlite</span>
+            <span class="elapsed" data-elapsed="754">12m 34s</span>
+          </div>
+          <h3>Migrate settings storage to SQLite</h3>
+          <div class="action-line"><span class="verb">edit</span><span class="t" id="act-1">apps/desktop-main/src/services/settings-store.ts</span><span class="caret"></span></div>
+          <div class="gates">
+            <span class="gate done"><i></i>Plan</span><span class="gate-link"></span>
+            <span class="gate done"><i></i>Permissions · 2</span><span class="gate-link"></span>
+            <span class="gate active"><i></i>Verify</span>
+          </div>
+          <div class="verify"><span>npm run check</span><div class="vbar"><i></i></div><span>running</span></div>
+        </article>
+
+        <article class="fcard running">
+          <div class="top">
+            <span class="chip">charter-site</span>
+            <span class="elapsed" data-elapsed="243">4m 03s</span>
+          </div>
+          <h3>Ship pricing page with annual toggle</h3>
+          <div class="action-line"><span class="verb">write</span><span class="t" id="act-2">src/pages/pricing.astro</span><span class="caret"></span></div>
+          <div class="gates">
+            <span class="gate done"><i></i>Plan</span><span class="gate-link"></span>
+            <span class="gate active"><i></i>Working</span><span class="gate-link"></span>
+            <span class="gate"><i></i>Verify</span>
+          </div>
+          <div class="verify"><span>verification armed</span><div class="vbar det"><i style="width:0"></i></div><span>—</span></div>
+        </article>
+
+        <article class="fcard running">
+          <div class="top">
+            <span class="chip">desktop-app</span>
+            <span class="elapsed" data-elapsed="1122">18m 42s</span>
+          </div>
+          <h3>Chase flaky external-cli e2e retry</h3>
+          <div class="action-line"><span class="verb">run</span><span class="t" id="act-3">npm run test:e2e — external-cli.spec.ts</span><span class="caret"></span></div>
+          <div class="gates">
+            <span class="gate done"><i></i>Plan</span><span class="gate-link"></span>
+            <span class="gate done"><i></i>Permissions · 1</span><span class="gate-link"></span>
+            <span class="gate active"><i></i>Verify</span>
+          </div>
+          <div class="verify"><span>test:e2e</span><div class="vbar det"><i id="e2e-bar" style="width:38%"></i></div><span id="e2e-count">9/24</span></div>
+        </article>
+      </section>
+
+      <!-- 今日已落地 -->
+      <div class="zone-head">
+        <h2>Settled today</h2>
+        <span class="rule"></span>
+        <span class="meta">EVERY LANDING VERIFIED — REPLAY ANY OF THEM</span>
+      </div>
+      <section class="settled-strip">
+        <div class="settled-item">
+          <span class="s-lamp ok"></span>
+          <div class="s-copy"><b>Harden IPC schema for task events</b><span>desktop-app · accepted 14:22</span></div>
+          <span class="s-diff"><em class="add">+96</em> <em class="del">−31</em></span>
+          <span class="s-replay">replay ⟲</span>
+        </div>
+        <div class="settled-item">
+          <span class="s-lamp ok"></span>
+          <div class="s-copy"><b>Dedupe review comment threads</b><span>charter-site · accepted 09:47</span></div>
+          <span class="s-diff"><em class="add">+42</em> <em class="del">−58</em></span>
+          <span class="s-replay">replay ⟲</span>
+        </div>
+        <div class="settled-item">
+          <span class="s-lamp"></span>
+          <div class="s-copy"><b>Answer: why zsh drops PATH</b><span>desktop-app · answered 09:12</span></div>
+          <span class="s-diff none">no changes</span>
+          <span class="s-replay">replay ⟲</span>
+        </div>
+        <div class="settled-item">
+          <span class="s-lamp bad"></span>
+          <div class="s-copy"><b>Probe: Electron 33 upgrade</b><span>rolled back · main untouched</span></div>
+          <span class="s-diff none">discarded</span>
+          <span class="s-replay">replay ⟲</span>
+        </div>
+      </section>
+    </div>
+
+    <!-- 发射台 -->
+    <footer class="launchpad">
+      <div class="pad-box">
+        <div class="pad-input">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5f92ad" stroke-width="1.6"><path d="M12 2c3 3 4 7 4 10l3 4-4-1a5 5 0 0 1-6 0l-4 1 3-4c0-3 1-7 4-10Z"/><circle cx="12" cy="10" r="1.6"/></svg>
+          <input placeholder="Dispatch a new session — what should we build?" />
+        </div>
+        <div class="pad-meta">
+          <span class="chip">desktop-app · main</span>
+          <span class="chip">Approve changes</span>
+          <span class="chip">claude-fable-5</span>
+          <span class="chip">Advanced ⌄</span>
+          <span class="spacer"></span>
+          <button class="launch">Launch
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14m-5-5 5 5-5 5"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hint">发起只是一瞬，督战才是常态 — composer 沉为「发射台」，态势永远在最上方 · <kbd>⌘K</kbd> anywhere</div>
+    </footer>
+  </main>
+</div>
+
+<!-- 注解（mock 说明） -->
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').remove()">✕</button>
+  <b>方案 A · Flight Deck 舰队指挥台</b><br/>
+  打开产品的第一眼 = 一屋子智能体在为你干活：态势带（5 仪表 + 舰队示波器）、
+  Needs You 发光通道（决策优先）、活的会话卡（动作行 tail -f、三段门序列、验证进度）。
+  Rail 中运行中的会话有「心电」谱线。发起区沉底为发射台。
+</aside>
+
+<script>
+  // 舰队示波器：随机高度的活动柱
+  (function () {
+    const wave = document.getElementById('wave');
+    for (let i = 0; i < 46; i++) {
+      const bar = document.createElement('i');
+      bar.style.height = (8 + Math.random() * 82) + '%';
+      bar.style.animationDelay = (Math.random() * 2.4) + 's';
+      wave.appendChild(bar);
+    }
+    setInterval(() => {
+      const bars = wave.children;
+      const idx = Math.floor(Math.random() * bars.length);
+      bars[idx].style.height = (8 + Math.random() * 88) + '%';
+    }, 160);
+  })();
+
+  // 动作行轮换：像现场直播
+  (function () {
+    const feeds = {
+      'act-1': [
+        'apps/desktop-main/src/services/settings-store.ts',
+        'apps/desktop-main/src/services/settings-migration.ts',
+        'packages/ipc-contracts/src/channels.ts',
+        'apps/desktop-main/src/services/settings-store.test.ts'
+      ],
+      'act-2': [
+        'src/pages/pricing.astro',
+        'src/components/PlanToggle.tsx',
+        'src/styles/pricing.css'
+      ],
+      'act-3': [
+        'npm run test:e2e — external-cli.spec.ts',
+        'reading tests/e2e/external-cli.spec.ts:214',
+        'npm run test:e2e — retry 2 of 3'
+      ]
+    };
+    Object.keys(feeds).forEach((id, k) => {
+      let i = 0;
+      setInterval(() => {
+        i = (i + 1) % feeds[id].length;
+        const el = document.getElementById(id);
+        if (el) { el.style.opacity = 0; setTimeout(() => { el.textContent = feeds[id][i]; el.style.opacity = 1; }, 180); }
+      }, 2600 + k * 700);
+    });
+  })();
+
+  // e2e 计数缓慢推进 + elapsed 秒表 + 偶发仪表跳动
+  (function () {
+    let done = 9;
+    setInterval(() => {
+      if (done < 24) {
+        done += 1;
+        document.getElementById('e2e-count').textContent = done + '/24';
+        document.getElementById('e2e-bar').style.width = Math.round(done / 24 * 100) + '%';
+      }
+    }, 4200);
+
+    document.querySelectorAll('.elapsed').forEach(el => {
+      let s = parseInt(el.dataset.elapsed, 10);
+      setInterval(() => {
+        s += 1;
+        const m = Math.floor(s / 60), r = (s % 60).toString().padStart(2, '0');
+        el.textContent = m + 'm ' + r + 's';
+      }, 1000);
+    });
+
+    setInterval(() => {
+      const g = document.getElementById('g-files');
+      g.textContent = 26 + Math.floor(Math.random() * 4);
+    }, 3400);
+  })();
+</script>
+</body>
+</html>

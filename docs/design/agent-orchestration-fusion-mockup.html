@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 会话编排 — 融合稿（①家谱 + ②指挥室）</title>
+    <style>
+      /* Tokens mirror apps/desktop-renderer/src/styles/theme.css (studio light).
+         Shell likeness mirrors session-workbench.css (rail) + room.css (room).
+         Fusion of v2 variants: ① rail family tree + ② commander fleet section. */
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --danger-bg: #fdecea;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --radius-card: 14px;
+        --radius-chip: 9px;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg-app); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+
+      /* ---------- mockup 导航（非产品 UI） ---------- */
+      .mockbar { max-width: 1240px; margin: 24px auto 6px; padding: 0 20px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      .mockbar h1 { font-family: var(--font-display); font-size: 21px; font-weight: 600; margin: 0; }
+      .mockbar .sub { color: var(--fg-muted); font-size: 12.5px; }
+      .vdesc { max-width: 1240px; margin: 0 auto 12px; padding: 0 20px; color: var(--fg-muted); font-size: 12.5px; }
+      .vdesc b { color: var(--fg); }
+
+      /* ---------- 壳复刻 ---------- */
+      .frame { max-width: 1240px; margin: 0 auto 26px; padding: 0 20px; }
+      .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 600px; background: var(--bg-editor); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+
+      /* rail（镜像 .sr-rail：44px 活动列 + 面板） */
+      .rail { display: grid; grid-template-columns: 44px minmax(0, 1fr); border-right: 1px solid var(--border); background: var(--bg-sidebar); min-height: 0; }
+      .rail-strip { border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 6px; }
+      .rail-strip .brand { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-family: var(--font-display); font-size: 13px; margin-bottom: 8px; }
+      .rail-strip .it { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-faint); font-size: 14px; position: relative; }
+      .rail-strip .it.active { background: var(--bg-active); color: var(--fg); }
+      .rail-strip .it .mini { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+      .rail-panel { display: flex; flex-direction: column; min-height: 0; }
+      .rail-head { padding: 12px 12px 8px; }
+      .rail-head .hrow { display: flex; align-items: baseline; gap: 6px; }
+      .rail-head strong { font-size: 14px; }
+      .rail-head small { color: var(--fg-faint); font-size: 10.5px; margin-left: auto; }
+      .rail-search { margin-top: 8px; display: flex; gap: 6px; }
+      .rail-search .box { flex: 1; display: flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--fg-faint); font-size: 11.5px; }
+      .rail-search .needs { padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--fg-muted); font-size: 11.5px; cursor: pointer; }
+      .rail-scroll { flex: 1; min-height: 0; overflow: auto; padding: 6px 9px 14px; }
+      .grp-head { min-height: 32px; display: flex; align-items: center; gap: 6px; padding-left: 6px; color: var(--fg-muted); }
+      .grp-head strong { font: 650 11.5px var(--font-ui); color: var(--fg); }
+      .grp-head .cnt { margin-left: auto; color: var(--fg-faint); font: 9px var(--font-mono); padding-right: 6px; }
+      .grp-items { margin: 0 0 6px 8px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+      /* 会话行（镜像 .sr-session） */
+      .srow { position: relative; width: 100%; min-height: 56px; display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 7px; margin-bottom: 2px; padding: 7px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; align-items: start; }
+      .srow:hover { background: var(--bg-hover); }
+      .srow.selected { background: var(--bg-active); border-color: var(--border); }
+      .srow .ic { width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; background: var(--bg-chip); color: var(--fg-muted); }
+      .srow .t { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; min-width: 0; }
+      .srow .t .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .srow .d { margin-top: 2px; color: var(--fg-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); opacity: 0.5; flex: none; }
+      .ldot.live { background: var(--success); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+      .ldot.hold { background: var(--warning); opacity: 1; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .badge { flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 6px; background: var(--bg-chip); color: var(--fg-muted); font-weight: 600; }
+      .badge.warn { background: var(--warning-bg); color: var(--warning); }
+      .badge.ok { background: var(--success-bg); color: var(--success); }
+      .badge.info { background: var(--info-bg); color: var(--info); }
+      /* 家谱缩进（沿用 .sr-group-items 的既有习语） */
+      .kids { margin: 0 0 4px 19px; padding-left: 7px; border-left: 1px solid var(--border-soft); }
+      .kids .srow { min-height: 44px; }
+      .kids .srow .ic { width: 21px; height: 21px; font-size: 10.5px; }
+
+      /* ---------- 房间复刻 ---------- */
+      .room { display: flex; flex-direction: column; min-height: 0; background: var(--bg-editor); }
+      .room-head { display: flex; align-items: center; gap: 9px; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); }
+      .room-head .back { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); font-size: 12px; cursor: pointer; }
+      .room-head .rt { font-family: var(--font-display); font-size: 15px; font-weight: 600; }
+      .room-head .proj { color: var(--fg-faint); font-size: 11.5px; }
+      .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: var(--radius-chip); background: var(--bg-chip); color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+      .chip.ctl { background: var(--info-bg); color: var(--info); }
+      .chip.warn { background: var(--warning-bg); color: var(--warning); }
+      .chip.click { cursor: pointer; }
+      .spacer { flex: 1; }
+      .ghost { border: none; background: transparent; color: var(--fg-faint); font: inherit; font-size: 12px; cursor: pointer; padding: 3px 7px; border-radius: 7px; }
+      .ghost:hover { background: var(--bg-hover); color: var(--fg); }
+
+      .band { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12px; border-bottom: 1px solid var(--border-soft); }
+      .band.ctl { background: var(--info-bg); color: var(--info); }
+      .band .crumb { text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+      .band .act { margin-left: auto; font-size: 11.5px; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 7px; padding: 2px 9px; cursor: pointer; }
+
+      .term { flex: 1; min-height: 0; overflow: auto; padding: 12px 18px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.66; color: var(--fg-muted); white-space: pre-wrap; cursor: text; }
+      .term .cmd { color: var(--fg); }
+      .term .ok { color: var(--success); }
+      .term .err { color: var(--danger); }
+      .term .dim { color: var(--fg-faint); }
+
+      .approval { margin: 10px 16px; border: 1px solid var(--warning); background: var(--warning-bg); border-radius: 12px; padding: 10px 13px; }
+      .approval .q { font-size: 12.5px; }
+      .approval code { font-family: var(--font-mono); font-size: 11px; background: rgba(255, 255, 255, 0.7); padding: 1px 6px; border-radius: 5px; }
+      .approval .acts { display: flex; gap: 6px; margin-top: 9px; }
+      .approval .acts button { font: inherit; font-size: 11.5px; padding: 3.5px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .approval .acts .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      .cli-input { margin: 10px 16px 14px; display: flex; align-items: center; gap: 8px; max-width: 760px; align-self: center; width: calc(100% - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); padding: 10px 14px; color: var(--fg-faint); font-family: var(--font-mono); font-size: 12px; }
+      .cli-input .caret { color: var(--fg); }
+
+      /* 编队区（②，作为主会话房间的可折叠区） */
+      .fleet-sec { border-top: 1px solid var(--border-soft); padding: 10px 16px 14px; }
+      .fleet-sec h4 { margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); display: flex; align-items: center; gap: 8px; }
+      .fleet-sec h4 .fold { cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px; color: inherit; }
+      .fleet-sec h4 .fold .chev { transition: transform 120ms ease; display: inline-block; }
+      .fleet-sec.closed h4 .fold .chev { transform: rotate(-90deg); }
+      .fleet-sec h4 .spacer { flex: 1; }
+      .fleet-sec h4 .hold { font-size: 11px; text-transform: none; letter-spacing: 0; }
+      .fleet-sec.closed .ftiles { display: none; }
+      .ftiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .ftile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; }
+      .ftile.pending { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+      .ftile .fh { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); background: var(--bg-titlebar); font-size: 11.5px; font-weight: 600; }
+      .ftile .fh .open { margin-left: auto; color: var(--info); font-weight: 500; font-size: 11px; cursor: pointer; }
+      .ftile .fb { padding: 7px 11px; font-family: var(--font-mono); font-size: 10.5px; line-height: 1.6; color: var(--fg-muted); white-space: pre-wrap; min-height: 62px; }
+      .ftile .fa { padding: 0 10px 9px; display: flex; gap: 6px; }
+      .ftile .fa button { font: inherit; font-size: 11px; padding: 2.5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .ftile .fa .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      /* ---------- 设计说明 ---------- */
+      .notes { max-width: 1240px; margin: 4px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .note-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px 18px; }
+      .note-card h2 { font-family: var(--font-display); font-size: 15px; margin: 0 0 8px; }
+      .note-card ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
+      .note-card li { margin: 4px 0; }
+      .note-card li b { color: var(--fg); }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="mockbar">
+      <h1>会话编排 · 融合稿</h1>
+      <span class="sub">①家谱在侧栏 + ②指挥室编队区 · 三个房间可穿梭 · 审批三入口实时同步</span>
+    </div>
+    <div class="vdesc">
+      <b>怎么玩：</b>点 rail 里的会话行（或瓦片上的「打开房间 ›」、⌁ 横带里的主会话名）在三个房间间穿梭。审批同时存在于「rail 徽章 / 主会话房间的瓦片 / 被指挥房间的卡片」三处——<b>在任意一处允许或拒绝，其余两处同步消失</b>。在「claude · 跑测试」房间里点终端正文可试"敲字即接管"，回到主会话房间看瓦片上的接管回显。
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="rail">
+          <div class="rail-strip">
+            <div class="brand">C</div>
+            <div class="it active">▤<span class="mini" id="stripMini"></span></div>
+            <div class="it">▦</div>
+            <div class="it">◈</div>
+          </div>
+          <div class="rail-panel">
+            <div class="rail-head">
+              <div class="hrow"><strong>Sessions</strong><small>今天 · 4 live</small></div>
+              <div class="rail-search"><span class="box">⌕ 搜索会话…</span><span class="needs" id="needsFilter">Needs 1</span></div>
+            </div>
+            <div class="rail-scroll">
+              <div class="grp-head"><strong>pay-service</strong><span class="cnt">4</span></div>
+              <div class="grp-items">
+                <div class="srow" data-room="t1" id="rowT1">
+                  <span class="ic">✳</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">claude · 支付超时排查</span><span class="badge info">⌁ 指挥 2</span><span class="badge warn" id="railT1Needs">1</span></span>
+                    <span class="d">外部会话 · 正在协调评审与测试</span>
+                  </span>
+                </div>
+                <div class="kids">
+                  <div class="srow" data-room="t3" id="rowT3">
+                    <span class="ic">▷</span>
+                    <span>
+                      <span class="t"><span class="ldot live"></span><span class="nm">codex · 方案评审</span></span>
+                      <span class="d">由主会话开启 · 输出中</span>
+                    </span>
+                  </div>
+                  <div class="srow" data-room="t9" id="rowT9">
+                    <span class="ic">✳</span>
+                    <span>
+                      <span class="t"><span class="ldot hold" id="railT9dot"></span><span class="nm">claude · 跑测试</span><span class="badge warn" id="railT9badge">待审批</span></span>
+                      <span class="d" id="railT9desc">由主会话开启 · 请求重装依赖</span>
+                    </span>
+                  </div>
+                </div>
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">购物车折扣</span><span class="badge ok">Review</span></span>
+                    <span class="d">任务 · 等你验收 · 26 分钟前</span>
+                  </span>
+                </div>
+              </div>
+              <div class="grp-head"><strong>charter-site</strong><span class="cnt">1</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">首页文案微调</span></span>
+                    <span class="d">History · 昨天</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- ===== 房间一：主会话（指挥室） ===== -->
+        <main class="room" id="roomT1">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 支付超时排查</span>
+            <span class="proj">pay-service</span>
+            <span class="chip ctl">⌁ 指挥 2 个会话</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="term" id="t1Term"><span class="cmd">✻ 方案已写入 docs/plan.md，交给 codex 评审中。</span>
+<span class="cmd">✻ 测试窗首跑 exit 1：sharp 二进制缺失，是环境不是代码。</span>
+<span class="cmd">✻ 已申请向测试窗注入重装命令（R3），等你放行。</span>
+<span class="dim">⏳ wait codex（静默判定）· wait 测试窗（exit 码）</span>
+<span class="cmd">▍</span></div>
+          <div class="fleet-sec" id="fleetSec">
+            <h4>
+              <span class="fold" id="fleetFold"><span class="chev">▾</span>编队 · 2</span>
+              <span class="spacer"></span>
+              <span class="ghost hold" id="holdAll">⏸ 暂停全部遥控</span>
+            </h4>
+            <div class="ftiles">
+              <div class="ftile" id="tileT3">
+                <div class="fh"><span class="ldot live"></span>codex · 方案评审<span class="badge">输出中</span><span class="open" data-room="t3">打开房间 ›</span></div>
+                <div class="fb" id="tileT3body">② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+▍</div>
+              </div>
+              <div class="ftile pending" id="tileT9">
+                <div class="fh"><span class="ldot hold" id="tileT9dot"></span>claude · 跑测试<span class="badge warn" id="tileT9badge">待审批 R3</span><span class="open" data-room="t9">打开房间 ›</span></div>
+                <div class="fb" id="tileT9body">请求注入：rm -rf node_modules && npm ci</div>
+                <div class="fa" id="tileT9acts">
+                  <button class="allow" data-approve="yes">允许一次</button>
+                  <button>本任务内总是允许</button>
+                  <button data-approve="no">拒绝</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与主会话对话（CLI 输入行）…</div>
+        </main>
+
+        <!-- ===== 房间二：codex · 方案评审（被指挥） ===== -->
+        <main class="room hidden" id="roomT3">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">codex · 方案评审</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="band ctl">⌁ 由 <span class="crumb" data-room="t1">claude · 支付超时排查</span> 指挥 · 输入可能来自它<button class="act">暂停对它的遥控</button></div>
+          <div class="term" id="t3Term"><span class="cmd">› 请 review docs/plan.md，意见写到 review.md</span>
+正在阅读方案……
+① 重试策略建议指数退避 ✔
+② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+<span class="cmd">▍</span></div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与本会话对话…</div>
+        </main>
+
+        <!-- ===== 房间三：claude · 跑测试（被指挥 + 审批 + 接管） ===== -->
+        <main class="room hidden" id="roomT9">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 跑测试</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="band ctl" id="t9BandCtl">⌁ 由 <span class="crumb" data-room="t1">claude · 支付超时排查</span> 指挥 · 输入可能来自它<button class="act" id="t9PauseBtn">暂停对它的遥控</button></div>
+          <div class="band ctl hidden" id="t9BandTaken">✋ 你已接管 · 主会话的注入已暂挂<button class="act" id="t9GiveBack">归还控制</button></div>
+          <div class="term" id="t9Term" title="点击正文演示接管"><span class="cmd">$ npm test</span>
+<span class="err">✗ 12 passed · 2 failed</span>
+<span class="dim">  ELIFECYCLE 依赖损坏（sharp 二进制缺失）</span>
+<span class="cmd">▍</span></div>
+          <div class="approval" id="t9Approval">
+            <div class="q"><b>主会话</b> 请求向本终端注入高危命令（R3）：<code>rm -rf node_modules && npm ci</code></div>
+            <div class="acts">
+              <button class="allow" data-approve="yes">允许一次</button>
+              <button>本任务内总是允许</button>
+              <button data-approve="no">拒绝</button>
+            </div>
+          </div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与本会话对话（CLI 输入行）…</div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ================= 设计说明 ================= -->
+    <div class="notes">
+      <div class="note-card">
+        <h2>融合后的分工（谁负责什么）</h2>
+        <ul>
+          <li><b>rail = 到达与全局感知</b>：家谱缩进（沿用组内缩进习语）回答"谁指挥谁"；子会话的 needs 冒泡到主会话行，Needs 过滤器一键聚焦。</li>
+          <li><b>主会话房间 = 围观与快处理</b>：编队区内嵌实时瓦片，审批可直接在瓦片上批掉，不必离开指挥位；区块可折叠（折叠态记忆），不围观时房间回到纯对话形态。</li>
+          <li><b>被指挥房间 = 深入与接管</b>：⌁ 横带写明"被谁指挥"（点名字即回主会话）；点终端即接管，注入暂挂；审批卡在此同样出现。</li>
+          <li>层级只到两层（主会话 → 工作会话）：子会话再开子会话在 v1 不允许（工程与心智都简单一个量级）。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>一个事件、三个入口（本页可验证）</h2>
+        <ul>
+          <li>那条 R3 注入请求同时呈现为：<b>rail 的「待审批」徽章</b>（+主会话行的 needs 计数）、<b>主会话房间瓦片上的按钮</b>、<b>被指挥房间的内联卡</b>。</li>
+          <li>在任意一处允许/拒绝，其余入口同步消失——UI 三处引用的是 permission_requests 里的<b>同一条记录</b>，不是三份状态。系统通知（PIVOT-014）是第四入口，本 mock 不演示。</li>
+          <li>允许后可观察完整余波：t9 终端重装→测试转绿 exit 0→主会话被 wait 唤醒→瓦片徽章变「exit 0」→rail 圆点复绿。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>交互契约细则</h2>
+        <ul>
+          <li><b>敲字即接管</b>：被指挥终端的任何本地输入使遥控注入进入暂挂队列；瓦片同步显示「✋ 已接管」；归还后暂挂依次放行。</li>
+          <li><b>⏸ 暂停全部遥控</b>：只拦"新注入"，不打断在跑的命令、不关窗口；再点恢复。徽章在 rail 与瓦片同步。</li>
+          <li>编队区位置：置于终端<b>下方</b>——主会话的叙事优先，围观是从属；折叠后仅剩一行区头。</li>
+          <li>命名沿用现有惯例：会话名 =「CLI 名 · 意图」；关系词统一用「指挥 / 由…指挥」；全部界面无 Pi 字样。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>已拍板的四个细节（2026-07-21 产品负责人确认）</h2>
+        <ul>
+          <li>✅ 子会话行<b>矮一档</b>：44px（普通行 56px）。</li>
+          <li>✅ needs 冒泡用<b>数字徽章</b>（主会话行上计数）。</li>
+          <li>✅ 编队瓦片<b>双列</b>。</li>
+          <li>✅ 暂停粒度<b>两档都要</b>：⌁ 横带「暂停对它的遥控」（单会话）+ 编队区「⏸ 暂停全部遥控」（总闸）。</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      const $$ = (s) => document.querySelectorAll(s);
+
+      /* ---------- 房间穿梭 ---------- */
+      const ROOMS = ['t1', 't3', 't9'];
+      function go(room) {
+        for (const r of ROOMS) $('#room' + r.toUpperCase().replace('T', 'T')).classList.toggle('hidden', r !== room);
+        $('#rowT1').classList.toggle('selected', room === 't1');
+        $('#rowT3').classList.toggle('selected', room === 't3');
+        $('#rowT9').classList.toggle('selected', room === 't9');
+      }
+      for (const el of $$('[data-room]')) el.addEventListener('click', (e) => { e.stopPropagation(); go(el.dataset.room); });
+      go('t1');
+
+      /* ---------- 审批：单一事件，三入口同步 ---------- */
+      let pending = true;
+      function resolveApproval(allowed) {
+        if (!pending) return;
+        pending = false;
+        /* 入口一：rail */
+        $('#railT9badge').remove();
+        $('#railT1Needs').remove();
+        $('#needsFilter').textContent = 'Needs 0';
+        $('#stripMini').remove();
+        /* 入口二：瓦片 */
+        $('#tileT9').classList.remove('pending');
+        $('#tileT9acts').remove();
+        /* 入口三：房间卡 */
+        $('#t9Approval').remove();
+        if (allowed) {
+          $('#railT9dot').className = 'ldot live';
+          $('#tileT9dot').className = 'ldot live';
+          $('#railT9desc').textContent = '由主会话开启 · 重装依赖中';
+          $('#tileT9badge').textContent = '重装中';
+          $('#tileT9badge').className = 'badge info';
+          $('#tileT9body').textContent = '$ rm -rf node_modules && npm ci\n重装依赖中……▍';
+          $('#t9Term').innerHTML = '<span class="cmd">$ rm -rf node_modules && npm ci</span>\n重装依赖中……\n<span class="cmd">▍</span>';
+          setTimeout(() => {
+            $('#tileT9badge').textContent = 'exit 0';
+            $('#tileT9badge').className = 'badge ok';
+            $('#tileT9body').textContent = '$ npm test\n✓ 14 passed · exit 0';
+            $('#t9Term').innerHTML = '<span class="cmd">$ npm test</span>\n<span class="ok">✓ 14 passed · exit 0</span>';
+            $('#railT9desc').textContent = '由主会话开启 · 测试全绿';
+            $('#t1Term').innerHTML += '\n<span class="ok">✻ 测试窗 exit 0（14 passed）· wait 唤醒，收尾中。</span>';
+          }, 2600);
+        } else {
+          $('#railT9dot').className = 'ldot';
+          $('#tileT9dot').className = 'ldot';
+          $('#tileT9badge').textContent = '已拒绝';
+          $('#railT9desc').textContent = '由主会话开启 · 注入被拒绝';
+          $('#tileT9body').textContent = '（注入被你拒绝，主会话已收到回执）';
+          $('#t9Term').innerHTML += '<span class="dim">（注入被你拒绝，主会话已收到回执）</span>';
+          $('#t1Term').innerHTML += '\n<span class="dim">✻ 注入被拒绝——改为只删 sharp 后局部重装，重新申请中。</span>';
+        }
+      }
+      for (const b of $$('[data-approve]')) b.addEventListener('click', () => resolveApproval(b.dataset.approve === 'yes'));
+
+      /* ---------- 接管：房间与瓦片同步 ---------- */
+      let taken = false;
+      const t3TileHead = $('#tileT9 .fh');
+      function setTaken(on) {
+        taken = on;
+        $('#t9BandCtl').classList.toggle('hidden', on);
+        $('#t9BandTaken').classList.toggle('hidden', !on);
+        let chip = $('#tileT9takenChip');
+        if (on && !chip) {
+          chip = document.createElement('span');
+          chip.id = 'tileT9takenChip';
+          chip.className = 'badge info';
+          chip.textContent = '✋ 已接管';
+          t3TileHead.insertBefore(chip, t3TileHead.querySelector('.open'));
+        } else if (!on && chip) chip.remove();
+      }
+      $('#t9Term').addEventListener('click', () => setTaken(true));
+      $('#t9GiveBack').addEventListener('click', () => setTaken(false));
+
+      /* ---------- 暂停全部遥控 ---------- */
+      let holding = false;
+      $('#holdAll').addEventListener('click', () => {
+        holding = !holding;
+        $('#holdAll').textContent = holding ? '▶ 恢复遥控' : '⏸ 暂停全部遥控';
+        const b = $('#rowT1 .badge.info');
+        if (b) { b.textContent = holding ? '⌁ 已暂停' : '⌁ 指挥 2'; b.className = holding ? 'badge' : 'badge info'; }
+        $('#t1Term').innerHTML += holding
+          ? '\n<span class="dim">⏸ 你暂停了全部遥控：新注入排队，在跑的命令不受影响。</span>'
+          : '\n<span class="dim">▶ 遥控已恢复，暂挂注入依次放行。</span>';
+      });
+
+      /* ---------- 编队区折叠 ---------- */
+      $('#fleetFold').addEventListener('click', () => $('#fleetSec').classList.toggle('closed'));
+
+      /* ---------- 轻量直播感：codex 继续吐一条意见 ---------- */
+      setTimeout(() => {
+        $('#tileT3body').textContent = '③ 缺少幂等键，重复扣款风险 ⚠\n④ 建议回调侧加抖动重试\n▍';
+        $('#t3Term').innerHTML = $('#t3Term').innerHTML.replace('<span class="cmd">▍</span>', '④ 建议回调侧加抖动重试\n<span class="cmd">▍</span>');
+      }, 5000);
+    </script>
+  </body>
+</html>

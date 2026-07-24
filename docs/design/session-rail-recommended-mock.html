@@ -1,0 +1,1965 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Recommended Session Rail Mock</title>
+    <style>
+      /* Archive/light tokens mirror apps/desktop-renderer/src/styles/theme.css. */
+      :root {
+        color-scheme: light;
+        --font-ui: 'Iowan Old Style', 'Palatino Linotype', Georgia, 'Songti SC', serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Songti SC', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, monospace;
+        --bg-app: #ded2bc;
+        --bg-titlebar: #f2e6cf;
+        --bg-sidebar: #f5ead5;
+        --bg-editor: #fbf2df;
+        --bg-panel: #f2e6cf;
+        --bg-card: #fff8e9;
+        --bg-chip: #eadbc2;
+        --bg-hover: #eee0c8;
+        --bg-selected: #ead7b9;
+        --border: #d8c4a3;
+        --border-soft: #e9d9bd;
+        --border-strong: #b99d78;
+        --fg: #392a21;
+        --fg-muted: #795f4f;
+        --fg-faint: #a48570;
+        --fg-inverse: #fff8e9;
+        --accent: #b94e32;
+        --accent-fg: #fffaf0;
+        --warning: #a46220;
+        --warning-bg: #f3e0b6;
+        --success: #4f754d;
+        --success-bg: #dde8d2;
+        --info: #3f6674;
+        --info-bg: #dbe7e6;
+        --danger: #a43129;
+        --danger-bg: #f5d7ce;
+        --shadow-card: 0 1px 1px rgba(62, 40, 25, 0.06), 0 12px 32px rgba(62, 40, 25, 0.1);
+        --shadow-menu: 0 24px 72px rgba(55, 36, 23, 0.25);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      body {
+        min-height: 100vh;
+        overflow: hidden;
+        background: var(--bg-app);
+        color: var(--fg);
+        font-family: var(--font-ui);
+      }
+
+      svg {
+        display: block;
+        flex: none;
+      }
+
+      .mock-page {
+        height: 100vh;
+        display: grid;
+        grid-template-rows: 48px minmax(0, 1fr);
+      }
+
+      .mock-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 18px;
+        border-bottom: 1px solid rgba(121, 95, 79, 0.2);
+        background: color-mix(in srgb, var(--bg-titlebar) 84%, transparent);
+      }
+
+      .mock-toolbar strong {
+        font-family: var(--font-display);
+        font-size: 14px;
+      }
+
+      .mock-toolbar span {
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .mock-toolbar .spacer {
+        flex: 1;
+      }
+
+      .mock-toolbar button {
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-card);
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .mock-toolbar button:hover,
+      .mock-toolbar button.active {
+        border-color: var(--border-strong);
+        background: var(--bg-hover);
+      }
+
+      .stage {
+        min-height: 0;
+        display: grid;
+        place-items: center;
+        padding: 22px;
+      }
+
+      .app-frame {
+        width: min(1220px, calc(100vw - 44px));
+        height: min(780px, calc(100vh - 92px));
+        min-height: 620px;
+        display: grid;
+        grid-template-rows: 38px minmax(0, 1fr) 24px;
+        overflow: hidden;
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: var(--bg-editor);
+        box-shadow: 0 28px 90px rgba(73, 49, 30, 0.2);
+        transition: width 180ms ease;
+      }
+
+      .app-frame.narrow {
+        width: min(940px, calc(100vw - 44px));
+      }
+
+      .windowbar {
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        padding: 0 12px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        font-size: 10.5px;
+        user-select: none;
+      }
+
+      .traffic {
+        display: flex;
+        gap: 7px;
+      }
+
+      .traffic i {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #c46f54;
+      }
+
+      .traffic i:nth-child(2) {
+        background: #cda14e;
+      }
+
+      .traffic i:nth-child(3) {
+        background: #6c9868;
+      }
+
+      .window-title {
+        color: var(--fg-muted);
+        letter-spacing: 0.05em;
+      }
+
+      .window-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        color: var(--fg-faint);
+      }
+
+      .app-body {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+      }
+
+      /* Recommended rail: stable app destinations + one contextual panel. */
+      .session-rail {
+        width: 320px;
+        min-width: 320px;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr);
+        border-right: 1px solid var(--border);
+        background: var(--bg-sidebar);
+        user-select: none;
+      }
+
+      .activity-rail {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 9px 5px 8px;
+        border-right: 1px solid var(--border-soft);
+        background: var(--bg-titlebar);
+      }
+
+      .brand-mark {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 8px;
+        border-radius: 7px;
+        background: var(--fg);
+        color: var(--bg-editor);
+        box-shadow: 0 5px 15px rgba(57, 42, 33, 0.15);
+      }
+
+      .activity-button {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .activity-button:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .activity-button.active {
+        border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+        background: var(--bg-card);
+        color: var(--accent);
+        box-shadow: inset 2px 0 0 var(--accent), 0 4px 12px rgba(73, 49, 30, 0.08);
+      }
+
+      .activity-button::after {
+        content: attr(data-tooltip);
+        position: absolute;
+        z-index: 40;
+        left: 42px;
+        top: 50%;
+        transform: translateY(-50%) translateX(-4px);
+        padding: 5px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--bg-card);
+        color: var(--fg);
+        box-shadow: var(--shadow-card);
+        font: 10.5px var(--font-ui);
+        white-space: nowrap;
+        opacity: 0;
+        pointer-events: none;
+        transition: 120ms ease;
+      }
+
+      .activity-button:hover::after,
+      .activity-button:focus-visible::after {
+        opacity: 1;
+        transform: translateY(-50%) translateX(0);
+      }
+
+      .activity-spacer {
+        flex: 1;
+      }
+
+      .attention-badge {
+        position: absolute;
+        top: 0;
+        right: 0;
+        min-width: 15px;
+        height: 15px;
+        display: grid;
+        place-items: center;
+        padding: 0 3px;
+        border: 2px solid var(--bg-titlebar);
+        border-radius: 999px;
+        background: var(--warning);
+        color: #fffaf0;
+        font: 700 8px var(--font-mono);
+      }
+
+      .context-panel {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-sidebar);
+      }
+
+      .panel-view {
+        min-height: 0;
+        display: none;
+        flex: 1;
+        flex-direction: column;
+      }
+
+      .panel-view.active {
+        display: flex;
+      }
+
+      .panel-head {
+        display: grid;
+        gap: 9px;
+        padding: 13px 12px 11px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .panel-heading-row {
+        display: flex;
+        align-items: center;
+        min-height: 24px;
+        gap: 8px;
+      }
+
+      .panel-heading-row strong {
+        font-family: var(--font-display);
+        font-size: 14px;
+        font-weight: 650;
+        letter-spacing: 0.02em;
+      }
+
+      .panel-heading-row small {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font-size: 10px;
+      }
+
+      .search-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 34px;
+        gap: 6px;
+      }
+
+      .search-box {
+        min-width: 0;
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+      }
+
+      .search-box:focus-within {
+        border-color: var(--border-strong);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+
+      .search-box input {
+        min-width: 0;
+        flex: 1;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--fg);
+        font-size: 11.5px;
+      }
+
+      .search-box input::placeholder {
+        color: var(--fg-faint);
+      }
+
+      .icon-button {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .icon-button:hover,
+      .icon-button.active {
+        border-color: var(--border-strong);
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .new-session-wrap {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      .new-session-button,
+      .project-context-button {
+        min-height: 36px;
+        border: 1px solid var(--fg);
+        background: var(--fg);
+        color: var(--fg-inverse);
+        cursor: pointer;
+      }
+
+      .new-session-button {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        border-radius: 8px 0 0 8px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .project-context-button {
+        min-width: 82px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        padding: 0 8px;
+        border-left-color: color-mix(in srgb, var(--fg-inverse) 24%, transparent);
+        border-radius: 0 8px 8px 0;
+        color: color-mix(in srgb, var(--fg-inverse) 84%, transparent);
+        font-size: 10.5px;
+      }
+
+      .new-session-button:hover,
+      .project-context-button:hover {
+        background: color-mix(in srgb, var(--fg) 92%, var(--accent));
+      }
+
+      .project-menu {
+        position: absolute;
+        z-index: 20;
+        top: 42px;
+        right: 0;
+        width: 170px;
+        display: none;
+        padding: 5px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-menu);
+      }
+
+      .project-menu.open {
+        display: grid;
+      }
+
+      .project-menu button {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 31px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        text-align: left;
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      .project-menu button:hover,
+      .project-menu button.active {
+        background: var(--bg-hover);
+      }
+
+      .panel-scroll {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 9px 9px 14px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(121, 95, 79, 0.28) transparent;
+      }
+
+      .section-label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-height: 31px;
+        padding: 0 6px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .section-label strong {
+        color: var(--fg);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .section-label span {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font: 9px var(--font-mono);
+      }
+
+      .group {
+        margin-bottom: 3px;
+      }
+
+      .group-head {
+        width: 100%;
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 6px;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--fg-muted);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .group-head:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .group-chevron {
+        transition: transform 120ms ease;
+      }
+
+      .group.collapsed .group-chevron {
+        transform: rotate(-90deg);
+      }
+
+      .group-head strong {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--fg);
+        font-size: 11.5px;
+        font-weight: 650;
+      }
+
+      .group-count {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font: 9px var(--font-mono);
+      }
+
+      .group-add {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        margin-left: 1px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg-faint);
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .group-head:hover .group-add,
+      .group-head:focus-within .group-add {
+        opacity: 1;
+      }
+
+      .group-add:hover {
+        border-color: var(--border);
+        background: var(--bg-card);
+        color: var(--accent);
+      }
+
+      .group-items {
+        margin: 0 0 6px 8px;
+        padding-left: 6px;
+        border-left: 1px solid var(--border-soft);
+      }
+
+      .group.collapsed .group-items {
+        display: none;
+      }
+
+      .session-row {
+        width: 100%;
+        min-height: 58px;
+        display: grid;
+        grid-template-columns: 25px minmax(0, 1fr);
+        align-items: start;
+        gap: 7px;
+        margin-bottom: 2px;
+        padding: 7px 7px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--fg);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .session-row:hover {
+        background: var(--bg-hover);
+      }
+
+      .session-row.selected {
+        border-color: color-mix(in srgb, var(--info) 24%, transparent);
+        background: var(--info-bg);
+        box-shadow: inset 3px 0 0 var(--info), 0 4px 12px rgba(63, 102, 116, 0.08);
+      }
+
+      .session-row[hidden] {
+        display: none;
+      }
+
+      .provider-mark {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        --pm-hole: var(--bg-sidebar);
+      }
+
+      .session-row.selected .provider-mark {
+        --pm-hole: var(--info-bg);
+      }
+
+      .provider-mark.claude {
+        color: #c86f50;
+      }
+
+      .provider-mark.codex,
+      .provider-mark.pi {
+        color: var(--fg);
+      }
+
+      .session-copy {
+        min-width: 0;
+        display: grid;
+        gap: 5px;
+      }
+
+      .session-title-line,
+      .session-meta-line {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .session-title-line strong {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--fg-faint);
+      }
+
+      .live-dot.live {
+        background: var(--success);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent);
+      }
+
+      .state-badge {
+        flex: none;
+        min-height: 18px;
+        display: inline-flex;
+        align-items: center;
+        padding: 0 6px;
+        border-radius: 999px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 9px;
+        font-weight: 700;
+      }
+
+      .state-badge.answered {
+        background: var(--success-bg);
+        color: var(--success);
+      }
+
+      .session-meta-line {
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .session-meta-line .activity-copy {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .session-meta-line time {
+        flex: none;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+      }
+
+      .empty-filter {
+        display: none;
+        margin: 8px 4px;
+        padding: 14px 11px;
+        border: 1px dashed var(--border);
+        border-radius: 8px;
+        color: var(--fg-muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .empty-filter.visible {
+        display: block;
+      }
+
+      .inbox-intro {
+        margin: 2px 2px 10px;
+        padding: 11px;
+        border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+        border-radius: 9px;
+        background: var(--warning-bg);
+      }
+
+      .inbox-intro strong {
+        display: block;
+        margin-bottom: 3px;
+        color: var(--warning);
+        font-size: 12px;
+      }
+
+      .inbox-intro span {
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.45;
+      }
+
+      .inbox-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 5px;
+        padding: 9px 8px;
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        background: color-mix(in srgb, var(--bg-card) 64%, transparent);
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .inbox-row:hover {
+        border-color: var(--border-strong);
+        background: var(--bg-card);
+      }
+
+      .inbox-row-copy {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .inbox-row-copy strong,
+      .inbox-row-copy span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .inbox-row-copy strong {
+        font-size: 11.5px;
+      }
+
+      .inbox-row-copy span {
+        color: var(--fg-muted);
+        font-size: 10px;
+      }
+
+      .inbox-action {
+        min-height: 26px;
+        padding: 0 8px;
+        border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+        border-radius: 7px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .project-row {
+        position: relative;
+        min-height: 52px;
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+        padding: 7px 7px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        background: transparent;
+      }
+
+      .project-row:hover,
+      .project-row.active {
+        border-color: var(--border-soft);
+        background: var(--bg-hover);
+      }
+
+      .project-row.active {
+        box-shadow: inset 3px 0 0 var(--accent);
+      }
+
+      .project-copy {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .project-copy strong,
+      .project-copy span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .project-copy strong {
+        font-size: 11.5px;
+      }
+
+      .project-copy span {
+        color: var(--fg-faint);
+        font-size: 9.5px;
+      }
+
+      .project-row-actions {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .project-row-actions button {
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg-muted);
+        opacity: 0;
+        cursor: pointer;
+      }
+
+      .project-row:hover .project-row-actions button,
+      .project-row:focus-within .project-row-actions button,
+      .project-row.active .project-row-actions button:first-child {
+        opacity: 1;
+      }
+
+      .project-row-actions button:hover {
+        border-color: var(--border);
+        background: var(--bg-card);
+        color: var(--accent);
+      }
+
+      .secondary-action {
+        width: 100%;
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 5px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .secondary-action:hover {
+        border-color: var(--border-strong);
+        color: var(--fg);
+      }
+
+      .global-search-box {
+        margin: 1px 2px 11px;
+      }
+
+      .search-result-label {
+        margin: 10px 5px 5px;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .search-result {
+        width: 100%;
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .search-result:hover {
+        background: var(--bg-hover);
+      }
+
+      .search-result span {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+      }
+
+      .search-result small {
+        color: var(--fg-faint);
+        font-size: 9px;
+      }
+
+      /* The rest of the app is intentionally quiet so the rail can be judged in context. */
+      .workspace {
+        min-width: 0;
+        min-height: 0;
+        flex: 1;
+        display: grid;
+        grid-template-rows: 62px minmax(0, 1fr);
+        background: var(--bg-editor);
+      }
+
+      .workspace-head {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 17px;
+        border-bottom: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--bg-editor) 88%, var(--bg-titlebar));
+      }
+
+      .workspace-title {
+        min-width: 0;
+        display: grid;
+        gap: 4px;
+      }
+
+      .workspace-title strong,
+      .workspace-title span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .workspace-title strong {
+        font-family: var(--font-display);
+        font-size: 17px;
+      }
+
+      .workspace-title span {
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .workspace-head .spacer {
+        flex: 1;
+      }
+
+      .head-action {
+        min-height: 30px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .workspace-body {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(250px, 34%);
+        overflow: hidden;
+      }
+
+      .conversation {
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        padding: 32px clamp(24px, 5vw, 72px);
+      }
+
+      .timeline-time {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin: 8px 0 24px;
+        color: var(--fg-faint);
+        font: 9.5px var(--font-mono);
+      }
+
+      .timeline-time::before,
+      .timeline-time::after {
+        content: '';
+        height: 1px;
+        flex: 1;
+        background: var(--border-soft);
+      }
+
+      .user-message {
+        max-width: 72%;
+        margin: 0 0 30px auto;
+        padding: 11px 14px;
+        border-radius: 12px 12px 3px 12px;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .assistant-message {
+        max-width: 690px;
+        color: var(--fg);
+        font-size: 12px;
+        line-height: 1.72;
+      }
+
+      .assistant-message strong {
+        color: var(--accent);
+      }
+
+      .activity-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+      }
+
+      .activity-line b {
+        color: var(--success);
+      }
+
+      .tool-canvas {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--border);
+        background: var(--bg-panel);
+      }
+
+      .tool-tabs {
+        min-height: 40px;
+        display: flex;
+        align-items: center;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .tool-tabs button {
+        min-height: 30px;
+        padding: 0 9px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--fg-muted);
+        font-size: 10px;
+      }
+
+      .tool-tabs button.active {
+        border-bottom-color: var(--accent);
+        color: var(--fg);
+      }
+
+      .tool-content {
+        padding: 17px;
+      }
+
+      .summary-card {
+        padding: 14px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-card);
+      }
+
+      .summary-card h3 {
+        margin: 0 0 11px;
+        font-size: 12px;
+      }
+
+      .summary-card ul {
+        margin: 0;
+        padding-left: 17px;
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        line-height: 1.65;
+      }
+
+      .statusbar {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 0 11px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        color: var(--fg-faint);
+        font-size: 9px;
+      }
+
+      .statusbar .spacer {
+        flex: 1;
+      }
+
+      dialog {
+        width: min(420px, calc(100vw - 40px));
+        padding: 0;
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        background: var(--bg-card);
+        color: var(--fg);
+        box-shadow: var(--shadow-menu);
+      }
+
+      dialog::backdrop {
+        background: rgba(57, 42, 33, 0.36);
+        backdrop-filter: blur(2px);
+      }
+
+      .dialog-head {
+        display: flex;
+        align-items: center;
+        padding: 14px 15px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+
+      .dialog-head strong {
+        font-family: var(--font-display);
+        font-size: 15px;
+      }
+
+      .dialog-head button {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        margin-left: auto;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+
+      .dialog-head button:hover {
+        background: var(--bg-hover);
+      }
+
+      .dialog-body {
+        display: grid;
+        gap: 14px;
+        padding: 15px;
+      }
+
+      .field-label {
+        display: grid;
+        gap: 6px;
+        color: var(--fg-muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .field-label select {
+        width: 100%;
+        height: 35px;
+        padding: 0 9px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        color: var(--fg);
+      }
+
+      .agent-options {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 7px;
+      }
+
+      .agent-option {
+        min-height: 78px;
+        display: grid;
+        place-items: center;
+        gap: 5px;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .agent-option:hover,
+      .agent-option.selected {
+        border-color: var(--accent);
+        background: var(--bg-hover);
+      }
+
+      .agent-option span {
+        font-size: 10.5px;
+        font-weight: 650;
+      }
+
+      .dialog-foot {
+        display: flex;
+        justify-content: flex-end;
+        gap: 7px;
+        padding: 12px 15px;
+        border-top: 1px solid var(--border-soft);
+      }
+
+      .dialog-foot button {
+        min-height: 33px;
+        padding: 0 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--bg-card);
+        cursor: pointer;
+      }
+
+      .dialog-foot .primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-fg);
+      }
+
+      .toast {
+        position: fixed;
+        z-index: 80;
+        left: 50%;
+        bottom: 28px;
+        transform: translate(-50%, 10px);
+        max-width: min(480px, calc(100vw - 30px));
+        padding: 9px 13px;
+        border: 1px solid var(--border-strong);
+        border-radius: 8px;
+        background: var(--fg);
+        color: var(--fg-inverse);
+        box-shadow: var(--shadow-menu);
+        font-size: 11px;
+        opacity: 0;
+        pointer-events: none;
+        transition: 150ms ease;
+      }
+
+      .toast.show {
+        transform: translate(-50%, 0);
+        opacity: 1;
+      }
+
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      @media (max-width: 1050px) {
+        .app-frame {
+          min-height: 580px;
+        }
+
+        .session-rail {
+          width: 304px;
+          min-width: 304px;
+          grid-template-columns: 42px minmax(0, 1fr);
+        }
+
+        .workspace-body {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .tool-canvas {
+          display: none;
+        }
+
+        .head-action span {
+          display: none;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .mock-toolbar span,
+        .mock-toolbar button[data-mock-view] {
+          display: none;
+        }
+
+        .stage {
+          padding: 10px;
+        }
+
+        .app-frame {
+          width: calc(100vw - 20px);
+          height: calc(100vh - 68px);
+          min-height: 520px;
+        }
+
+        .session-rail {
+          width: min(320px, 100%);
+          min-width: min(320px, 100%);
+        }
+
+        .workspace {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mock-page">
+      <header class="mock-toolbar">
+        <strong>Charter · Session Rail</strong>
+        <span>推荐方向：活动栏 + 上下文面板 + 两行会话</span>
+        <div class="spacer"></div>
+        <button type="button" data-mock-view="sessions" class="active">Sessions</button>
+        <button type="button" data-mock-view="inbox">Inbox</button>
+        <button type="button" data-mock-view="projects">Projects</button>
+        <button type="button" id="width-toggle">窄窗口</button>
+      </header>
+
+      <main class="stage">
+        <section class="app-frame" id="app-frame" aria-label="Charter sidebar redesign mock">
+          <header class="windowbar">
+            <div class="traffic" aria-hidden="true"><i></i><i></i><i></i></div>
+            <div class="window-title">CHARTER · SESSION CANVAS</div>
+            <div class="window-actions"><span>⌘K</span><span>Archive</span></div>
+          </header>
+
+          <div class="app-body">
+            <aside class="session-rail" aria-label="Application navigation">
+              <nav class="activity-rail" aria-label="Primary">
+                <div class="brand-mark" data-icon="flag" data-size="15" aria-label="Charter"></div>
+                <button
+                  type="button"
+                  class="activity-button active"
+                  data-view="sessions"
+                  data-tooltip="Sessions"
+                  aria-label="Sessions"
+                ><span data-icon="terminal" data-size="16"></span></button>
+                <button
+                  type="button"
+                  class="activity-button"
+                  data-view="inbox"
+                  data-tooltip="Inbox · 2"
+                  aria-label="Inbox, 2 items"
+                ><span data-icon="inbox" data-size="16"></span><span class="attention-badge">2</span></button>
+                <button
+                  type="button"
+                  class="activity-button"
+                  data-view="projects"
+                  data-tooltip="Projects"
+                  aria-label="Projects"
+                ><span data-icon="folder" data-size="16"></span></button>
+                <button
+                  type="button"
+                  class="activity-button"
+                  data-view="search"
+                  data-tooltip="Search · ⌘K"
+                  aria-label="Global search"
+                ><span data-icon="search" data-size="16"></span></button>
+                <div class="activity-spacer"></div>
+                <button
+                  type="button"
+                  class="activity-button utility-button"
+                  data-tooltip="Editor"
+                  aria-label="Editor"
+                ><span data-icon="layout" data-size="16"></span></button>
+                <button
+                  type="button"
+                  class="activity-button utility-button"
+                  data-tooltip="Settings"
+                  aria-label="Settings"
+                ><span data-icon="sliders" data-size="16"></span></button>
+              </nav>
+
+              <div class="context-panel">
+                <section class="panel-view active" data-panel="sessions" aria-label="Sessions panel">
+                  <header class="panel-head">
+                    <div class="panel-heading-row">
+                      <strong>Sessions</strong>
+                      <small>5 sessions</small>
+                    </div>
+                    <div class="search-row">
+                      <label class="search-box">
+                        <span data-icon="search" data-size="13"></span>
+                        <input id="session-search" type="search" placeholder="Search sessions…" autocomplete="off" />
+                      </label>
+                      <button type="button" class="icon-button" id="needs-filter" title="Needs attention only" aria-pressed="false">
+                        <span data-icon="filter" data-size="14"></span>
+                      </button>
+                    </div>
+                    <div class="new-session-wrap">
+                      <button type="button" class="new-session-button" data-open-new>
+                        <span data-icon="plus" data-size="14"></span>
+                        <span>New Session</span>
+                      </button>
+                      <button type="button" class="project-context-button" id="project-context" aria-expanded="false">
+                        <span data-icon="folder" data-size="11"></span>
+                        <span id="context-name">charter</span>
+                        <span data-icon="chevron" data-size="10"></span>
+                      </button>
+                      <div class="project-menu" id="project-menu">
+                        <button type="button" class="active" data-context="charter"><span data-icon="folder" data-size="12"></span>charter</button>
+                        <button type="button" data-context="fable5"><span data-icon="folder" data-size="12"></span>fable5</button>
+                        <button type="button" data-context="termio"><span data-icon="folder" data-size="12"></span>termio</button>
+                      </div>
+                    </div>
+                  </header>
+
+                  <div class="panel-scroll" id="session-list">
+                    <section class="group" data-group="charter">
+                      <button type="button" class="group-head" aria-expanded="true">
+                        <span class="group-chevron" data-icon="chevron" data-size="11"></span>
+                        <span data-icon="folder" data-size="12"></span>
+                        <strong>charter</strong>
+                        <span class="group-count">1</span>
+                        <span class="group-add" data-project="charter" title="在 charter 新建会话" data-open-new><span data-icon="plus" data-size="12"></span></span>
+                      </button>
+                      <div class="group-items">
+                        <button
+                          type="button"
+                          class="session-row selected"
+                          data-session-title="写一个地球自转的 HTML"
+                          data-session-project="charter"
+                          data-session-provider="pi"
+                          data-needs="false"
+                        >
+                          <span class="provider-mark pi" data-provider="pi"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <span class="live-dot live"></span>
+                              <strong>写一个地球自转的 HTML</strong>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">正在更新页面动效</span>
+                              <time>now</time>
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    </section>
+
+                    <section class="group" data-group="fable5">
+                      <button type="button" class="group-head" aria-expanded="true">
+                        <span class="group-chevron" data-icon="chevron" data-size="11"></span>
+                        <span data-icon="folder" data-size="12"></span>
+                        <strong>fable5</strong>
+                        <span class="group-count">4</span>
+                        <span class="group-add" data-project="fable5" title="在 fable5 新建会话" data-open-new><span data-icon="plus" data-size="12"></span></span>
+                      </button>
+                      <div class="group-items">
+                        <button
+                          type="button"
+                          class="session-row"
+                          data-session-title="整理终端输出结构"
+                          data-session-project="fable5"
+                          data-session-provider="claude"
+                          data-needs="false"
+                        >
+                          <span class="provider-mark claude" data-provider="claude"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <span class="live-dot live"></span>
+                              <strong>整理终端输出结构</strong>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">正在分析终端输出</span>
+                              <time>9m</time>
+                            </span>
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          class="session-row"
+                          data-session-title="解释测试失败原因"
+                          data-session-project="fable5"
+                          data-session-provider="claude"
+                          data-needs="false"
+                        >
+                          <span class="provider-mark claude" data-provider="claude"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <strong>解释测试失败原因</strong>
+                              <span class="state-badge answered">Answered</span>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">已回答 · 没有文件变更</span>
+                              <time>18m</time>
+                            </span>
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          class="session-row"
+                          data-session-title="审查地球动画页面"
+                          data-session-project="fable5"
+                          data-session-provider="claude"
+                          data-needs="true"
+                        >
+                          <span class="provider-mark claude" data-provider="claude"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <strong>审查地球动画页面</strong>
+                              <span class="state-badge">Review</span>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">2 个文件待确认</span>
+                              <time>24m</time>
+                            </span>
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          class="session-row"
+                          data-session-title="提交订单按钮优化"
+                          data-session-project="fable5"
+                          data-session-provider="pi"
+                          data-needs="true"
+                        >
+                          <span class="provider-mark pi" data-provider="pi"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <strong>提交订单按钮优化</strong>
+                              <span class="state-badge">Review</span>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">计划与变更等待确认</span>
+                              <time>31m</time>
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    </section>
+
+                    <section class="group collapsed" data-group="history">
+                      <button type="button" class="group-head" aria-expanded="false">
+                        <span class="group-chevron" data-icon="chevron" data-size="11"></span>
+                        <span data-icon="clock" data-size="12"></span>
+                        <strong>History</strong>
+                        <span class="group-count">1</span>
+                      </button>
+                      <div class="group-items">
+                        <button
+                          type="button"
+                          class="session-row"
+                          data-session-title="修复会话恢复逻辑"
+                          data-session-project="charter"
+                          data-session-provider="codex"
+                          data-needs="false"
+                        >
+                          <span class="provider-mark codex" data-provider="codex"></span>
+                          <span class="session-copy">
+                            <span class="session-title-line">
+                              <strong>修复会话恢复逻辑</strong>
+                              <span class="state-badge answered">Accepted</span>
+                            </span>
+                            <span class="session-meta-line">
+                              <span class="activity-copy">已完成 · 4 个文件</span>
+                              <time>Yesterday</time>
+                            </span>
+                          </span>
+                        </button>
+                      </div>
+                    </section>
+
+                    <div class="empty-filter" id="empty-filter">No matching sessions. Try another search or turn off the attention filter.</div>
+                  </div>
+                </section>
+
+                <section class="panel-view" data-panel="inbox" aria-label="Inbox panel">
+                  <header class="panel-head">
+                    <div class="panel-heading-row">
+                      <strong>Needs attention</strong>
+                      <small>2 waiting</small>
+                    </div>
+                    <div class="search-row">
+                      <label class="search-box" style="grid-column: 1 / -1">
+                        <span data-icon="search" data-size="13"></span>
+                        <input type="search" placeholder="Search attention sessions…" />
+                      </label>
+                    </div>
+                  </header>
+                  <div class="panel-scroll">
+                    <div class="inbox-intro">
+                      <strong>2 decisions waiting for you</strong>
+                      <span>Only permissions, plan approvals and change reviews appear here. One click opens the decision.</span>
+                    </div>
+                    <button type="button" class="inbox-row" data-open-session="审查地球动画页面" data-provider="claude" data-project="fable5">
+                      <span class="provider-mark claude" data-provider="claude"></span>
+                      <span class="inbox-row-copy"><strong>审查地球动画页面</strong><span>fable5 · 2 files changed</span></span>
+                      <span class="inbox-action">Review</span>
+                    </button>
+                    <button type="button" class="inbox-row" data-open-session="提交订单按钮优化" data-provider="pi" data-project="fable5">
+                      <span class="provider-mark pi" data-provider="pi"></span>
+                      <span class="inbox-row-copy"><strong>提交订单按钮优化</strong><span>fable5 · Plan and changes ready</span></span>
+                      <span class="inbox-action">Review</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section class="panel-view" data-panel="projects" aria-label="Projects panel">
+                  <header class="panel-head">
+                    <div class="panel-heading-row">
+                      <strong>Projects</strong>
+                      <small>working context</small>
+                    </div>
+                    <label class="search-box">
+                      <span data-icon="search" data-size="13"></span>
+                      <input type="search" placeholder="Search projects…" />
+                    </label>
+                  </header>
+                  <div class="panel-scroll">
+                    <div class="section-label"><strong>Recent projects</strong><span>3</span></div>
+                    <div class="project-row active">
+                      <span data-icon="folder" data-size="16"></span>
+                      <span class="project-copy"><strong>charter</strong><span>Working project · 1 session</span></span>
+                      <span class="project-row-actions">
+                        <button type="button" title="在 charter 新建会话" data-open-new data-project="charter"><span data-icon="plus" data-size="12"></span></button>
+                        <button type="button" title="更多"><span data-icon="more" data-size="13"></span></button>
+                      </span>
+                    </div>
+                    <div class="project-row">
+                      <span data-icon="folder" data-size="16"></span>
+                      <span class="project-copy"><strong>fable5</strong><span>4 sessions · 2 need attention</span></span>
+                      <span class="project-row-actions">
+                        <button type="button" title="在 fable5 新建会话" data-open-new data-project="fable5"><span data-icon="plus" data-size="12"></span></button>
+                        <button type="button" title="更多"><span data-icon="more" data-size="13"></span></button>
+                      </span>
+                    </div>
+                    <div class="project-row">
+                      <span data-icon="folder" data-size="16"></span>
+                      <span class="project-copy"><strong>termio</strong><span>No sessions yet</span></span>
+                      <span class="project-row-actions">
+                        <button type="button" title="在 termio 新建会话" data-open-new data-project="termio"><span data-icon="plus" data-size="12"></span></button>
+                        <button type="button" title="更多"><span data-icon="more" data-size="13"></span></button>
+                      </span>
+                    </div>
+                    <button type="button" class="secondary-action"><span data-icon="folder" data-size="13"></span>Open folder…</button>
+                    <button type="button" class="secondary-action"><span data-icon="plus" data-size="13"></span>New project…</button>
+                  </div>
+                </section>
+
+                <section class="panel-view" data-panel="search" aria-label="Global search panel">
+                  <header class="panel-head">
+                    <div class="panel-heading-row">
+                      <strong>Search</strong>
+                      <small>⌘K</small>
+                    </div>
+                  </header>
+                  <div class="panel-scroll">
+                    <label class="search-box global-search-box">
+                      <span data-icon="search" data-size="14"></span>
+                      <input id="global-search" type="search" placeholder="Projects, sessions or files…" />
+                    </label>
+                    <div class="search-result-label">Sessions</div>
+                    <button type="button" class="search-result" data-open-session="写一个地球自转的 HTML" data-provider="pi" data-project="charter">
+                      <span class="provider-mark pi" data-provider="pi"></span><span>写一个地球自转的 HTML</span><small>charter</small>
+                    </button>
+                    <button type="button" class="search-result" data-open-session="审查地球动画页面" data-provider="claude" data-project="fable5">
+                      <span class="provider-mark claude" data-provider="claude"></span><span>审查地球动画页面</span><small>fable5</small>
+                    </button>
+                    <div class="search-result-label">Projects</div>
+                    <button type="button" class="search-result"><span data-icon="folder" data-size="14"></span><span>fable5</span><small>project</small></button>
+                    <div class="search-result-label">Files</div>
+                    <button type="button" class="search-result"><span data-icon="file" data-size="14"></span><span>earth-rotation.html</span><small>charter</small></button>
+                  </div>
+                </section>
+              </div>
+            </aside>
+
+            <section class="workspace" aria-label="Session canvas context">
+              <header class="workspace-head">
+                <span class="provider-mark pi" id="workspace-provider" data-provider="pi"></span>
+                <div class="workspace-title">
+                  <strong id="workspace-session-title">写一个地球自转的 HTML</strong>
+                  <span id="workspace-session-meta">charter · main · 正在运行</span>
+                </div>
+                <div class="spacer"></div>
+                <button type="button" class="head-action"><span data-icon="file" data-size="12"></span><span>Files</span></button>
+                <button type="button" class="head-action"><span data-icon="layout" data-size="12"></span><span>Preview</span></button>
+              </header>
+              <div class="workspace-body">
+                <article class="conversation">
+                  <div class="timeline-time">14:28</div>
+                  <div class="user-message">写一个地球自转的 HTML 动画页面，背景要有星空和真实质感。</div>
+                  <div class="activity-line"><span data-icon="terminal" data-size="12"></span><span>Tool calls (1)</span><b>✓</b><span>创建 earth-rotation.html</span></div>
+                  <p class="assistant-message">
+                    已创建 <strong>earth-rotation.html</strong>。页面使用星空背景、柔和光晕和可调节的自转速度；当前正在收紧动画节奏与窄窗口布局。
+                  </p>
+                </article>
+                <aside class="tool-canvas">
+                  <nav class="tool-tabs"><button type="button" class="active">Summary</button><button type="button">Diff</button><button type="button">Preview</button></nav>
+                  <div class="tool-content">
+                    <section class="summary-card">
+                      <h3>Current session</h3>
+                      <ul>
+                        <li>1 file changed</li>
+                        <li>Animation running</li>
+                        <li>No console errors</li>
+                      </ul>
+                    </section>
+                  </div>
+                </aside>
+              </div>
+            </section>
+          </div>
+
+          <footer class="statusbar"><span>charter</span><span>main</span><span class="spacer"></span><span>5 sessions</span><span>2 need attention</span></footer>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="new-session-dialog" aria-labelledby="new-session-title">
+      <div class="dialog-head">
+        <strong id="new-session-title">New Session</strong>
+        <button type="button" data-close-dialog aria-label="Close"><span data-icon="x" data-size="14"></span></button>
+      </div>
+      <div class="dialog-body">
+        <label class="field-label">PROJECT
+          <select id="dialog-project"><option>charter</option><option>fable5</option><option>termio</option></select>
+        </label>
+        <div class="field-label">AGENT</div>
+        <div class="agent-options">
+          <button type="button" class="agent-option selected" data-agent="Pi"><span class="provider-mark pi" data-provider="pi"></span><span>Pi</span></button>
+          <button type="button" class="agent-option" data-agent="Claude"><span class="provider-mark claude" data-provider="claude"></span><span>Claude</span></button>
+          <button type="button" class="agent-option" data-agent="Codex"><span class="provider-mark codex" data-provider="codex"></span><span>Codex</span></button>
+        </div>
+      </div>
+      <div class="dialog-foot">
+        <button type="button" data-close-dialog>Cancel</button>
+        <button type="button" class="primary" id="create-session">Continue</button>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status"></div>
+
+    <script>
+      /* Icon paths and provider marks are reused from the repository's home-icons.tsx. */
+      const ICONS = {
+        flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+        terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+        inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+        folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+        search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+        layout: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+        sliders: '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+        plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+        chevron: '<path d="m6 9 6 6 6-6"/>',
+        clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+        file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/>',
+        filter: '<path d="M4 5h16l-6.5 7.2V18l-3 1.5v-7.3Z"/>',
+        more: '<circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/>',
+        x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+      };
+
+      const CLAUDE_PATH = 'm4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6957-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215L0 11.8109l.0546-.3521.4797-.3218.686.0607 1.5178.1032 2.2767.1578 1.6514.0972 2.4468.2549h.3886l.0546-.1578-.1335-.0972-.1032-.0971-2.3557-1.5967-2.5501-1.688-1.3356-.9714-.7225-.4917-.3643-.4614-.1578-1.0079.6557-.7225.8804.0607.2246.0607.8925.686 1.9066 1.4753 2.4892 1.8331.3643.3035.1457-.1032.0182-.0729-.1639-.2732-1.3538-2.4467-1.445-2.4893-.6435-1.032-.17-.6193c-.0607-.2549-.1032-.4674-.1032-.7285l.7468-1.0139.4128-.1336.9964.1336.4189.3642.6193 1.4147 1.0017 2.2282 1.5542 3.0295.4553.8986.2428.8318.0911.2549h.1578v-.1457l.1275-1.706.2368-2.0947.2306-2.6957.079-.7589.3764-.9107.7468-.4918.5828.2793.4796.686-.0667.4432-.2853 1.8573-.5586 2.9081-.3643 1.9492h.2125l.2428-.2429.9835-1.3053 1.6514-2.0644.7286-.8197.85-.9046.5464-.4311h1.0321l.7589 1.129-.34 1.1655-1.0624 1.3477-.8804 1.1411-1.263 1.7-.7892 1.36.0728.1093.1882-.0182 2.8536-.6071 1.5421-.2793 1.8394-.3157.8318.3886.0911.3946-.3278.8075-1.9673.4857-2.3071.4614-3.4364.8136-.0425.0304.0486.0607 1.5481.1457.6618.0364h1.6211l3.0174.2246.7893.5222.4736.6374-.079.4857-1.2145.6193-1.6393-.3886-3.8252-.9107-1.3113-.3278h-.1821v.1093l1.0927 1.0686 2.0037 1.809 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9248-1.6211h-.1275v.1699l.4432.6496 2.3435 3.5214.1214 1.0807-.17.3521-.6071.2125-.6678-.1214-1.3721-1.9249-1.4147-2.1675-1.1412-1.9431-.1396.0789-.6743 7.2563-.3157.3704-.7286.2792-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9248.3157-1.5299.2853-1.9006.1699-.6314-.0121-.0425-.1396.0182-1.4328 1.9673-2.1797 2.9445-1.7242 1.8452-.4128.164-.7165-.3704.0668-.6618.4007-.5889 2.3861-3.0356 1.439-1.882.9288-1.0868-.006-.1578h-.0546l-6.338 4.1165-1.129.1457-.4857-.4553.0607-.7468.2307-.2428 1.9066-1.3114Z';
+      const OPENAI_PATH = 'M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.073zM13.2599 22.4301a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6455zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.8956zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654 2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z';
+
+      function iconSvg(name, size = 14) {
+        const paths = ICONS[name] || ICONS.file;
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+      }
+
+      function providerSvg(provider, size = 18) {
+        if (provider === 'claude') {
+          return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="${CLAUDE_PATH}"/></svg>`;
+        }
+        if (provider === 'codex') {
+          return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="currentColor"/><path fill="var(--pm-hole,#fff)" transform="translate(4.56 4.56) scale(0.62)" d="${OPENAI_PATH}"/></svg>`;
+        }
+        return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="6.5" fill="currentColor"/><g fill="none" stroke="var(--pm-hole,#fff)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 8.1h10.8"/><path d="M9.7 8.1v8"/><path d="M14.5 8.1c0 3.1-.15 5.4.3 6.9.2.7.7 1.1 1.4 1.1.5 0 .9-.2 1.2-.6"/></g></svg>`;
+      }
+
+      function hydrateIcons(root = document) {
+        root.querySelectorAll('[data-icon]').forEach((node) => {
+          node.innerHTML = iconSvg(node.dataset.icon, Number(node.dataset.size || 14));
+        });
+        root.querySelectorAll('[data-provider]').forEach((node) => {
+          node.innerHTML = providerSvg(node.dataset.provider, 18);
+        });
+      }
+
+      hydrateIcons();
+
+      const toast = document.getElementById('toast');
+      let toastTimer;
+      function showToast(message) {
+        window.clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.add('show');
+        toastTimer = window.setTimeout(() => toast.classList.remove('show'), 2200);
+      }
+
+      function switchView(view) {
+        document.querySelectorAll('.activity-button[data-view]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.view === view);
+        });
+        document.querySelectorAll('.panel-view').forEach((panel) => {
+          panel.classList.toggle('active', panel.dataset.panel === view);
+        });
+        document.querySelectorAll('[data-mock-view]').forEach((button) => {
+          button.classList.toggle('active', button.dataset.mockView === view);
+        });
+        if (view === 'search') window.setTimeout(() => document.getElementById('global-search').focus(), 0);
+      }
+
+      document.querySelectorAll('.activity-button[data-view]').forEach((button) => {
+        button.addEventListener('click', () => switchView(button.dataset.view));
+      });
+      document.querySelectorAll('[data-mock-view]').forEach((button) => {
+        button.addEventListener('click', () => switchView(button.dataset.mockView));
+      });
+      document.querySelectorAll('.utility-button').forEach((button) => {
+        button.addEventListener('click', () => showToast(`${button.getAttribute('aria-label')} 保持为稳定的应用级入口`));
+      });
+
+      document.querySelectorAll('.group-head').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          if (event.target.closest('[data-open-new]')) return;
+          const group = button.closest('.group');
+          group.classList.toggle('collapsed');
+          button.setAttribute('aria-expanded', String(!group.classList.contains('collapsed')));
+        });
+      });
+
+      const sessionSearch = document.getElementById('session-search');
+      const needsFilter = document.getElementById('needs-filter');
+      let needsOnly = false;
+      function filterSessions() {
+        const query = sessionSearch.value.trim().toLocaleLowerCase();
+        let visible = 0;
+        document.querySelectorAll('#session-list .session-row').forEach((row) => {
+          const title = row.dataset.sessionTitle.toLocaleLowerCase();
+          const matches = title.includes(query) && (!needsOnly || row.dataset.needs === 'true');
+          row.hidden = !matches;
+          if (matches) visible += 1;
+        });
+        document.querySelectorAll('#session-list .group').forEach((group) => {
+          const rows = [...group.querySelectorAll('.session-row')];
+          group.hidden = rows.length > 0 && rows.every((row) => row.hidden);
+        });
+        document.getElementById('empty-filter').classList.toggle('visible', visible === 0);
+      }
+      sessionSearch.addEventListener('input', filterSessions);
+      needsFilter.addEventListener('click', () => {
+        needsOnly = !needsOnly;
+        needsFilter.classList.toggle('active', needsOnly);
+        needsFilter.setAttribute('aria-pressed', String(needsOnly));
+        filterSessions();
+      });
+
+      function openSession(title, provider, project) {
+        document.querySelectorAll('.session-row').forEach((row) => {
+          row.classList.toggle('selected', row.dataset.sessionTitle === title);
+        });
+        document.getElementById('workspace-session-title').textContent = title;
+        document.getElementById('workspace-session-meta').textContent = `${project} · main · 当前会话`;
+        const workspaceProvider = document.getElementById('workspace-provider');
+        workspaceProvider.className = `provider-mark ${provider}`;
+        workspaceProvider.dataset.provider = provider;
+        workspaceProvider.innerHTML = providerSvg(provider, 18);
+        switchView('sessions');
+      }
+
+      document.querySelectorAll('.session-row').forEach((row) => {
+        row.addEventListener('click', () => openSession(row.dataset.sessionTitle, row.dataset.sessionProvider, row.dataset.sessionProject));
+      });
+      document.querySelectorAll('[data-open-session]').forEach((row) => {
+        row.addEventListener('click', () => openSession(row.dataset.openSession, row.dataset.provider, row.dataset.project));
+      });
+
+      const projectContext = document.getElementById('project-context');
+      const projectMenu = document.getElementById('project-menu');
+      projectContext.addEventListener('click', () => {
+        const open = projectMenu.classList.toggle('open');
+        projectContext.setAttribute('aria-expanded', String(open));
+      });
+      projectMenu.querySelectorAll('[data-context]').forEach((button) => {
+        button.addEventListener('click', () => {
+          projectMenu.querySelectorAll('button').forEach((item) => item.classList.toggle('active', item === button));
+          document.getElementById('context-name').textContent = button.dataset.context;
+          projectMenu.classList.remove('open');
+          projectContext.setAttribute('aria-expanded', 'false');
+        });
+      });
+
+      const dialog = document.getElementById('new-session-dialog');
+      let selectedAgent = 'Pi';
+      document.querySelectorAll('[data-open-new]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const project = button.dataset.project || document.getElementById('context-name').textContent;
+          document.getElementById('dialog-project').value = project;
+          dialog.showModal();
+        });
+      });
+      document.querySelectorAll('[data-close-dialog]').forEach((button) => button.addEventListener('click', () => dialog.close()));
+      document.querySelectorAll('.agent-option').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectedAgent = button.dataset.agent;
+          document.querySelectorAll('.agent-option').forEach((item) => item.classList.toggle('selected', item === button));
+        });
+      });
+      document.getElementById('create-session').addEventListener('click', () => {
+        const project = document.getElementById('dialog-project').value;
+        dialog.close();
+        showToast(`已准备在 ${project} 创建 ${selectedAgent} 会话`);
+      });
+
+      document.getElementById('width-toggle').addEventListener('click', (event) => {
+        const narrow = document.getElementById('app-frame').classList.toggle('narrow');
+        event.currentTarget.textContent = narrow ? '宽窗口' : '窄窗口';
+        event.currentTarget.classList.toggle('active', narrow);
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>方案 B · 列表内“Add project”幽灵行 — Projects 面板</title>
+<style>
+  :root {
+    --font-ui: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Songti SC', serif;
+    --bg-app: #ded2bc;
+    --bg-sidebar: #f5ead5;
+    --bg-input: #fffaf0;
+    --bg-card: #fff8e9;
+    --bg-chip: #eadbc2;
+    --bg-hover: #eee0c8;
+    --bg-active: #e3d0b0;
+    --border: #d8c4a3;
+    --border-soft: #e9d9bd;
+    --border-strong: #b99d78;
+    --fg: #392a21;
+    --fg-muted: #795f4f;
+    --fg-faint: #a48570;
+    --accent: #b94e32;
+    --accent-fg: #fffaf0;
+    --success: #4f754d;
+    --shadow-card: 0 1px 1px rgba(62,40,25,.06), 0 12px 32px rgba(62,40,25,.1);
+    --shadow-menu: 0 28px 80px rgba(55,36,23,.28);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    padding: 40px 48px 64px;
+    background: var(--bg-app);
+    color: var(--fg);
+    font: 14px/1.6 var(--font-ui);
+  }
+  h1 { font: 650 26px/1.3 var(--font-display); letter-spacing: .01em; }
+  .sub { max-width: 760px; margin: 10px 0 6px; color: var(--fg-muted); }
+  .hint { margin-bottom: 28px; color: var(--fg-faint); font-size: 12.5px; }
+  .row { display: flex; gap: 36px; flex-wrap: wrap; align-items: flex-start; }
+  .demo { display: grid; gap: 10px; }
+  .demo > figcaption { color: var(--fg-muted); font-size: 12.5px; text-align: center; }
+
+  .rail {
+    position: relative;
+    width: 272px;
+    height: 600px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border-soft);
+    border-radius: 12px;
+    background: var(--bg-sidebar);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+  }
+  .head {
+    display: grid;
+    gap: 9px;
+    padding: 13px 12px 11px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .heading { min-height: 24px; display: flex; align-items: center; gap: 8px; }
+  .heading strong {
+    font-family: var(--font-display);
+    font-size: 14px; font-weight: 650; letter-spacing: .02em;
+  }
+  .heading small { margin-left: auto; color: var(--fg-faint); font-size: 10px; }
+  .search {
+    min-width: 0; height: 34px; display: flex; align-items: center; gap: 7px;
+    padding: 0 10px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-card); color: var(--fg-muted);
+  }
+  .search input {
+    min-width: 0; flex: 1; border: 0; outline: 0; background: transparent;
+    color: var(--fg); font: 11.5px var(--font-ui);
+  }
+  .search input::placeholder { color: var(--fg-faint); }
+
+  .scroll { flex: 1; min-height: 0; padding: 8px 9px; overflow: auto; }
+
+  .proj {
+    position: relative; min-height: 52px; display: flex; align-items: center;
+    margin-bottom: 4px; border: 1px solid transparent; border-radius: 9px;
+  }
+  .proj:hover { border-color: var(--border-soft); background: var(--bg-hover); }
+  .proj.active {
+    border-color: var(--border-soft); background: var(--bg-hover);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .proj-main {
+    min-width: 0; min-height: 50px; flex: 1; display: flex; align-items: center; gap: 8px;
+    padding: 7px; border: 0; border-radius: 9px; background: transparent;
+    color: var(--fg-muted); font-family: var(--font-ui); text-align: left; cursor: pointer;
+  }
+  .copy { min-width: 0; flex: 1; display: grid; gap: 3px; }
+  .copy strong { color: var(--fg); font-size: 11.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .copy small { color: var(--fg-faint); font-size: 9.5px; }
+  .cur { width: 20px; height: 20px; flex: none; display: grid; place-items: center; color: var(--success); }
+  .use {
+    width: 26px; height: 26px; flex: none; margin-right: 6px; padding: 0;
+    display: grid; place-items: center; border: 1px solid transparent; border-radius: 6px;
+    background: transparent; color: var(--fg-muted); opacity: 0; cursor: pointer;
+  }
+  .proj:hover .use, .proj.active .use { opacity: 1; }
+  .use:hover { border-color: var(--border); background: var(--bg-card); color: var(--accent); }
+
+  /* 变化点：列表末尾的幽灵行，点击原地展开成两个选项 */
+  .add-row {
+    width: 100%; min-height: 40px; display: flex; align-items: center; gap: 8px;
+    margin-top: 2px; padding: 7px;
+    border: 1px dashed var(--border); border-radius: 9px;
+    background: transparent; color: var(--fg-faint);
+    font: 11.5px var(--font-ui); text-align: left; cursor: pointer;
+  }
+  .add-row:hover { border-color: var(--border-strong); background: var(--bg-hover); color: var(--fg-muted); }
+  .add-row .plus-ic {
+    width: 20px; height: 20px; display: grid; place-items: center; flex: none;
+  }
+  .add-expand { display: none; margin-top: 2px; }
+  .adding .add-row { display: none; }
+  .adding .add-expand { display: grid; gap: 5px; }
+  .opt {
+    width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px;
+    border: 1px solid var(--border-soft); border-radius: 9px;
+    background: var(--bg-card); color: var(--fg);
+    font-family: var(--font-ui); text-align: left; cursor: pointer;
+  }
+  .opt:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+  .opt .ic {
+    width: 28px; height: 28px; flex: none; display: grid; place-items: center;
+    border: 1px solid var(--border-soft); border-radius: 7px;
+    background: var(--bg-input); color: var(--fg-muted);
+  }
+  .opt:hover .ic { color: var(--accent); }
+  .opt strong { display: block; font-size: 11.5px; font-weight: 650; }
+  .opt small { display: block; color: var(--fg-faint); font-size: 9.5px; }
+  .cancel-row {
+    width: 100%; min-height: 26px; margin-top: 3px;
+    border: 0; background: transparent; color: var(--fg-faint);
+    font: 10px var(--font-ui); cursor: pointer;
+  }
+  .cancel-row:hover { color: var(--fg-muted); }
+
+  .empty-note {
+    margin: 20px 8px 10px; text-align: center;
+    color: var(--fg-faint); font-size: 10.5px;
+  }
+
+  .notes { max-width: 760px; margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--border-strong); }
+  .notes h2 { font: 650 16px var(--font-display); margin-bottom: 10px; }
+  .notes li { margin: 4px 0 4px 18px; color: var(--fg-muted); font-size: 13px; }
+  .notes b { color: var(--fg); }
+</style>
+</head>
+<body>
+
+<h1>方案 B · 列表内的“Add project”幽灵行</h1>
+<p class="sub">动作跟着列表走，不再钉死在面板最底端。最后一张项目卡之后是一个虚线幽灵行 <i>＋ Add project…</i>，与卡片同宽同圆角；点击后原地展开为两个带说明的选项，选完或点 cancel 收起。列表短时动作就近，永远不会孤零零沉在底部。</p>
+<p class="hint">🖱 可交互：点击虚线行展开选项，Cancel 收起。</p>
+
+<div class="row">
+  <figure class="demo">
+    <div class="rail">
+      <header class="head">
+        <div class="heading"><strong>Projects</strong><small>working context</small></div>
+        <label class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+          <input placeholder="Search projects…">
+        </label>
+      </header>
+      <div class="scroll" data-addwrap>
+        <div class="proj active">
+          <button class="proj-main">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="copy"><strong>fable5</strong><small>3 sessions</small></span>
+            <span class="cur"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          </button>
+          <button class="use" title="New session"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div class="proj">
+          <button class="proj-main">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="copy"><strong>charter</strong><small>0 sessions</small></span>
+          </button>
+          <button class="use" title="New session"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+
+        <button class="add-row" onclick="expand(this)">
+          <span class="plus-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+          Add project…
+        </button>
+        <div class="add-expand">
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg></span>
+            <span><strong>Open folder…</strong><small>Use an existing folder on disk</small></span>
+          </button>
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6M9 13h6"/></svg></span>
+            <span><strong>New project…</strong><small>Create empty, or clone a repository</small></span>
+          </button>
+          <button class="cancel-row" onclick="collapse(this)">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <figcaption>① 默认态 — 幽灵行紧跟列表，不沉底</figcaption>
+  </figure>
+
+  <figure class="demo">
+    <div class="rail">
+      <header class="head">
+        <div class="heading"><strong>Projects</strong><small>working context</small></div>
+        <label class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+          <input placeholder="Search projects…">
+        </label>
+      </header>
+      <div class="scroll adding" data-addwrap>
+        <div class="proj active">
+          <button class="proj-main">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="copy"><strong>fable5</strong><small>3 sessions</small></span>
+            <span class="cur"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>
+          </button>
+        </div>
+        <div class="proj">
+          <button class="proj-main">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="copy"><strong>charter</strong><small>0 sessions</small></span>
+          </button>
+        </div>
+
+        <button class="add-row" onclick="expand(this)">
+          <span class="plus-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></span>
+          Add project…
+        </button>
+        <div class="add-expand">
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg></span>
+            <span><strong>Open folder…</strong><small>Use an existing folder on disk</small></span>
+          </button>
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6M9 13h6"/></svg></span>
+            <span><strong>New project…</strong><small>Create empty, or clone a repository</small></span>
+          </button>
+          <button class="cancel-row" onclick="collapse(this)">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <figcaption>② 展开态 — 原地长出两个选项</figcaption>
+  </figure>
+
+  <figure class="demo">
+    <div class="rail">
+      <header class="head">
+        <div class="heading"><strong>Projects</strong><small>working context</small></div>
+        <label class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.8-3.8"/></svg>
+          <input placeholder="Search projects…">
+        </label>
+      </header>
+      <div class="scroll adding" data-addwrap>
+        <p class="empty-note">No projects yet — add one to give sessions a working context.</p>
+        <div class="add-expand">
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/></svg></span>
+            <span><strong>Open folder…</strong><small>Use an existing folder on disk</small></span>
+          </button>
+          <button class="opt">
+            <span class="ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6M9 13h6"/></svg></span>
+            <span><strong>New project…</strong><small>Create empty, or clone a repository</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <figcaption>③ 空状态 — 选项直接平铺，天然就是引导</figcaption>
+  </figure>
+</div>
+
+<div class="notes">
+  <h2>设计说明</h2>
+  <ul>
+    <li><b>优点：</b>动作在内容流里，跟最后一张卡片只隔 4px——“项目在哪，加项目就在哪”，视线不用跳到面板底部。</li>
+    <li><b>优点：</b>虚线幽灵行是通识的“占位即入口”模式（Notion / Things 的 add row）；空状态时它自然退化成引导卡，不需要单独设计。</li>
+    <li><b>代价：</b>列表很长需要滚动时，幽灵行会跟着滚出视野（需要滚到底才能加）；展开会把内容推下去。</li>
+    <li><b>适合：</b>项目数量少（≤8，当前也只显示 8 个）、强调内容流连续性的取向。</li>
+  </ul>
+</div>
+
+<script>
+  function expand(btn) { btn.closest('[data-addwrap]').classList.add('adding'); }
+  function collapse(btn) { btn.closest('[data-addwrap]').classList.remove('adding'); }
+</script>
+</body>
+</html>

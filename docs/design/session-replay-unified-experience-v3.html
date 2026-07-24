@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Agent Replay V3 — One Story, Three Depths · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="agent-replay-v3-one-story-three-depths">Agent Replay V3 — One Story, Three Depths</h1>
+<p>Status: product direction proposal<br>Date: 2026-07-15<br>Scope: Pi Home, managed agents, Claude/Codex terminals, and non-coding agents</p>
+<h2 id="decision">Decision</h2>
+<p>Replace the five peer modes A–E with one replay experience that progressively<br>deepens:</p>
+<ol><li><strong>Recap</strong> answers “what happened and does it matter?”</li><li><strong>Explore</strong> answers “what happened around this moment?”</li><li><strong>Verify</strong> answers “what proves this claim and can I approve it?”</li></ol>
+<p>These are not separate visualizations or data stores. They are three depths of<br>the same selected moment. The playhead, filters, evidence selection, and source<br>boundaries remain stable as the user moves deeper.</p>
+<p>The product name remains <strong>Replay / 回顾</strong>. “Replay” is the familiar entry<br>metaphor; “Recap” is the default experience inside it.</p>
+<h2 id="why-the-current-a-e-structure-is-not-the-final-answer">Why the current A–E structure is not the final answer</h2>
+<p>The current implementation established the right technical foundation, but the<br>information architecture still exposes the design exploration to the user.</p>
+<h3 id="1-it-asks-users-to-choose-a-representation-before-they-have-a-question">1. It asks users to choose a representation before they have a question</h3>
+<p>A, B, C, D, and E are designer concepts, not user intentions. A returning user<br>usually wants one of three things: understand the result quickly, investigate a<br>moment, or verify evidence. Choosing between “causal”, “spatial”, and<br>“documentary” creates avoidable work.</p>
+<h3 id="2-a-is-visually-compelling-but-still-artifact-first">2. A is visually compelling but still artifact-first</h3>
+<p>The before/after stage works beautifully when a file or document changed. It is<br>weak for research, scheduling, communication, purchasing, monitoring, or a run<br>whose important result is a decision rather than a file. The default experience<br>must begin with the goal and outcome, then render the best available artifact.</p>
+<h3 id="3-b-currently-risks-overstating-causality">3. B currently risks overstating causality</h3>
+<p>Temporal adjacency is not causality. A line between two events may mean only<br>“happened next”. Replay may show <code>requested by</code>, <code>produced</code>, and <code>verified by</code><br>only when those relations are explicitly recorded. Everything else is related<br>context, not a causal claim.</p>
+<h3 id="4-c-turns-missing-semantics-into-a-destination">4. C turns missing semantics into a destination</h3>
+<p>A cross-app map is valuable only when applications and resources are emitted by<br>MCP/provider events. For a plain terminal, a spatial graph is decorative. App<br>identity belongs on timeline lanes and artifact cards; it does not deserve a<br>peer mode when the evidence is incomplete.</p>
+<h3 id="5-d-and-e-are-useful-but-they-are-depths-not-destinations">5. D and E are useful, but they are depths, not destinations</h3>
+<p>The event list, inspector, provenance, approval record, and evidence table are<br>exactly what advanced users need. They should open around the currently selected<br>moment, without resetting the user&#39;s mental position or moving to another mode.</p>
+<h3 id="6-numeric-confidence-is-not-defensible-yet">6. Numeric “confidence” is not defensible yet</h3>
+<p>Values such as 58%, 86%, or 96% currently come from product heuristics rather<br>than calibrated probabilities. They look precise but cannot withstand an audit.<br>V3 replaces them with categorical evidence levels and separately reports<br>measurable coverage.</p>
+<h3 id="7-session-level-capture-grade-hides-mixed-evidence">7. Session-level capture grade hides mixed evidence</h3>
+<p>A run can contain full Pi events, observed terminal text, structured MCP calls,<br>and inferred narrative at the same time. One badge for the whole session can<br>silently upgrade weaker moments. Capture level must be shown per event and as a<br>segmented coverage band on the timeline.</p>
+<h2 id="product-promise">Product promise</h2>
+<blockquote><p>In ten seconds, understand the outcome. In sixty seconds, understand the<br>story. In three interactions, reach the evidence for any claim.</p></blockquote>
+<p>This promise works for code, documents, spreadsheets, research, email,<br>calendars, approvals, purchasing, operations, and other agent work.</p>
+<h2 id="the-unified-screen">The unified screen</h2>
+<h3 id="persistent-header-the-session-contract">Persistent header: the session contract</h3>
+<p>The header is visible at every depth and contains:</p>
+<ul><li>Original goal, not an agent-generated title alone.</li><li>Outcome: completed, partially completed, needs attention, or stopped.</li><li>Verification state: verified, partly verified, or not verified.</li><li>Actual elapsed time and condensed recap length.</li><li>Source coverage summary: Full / Structured / Observed / Missing.</li><li>Close and Share evidence receipt.</li></ul>
+<p>It never shows a single synthetic confidence percentage.</p>
+<h3 id="default-body-recap">Default body: Recap</h3>
+<p>The first frame is a result card, not the first low-level event.</p>
+<p>It answers:</p>
+<ul><li><strong>Result</strong> — one factual sentence about what was achieved.</li><li><strong>Changed</strong> — the three highest-impact outputs or state changes.</li><li><strong>Attention</strong> — failures, unresolved questions, risky actions, or missing<br>verification.</li><li><strong>Evidence coverage</strong> — what the recorder could and could not see.</li></ul>
+<p>The primary action is <strong>Play 60-second recap</strong>. Replay does not autoplay when<br>opened; a user returning from a long absence first gets a stable orientation.</p>
+<p>Below the result card, the adaptive artifact stage renders the selected moment.<br>The stage is not hard-coded to files:</p>
+<table><thead><tr><th>Evidence</th><th>Stage renderer</th></tr></thead><tbody><tr><td>Code or file</td><td>Before/after, patch, verification result</td></tr><tr><td>Document</td><td>Version comparison with changed passages</td></tr><tr><td>Spreadsheet</td><td>Changed cells, formulas, and affected chart</td></tr><tr><td>Research/web</td><td>Source page, captured excerpt, citation, and resulting claim</td></tr><tr><td>Message/email</td><td>Draft/final state, recipients, delivery state; sensitive body redacted by policy</td></tr><tr><td>Calendar/task</td><td>Previous and new state, participants/assignees, due time</td></tr><tr><td>Approval/purchase</td><td>Request, policy/checkpoint, approver, final disposition</td></tr><tr><td>MCP/application</td><td>Tool request, normalized result, named application/resource</td></tr><tr><td>No artifact</td><td>Observable action card with result and evidence level</td></tr></tbody></table>
+<h3 id="story-rail-chapters-chosen-by-meaning">Story rail: chapters chosen by meaning</h3>
+<p>The left rail contains at most eight semantic chapters:</p>
+<ul><li>Request</li><li>Plan or approach</li><li>Important discoveries</li><li>Decisions and approvals</li><li>Material changes</li><li>Problems and recovery</li><li>Verification</li><li>Result</li></ul>
+<p>Chapters are ranked by user impact, irreversibility, risk, failure, approval,<br>output delta, and verification—not sampled evenly by event count.</p>
+<h3 id="evidence-drawer-always-contextual">Evidence drawer: always contextual</h3>
+<p>The right drawer follows the selected moment. It contains:</p>
+<ul><li>Observable claim.</li><li>Evidence level and source.</li><li>Immutable evidence references and integrity hashes when available.</li><li>Before/after or request/result pair.</li><li>Explicit relationship links: Requested by, Produced, Verified by.</li><li>Redactions and missing-evidence explanation.</li><li>Reversibility: reversible, compensating action available, or irreversible.</li><li>Actions: open artifact, compare checkpoint, ask about this moment, export<br>receipt, or roll back when the domain adapter supports it.</li></ul>
+<p>The drawer collapses in Recap, opens automatically in Verify, and becomes a<br>sheet at narrow widths.</p>
+<h3 id="bottom-control-semantic-timeline">Bottom control: semantic timeline</h3>
+<p>The timeline keeps real timestamps but defaults to <strong>Story time</strong>:</p>
+<ul><li>Idle gaps are folded.</li><li>Repeated reads/searches/terminal refreshes are grouped.</li><li>High-impact changes and decisions receive enough screen time to understand.</li><li>Failures, approvals, irreversible actions, and verification are never skipped.</li><li>Hovering or opening a moment always reveals actual wall-clock time.</li></ul>
+<p>The user can switch to <strong>Real time</strong>, zoom from the full run to a local window,<br>or play at 1×, 2×, 4×, 8×, and 16×.</p>
+<p>The timeline has four quiet lanes rather than five modes:</p>
+<ol><li>Conversation and intent</li><li>Actions and applications</li><li>Artifacts and state changes</li><li>Decisions, risk, and verification</li></ol>
+<p>A coverage band directly under the lanes shows Full, Structured, Observed, and<br>Missing segments for the exact interval. This prevents a strong event from<br>visually upgrading the entire session.</p>
+<h2 id="three-depths-one-position">Three depths, one position</h2>
+<h3 id="depth-1-recap">Depth 1 — Recap</h3>
+<p>For the user returning after a long task. It shows the outcome card, adaptive<br>artifact stage, semantic chapters, evidence highlights, and condensed playback.</p>
+<h3 id="depth-2-explore">Depth 2 — Explore</h3>
+<p>Triggered by expanding the timeline, opening “all events”, searching, or asking<br>to see surrounding context. The stage remains visible while the timeline grows<br>into a virtualized chronological list. Filters are questions, not data types:</p>
+<ul><li>What changed?</li><li>What decisions were made?</li><li>What failed or was retried?</li><li>What required approval?</li><li>What remains unverified?</li><li>Which application or person was involved?</li></ul>
+<p>The previous D event list becomes this depth. The previous C app view becomes<br>application lanes and filters. The previous B graph becomes explicit context<br>links inside the selected moment.</p>
+<h3 id="depth-3-verify">Depth 3 — Verify</h3>
+<p>Triggered from a claim, risky action, approval, result, or Share receipt. The<br>selected moment does not change. The evidence drawer expands into a review<br>workspace with immutable evidence, checkpoint comparison, policy/approval<br>record, redactions, reversibility, and export.</p>
+<p>The previous E audit table remains available as <strong>All evidence</strong>, but the normal<br>path begins with the claim the user was already inspecting.</p>
+<h2 id="evidence-language">Evidence language</h2>
+<p>V3 uses levels that describe provenance, not probability:</p>
+<table><thead><tr><th>Level</th><th>Meaning</th><th>UI treatment</th></tr></thead><tbody><tr><td>Verified</td><td>Direct artifact/result plus a successful verification or signed receipt</td><td>Green check</td></tr><tr><td>Recorded</td><td>Structured provider, Pi, MCP, approval, or application event</td><td>Blue solid marker</td></tr><tr><td>Observed</td><td>Terminal/process/file-system observation without semantic provider confirmation</td><td>Amber outlined marker</td></tr><tr><td>Inferred</td><td>Narrative or relationship derived from recorded facts</td><td>Dashed marker with citations</td></tr><tr><td>Missing</td><td>A known interval or claim lacks sufficient evidence</td><td>Gray gap / explicit warning</td></tr></tbody></table>
+<p>Only a measurable quantity may use a percentage, for example “82% of the run<br>has structured or full coverage”. The UI never calls this confidence.</p>
+<h2 id="ask-this-replay">“Ask this replay”</h2>
+<p>Every selected moment offers a constrained question box. Example prompts:</p>
+<ul><li>Why was this changed?</li><li>Show only the steps that affected the customer.</li><li>Which claims were not verified?</li><li>What happened between the approval and the purchase?</li><li>Did the agent retry after this failure?</li></ul>
+<p>Answers must cite event/evidence ids. When the ledger cannot answer, it says<br>“The recording cannot confirm this” instead of reconstructing hidden reasoning.<br>The answer is a derived narrative and is never written back as raw evidence.</p>
+<h2 id="entry-points">Entry points</h2>
+<ul><li><strong>Home task card:</strong> <code>View recap · 48s</code> after completion; <code>Watch live</code> while<br>running.</li><li><strong>Task Room:</strong> Replay beside Outcome and Review.</li><li><strong>Changes panel:</strong> the play button seeks to the first material change rather<br>than always opening at 00:00.</li><li><strong>External terminal ended toast:</strong> View recap.</li><li><strong>Approval/high-risk task:</strong> Verify opens first, with Recap one level up.</li></ul>
+<p>The entry determines the initial moment and depth, not a different replay<br>product.</p>
+<h2 id="live-behavior">Live behavior</h2>
+<p>During a running session, Replay becomes <strong>Watch live</strong>:</p>
+<ul><li>The user follows the current chapter or detaches and explores history.</li><li>New high-risk, failed, approval, and verification events create quiet markers;<br>they do not steal focus while detached.</li><li>Capture coverage is visible immediately.</li><li>The result card remains provisional until the session closes.</li></ul>
+<h2 id="domain-neutral-event-and-evidence-model">Domain-neutral event and evidence model</h2>
+<p>The existing <code>task_events</code> ledger and blob store remain the source of truth.<br>V3 adds optional normalized facts rather than a second replay database.</p>
+<div class="code-block"><span class="code-block__lang">ts</span><button class="copy-code" type="button">复制</button><pre><code class="language-ts">interface ReplayFact {
+  id: string;
+  span: { startedAt: string; endedAt?: string };
+  actor: { id: string; kind: &#39;user&#39; | &#39;agent&#39; | &#39;application&#39; | &#39;system&#39; };
+  action: string;
+  target?: { type: string; label: string; app?: string; resource?: string };
+  result?: { status: string; summary?: string };
+  relations?: Array&lt;{ type: &#39;requested-by&#39; | &#39;produced&#39; | &#39;verified-by&#39;; id: string }&gt;;
+  risk?: &#39;none&#39; | &#39;low&#39; | &#39;medium&#39; | &#39;high&#39;;
+  reversibility?: &#39;reversible&#39; | &#39;compensatable&#39; | &#39;irreversible&#39; | &#39;unknown&#39;;
+  capture: &#39;full&#39; | &#39;structured&#39; | &#39;observed&#39;;
+  evidenceRefs: string[];
+}
+
+interface ReplayEvidence {
+  id: string;
+  type: string;
+  source: string;
+  capturedAt: string;
+  integrityHash?: string;
+  beforeRef?: string;
+  afterRef?: string;
+  previewAdapter?: string;
+  redactions?: Array&lt;{ reason: string }&gt;;
+}
+
+interface ReplayNarrative {
+  id: string;
+  kind: &#39;result&#39; | &#39;chapter&#39; | &#39;answer&#39;;
+  text: string;
+  citations: string[];
+  generatedAt: string;
+  model?: string;
+}</code></pre></div>
+<p>Facts and evidence are durable. Narratives are derived, versioned, cited, and<br>replaceable.</p>
+<h2 id="how-a-e-survive-without-becoming-five-modes">How A–E survive without becoming five modes</h2>
+<table><thead><tr><th>Previous direction</th><th>Retained strength</th><th>New home</th></tr></thead><tbody><tr><td>A cinematic</td><td>Playback, stage, before/after, chapters</td><td>Recap default</td></tr><tr><td>B causal</td><td>Inputs, decisions, outputs, relationships</td><td>Explicit context links and timeline relations</td></tr><tr><td>C spatial</td><td>Cross-application awareness</td><td>App lanes, artifact renderer, and app filter</td></tr><tr><td>D documentary</td><td>Dense event list, filters, inspector</td><td>Explore depth</td></tr><tr><td>E audit</td><td>Evidence, approvals, checkpoints, rollback</td><td>Verify depth and evidence receipt</td></tr></tbody></table>
+<p>No prior work is discarded. The conceptual boundaries stop being navigation.</p>
+<h2 id="visual-direction">Visual direction</h2>
+<p>Keep Charter&#39;s current warm, calm shell and typography. The artifact stage may<br>remain dark when it improves document/code contrast, but the surrounding UI is<br>quiet and domain-neutral.</p>
+<ul><li>Blue: current selection and recorded structured evidence.</li><li>Green: verified result, never merely “agent said success”.</li><li>Amber: observed or attention needed.</li><li>Red: failed, denied, irreversible, or policy violation.</li><li>Gray: missing evidence and folded idle time.</li></ul>
+<p>Motion is functional: playhead movement, chapter transition, artifact version<br>change, and drawer expansion. There are no decorative orbits, simulated rooms,<br>or causal lines without recorded relationships.</p>
+<p>At 1440px the layout uses chapter rail + stage + evidence drawer. At 1024px the<br>chapter rail becomes a horizontal strip and the evidence drawer overlays. At<br>mobile width, Recap becomes a vertical result/story feed; Verify remains a<br>sheet. Keyboard navigation, reduced motion, high contrast, and screen-reader<br>announcements are first-class acceptance criteria.</p>
+<h2 id="implementation-path">Implementation path</h2>
+<h3 id="pass-1-fix-the-product-structure">Pass 1 — fix the product structure</h3>
+<ul><li>Replace A–E navigation with Recap, Explore, and contextual Verify depth.</li><li>Add the session contract and result card.</li><li>Convert numeric confidence to categorical evidence levels.</li><li>Replace session-global grade presentation with per-event coverage segments.</li><li>Preserve the current playhead across all depths.</li><li>Reuse A stage, D inspector, and E evidence table components.</li></ul>
+<h3 id="pass-2-make-it-truly-domain-neutral">Pass 2 — make it truly domain-neutral</h3>
+<ul><li>Introduce the artifact renderer registry.</li><li>Ship file/code, generic document, terminal, message, web/source, spreadsheet,<br>and approval renderers.</li><li>Replace count-sampled chapters with semantic chapter ranking.</li><li>Add question-shaped filters and virtualized long-run exploration.</li></ul>
+<h3 id="pass-3-trust-and-collaboration">Pass 3 — trust and collaboration</h3>
+<ul><li>Add cited “Ask this replay”.</li><li>Add live Watch mode.</li><li>Add immutable shareable evidence receipts and redaction policy display.</li><li>Add explicit relation capture from Pi, MCP, Claude/Codex structured streams,<br>and application connectors.</li></ul>
+<h2 id="acceptance-criteria">Acceptance criteria</h2>
+<ol><li>A first-time user can state the result, important changes, and remaining risk<br>after ten seconds on the opening frame.</li><li>A 30-minute run produces a useful recap no longer than 90 seconds without<br>skipping any failure, approval, irreversible action, or verification result.</li><li>Any result-card claim reaches its evidence in at most three interactions.</li><li>No UI edge claims causality unless an explicit relationship id supports it.</li><li>No numeric confidence appears unless it is calibrated and defined; coverage<br>percentages remain clearly labeled as coverage.</li><li>A mixed-capture session shows its evidence level per event and per timeline<br>interval.</li><li>Plain Claude/Codex TUI runs never appear semantically equivalent to Pi or a<br>structured provider stream.</li><li>The same screen successfully replays a code edit, research report,<br>spreadsheet update, email/calendar workflow, and approval/purchase workflow.</li><li>Ten thousand events remain searchable and scrubbable without blocking the<br>renderer.</li><li>All generated summaries and replay answers cite durable evidence and admit<br>when the ledger cannot answer.</li></ol>
+<h2 id="final-product-decision">Final product decision</h2>
+<p>The perfect direction is not A, D, E plus advanced B/C tabs. It is one story<br>whose depth changes with the user&#39;s question:</p>
+<ul><li><strong>Recap is the front door.</strong></li><li><strong>Explore is the microscope.</strong></li><li><strong>Verify is the receipt.</strong></li></ul>
+<p>A–E become reusable visual instruments inside that journey. The evidence ledger<br>remains singular, and the interface never asks the user to understand the<br>design taxonomy that produced it.</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

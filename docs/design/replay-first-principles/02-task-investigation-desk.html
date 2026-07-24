@@ -1,0 +1,1314 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Replay 方案 B — 任务调查台</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --chrome: #151a1c;
+        --chrome-2: #1d2427;
+        --chrome-line: #30383b;
+        --paper: #fffefa;
+        --folio: #f2f0e9;
+        --ink: #1d211f;
+        --muted: #68706c;
+        --faint: #929791;
+        --line: #d8d5cc;
+        --line-dark: #bdbbb3;
+        --teal: #0a6e60;
+        --teal-soft: #e7f2ee;
+        --rust: #a34d29;
+        --rust-soft: #f7ebe4;
+        --blue: #3068c9;
+        --rail: 310px;
+        --evidence: 408px;
+        font-family:
+          Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        font-synthesis: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--chrome);
+        color: var(--ink);
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 2px solid #58a89c;
+        outline-offset: 2px;
+      }
+
+      .sprite {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+
+      .icon {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.65;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .icon.sm {
+        width: 14px;
+        height: 14px;
+      }
+
+      .icon.lg {
+        width: 20px;
+        height: 20px;
+      }
+
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-rows: 62px minmax(0, 1fr);
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: var(--rail) minmax(0, 1fr) var(--evidence);
+        align-items: center;
+        border-bottom: 1px solid var(--chrome-line);
+        background: var(--chrome);
+        color: #f1f3f1;
+      }
+
+      .back-button,
+      .top-action,
+      .close-button {
+        border: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+      }
+
+      .back-button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: max-content;
+        margin-left: 24px;
+        padding: 8px 5px;
+        color: #d8ddda;
+        font-size: 12px;
+      }
+
+      .back-button:hover,
+      .top-action:hover,
+      .close-button:hover {
+        color: white;
+      }
+
+      .titlebar-name {
+        min-width: 0;
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        padding-left: 30px;
+      }
+
+      .titlebar-name strong {
+        font-size: 15px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .titlebar-name span {
+        min-width: 0;
+        padding-left: 14px;
+        border-left: 1px solid #4b5355;
+        overflow: hidden;
+        color: #c1c7c4;
+        font-size: 12px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        padding-right: 18px;
+      }
+
+      .top-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        color: #dce1de;
+        font-size: 11.5px;
+      }
+
+      .close-button {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        color: #aeb6b2;
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: var(--rail) minmax(0, 1fr) var(--evidence);
+      }
+
+      .investigation-rail {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+        border-right: 1px solid var(--chrome-line);
+        background: var(--chrome);
+        color: #e9ecea;
+      }
+
+      .rail-section {
+        padding: 21px 18px 0;
+      }
+
+      .rail-section + .rail-section {
+        margin-top: 20px;
+        padding-top: 21px;
+        border-top: 1px solid var(--chrome-line);
+      }
+
+      .rail-section h2 {
+        margin: 0 0 13px;
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        color: #c6cdca;
+      }
+
+      .ask-form {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 34px;
+        gap: 6px;
+        margin-bottom: 14px;
+      }
+
+      .ask-field {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 36px;
+        padding: 0 10px;
+        border: 1px solid #465053;
+        border-radius: 5px;
+        color: #9fa9a5;
+        background: #111618;
+      }
+
+      .ask-field input {
+        min-width: 0;
+        width: 100%;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: white;
+        font-size: 11px;
+      }
+
+      .ask-field input::placeholder {
+        color: #75807b;
+      }
+
+      .ask-submit {
+        display: grid;
+        place-items: center;
+        border: 1px solid #465053;
+        border-radius: 5px;
+        background: transparent;
+        color: #bcc5c1;
+        cursor: pointer;
+      }
+
+      .ask-submit:hover {
+        border-color: #70807a;
+        color: white;
+      }
+
+      .question-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .saved-question {
+        position: relative;
+        width: 100%;
+        min-height: 49px;
+        display: grid;
+        grid-template-columns: 24px minmax(0, 1fr);
+        gap: 10px;
+        align-items: center;
+        padding: 9px 11px;
+        border: 0;
+        border-radius: 5px;
+        background: transparent;
+        color: #cbd2cf;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .saved-question::before {
+        content: "";
+        position: absolute;
+        left: -1px;
+        top: 7px;
+        bottom: 7px;
+        width: 2px;
+        background: transparent;
+      }
+
+      .saved-question:hover {
+        background: #1d2427;
+        color: white;
+      }
+
+      .saved-question.active {
+        background: #293033;
+        color: white;
+      }
+
+      .saved-question.active::before {
+        background: #31b6a4;
+      }
+
+      .qmark {
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #89938f;
+        border-radius: 50%;
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .saved-question span:last-child {
+        overflow: hidden;
+        font-size: 11.5px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .checkpoint-list {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .checkpoint {
+        width: 100%;
+        min-height: 52px;
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        padding: 8px 10px;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        background: var(--chrome-2);
+        color: #d3d9d6;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .checkpoint:hover {
+        border-color: #455054;
+      }
+
+      .checkpoint.selected {
+        border-color: #2f8277;
+        box-shadow: inset 2px 0 #31b6a4;
+      }
+
+      .checkpoint .icon {
+        color: #94a19b;
+      }
+
+      .checkpoint strong,
+      .checkpoint small {
+        display: block;
+      }
+
+      .checkpoint strong {
+        margin-bottom: 3px;
+        font-size: 11px;
+      }
+
+      .checkpoint small {
+        color: #87918d;
+        font-size: 9px;
+      }
+
+      .checkpoint em {
+        display: grid;
+        place-items: center;
+        min-width: 25px;
+        height: 21px;
+        border: 1px solid #68736f;
+        border-radius: 4px;
+        color: #aab3af;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9px;
+        font-style: normal;
+      }
+
+      .compare-button {
+        width: 100%;
+        min-height: 40px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 8px;
+        border: 1px dashed #586461;
+        border-radius: 4px;
+        background: transparent;
+        color: #aab5b0;
+        font-size: 10.5px;
+        cursor: pointer;
+      }
+
+      .compare-button:hover {
+        border-color: #8b9994;
+        color: white;
+      }
+
+      .rail-help {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        margin: auto 24px 20px;
+        padding: 8px 0;
+        color: #87918d;
+        font-size: 10px;
+        text-decoration: none;
+      }
+
+      .case-file {
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        background: var(--paper);
+        box-shadow: inset -12px 0 22px -22px rgba(21, 26, 28, 0.38);
+      }
+
+      .case-inner {
+        width: min(100%, 850px);
+        margin: 0 auto;
+        padding: 27px 32px 54px;
+      }
+
+      .document-label {
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 9.5px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+      }
+
+      .case-title {
+        margin: 0;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: clamp(29px, 3vw, 43px);
+        line-height: 1.2;
+        letter-spacing: -0.035em;
+        font-weight: 650;
+      }
+
+      .verdict {
+        margin: 9px 0 18px;
+        padding-bottom: 18px;
+        border-bottom: 1px solid #aaa9a2;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: clamp(16px, 1.7vw, 21px);
+        line-height: 1.55;
+      }
+
+      .section-title {
+        margin: 20px 0 9px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+      }
+
+      .acceptance-matrix {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+      }
+
+      .acceptance-matrix th,
+      .acceptance-matrix td {
+        padding: 9px 11px;
+        border: 1px solid var(--line-dark);
+        text-align: left;
+        vertical-align: middle;
+      }
+
+      .acceptance-matrix th {
+        background: #f6f5f0;
+        font-weight: 650;
+      }
+
+      .acceptance-matrix th:last-child,
+      .acceptance-matrix td:last-child {
+        width: 34%;
+      }
+
+      .matrix-proof {
+        color: var(--teal);
+        font-weight: 650;
+      }
+
+      .matrix-gap {
+        color: var(--rust);
+        font-weight: 650;
+      }
+
+      .explanation {
+        padding-bottom: 17px;
+        border-bottom: 1px solid var(--line-dark);
+      }
+
+      .explanation p {
+        margin: 0 0 8px;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: 14px;
+        line-height: 1.8;
+      }
+
+      .citation {
+        display: inline-grid;
+        place-items: center;
+        min-width: 21px;
+        height: 20px;
+        margin-left: 3px;
+        padding: 0 3px;
+        border: 0;
+        border-bottom: 1px solid currentColor;
+        background: transparent;
+        color: var(--blue);
+        font-family: ui-sans-serif, sans-serif;
+        font-size: 10px;
+        cursor: pointer;
+        vertical-align: baseline;
+      }
+
+      .citation:hover {
+        background: #eaf0fb;
+      }
+
+      .comparison-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 19px 0 9px;
+      }
+
+      .comparison-heading h2 {
+        margin: 0;
+        font-size: 12px;
+      }
+
+      .comparison-heading small {
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9px;
+      }
+
+      .checkpoint-diff {
+        position: relative;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border: 1px solid var(--line-dark);
+        background: white;
+      }
+
+      .diff-pane + .diff-pane {
+        border-left: 1px solid var(--line-dark);
+      }
+
+      .diff-label {
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--line-dark);
+        background: #f4f3ee;
+        font-size: 10px;
+      }
+
+      .diff-label b {
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9px;
+      }
+
+      .code-line {
+        display: grid;
+        grid-template-columns: 35px minmax(0, 1fr);
+        min-height: 24px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9.5px;
+        line-height: 24px;
+      }
+
+      .code-line span:first-child {
+        padding-right: 8px;
+        border-right: 1px solid #e3e1da;
+        color: #989b96;
+        text-align: right;
+      }
+
+      .code-line code {
+        min-width: 0;
+        padding: 0 9px;
+        overflow: hidden;
+        white-space: pre;
+        text-overflow: ellipsis;
+      }
+
+      .code-line.removed {
+        background: #f9eae6;
+        color: #793c2a;
+      }
+
+      .code-line.added {
+        background: #e3f1ea;
+        color: #205e4e;
+      }
+
+      .annotation {
+        position: absolute;
+        right: 8px;
+        top: 113px;
+        max-width: 116px;
+        padding: 7px 9px;
+        border: 1px solid #2d7189;
+        border-radius: 4px;
+        background: white;
+        color: #315965;
+        font-size: 9px;
+        line-height: 1.4;
+      }
+
+      .annotation::before {
+        content: "";
+        position: absolute;
+        left: -18px;
+        top: 16px;
+        width: 18px;
+        height: 1px;
+        background: #2d7189;
+      }
+
+      .open-diff {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        margin-top: 10px;
+        padding: 6px 0;
+        border: 0;
+        background: transparent;
+        color: var(--blue);
+        font-size: 10.5px;
+        cursor: pointer;
+      }
+
+      .open-diff:hover {
+        text-decoration: underline;
+      }
+
+      .evidence-folio {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+        border-left: 1px solid var(--line-dark);
+        background: var(--folio);
+      }
+
+      .folio-scroll {
+        min-height: 0;
+        padding: 21px 22px 24px;
+        overflow: auto;
+      }
+
+      .folio-scroll > h2 {
+        margin: 0 0 14px;
+        font-size: 12px;
+      }
+
+      .evidence-card {
+        position: relative;
+        margin-bottom: 11px;
+        padding: 12px 12px 11px;
+        border: 1px solid #c7c4bb;
+        background: rgba(255, 255, 255, 0.55);
+        transition: 140ms ease;
+      }
+
+      .evidence-card.highlight {
+        border-color: var(--teal);
+        box-shadow: 0 0 0 2px rgba(10, 110, 96, 0.12);
+      }
+
+      .evidence-card-head {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+
+      .source-number {
+        display: grid;
+        place-items: center;
+        width: 23px;
+        height: 25px;
+        background: var(--teal);
+        color: white;
+        font-family: Georgia, serif;
+        font-size: 13px;
+      }
+
+      .evidence-card-head strong {
+        overflow: hidden;
+        font-size: 11.5px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .source-open {
+        min-height: 28px;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 0 8px;
+        border: 1px solid #9d9c96;
+        border-radius: 4px;
+        background: transparent;
+        font-size: 9px;
+        cursor: pointer;
+      }
+
+      .source-open:hover {
+        background: white;
+      }
+
+      .source-meta {
+        display: grid;
+        grid-template-columns: 62px minmax(0, 1fr);
+        gap: 5px 8px;
+        margin: 0;
+        font-size: 9px;
+      }
+
+      .source-meta dt {
+        color: var(--muted);
+      }
+
+      .source-meta dd {
+        min-width: 0;
+        margin: 0;
+        overflow: hidden;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .source-detail {
+        display: none;
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+        color: #52605a;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 8.8px;
+        line-height: 1.5;
+      }
+
+      .evidence-card.expanded .source-detail {
+        display: block;
+      }
+
+      .cannot-prove {
+        margin-top: 17px;
+        padding-top: 14px;
+        border-top: 1px solid #b87d63;
+      }
+
+      .cannot-prove h3 {
+        margin: 0 0 10px;
+        color: var(--rust);
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: 13px;
+      }
+
+      .unknown-row {
+        display: grid;
+        grid-template-columns: 27px minmax(0, 1fr);
+        gap: 9px;
+        align-items: start;
+        padding: 8px 0;
+      }
+
+      .unknown-icon {
+        width: 26px;
+        height: 26px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #c2b3ab;
+        color: var(--rust);
+      }
+
+      .unknown-row strong,
+      .unknown-row small {
+        display: block;
+      }
+
+      .unknown-row strong {
+        margin-bottom: 3px;
+        font-size: 10.5px;
+      }
+
+      .unknown-row small {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .folio-actions {
+        display: grid;
+        grid-template-columns: 1.35fr 1fr;
+        gap: 9px;
+        padding: 14px 18px;
+        border-top: 1px solid var(--line-dark);
+        background: #f7f5ef;
+      }
+
+      .button {
+        min-height: 39px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid #8e918d;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--ink);
+        font-size: 10.5px;
+        font-weight: 620;
+        cursor: pointer;
+      }
+
+      .button:hover {
+        background: white;
+      }
+
+      .button.primary {
+        border-color: var(--teal);
+        background: var(--teal);
+        color: white;
+      }
+
+      .button.primary:hover {
+        background: #075d52;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: none;
+        place-items: center;
+        padding: 20px;
+        background: rgba(9, 13, 14, 0.58);
+      }
+
+      .modal-backdrop.open {
+        display: grid;
+      }
+
+      .decision-modal {
+        width: min(460px, 100%);
+        border: 1px solid #777d79;
+        background: var(--paper);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 17px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .modal-head h2 {
+        margin: 0;
+        font-family: "Songti SC", "STSong", Georgia, serif;
+        font-size: 19px;
+      }
+
+      .modal-body {
+        padding: 17px 18px 20px;
+      }
+
+      .modal-body > p {
+        margin: 0 0 15px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .decision-choice {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 25px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        padding: 12px 0;
+        border: 0;
+        border-top: 1px solid var(--line);
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .decision-choice:hover strong {
+        color: var(--teal);
+      }
+
+      .decision-choice strong,
+      .decision-choice small {
+        display: block;
+      }
+
+      .decision-choice strong {
+        margin-bottom: 3px;
+        font-size: 11.5px;
+      }
+
+      .decision-choice small {
+        color: var(--muted);
+        font-size: 9.5px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        background: #101616;
+        color: white;
+        font-size: 10.5px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, 12px);
+        transition: 170ms ease;
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      @media (max-width: 1250px) {
+        :root {
+          --rail: 258px;
+          --evidence: 340px;
+        }
+
+        .case-inner {
+          padding-inline: 25px;
+        }
+
+        .annotation {
+          display: none;
+        }
+
+        .source-meta {
+          grid-template-columns: 54px minmax(0, 1fr);
+        }
+
+        .folio-scroll {
+          padding-inline: 16px;
+        }
+      }
+
+      @media (max-width: 940px) {
+        html,
+        body {
+          overflow: auto;
+        }
+
+        .app {
+          min-width: 720px;
+          height: auto;
+          min-height: 100%;
+        }
+
+        .topbar {
+          grid-template-columns: 220px minmax(0, 1fr) 260px;
+        }
+
+        .workspace {
+          grid-template-columns: 220px minmax(0, 1fr);
+        }
+
+        .evidence-folio {
+          grid-column: 1 / -1;
+          min-height: 560px;
+          border-top: 1px solid var(--line-dark);
+          border-left: 0;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.001ms !important;
+          animation-duration: 0.001ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7" /><path d="M8 12h12" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+      <symbol id="i-package" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" /><path d="m4 7.5 8 4.5 8-4.5M12 12v9" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m15.5 15.5 5 5" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4-6 4V3Z" /></symbol>
+      <symbol id="i-compare" viewBox="0 0 24 24"><path d="M8 4 4 8l4 4M4 8h14M16 20l4-4-4-4m4 4H6" /></symbol>
+      <symbol id="i-open" viewBox="0 0 24 24"><path d="M14 5h5v5m0-5-8 8" /><path d="M18 13v6H5V6h6" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v4.5M12 17.1v.1" /></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></symbol>
+      <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></symbol>
+      <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M5 7h14" /><path d="m5 7-3 6h6L5 7Zm14 0-3 6h6l-3-6Z" /></symbol>
+      <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4V5Z" /></symbol>
+    </svg>
+
+    <main class="app">
+      <header class="topbar">
+        <button class="back-button" data-toast="返回会话"><svg class="icon"><use href="#i-back" /></svg>返回会话</button>
+        <div class="titlebar-name"><strong>任务调查台</strong><span>修复登录态刷新与重试</span></div>
+        <div class="top-actions">
+          <button class="top-action" data-toast="审计包已生成：investigation-184.zip"><svg class="icon"><use href="#i-package" /></svg>生成审计包</button>
+          <button class="close-button" aria-label="关闭" data-toast="这是独立 Mock，关闭操作未连接宿主应用"><svg class="icon lg"><use href="#i-close" /></svg></button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="investigation-rail" aria-label="调查问题与检查点">
+          <section class="rail-section">
+            <h2>调查问题</h2>
+            <form class="ask-form" id="ask-form">
+              <label class="ask-field"><svg class="icon sm"><use href="#i-search" /></svg><input id="ask-input" placeholder="问这次任务…" /></label>
+              <button class="ask-submit" type="submit" aria-label="提问"><svg class="icon"><use href="#i-plus" /></svg></button>
+            </form>
+            <div class="question-list" id="question-list">
+              <button class="saved-question active" data-question="goal"><span class="qmark">?</span><span>目标真的完成了吗？</span></button>
+              <button class="saved-question" data-question="risks"><span class="qmark">?</span><span>有哪些风险还没排除？</span></button>
+              <button class="saved-question" data-question="why"><span class="qmark">?</span><span>为什么修改 refresh.ts？</span></button>
+              <button class="saved-question" data-question="tests"><span class="qmark">?</span><span>测试覆盖了哪些行为？</span></button>
+            </div>
+          </section>
+
+          <section class="rail-section">
+            <h2>检查点</h2>
+            <div class="checkpoint-list">
+              <button class="checkpoint selected" data-checkpoint="A1"><svg class="icon"><use href="#i-bookmark" /></svg><span><strong>开始</strong><small>12:19 · 原始状态</small></span><em>A1</em></button>
+              <button class="checkpoint" data-checkpoint="A2"><svg class="icon"><use href="#i-bookmark" /></svg><span><strong>首次实现</strong><small>13:08 · 测试仍失败</small></span><em>A2</em></button>
+              <button class="checkpoint selected" data-checkpoint="A3"><svg class="icon"><use href="#i-bookmark" /></svg><span><strong>最终结果</strong><small>14:32 · 18/18 通过</small></span><em>A3</em></button>
+            </div>
+            <button class="compare-button" id="compare-button"><svg class="icon"><use href="#i-compare" /></svg><span>对比 A1 与 A3</span></button>
+          </section>
+          <a class="rail-help" href="#" onclick="event.preventDefault()">如何提出好问题？<svg class="icon sm"><use href="#i-open" /></svg></a>
+        </aside>
+
+        <article class="case-file" aria-live="polite">
+          <div class="case-inner">
+            <div class="document-label">当前问题</div>
+            <h1 class="case-title" id="case-title">目标真的完成了吗？</h1>
+            <p class="verdict" id="verdict">核心目标已完成，但弱网场景仍缺少浏览器实测。</p>
+
+            <h2 class="section-title">验收矩阵</h2>
+            <table class="acceptance-matrix">
+              <thead><tr><th>验收标准</th><th>结论</th></tr></thead>
+              <tbody id="acceptance-body">
+                <tr><td>刷新失败不会无限重试</td><td class="matrix-proof">已证明</td></tr>
+                <tr><td>重试结束后返回可诊断错误</td><td class="matrix-proof">已证明</td></tr>
+                <tr><td>弱网下不会出现重复刷新</td><td class="matrix-gap">证据不足</td></tr>
+              </tbody>
+            </table>
+
+            <h2 class="section-title">因果说明</h2>
+            <div class="explanation" id="explanation">
+              <p>refresh.ts 将无限循环改为 5 次上限，并在达到上限后返回明确错误码 <button class="citation" data-evidence="1">[1]</button>。</p>
+              <p>相关行为被单元测试覆盖，共 18/18 通过，验证了重试上限与错误返回 <button class="citation" data-evidence="2">[2]</button>。</p>
+              <p>但记录中没有浏览器弱网实测，因此无法排除重复刷新的环境风险 <button class="citation" data-evidence="3">[3]</button>。</p>
+            </div>
+
+            <div class="comparison-heading"><h2 id="comparison-title">检查点对比：src/auth/refresh.ts（开始 → 最终结果）</h2><small id="comparison-range">A1 12:19 → A3 14:32</small></div>
+            <div class="checkpoint-diff">
+              <div class="diff-pane">
+                <div class="diff-label"><b id="diff-left-id">A1</b><span id="diff-left-name">开始</span></div>
+                <div class="code-line"><span>45</span><code>while (true) {</code></div>
+                <div class="code-line"><span>46</span><code>  try {</code></div>
+                <div class="code-line removed"><span>47</span><code>    return await doRefresh();</code></div>
+                <div class="code-line"><span>48</span><code>  } catch (e) {</code></div>
+                <div class="code-line removed"><span>49</span><code>    await wait(backoff(attempt++));</code></div>
+                <div class="code-line"><span>50</span><code>  }</code></div>
+                <div class="code-line"><span>51</span><code>}</code></div>
+              </div>
+              <div class="diff-pane">
+                <div class="diff-label"><b id="diff-right-id">A3</b><span id="diff-right-name">最终结果</span></div>
+                <div class="code-line added"><span>45</span><code>const MAX_RETRY = 5;</code></div>
+                <div class="code-line"><span>46</span><code>let attempt = 0;</code></div>
+                <div class="code-line added"><span>47</span><code>while (attempt &lt; MAX_RETRY) {</code></div>
+                <div class="code-line"><span>48</span><code>  try { return await doRefresh(); }</code></div>
+                <div class="code-line"><span>49</span><code>  catch (e) {</code></div>
+                <div class="code-line"><span>50</span><code>    await wait(backoff(attempt++));</code></div>
+                <div class="code-line added"><span>51</span><code>throw new RefreshError('MAX_RETRY');</code></div>
+              </div>
+              <div class="annotation">这里把无限循环改为 5 次上限</div>
+            </div>
+            <button class="open-diff" data-toast="已打开完整差异"><span>查看完整差异</span><svg class="icon sm"><use href="#i-open" /></svg></button>
+          </div>
+        </article>
+
+        <aside class="evidence-folio" aria-label="本回答使用的证据">
+          <div class="folio-scroll">
+            <h2>本回答使用的证据</h2>
+            <section class="evidence-card" data-source="1">
+              <div class="evidence-card-head"><span class="source-number">1</span><strong>代码差异</strong><button class="source-open">打开<svg class="icon sm"><use href="#i-open" /></svg></button></div>
+              <dl class="source-meta"><dt>来源</dt><dd>Git 仓库（私有）</dd><dt>证据 ID</dt><dd>diff://a1…a3/src/auth/refresh.ts</dd><dt>捕获时间</dt><dd>2026-07-17 14:29:13</dd><dt>完整性</dt><dd>SHA256: 9f7a…3c2d</dd></dl>
+              <div class="source-detail">+ const MAX_RETRY = 5<br />+ throw new RefreshError('MAX_RETRY')</div>
+            </section>
+            <section class="evidence-card" data-source="2">
+              <div class="evidence-card-head"><span class="source-number">2</span><strong>测试报告 18/18</strong><button class="source-open">打开<svg class="icon sm"><use href="#i-open" /></svg></button></div>
+              <dl class="source-meta"><dt>来源</dt><dd>本地测试运行</dd><dt>证据 ID</dt><dd>run://184/tests/report</dd><dt>捕获时间</dt><dd>2026-07-17 14:25:32</dd><dt>完整性</dt><dd>SHA256: b1e2…7a91</dd></dl>
+              <div class="source-detail">18 passed · 0 failed · 2.41s<br />retry limit / backoff / diagnostic error</div>
+            </section>
+            <section class="evidence-card" data-source="3">
+              <div class="evidence-card-head"><span class="source-number">3</span><strong>任务账本 #184</strong><button class="source-open">打开<svg class="icon sm"><use href="#i-open" /></svg></button></div>
+              <dl class="source-meta"><dt>来源</dt><dd>Charter 任务账本</dd><dt>证据 ID</dt><dd>ledger://task/184</dd><dt>捕获时间</dt><dd>2026-07-17 14:27:12</dd><dt>完整性</dt><dd>SHA256: c4d9…8f13</dd></dl>
+              <div class="source-detail">Boundary recorded: no browser weak-network session was captured.</div>
+            </section>
+
+            <section class="cannot-prove">
+              <h3>记录不能证明</h3>
+              <div class="unknown-row"><span class="unknown-icon"><svg class="icon sm"><use href="#i-globe" /></svg></span><span><strong>浏览器弱网实测</strong><small>未发现相关证据。</small></span></div>
+              <div class="unknown-row"><span class="unknown-icon"><svg class="icon sm"><use href="#i-user" /></svg></span><span><strong>用户真实会话行为</strong><small>未发现相关证据。</small></span></div>
+            </section>
+          </div>
+          <div class="folio-actions">
+            <button class="button primary" id="decide"><svg class="icon"><use href="#i-scale" /></svg>基于这些证据做决定</button>
+            <button class="button" id="continue-ask"><svg class="icon"><use href="#i-chat" /></svg>继续追问</button>
+          </div>
+        </aside>
+      </section>
+    </main>
+
+    <div class="modal-backdrop" id="decision-modal" role="dialog" aria-modal="true" aria-labelledby="decision-title">
+      <section class="decision-modal">
+        <header class="modal-head"><h2 id="decision-title">你准备如何处理？</h2><button class="close-button" id="modal-close" aria-label="关闭"><svg class="icon"><use href="#i-close" /></svg></button></header>
+        <div class="modal-body">
+          <p>调查结论显示核心目标已完成，但浏览器弱网场景仍缺直接证据。选择不会被伪装成自动决定。</p>
+          <button class="decision-choice" data-decision="已接受变更"><svg class="icon"><use href="#i-check" /></svg><span><strong>接受当前变更</strong><small>接受已证明的结果，并保留证据边界。</small></span></button>
+          <button class="decision-choice" data-decision="已请求补充弱网验证"><svg class="icon"><use href="#i-alert" /></svg><span><strong>要求补充弱网验证</strong><small>把未证明项转成下一条明确任务。</small></span></button>
+          <button class="decision-choice" data-decision="继续调查"><svg class="icon"><use href="#i-search" /></svg><span><strong>暂不决定，继续调查</strong><small>回到问题列表，查看更多记录。</small></span></button>
+        </div>
+      </section>
+    </div>
+
+    <div class="toast" role="status"><svg class="icon sm"><use href="#i-check" /></svg><span></span></div>
+
+    <script>
+      const cases = {
+        goal: {
+          title: '目标真的完成了吗？',
+          verdict: '核心目标已完成，但弱网场景仍缺少浏览器实测。',
+          matrix: [['刷新失败不会无限重试', '已证明', 'proof'], ['重试结束后返回可诊断错误', '已证明', 'proof'], ['弱网下不会出现重复刷新', '证据不足', 'gap']],
+          explanation: ['refresh.ts 将无限循环改为 5 次上限，并在达到上限后返回明确错误码', '相关行为被单元测试覆盖，共 18/18 通过，验证了重试上限与错误返回', '但记录中没有浏览器弱网实测，因此无法排除重复刷新的环境风险'],
+        },
+        risks: {
+          title: '有哪些风险还没排除？',
+          verdict: '剩余风险集中在真实网络环境，而不是当前单元测试覆盖的代码路径。',
+          matrix: [['无限重试导致请求堆积', '已排除', 'proof'], ['弱网下并发刷新竞争', '尚未证明', 'gap'], ['不同浏览器的定时器行为', '尚未证明', 'gap']],
+          explanation: ['代码层面的退出条件已被直接差异证明', '18 项测试覆盖模拟错误与退避，但没有真实浏览器调度', '账本明确记录了这一证据边界，系统没有把缺失测试解释成通过'],
+        },
+        why: {
+          title: '为什么修改 refresh.ts？',
+          verdict: '因为问题的退出条件就在 refresh.ts；其调用方只消费结果，不拥有重试循环。',
+          matrix: [['问题位置与修改位置一致', '已证明', 'proof'], ['调用方接口保持兼容', '已证明', 'proof'], ['5 次是否是长期最优值', '尚未证明', 'gap']],
+          explanation: ['复现日志把持续请求定位到 refreshWithRetry 内部', '调用关系显示 refresh.ts 是重试状态的唯一拥有者', 'Agent 根据 10 秒失败预算选择 5 次，但没有声称该值对所有环境最优'],
+        },
+        tests: {
+          title: '测试覆盖了哪些行为？',
+          verdict: '自动化测试覆盖了重试上限、退避和错误返回；没有覆盖真实浏览器弱网会话。',
+          matrix: [['达到 5 次后停止', '18/18 通过', 'proof'], ['返回 REFRESH_FAILED_MAX_RETRY', '18/18 通过', 'proof'], ['真实弱网与多标签页竞争', '未覆盖', 'gap']],
+          explanation: ['测试报告列出了 retry limit、backoff 与 diagnostic error 三类断言', '报告与最终提交来自同一检查点，避免旧报告误配新代码', '没有浏览器或多标签页证据，因此这部分保持未知'],
+        },
+        custom: {
+          title: '按顺序发生了什么？',
+          verdict: '请求、复现、决定、修改、验证和结果共形成 6 个检查点；其余重复读取已折叠。',
+          matrix: [['请求与目标', '12:19 已记录', 'proof'], ['关键决定与修改', '12:26–12:29 已记录', 'proof'], ['验证与结果', '14:25–14:32 已记录', 'proof']],
+          explanation: ['用户先要求修复无限刷新并保留诊断信息', 'Agent 复现后根据失败预算选择 5 次上限，随后修改 refresh.ts', '18 项测试通过后形成结果，并明确保留弱网实测边界'],
+        },
+      };
+
+      const title = document.querySelector('#case-title');
+      const verdict = document.querySelector('#verdict');
+      const matrix = document.querySelector('#acceptance-body');
+      const explanation = document.querySelector('#explanation');
+      const questionList = document.querySelector('#question-list');
+      const evidenceCards = [...document.querySelectorAll('.evidence-card')];
+      const checkpointButtons = [...document.querySelectorAll('.checkpoint')];
+      const compareButton = document.querySelector('#compare-button');
+      const toast = document.querySelector('.toast');
+      const modal = document.querySelector('#decision-modal');
+      let selectedCheckpoints = ['A1', 'A3'];
+
+      function renderCase(key, customTitle) {
+        const item = cases[key] || cases.custom;
+        title.textContent = customTitle || item.title;
+        verdict.textContent = customTitle && key === 'custom' ? '记录只能确认与现有证据直接相关的部分；下面的回答不会补写未记录的原因。' : item.verdict;
+        matrix.innerHTML = item.matrix.map(([criterion, result, kind]) => `<tr><td>${criterion}</td><td class="matrix-${kind}">${result}</td></tr>`).join('');
+        explanation.innerHTML = item.explanation.map((line, index) => `<p>${line} <button class="citation" data-evidence="${index + 1}">[${index + 1}]</button>。</p>`).join('');
+        bindCitations();
+      }
+
+      function selectQuestion(button) {
+        document.querySelectorAll('.saved-question').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        renderCase(button.dataset.question, button.dataset.customTitle);
+      }
+
+      function bindCitations() {
+        document.querySelectorAll('.citation').forEach((citation) => citation.addEventListener('click', () => {
+          evidenceCards.forEach((card) => card.classList.toggle('highlight', card.dataset.source === citation.dataset.evidence));
+          const target = evidenceCards.find((card) => card.dataset.source === citation.dataset.evidence);
+          target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          window.setTimeout(() => target?.classList.remove('highlight'), 1800);
+        }));
+      }
+
+      function updateCompare() {
+        const ordered = checkpointButtons.filter((button) => selectedCheckpoints.includes(button.dataset.checkpoint));
+        checkpointButtons.forEach((button) => button.classList.toggle('selected', selectedCheckpoints.includes(button.dataset.checkpoint)));
+        if (ordered.length !== 2) {
+          compareButton.querySelector('span').textContent = '请选择两个检查点';
+          return;
+        }
+        const [left, right] = ordered;
+        compareButton.querySelector('span').textContent = `对比 ${left.dataset.checkpoint} 与 ${right.dataset.checkpoint}`;
+        document.querySelector('#diff-left-id').textContent = left.dataset.checkpoint;
+        document.querySelector('#diff-left-name').textContent = left.querySelector('strong').textContent;
+        document.querySelector('#diff-right-id').textContent = right.dataset.checkpoint;
+        document.querySelector('#diff-right-name').textContent = right.querySelector('strong').textContent;
+        document.querySelector('#comparison-title').textContent = `检查点对比：src/auth/refresh.ts（${left.querySelector('strong').textContent} → ${right.querySelector('strong').textContent}）`;
+        document.querySelector('#comparison-range').textContent = `${left.dataset.checkpoint} → ${right.dataset.checkpoint}`;
+      }
+
+      function showToast(message) {
+        toast.querySelector('span').textContent = message;
+        toast.classList.add('show');
+        window.setTimeout(() => toast.classList.remove('show'), 1900);
+      }
+
+      questionList.addEventListener('click', (event) => {
+        const button = event.target.closest('.saved-question');
+        if (button) selectQuestion(button);
+      });
+
+      document.querySelector('#ask-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const input = document.querySelector('#ask-input');
+        const value = input.value.trim();
+        if (!value) return;
+        const button = document.createElement('button');
+        button.className = 'saved-question';
+        button.dataset.question = 'custom';
+        button.dataset.customTitle = value;
+        button.innerHTML = `<span class="qmark">?</span><span></span>`;
+        button.querySelector('span:last-child').textContent = value;
+        questionList.appendChild(button);
+        input.value = '';
+        selectQuestion(button);
+      });
+
+      checkpointButtons.forEach((button) => button.addEventListener('click', () => {
+        const id = button.dataset.checkpoint;
+        if (selectedCheckpoints.includes(id)) selectedCheckpoints = selectedCheckpoints.filter((item) => item !== id);
+        else selectedCheckpoints = [...selectedCheckpoints.slice(-1), id];
+        updateCompare();
+      }));
+
+      compareButton.addEventListener('click', () => {
+        updateCompare();
+        document.querySelector('.checkpoint-diff').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+
+      document.querySelectorAll('.source-open').forEach((button) => button.addEventListener('click', () => {
+        const card = button.closest('.evidence-card');
+        card.classList.toggle('expanded');
+        button.firstChild.textContent = card.classList.contains('expanded') ? '收起' : '打开';
+      }));
+
+      document.querySelectorAll('[data-toast]').forEach((button) => button.addEventListener('click', () => showToast(button.dataset.toast)));
+      document.querySelector('#continue-ask').addEventListener('click', () => document.querySelector('#ask-input').focus());
+      document.querySelector('#decide').addEventListener('click', () => modal.classList.add('open'));
+      document.querySelector('#modal-close').addEventListener('click', () => modal.classList.remove('open'));
+      modal.addEventListener('click', (event) => { if (event.target === modal) modal.classList.remove('open'); });
+      document.querySelectorAll('.decision-choice').forEach((button) => button.addEventListener('click', () => {
+        modal.classList.remove('open');
+        showToast(button.dataset.decision);
+      }));
+      window.addEventListener('keydown', (event) => { if (event.key === 'Escape') modal.classList.remove('open'); });
+      bindCitations();
+    </script>
+  </body>
+</html>

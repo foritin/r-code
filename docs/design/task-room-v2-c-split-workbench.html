@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Task Room V2 · 分栏工作台式</title>
+    <link rel="stylesheet" href="./task-room-v2-shared.css" />
+    <style>
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto;
+      }
+
+      .workbench {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(360px, 0.78fr) minmax(560px, 1.22fr);
+      }
+
+      .conversation-pane,
+      .review-pane {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: 50px minmax(0, 1fr) auto;
+      }
+
+      .conversation-pane {
+        border-right: 1px solid var(--border);
+        background: var(--bg-soft);
+      }
+
+      .review-pane {
+        background: var(--bg-card);
+      }
+
+      .pane-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .pane-head h2 {
+        margin: 0;
+        font-size: 13px;
+      }
+
+      .pane-head span {
+        color: var(--fg-subtle);
+        font-size: 11px;
+      }
+
+      .thread-scroll,
+      .review-scroll {
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .thread-scroll {
+        padding: 24px 20px;
+      }
+
+      .thread {
+        display: grid;
+        gap: 22px;
+      }
+
+      .thread-turn {
+        width: 88%;
+      }
+
+      .thread-turn.user {
+        justify-self: start;
+      }
+
+      .thread-turn.agent {
+        justify-self: end;
+      }
+
+      .thread-speaker {
+        margin-bottom: 6px;
+        color: var(--fg-subtle);
+        font-size: 11px;
+        font-weight: 750;
+      }
+
+      .thread-turn.agent .thread-speaker {
+        text-align: right;
+      }
+
+      .thread-message {
+        border-radius: 4px 13px 13px 13px;
+        padding: 13px 15px;
+        background: #e9e6df;
+        font-size: 14px;
+        line-height: 1.68;
+      }
+
+      .thread-turn.agent .thread-message {
+        border: 1px solid var(--border);
+        border-radius: 13px 4px 13px 13px;
+        background: var(--bg-card);
+      }
+
+      .thread-message strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+
+      .thread .acceptance-note {
+        width: 92%;
+        font-size: 12px;
+      }
+
+      .thread-summary {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px 12px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .thread-summary b {
+        color: var(--fg);
+      }
+
+      .conversation-compose {
+        padding: 12px 16px 16px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-soft);
+      }
+
+      .review-scroll {
+        padding: 26px clamp(22px, 3vw, 44px);
+      }
+
+      .review-lead {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 22px;
+      }
+
+      .review-lead h1 {
+        margin: 0;
+        font-size: 24px;
+        letter-spacing: -0.03em;
+      }
+
+      .review-lead p {
+        margin: 7px 0 0;
+        color: var(--fg-muted);
+        line-height: 1.6;
+      }
+
+      .review-badge {
+        flex: none;
+        border-radius: 8px;
+        padding: 9px 11px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .file-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 10px;
+        padding: 8px 3px;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .file-strip strong {
+        color: var(--fg);
+      }
+
+      .review-note {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        margin-top: 18px;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--border);
+      }
+
+      .review-note div {
+        min-height: 84px;
+        padding: 13px;
+        background: var(--bg-soft);
+      }
+
+      .review-note span {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--fg-subtle);
+        font-size: 11px;
+        font-weight: 720;
+      }
+
+      .review-note strong {
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .review-actions {
+        min-height: 66px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 11px 20px;
+        border-top: 1px solid var(--border);
+        background: var(--bg-card);
+      }
+
+      .review-actions p {
+        margin: 0;
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .review-actions-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .accepted-note {
+        color: var(--success);
+        font-weight: 720;
+      }
+
+      .activity-dock {
+        border-top: 1px solid var(--border-strong);
+        background: #252621;
+        color: #f0efe9;
+      }
+
+      .dock-head {
+        min-height: 42px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 0 18px;
+      }
+
+      .dock-head strong {
+        font-size: 12px;
+        letter-spacing: 0.02em;
+      }
+
+      .dock-head button {
+        min-height: 30px;
+        border: 0;
+        padding: 0 5px;
+        background: transparent;
+        color: #c8c7bf;
+        cursor: pointer;
+        font-size: 12px;
+      }
+
+      .dock-body {
+        display: grid;
+        grid-template-columns: minmax(300px, 1.35fr) repeat(3, minmax(150px, 0.7fr));
+        border-top: 1px solid #45463f;
+      }
+
+      .dock-cell {
+        min-width: 0;
+        min-height: 104px;
+        padding: 14px 16px;
+        border-left: 1px solid #45463f;
+      }
+
+      .dock-cell:first-child {
+        border-left: 0;
+      }
+
+      .dock-cell span {
+        display: block;
+        margin-bottom: 8px;
+        color: #aaa99f;
+        font-size: 10px;
+        font-weight: 740;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .dock-cell p {
+        margin: 0;
+        overflow-wrap: anywhere;
+        color: #e2e1da;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .dock-cell.thought p {
+        color: #d8e6fa;
+        font-style: italic;
+      }
+
+      .dock-state {
+        margin-top: 9px;
+        color: #78c698;
+        font-size: 11px;
+        font-weight: 720;
+      }
+
+      .dock-state.warn {
+        color: #e3b266;
+      }
+
+      .dock-usage {
+        color: #aaa99f;
+        font: 10px/1.5 var(--font-mono);
+      }
+
+      @media (max-width: 920px) {
+        body {
+          overflow: auto;
+        }
+
+        .app {
+          height: auto;
+          min-height: 100%;
+        }
+
+        .workspace,
+        .workbench {
+          display: block;
+        }
+
+        .conversation-pane,
+        .review-pane {
+          min-height: 640px;
+          border: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .dock-body {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .dock-cell:nth-child(3) {
+          border-left: 0;
+          border-top: 1px solid #45463f;
+        }
+
+        .dock-cell:nth-child(4) {
+          border-top: 1px solid #45463f;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .thread-turn,
+        .thread .acceptance-note {
+          width: 100%;
+        }
+
+        .review-lead,
+        .review-actions {
+          align-items: stretch;
+          flex-direction: column;
+        }
+
+        .review-note,
+        .dock-body {
+          display: block;
+        }
+
+        .review-note div,
+        .dock-cell {
+          min-height: 0;
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .review-note div:first-child,
+        .dock-cell:first-child {
+          border-top: 0;
+        }
+
+        .review-actions-buttons {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="titlebar">
+        <div class="titlebar-main">
+          <span class="brand">CHARTER</span>
+          <span class="task-title">调整提交按钮与优惠券过期提示</span>
+        </div>
+        <div class="titlebar-actions">
+          <div class="status-chip"><span data-status-text>等待审阅</span></div>
+          <div class="project-chip">fable5</div>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <div class="workbench">
+          <section class="conversation-pane" aria-labelledby="conversation-title-c">
+            <header class="pane-head">
+              <h2 id="conversation-title-c">对话</h2>
+              <span>任务上下文</span>
+            </header>
+            <div class="thread-scroll">
+              <div class="thread">
+                <section class="thread-turn user">
+                  <div class="thread-speaker">你</div>
+                  <div class="thread-message">
+                    把「提交订单」按钮底色改成绿色（#2f9e63），优惠券过期提示加一条红色左边框。只改
+                    public/index.html。
+                  </div>
+                </section>
+
+                <div class="acceptance-note">
+                  <span><strong>验收条件未提供。</strong> 当前按任务描述检查改动。</span>
+                </div>
+
+                <section class="thread-turn agent">
+                  <div class="thread-speaker">Charter</div>
+                  <div class="thread-message">
+                    <strong>修改完成，可以开始审阅。</strong>
+                    提交按钮已改为绿色，优惠券过期提示增加红色左边框，改动仅涉及目标文件。
+                    <div class="thread-summary">
+                      <span>修改文件</span><b>1</b>
+                      <span>代码变化</span><b><span class="success">+5</span> / <span class="danger">−2</span></b>
+                      <span>自动验证</span><b class="warning">未运行</b>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+            <div class="conversation-compose">
+              <div class="composer">
+                <textarea id="composer-c" rows="1" aria-label="继续修改" placeholder="继续修改这个任务…"></textarea>
+                <button class="primary" type="button">发送</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="review-pane" aria-labelledby="review-title-c">
+            <header class="pane-head">
+              <h2 id="review-title-c">改动审阅</h2>
+              <span class="mono">public/index.html</span>
+            </header>
+            <div class="review-scroll">
+              <div class="review-lead">
+                <div>
+                  <h1>一个聚焦、可直接判断的 Diff</h1>
+                  <p>右侧始终展示结果，左侧对话不会把代码审阅推到首屏之外。</p>
+                </div>
+                <div class="review-badge">自动验证未运行</div>
+              </div>
+
+              <div class="file-strip">
+                <strong class="mono">public/index.html</strong>
+                <span><span class="success">+5</span> <span class="danger">−2</span></span>
+              </div>
+              <div class="diff">
+                <pre class="diff-code"><span class="diff-line">:root {</span><span class="diff-line remove">-  --primary: #c56b32;</span><span class="diff-line add">+  --success: #2f9e63;</span><span class="diff-line add">+  --danger: #c4453d;</span><span class="diff-line">}</span><span class="diff-line"> </span><span class="diff-line add">+  .coupon-hint { border-left: 3px solid var(--danger); }</span><span class="diff-line add">+  .submit-btn { background: var(--success); }</span><span class="diff-line add">+  .submit-btn:hover { background: #278653; }</span></pre>
+              </div>
+
+              <div class="review-note">
+                <div><span>任务覆盖</span><strong>按钮成功色与过期提示边框均已修改</strong></div>
+                <div><span>范围</span><strong>仅修改允许的一个文件</strong></div>
+                <div><span>风险</span><strong class="warning">需要人工确认视觉效果</strong></div>
+              </div>
+            </div>
+            <footer class="review-actions">
+              <p data-after-accept hidden class="accepted-note">改动已接受，仍可回滚。</p>
+              <p>接受前可继续提要求，结果与对话保持并排。</p>
+              <div class="review-actions-buttons">
+                <button class="secondary" type="button" data-focus="composer-c">继续修改</button>
+                <button class="primary" type="button" data-accept>接受改动</button>
+              </div>
+            </footer>
+          </section>
+        </div>
+
+        <section class="activity-dock" aria-label="运行详情">
+          <div class="dock-head">
+            <strong>运行详情 · 4 项 · 56 秒</strong>
+            <button type="button" data-toggle="dock-c" aria-controls="dock-c" aria-expanded="true">显示 / 隐藏详情</button>
+          </div>
+          <div class="dock-body" id="dock-c">
+            <div class="dock-cell thought">
+              <span>Thought · 3 秒</span>
+              <p>我先读取目标文件，确认当前按钮与优惠券提示的样式定义，再做最小范围修改。</p>
+            </div>
+            <div class="dock-cell">
+              <span>读取</span>
+              <p class="mono">public/index.html</p>
+              <div class="dock-state">完成 · 3.8 秒</div>
+            </div>
+            <div class="dock-cell">
+              <span>计划</span>
+              <p>2 步，已自动批准</p>
+              <div class="dock-state">完成</div>
+            </div>
+            <div class="dock-cell">
+              <span>验证与用量</span>
+              <p>未运行验证命令</p>
+              <div class="dock-state warn">待人工审阅</div>
+              <div class="dock-usage">2.1k / 663 · $0.0224</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="./task-room-v2-shared.js"></script>
+  </body>
+</html>

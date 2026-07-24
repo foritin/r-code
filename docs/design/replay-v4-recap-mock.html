@@ -1,0 +1,756 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay 完善概念稿 · Recap（mock，非实现）</title>
+<style>
+  /* ---- product theme tokens (light warm) + replay evidence palette ---- */
+  :root {
+    --bg-editor: #fbfaf7;
+    --bg-card: #ffffff;
+    --border: #e5e1d8;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --blue: #3d78e6;
+    --green: #3a9b62;
+    --amber: #d99025;
+    --red: #c94f3d;
+    --violet: #7b5bd6;
+    --gray: #9a938a;
+    --blue-soft: #eef3fd;
+    --green-soft: #ecf6f0;
+    --amber-soft: #fbf3e4;
+    --red-soft: #faeeec;
+    --violet-soft: #f2eefb;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13px/1.55 -apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+    color: var(--fg);
+    background: #efede8;
+    display: flex;
+    flex-direction: column;
+  }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ---- mock banner (not part of the product UI) ---- */
+  .mock-banner {
+    flex: none;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px;
+    background: #2c2440; color: #e9e4f7;
+    font-size: 12px;
+  }
+  .mock-banner strong { color: #cfc2f4; font-weight: 650; }
+  .mock-banner .pts { opacity: .92; }
+  .mock-banner label {
+    margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px;
+    background: #453a63; border-radius: 20px; padding: 4px 12px; cursor: pointer;
+  }
+  .mock-banner a { color: #cfc2f4; }
+
+  /* conclusion line (revised improvement 1) & return line (revised improvement 2) */
+  .concl {
+    margin: 10px 0 0; font-size: 13.2px; padding: 9px 12px;
+    background: var(--violet-soft); border-left: 3px solid var(--violet); border-radius: 8px;
+  }
+  .concl .lvl { margin-right: 6px; }
+  .to-room { margin-top: 10px; display: flex; align-items: baseline; gap: 8px; font-size: 12.3px; color: var(--fg-muted); flex-wrap: wrap; }
+  .to-room button { color: var(--blue); font-weight: 600; }
+  .to-room small { color: var(--fg-muted); }
+
+  /* ---- improvement annotations ---- */
+  .new { position: relative; }
+  body:has(#ann:checked) .new {
+    outline: 1.5px dashed var(--violet);
+    outline-offset: 3px;
+    border-radius: 8px;
+  }
+  body:has(#ann:checked) .new::after {
+    content: "改进 " attr(data-n);
+    position: absolute; top: -9px; right: 8px; z-index: 5;
+    background: var(--violet); color: #fff;
+    font-size: 10px; font-weight: 650; line-height: 1;
+    padding: 3px 7px; border-radius: 8px;
+    pointer-events: none;
+  }
+
+  /* ---- app frame ---- */
+  .app {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    background: var(--bg-editor);
+  }
+
+  /* ---- header ---- */
+  .head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+  }
+  .head .mark {
+    width: 32px; height: 32px; border-radius: 8px; flex: none;
+    display: grid; place-items: center;
+    background: var(--fg); color: var(--bg-card);
+    font-size: 15px; font-weight: 700;
+  }
+  .head .title { min-width: 0; margin-right: auto; }
+  .head .title strong { display: block; font-size: 14px; }
+  .head .title span { font-size: 11px; color: var(--fg-muted); }
+  .depths {
+    display: flex; gap: 4px; padding: 3px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--bg-editor);
+  }
+  .depths button { padding: 5px 13px; border-radius: 7px; font-size: 12px; color: var(--fg-muted); }
+  .depths button.on { background: var(--fg); color: var(--bg-card); font-weight: 600; }
+  .head .ghost {
+    padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 12px; background: var(--bg-card);
+  }
+
+  /* ---- session contract ---- */
+  .contract {
+    display: flex; align-items: stretch; gap: 0;
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .cell {
+    padding: 2px 18px 2px 0; margin-right: 18px;
+    border-right: 1px solid var(--border);
+    min-width: 0; flex: none;
+  }
+  .cell:last-child { border-right: 0; margin-right: 0; }
+  .cell dt { font-size: 10px; color: var(--fg-muted); letter-spacing: .4px; margin-bottom: 2px; }
+  .cell dd { margin: 0; font-size: 12.5px; font-weight: 550; white-space: nowrap; }
+  .cell dd small { font-weight: 400; color: var(--fg-muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+  .pill.amber { background: var(--amber-soft); color: #9a6410; }
+  .pill.green { background: var(--green-soft); color: #22713f; }
+  .cell details { display: inline; }
+  .cell summary { cursor: pointer; list-style: none; }
+  .cell summary::-webkit-details-marker { display: none; }
+  .cell summary .expand { color: var(--blue); font-size: 11px; margin-left: 4px; }
+  .ctx-pop {
+    position: absolute; z-index: 30; margin-top: 8px;
+    width: 340px; padding: 12px 14px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 10px 32px rgba(32,30,26,.14);
+    font-weight: 400; white-space: normal;
+  }
+  .ctx-pop h4 { margin: 0 0 6px; font-size: 11px; color: var(--fg-muted); }
+  .ctx-pop ul { margin: 0 0 10px; padding-left: 16px; font-size: 12px; }
+  .ctx-pop li { margin: 2px 0; }
+  .ctx-pop .mono { font-size: 11.5px; }
+
+  /* ---- body ---- */
+  .body { display: grid; grid-template-columns: 430px minmax(0,1fr); min-height: 0; }
+
+  /* ---- left: conversation & actions ---- */
+  .story {
+    display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--border); background: var(--bg-card);
+  }
+  .story-head {
+    flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px 8px; font-size: 12.5px;
+  }
+  .story-head strong { font-size: 13px; }
+  .story-head button { color: var(--fg-muted); font-size: 11.5px; border: 1px solid var(--border); border-radius: 14px; padding: 3px 10px; }
+  .story-list { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+  .story-foot {
+    flex: none; padding: 8px 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted); display: flex; justify-content: space-between;
+  }
+
+  .msg { display: flex; gap: 10px; margin: 14px 0; }
+  .msg .ava {
+    flex: none; width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .msg.user .ava { background: #4a4640; }
+  .msg.agent .ava { background: var(--blue); }
+  .msg .body-t { min-width: 0; }
+  .msg .who { font-size: 10.5px; color: var(--fg-muted); letter-spacing: .5px; margin-bottom: 3px; }
+  .msg .who b { color: var(--fg); font-weight: 650; margin-right: 6px; }
+  .msg .text {
+    background: var(--bg-editor); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 11px; font-size: 12.8px;
+  }
+  .msg.user .text { background: #f3f1ec; }
+  .msg .text code { background: rgba(61,120,230,.09); padding: 0 4px; border-radius: 4px; font-size: 11.8px; }
+  .cite-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 6px; margin-right: 6px;
+    font-size: 10.5px; color: var(--blue);
+    border: 1px solid #cddcf8; background: var(--blue-soft);
+    border-radius: 12px; padding: 2px 8px; cursor: pointer;
+  }
+
+  .act {
+    display: flex; align-items: center; gap: 9px;
+    width: 100%; text-align: left;
+    padding: 6px 8px; margin: 2px 0;
+    border-radius: 8px; font-size: 12.3px;
+  }
+  .act:hover { background: var(--bg-editor); }
+  .act .dot {
+    flex: none; width: 22px; height: 22px; border-radius: 6px;
+    display: grid; place-items: center; font-size: 11px;
+    background: var(--bg-editor); border: 1px solid var(--border); color: var(--fg-muted);
+  }
+  .act.err .dot { background: var(--red-soft); border-color: #eccbc4; color: var(--red); }
+  .act.ok .dot { background: var(--green-soft); border-color: #cbe5d4; color: var(--green); }
+  .act.warn .dot { background: var(--amber-soft); border-color: #f0dcb6; color: var(--amber); }
+  .act .t { min-width: 0; flex: 1; }
+  .act .t b { font-weight: 600; }
+  .act .t small { color: var(--fg-muted); }
+  .act time { flex: none; font-size: 10.5px; color: var(--fg-muted); }
+  .lvl {
+    flex: none; font-size: 10px; padding: 1.5px 7px; border-radius: 10px; font-weight: 600;
+  }
+  .lvl.rec { background: var(--blue-soft); color: #2b5cb8; }
+  .lvl.ver { background: var(--green-soft); color: #22713f; }
+  .lvl.inf { background: var(--violet-soft); color: #5b3fb0; }
+  .lvl.obs { background: var(--amber-soft); color: #9a6410; }
+  .act.active { background: var(--blue-soft); box-shadow: inset 0 0 0 1.5px var(--blue); }
+  .diffstat b { color: var(--green); font-weight: 650; }
+  .diffstat em { color: var(--red); font-style: normal; }
+
+  /* fold placeholder */
+  .fold { margin: 6px 0; }
+  .fold summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--fg-muted); font-size: 11.5px;
+    padding: 5px 8px; border-radius: 8px;
+  }
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary:hover { background: var(--bg-editor); color: var(--fg); }
+  .fold summary .line { flex: 1; border-top: 1px dashed var(--border); }
+  .fold summary .n { flex: none; }
+  .fold summary .hint { flex: none; color: var(--blue); }
+  .fold .sample { padding: 2px 0 4px 14px; border-left: 2px dashed var(--border); margin-left: 18px; }
+  .fold .sample .act { opacity: .85; }
+  .fold .more { display: block; font-size: 11px; color: var(--blue); padding: 4px 8px 2px 22px; }
+
+  /* pivot card */
+  .pivot {
+    margin: 10px 0; padding: 10px 12px 11px;
+    border: 1px solid #d9cef2; border-left: 3px solid var(--violet);
+    background: var(--violet-soft); border-radius: 10px;
+  }
+  .pivot .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; color: #5b3fb0; letter-spacing: .5px;
+    margin-bottom: 5px;
+  }
+  .pivot .tag i { font-style: normal; font-size: 13px; }
+  .pivot p { margin: 0; font-size: 12.6px; }
+  .pivot .why { color: #4c3f77; }
+  .pivot .refs { margin-top: 7px; }
+
+  /* ---- right column ---- */
+  .main { min-width: 0; overflow-y: auto; padding: 16px 20px 22px; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
+  }
+
+  /* result card */
+  .result-line { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .result-line h1 { margin: 0; font-size: 17px; font-weight: 700; }
+  .result-line .facts { color: var(--fg-muted); font-size: 12.5px; }
+  .why {
+    margin-top: 12px; padding: 10px 13px;
+    background: var(--violet-soft); border-left: 3px solid var(--violet); border-radius: 8px;
+  }
+  .why .lab {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 10.5px; color: #5b3fb0; font-weight: 700; letter-spacing: .4px; margin-bottom: 5px;
+  }
+  .why .lab .lvl { font-weight: 600; }
+  .why p { margin: 0; font-size: 13px; }
+  .next {
+    margin-top: 12px; padding: 12px 13px;
+    background: var(--bg-editor); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .next .lab { font-size: 10.5px; color: var(--fg-muted); font-weight: 700; letter-spacing: .4px; margin-bottom: 8px; }
+  .next .btns { display: flex; gap: 8px; margin-bottom: 10px; }
+  .btn-primary {
+    background: var(--fg); color: var(--bg-card);
+    padding: 7px 16px; border-radius: 8px; font-weight: 650; font-size: 12.5px;
+  }
+  .btn-second {
+    border: 1px solid var(--border); background: var(--bg-card);
+    padding: 7px 14px; border-radius: 8px; font-size: 12.5px;
+  }
+  .next ul { margin: 0; padding: 0; list-style: none; font-size: 12.3px; }
+  .next li { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; }
+  .next li .box { flex: none; font-size: 12px; }
+  .next li.done { color: var(--fg-muted); }
+  .next li.done .box { color: var(--green); }
+
+  /* changed / attention */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .duo h3 { margin: 0 0 8px; font-size: 11px; color: var(--fg-muted); letter-spacing: .4px; }
+  .file-row {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 6px 8px; border-radius: 7px; font-size: 12.3px;
+  }
+  .file-row:hover { background: var(--bg-editor); }
+  .file-row .mono { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11.8px; }
+  .attn {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 6px 8px; border-radius: 7px; font-size: 12.3px; width: 100%; text-align: left;
+  }
+  .attn:hover { background: var(--bg-editor); }
+  .attn .ic { flex: none; }
+  .attn.irrev {
+    background: var(--amber-soft); border: 1px solid #f0dcb6;
+  }
+  .attn.irrev .badge {
+    flex: none; font-size: 10px; font-weight: 700; color: #fff;
+    background: var(--amber); border-radius: 8px; padding: 1.5px 7px;
+  }
+
+  /* artifact stage */
+  .stage { margin-top: 12px; }
+  .stage-head {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; margin-bottom: 8px;
+  }
+  .stage-head .now { color: var(--fg-muted); }
+  .stage-head .mono { font-weight: 650; }
+  .stage-head .rev { margin-left: auto; font-size: 11px; color: var(--green); background: var(--green-soft); border-radius: 10px; padding: 2px 9px; font-weight: 600; }
+  .diff {
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.6px; line-height: 1.7;
+  }
+  .diff .hunk { background: #f4f2ee; color: var(--fg-muted); padding: 2px 12px; font-size: 10.8px; }
+  .diff .l { padding: 0 12px; white-space: pre; overflow-x: auto; }
+  .diff .del { background: #fbeeec; color: #8a3d31; }
+  .diff .add { background: #edf6f0; color: #2a6a45; }
+  .stage-foot { display: flex; gap: 14px; margin-top: 8px; font-size: 11.5px; }
+  .stage-foot button { color: var(--blue); }
+
+  /* ---- timeline ---- */
+  .timeline {
+    background: var(--bg-card); border-top: 1px solid var(--border);
+    padding: 8px 16px 10px;
+  }
+  .transport { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .transport .tp {
+    width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border);
+    display: grid; place-items: center; background: var(--bg-card);
+  }
+  .transport .tp.play { background: var(--fg); color: var(--bg-card); border-color: var(--fg); }
+  .transport time { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .transport select { font: inherit; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; background: var(--bg-card); color: var(--fg-muted); }
+  .toggle {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 16px; padding: 3px 11px; font-size: 11.5px;
+  }
+  .toggle.on { background: var(--blue-soft); border-color: #c5d8f8; color: #2b5cb8; font-weight: 600; }
+  .toggle i { width: 22px; height: 12px; border-radius: 8px; background: #cfd8ea; position: relative; font-style: normal; }
+  .toggle.on i { background: var(--blue); }
+  .toggle i::after { content: ""; position: absolute; top: 1.5px; left: 1.5px; width: 9px; height: 9px; border-radius: 50%; background: #fff; }
+  .toggle.on i::after { left: auto; right: 1.5px; }
+  .transport .steps { margin-left: auto; color: var(--fg-muted); font-size: 11.5px; }
+
+  .axis { position: relative; height: 56px; margin: 10px 6px 0; }
+  .axis .line { position: absolute; left: 0; right: 0; top: 38px; border-top: 2px solid var(--border); }
+  .moment {
+    position: absolute; top: 0; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--fg-muted); white-space: nowrap;
+  }
+  .moment b { font-size: 10.5px; color: var(--fg); font-weight: 650; }
+  .moment i {
+    font-style: normal; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--bg-card); border: 2.5px solid var(--gray); margin-top: 2px;
+  }
+  .moment.req i { border-color: #4a4640; }
+  .moment.disc i { border-color: var(--blue); }
+  .moment.warn i { border-color: var(--amber); }
+  .moment.dec i { border-color: var(--blue); }
+  .moment.prob i { border-color: var(--red); background: var(--red-soft); }
+  .moment.pivot i { border-color: var(--violet); background: var(--violet-soft); }
+  .moment.chg i { border-color: var(--blue); }
+  .moment.ver i { border-color: var(--green); background: var(--green-soft); }
+  .moment.res i { border-color: var(--fg); }
+  .moment.here b { color: var(--blue); }
+  .moment.here i { box-shadow: 0 0 0 4px var(--blue-soft); border-color: var(--blue); }
+  .playhead {
+    position: absolute; top: 30px; width: 2px; height: 18px; background: var(--blue);
+    transform: translateX(-50%);
+  }
+  .playhead::before { content: ""; position: absolute; top: -4px; left: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+
+  .cov { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 10.5px; color: var(--fg-muted); }
+  .cov .band { flex: 1; display: flex; height: 6px; border-radius: 4px; overflow: hidden; }
+  .cov .band i { display: block; height: 100%; }
+  .cov .rec { background: #b9cdf3; }
+  .cov .verif { background: #9fd0b2; }
+  .cov .obs { background: #ecc98a; }
+  .legend { display: flex; gap: 10px; }
+  .legend s { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+  .legend s::before { content: ""; width: 8px; height: 8px; border-radius: 2px; }
+  .legend .l-rec::before { background: #b9cdf3; }
+  .legend .l-ver::before { background: #9fd0b2; }
+  .legend .l-obs::before { background: #ecc98a; }
+</style>
+</head>
+<body>
+
+<header class="mock-banner">
+  <strong>Replay 完善概念稿 · 第 2 轮（代码任务场景）</strong>
+  <span class="pts">本轮修订：① 降级为一句「引自最终报告」的结论行 ② 砍成一根返回线（审阅只在房间，回放保持只读）· 成本账已删（房间 RunDetails 已有）· 保留 ③折叠占位 ④转折 ⑤输入账 ⑥不可逆置顶 · <a href="replay-v4-recap-mock-noncode.html">看非代码任务版 →</a></span>
+  <label><input type="checkbox" id="ann" checked> 标注改进点</label>
+</header>
+
+<div class="app">
+
+  <!-- ================= header ================= -->
+  <header class="head">
+    <div class="mark">▸</div>
+    <div class="title">
+      <strong>修复登录后偶发 401（token 刷新竞态）</strong>
+      <span>Charter Agent · 2026-07-20 09:32 – 10:00 · 612 个记录事件</span>
+    </div>
+    <nav class="depths">
+      <button class="on">回顾</button>
+      <button>探究</button>
+      <button>核验</button>
+    </nav>
+    <button class="ghost">导出凭证</button>
+    <button class="ghost">✕</button>
+  </header>
+
+  <!-- ================= session contract ================= -->
+  <dl class="contract" style="margin:0">
+    <div class="cell" style="max-width:300px">
+      <dt>原始目标（已记录）</dt>
+      <dd style="white-space:normal;font-weight:450">线上偶发 401，查明原因并修复，改动尽量小</dd>
+    </div>
+    <div class="cell">
+      <dt>结果</dt>
+      <dd><span class="pill amber">Agent 完成 · 待审阅</span></dd>
+    </div>
+    <div class="cell">
+      <dt>验证</dt>
+      <dd><span class="pill green">已验证 · 143/143 通过</span></dd>
+    </div>
+    <div class="cell">
+      <dt>用时</dt>
+      <dd>28 分钟 <small>实际</small> · 90 秒 <small>故事</small></dd>
+    </div>
+    <div class="cell new" data-n="5" style="position:relative">
+      <dt>喂给 Agent 的输入</dt>
+      <dd>
+        <details>
+          <summary>3 个文件引用 · 2 条记忆 · 1 份规则<span class="expand">展开 ▾</span></summary>
+          <div class="ctx-pop">
+            <h4>文件引用（当次快照）</h4>
+            <ul class="mono">
+              <li>@src/auth/authClient.ts</li>
+              <li>@src/auth/session.ts</li>
+              <li>@docs/api-auth.md</li>
+            </ul>
+            <h4>注入的记忆</h4>
+            <ul>
+              <li>「改动尽量小」— 用户偏好（2026-07-12）</li>
+              <li>「本项目测试命令为 npm test」— 项目记忆</li>
+            </ul>
+            <h4>规则</h4>
+            <ul><li>CLAUDE.md（当次版本快照）</li></ul>
+          </div>
+        </details>
+      </dd>
+    </div>
+    <div class="cell">
+      <dt>证据覆盖</dt>
+      <dd>完整记录 92% <small>· 观察 8%</small></dd>
+    </div>
+  </dl>
+
+  <!-- ================= body ================= -->
+  <div class="body">
+
+    <!-- ---------- left: conversation & actions (kept, primary) ---------- -->
+    <aside class="story">
+      <div class="story-head">
+        <strong>对话与操作</strong>
+        <button>显示全部上下文</button>
+      </div>
+      <div class="story-list">
+
+        <div class="msg user">
+          <span class="ava">你</span>
+          <div class="body-t">
+            <div class="who"><b>YOU</b>09:32</div>
+            <div class="text">线上用户反馈登录后偶尔全部请求 401，刷新页面又恢复。帮我查一下原因并修掉，改动尽量小。</div>
+          </div>
+        </div>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>09:33 · <span style="color:#2b5cb8">结构化记录</span></div>
+            <div class="text">收到。我先在本地复现，从 401 请求的时序和 token 刷新逻辑入手排查。</div>
+          </div>
+        </div>
+
+        <details class="fold new" data-n="3">
+          <summary>
+            <span class="line"></span>
+            <span class="n">探索阶段 · 折叠了 87 次读取、12 次搜索 · 6 分钟</span>
+            <span class="hint">展开样例</span>
+            <span class="line"></span>
+          </summary>
+          <div class="sample">
+            <div class="act"><span class="dot">📄</span><span class="t">读取 <b class="mono">src/auth/authClient.ts</b></span><time>09:35</time></div>
+            <div class="act"><span class="dot">⌕</span><span class="t">搜索 <b class="mono">"refresh_token"</b> <small>· 14 处结果</small></span><time>09:36</time></div>
+            <div class="act"><span class="dot">⌨</span><span class="t">运行 <b class="mono">npm run dev</b> <small>· 复现 401</small></span><time>09:38</time></div>
+            <span class="more">在探究层查看全部 99 条 →</span>
+          </div>
+        </details>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>09:41 · 发现</div>
+            <div class="text">
+              定位到根因：<code>authClient.ts</code> 中两个并发请求同时触发 token 刷新，后完成的一次携带已被轮换掉的 refresh_token，被服务端拒绝并注销会话。
+              <div><span class="cite-chip">依据 · 请求日志片段</span><span class="cite-chip">依据 · authClient.ts:118</span></div>
+            </div>
+          </div>
+        </div>
+
+        <button class="act warn">
+          <span class="dot">⚠</span>
+          <span class="t"><b>在 Sentry 事件 #4821 添加根因备注</b> <small>· 外部系统 · 不可逆</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:42</time>
+        </button>
+
+        <button class="act">
+          <span class="dot">🗺</span>
+          <span class="t"><b>计划：方案 A — 给 token 刷新加互斥锁</b> <small>· 你批准了</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:44</time>
+        </button>
+
+        <details class="fold">
+          <summary>
+            <span class="line"></span>
+            <span class="n">实现方案 A · 23 次编辑、9 次命令 · 8 分钟</span>
+            <span class="hint">展开样例</span>
+            <span class="line"></span>
+          </summary>
+          <div class="sample">
+            <div class="act"><span class="dot">✎</span><span class="t">写入 <b class="mono">authClient.ts</b> <small class="diffstat">· <b>+31</b> <em>−4</em></small></span><time>09:47</time></div>
+            <span class="more">在探究层查看全部 32 条 →</span>
+          </div>
+        </details>
+
+        <button class="act err">
+          <span class="dot">✕</span>
+          <span class="t"><b>npm test — auth.spec 失败 2 例</b> <small>· 互斥锁与注销流程互相等待，超时死锁</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:52</time>
+        </button>
+
+        <div class="pivot new" data-n="4">
+          <span class="tag"><i>↷</i> 转折 · 更换方案 <span class="lvl inf">推导叙事</span></span>
+          <p><b>放弃互斥锁，改为 single-flight 刷新 + 401 请求重放队列。</b></p>
+          <p class="why">原因：锁会和注销流程互相等待（见上一步失败用例）。</p>
+          <div class="refs">
+            <span class="cite-chip">依据 · 失败用例 ×2</span>
+            <span class="cite-chip">依据 · 计划修订事件 09:53</span>
+          </div>
+        </div>
+
+        <button class="act">
+          <span class="dot">🛡</span>
+          <span class="t"><b>请求修改 src/auth/*（3 个文件）</b> <small>· 中风险 R2 · 你批准了</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:55</time>
+        </button>
+
+        <details class="fold">
+          <summary>
+            <span class="line"></span>
+            <span class="n">实现方案 B · 31 次编辑 · 7 分钟</span>
+            <span class="hint">展开样例</span>
+            <span class="line"></span>
+          </summary>
+          <div class="sample">
+            <span class="more">在探究层查看全部 31 条 →</span>
+          </div>
+        </details>
+
+        <button class="act active">
+          <span class="dot">✎</span>
+          <span class="t"><b>写入 src/auth/authClient.ts</b> <small class="diffstat">· <b>+86</b> <em>−41</em></small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>10:02</time>
+        </button>
+
+        <button class="act">
+          <span class="dot">✎</span>
+          <span class="t"><b>写入 src/auth/session.ts</b> <small class="diffstat">· <b>+22</b> <em>−9</em></small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>10:03</time>
+        </button>
+
+        <button class="act ok">
+          <span class="dot">✓</span>
+          <span class="t"><b>npm test — 143 通过 / 0 失败</b></span>
+          <span class="lvl ver">已验证</span>
+          <time>10:07</time>
+        </button>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>10:08 · 最终报告</div>
+            <div class="text">
+              已修复。并发刷新收敛为 single-flight，刷新期间到达的 401 请求进入重放队列，刷新成功后自动重发。
+              未能在本地验证 5 分钟真实过期场景，建议合并后在 staging 观察一天。
+              <div><span class="cite-chip">依据 · 3 个文件变更</span><span class="cite-chip">依据 · 143/143 测试通过</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="story-foot">
+        <span>14 个语义节点</span>
+        <span>已折叠 598 条低影响记录 · 节点间可展开</span>
+      </div>
+    </aside>
+
+    <!-- ---------- right: result, next steps, current moment ---------- -->
+    <section class="main">
+
+      <div class="card">
+        <div class="result-line">
+          <h1>Agent 完成 · 待审阅</h1>
+          <span class="facts">3 个文件被修改（+118 −57）· 验证通过 143/143 · 28 分钟</span>
+        </div>
+
+        <p class="concl new" data-n="1">
+          <span class="lvl inf">引自最终报告</span>
+          401 根因是并发 token 刷新竞态；先试互斥锁（与注销流程死锁，放弃），改为 single-flight 刷新 + 401 重放队列。
+          <span class="cite-chip">① 失败用例 09:52</span>
+          <span class="cite-chip">② 计划修订 09:53</span>
+          <span class="cite-chip">③ 最终报告 10:08</span>
+        </p>
+
+        <div class="to-room new" data-n="2">
+          <button>Esc 关闭回放 · 回到房间的审阅栏处理这 3 个改动 →</button>
+          <small>审阅、接受与回滚只在房间进行 — 回放保持只读</small>
+        </div>
+
+        <div class="duo">
+          <div>
+            <h3>重要变化</h3>
+            <button class="file-row"><span>✎</span><span class="mono">src/auth/authClient.ts</span><span class="diffstat"><b>+86</b> <em>−41</em></span></button>
+            <button class="file-row"><span>✎</span><span class="mono">src/auth/session.ts</span><span class="diffstat"><b>+22</b> <em>−9</em></span></button>
+            <button class="file-row"><span>✎</span><span class="mono">src/auth/auth.spec.ts</span><span class="diffstat"><b>+10</b> <em>−7</em></span></button>
+          </div>
+          <div>
+            <h3>需要注意</h3>
+            <button class="attn irrev new" data-n="6">
+              <span class="badge">不可逆</span>
+              <span>Sentry 事件 #4821 被添加备注（外部系统，无法回滚；内容已存证）</span>
+            </button>
+            <button class="attn"><span class="ic" style="color:var(--red)">✕</span><span>auth.spec 曾失败 2 例 — 转折后已修复，点击回看</span></button>
+            <button class="attn"><span class="ic" style="color:var(--amber)">⚠</span><span>真实过期场景未验证（Agent 声明）</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card stage">
+        <div class="stage-head">
+          <span class="now">正在查看 10:02</span>
+          <span class="mono">src/auth/authClient.ts</span>
+          <span class="diffstat"><b>+86</b> <em>−41</em></span>
+          <span class="rev">可回滚 · 字节级快照</span>
+        </div>
+        <div class="diff">
+          <div class="hunk">@@ -112,9 +112,17 @@ export function createAuthClient(store: SessionStore) {</div>
+          <div class="l del">-  async function refreshToken(): Promise&lt;Session&gt; {</div>
+          <div class="l del">-    const res = await http.post('/auth/refresh', { token: store.refreshToken });</div>
+          <div class="l del">-    store.save(res.session);</div>
+          <div class="l del">-    return res.session;</div>
+          <div class="l add">+  let inflight: Promise&lt;Session&gt; | null = null;</div>
+          <div class="l add">+</div>
+          <div class="l add">+  async function refreshToken(): Promise&lt;Session&gt; {</div>
+          <div class="l add">+    // 并发请求共享同一次刷新，避免 refresh_token 轮换竞态</div>
+          <div class="l add">+    inflight ??= http</div>
+          <div class="l add">+      .post('/auth/refresh', { token: store.refreshToken })</div>
+          <div class="l add">+      .then((res) =&gt; { store.save(res.session); return res.session; })</div>
+          <div class="l add">+      .finally(() =&gt; { inflight = null; });</div>
+          <div class="l add">+    return inflight;</div>
+          <div class="l">   }</div>
+        </div>
+        <div class="stage-foot">
+          <button>查看这一步的完整详情</button>
+          <button>在核验层追溯证据 →</button>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ================= timeline ================= -->
+  <footer class="timeline">
+    <div class="transport">
+      <button class="tp">‹</button>
+      <button class="tp play">▶</button>
+      <button class="tp">›</button>
+      <time>01:04 / 01:30</time>
+      <select><option>1×</option><option>2×</option><option>4×</option></select>
+      <button class="toggle on"><i></i>跳过等待</button>
+      <span class="steps">step 11 / 612 · Story Time（切换真实时间）</span>
+    </div>
+    <div class="axis">
+      <div class="line"></div>
+      <div class="moment req"   style="left:4%"><b>请求</b><span>09:32</span><i></i></div>
+      <div class="moment disc"  style="left:15.5%"><b>发现</b><span>09:41</span><i></i></div>
+      <div class="moment warn"  style="left:27%"><b>外部备注</b><span>09:42</span><i></i></div>
+      <div class="moment dec"   style="left:38.5%"><b>决策</b><span>09:44</span><i></i></div>
+      <div class="moment prob"  style="left:50%"><b>问题</b><span>09:52</span><i></i></div>
+      <div class="moment pivot new" data-n="4" style="left:61.5%"><b>转折</b><span>09:53</span><i></i></div>
+      <div class="moment chg here" style="left:73%"><b>变更</b><span>10:02</span><i></i></div>
+      <div class="moment ver"   style="left:84.5%"><b>验证</b><span>10:07</span><i></i></div>
+      <div class="moment res"   style="left:96%"><b>结果</b><span>10:08</span><i></i></div>
+      <div class="playhead" style="left:73%"></div>
+    </div>
+    <div class="cov">
+      <time>00:00</time>
+      <div class="band">
+        <i class="rec" style="width:40%"></i>
+        <i class="obs" style="width:8%"></i>
+        <i class="rec" style="width:30%"></i>
+        <i class="verif" style="width:7%"></i>
+        <i class="rec" style="width:15%"></i>
+      </div>
+      <div class="legend">
+        <s class="l-rec">结构化记录</s><s class="l-ver">已验证</s><s class="l-obs">观察记录</s>
+      </div>
+      <span>已压缩等待与重复读取</span>
+      <time>01:30</time>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

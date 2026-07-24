@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Charter · 跟随模式三方案 Mock（长在现有 Session 工作区上）</title>
+<style>
+  /* ============ tokens：与 ux-refresh-mock / theme.css 完全一致 ============ */
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', monospace;
+    --bg-app: #eceae5; --bg-sidebar: #f6f5f1; --bg-editor: #fbfaf7;
+    --bg-card: #ffffff; --bg-chip: #edeae3; --bg-hover: #e8e5de;
+    --bg-selected: #e9e6df; --border: #e5e1d8; --border-strong: #cfcabf;
+    --fg: #201e1a; --fg-muted: #5c584f; --fg-faint: #8a857a;
+    --accent: #1b1a16; --accent-fg: #fff;
+    --danger: #c4453d; --danger-bg: #fdecea;
+    --warning: #b06f10; --warning-bg: #faf0dc;
+    --success: #2f9e63; --success-bg: #e7f5ec;
+    --info: #3f7bd9; --info-bg: #e9f1fd;
+    --fs-body: 13px; --fs-secondary: 12px; --fs-min: 11px;
+    --fs-title: 15px; --fs-display: 20px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font-ui); font-size: var(--fs-body); color: var(--fg);
+    background: var(--bg-app); height: 100vh; display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ============ demo chrome（非产品 UI）============ */
+  .chrome {
+    display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+    background: #262420; color: #e8e5de; font-size: var(--fs-secondary); flex: none;
+  }
+  .chrome b { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .chrome .tabs { display: flex; gap: 4px; }
+  .chrome .tabs button { padding: 5px 12px; border-radius: 6px; color: #b5b0a4; }
+  .chrome .tabs button.on { background: #3d3a33; color: #fff; }
+  .chrome .sp { flex: 1; }
+  .chrome .anno-toggle { color: #b5b0a4; padding: 4px 10px; border: 1px solid #4a463e; border-radius: 6px; }
+  .chrome .anno-toggle.on { color: #e6c886; border-color: #8a6d34; }
+
+  .tag {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin: 0 3px; vertical-align: 2px;
+    border-radius: 8px; background: #7a5cc5; color: #fff;
+    font-size: 10px; font-style: normal; font-weight: 700; cursor: help;
+  }
+  body.no-anno .tag { display: none; }
+
+  /* ============ 应用布局：与现有主界面一致 ============ */
+  .app { flex: 1; display: flex; min-height: 0; }
+  .abar {
+    width: 46px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    align-items: center; padding: 12px 0 10px; gap: 4px;
+  }
+  .abar button {
+    width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; color: var(--fg-muted); position: relative; font-size: 15px;
+  }
+  .abar button.on { background: var(--bg-selected); color: var(--fg); }
+  .abar .grow { flex: 1; }
+
+  .rail {
+    width: 288px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    padding: 10px 8px 8px; overflow-y: auto;
+  }
+  .rail-head { display: flex; align-items: center; padding: 2px 8px 10px; gap: 8px; }
+  .rail-head h1 { font-size: var(--fs-title); font-weight: 650; font-family: var(--font-display); }
+  .rail-head .sp { flex: 1; }
+  .btn-new {
+    display: flex; align-items: center; gap: 6px; background: var(--accent); color: var(--accent-fg);
+    border-radius: 7px; padding: 5px 11px; font-size: var(--fs-secondary); font-weight: 600;
+  }
+  .grp-head {
+    display: flex; align-items: center; gap: 6px; padding: 7px 8px 4px;
+    font-size: var(--fs-secondary); font-weight: 650; color: var(--fg-muted); width: 100%;
+  }
+  .grp-head .cnt { color: var(--fg-faint); font-weight: 500; }
+  .srow {
+    display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+    padding: 7px 10px 7px 22px; border-radius: 8px; position: relative;
+  }
+  .srow:hover { background: var(--bg-hover); }
+  .srow.sel { background: var(--bg-selected); }
+  .srow.sel::before { content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .srow .l1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .srow .tt { font-size: var(--fs-body); font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .l2 { display: flex; align-items: center; gap: 6px; font-size: var(--fs-secondary); color: var(--fg-muted); padding-left: 15px; white-space: nowrap; overflow: hidden; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.run { background: var(--success); animation: pulse 1.6s infinite; }
+  .dot.warn { background: var(--warning); }
+  .dot.idle { background: var(--border-strong); }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .pmark {
+    width: 15px; height: 15px; border-radius: 4px; flex: none; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff;
+  }
+  .pmark.pi { background: #1b1a16; } .pmark.claude { background: #c96f4a; }
+  .chip { font-size: var(--fs-min); font-weight: 650; border-radius: 6px; padding: 1px 7px; flex: none; }
+  .chip.warn { background: var(--warning-bg); color: var(--warning); }
+  .chip.ok { background: var(--success-bg); color: var(--success); }
+  .rail .grow { flex: 1; }
+
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-editor); }
+  .screen { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .screen.on { display: flex; }
+
+  .room-head { flex: none; padding: 14px 28px 0; display: flex; flex-direction: column; gap: 12px; }
+  .room-head .t { display: flex; align-items: baseline; gap: 10px; }
+  .room-head h2 { font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; }
+  .room-head .meta { font-size: var(--fs-secondary); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
+  .status-strip {
+    display: flex; align-items: center; gap: 12px; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 11px; padding: 11px 14px;
+    box-shadow: 0 1px 2px rgba(30,26,18,.04);
+  }
+  .status-strip .st { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: var(--fs-body); }
+  .status-strip .st .live-file { font-family: var(--font-mono); font-weight: 500; color: var(--fg-muted); }
+  .status-strip .sp { flex: 1; }
+  .btn-ghost { color: var(--fg-muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: var(--fs-body); }
+
+  .timeline { flex: 1; overflow-y: auto; padding: 20px 28px; display: flex; justify-content: center; }
+  .timeline .col { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+  .turn-user {
+    align-self: flex-end; max-width: 78%; background: var(--bg-chip);
+    border-radius: 12px 12px 3px 12px; padding: 10px 14px; font-size: var(--fs-body); line-height: 1.6;
+  }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; padding: 12px 15px; }
+  .card .ch { display: flex; align-items: center; gap: 8px; font-size: var(--fs-secondary); font-weight: 650; color: var(--fg-muted); margin-bottom: 8px; }
+  .card ul { padding-left: 18px; font-size: var(--fs-body); line-height: 1.8; color: var(--fg); }
+  .filerow { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-secondary); padding: 3px 0; }
+  .filerow .stat { margin-left: auto; }
+  .filerow .add { color: var(--success); } .filerow .del { color: var(--danger); }
+  .prose { font-size: var(--fs-body); line-height: 1.7; }
+
+  .composer-zone { flex: none; padding: 12px 40px 18px; display: flex; justify-content: center; }
+  .composer { width: 100%; max-width: 860px; }
+  .composer .box {
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(30,26,18,.05), 0 8px 28px rgba(30,26,18,.06); padding: 12px 14px 10px;
+  }
+  .composer textarea {
+    width: 100%; border: none; outline: none; resize: none; font: inherit; font-size: 14px;
+    background: transparent; height: 30px; color: var(--fg);
+  }
+  .composer textarea::placeholder { color: var(--fg-faint); }
+
+  /* ============ 直播共用件 ============ */
+  .codepane {
+    font-family: var(--font-mono); font-size: var(--fs-secondary); line-height: 1.85;
+    background: var(--bg-card); padding: 10px 0; overflow: hidden;
+  }
+  .cl { padding: 0 16px; white-space: pre; }
+  .cl .ln { display: inline-block; width: 30px; color: var(--fg-faint); user-select: none; }
+  .cl.flash { animation: flash 2.6s ease-out infinite; }
+  @keyframes flash { 0% { background: #d3ecdd; } 55% { background: #eef8f1; } 100% { background: transparent; } }
+  .caret { display: inline-block; width: 6px; height: 12px; background: var(--success); vertical-align: -1px; animation: blink .9s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ============ 方案 A：画布跟随（surface 级） ============ */
+  .surface-nav { flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 28px 0; }
+  .surface-nav button {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    padding: 7px 14px; border-radius: 9px; border: 1px solid transparent;
+  }
+  .surface-nav button b { font-size: var(--fs-body); }
+  .surface-nav button small { font-size: var(--fs-min); color: var(--fg-faint); }
+  .surface-nav button.on { background: var(--bg-card); border-color: var(--border-strong); }
+  .surface-nav button.on small { color: var(--fg-muted); }
+  .surface-nav button.follow b { display: flex; align-items: center; gap: 6px; color: var(--success); }
+  .follow-body { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 28px 0; }
+  .follow-frame {
+    flex: 1; min-height: 0; display: flex; flex-direction: column;
+    background: var(--bg-card); border: 1px solid #cde5d6; border-radius: 11px; overflow: hidden;
+    box-shadow: 0 0 0 3px rgba(47,158,99,.08);
+  }
+  .follow-bar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+    background: var(--success-bg); border-bottom: 1px solid #cde5d6;
+    color: var(--success); font-weight: 650; font-size: var(--fs-secondary);
+  }
+  .follow-bar .file { font-family: var(--font-mono); font-weight: 500; }
+  .follow-bar .sp { flex: 1; }
+  .follow-bar .exit { color: var(--fg-muted); font-weight: 500; }
+  .follow-trail { display: flex; gap: 6px; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--bg-sidebar); }
+  .fchip {
+    display: flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: var(--fs-min);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--bg-card); color: var(--fg-muted);
+  }
+  .fchip.hot { border-color: #bfdfcc; background: var(--success-bg); color: var(--success); font-weight: 650; }
+  .resume-pill {
+    position: absolute; right: 44px; bottom: 96px; display: none; align-items: center; gap: 7px;
+    background: var(--accent); color: var(--accent-fg); border-radius: 20px; padding: 7px 16px;
+    font-weight: 650; box-shadow: 0 8px 24px rgba(30,26,18,.25); z-index: 6;
+  }
+
+  /* ============ 方案 B：画中画监视器 ============ */
+  .pip {
+    position: absolute; right: 40px; bottom: 108px; width: 380px; z-index: 6;
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 11px;
+    box-shadow: 0 16px 44px rgba(30,26,18,.20); overflow: hidden;
+  }
+  .pip-head {
+    display: flex; align-items: center; gap: 7px; padding: 7px 11px;
+    background: var(--bg-sidebar); border-bottom: 1px solid var(--border);
+    font-size: var(--fs-secondary); font-weight: 650;
+  }
+  .pip-head .file { font-family: var(--font-mono); font-weight: 500; }
+  .pip-head .acts { margin-left: auto; color: var(--fg-faint); letter-spacing: 3px; font-size: 12px; }
+  .pip .codepane { font-size: var(--fs-min); line-height: 1.75; }
+  .pip-strip { display: flex; gap: 5px; padding: 6px 10px; border-top: 1px solid var(--border); background: var(--bg-sidebar); }
+
+  /* ============ 方案 C：直播改动流卡片 ============ */
+  .live-card { border-color: #bfdfcc; }
+  .live-card .ch { color: var(--success); }
+  .live-card .ch .dot { width: 7px; height: 7px; }
+  .live-card .filerow { border-radius: 6px; padding: 3px 8px; margin: 0 -8px; }
+  .live-card .filerow.now { background: var(--success-bg); }
+  .live-card .filerow.now .fn { font-weight: 650; color: var(--fg); }
+  .difftail {
+    font-family: var(--font-mono); font-size: var(--fs-min); line-height: 1.7;
+    color: #2b6d49; background: #f2f9f4; border: 1px solid #e0f0e6; border-radius: 7px;
+    padding: 5px 10px; margin: 4px 0 6px; white-space: pre; overflow: hidden;
+  }
+
+  /* ============ 底部对比注脚 ============ */
+  .specnote {
+    flex: none; background: #262420; color: #9d988c; font-size: var(--fs-min);
+    padding: 7px 16px; display: flex; gap: 22px; align-items: center; overflow-x: auto; white-space: nowrap;
+  }
+  .specnote b { color: #d8d4c9; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ═══ demo 工具条（非产品 UI）═══ -->
+<div class="chrome">
+  <b>Charter · 跟随模式三方案</b>
+  <div class="tabs">
+    <button class="on" data-screen="a">A · 画布跟随</button>
+    <button data-screen="b">B · 画中画监视器</button>
+    <button data-screen="c">C · 直播改动流</button>
+  </div>
+  <span>同一个正在运行的 Session（重构支付模块），三种"边干边看"的长法</span>
+  <span class="sp"></span>
+  <button class="anno-toggle on" id="annoBtn">标注：开</button>
+</div>
+
+<div class="app">
+
+  <!-- ═══ 活动条 + Session Rail：现状原样，仅 s2 被选中 ═══ -->
+  <nav class="abar">
+    <button class="on" title="Sessions">☰</button>
+    <button title="Inbox">▤</button>
+    <button title="Projects">▣</button>
+    <button title="Search ⌘K">⌕</button>
+    <span class="grow"></span>
+    <button title="Editor ⌘E">⌗</button>
+    <button title="Settings">⚙</button>
+  </nav>
+
+  <aside class="rail">
+    <div class="rail-head">
+      <h1>Session</h1>
+      <span class="sp"></span>
+      <button class="btn-new">新建 Session</button>
+    </div>
+    <button class="grp-head">▾ bullpen <span class="cnt">· 4</span></button>
+    <button class="srow">
+      <span class="l1"><span class="dot warn"></span><span class="tt">修复登录跳转循环</span><span class="chip warn">待审阅</span></span>
+      <span class="l2">fix/login-loop · 改动 3 个文件</span>
+    </button>
+    <button class="srow sel">
+      <span class="l1"><span class="pmark claude">✳</span><span class="tt">重构支付模块</span><span class="dot run" style="margin-left:auto"></span></span>
+      <span class="l2">✎ 正在编辑 payments/api.ts…<i class="tag" title="现状已有：rail 的 live dot + 正在编辑 ticker。三个方案都从这条既有事实长出去，不新增数据源">0</i></span>
+    </button>
+    <button class="srow">
+      <span class="l1"><span class="dot idle"></span><span class="tt">依赖升级排查</span></span>
+      <span class="l2">手工启动的 CLI · 只读跟踪</span>
+    </button>
+    <button class="srow">
+      <span class="l1"><span class="dot idle"></span><span class="tt">解释 webpack 配置</span></span>
+      <span class="l2">只读问答 · 昨天</span>
+    </button>
+    <span class="grow"></span>
+  </aside>
+
+  <main>
+
+    <!-- ═══════════ 方案 A：画布跟随 —「跟随」成为一个 surface ═══════════ -->
+    <section class="screen on" id="screen-a" style="position:relative">
+      <div class="room-head">
+        <div class="t">
+          <h2>重构支付模块</h2>
+          <span class="meta"><span class="pmark claude">✳</span> Claude Code · bullpen</span>
+        </div>
+        <div class="status-strip">
+          <span class="st"><span class="dot run"></span>正在执行 · 第 2 轮 <span class="live-file">✎ payments/api.ts</span></span>
+          <span class="sp"></span>
+          <button class="btn-ghost">⏸ 暂停</button>
+        </div>
+      </div>
+
+      <div class="surface-nav">
+        <button><b>对话</b><small>回到会话时间线</small></button>
+        <button class="on follow"><b><span class="dot run"></span>跟随</b><small>直播 agent 正在写的文件</small><i class="tag" title="A1 「跟随」是 surface 家族（速览/审阅/预览/编辑器）的新成员，只在 Session 运行中出现；进入方式：点这里，或点状态条里的 ✎ 文件名">A1</i></button>
+        <button><b>速览</b><small>只读，不做决定</small></button>
+        <button><b>编辑器</b><small>手工修改代码</small></button>
+      </div>
+
+      <div class="follow-body">
+        <div class="follow-frame">
+          <div class="follow-bar">
+            <span class="dot run"></span> 跟随中
+            <span class="file">payments/api.ts</span>
+            <span>agent 每换文件，这里自动跟着换；HTML 文件时整块变为实时渲染预览<i class="tag" title="A2 双缓冲渲染：新内容在离屏 iframe 就绪后瞬间置换，零白闪（FanBox 已验证的做法）">A2</i></span>
+            <span class="sp"></span>
+            <span class="exit">滚动 / 点击 / 切换即退出跟随<i class="tag" title="A3 控制权规则：任何手动交互立即退出跟随并停在当前位置，右下浮出「回到跟随」；这是方案 A 成立与否的生命线">A3</i></span>
+          </div>
+          <div class="codepane">
+            <div class="cl"><span class="ln">38</span>export async function charge(order: Order, amount: Money) {</div>
+            <div class="cl"><span class="ln">39</span>  const client = getClient();</div>
+            <div class="cl"><span class="ln">40</span>  assertSameCurrency(order, amount);</div>
+            <div class="cl flash"><span class="ln">41</span>  const idempotencyKey = makeKey(order.id);</div>
+            <div class="cl flash"><span class="ln">42</span>  const receipt = await client.charge(amount, { idempotencyKey });</div>
+            <div class="cl flash"><span class="ln">43</span>  await ledger.record(order.id, receipt);<span class="caret"></span></div>
+            <div class="cl"><span class="ln">44</span>}</div>
+          </div>
+          <div class="follow-trail">
+            <span style="font-size:var(--fs-min);color:var(--fg-faint);align-self:center">本轮足迹</span>
+            <span class="fchip">payments/hooks.ts</span>
+            <span class="fchip">payments/types.ts</span>
+            <span class="fchip hot">payments/api.ts ●</span>
+            <i class="tag" title="A4 足迹条 = activityStore 已有的 filesTouched，点任意 chip 可锁定只看该文件（暂停自动跟随，agent 回到该文件时行仍会闪）">A4</i>
+          </div>
+        </div>
+      </div>
+
+      <div class="resume-pill" style="display:flex">↩ 回到跟随<i class="tag" title="A3′ 退出跟随后的召回入口，Esc 或点击即恢复；演示常开">A3′</i></div>
+
+      <div class="composer-zone"><div class="composer"><div class="box">
+        <textarea placeholder="跟随中也能随时插话，agent 下一轮会看到…"></textarea>
+      </div></div></div>
+    </section>
+
+    <!-- ═══════════ 方案 B：画中画监视器 — 时间线不动，浮窗直播 ═══════════ -->
+    <section class="screen" id="screen-b" style="position:relative">
+      <div class="room-head">
+        <div class="t">
+          <h2>重构支付模块</h2>
+          <span class="meta"><span class="pmark claude">✳</span> Claude Code · bullpen</span>
+        </div>
+        <div class="status-strip">
+          <span class="st"><span class="dot run"></span>正在执行 · 第 2 轮 <span class="live-file">✎ payments/api.ts</span></span>
+          <span class="sp"></span>
+          <button class="btn-ghost" style="color:var(--success);border-color:#bfdfcc">◱ 直播小窗<i class="tag" title="B1 状态条新增开关；Session 开始写文件时小窗自动浮现（设置里可改为手动），回合结束停留 5 秒后收起">B1</i></button>
+          <button class="btn-ghost">⏸ 暂停</button>
+        </div>
+      </div>
+
+      <div class="timeline"><div class="col">
+        <div class="turn-user">把 charge 加上幂等键，防止重复扣款。</div>
+        <div class="card">
+          <div class="ch">▤ 计划 · 已批准</div>
+          <ul>
+            <li>为 charge 引入 idempotencyKey，按订单派生</li>
+            <li>落账走 ledger.record，补幂等回归测试</li>
+          </ul>
+        </div>
+        <div class="card prose" style="color:var(--fg-muted)">正在改写 charge 的调用链，先处理 api.ts…<i class="tag" title="B2 时间线保持现状不动 —— 直播完全发生在小窗里，你可以同时在这里翻历史、写下一条指令">B2</i></div>
+      </div></div>
+
+      <div class="pip">
+        <div class="pip-head">
+          <span class="dot run"></span> agent 正在写
+          <span class="file">payments/api.ts</span>
+          <span class="acts" title="展开成分屏 · 钉住 · 关闭">⤢ ⌖ ✕<i class="tag" title="B3 ⤢ 把小窗升格为右侧分屏（进入方案 A 的形态）；⌖ 钉住当前文件不再自动切换；✕ 本回合内不再打开">B3</i></span>
+        </div>
+        <div class="codepane">
+          <div class="cl flash"><span class="ln">41</span>const idempotencyKey = makeKey(order.id);</div>
+          <div class="cl flash"><span class="ln">42</span>const receipt = await client.charge(amount, …);</div>
+          <div class="cl flash"><span class="ln">43</span>await ledger.record(order.id, receipt);<span class="caret"></span></div>
+        </div>
+        <div class="pip-strip">
+          <span class="fchip">hooks.ts</span>
+          <span class="fchip">types.ts</span>
+          <span class="fchip hot">api.ts ●</span>
+          <i class="tag" title="B4 同一份 filesTouched：点 chip 切换直播源；小窗可拖拽，吸附四角，位置记忆">B4</i>
+        </div>
+      </div>
+
+      <div class="composer-zone"><div class="composer"><div class="box">
+        <textarea placeholder="主区域始终是你的 —— 边看直播边下指令…"></textarea>
+      </div></div></div>
+    </section>
+
+    <!-- ═══════════ 方案 C：直播改动流 — 会话时间线自己长出直播卡 ═══════════ -->
+    <section class="screen" id="screen-c">
+      <div class="room-head">
+        <div class="t">
+          <h2>重构支付模块</h2>
+          <span class="meta"><span class="pmark claude">✳</span> Claude Code · bullpen</span>
+        </div>
+        <div class="status-strip">
+          <span class="st"><span class="dot run"></span>正在执行 · 第 2 轮 <span class="live-file">✎ payments/api.ts</span></span>
+          <span class="sp"></span>
+          <button class="btn-ghost">⏸ 暂停</button>
+        </div>
+      </div>
+
+      <div class="timeline"><div class="col">
+        <div class="turn-user">先把 hooks 里的重复请求问题修掉。</div>
+        <div class="card">
+          <div class="ch">✎ 修改了 1 个文件 · 第 1 轮已结算</div>
+          <div class="filerow">payments/hooks.ts <span class="stat"><span class="add">+9</span> <span class="del">−3</span></span></div>
+          <i class="tag" title="C1 这就是现状的回合结算卡（per-turn settlement, ADR-0032）。方案 C 不发明新卡片，只是给『进行中的回合』一个现在时形态">C1</i>
+        </div>
+
+        <div class="turn-user">把 charge 加上幂等键，防止重复扣款。</div>
+        <div class="card live-card">
+          <div class="ch"><span class="dot run"></span> 正在改动 · 2 个文件 · +38 −6<i class="tag" title="C2 直播卡 = 结算卡的现在时：diff 行流式追加，数字实时跳；回合结束原地折叠成上面那种结算卡，replay 回放的正是这张卡长出来的过程 —— live / 结算 / replay 三态一个模型">C2</i></div>
+          <div class="filerow now"><span class="fn">payments/api.ts</span> <span class="stat"><span class="add">+31</span> <span class="del">−6</span></span></div>
+          <div class="difftail">+ const idempotencyKey = makeKey(order.id);
++ const receipt = await client.charge(amount, { idempotencyKey });
++ await ledger.record(order.id, receipt);<span class="caret"></span></div>
+          <div class="filerow"><span class="fn">payments/types.ts</span> <span class="stat"><span class="add">+7</span></span><i class="tag" title="C3 点击任意文件行 → 右侧编辑器打开对应位置（复用既有 doc.open / revealPosition）；正在写的文件带绿底和实时 diff 尾巴，其余只列名字">C3</i></div>
+        </div>
+      </div></div>
+
+      <div class="composer-zone"><div class="composer"><div class="box">
+        <textarea placeholder="改动在对话里直播，随时插话…"></textarea>
+      </div></div></div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="specnote">
+  <span><b>A 画布跟随</b>：直播文件本体（含 HTML 实时渲染），沉浸最强；代价是借用画布 + 控制权归还必须可靠 · 成本 M</span>
+  <span><b>B 画中画</b>：主区域永远是你的，多会话可各开一窗；代价是浮窗管理 + 视口小 · 成本 M+</span>
+  <span><b>C 改动流</b>：与回合结算/replay 同一模型，最贴现有架构；代价是看 diff 不是成品 · 成本 S+</span>
+  <span><b>组合</b>：C 是数据地基，B 的 ⤢ 可升格为 A —— 不互斥，一期只做一个</span>
+</footer>
+
+<script>
+document.querySelectorAll('.chrome .tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.chrome .tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === 'screen-' + b.dataset.screen));
+});
+const annoBtn = document.getElementById('annoBtn');
+annoBtn.onclick = () => {
+  document.body.classList.toggle('no-anno');
+  const off = document.body.classList.contains('no-anno');
+  annoBtn.classList.toggle('on', !off);
+  annoBtn.textContent = off ? '标注：关' : '标注：开';
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>方向 04 · 事件流收件箱</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">Charter · 编队 UI</a>
+        <a class="nav-link" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link active" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">试试筛选与“查看证据”</span>
+      </div>
+    </header>
+
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">Direction 04 / Exceptions, not screens</p>
+        <h1>事件流收件箱</h1>
+      </div>
+      <p>
+        用户真正要处理的是“谁需要我、谁完成了、哪里失败了”，不是持续盯三个终端。这里把编队改造成结构化活动流；原始终端输出只作为可展开证据。
+      </p>
+    </section>
+
+    <main class="canvas-wrap">
+      <div class="prototype">
+        <div class="window-bar">
+          <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+          <span class="window-title">Charter — Orchestration Activity</span>
+        </div>
+
+        <section class="inbox-app">
+          <aside class="inbox-nav">
+            <div class="brandmark">C</div>
+            <h3>Workspace</h3>
+            <button>▤ Sessions</button>
+            <button class="active">⌁ Activity <span class="inbox-count">1</span></button>
+            <button>⌘ Changes</button>
+            <button>◇ Memory</button>
+            <h3 style="margin-top: 19px">Current task</h3>
+            <button>↗ 主会话</button>
+            <button>✓ 验收</button>
+            <span class="spacer"></span>
+            <button>⚙ Settings</button>
+          </aside>
+
+          <section class="inbox-center">
+            <header class="inbox-head">
+              <div>
+                <h2>支付超时排查</h2>
+                <div style="color: var(--faint); font-size: 10px; margin-top: 2px">编队活动 · 3 workers · 1 decision</div>
+              </div>
+              <span class="spacer"></span>
+              <button class="btn">打开主会话</button>
+              <button class="btn">暂停全部</button>
+            </header>
+
+            <div class="filter-bar">
+              <button class="filter-button active" data-filter="all">全部 6</button>
+              <button class="filter-button" data-filter="needs">待我处理 1</button>
+              <button class="filter-button" data-filter="running">进行中 2</button>
+              <button class="filter-button" data-filter="done">已完成 3</button>
+            </div>
+
+            <div class="event-feed">
+              <div class="time-label">现在</div>
+
+              <article class="event-card" data-kind="needs" id="inboxDecision">
+                <div class="event-icon">!</div>
+                <div class="event-copy">
+                  <strong>Claude · 跑测试需要你的决定</strong>
+                  <p>请求执行 <code>npm install @playwright/test</code>。风险 R3，将修改 lockfile。</p>
+                </div>
+                <div class="event-actions">
+                  <button class="btn primary" id="inboxAllow">允许一次</button>
+                  <button class="btn">拒绝</button>
+                </div>
+              </article>
+
+              <article class="event-card" data-kind="running">
+                <div class="event-icon">◎</div>
+                <div class="event-copy">
+                  <strong>Codex 发现一个可能的接管竞态</strong>
+                  <p>正在确认 xterm 协议回复是否可能被误判为用户输入；当前置信度中等。</p>
+                </div>
+                <div class="event-actions"><button class="btn evidence-toggle">查看证据</button></div>
+                <pre class="terminal event-evidence"><span class="accent">Finding 1</span>
+onData includes focus / DA / DSR protocol traffic.
+Only keyboard, paste and IME gestures should arm userInitiated.</pre>
+              </article>
+
+              <div class="time-label" style="margin-top: 18px">2 分钟前</div>
+
+              <article class="event-card" data-kind="done">
+                <div class="event-icon">✓</div>
+                <div class="event-copy">
+                  <strong>Claude · 文档同步已完成</strong>
+                  <p>修改 4 个文件，没有提交。README 和 M13 状态文档已同步。</p>
+                </div>
+                <div class="event-actions"><button class="btn evidence-toggle">查看文件</button></div>
+                <pre class="terminal event-evidence"><span class="ok">M README.md</span>
+<span class="ok">M README.zh-CN.md</span>
+<span class="ok">M docs/IMPLEMENTATION_STATUS.html</span>
+<span class="ok">M docs/IMPLEMENTATION_BACKLOG.html</span></pre>
+              </article>
+
+              <article class="event-card" data-kind="running">
+                <div class="event-icon">↗</div>
+                <div class="event-copy">
+                  <strong>Commander 创建了 Codex worker</strong>
+                  <p>任务：审查直接启动与终端接管边界。创建耗时 84ms。</p>
+                </div>
+                <div class="event-actions"><button class="btn">打开 worker</button></div>
+              </article>
+
+              <div class="time-label" style="margin-top: 18px">5 分钟前</div>
+
+              <article class="event-card" data-kind="done">
+                <div class="event-icon">✓</div>
+                <div class="event-copy">
+                  <strong>单元测试通过</strong>
+                  <p>102 个测试文件，829 项通过；耗时 17.8 秒。</p>
+                </div>
+                <div class="event-actions"><button class="btn evidence-toggle">查看证据</button></div>
+                <pre class="terminal event-evidence"><span class="ok">Test Files  102 passed (102)</span>
+<span class="ok">Tests       829 passed (829)</span>
+Duration    17.81s</pre>
+              </article>
+
+              <article class="event-card" data-kind="done">
+                <div class="event-icon">⌁</div>
+                <div class="event-copy">
+                  <strong>编队启动</strong>
+                  <p>Commander 将任务拆成测试、代码评审和文档同步三个分支。</p>
+                </div>
+                <div class="event-actions"><button class="btn">查看计划</button></div>
+              </article>
+
+              <div class="decision-empty" id="filterEmpty" hidden>这个筛选下暂时没有事件。</div>
+            </div>
+          </section>
+
+          <aside class="worker-summary">
+            <h3>Workers</h3>
+            <div class="health-row">
+              <span class="live-dot wait"></span>
+              <span><strong>Claude · 跑测试</strong><small>等待决策 · 02:14</small></span>
+              <span class="status wait">1</span>
+            </div>
+            <div class="health-row">
+              <span class="live-dot live"></span>
+              <span><strong>Codex · 方案评审</strong><small>输出中 · 01:48</small></span>
+              <span class="status live">live</span>
+            </div>
+            <div class="health-row">
+              <span class="live-dot"></span>
+              <span><strong>Claude · 文档同步</strong><small>完成 · 00:36</small></span>
+              <span class="status done">done</span>
+            </div>
+
+            <div class="summary-box">
+              <strong>Commander 摘要</strong>
+              <p>当前没有失败项。一个测试分支等待依赖安装；评审分支发现一个中等置信度竞态。</p>
+            </div>
+            <div class="summary-box">
+              <strong>工作区变化</strong>
+              <p>4 个文档文件已修改。代码文件尚未发生变化。</p>
+            </div>
+            <button class="btn" style="width: 100%; margin-top: 12px">打开终端视图</button>
+          </aside>
+        </section>
+      </div>
+    </main>
+
+    <section class="mock-caption">
+      <article class="caption-card"><strong>解决什么</strong><span>信息按重要性而不是按 worker 排列；用户打开页面首先看到待处理事项，而不是三块不停刷新的日志。</span></article>
+      <article class="caption-card"><strong>关键代价</strong><span>依赖更强的结构化事件模型；如果事件摘要质量差，用户仍会频繁展开终端证据。</span></article>
+      <article class="caption-card"><strong>适用边界</strong><span>最适合作为默认体验；终端专家仍可从任意事件进入方向 03 的聚焦剧场。</span></article>
+    </section>
+
+    <script>
+      const cards = [...document.querySelectorAll('.event-card')];
+      document.querySelectorAll('[data-filter]').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('[data-filter]').forEach((item) => item.classList.remove('active'));
+          button.classList.add('active');
+          const filter = button.dataset.filter;
+          let shown = 0;
+          cards.forEach((card) => {
+            const visible = filter === 'all' || card.dataset.kind === filter;
+            card.hidden = !visible;
+            if (visible) shown += 1;
+          });
+          document.querySelectorAll('.time-label').forEach((label) => (label.hidden = filter !== 'all'));
+          document.getElementById('filterEmpty').hidden = shown > 0;
+        });
+      });
+      document.querySelectorAll('.evidence-toggle').forEach((button) => {
+        button.addEventListener('click', () => {
+          const card = button.closest('.event-card');
+          card.classList.toggle('expanded');
+          button.textContent = card.classList.contains('expanded') ? '收起证据' : '查看证据';
+        });
+      });
+      document.getElementById('inboxAllow').addEventListener('click', () => {
+        const card = document.getElementById('inboxDecision');
+        card.dataset.kind = 'running';
+        card.querySelector('.event-icon').textContent = '↗';
+        card.querySelector('.event-copy').innerHTML = '<strong>Claude · 跑测试已继续</strong><p>允许一次；安装完成后会自动恢复 E2E。</p>';
+        card.querySelector('.event-actions').innerHTML = '<span class="status live">进行中</span>';
+      });
+    </script>
+  </body>
+</html>

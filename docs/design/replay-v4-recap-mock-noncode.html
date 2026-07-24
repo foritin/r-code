@@ -1,0 +1,665 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay 完善概念稿 · 非代码任务（mock，非实现）</title>
+<style>
+  /* ---- product theme tokens (light warm) + replay evidence palette ---- */
+  :root {
+    --bg-editor: #fbfaf7;
+    --bg-card: #ffffff;
+    --border: #e5e1d8;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --blue: #3d78e6;
+    --green: #3a9b62;
+    --amber: #d99025;
+    --red: #c94f3d;
+    --violet: #7b5bd6;
+    --gray: #9a938a;
+    --blue-soft: #eef3fd;
+    --green-soft: #ecf6f0;
+    --amber-soft: #fbf3e4;
+    --red-soft: #faeeec;
+    --violet-soft: #f2eefb;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13px/1.55 -apple-system, "PingFang SC", "Helvetica Neue", "Segoe UI", sans-serif;
+    color: var(--fg);
+    background: #efede8;
+    display: flex;
+    flex-direction: column;
+  }
+  code, .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  .mock-banner {
+    flex: none;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px;
+    background: #1f3a2e; color: #e2f0e8;
+    font-size: 12px;
+  }
+  .mock-banner strong { color: #b7e2c9; font-weight: 650; }
+  .mock-banner .pts { opacity: .92; }
+  .mock-banner a { color: #b7e2c9; }
+  .mock-banner label {
+    margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px;
+    background: #355445; border-radius: 20px; padding: 4px 12px; cursor: pointer;
+  }
+
+  .new { position: relative; }
+  body:has(#ann:checked) .new {
+    outline: 1.5px dashed var(--violet);
+    outline-offset: 3px;
+    border-radius: 8px;
+  }
+  body:has(#ann:checked) .new::after {
+    content: attr(data-t);
+    position: absolute; top: -9px; right: 8px; z-index: 5;
+    background: var(--violet); color: #fff;
+    font-size: 10px; font-weight: 650; line-height: 1;
+    padding: 3px 7px; border-radius: 8px;
+    pointer-events: none;
+  }
+
+  .app {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    background: var(--bg-editor);
+  }
+
+  /* ---- header ---- */
+  .head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+  }
+  .head .mark {
+    width: 32px; height: 32px; border-radius: 8px; flex: none;
+    display: grid; place-items: center;
+    background: var(--fg); color: var(--bg-card);
+    font-size: 15px; font-weight: 700;
+  }
+  .head .title { min-width: 0; margin-right: auto; }
+  .head .title strong { display: block; font-size: 14px; }
+  .head .title span { font-size: 11px; color: var(--fg-muted); }
+  .depths {
+    display: flex; gap: 4px; padding: 3px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--bg-editor);
+  }
+  .depths button { padding: 5px 13px; border-radius: 7px; font-size: 12px; color: var(--fg-muted); }
+  .depths button.on { background: var(--fg); color: var(--bg-card); font-weight: 600; }
+  .head .ghost {
+    padding: 6px 12px; border: 1px solid var(--border); border-radius: 8px;
+    font-size: 12px; background: var(--bg-card);
+  }
+
+  /* ---- session contract ---- */
+  .contract {
+    display: flex; align-items: stretch;
+    padding: 8px 16px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto; margin: 0;
+  }
+  .cell {
+    padding: 2px 18px 2px 0; margin-right: 18px;
+    border-right: 1px solid var(--border);
+    min-width: 0; flex: none;
+  }
+  .cell:last-child { border-right: 0; margin-right: 0; }
+  .cell dt { font-size: 10px; color: var(--fg-muted); letter-spacing: .4px; margin-bottom: 2px; }
+  .cell dd { margin: 0; font-size: 12.5px; font-weight: 550; white-space: nowrap; }
+  .cell dd small { font-weight: 400; color: var(--fg-muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 20px; font-size: 11.5px; font-weight: 600; }
+  .pill.amber { background: var(--amber-soft); color: #9a6410; }
+  .pill.green { background: var(--green-soft); color: #22713f; }
+  .cell details { display: inline; }
+  .cell summary { cursor: pointer; list-style: none; }
+  .cell summary::-webkit-details-marker { display: none; }
+  .cell summary .expand { color: var(--blue); font-size: 11px; margin-left: 4px; }
+  .ctx-pop {
+    position: absolute; z-index: 30; margin-top: 8px;
+    width: 340px; padding: 12px 14px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+    box-shadow: 0 10px 32px rgba(32,30,26,.14);
+    font-weight: 400; white-space: normal;
+  }
+  .ctx-pop h4 { margin: 0 0 6px; font-size: 11px; color: var(--fg-muted); }
+  .ctx-pop ul { margin: 0 0 10px; padding-left: 16px; font-size: 12px; }
+  .ctx-pop li { margin: 2px 0; }
+
+  /* ---- body ---- */
+  .body { display: grid; grid-template-columns: 430px minmax(0,1fr); min-height: 0; }
+
+  .story {
+    display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--border); background: var(--bg-card);
+  }
+  .story-head {
+    flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 16px 8px; font-size: 12.5px;
+  }
+  .story-head strong { font-size: 13px; }
+  .story-head button { color: var(--fg-muted); font-size: 11.5px; border: 1px solid var(--border); border-radius: 14px; padding: 3px 10px; }
+  .story-list { flex: 1; overflow-y: auto; padding: 4px 16px 16px; }
+  .story-foot {
+    flex: none; padding: 8px 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--fg-muted); display: flex; justify-content: space-between;
+  }
+
+  .msg { display: flex; gap: 10px; margin: 14px 0; }
+  .msg .ava {
+    flex: none; width: 26px; height: 26px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .msg.user .ava { background: #4a4640; }
+  .msg.agent .ava { background: var(--blue); }
+  .msg .body-t { min-width: 0; }
+  .msg .who { font-size: 10.5px; color: var(--fg-muted); letter-spacing: .5px; margin-bottom: 3px; }
+  .msg .who b { color: var(--fg); font-weight: 650; margin-right: 6px; }
+  .msg .text {
+    background: var(--bg-editor); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 11px; font-size: 12.8px;
+  }
+  .msg.user .text { background: #f3f1ec; }
+  .cite-chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 6px; margin-right: 6px;
+    font-size: 10.5px; color: var(--blue);
+    border: 1px solid #cddcf8; background: var(--blue-soft);
+    border-radius: 12px; padding: 2px 8px; cursor: pointer;
+  }
+
+  .act {
+    display: flex; align-items: center; gap: 9px;
+    width: 100%; text-align: left;
+    padding: 6px 8px; margin: 2px 0;
+    border-radius: 8px; font-size: 12.3px;
+  }
+  .act:hover { background: var(--bg-editor); }
+  .act .dot {
+    flex: none; width: 22px; height: 22px; border-radius: 6px;
+    display: grid; place-items: center; font-size: 11px;
+    background: var(--bg-editor); border: 1px solid var(--border); color: var(--fg-muted);
+  }
+  .act.err .dot { background: var(--red-soft); border-color: #eccbc4; color: var(--red); }
+  .act.ok .dot { background: var(--green-soft); border-color: #cbe5d4; color: var(--green); }
+  .act.warn .dot { background: var(--amber-soft); border-color: #f0dcb6; color: var(--amber); }
+  .act .t { min-width: 0; flex: 1; }
+  .act .t b { font-weight: 600; }
+  .act .t small { color: var(--fg-muted); }
+  .act time { flex: none; font-size: 10.5px; color: var(--fg-muted); }
+  .lvl { flex: none; font-size: 10px; padding: 1.5px 7px; border-radius: 10px; font-weight: 600; }
+  .lvl.rec { background: var(--blue-soft); color: #2b5cb8; }
+  .lvl.ver { background: var(--green-soft); color: #22713f; }
+  .lvl.inf { background: var(--violet-soft); color: #5b3fb0; }
+  .act.active { background: var(--blue-soft); box-shadow: inset 0 0 0 1.5px var(--blue); }
+
+  .fold { margin: 6px 0; }
+  .fold summary {
+    list-style: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    color: var(--fg-muted); font-size: 11.5px;
+    padding: 5px 8px; border-radius: 8px;
+  }
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary:hover { background: var(--bg-editor); color: var(--fg); }
+  .fold summary .line { flex: 1; border-top: 1px dashed var(--border); }
+  .fold summary .n { flex: none; }
+  .fold summary .hint { flex: none; color: var(--blue); }
+  .fold .sample { padding: 2px 0 4px 14px; border-left: 2px dashed var(--border); margin-left: 18px; }
+  .fold .more { display: block; font-size: 11px; color: var(--blue); padding: 4px 8px 2px 22px; }
+
+  .pivot {
+    margin: 10px 0; padding: 10px 12px 11px;
+    border: 1px solid #d9cef2; border-left: 3px solid var(--violet);
+    background: var(--violet-soft); border-radius: 10px;
+  }
+  .pivot .tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; color: #5b3fb0; letter-spacing: .5px;
+    margin-bottom: 5px;
+  }
+  .pivot .tag i { font-style: normal; font-size: 13px; }
+  .pivot p { margin: 0; font-size: 12.6px; }
+  .pivot .why { color: #4c3f77; }
+  .pivot .refs { margin-top: 7px; }
+
+  /* ---- right column ---- */
+  .main { min-width: 0; overflow-y: auto; padding: 16px 20px 22px; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px 16px;
+  }
+  .result-line { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .result-line h1 { margin: 0; font-size: 17px; font-weight: 700; }
+  .result-line .facts { color: var(--fg-muted); font-size: 12.5px; }
+
+  .concl {
+    margin: 10px 0 0; font-size: 13.2px; padding: 9px 12px;
+    background: var(--violet-soft); border-left: 3px solid var(--violet); border-radius: 8px;
+  }
+  .concl .lvl { margin-right: 6px; }
+  .to-room { margin-top: 10px; display: flex; align-items: baseline; gap: 8px; font-size: 12.3px; color: var(--fg-muted); flex-wrap: wrap; }
+  .to-room button { color: var(--blue); font-weight: 600; }
+  .to-room small { color: var(--fg-muted); }
+
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+  .duo h3 { margin: 0 0 8px; font-size: 11px; color: var(--fg-muted); letter-spacing: .4px; }
+  .out-row {
+    display: flex; align-items: baseline; gap: 8px; width: 100%; text-align: left;
+    padding: 6px 8px; border-radius: 7px; font-size: 12.3px;
+  }
+  .out-row:hover { background: var(--bg-editor); }
+  .out-row .ic { flex: none; }
+  .out-row .t { flex: 1; min-width: 0; }
+  .out-row .t small { color: var(--fg-muted); }
+  .tag-irrev {
+    flex: none; font-size: 10px; font-weight: 700; color: #fff;
+    background: var(--amber); border-radius: 8px; padding: 1.5px 7px;
+  }
+  .tag-comp {
+    flex: none; font-size: 10px; font-weight: 600; color: #22713f;
+    background: var(--green-soft); border-radius: 8px; padding: 1.5px 7px;
+  }
+  .attn {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 6px 8px; border-radius: 7px; font-size: 12.3px; width: 100%; text-align: left;
+  }
+  .attn:hover { background: var(--bg-editor); }
+  .attn.irrev { background: var(--amber-soft); border: 1px solid #f0dcb6; }
+  .attn.irrev .badge {
+    flex: none; font-size: 10px; font-weight: 700; color: #fff;
+    background: var(--amber); border-radius: 8px; padding: 1.5px 7px;
+  }
+
+  /* message artifact stage (no diff — this task changed no files) */
+  .stage { margin-top: 12px; }
+  .stage-head { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-bottom: 8px; }
+  .stage-head .now { color: var(--fg-muted); }
+  .stage-head b { font-weight: 650; }
+  .stage-head .rev { margin-left: auto; font-size: 11px; color: var(--green); background: var(--green-soft); border-radius: 10px; padding: 2px 9px; font-weight: 600; }
+  .sent-msg {
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+    background: var(--bg-editor); font-size: 12.8px;
+  }
+  .sent-msg .meta { font-size: 11px; color: var(--fg-muted); margin-bottom: 8px; }
+  .sent-msg table { border-collapse: collapse; margin: 8px 0; width: 100%; font-size: 12px; }
+  .sent-msg th, .sent-msg td { border: 1px solid var(--border); padding: 4px 9px; text-align: left; }
+  .sent-msg th { background: #f4f2ee; font-weight: 600; }
+  .sent-msg .win { background: var(--green-soft); }
+  .stage-foot { display: flex; gap: 14px; margin-top: 8px; font-size: 11.5px; }
+  .stage-foot button { color: var(--blue); }
+
+  /* ---- timeline ---- */
+  .timeline { background: var(--bg-card); border-top: 1px solid var(--border); padding: 8px 16px 10px; }
+  .transport { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .transport .tp {
+    width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border);
+    display: grid; place-items: center; background: var(--bg-card);
+  }
+  .transport .tp.play { background: var(--fg); color: var(--bg-card); border-color: var(--fg); }
+  .transport time { color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+  .transport select { font: inherit; font-size: 11.5px; border: 1px solid var(--border); border-radius: 6px; padding: 2px 4px; background: var(--bg-card); color: var(--fg-muted); }
+  .toggle {
+    display: flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 16px; padding: 3px 11px; font-size: 11.5px;
+  }
+  .toggle.on { background: var(--blue-soft); border-color: #c5d8f8; color: #2b5cb8; font-weight: 600; }
+  .toggle i { width: 22px; height: 12px; border-radius: 8px; background: #cfd8ea; position: relative; font-style: normal; }
+  .toggle.on i { background: var(--blue); }
+  .toggle i::after { content: ""; position: absolute; top: 1.5px; left: 1.5px; width: 9px; height: 9px; border-radius: 50%; background: #fff; }
+  .toggle.on i::after { left: auto; right: 1.5px; }
+  .transport .steps { margin-left: auto; color: var(--fg-muted); font-size: 11.5px; }
+
+  .axis { position: relative; height: 56px; margin: 10px 6px 0; }
+  .axis .line { position: absolute; left: 0; right: 0; top: 38px; border-top: 2px solid var(--border); }
+  .moment {
+    position: absolute; top: 0; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 10px; color: var(--fg-muted); white-space: nowrap;
+  }
+  .moment b { font-size: 10.5px; color: var(--fg); font-weight: 650; }
+  .moment i {
+    font-style: normal; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--bg-card); border: 2.5px solid var(--gray); margin-top: 2px;
+  }
+  .moment.req i { border-color: #4a4640; }
+  .moment.disc i { border-color: var(--blue); }
+  .moment.dec i { border-color: var(--blue); }
+  .moment.warn i { border-color: var(--amber); }
+  .moment.pivot i { border-color: var(--violet); background: var(--violet-soft); }
+  .moment.ver i { border-color: var(--green); background: var(--green-soft); }
+  .moment.res i { border-color: var(--fg); }
+  .moment.here b { color: var(--blue); }
+  .moment.here i { box-shadow: 0 0 0 4px var(--blue-soft); border-color: var(--blue); }
+  .playhead { position: absolute; top: 30px; width: 2px; height: 18px; background: var(--blue); transform: translateX(-50%); }
+  .playhead::before { content: ""; position: absolute; top: -4px; left: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+
+  .cov { display: flex; align-items: center; gap: 10px; margin-top: 10px; font-size: 10.5px; color: var(--fg-muted); }
+  .cov .band { flex: 1; display: flex; height: 6px; border-radius: 4px; overflow: hidden; }
+  .cov .band i { display: block; height: 100%; }
+  .cov .rec { background: #b9cdf3; }
+  .cov .verif { background: #9fd0b2; }
+  .legend { display: flex; gap: 10px; }
+  .legend s { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+  .legend s::before { content: ""; width: 8px; height: 8px; border-radius: 2px; }
+  .legend .l-rec::before { background: #b9cdf3; }
+  .legend .l-ver::before { background: #9fd0b2; }
+</style>
+</head>
+<body>
+
+<header class="mock-banner">
+  <strong>非代码任务版（0 文件改动）</strong>
+  <span class="pts">同一套回放 UI 换一个使用者：比价 + 改约 + 发结论。重要变化 → 「产出与对外动作」；舞台 → 已发出的消息；验证 → 回执。结论行在这类任务里就是全部结果。<a href="replay-v4-recap-mock.html">← 返回代码任务版</a></span>
+  <label><input type="checkbox" id="ann" checked> 标注适配点</label>
+</header>
+
+<div class="app">
+
+  <!-- ================= header ================= -->
+  <header class="head">
+    <div class="mark">▸</div>
+    <div class="title">
+      <strong>对比三家供应商报价，改约 VendorB 演示并通知采购组</strong>
+      <span>Charter Agent · 2026-07-20 09:10 – 09:32 · 418 个记录事件</span>
+    </div>
+    <nav class="depths">
+      <button class="on">回顾</button>
+      <button>探究</button>
+      <button>核验</button>
+    </nav>
+    <button class="ghost">导出凭证</button>
+    <button class="ghost">✕</button>
+  </header>
+
+  <!-- ================= session contract ================= -->
+  <dl class="contract">
+    <div class="cell" style="max-width:320px">
+      <dt>原始目标（已记录）</dt>
+      <dd style="white-space:normal;font-weight:450">对比三份报价（三年总成本 + SLA），结论发采购组；VendorB 演示改约并通知对方</dd>
+    </div>
+    <div class="cell">
+      <dt>结果</dt>
+      <dd><span class="pill amber">Agent 完成 · 待你确认</span></dd>
+    </div>
+    <div class="cell">
+      <dt>验证</dt>
+      <dd><span class="pill green">已验证 · 2 项回执</span></dd>
+    </div>
+    <div class="cell">
+      <dt>用时</dt>
+      <dd>22 分钟 <small>实际</small> · 75 秒 <small>故事</small></dd>
+    </div>
+    <div class="cell" style="position:relative">
+      <dt>喂给 Agent 的输入</dt>
+      <dd>
+        <details>
+          <summary>3 份报价 PDF · 1 条记忆 · 1 份规则<span class="expand">展开 ▾</span></summary>
+          <div class="ctx-pop">
+            <h4>文件引用（当次快照）</h4>
+            <ul>
+              <li>VendorA-报价-2026Q3.pdf</li>
+              <li>VendorB-报价-2026Q3.pdf</li>
+              <li>VendorC-报价-2026Q3.pdf</li>
+            </ul>
+            <h4>注入的记忆</h4>
+            <ul><li>「采购类结论需同步采购组群」— 项目记忆（2026-06-30）</li></ul>
+            <h4>规则</h4>
+            <ul><li>对外发送前必须请求权限（工作区策略）</li></ul>
+          </div>
+        </details>
+      </dd>
+    </div>
+    <div class="cell">
+      <dt>证据覆盖</dt>
+      <dd>完整记录 100%</dd>
+    </div>
+  </dl>
+
+  <!-- ================= body ================= -->
+  <div class="body">
+
+    <!-- ---------- left: conversation & actions ---------- -->
+    <aside class="story">
+      <div class="story-head">
+        <strong>对话与操作</strong>
+        <button>显示全部上下文</button>
+      </div>
+      <div class="story-list">
+
+        <div class="msg user">
+          <span class="ava">你</span>
+          <div class="body-t">
+            <div class="who"><b>YOU</b>09:10</div>
+            <div class="text">这三份报价 PDF 你对比一下，重点看三年总成本和 SLA，结论整理后发到采购组群。另外 VendorB 周三的演示我有冲突，帮我改约到周五下午并通知对方。</div>
+          </div>
+        </div>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>09:10 · <span style="color:#2b5cb8">结构化记录</span></div>
+            <div class="text">好的。我先读三份报价做对比，再给 VendorB 发改约请求，最后把结论发到采购组。</div>
+          </div>
+        </div>
+
+        <details class="fold new" data-t="折叠占位">
+          <summary>
+            <span class="line"></span>
+            <span class="n">阅读报价与往来邮件 · 34 次读取 · 5 分钟</span>
+            <span class="hint">展开样例</span>
+            <span class="line"></span>
+          </summary>
+          <div class="sample">
+            <div class="act"><span class="dot">📄</span><span class="t">读取 <b>VendorB-报价-2026Q3.pdf</b> <small>· 第 4 页</small></span><time>09:12</time></div>
+            <div class="act"><span class="dot">📄</span><span class="t">读取 <b>与 VendorB 的往来邮件</b> <small>· 最近 6 封</small></span><time>09:13</time></div>
+            <span class="more">在探究层查看全部 34 条 →</span>
+          </div>
+        </details>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>09:15 · 发现</div>
+            <div class="text">
+              对比完成：VendorB 首年报价最低，但第 4 页含年度平台费 $12k，三年总成本反而最高（$186k）；VendorA 三年 $168k 且 SLA 99.95%，综合最优。
+              <div><span class="cite-chip">依据 · VendorB 报价 第 4 页</span><span class="cite-chip">依据 · 三年成本计算过程</span></div>
+            </div>
+          </div>
+        </div>
+
+        <button class="act">
+          <span class="dot">🛡</span>
+          <span class="t"><b>请求以你的邮箱向 VendorB 发送改约邮件</b> <small>· 高风险 R3 · 你批准了</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:17</time>
+        </button>
+
+        <button class="act warn">
+          <span class="dot">✉</span>
+          <span class="t"><b>已发送邮件：请求改约至周五 14:00</b> <small>· 外部系统 · 不可逆 · 内容已存证</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:18</time>
+        </button>
+
+        <details class="fold">
+          <summary>
+            <span class="line"></span>
+            <span class="n">等待 VendorB 回复 · 已折叠 2.6 分钟空闲</span>
+            <span class="line"></span>
+          </summary>
+        </details>
+
+        <div class="pivot new" data-t="转折">
+          <span class="tag"><i>↷</i> 转折 · 改期方案变更 <span class="lvl inf">推导叙事</span></span>
+          <p><b>周五不可行，按对方提议改为下周一 10:00。</b></p>
+          <p class="why">原因：VendorB 回复周五下午无档期，提出周一上午两个时段。</p>
+          <div class="refs">
+            <span class="cite-chip">依据 · 对方回复邮件 09:21</span>
+            <span class="cite-chip">依据 · 确认邮件 09:22</span>
+          </div>
+        </div>
+
+        <button class="act warn">
+          <span class="dot">✉</span>
+          <span class="t"><b>已发送邮件：确认下周一 10:00</b> <small>· 外部系统 · 不可逆</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:22</time>
+        </button>
+
+        <button class="act">
+          <span class="dot">📅</span>
+          <span class="t"><b>创建日程：VendorB 产品演示 · 下周一 10:00</b> <small>· 可补偿（可删除）</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:24</time>
+        </button>
+
+        <button class="act active warn">
+          <span class="dot">💬</span>
+          <span class="t"><b>在「采购组」发送对比结论</b> <small>· 不可逆 · 内容已存证</small></span>
+          <span class="lvl rec">结构化记录</span>
+          <time>09:26</time>
+        </button>
+
+        <button class="act ok">
+          <span class="dot">✓</span>
+          <span class="t"><b>回执验证：日程存在 + 群消息已送达</b> <small>· 2 项回执</small></span>
+          <span class="lvl ver">已验证</span>
+          <time>09:27</time>
+        </button>
+
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="body-t">
+            <div class="who"><b>AGENT</b>09:28 · 最终报告</div>
+            <div class="text">
+              已完成。结论已发采购组：推荐 VendorA（三年总成本最低、SLA 达标）。VendorB 演示改约至下周一 10:00，双方已确认，日程已建。注意：两封邮件与群消息已发出，不可撤回。
+              <div><span class="cite-chip">依据 · 送达回执</span><span class="cite-chip">依据 · 日程回执</span></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="story-foot">
+        <span>13 个语义节点</span>
+        <span>已折叠 405 条低影响记录 · 节点间可展开</span>
+      </div>
+    </aside>
+
+    <!-- ---------- right: result & current moment ---------- -->
+    <section class="main">
+
+      <div class="card">
+        <div class="result-line">
+          <h1>Agent 完成 · 待你确认</h1>
+          <span class="facts new" data-t="替代「未记录文件变更」">4 项对外动作（3 项不可逆）· 0 文件变更 · 2 项回执已验证 · 22 分钟</span>
+        </div>
+
+        <p class="concl new" data-t="结论行=全部结果">
+          <span class="lvl inf">引自最终报告</span>
+          推荐 VendorA——三年总成本最低（$168k）且 SLA 达标；VendorB 演示已改约至下周一 10:00，结论已发采购组。
+          <span class="cite-chip">① 报价对比 09:15</span>
+          <span class="cite-chip">② 对方确认 09:21</span>
+          <span class="cite-chip">③ 送达回执 09:27</span>
+        </p>
+
+        <div class="to-room">
+          <button>Esc 关闭回放 · 回到房间确认收尾 →</button>
+          <small>回放保持只读；对外动作已发生，房间里可归档或追加指示</small>
+        </div>
+
+        <div class="duo">
+          <div class="new" data-t="重要变化 → 对外动作">
+            <h3>产出与对外动作</h3>
+            <div class="out-row"><span class="ic">✉</span><span class="t">改约邮件 ×2（VendorB）<br><small>请求周五 → 确认下周一 10:00</small></span><span class="tag-irrev">不可逆</span></div>
+            <div class="out-row"><span class="ic">💬</span><span class="t">采购组群消息 ×1<br><small>对比结论 · 已送达</small></span><span class="tag-irrev">不可逆</span></div>
+            <div class="out-row"><span class="ic">📅</span><span class="t">日程 ×1：VendorB 演示<br><small>下周一 10:00 · 已回读确认</small></span><span class="tag-comp">可补偿</span></div>
+          </div>
+          <div>
+            <h3>需要注意</h3>
+            <button class="attn irrev">
+              <span class="badge">不可逆</span>
+              <span>2 封邮件与 1 条群消息已发出，无法撤回（内容均已存证，点击查看）</span>
+            </button>
+            <button class="attn"><span style="color:var(--violet)">↷</span><span>演示时间从周五改为下周一（对方要求）· 点击回看转折</span></button>
+            <button class="attn"><span style="color:var(--amber)">⚠</span><span>VendorC 报价未含实施费，按补齐口径对比（Agent 声明）<span class="lvl inf" style="margin-left:4px">推导叙事</span></span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card stage new" data-t="舞台 = 已发出的消息，非 diff">
+        <div class="stage-head">
+          <span class="now">正在查看 09:26</span>
+          <b>发送至「采购组」</b>
+          <span class="rev">送达回执 · 已验证</span>
+        </div>
+        <div class="sent-msg">
+          <div class="meta">发送者：Charter Agent（代 你）· 2026-07-20 09:26 · 内容已存证，与实际发出逐字一致</div>
+          <p style="margin:0 0 4px"><b>供应商对比结论（三年口径）</b></p>
+          <table>
+            <tr><th>供应商</th><th>三年总成本</th><th>SLA</th><th>结论</th></tr>
+            <tr class="win"><td>VendorA</td><td>$168k</td><td>99.95%</td><td><b>推荐</b></td></tr>
+            <tr><td>VendorB</td><td>$186k（含平台费 $12k×3）</td><td>99.9%</td><td>首年低价，三年最贵</td></tr>
+            <tr><td>VendorC</td><td>$174k（补齐实施费口径）</td><td>99.5%</td><td>SLA 不达标</td></tr>
+          </table>
+          <p style="margin:4px 0 0">VendorB 产品演示已改约至下周一 10:00，日程已同步。</p>
+        </div>
+        <div class="stage-foot">
+          <button>查看这一步的完整详情</button>
+          <button>在核验层追溯证据 →</button>
+        </div>
+      </div>
+
+    </section>
+  </div>
+
+  <!-- ================= timeline ================= -->
+  <footer class="timeline">
+    <div class="transport">
+      <button class="tp">‹</button>
+      <button class="tp play">▶</button>
+      <button class="tp">›</button>
+      <time>00:52 / 01:15</time>
+      <select><option>1×</option><option>2×</option><option>4×</option></select>
+      <button class="toggle on"><i></i>跳过等待</button>
+      <span class="steps">step 10 / 418 · Story Time（切换真实时间）</span>
+    </div>
+    <div class="axis">
+      <div class="line"></div>
+      <div class="moment req"  style="left:4%"><b>请求</b><span>09:10</span><i></i></div>
+      <div class="moment disc" style="left:17.1%"><b>发现</b><span>09:15</span><i></i></div>
+      <div class="moment dec"  style="left:30.3%"><b>决策</b><span>09:17</span><i></i></div>
+      <div class="moment warn" style="left:43.4%"><b>对外动作</b><span>09:18</span><i></i></div>
+      <div class="moment pivot new" data-t="转折" style="left:56.6%"><b>转折</b><span>09:21</span><i></i></div>
+      <div class="moment warn here" style="left:69.7%"><b>对外动作</b><span>09:26</span><i></i></div>
+      <div class="moment ver"  style="left:82.9%"><b>验证</b><span>09:27</span><i></i></div>
+      <div class="moment res"  style="left:96%"><b>结果</b><span>09:28</span><i></i></div>
+      <div class="playhead" style="left:69.7%"></div>
+    </div>
+    <div class="cov">
+      <time>00:00</time>
+      <div class="band">
+        <i class="rec" style="width:80%"></i>
+        <i class="verif" style="width:8%"></i>
+        <i class="rec" style="width:12%"></i>
+      </div>
+      <div class="legend">
+        <s class="l-rec">结构化记录</s><s class="l-ver">已验证</s>
+      </div>
+      <span>已压缩等待与重复读取</span>
+      <time>01:15</time>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

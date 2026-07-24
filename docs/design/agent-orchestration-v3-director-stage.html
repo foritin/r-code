@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 会话编排 V3 — 导播位（director-stage）</title>
+    <style>
+      /* Tokens mirror apps/desktop-renderer/src/styles/theme.css (studio light).
+         Shell likeness mirrors session-workbench.css (rail: 320px = 44px strip + panel,
+         session rows 56px grid 25px+1fr, group indent via left border) + room.css
+         (serif narration, recessed mono evidence, 14px cards / 9px chips).
+         V3 on top of the fusion draft (agent-orchestration-fusion-mockup.html):
+         the two-column fleet tiles stay as the "monitor wall"; a DIRECTOR STAGE
+         is added above it — the system auto-cuts the most watch-worthy feed onto
+         one big live panel, every cut is explained, lockable, logged, reviewable. */
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --danger-bg: #fdecea;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --radius-card: 14px;
+        --radius-chip: 9px;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg-app); color: var(--fg); font-family: var(--font-ui); font-size: 13px; }
+      button { font-family: inherit; }
+
+      /* ---------- mockup 导航（非产品 UI） ---------- */
+      .mockbar { max-width: 1240px; margin: 24px auto 6px; padding: 0 20px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+      .mockbar h1 { font-family: var(--font-display); font-size: 21px; font-weight: 600; margin: 0; }
+      .mockbar .sub { color: var(--fg-muted); font-size: 12.5px; }
+      .vdesc { max-width: 1240px; margin: 0 auto 12px; padding: 0 20px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.65; }
+      .vdesc b { color: var(--fg); }
+
+      /* ---------- 壳复刻 ---------- */
+      .frame { max-width: 1240px; margin: 0 auto 26px; padding: 0 20px; }
+      .app { display: grid; grid-template-columns: 320px minmax(0, 1fr); height: 700px; background: var(--bg-editor); border: 1px solid var(--border); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+
+      /* rail（镜像 .sr-rail：44px 活动列 + 面板；行 56px；子行 44px） */
+      .rail { display: grid; grid-template-columns: 44px minmax(0, 1fr); border-right: 1px solid var(--border); background: var(--bg-sidebar); min-height: 0; }
+      .rail-strip { border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 6px; background: var(--bg-titlebar); }
+      .rail-strip .brand { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accent-fg); display: grid; place-items: center; font-family: var(--font-display); font-size: 13px; margin-bottom: 8px; }
+      .rail-strip .it { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; color: var(--fg-faint); font-size: 14px; position: relative; }
+      .rail-strip .it.active { background: var(--bg-active); color: var(--fg); }
+      .rail-strip .it .mini { position: absolute; top: 2px; right: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--warning); }
+      .rail-panel { display: flex; flex-direction: column; min-height: 0; }
+      .rail-head { padding: 12px 12px 8px; }
+      .rail-head .hrow { display: flex; align-items: baseline; gap: 6px; }
+      .rail-head strong { font-size: 14px; }
+      .rail-head small { color: var(--fg-faint); font-size: 10.5px; margin-left: auto; }
+      .rail-search { margin-top: 8px; display: flex; gap: 6px; }
+      .rail-search .box { flex: 1; display: flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--fg-faint); font-size: 11.5px; }
+      .rail-search .needs { padding: 5px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--fg-muted); font-size: 11.5px; cursor: pointer; }
+      .rail-scroll { flex: 1; min-height: 0; overflow: auto; padding: 6px 9px 14px; }
+      .grp-head { min-height: 32px; display: flex; align-items: center; gap: 6px; padding-left: 6px; color: var(--fg-muted); }
+      .grp-head strong { font: 650 11.5px var(--font-ui); color: var(--fg); }
+      .grp-head .cnt { margin-left: auto; color: var(--fg-faint); font: 9px var(--font-mono); padding-right: 6px; }
+      .grp-items { margin: 0 0 6px 8px; padding-left: 6px; border-left: 1px solid var(--border-soft); }
+
+      .srow { position: relative; width: 100%; min-height: 56px; display: grid; grid-template-columns: 25px minmax(0, 1fr); gap: 7px; margin-bottom: 2px; padding: 7px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; align-items: start; }
+      .srow:hover { background: var(--bg-hover); }
+      .srow.selected { background: var(--bg-active); border-color: var(--border); }
+      .srow .ic { width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center; font-size: 12px; background: var(--bg-chip); color: var(--fg-muted); }
+      .srow .t { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; min-width: 0; }
+      .srow .t .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .srow .d { margin-top: 2px; color: var(--fg-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+      .ldot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); opacity: 0.5; flex: none; }
+      .ldot.live { background: var(--success); opacity: 1; animation: pulse 1.2s ease-in-out infinite; }
+      .ldot.hold { background: var(--warning); opacity: 1; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      .badge { flex: none; font-size: 9.5px; padding: 1px 6px; border-radius: 6px; background: var(--bg-chip); color: var(--fg-muted); font-weight: 600; }
+      .badge.warn { background: var(--warning-bg); color: var(--warning); }
+      .badge.ok { background: var(--success-bg); color: var(--success); }
+      .badge.info { background: var(--info-bg); color: var(--info); }
+      /* 家谱缩进（沿用 .sr-group-items 习语；子行矮一档 44px —— 已拍板） */
+      .kids { margin: 0 0 4px 19px; padding-left: 7px; border-left: 1px solid var(--border-soft); }
+      .kids .srow { min-height: 44px; }
+      .kids .srow .ic { width: 21px; height: 21px; font-size: 10.5px; }
+
+      /* ---------- 房间复刻 ---------- */
+      .room { display: flex; flex-direction: column; min-height: 0; background: var(--bg-editor); }
+      .room-head { display: flex; align-items: center; gap: 9px; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); flex: none; }
+      .room-head .back { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-faint); font-size: 12px; cursor: pointer; }
+      .room-head .rt { font-family: var(--font-display); font-size: 15px; font-weight: 600; }
+      .room-head .proj { color: var(--fg-faint); font-size: 11.5px; }
+      .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: var(--radius-chip); background: var(--bg-chip); color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+      .chip.ctl { background: var(--info-bg); color: var(--info); }
+      .spacer { flex: 1; }
+      .ghost { border: none; background: transparent; color: var(--fg-faint); font: inherit; font-size: 12px; cursor: pointer; padding: 3px 7px; border-radius: 7px; }
+      .ghost:hover { background: var(--bg-hover); color: var(--fg); }
+
+      .band { display: flex; align-items: center; gap: 8px; padding: 6px 16px; font-size: 12px; border-bottom: 1px solid var(--border-soft); flex: none; }
+      .band.ctl { background: var(--info-bg); color: var(--info); }
+      .band .crumb { text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+      .band .act { margin-left: auto; font-size: 11.5px; border: 1px solid currentColor; background: transparent; color: inherit; border-radius: 7px; padding: 2px 9px; cursor: pointer; }
+
+      .term { flex: 1; min-height: 90px; overflow: auto; padding: 12px 18px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.66; color: var(--fg-muted); white-space: pre-wrap; cursor: text; }
+      .term .cmd { color: var(--fg); }
+      .term .ok { color: var(--success); }
+      .term .err { color: var(--danger); }
+      .term .dim { color: var(--fg-faint); }
+
+      .approval { border: 1px solid var(--warning); background: var(--warning-bg); border-radius: 12px; padding: 10px 13px; font-family: var(--font-ui); white-space: normal; }
+      #t9Approval .approval { margin: 10px 16px; }
+      .approval .q { font-size: 12.5px; line-height: 1.55; }
+      .approval code { font-family: var(--font-mono); font-size: 11px; background: rgba(255, 255, 255, 0.7); padding: 1px 6px; border-radius: 5px; }
+      .approval .acts { display: flex; gap: 6px; margin-top: 9px; flex-wrap: wrap; }
+      .approval .acts button { font: inherit; font-size: 11.5px; padding: 3.5px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .approval .acts .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+      .approval.sm { margin: 9px 0 2px; padding: 8px 11px; }
+      .approval.sm .q { font-size: 11.5px; }
+
+      .cli-input { margin: 10px 16px 14px; display: flex; align-items: center; gap: 8px; max-width: 760px; align-self: center; width: calc(100% - 32px); background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-card); padding: 10px 14px; color: var(--fg-faint); font-family: var(--font-mono); font-size: 12px; flex: none; }
+      .cli-input .caret { color: var(--fg); }
+
+      /* ---------- 编队区 = 导播位 + 监视墙（融合稿编队区的增强层） ---------- */
+      .fleet-sec { border-top: 1px solid var(--border-soft); padding: 8px 16px 10px; flex: none; }
+      .fleet-sec h4 { margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); display: flex; align-items: center; gap: 8px; }
+      .fleet-sec h4 .fold { cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px; color: inherit; }
+      .fleet-sec h4 .fold .chev { transition: transform 120ms ease; display: inline-block; }
+      .fleet-sec.closed h4 .fold .chev { transform: rotate(-90deg); }
+      .fleet-sec.closed .fleet-body { display: none; }
+      .fleet-sec h4 .hold { font-size: 11px; text-transform: none; letter-spacing: 0; }
+      .tglchip { cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); border-radius: 7px; padding: 2px 9px; font-size: 10.5px; font-weight: 600; color: var(--fg-muted); text-transform: none; letter-spacing: 0; }
+      .tglchip:hover { border-color: var(--border-strong); }
+      .tglchip.off { background: var(--bg-chip); color: var(--fg-faint); }
+
+      /* 导播位（stage）：一块够大的直播画面，切换必带原因 */
+      .stage { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 7px; }
+      .stage.alert { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+      .stage-head { display: flex; align-items: center; gap: 7px; padding: 6px 11px; border-bottom: 1px solid var(--border-soft); background: var(--bg-titlebar); font-size: 11.5px; font-weight: 600; }
+      .stage-head .why { display: inline-flex; align-items: center; padding: 1px 8px; border-radius: 6px; background: var(--info-bg); color: var(--info); font-size: 10px; font-weight: 600; white-space: nowrap; }
+      .stage-head .open { color: var(--info); font-weight: 500; font-size: 11px; cursor: pointer; white-space: nowrap; }
+      .lockbtn { border: 1px solid var(--border); background: var(--bg-card); color: var(--fg-muted); font-size: 10.5px; border-radius: 7px; padding: 2px 8px; cursor: pointer; white-space: nowrap; }
+      .lockbtn.on { background: var(--bg-active); border-color: var(--border-strong); color: var(--fg); }
+      .review-band { display: flex; align-items: center; gap: 8px; padding: 4px 11px; font-size: 11px; background: var(--warning-bg); color: var(--warning); border-bottom: 1px solid var(--border-soft); }
+      .review-band button { margin-left: auto; border: 1px solid currentColor; background: transparent; color: inherit; font-size: 10.5px; border-radius: 6px; padding: 1.5px 8px; cursor: pointer; }
+      .stage-body { height: 168px; overflow: auto; padding: 9px 12px 10px; font-family: var(--font-mono); font-size: 11px; line-height: 1.65; color: var(--fg-muted); white-space: pre-wrap; background: color-mix(in srgb, var(--bg-chip) 40%, var(--bg-editor)); }
+      .stage-body .cmd { color: var(--fg); }
+      .stage-body .ok { color: var(--success); }
+      .stage-body .err { color: var(--danger); }
+      .stage-body .dim { color: var(--fg-faint); }
+      .stage-body.past { background: color-mix(in srgb, var(--warning-bg) 55%, var(--bg-editor)); }
+      .queue-chip { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 7px; border: 1px solid var(--warning); background: var(--warning-bg); color: var(--warning); font-size: 10.5px; font-weight: 600; border-radius: 7px; padding: 3px 10px; cursor: pointer; }
+
+      /* 导播记录：每次切换留档（账本投影），点旧 chip 回看 */
+      .cutlog { display: flex; gap: 6px; align-items: center; overflow-x: auto; padding: 1px 1px 8px; }
+      .cutlog .lbl { font-size: 10px; color: var(--fg-faint); flex: none; letter-spacing: 0.05em; }
+      .cl-chip { flex: none; font: 10px var(--font-mono); padding: 2.5px 9px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-card); color: var(--fg-muted); cursor: pointer; }
+      .cl-chip .tt { color: var(--fg-faint); margin-right: 5px; }
+      .cl-chip.live { border-color: color-mix(in srgb, var(--success) 45%, transparent); color: var(--fg); }
+      .cl-chip.viewing { background: var(--warning-bg); border-color: var(--warning); color: var(--warning); }
+
+      /* 监视墙：融合稿的双列瓦片，原样保留（已拍板），仅压矮 */
+      .ftiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+      .ftile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; }
+      .ftile.pending { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+      .ftile.staged { border-color: color-mix(in srgb, var(--success) 45%, var(--border)); }
+      .ftile .fh { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--border-soft); background: var(--bg-titlebar); font-size: 11px; font-weight: 600; cursor: pointer; }
+      .ftile .fh .fnm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ftile .fh .open { margin-left: auto; color: var(--info); font-weight: 500; font-size: 10.5px; cursor: pointer; white-space: nowrap; }
+      .ftile .fh .onair { font-size: 9.5px; color: var(--success); font-weight: 650; white-space: nowrap; }
+      .ftile .fb { height: 44px; padding: 4px 10px 6px; font-family: var(--font-mono); font-size: 10px; line-height: 1.55; color: var(--fg-muted); display: flex; align-items: flex-end; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 14px); mask-image: linear-gradient(to bottom, transparent 0, #000 14px); }
+      .ftile .fb .fbi { white-space: pre-wrap; width: 100%; }
+      .ftile .fb.dimmed { align-items: center; justify-content: center; font-family: var(--font-ui); font-size: 10.5px; color: var(--fg-faint); }
+      .ftile .fa { padding: 0 10px 8px; display: flex; gap: 6px; }
+      .ftile .fa button { font: inherit; font-size: 10.5px; padding: 2px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--bg-card); cursor: pointer; }
+      .ftile .fa .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      /* ---------- 设计说明 ---------- */
+      .notes { max-width: 1240px; margin: 4px auto 60px; padding: 0 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+      .note-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card); padding: 16px 18px; }
+      .note-card h2 { font-family: var(--font-display); font-size: 15px; margin: 0 0 8px; }
+      .note-card ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
+      .note-card li { margin: 4px 0; line-height: 1.55; }
+      .note-card li b { color: var(--fg); }
+      .hidden { display: none; }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="mockbar">
+      <h1>会话编排 · V3「导播位」</h1>
+      <span class="sub">监视墙之上加一块自动对准"最值得看"的大画面 · 切换可解释、可锁定、可回看</span>
+    </div>
+    <div class="vdesc">
+      <b>怎么玩：</b>导播位已自动对准「claude · 跑测试」（待审批优先级最高，切入原因写在蓝 chip 上）。约 9 秒后 codex 评审完成——审批还挂着时它<b>不抢画面</b>，而是变成「待切」排队。这条 R3 审批有四个入口：<b>rail 徽章 / 监视墙瓦片（未上屏时才展开按钮，试试先点 codex 瓦片头手动上屏）/ 导播位卡 / 被指挥房间的卡</b>——任意一处允许或拒绝，其余同步消失。允许后看连锁余波：重装 → exit 0 → 主会话被 wait 唤醒 → 导播切走。再试试：「锁定这路」、「导播·手动」、点「导播记录」旧 chip 回看切出时刻快照、进「跑测试」房间点终端正文体验敲字即接管。
+    </div>
+
+    <div class="frame">
+      <div class="app">
+        <aside class="rail">
+          <div class="rail-strip">
+            <div class="brand">C</div>
+            <div class="it active">▤<span class="mini" id="stripMini"></span></div>
+            <div class="it">▦</div>
+            <div class="it">◈</div>
+          </div>
+          <div class="rail-panel">
+            <div class="rail-head">
+              <div class="hrow"><strong>Sessions</strong><small>今天 · 4 live</small></div>
+              <div class="rail-search"><span class="box">⌕ 搜索会话…</span><span class="needs" id="needsFilter">Needs 1</span></div>
+            </div>
+            <div class="rail-scroll">
+              <div class="grp-head"><strong>pay-service</strong><span class="cnt">4</span></div>
+              <div class="grp-items">
+                <div class="srow" data-room="t1" id="rowT1">
+                  <span class="ic">✳</span>
+                  <span>
+                    <span class="t"><span class="ldot live"></span><span class="nm">claude · 支付超时排查</span><span class="badge info" id="cmdBadge">⌁ 指挥 2</span><span class="badge warn" id="railT1Needs">1</span></span>
+                    <span class="d">外部会话 · 正在协调评审与测试</span>
+                  </span>
+                </div>
+                <div class="kids">
+                  <div class="srow" data-room="t3" id="rowT3">
+                    <span class="ic">▷</span>
+                    <span>
+                      <span class="t"><span class="ldot live" id="railT3dot"></span><span class="nm">codex · 方案评审</span></span>
+                      <span class="d" id="railT3desc">由主会话开启 · 输出中</span>
+                    </span>
+                  </div>
+                  <div class="srow" data-room="t9" id="rowT9">
+                    <span class="ic">✳</span>
+                    <span>
+                      <span class="t"><span class="ldot hold" id="railT9dot"></span><span class="nm">claude · 跑测试</span><span class="badge warn" id="railT9badge">待审批</span></span>
+                      <span class="d" id="railT9desc">由主会话开启 · 请求重装依赖</span>
+                    </span>
+                  </div>
+                </div>
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">购物车折扣</span><span class="badge ok">Review</span></span>
+                    <span class="d">任务 · 等你验收 · 26 分钟前</span>
+                  </span>
+                </div>
+              </div>
+              <div class="grp-head"><strong>charter-site</strong><span class="cnt">1</span></div>
+              <div class="grp-items">
+                <div class="srow">
+                  <span class="ic">◇</span>
+                  <span>
+                    <span class="t"><span class="ldot"></span><span class="nm">首页文案微调</span></span>
+                    <span class="d">History · 昨天</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- ===== 房间一：主会话（指挥室：叙事 + 导播位 + 监视墙） ===== -->
+        <main class="room" id="roomT1">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 支付超时排查</span>
+            <span class="proj">pay-service</span>
+            <span class="chip ctl">⌁ 指挥 2 个会话</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="term" id="t1Term"></div>
+          <div class="fleet-sec" id="fleetSec">
+            <h4>
+              <span class="fold" id="fleetFold"><span class="chev">▾</span>编队 · 2</span>
+              <button class="tglchip" id="autoTgl">导播 · 自动</button>
+              <span class="spacer"></span>
+              <button class="ghost hold" id="holdAll">⏸ 暂停全部遥控</button>
+            </h4>
+            <div class="fleet-body">
+              <div class="stage" id="stage">
+                <div class="stage-head">
+                  <span class="ldot" id="stageDot"></span>
+                  <span id="stageName">—</span>
+                  <span class="badge" id="stageBadge">—</span>
+                  <span class="badge info" id="stageTaken" hidden>✋ 已接管</span>
+                  <span class="why" id="stageWhy">—</span>
+                  <span class="spacer"></span>
+                  <button class="lockbtn" id="stageLock">锁定这路</button>
+                  <span class="open" id="stageOpen" data-room="t9">打开房间 ›</span>
+                </div>
+                <div class="review-band" id="stageReview" hidden>
+                  <span id="stageReviewLabel">回看</span>
+                  <button id="backLive">回到直播</button>
+                </div>
+                <div class="stage-body" id="stageBody"></div>
+              </div>
+              <button class="queue-chip" id="stageQueue" hidden></button>
+              <div class="cutlog"><span class="lbl">导播记录</span><span id="cutLog" style="display:contents"></span></div>
+              <div class="ftiles">
+                <div class="ftile" id="tileT3"></div>
+                <div class="ftile" id="tileT9"></div>
+              </div>
+            </div>
+          </div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与主会话对话（CLI 输入行）…</div>
+        </main>
+
+        <!-- ===== 房间二：codex · 方案评审（被指挥） ===== -->
+        <main class="room hidden" id="roomT3">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">codex · 方案评审</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="band ctl">⌁ 由 <span class="crumb" data-room="t1">claude · 支付超时排查</span> 指挥 · 输入可能来自它<button class="act" id="t3PauseBtn">暂停对它的遥控</button></div>
+          <div class="term" id="t3Term"></div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与本会话对话…</div>
+        </main>
+
+        <!-- ===== 房间三：claude · 跑测试（被指挥 + 审批 + 接管） ===== -->
+        <main class="room hidden" id="roomT9">
+          <div class="room-head">
+            <span class="back">‹ Sessions</span>
+            <span class="rt">claude · 跑测试</span>
+            <span class="proj">pay-service</span>
+            <span class="spacer"></span>
+            <button class="ghost">⧉ 并排</button>
+            <button class="ghost">⋯</button>
+          </div>
+          <div class="band ctl" id="t9BandCtl">⌁ 由 <span class="crumb" data-room="t1">claude · 支付超时排查</span> 指挥 · 输入可能来自它<button class="act" id="t9PauseBtn">暂停对它的遥控</button></div>
+          <div class="band ctl hidden" id="t9BandTaken">✋ 你已接管 · 主会话的注入已暂挂<button class="act" id="t9GiveBack">归还控制</button></div>
+          <div class="term" id="t9Term" title="点击正文演示接管"></div>
+          <div id="t9Approval"></div>
+          <div class="cli-input"><span class="caret">›</span> 直接输入即与本会话对话（CLI 输入行）…</div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ================= 设计说明 ================= -->
+    <div class="notes">
+      <div class="note-card">
+        <h2>① 概念：导播位——它解决融合稿的什么盲区</h2>
+        <ul>
+          <li><b>概念</b>：编队区从"均权监视墙"升级为"导播台"。墙（双列瓦片）之上加一块大画面，系统按显式优先级把"当前最值得看"的一路切上来：<b>待你审批 &gt; 失败/异常退出 &gt; 刚完成 &gt; 输出中 &gt; 静默</b>。每次切换必带原因 chip（"切入 · 待审批 R3"），可锁定、可切手动、每次切换留档可回看。</li>
+          <li><b>盲区一：小瓦片看不清</b>。融合稿瓦片 10.5px mono 只露三行尾巴；想看清就得「打开房间」——但那会离开指挥位，丢掉主会话叙事和另一路动静。导播位 = <b>不离开指挥位的深围观</b>。</li>
+          <li><b>盲区二：注意力调度靠人肉</b>。两路还能扫，三四路时用户变成轮询器。系统本来就从账本事件里知道该看谁（审批、exit 码、完成判定），导播用一张<b>少而硬的规则表</b>替用户切，而不是只给边框变色。</li>
+          <li><b>盲区三：低头即错过</b>。瓦片只显示"现在的尾巴"，你回消息的十秒里 test 窗从 exit 1 走到申请注入的过程就丢了。「导播记录」把每个切换时刻留成快照 chip，点开回看——错过的瞬间兜得住。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>② 与融合稿的关系：叠加层，账本的实时投影</h2>
+        <ul>
+          <li><b>纯叠加，不推翻</b>：rail 家谱缩进（子行 44px）、needs 数字冒泡、⌁ 横带、两档暂停、敲字即接管——全部原样。双列瓦片墙（已拍板）保留为"监视墙"，导播位插在墙上方，同属可折叠编队区；折叠后仍只剩一行区头。</li>
+          <li><b>审批多了第四入口</b>：rail 徽章 / 瓦片 / 导播位卡 / 被指挥房间卡，四处引用 permission_requests 里<b>同一条记录</b>，任意一处处理，其余同步消失（本页可验证）。被放大的瓦片正文让位为「已在导播位」，未上屏时瓦片保留完整审批按钮——同一记录按表面状态渲染，不是四份状态。</li>
+          <li><b>不造新机器</b>：切换由账本里已有的编排事件驱动（审批、exit 码、静默判定），导播记录就是账本的筛选视图，"回看"就是 replay 的 UI 形态——概念落在既有事件账本骨架上。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>③ 代价与风险</h2>
+        <ul>
+          <li><b>垂直空间</b>：导播位挤压主会话叙事区。对策：瓦片压矮（尾巴两行，细节归导播位）、整区可折叠；窄高度下可退回"仅墙"形态。</li>
+          <li><b>自动切换的失控感</b>：画面自己动是最容易招烦的交互。对策：切换必带原因 chip、一键锁定、手动档（点瓦片头上屏）、审批未决时其他事件只排队不抢画面、同路事件只换 chip 不闪切。规则表必须少而硬——一旦错判几次，用户会永久忽略导播。</li>
+          <li><b>回看的实现成本</b>：切出时刻快照需要截取终端 scrollback 并留存（大小、隐私、脏数据）；若走账本 replay 全重建则成本再上一个量级。</li>
+          <li><b>规则僵化风险</b>：优先级表不做机器猜测（刻意），但"输出中谁优先"在多路时仍可能不合预期——先用"最久未上屏优先"，观察后调。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>④ 留给产品负责人拍的三个问题</h2>
+        <ul>
+          <li><b>Q1 导播位要不要全局化？</b>本稿只放在主会话房间（编队区内）。是否要跟随到被指挥房间、甚至浮出壳层跨房间常驻（那就长成画中画的形态）？建议 v1 只留在指挥位，观察使用再说。</li>
+          <li><b>Q2 回看的保真度选哪档？</b>轻量文本快照（切出时刻的 scrollback 尾巴，本稿演示的形态）vs 基于账本 replay 的完整重建（可拖时间轴）。成本差一个量级，建议 v1 快照、replay 留给账本查看器。</li>
+          <li><b>Q3 默认档位？</b>自动导播默认开（新手直觉"它自己会切"，但有失控感风险）还是默认手动（保守，导播记录仍然工作）？本稿默认自动 + 显眼的锁定/手动出口。</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+
+      /* ---------- 单一状态源：所有表面（rail/瓦片/导播位/房间）由它渲染 ---------- */
+      const S = {
+        approval: 'pending', // pending | allowed | denied —— 同一条 permission_requests 记录
+        taken: false,        // 敲字即接管
+        holding: false,      // 暂停全部遥控
+        holdT9: false,       // 暂停单路遥控
+        auto: true,          // 自动导播 / 手动
+        locked: false,       // 锁定当前路（仅自动档）
+        stage: 't9',         // 导播位上的会话
+        queued: null,        // 被压住的切换 {feed, reason}
+        review: null,        // 正在回看的导播记录 index，null=直播
+        codexDone: false, testGreen: false, finale: false,
+      };
+
+      const FEEDS = {
+        t3: {
+          name: 'codex · 方案评审', dot: 'live', badge: ['badge', '输出中'], live: true,
+          railDesc: '由主会话开启 · 输出中',
+          body: '<span class="cmd">› 请 review docs/plan.md，意见写到 review.md</span>\n正在阅读方案……\n① 重试策略建议指数退避 ✔\n② 超时阈值 3s 偏激进，建议可配置\n③ 缺少幂等键，重复扣款风险 ⚠',
+        },
+        t9: {
+          name: 'claude · 跑测试', dot: 'hold', badge: ['badge warn', '待审批 R3'], live: false,
+          railDesc: '由主会话开启 · 请求重装依赖',
+          body: '<span class="cmd">$ npm test</span>\n<span class="err">✗ 12 passed · 2 failed</span>\n<span class="dim">  ELIFECYCLE 依赖损坏（sharp 二进制缺失）</span>',
+        },
+      };
+      let MAIN = '<span class="cmd">✻ 方案已写入 docs/plan.md，交给 codex 评审中。</span>\n<span class="cmd">✻ 测试窗首跑 exit 1：sharp 二进制缺失，是环境不是代码。</span>\n<span class="cmd">✻ 已申请向测试窗注入重装命令（R3），等你放行。</span>\n<span class="dim">⏳ wait codex（静默判定）· wait 测试窗（exit 码）</span>';
+
+      /* 导播记录：每个条目 = 一段"上屏期"；snap 为切出时刻快照（账本投影） */
+      const LOG = [
+        { t: '14:01', feed: 't3', reason: '开始输出',
+          snap: '<span class="cmd">› 请 review docs/plan.md，意见写到 review.md</span>\n正在阅读方案……\n① 重试策略建议指数退避 ✔\n<span class="cmd">▍</span>' },
+        { t: '14:02', feed: 't9', reason: '待审批 R3', snap: null },
+      ];
+      let CLOCK = 2;
+      const cur = () => LOG[LOG.length - 1];
+      const tick = () => '14:' + String(++CLOCK).padStart(2, '0');
+
+      function approvalHtml(sm) {
+        return '<div class="approval' + (sm ? ' sm' : '') + '"><div class="q"><b>主会话</b> 请求向' + (sm ? '该' : '本') + '终端注入高危命令（R3）：<code>rm -rf node_modules &amp;&amp; npm ci</code></div><div class="acts"><button class="allow" data-approve="yes">允许一次</button><button data-approve="always">本任务内总是允许</button><button data-approve="no">拒绝</button></div></div>';
+      }
+
+      /* ---------- 导播切换机 ---------- */
+      function doCut(feed, reason) {
+        const prev = cur();
+        prev.snap = FEEDS[prev.feed].body + (FEEDS[prev.feed].live ? '\n<span class="cmd">▍</span>' : '');
+        LOG.push({ t: tick(), feed, reason, snap: null });
+        S.stage = feed;
+        if (S.queued && S.queued.feed === feed) S.queued = null;
+        render();
+      }
+      function requestCut(feed, reason) {
+        if (feed === S.stage) { doCut(feed, reason); return; } // 同路：只换原因并留档，不闪切
+        const blocked = !S.auto || S.locked || (S.approval === 'pending' && S.stage === 't9');
+        if (blocked) { S.queued = { feed, reason }; render(); } else doCut(feed, reason);
+      }
+      function releaseQueue() {
+        if (S.queued && S.auto && !S.locked && !(S.approval === 'pending' && S.stage === 't9')) {
+          const q = S.queued; S.queued = null; doCut(q.feed, q.reason);
+        }
+      }
+
+      /* ---------- 渲染：每个入口都是同一记录的投影 ---------- */
+      function renderTile(id) {
+        const f = FEEDS[id], el = $('#tile' + id.toUpperCase());
+        const staged = S.stage === id;
+        const showApp = S.approval === 'pending' && id === 't9' && !staged;
+        el.classList.toggle('pending', S.approval === 'pending' && id === 't9');
+        el.classList.toggle('staged', staged);
+        el.innerHTML =
+          '<div class="fh" data-cut="' + id + '" title="点击上屏到导播位"><span class="ldot ' + f.dot + '"></span><span class="fnm">' + f.name + '</span>' +
+          (id === 't9' && S.taken ? '<span class="badge info">✋ 已接管</span>' : '') +
+          '<span class="' + f.badge[0] + '">' + f.badge[1] + '</span>' +
+          (staged ? '<span class="onair">◉ 导播位</span>' : '') +
+          '<span class="open" data-room="' + id + '">打开房间 ›</span></div>' +
+          (staged
+            ? '<div class="fb dimmed">已在导播位放大直播</div>'
+            : '<div class="fb"><div class="fbi">' + f.body + (f.live ? '\n▍' : '') + '</div></div>') +
+          (showApp ? '<div class="fa"><button class="allow" data-approve="yes">允许一次</button><button data-approve="no">拒绝</button></div>' : '');
+      }
+      function render() {
+        /* rail（入口一） */
+        $('#railT9dot').className = 'ldot ' + FEEDS.t9.dot;
+        $('#railT3dot').className = 'ldot ' + FEEDS.t3.dot;
+        $('#railT9badge').hidden = S.approval !== 'pending';
+        $('#railT1Needs').hidden = S.approval !== 'pending';
+        $('#stripMini').hidden = S.approval !== 'pending';
+        $('#needsFilter').textContent = 'Needs ' + (S.approval === 'pending' ? 1 : 0);
+        $('#railT9desc').textContent = FEEDS.t9.railDesc;
+        $('#railT3desc').textContent = FEEDS.t3.railDesc;
+        const cb = $('#cmdBadge');
+        cb.textContent = S.holding ? '⌁ 已暂停' : '⌁ 指挥 2';
+        cb.className = 'badge' + (S.holding ? '' : ' info');
+        /* 导播位（入口四） */
+        const f = FEEDS[S.stage];
+        $('#stage').classList.toggle('alert', S.approval === 'pending' && S.stage === 't9');
+        $('#stageDot').className = 'ldot ' + f.dot;
+        $('#stageName').textContent = f.name;
+        const sb = $('#stageBadge'); sb.className = f.badge[0]; sb.textContent = f.badge[1];
+        $('#stageTaken').hidden = !(S.stage === 't9' && S.taken);
+        $('#stageWhy').textContent = S.auto ? '切入 · ' + cur().reason : '手动 · 点瓦片头上屏';
+        const lock = $('#stageLock');
+        lock.hidden = !S.auto;
+        lock.textContent = S.locked ? '已锁定 · 点击解锁' : '锁定这路';
+        lock.classList.toggle('on', S.locked);
+        $('#stageOpen').dataset.room = S.stage;
+        const q = $('#stageQueue');
+        q.hidden = !S.queued;
+        if (S.queued) q.textContent = '待切 ▸ ' + FEEDS[S.queued.feed].name + ' · ' + S.queued.reason + '（点击切过去）';
+        const body = $('#stageBody');
+        if (S.review != null) {
+          const e = LOG[S.review];
+          $('#stageReview').hidden = false;
+          $('#stageReviewLabel').textContent = '回看 ' + e.t + ' · ' + FEEDS[e.feed].name + ' · ' + e.reason + '（切出时刻快照）';
+          body.classList.add('past');
+          body.innerHTML = e.snap;
+        } else {
+          $('#stageReview').hidden = true;
+          body.classList.remove('past');
+          body.innerHTML = f.body + (f.live ? '\n<span class="cmd">▍</span>' : '') +
+            (S.approval === 'pending' && S.stage === 't9' ? approvalHtml(true) : '');
+          body.scrollTop = body.scrollHeight;
+        }
+        /* 导播记录 */
+        $('#cutLog').innerHTML = LOG.map((e, i) => {
+          const liveE = i === LOG.length - 1;
+          const short = FEEDS[e.feed].name.split(' · ')[1] || FEEDS[e.feed].name;
+          return '<button class="cl-chip' + (liveE ? ' live' : '') + (S.review === i ? ' viewing' : '') + '" data-log="' + i + '"><span class="tt">' + e.t + '</span>' + short + ' · ' + e.reason + (liveE ? ' ◉' : '') + '</button>';
+        }).join('');
+        /* 监视墙（入口二） */
+        renderTile('t3'); renderTile('t9');
+        /* 房间（入口三） + 终端镜像 */
+        $('#t9Approval').innerHTML = S.approval === 'pending' ? approvalHtml(false) : '';
+        $('#t9Term').innerHTML = FEEDS.t9.body + (FEEDS.t9.live ? '\n<span class="cmd">▍</span>' : '');
+        $('#t3Term').innerHTML = FEEDS.t3.body + (FEEDS.t3.live ? '\n<span class="cmd">▍</span>' : '');
+        $('#t1Term').innerHTML = MAIN + '\n<span class="cmd">▍</span>';
+        $('#t9BandCtl').classList.toggle('hidden', S.taken);
+        $('#t9BandTaken').classList.toggle('hidden', !S.taken);
+        $('#holdAll').textContent = S.holding ? '▶ 恢复遥控' : '⏸ 暂停全部遥控';
+        $('#t9PauseBtn').textContent = S.holdT9 ? '恢复对它的遥控' : '暂停对它的遥控';
+        const tg = $('#autoTgl');
+        tg.textContent = S.auto ? '导播 · 自动' : '导播 · 手动';
+        tg.classList.toggle('off', !S.auto);
+      }
+
+      /* ---------- 审批：一条记录，四个入口 ---------- */
+      function resolve(allowed, always) {
+        if (S.approval !== 'pending') return;
+        S.approval = allowed ? 'allowed' : 'denied';
+        if (always) MAIN += '\n<span class="dim">（已记住：本任务内同类注入自动放行）</span>';
+        if (allowed) {
+          requestCut('t9', 'R3 已放行 · 重装中'); // 先留档"待审批时刻"快照，再改内容
+          FEEDS.t9.dot = 'live'; FEEDS.t9.live = true;
+          FEEDS.t9.badge = ['badge info', '重装中'];
+          FEEDS.t9.railDesc = '由主会话开启 · 重装依赖中';
+          FEEDS.t9.body = '<span class="cmd">$ rm -rf node_modules &amp;&amp; npm ci</span>\n重装依赖中……';
+          setTimeout(() => {
+            requestCut('t9', 'exit 0 · 14 passed'); // 留档"重装中"快照
+            FEEDS.t9.dot = ''; FEEDS.t9.live = false;
+            FEEDS.t9.badge = ['badge ok', 'exit 0'];
+            FEEDS.t9.railDesc = '由主会话开启 · 测试全绿';
+            FEEDS.t9.body = '<span class="cmd">$ rm -rf node_modules &amp;&amp; npm ci</span>\n<span class="dim">added 412 packages in 21s</span>\n<span class="cmd">$ npm test</span>\n<span class="ok">✓ 14 passed · exit 0</span>';
+            MAIN += '\n<span class="ok">✻ 测试窗 exit 0（14 passed）· wait 唤醒，收尾中。</span>';
+            S.testGreen = true;
+            render(); maybeFinale();
+            setTimeout(releaseQueue, 1400);
+          }, 2600);
+        } else {
+          requestCut('t9', '注入被拒 · 主会话改道');
+          FEEDS.t9.dot = ''; FEEDS.t9.live = false;
+          FEEDS.t9.badge = ['badge', '已拒绝'];
+          FEEDS.t9.railDesc = '由主会话开启 · 注入被拒绝';
+          FEEDS.t9.body += '\n<span class="dim">（注入被你拒绝，主会话已收到回执）</span>';
+          MAIN += '\n<span class="dim">✻ 注入被拒绝——改为只删 sharp 后局部重装，稍后以更低风险等级重新申请。</span>';
+          setTimeout(releaseQueue, 1400);
+        }
+        render();
+      }
+      function maybeFinale() {
+        if (S.testGreen && S.codexDone && !S.finale) {
+          S.finale = true;
+          setTimeout(() => { MAIN += '\n<span class="ok">✻ 两路结果都齐了：评审 5 条 + 测试全绿，汇总修复方案中…</span>'; render(); }, 1200);
+        }
+      }
+
+      /* ---------- 房间穿梭 ---------- */
+      const ROOMS = ['t1', 't3', 't9'];
+      function go(room) {
+        for (const r of ROOMS) $('#room' + r[0].toUpperCase() + r.slice(1)).classList.toggle('hidden', r !== room);
+        $('#rowT1').classList.toggle('selected', room === 't1');
+        $('#rowT3').classList.toggle('selected', room === 't3');
+        $('#rowT9').classList.toggle('selected', room === 't9');
+      }
+
+      /* ---------- 事件委托：动态重绘的入口也稳定可点 ---------- */
+      document.addEventListener('click', (ev) => {
+        const ap = ev.target.closest('[data-approve]');
+        if (ap) { resolve(ap.dataset.approve !== 'no', ap.dataset.approve === 'always'); return; }
+        const rm = ev.target.closest('[data-room]');
+        if (rm) { go(rm.dataset.room); return; }
+        const lg = ev.target.closest('[data-log]');
+        if (lg) {
+          const i = +lg.dataset.log;
+          S.review = i === LOG.length - 1 ? null : i;
+          render(); return;
+        }
+        const ct = ev.target.closest('[data-cut]');
+        if (ct) {
+          doCut(ct.dataset.cut, '手动切换');
+          if (S.auto) { S.locked = true; render(); }
+          return;
+        }
+      });
+      $('#backLive').addEventListener('click', () => { S.review = null; render(); });
+      $('#stageLock').addEventListener('click', () => { S.locked = !S.locked; if (!S.locked) releaseQueue(); render(); });
+      $('#autoTgl').addEventListener('click', () => {
+        S.auto = !S.auto;
+        if (S.auto) releaseQueue(); else S.locked = false;
+        render();
+      });
+      $('#stageQueue').addEventListener('click', () => {
+        if (!S.queued) return;
+        const q = S.queued; S.queued = null; S.locked = false;
+        doCut(q.feed, q.reason);
+      });
+      $('#fleetFold').addEventListener('click', () => $('#fleetSec').classList.toggle('closed'));
+
+      /* 敲字即接管（点终端正文模拟）：注入自动暂挂，各表面同步 ✋ */
+      $('#t9Term').addEventListener('click', () => { if (!S.taken) { S.taken = true; render(); } });
+      $('#t9GiveBack').addEventListener('click', () => { S.taken = false; render(); });
+
+      /* 两档暂停（已拍板）：总闸只拦新注入；单路在 ⌁ 横带 */
+      $('#holdAll').addEventListener('click', () => {
+        S.holding = !S.holding;
+        MAIN += S.holding
+          ? '\n<span class="dim">⏸ 你暂停了全部遥控：新注入排队，在跑的命令不受影响。</span>'
+          : '\n<span class="dim">▶ 遥控已恢复，暂挂注入依次放行。</span>';
+        render();
+      });
+      $('#t9PauseBtn').addEventListener('click', () => {
+        S.holdT9 = !S.holdT9;
+        MAIN += S.holdT9
+          ? '\n<span class="dim">⏸ 已暂停对「跑测试」的遥控（单路）。</span>'
+          : '\n<span class="dim">▶ 已恢复对「跑测试」的遥控。</span>';
+        render();
+      });
+      $('#t3PauseBtn').addEventListener('click', () => {
+        MAIN += '\n<span class="dim">⏸ 已暂停对「方案评审」的遥控（单路）。</span>';
+        render();
+      });
+
+      /* ---------- 轻量直播感：codex 继续输出，随后完成（演示排队/切换） ---------- */
+      setTimeout(() => { FEEDS.t3.body += '\n④ 建议回调侧加抖动重试'; render(); }, 5000);
+      setTimeout(() => {
+        S.codexDone = true;
+        FEEDS.t3.body += '\n⑤ 建议补一条超时回归用例\n<span class="ok">评审完成 · 5 条意见已写入 review.md</span>';
+        FEEDS.t3.live = false; FEEDS.t3.dot = '';
+        FEEDS.t3.badge = ['badge ok', '评审完成'];
+        FEEDS.t3.railDesc = '由主会话开启 · 评审完成';
+        MAIN += '\n<span class="cmd">✻ codex 静默判定达成 · 已收 review.md（5 条意见）。</span>';
+        requestCut('t3', '评审完成');
+        maybeFinale();
+      }, 9000);
+
+      go('t1');
+      render();
+    </script>
+  </body>
+</html>

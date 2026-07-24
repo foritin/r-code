@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Session split-width mockups · r-code</title>
+  <link rel="stylesheet" href="../../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../../agent-core/index.html">Agent Core</a><a href="../../../index.html" aria-current="page">R-Code</a><a href="../../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="session-split-width-mockups">Session split-width mockups</h1>
+<p>讨论用 mock，非产品代码。主题：Session 画布里「对话列 ↔ 工具画布」的宽度分配。</p>
+<h2 id="背景-现状">背景（现状）</h2>
+<ul><li><code>session-canvas.css</code>：<code>.tr-main</code> 56% / <code>.session-tool-canvas</code> 44%，固定 flex 比例，无拖拽把手。</li><li>唯一的调节手段是右上角 Expand/Balance，切到 38% / 62% 两档。</li><li><code>appStore.openPeek(mode: &#39;diff&#39;)</code> 会自动置 <code>sessionToolExpanded: true</code> —— 打开 Diff<br>时右侧自动变宽，是「中间有时候太窄」的直接来源。</li></ul>
+<h2 id="打开方式">打开方式</h2>
+<p>浏览器直接打开 <code>index.html</code>（或任一变体）。三个 mock 都是真实可交互的。</p>
+<h2 id="三个方向">三个方向</h2>
+<table><thead><tr><th></th><th>A · 自由拖拽把手</th><th>B · 磁吸档位</th><th>C · 焦点跟随</th></tr></thead><tbody><tr><td>核心动作</td><td>拖到哪算哪</td><td>拖动吸附到 62/50/38 三档</td><td>不手动调，宽度跟随焦点</td></tr><tr><td>复位/切换</td><td>双击复位 56/44</td><td>点圆点直达、双击轮换</td><td>⇄ 一键对调</td></tr><tr><td>记忆</td><td>按 Session 记住任意比例</td><td>按 Session 记住所在档位</td><td>图钉冻结当前比例</td></tr><tr><td>与 Diff 自动扩展的关系</td><td>手动拖过 = 覆盖自动值</td><td>Diff 打开跳到「工具优先」档</td><td>天然就是这个模型</td></tr><tr><td>风险</td><td>像素级微调易失控、比例不可复现</td><td>自由度受限</td><td>自动行为可能打扰重度键盘用户</td></tr><tr><td>键盘</td><td>←/→ 2% 微调</td><td>←/→ 上下档</td><td>—（Tab 到 ⇄/图钉）</td></tr></tbody></table>
+<p>共同规格（三案一致）：对话列最小 380px、工具画布最小 360px；调整动画 160–240ms<br>且尊重 <code>prefers-reduced-motion</code>；现有 Expand 按钮保留语义（A/B 中等于跳档）。</p>
+<h2 id="需要拍板的问题">需要拍板的问题</h2>
+<ol><li>记忆的粒度：按 Session、按项目、还是全局一个值？</li><li>打开 Diff 的自动扩展是否保留？（A 案建议：用户拖过之后自动扩展不再覆盖手动值）</li><li>B 案的档位数值（62/50/38）与命名是否成立？</li><li>C 案是否作为 A/B 之上的可选增强（设置项），而不是三选一？</li></ol></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../../assets/site.js"></script>
+</body>
+</html>

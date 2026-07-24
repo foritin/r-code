@@ -1,0 +1,947 @@
+<!doctype html>
+<!-- Charter — Skills 透视(触发统计 + context 预算)mockup (docs/design). NOT product code.
+     补齐对 FanBox 的两个缺口,帮用户做 skill 断舍离:
+       1. 触发统计:45 天内每个 skill 被 load_skill 调用几次(数据已在 turn ledger,聚合即可)
+       2. context 预算条:enabled skills 各占 preamble 多少 token(skill-store 的 <skill> 块长度即来源)
+     三个方案,共享同一份 skill 状态(在任一处切 Off/Auto,其余方案同步更新):
+       A. 最小改动 —— 留在 Settings → Agent 卡片内,每行加用量+token,顶部加一条预算摘要
+       B. 新增 Settings 左侧栏目 "Skills"(推荐)—— 独立页面:堆叠预算条 + 可排序列表 + unused 提示
+       C. 断舍离审查 —— 从 B 页一键进入:按"每次调用成本"排序的候选清单,勾选批量禁用
+     主题切换、排序、hover 联动、批量禁用 都是活的。试试点。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — Skills 透视 mockup</title>
+    <style>
+      body[data-theme='light'] {
+        --backdrop: #e8e6e2;
+        --side: #f6f5f1;
+        --main: #ffffff;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --fg: #201e1a;
+        --fg2: #6e6a61;
+        --fg3: #a39e94;
+        --hover: #e8e5de;
+        --active: #e2dfd7;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --warn: #b06f10;
+        --ok: #2f9e63;
+        --info: #3f7bd9;
+        --code: #f4f2ee;
+        --card-shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      body[data-theme='dark'] {
+        --backdrop: #141312;
+        --side: #1d1c19;
+        --main: #161513;
+        --card: #21201c;
+        --border: #33312b;
+        --border-soft: #2a2924;
+        --fg: #e8e6e0;
+        --fg2: #a29d92;
+        --fg3: #6e6a61;
+        --hover: #292823;
+        --active: #31302a;
+        --accent: #e8e6e0;
+        --accent-fg: #1a1917;
+        --danger: #e06b62;
+        --warn: #d29a3a;
+        --ok: #46b477;
+        --info: #6ca1e8;
+        --code: #1a1916;
+        --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.35);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--backdrop);
+        color: var(--fg);
+        padding: 60px 24px 120px;
+        min-height: 100vh;
+      }
+      .bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 50;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 18px;
+        background: var(--side);
+        border-bottom: 1px solid var(--border);
+      }
+      .bar b {
+        font-size: 13px;
+      }
+      .bar .sp {
+        flex: 1;
+      }
+      .bar button {
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 40px;
+      }
+      .lead {
+        font-size: 13px;
+        color: var(--fg2);
+        line-height: 1.65;
+      }
+      .sec-h {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        margin: 0 0 12px;
+      }
+      .note {
+        font-size: 12px;
+        color: var(--fg3);
+        margin-top: 10px;
+        line-height: 1.55;
+      }
+      .panel {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 20px;
+      }
+      .panel-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .panel-head h2 {
+        font-size: 16px;
+        margin: 0;
+        font-weight: 650;
+      }
+      .panel-head .sp {
+        flex: 1;
+      }
+      .btn {
+        font: inherit;
+        font-size: 12.5px;
+        padding: 7px 13px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn:hover {
+        background: var(--hover);
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: transparent;
+      }
+      .badge {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 999px;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+      }
+      .badge.local {
+        color: var(--fg2);
+        background: var(--hover);
+      }
+      .badge.manual {
+        color: var(--info);
+        background: color-mix(in srgb, var(--info) 13%, transparent);
+      }
+      .badge.danger {
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 13%, transparent);
+      }
+      .badge.unused {
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 14%, transparent);
+      }
+
+      /* ---------- skill row (shared by A & B) ---------- */
+      .skill {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-top: 10px;
+        background: var(--card);
+        transition: box-shadow 0.15s;
+      }
+      .skill.off {
+        opacity: 0.55;
+      }
+      .skill.hl {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 55%, transparent);
+      }
+      .srow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 14px;
+      }
+      .sdot {
+        width: 9px;
+        height: 9px;
+        border-radius: 3px;
+        flex: none;
+      }
+      .sinfo {
+        flex: 1;
+        min-width: 0;
+      }
+      .sname {
+        font-size: 13.5px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sname code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+      }
+      .sdesc {
+        font-size: 12px;
+        color: var(--fg3);
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* usage cell: count + weekly spark bars */
+      .usage {
+        width: 118px;
+        flex: none;
+        text-align: right;
+      }
+      .ucount {
+        font-size: 12.5px;
+        font-weight: 650;
+        font-variant-numeric: tabular-nums;
+      }
+      .ucount small {
+        font-weight: 400;
+        color: var(--fg3);
+      }
+      .ulast {
+        font-size: 10.5px;
+        color: var(--fg3);
+        margin-top: 1px;
+      }
+      .spark {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 2px;
+        height: 16px;
+        margin-left: 8px;
+        vertical-align: -3px;
+      }
+      .spark i {
+        width: 4px;
+        border-radius: 1.5px;
+        background: color-mix(in srgb, var(--info) 55%, transparent);
+        min-height: 2px;
+      }
+      .spark i.z {
+        background: var(--hover);
+      }
+      /* token cell */
+      .tok {
+        width: 86px;
+        flex: none;
+        text-align: right;
+        font-size: 12.5px;
+        font-variant-numeric: tabular-nums;
+      }
+      .tok small {
+        color: var(--fg3);
+      }
+      .tok .tbar {
+        height: 3px;
+        border-radius: 2px;
+        background: var(--hover);
+        margin-top: 5px;
+        overflow: hidden;
+      }
+      .tok .tbar i {
+        display: block;
+        height: 100%;
+        border-radius: 2px;
+      }
+      .tri {
+        display: inline-flex;
+        background: var(--hover);
+        border-radius: 999px;
+        padding: 3px;
+        gap: 2px;
+        flex: none;
+      }
+      .tri button {
+        font: inherit;
+        font-size: 11.5px;
+        color: var(--fg2);
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tri button.on {
+        background: var(--card);
+        color: var(--fg);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+
+      /* ---------- budget strip (A) & stacked bar (B) ---------- */
+      .budget-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+        color: var(--fg2);
+        background: var(--code);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        padding: 9px 12px;
+        margin-top: 12px;
+      }
+      .budget-line b {
+        color: var(--fg);
+        font-variant-numeric: tabular-nums;
+      }
+      .minibar {
+        flex: 1;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--hover);
+        overflow: hidden;
+        display: flex;
+      }
+      .minibar i {
+        height: 100%;
+      }
+      .stackwrap {
+        margin: 6px 0 4px;
+      }
+      .stack {
+        display: flex;
+        height: 22px;
+        border-radius: 7px;
+        overflow: hidden;
+        background: var(--hover);
+      }
+      .stack i {
+        height: 100%;
+        cursor: pointer;
+        transition: filter 0.12s;
+        min-width: 3px;
+      }
+      .stack i:hover {
+        filter: brightness(1.15);
+      }
+      .stackcap {
+        display: flex;
+        justify-content: space-between;
+        font-size: 11.5px;
+        color: var(--fg3);
+        margin-top: 6px;
+        font-variant-numeric: tabular-nums;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        margin-top: 10px;
+      }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11.5px;
+        color: var(--fg2);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        cursor: default;
+      }
+      .legend span i {
+        width: 8px;
+        height: 8px;
+        border-radius: 2.5px;
+      }
+
+      /* ---------- B: settings layout with left nav ---------- */
+      .st-mock {
+        display: flex;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        overflow: hidden;
+        background: var(--main);
+        min-height: 480px;
+      }
+      .st-nav {
+        width: 168px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border);
+        padding: 12px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .st-nav button {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: inherit;
+        font-size: 12.5px;
+        color: var(--fg2);
+        border: none;
+        background: transparent;
+        text-align: left;
+        padding: 7px 10px;
+        border-radius: 8px;
+        cursor: default;
+      }
+      .st-nav button.active {
+        background: var(--active);
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .st-nav button.new {
+        outline: 1.5px dashed color-mix(in srgb, var(--info) 60%, transparent);
+        outline-offset: -1.5px;
+      }
+      .st-nav .newtag {
+        margin-left: auto;
+        font-size: 9px;
+        font-weight: 700;
+        color: var(--info);
+        letter-spacing: 0.05em;
+      }
+      .st-page {
+        flex: 1;
+        padding: 20px 22px;
+        min-width: 0;
+      }
+      .sortrow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 16px 0 2px;
+      }
+      .sortrow .cap {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        margin-right: 4px;
+      }
+      .sortrow button {
+        font: inherit;
+        font-size: 11.5px;
+        padding: 4px 11px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg2);
+        cursor: pointer;
+      }
+      .sortrow button.on {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .colhead {
+        display: flex;
+        gap: 12px;
+        padding: 10px 14px 0;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg3);
+      }
+      .colhead .c1 {
+        flex: 1;
+      }
+      .colhead .c2 {
+        width: 118px;
+        text-align: right;
+        flex: none;
+      }
+      .colhead .c3 {
+        width: 86px;
+        text-align: right;
+        flex: none;
+      }
+      .colhead .c4 {
+        width: 96px;
+        flex: none;
+      }
+
+      /* ---------- C: declutter review ---------- */
+      .rev-sum {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+      .rev-stat {
+        flex: 1;
+        background: var(--code);
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        padding: 11px 14px;
+      }
+      .rev-stat b {
+        display: block;
+        font-size: 19px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .rev-stat span {
+        font-size: 11.5px;
+        color: var(--fg3);
+      }
+      .cand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 11px 14px;
+        margin-top: 8px;
+        background: var(--card);
+      }
+      .cand.dim {
+        opacity: 0.45;
+      }
+      .cand input {
+        width: 15px;
+        height: 15px;
+        accent-color: var(--accent);
+        flex: none;
+      }
+      .cand .why {
+        font-size: 11.5px;
+        color: var(--warn);
+        margin-top: 2px;
+      }
+      .cand .cost {
+        flex: none;
+        text-align: right;
+        font-size: 12px;
+        color: var(--fg2);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.5;
+      }
+      .rev-foot {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .rev-foot .saving {
+        font-size: 12.5px;
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .toast {
+        font-size: 12.5px;
+        color: var(--ok);
+        margin-top: 10px;
+        display: none;
+      }
+      .toast.show {
+        display: block;
+      }
+    </style>
+  </head>
+  <body data-theme="light">
+    <div class="bar">
+      <b>Charter — Skills 透视:触发统计 + context 预算</b>
+      <span class="sp"></span>
+      <button id="themeBtn" onclick="toggleTheme()">◐ Dark</button>
+    </div>
+
+    <div class="wrap">
+      <div class="lead">
+        三个方案共享同一份状态——在任何一处把 skill 切到 <b>Off</b>,预算条、总计、候选清单全部实时更新。
+        数据来源:<b>调用次数</b> = turn ledger 里 45 天内 <code>load_skill</code> 的聚合;<b>token 占用</b> =
+        skill-store 为每个 enabled skill 生成的 <code>&lt;skill&gt;</code> preamble 块长度估算。
+        Off 的 skill 不进 preamble,所以 token 记 0,但历史调用次数保留(帮你判断"要不要再开回来")。
+      </div>
+
+      <!-- ============ A ============ -->
+      <section>
+        <div class="sec-h">方案 A · 最小改动 —— 留在 Settings → Agent 卡片内</div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Skills</h2>
+            <span class="sp"></span>
+            <button class="btn">Rescan</button>
+            <button class="btn primary">Import skill folder…</button>
+          </div>
+          <div class="budget-line" id="aBudget"></div>
+          <div id="aList"></div>
+        </div>
+        <div class="note">
+          每行右侧加两列:<b>45 天调用</b>(次数 + 周粒度 spark 柱,末次调用时间)与
+          <b>token 占用</b>(数字 + 相对占比条)。卡片顶部一条预算摘要:enabled skills 合计占多少
+          token、约占 200k 窗口百分比。零调用且 enabled 的行出现
+          <b>unused 45d</b> 徽章——这就是断舍离的最小闭环,不动信息架构。
+        </div>
+      </section>
+
+      <!-- ============ B ============ -->
+      <section>
+        <div class="sec-h">方案 B · 新增 Settings 左侧栏目 “Skills”(推荐)</div>
+        <div class="st-mock">
+          <nav class="st-nav">
+            <button>⚙︎ General</button>
+            <button>✎ Editor</button>
+            <button>❯_ Terminal</button>
+            <button>✦ Agent</button>
+            <button class="active new">❖ Skills<span class="newtag">NEW</span></button>
+            <button>▤ Models</button>
+            <button>🛡 Permissions</button>
+            <button>◍ Privacy</button>
+            <button>↻ Updates</button>
+            <button>ⓘ About</button>
+          </nav>
+          <div class="st-page">
+            <div class="panel-head" style="margin-bottom: 2px">
+              <h2>Skills</h2>
+              <span class="sp"></span>
+              <button class="btn" onclick="toggleReview(true)">Review usage…</button>
+              <button class="btn primary">Import…</button>
+            </div>
+            <div class="note" style="margin: 2px 0 14px">
+              Context budget — what enabled skills cost on <b>every</b> turn. Hover a segment to
+              find its row.
+            </div>
+            <div class="stackwrap">
+              <div class="stack" id="bStack"></div>
+              <div class="stackcap" id="bStackCap"></div>
+              <div class="legend" id="bLegend"></div>
+            </div>
+            <div class="sortrow">
+              <span class="cap">Sort by</span>
+              <button data-sort="uses">调用次数</button>
+              <button data-sort="tokens">token 占用</button>
+              <button data-sort="cost">每次调用成本</button>
+            </div>
+            <div class="colhead">
+              <span class="c1">Skill</span><span class="c2">45d 调用</span
+              ><span class="c3">Tokens</span><span class="c4"></span>
+            </div>
+            <div id="bList"></div>
+          </div>
+        </div>
+        <div class="note">
+          回答"要不要加新栏目":<b>加,但加在 Settings 的左侧 nav</b>(Agent 和 Models 之间),
+          而不是主工作区左侧栏——那里是项目/会话导航,skills 是全局配置,归 Settings。 现有
+          <code>SettingsSection</code> 就是一个 union type + nav 数组,加一项即可;Agent
+          页原位置留一行入口链接过来。独立页面才放得下:堆叠预算条(hover 联动行高亮)、
+          三种排序、列表头。
+        </div>
+      </section>
+
+      <!-- ============ C ============ -->
+      <section>
+        <div class="sec-h">方案 C · 断舍离审查 —— 从 B 页 “Review usage…” 进入</div>
+        <div class="panel" id="revPanel">
+          <div class="panel-head">
+            <h2>Review skill usage</h2>
+            <span class="sp"></span>
+            <span class="badge local">last 45 days</span>
+          </div>
+          <div class="rev-sum" id="revSum"></div>
+          <div class="note" style="margin: 0 0 4px">
+            按“每次调用成本”(token ÷ 45 天调用次数)排出候选;零调用排最前。勾选后批量禁用——
+            随时可在列表里一键开回来,<b>不删除、不丢历史</b>。
+          </div>
+          <div id="candList"></div>
+          <div class="rev-foot">
+            <button class="btn primary" id="applyBtn" onclick="applyReview()">
+              Disable selected
+            </button>
+            <span class="saving" id="savingLine"></span>
+          </div>
+          <div class="toast" id="revToast"></div>
+        </div>
+        <div class="note">
+          审查是<b>建议不是自动化</b>:Charter 只排序和算账,禁用永远是用户点的。explicit-only /
+          side-effects 徽章照常显示,提醒“这个 skill 平时靠手动 / 唤起,调用少不代表没用”。
+        </div>
+      </section>
+    </div>
+
+    <script>
+      function toggleTheme() {
+        const b = document.body;
+        const next = b.dataset.theme === 'light' ? 'dark' : 'light';
+        b.dataset.theme = next;
+        document.getElementById('themeBtn').textContent = next === 'light' ? '◐ Dark' : '◑ Light';
+      }
+
+      const SEG = ['#6ca1e8', '#46b477', '#d29a3a', '#9a7fd1', '#5bb8c4', '#c47fb0', '#e0876a'];
+      const WINDOW_TOKENS = 200000;
+
+      // uses45: load_skill 次数(45 天) · weeks: 周粒度 spark(旧→新) · tokens: preamble 块估算
+      const SKILLS = [
+        { name: 'commit-helper', desc: 'Write a conventional-commit message from the staged diff.', src: 'claude', mode: 'auto', explicitOnly: true, danger: false, tokens: 210, uses45: 31, lastDays: 0, weeks: [4, 6, 5, 7, 5, 4] },
+        { name: 'pdf-fill', desc: 'Fill and extract fields from PDF forms.', src: 'agent', mode: 'auto', explicitOnly: false, danger: false, tokens: 420, uses45: 18, lastDays: 2, weeks: [2, 4, 3, 5, 2, 2] },
+        { name: 'deploy-staging', desc: 'Deploy the current branch to the staging environment.', src: 'local', mode: 'auto', explicitOnly: true, danger: true, tokens: 350, uses45: 6, lastDays: 9, weeks: [1, 2, 0, 2, 1, 0] },
+        { name: 'dataviz', desc: 'Chart and dashboard design system with palette validator.', src: 'codex', mode: 'auto', explicitOnly: false, danger: false, tokens: 980, uses45: 1, lastDays: 41, weeks: [1, 0, 0, 0, 0, 0] },
+        { name: 'legacy-billing-notes', desc: 'Background context on the legacy billing module.', src: 'local', mode: 'auto', explicitOnly: false, danger: false, tokens: 640, uses45: 0, lastDays: null, weeks: [0, 0, 0, 0, 0, 0] },
+        { name: 'xlsx-report', desc: 'Generate spreadsheet reports with formulas and pivot tables.', src: 'claude', mode: 'auto', explicitOnly: false, danger: false, tokens: 730, uses45: 0, lastDays: 62, weeks: [0, 0, 0, 0, 0, 0] },
+        { name: 'web-research', desc: 'Iterative web research with source verification.', src: 'agent', mode: 'off', explicitOnly: false, danger: false, tokens: 540, uses45: 3, lastDays: 20, weeks: [0, 2, 1, 0, 0, 0] },
+      ];
+
+      let sortKey = 'uses';
+      let checked = new Set(
+        SKILLS.filter((s) => s.mode === 'auto' && s.uses45 === 0).map((s) => s.name),
+      );
+
+      const fmt = (n) => n.toLocaleString('en-US');
+      const enabled = () => SKILLS.filter((s) => s.mode === 'auto');
+      const totalTok = () => enabled().reduce((a, s) => a + s.tokens, 0);
+      const lastLabel = (s) =>
+        s.uses45 === 0
+          ? s.lastDays == null
+            ? 'never used'
+            : `last ${s.lastDays}d ago`
+          : s.lastDays === 0
+            ? 'last today'
+            : `last ${s.lastDays}d ago`;
+      const segColor = (name) => SEG[SKILLS.findIndex((s) => s.name === name) % SEG.length];
+
+      function badges(s) {
+        return (
+          (s.danger ? '<span class="badge danger">side effects</span>' : '') +
+          (s.explicitOnly ? '<span class="badge manual">explicit-only</span>' : '') +
+          (s.mode === 'auto' && s.uses45 === 0
+            ? '<span class="badge unused">unused 45d</span>'
+            : '') +
+          `<span class="badge local">${s.src}</span>`
+        );
+      }
+      function spark(s) {
+        const max = Math.max(1, ...s.weeks);
+        return `<span class="spark">${s.weeks
+          .map((w) => `<i class="${w ? '' : 'z'}" style="height:${Math.max(2, (w / max) * 16)}px"></i>`)
+          .join('')}</span>`;
+      }
+      function triHtml(s, ctx) {
+        return `<div class="tri">${['off', 'auto']
+          .map(
+            (m) =>
+              `<button data-ctx="${ctx}" data-name="${s.name}" data-m="${m}" class="${s.mode === m ? 'on' : ''}">${m === 'off' ? 'Off' : 'Auto'}</button>`,
+          )
+          .join('')}</div>`;
+      }
+      function rowHtml(s, ctx) {
+        const maxTok = Math.max(...SKILLS.map((x) => x.tokens));
+        const on = s.mode === 'auto';
+        return `
+          <div class="skill ${on ? '' : 'off'}" data-row="${s.name}">
+            <div class="srow">
+              <span class="sdot" style="background:${on ? segColor(s.name) : 'var(--hover)'}"></span>
+              <div class="sinfo">
+                <div class="sname"><code>${s.name}</code>${badges(s)}</div>
+                <div class="sdesc">${s.desc}</div>
+              </div>
+              <div class="usage">
+                <span class="ucount">${s.uses45}<small>×</small></span>${spark(s)}
+                <div class="ulast">${lastLabel(s)}</div>
+              </div>
+              <div class="tok">
+                ${on ? `${fmt(s.tokens)} <small>tok</small>` : `<small>0 tok</small>`}
+                <div class="tbar"><i style="width:${on ? (s.tokens / maxTok) * 100 : 0}%;background:${segColor(s.name)}"></i></div>
+              </div>
+              ${triHtml(s, ctx)}
+            </div>
+          </div>`;
+      }
+
+      // ---------- A ----------
+      function renderA() {
+        const tot = totalTok();
+        const pct = ((tot / WINDOW_TOKENS) * 100).toFixed(1);
+        document.getElementById('aBudget').innerHTML = `
+          <span>Preamble budget</span>
+          <div class="minibar">${enabled()
+            .map(
+              (s) =>
+                `<i style="width:${(s.tokens / Math.max(1, tot)) * 100}%;background:${segColor(s.name)}"></i>`,
+            )
+            .join('')}</div>
+          <span><b>≈ ${fmt(tot)} tokens</b> · ${pct}% of a 200k window · every turn</span>`;
+        document.getElementById('aList').innerHTML = SKILLS.map((s) => rowHtml(s, 'a')).join('');
+      }
+
+      // ---------- B ----------
+      function sorted() {
+        const cost = (s) => (s.uses45 === 0 ? Infinity : s.tokens / s.uses45);
+        const arr = [...SKILLS];
+        if (sortKey === 'uses') arr.sort((a, b) => b.uses45 - a.uses45);
+        if (sortKey === 'tokens') arr.sort((a, b) => b.tokens - a.tokens);
+        if (sortKey === 'cost') arr.sort((a, b) => cost(b) - cost(a) || b.tokens - a.tokens);
+        return arr;
+      }
+      function renderB() {
+        const tot = totalTok();
+        const pct = ((tot / WINDOW_TOKENS) * 100).toFixed(1);
+        document.getElementById('bStack').innerHTML = enabled()
+          .map(
+            (s) =>
+              `<i data-seg="${s.name}" title="${s.name} · ${fmt(s.tokens)} tok" style="width:${(s.tokens / Math.max(1, tot)) * 100}%;background:${segColor(s.name)}"></i>`,
+          )
+          .join('');
+        document.getElementById('bStackCap').innerHTML =
+          `<span>${enabled().length} skills enabled</span><span>≈ ${fmt(tot)} tokens · ${pct}% of 200k · charged every turn</span>`;
+        document.getElementById('bLegend').innerHTML = enabled()
+          .map(
+            (s) =>
+              `<span data-seg="${s.name}"><i style="background:${segColor(s.name)}"></i>${s.name} ${fmt(s.tokens)}</span>`,
+          )
+          .join('');
+        document.getElementById('bList').innerHTML = sorted()
+          .map((s) => rowHtml(s, 'b'))
+          .join('');
+        document.querySelectorAll('.sortrow button').forEach((b) => {
+          b.classList.toggle('on', b.dataset.sort === sortKey);
+          b.onclick = () => {
+            sortKey = b.dataset.sort;
+            renderB();
+          };
+        });
+        // hover segment/legend ↔ highlight row
+        document.querySelectorAll('[data-seg]').forEach((el) => {
+          el.onmouseenter = () =>
+            document
+              .querySelectorAll(`#bList [data-row="${el.dataset.seg}"]`)
+              .forEach((r) => r.classList.add('hl'));
+          el.onmouseleave = () =>
+            document.querySelectorAll('#bList .skill.hl').forEach((r) => r.classList.remove('hl'));
+        });
+      }
+
+      // ---------- C ----------
+      function candidates() {
+        const cost = (s) => (s.uses45 === 0 ? Infinity : s.tokens / s.uses45);
+        return SKILLS.filter((s) => s.mode === 'auto')
+          .filter((s) => s.uses45 === 0 || cost(s) >= 300)
+          .sort((a, b) => cost(b) - cost(a) || b.tokens - a.tokens);
+      }
+      function renderC() {
+        const tot = totalTok();
+        const unused = enabled().filter((s) => s.uses45 === 0);
+        document.getElementById('revSum').innerHTML = `
+          <div class="rev-stat"><b>${enabled().length}</b><span>skills enabled</span></div>
+          <div class="rev-stat"><b>≈ ${fmt(tot)}</b><span>tokens per turn</span></div>
+          <div class="rev-stat"><b>${unused.length}</b><span>unused in 45 days</span></div>`;
+        const cands = candidates();
+        document.getElementById('candList').innerHTML = cands.length
+          ? cands
+              .map((s) => {
+                const why =
+                  s.uses45 === 0
+                    ? s.lastDays == null
+                      ? 'Never invoked — costs tokens on every turn.'
+                      : `Not invoked in 45 days (last ${s.lastDays}d ago).`
+                    : `${s.uses45}× in 45 days for ${fmt(s.tokens)} tokens — ${fmt(Math.round(s.tokens / s.uses45))} tok per use.`;
+                return `
+              <div class="cand ${checked.has(s.name) ? '' : 'dim'}">
+                <input type="checkbox" data-cand="${s.name}" ${checked.has(s.name) ? 'checked' : ''} />
+                <div class="sinfo">
+                  <div class="sname"><code>${s.name}</code>${badges(s)}</div>
+                  <div class="why">${why}</div>
+                </div>
+                <div class="cost">${fmt(s.tokens)} tok<br /><small style="color:var(--fg3)">${s.uses45}× / 45d</small></div>
+              </div>`;
+              })
+              .join('')
+          : '<div class="note">没有明显的断舍离候选——所有 enabled skill 都在被用。✨</div>';
+        const save = cands
+          .filter((s) => checked.has(s.name))
+          .reduce((a, s) => a + s.tokens, 0);
+        document.getElementById('savingLine').textContent = save
+          ? `释放 ≈ ${fmt(save)} tokens/turn(${Math.round((save / Math.max(1, tot)) * 100)}%)`
+          : '';
+        document.getElementById('applyBtn').style.display = cands.length ? '' : 'none';
+        document.querySelectorAll('[data-cand]').forEach((cb) => {
+          cb.onchange = () => {
+            cb.checked ? checked.add(cb.dataset.cand) : checked.delete(cb.dataset.cand);
+            renderC();
+          };
+        });
+      }
+      function applyReview() {
+        let n = 0;
+        SKILLS.forEach((s) => {
+          if (checked.has(s.name) && s.mode === 'auto') {
+            s.mode = 'off';
+            n++;
+          }
+        });
+        checked.clear();
+        renderAll();
+        const t = document.getElementById('revToast');
+        t.textContent = `✓ Disabled ${n} skill${n === 1 ? '' : 's'} — preamble now ≈ ${fmt(totalTok())} tokens/turn. 随时可在列表里开回来。`;
+        t.classList.add('show');
+      }
+      function toggleReview() {
+        document.getElementById('revPanel').scrollIntoView({ behavior: 'smooth' });
+      }
+
+      function renderAll() {
+        renderA();
+        renderB();
+        renderC();
+        document.querySelectorAll('[data-m]').forEach((b) => {
+          b.onclick = () => {
+            const s = SKILLS.find((x) => x.name === b.dataset.name);
+            s.mode = b.dataset.m;
+            if (s.mode === 'off') checked.delete(s.name);
+            renderAll();
+          };
+        });
+      }
+      renderAll();
+    </script>
+  </body>
+</html>

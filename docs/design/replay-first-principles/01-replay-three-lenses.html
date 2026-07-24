@@ -1,0 +1,1745 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Replay 方案 A — 一份事实，三种问题</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f6f3;
+        --surface: #ffffff;
+        --surface-muted: #fafaf8;
+        --ink: #171918;
+        --muted: #696d69;
+        --faint: #969a95;
+        --line: #dedfd9;
+        --line-strong: #c9cbc4;
+        --blue: #2f67d8;
+        --blue-soft: #edf3ff;
+        --green: #23845d;
+        --green-soft: #eaf6f0;
+        --amber: #b66a18;
+        --amber-soft: #fff4e5;
+        --red: #c44338;
+        --code: #121918;
+        --code-line: #25302e;
+        --code-text: #dbe4e1;
+        --code-muted: #80918c;
+        --rail: 266px;
+        --evidence: 344px;
+        font-family:
+          Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        font-synthesis: none;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--ink);
+      }
+
+      button,
+      input,
+      select {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--blue);
+        outline-offset: 2px;
+      }
+
+      .icon {
+        width: 16px;
+        height: 16px;
+        flex: none;
+        stroke: currentColor;
+        stroke-width: 1.75;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        fill: none;
+      }
+
+      .icon.sm {
+        width: 14px;
+        height: 14px;
+      }
+
+      .icon.lg {
+        width: 20px;
+        height: 20px;
+      }
+
+      .sprite {
+        position: absolute;
+        width: 0;
+        height: 0;
+        overflow: hidden;
+      }
+
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-rows: 70px minmax(0, 1fr) 112px;
+        background: var(--surface);
+      }
+
+      .app[data-lens="sequence"] {
+        grid-template-rows: 70px minmax(0, 1fr) 132px;
+      }
+
+      .topbar {
+        display: grid;
+        grid-template-columns: minmax(320px, 1fr) auto;
+        align-items: center;
+        gap: 20px;
+        padding: 0 20px 0 22px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      .session-heading {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 13px;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        background: var(--ink);
+        color: white;
+        font-size: 15px;
+        font-weight: 760;
+        letter-spacing: -0.02em;
+      }
+
+      .heading-copy {
+        min-width: 0;
+      }
+
+      .heading-copy h1 {
+        margin: 0 0 3px;
+        font-size: 15px;
+        line-height: 1.2;
+        font-weight: 680;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .heading-copy p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11.5px;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+      }
+
+      .status-summary {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-right: 8px;
+        padding-right: 18px;
+        border-right: 1px solid var(--line);
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .status-summary span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+      }
+
+      .status-summary .ok {
+        color: var(--green);
+      }
+
+      .status-summary .warn {
+        color: var(--amber);
+      }
+
+      .button {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 0 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: 8px;
+        background: var(--surface);
+        font-size: 12px;
+        font-weight: 590;
+        cursor: pointer;
+        transition: 150ms ease;
+      }
+
+      .button:hover {
+        border-color: #aeb1ab;
+        background: var(--surface-muted);
+      }
+
+      .button.primary {
+        background: var(--ink);
+        color: white;
+        border-color: var(--ink);
+      }
+
+      .button.primary:hover {
+        background: #292d2b;
+      }
+
+      .icon-button {
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .icon-button:hover {
+        color: var(--ink);
+        background: var(--surface-muted);
+      }
+
+      .workspace {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: var(--rail) minmax(0, 1fr) var(--evidence);
+      }
+
+      .question-rail {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--line);
+        background: #fbfbf9;
+      }
+
+      .rail-title {
+        padding: 22px 20px 14px;
+        font-size: 12px;
+        font-weight: 650;
+        letter-spacing: 0.02em;
+      }
+
+      .question-list {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .question {
+        position: relative;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr);
+        gap: 12px;
+        width: 100%;
+        padding: 16px 17px 16px 19px;
+        border: 0;
+        border-top: 1px solid transparent;
+        border-bottom: 1px solid transparent;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .question::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        inset-block: -1px;
+        width: 3px;
+        background: transparent;
+      }
+
+      .question:hover {
+        background: #f5f5f1;
+      }
+
+      .question[aria-selected="true"] {
+        background: var(--blue-soft);
+        border-color: #d5e1fb;
+      }
+
+      .question[aria-selected="true"]::before {
+        background: var(--blue);
+      }
+
+      .question-mark {
+        display: grid;
+        place-items: center;
+        width: 31px;
+        height: 31px;
+        margin-top: 1px;
+        border: 1.5px solid #8c908c;
+        border-radius: 50%;
+        color: var(--muted);
+        font-size: 16px;
+        font-weight: 660;
+      }
+
+      .question[aria-selected="true"] .question-mark {
+        color: white;
+        border-color: var(--blue);
+        background: var(--blue);
+      }
+
+      .question strong,
+      .question small {
+        display: block;
+      }
+
+      .question strong {
+        margin: 1px 0 5px;
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .question small {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .question[aria-selected="true"] strong,
+      .question[aria-selected="true"] small {
+        color: var(--blue);
+      }
+
+      .rail-principle {
+        margin: auto 18px 18px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 10.5px;
+        line-height: 1.55;
+      }
+
+      .rail-principle strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--ink);
+        font-size: 11px;
+      }
+
+      .projection {
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        background: var(--surface);
+      }
+
+      .view {
+        display: none;
+        min-height: 100%;
+      }
+
+      .app[data-lens="outcome"] .view-outcome,
+      .app[data-lens="why"] .view-why,
+      .app[data-lens="sequence"] .view-sequence {
+        display: block;
+      }
+
+      .result-intro {
+        padding: 28px 30px 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .eyebrow {
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 670;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .result-intro h2 {
+        max-width: 920px;
+        margin: 0;
+        font-size: clamp(21px, 2vw, 30px);
+        line-height: 1.32;
+        letter-spacing: -0.025em;
+        font-weight: 690;
+      }
+
+      .impact-strip {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1.45fr;
+        margin-top: 21px;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        overflow: hidden;
+      }
+
+      .impact-item {
+        min-height: 54px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 15px;
+        border-right: 1px solid var(--line);
+        font-size: 12px;
+      }
+
+      .impact-item:last-child {
+        border-right: 0;
+      }
+
+      .impact-item .plus {
+        color: var(--green);
+        font-weight: 650;
+      }
+
+      .impact-item .minus {
+        color: var(--red);
+        font-weight: 650;
+      }
+
+      .impact-item.attention {
+        color: var(--amber);
+        background: #fffaf2;
+      }
+
+      .artifact-section {
+        padding: 20px 30px 28px;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 11px;
+      }
+
+      .section-heading h3 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 680;
+      }
+
+      .section-heading small {
+        color: var(--muted);
+        font-size: 10.5px;
+      }
+
+      .diff-stage {
+        border: 1px solid #293532;
+        border-radius: 10px;
+        overflow: hidden;
+        background: var(--code);
+        color: var(--code-text);
+        box-shadow: 0 14px 30px rgba(20, 31, 28, 0.08);
+      }
+
+      .diff-head {
+        min-height: 42px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        align-items: center;
+        border-bottom: 1px solid var(--code-line);
+        color: #aebbb7;
+        font-size: 11px;
+      }
+
+      .diff-head span {
+        padding: 0 16px;
+      }
+
+      .diff-head span + span {
+        border-left: 1px solid var(--code-line);
+      }
+
+      .diff-head b {
+        color: #e6edeb;
+        font-weight: 620;
+      }
+
+      .diff-columns {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .code-pane + .code-pane {
+        border-left: 1px solid var(--code-line);
+      }
+
+      .code-line {
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr);
+        min-height: 29px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 11px;
+        line-height: 29px;
+      }
+
+      .code-line .ln {
+        padding-right: 10px;
+        border-right: 1px solid var(--code-line);
+        color: var(--code-muted);
+        text-align: right;
+        user-select: none;
+      }
+
+      .code-line code {
+        min-width: 0;
+        padding: 0 12px;
+        overflow: hidden;
+        white-space: pre;
+        text-overflow: ellipsis;
+      }
+
+      .code-line.removed {
+        background: rgba(198, 67, 56, 0.17);
+      }
+
+      .code-line.removed code {
+        color: #ffc1bb;
+      }
+
+      .code-line.added {
+        background: rgba(35, 132, 93, 0.22);
+      }
+
+      .code-line.added code {
+        color: #aee8cb;
+      }
+
+      .kw {
+        color: #8db7ff;
+      }
+
+      .const {
+        color: #e9b98d;
+      }
+
+      .str {
+        color: #9dddb9;
+      }
+
+      .reason-link {
+        display: flex;
+        justify-content: center;
+        padding-top: 15px;
+      }
+
+      .text-action {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 4px;
+        border: 0;
+        background: transparent;
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 620;
+        cursor: pointer;
+      }
+
+      .text-action:hover {
+        text-decoration: underline;
+      }
+
+      .why-intro,
+      .sequence-intro {
+        padding: 27px 30px 20px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .why-intro h2,
+      .sequence-intro h2 {
+        margin: 0 0 7px;
+        font-size: 24px;
+        letter-spacing: -0.02em;
+      }
+
+      .why-intro p,
+      .sequence-intro p {
+        max-width: 760px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .causal-canvas {
+        padding: 24px 30px 30px;
+      }
+
+      .causal-chain {
+        display: grid;
+        grid-template-columns: minmax(120px, 1fr) 34px minmax(140px, 1.15fr) 34px minmax(150px, 1.25fr);
+        align-items: stretch;
+      }
+
+      .cause-node {
+        min-height: 146px;
+        padding: 17px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        text-align: left;
+        cursor: pointer;
+        transition: 150ms ease;
+      }
+
+      .cause-node:hover,
+      .cause-node.selected {
+        border-color: var(--blue);
+        box-shadow: inset 0 0 0 1px var(--blue);
+      }
+
+      .cause-node small {
+        display: block;
+        margin-bottom: 9px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+        letter-spacing: 0.05em;
+      }
+
+      .cause-node strong {
+        display: block;
+        margin-bottom: 8px;
+        font-size: 14px;
+        line-height: 1.35;
+      }
+
+      .cause-node p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .cause-node em {
+        display: inline-flex;
+        margin-top: 12px;
+        color: var(--green);
+        font-size: 10px;
+        font-style: normal;
+        font-weight: 650;
+      }
+
+      .causal-arrow {
+        position: relative;
+        display: grid;
+        place-items: center;
+        color: var(--blue);
+      }
+
+      .causal-arrow::before {
+        content: "";
+        position: absolute;
+        left: 3px;
+        right: 4px;
+        top: 50%;
+        height: 1px;
+        background: #9bb5ea;
+      }
+
+      .causal-arrow .icon {
+        position: relative;
+        margin-left: auto;
+        background: white;
+      }
+
+      .relationship-note {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        margin-top: 16px;
+        padding: 13px 14px;
+        border-left: 3px solid var(--blue);
+        background: #f4f7fd;
+        color: #47556f;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .branch-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-top: 20px;
+      }
+
+      .branch {
+        padding: 16px;
+        border-top: 1px solid var(--line-strong);
+        background: var(--surface-muted);
+      }
+
+      .branch span {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .branch strong {
+        display: block;
+        margin: 7px 0 4px;
+        font-size: 12px;
+      }
+
+      .branch p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+
+      .sequence-layout {
+        display: grid;
+        grid-template-columns: minmax(245px, 0.74fr) minmax(320px, 1.35fr);
+        min-height: calc(100% - 98px);
+      }
+
+      .event-list {
+        min-height: 0;
+        border-right: 1px solid var(--line);
+        background: #fbfbf9;
+      }
+
+      .event-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 48px 20px minmax(0, 1fr);
+        gap: 9px;
+        align-items: start;
+        min-height: 62px;
+        padding: 12px 14px;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .event-row:hover {
+        background: #f5f5f1;
+      }
+
+      .event-row.active {
+        background: var(--blue-soft);
+      }
+
+      .event-row time {
+        color: var(--faint);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9.5px;
+        line-height: 20px;
+      }
+
+      .event-dot {
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        border: 1px solid #b9bcb7;
+        border-radius: 50%;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .event-row.active .event-dot {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: white;
+      }
+
+      .event-row strong {
+        display: block;
+        margin: 1px 0 3px;
+        font-size: 11.5px;
+      }
+
+      .event-row small {
+        display: block;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 10.5px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .event-stage {
+        padding: 22px 25px;
+      }
+
+      .event-stage-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .event-stage-head strong {
+        font-size: 13px;
+      }
+
+      .capture-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--green);
+        font-size: 10.5px;
+      }
+
+      .event-preview {
+        min-height: 280px;
+        padding: 22px;
+        border-radius: 9px;
+        background: var(--code);
+        color: var(--code-text);
+      }
+
+      .event-preview h3 {
+        margin: 0 0 6px;
+        font-size: 17px;
+      }
+
+      .event-preview p {
+        margin: 0 0 22px;
+        color: #9eada8;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .terminal-line {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr);
+        gap: 6px;
+        min-height: 25px;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 11px;
+        line-height: 25px;
+      }
+
+      .terminal-line span:first-child {
+        color: #5b736c;
+      }
+
+      .terminal-line.success {
+        color: #8fdbb4;
+      }
+
+      .evidence-panel {
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--line);
+        background: #fbfbf9;
+      }
+
+      .evidence-scroll {
+        min-height: 0;
+        padding: 19px 16px 15px;
+        overflow: auto;
+      }
+
+      .evidence-scroll > h2 {
+        margin: 0 0 14px;
+        font-size: 13px;
+      }
+
+      .claim {
+        margin-bottom: 18px;
+        padding-bottom: 17px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .claim-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 9.5px;
+        font-weight: 680;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+      }
+
+      .claim-label span:last-child {
+        color: var(--green);
+        letter-spacing: 0;
+      }
+
+      .claim p {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.5;
+      }
+
+      .panel-label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 640;
+      }
+
+      .evidence-list {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .evidence-item {
+        width: 100%;
+        min-height: 54px;
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) 16px;
+        gap: 9px;
+        align-items: center;
+        padding: 9px 10px;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .evidence-item:last-child {
+        border-bottom: 0;
+      }
+
+      .evidence-item:hover,
+      .evidence-item.open {
+        background: #f6f8f5;
+      }
+
+      .evidence-symbol {
+        width: 25px;
+        height: 25px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        background: var(--green-soft);
+        color: var(--green);
+      }
+
+      .evidence-item strong,
+      .evidence-item small {
+        display: block;
+      }
+
+      .evidence-item strong {
+        margin-bottom: 2px;
+        font-size: 11px;
+      }
+
+      .evidence-item small {
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9px;
+      }
+
+      .evidence-detail {
+        display: none;
+        margin: 8px 0 16px;
+        padding: 10px 11px;
+        border-left: 2px solid var(--green);
+        background: #f2f7f4;
+        color: #4f5c56;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 9.5px;
+        line-height: 1.55;
+      }
+
+      .evidence-detail.visible {
+        display: block;
+      }
+
+      .provenance {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        margin-top: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+      }
+
+      .provenance div {
+        padding: 10px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .provenance div:nth-child(odd) {
+        border-right: 1px solid var(--line);
+      }
+
+      .provenance div:nth-last-child(-n + 2) {
+        border-bottom: 0;
+      }
+
+      .provenance dt {
+        margin-bottom: 4px;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .provenance dd {
+        margin: 0;
+        overflow: hidden;
+        font-size: 10px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .boundary {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        margin-top: 16px;
+        padding: 11px;
+        border: 1px solid #edc48d;
+        border-radius: 8px;
+        background: var(--amber-soft);
+        color: #855120;
+        font-size: 10.5px;
+        line-height: 1.45;
+      }
+
+      .evidence-actions {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 8px;
+        padding: 13px 16px;
+        border-top: 1px solid var(--line);
+        background: var(--surface);
+      }
+
+      .checkpoints {
+        position: relative;
+        display: grid;
+        grid-template-columns: var(--rail) minmax(0, 1fr) var(--evidence);
+        border-top: 1px solid var(--line);
+        background: #fafaf8;
+      }
+
+      .checkpoint-label {
+        padding: 18px 20px;
+        border-right: 1px solid var(--line);
+      }
+
+      .checkpoint-label strong,
+      .checkpoint-label small {
+        display: block;
+      }
+
+      .checkpoint-label strong {
+        margin-bottom: 5px;
+        font-size: 11.5px;
+      }
+
+      .checkpoint-label small {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .checkpoint-track {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(6, minmax(86px, 1fr));
+        gap: 8px;
+        align-items: stretch;
+        padding: 12px 14px;
+      }
+
+      .checkpoint-track::before {
+        content: "";
+        position: absolute;
+        left: 7%;
+        right: 7%;
+        top: 33px;
+        height: 1px;
+        background: #cfd2cb;
+      }
+
+      .checkpoint {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 25px auto;
+        padding: 0 8px 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .checkpoint:hover {
+        background: #f1f2ed;
+      }
+
+      .checkpoint.active {
+        border-color: var(--blue);
+        background: white;
+        box-shadow: 0 4px 12px rgba(31, 54, 92, 0.06);
+      }
+
+      .checkpoint-dot {
+        width: 19px;
+        height: 19px;
+        display: grid;
+        place-items: center;
+        margin: 11px 0 2px;
+        border: 1px solid #9ea29d;
+        border-radius: 50%;
+        background: #fafaf8;
+        color: var(--muted);
+        font-size: 8px;
+        font-weight: 700;
+      }
+
+      .checkpoint.active .checkpoint-dot {
+        border-color: var(--blue);
+        background: var(--blue);
+        color: white;
+      }
+
+      .checkpoint strong,
+      .checkpoint small,
+      .checkpoint time {
+        display: block;
+      }
+
+      .checkpoint strong {
+        margin-bottom: 3px;
+        font-size: 10.5px;
+      }
+
+      .checkpoint small {
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 9.5px;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+
+      .checkpoint time {
+        position: absolute;
+        top: 13px;
+        right: 7px;
+        color: var(--faint);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 8px;
+      }
+
+      .sequence-controls {
+        display: none;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 12px;
+        border-left: 1px solid var(--line);
+      }
+
+      .app[data-lens="sequence"] .sequence-controls {
+        display: flex;
+      }
+
+      .app:not([data-lens="sequence"]) .checkpoint-context {
+        display: flex;
+      }
+
+      .checkpoint-context {
+        display: none;
+        align-items: center;
+        padding: 14px 16px;
+        border-left: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 10.5px;
+        line-height: 1.45;
+      }
+
+      .transport-button {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: white;
+        cursor: pointer;
+      }
+
+      .transport-button.playing {
+        border-color: var(--blue);
+        color: white;
+        background: var(--blue);
+      }
+
+      .sequence-controls select {
+        height: 32px;
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: white;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 8px;
+        background: #171918;
+        color: white;
+        font-size: 11px;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, 12px);
+        transition: 180ms ease;
+        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.2);
+      }
+
+      .toast.show {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
+      @media (max-width: 1180px) {
+        :root {
+          --rail: 218px;
+          --evidence: 294px;
+        }
+
+        .status-summary {
+          display: none;
+        }
+
+        .result-intro,
+        .why-intro,
+        .sequence-intro {
+          padding-inline: 22px;
+        }
+
+        .artifact-section,
+        .causal-canvas {
+          padding-inline: 22px;
+        }
+
+        .impact-strip {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .impact-item:last-child {
+          grid-column: 1 / -1;
+          border-top: 1px solid var(--line);
+        }
+
+        .causal-chain {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .sequence-layout {
+          grid-template-columns: minmax(185px, 0.75fr) minmax(0, 1.25fr);
+        }
+
+        .event-stage {
+          min-width: 0;
+          padding-inline: 17px;
+        }
+
+        .event-preview {
+          min-width: 0;
+          padding-inline: 16px;
+          overflow: hidden;
+        }
+
+        .cause-node {
+          min-height: auto;
+        }
+
+        .causal-arrow {
+          height: 18px;
+          transform: rotate(90deg);
+        }
+
+        .checkpoint-track {
+          gap: 3px;
+          padding-inline: 8px;
+        }
+
+        .checkpoint small,
+        .checkpoint time {
+          display: none;
+        }
+
+        .checkpoint-context {
+          padding-inline: 10px;
+        }
+      }
+
+      @media (max-width: 900px) {
+        html,
+        body {
+          overflow: auto;
+        }
+
+        .app,
+        .app[data-lens="sequence"] {
+          min-width: 680px;
+          height: auto;
+          min-height: 100%;
+          grid-template-rows: auto auto auto;
+        }
+
+        .topbar {
+          min-height: 66px;
+        }
+
+        .workspace {
+          grid-template-columns: 190px minmax(0, 1fr);
+        }
+
+        .evidence-panel {
+          grid-column: 1 / -1;
+          min-height: 360px;
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+
+        .checkpoints {
+          grid-template-columns: 190px minmax(0, 1fr);
+        }
+
+        .checkpoint-context,
+        .sequence-controls {
+          display: none !important;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.001ms !important;
+          animation-duration: 0.001ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v4.5M12 17.1v.1" /></symbol>
+      <symbol id="i-export" viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4" /><path d="M5 12v7h14v-7" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Z" /><path d="M14 3v5h4" /></symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 19V5m0 14h16" /><path d="m7 15 4-4 3 2 5-6" /></symbol>
+      <symbol id="i-code" viewBox="0 0 24 24"><path d="m9 6-6 6 6 6m6-12 6 6-6 6" /><path d="m14 4-4 16" /></symbol>
+      <symbol id="i-test" viewBox="0 0 24 24"><path d="m8 3 1 5-5 9a3 3 0 0 0 2.6 4.5h10.8A3 3 0 0 0 20 17l-5-9 1-5" /><path d="M7 14h10M9 8h6" /></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.5A3.5 3.5 0 0 1 7.5 1H11v18H7.5A3.5 3.5 0 0 0 4 22.5v-18Z" /><path d="M20 4.5A3.5 3.5 0 0 0 16.5 1H13v18h3.5a3.5 3.5 0 0 1 3.5 3.5v-18Z" /></symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5" /></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8 5v14M16 5v14" /></symbol>
+      <symbol id="i-prev" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6" /></symbol>
+      <symbol id="i-next" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></symbol>
+    </svg>
+
+    <main class="app" data-lens="outcome">
+      <header class="topbar">
+        <div class="session-heading">
+          <div class="brand-mark" aria-hidden="true">R</div>
+          <div class="heading-copy">
+            <h1>修复登录态刷新与重试</h1>
+            <p>完成于 14:32 · 用时 12分48秒 · 当前停在「修改」检查点</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="status-summary" aria-label="任务状态摘要">
+            <span class="ok"><svg class="icon sm"><use href="#i-check" /></svg>3 项已验证</span>
+            <span class="warn"><svg class="icon sm"><use href="#i-alert" /></svg>1 项需确认</span>
+          </div>
+          <button class="button" data-toast="证据包已准备：replay-evidence-184.zip">
+            <svg class="icon sm"><use href="#i-export" /></svg>导出证据
+          </button>
+          <button class="icon-button" aria-label="关闭">
+            <svg class="icon lg"><use href="#i-close" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <aside class="question-rail" aria-label="回放问题">
+          <div class="rail-title">你想知道什么？</div>
+          <div class="question-list" role="tablist" aria-label="观察角度">
+            <button class="question" data-lens="outcome" role="tab" aria-selected="true">
+              <span class="question-mark">?</span>
+              <span>
+                <strong>最后得到了什么？</strong>
+                <small>结果、影响与未完成项</small>
+              </span>
+            </button>
+            <button class="question" data-lens="why" role="tab" aria-selected="false">
+              <span class="question-mark">?</span>
+              <span>
+                <strong>为什么会变成这样？</strong>
+                <small>决定、输入与证据关系</small>
+              </span>
+            </button>
+            <button class="question" data-lens="sequence" role="tab" aria-selected="false">
+              <span class="question-mark">?</span>
+              <span>
+                <strong>中间具体发生了什么？</strong>
+                <small>按真实顺序查看全部记录</small>
+              </span>
+            </button>
+          </div>
+          <div class="rail-principle">
+            <strong>同一份事实，不同观察角度</strong>
+            切换问题不会重置当前检查点；右侧证据始终跟随你正在看的结论。
+          </div>
+        </aside>
+
+        <section class="projection" aria-live="polite">
+          <article class="view view-outcome">
+            <div class="result-intro">
+              <div class="eyebrow">结果</div>
+              <h2>登录态刷新已修复，重试现在有上限并通过 18 项测试。</h2>
+              <div class="impact-strip" aria-label="结果影响">
+                <div class="impact-item">
+                  <svg class="icon"><use href="#i-file" /></svg>
+                  <span>4 个文件 · <span class="plus">+126</span> <span class="minus">−38</span></span>
+                </div>
+                <div class="impact-item">
+                  <svg class="icon"><use href="#i-chart" /></svg>
+                  <span>行为变化：无限重试 → 最多 5 次</span>
+                </div>
+                <div class="impact-item attention">
+                  <svg class="icon"><use href="#i-alert" /></svg>
+                  <span>仍需确认：弱网下的刷新时序</span>
+                </div>
+              </div>
+            </div>
+            <section class="artifact-section">
+              <div class="section-heading">
+                <h3>src/auth/refresh.ts</h3>
+                <small>检查点对比 · 开始时 → 完成时</small>
+              </div>
+              <div class="diff-stage" aria-label="代码前后对比">
+                <div class="diff-head">
+                  <span><b>开始时</b> · A1</span>
+                  <span><b>完成时</b> · A3</span>
+                </div>
+                <div class="diff-columns">
+                  <div class="code-pane">
+                    <div class="code-line"><span class="ln">62</span><code><span class="kw">async function</span> refreshWithRetry() {</code></div>
+                    <div class="code-line"><span class="ln">63</span><code>  <span class="kw">let</span> attempt = 0;</code></div>
+                    <div class="code-line removed"><span class="ln">64</span><code>  <span class="kw">while</span> (<span class="const">true</span>) {</code></div>
+                    <div class="code-line"><span class="ln">65</span><code>    <span class="kw">try</span> {</code></div>
+                    <div class="code-line"><span class="ln">66</span><code>      <span class="kw">return await</span> doRefresh();</code></div>
+                    <div class="code-line"><span class="ln">67</span><code>    } <span class="kw">catch</span> (error) {</code></div>
+                    <div class="code-line"><span class="ln">68</span><code>      attempt += 1;</code></div>
+                    <div class="code-line"><span class="ln">69</span><code>      <span class="kw">await</span> delay(backoff(attempt));</code></div>
+                    <div class="code-line"><span class="ln">70</span><code>    }</code></div>
+                    <div class="code-line"><span class="ln">71</span><code>  }</code></div>
+                  </div>
+                  <div class="code-pane">
+                    <div class="code-line"><span class="ln">62</span><code><span class="kw">async function</span> refreshWithRetry() {</code></div>
+                    <div class="code-line added"><span class="ln">63</span><code>  <span class="kw">const</span> MAX_ATTEMPTS = <span class="const">5</span>;</code></div>
+                    <div class="code-line"><span class="ln">64</span><code>  <span class="kw">let</span> attempt = 0;</code></div>
+                    <div class="code-line added"><span class="ln">65</span><code>  <span class="kw">while</span> (attempt &lt; MAX_ATTEMPTS) {</code></div>
+                    <div class="code-line"><span class="ln">66</span><code>    <span class="kw">try</span> {</code></div>
+                    <div class="code-line"><span class="ln">67</span><code>      <span class="kw">return await</span> doRefresh();</code></div>
+                    <div class="code-line"><span class="ln">68</span><code>    } <span class="kw">catch</span> (error) {</code></div>
+                    <div class="code-line"><span class="ln">69</span><code>      attempt += 1;</code></div>
+                    <div class="code-line added"><span class="ln">70</span><code>      <span class="kw">if</span> (attempt === MAX_ATTEMPTS) <span class="kw">throw</span> error;</code></div>
+                    <div class="code-line"><span class="ln">71</span><code>    }</code></div>
+                  </div>
+                </div>
+              </div>
+              <div class="reason-link">
+                <button class="text-action" data-switch="why">
+                  <svg class="icon sm"><use href="#i-book" /></svg>查看此变化的原因
+                  <svg class="icon sm"><use href="#i-arrow" /></svg>
+                </button>
+              </div>
+            </section>
+          </article>
+
+          <article class="view view-why">
+            <div class="why-intro">
+              <div class="eyebrow">原因</div>
+              <h2>为什么把无限重试改成 5 次上限？</h2>
+              <p>这里只展示被账本明确记录的请求、发现、决定和验证关系。相邻发生不等于因果。</p>
+            </div>
+            <section class="causal-canvas">
+              <div class="causal-chain">
+                <button class="cause-node" data-claim="用户明确要求避免刷新请求无限循环，同时保留可诊断错误。">
+                  <small>用户约束 · #121</small>
+                  <strong>失败必须可收敛</strong>
+                  <p>“修复刷新循环，不要让网络异常持续占用请求。”</p>
+                  <em>结构化记录</em>
+                </button>
+                <div class="causal-arrow"><svg class="icon"><use href="#i-arrow" /></svg></div>
+                <button class="cause-node" data-claim="Agent 复现了无上限循环，并记录 attempt 在异常路径持续增长。">
+                  <small>发现 · #147</small>
+                  <strong>当前实现没有退出条件</strong>
+                  <p>测试在模拟 503 后持续发出刷新请求，直到超时被终止。</p>
+                  <em>测试日志 + 代码观察</em>
+                </button>
+                <div class="causal-arrow"><svg class="icon"><use href="#i-arrow" /></svg></div>
+                <button class="cause-node selected" data-claim="Agent 选择 5 次上限，因为现有 backoff 总等待约 7.5 秒，落在产品的 10 秒失败预算内。">
+                  <small>决定 · #156</small>
+                  <strong>采用 5 次重试上限</strong>
+                  <p>5 次是失败预算和短暂抖动恢复率之间的折中；没有声称这是全局最优值。</p>
+                  <em>明确记录的决定</em>
+                </button>
+              </div>
+              <div class="relationship-note">
+                <svg class="icon sm"><use href="#i-shield" /></svg>
+                <span><b>关系边界：</b>“请求 → 发现 → 决定”三条关系都有事件 ID 支撑；“用户偏好 5 次”没有被记录，因此系统不会这样推断。</span>
+              </div>
+              <div class="branch-row">
+                <div class="branch">
+                  <span>这个决定产生了什么</span>
+                  <strong>refresh.ts 增加 MAX_ATTEMPTS 与终止错误</strong>
+                  <p>代码差异 #173 · 4 个相关调用点同步适配</p>
+                </div>
+                <div class="branch">
+                  <span>这个决定如何被检验</span>
+                  <strong>18/18 单元测试通过</strong>
+                  <p>覆盖退出条件与错误返回；未覆盖浏览器弱网实测</p>
+                </div>
+              </div>
+            </section>
+          </article>
+
+          <article class="view view-sequence">
+            <div class="sequence-intro">
+              <div class="eyebrow">真实顺序</div>
+              <h2>从请求到验证，共 6 个关键检查点</h2>
+              <p>默认折叠 42 条重复读取与终端刷新。需要时可展开全部原始记录；播放控制只在这里出现。</p>
+            </div>
+            <div class="sequence-layout">
+              <div class="event-list" aria-label="事件顺序">
+                <button class="event-row" data-index="0"><time>12:19</time><span class="event-dot">1</span><span><strong>收到修复请求</strong><small>目标与验证条件已记录</small></span></button>
+                <button class="event-row" data-index="1"><time>12:22</time><span class="event-dot">2</span><span><strong>复现无限重试</strong><small>模拟 503 后请求未停止</small></span></button>
+                <button class="event-row" data-index="2"><time>12:26</time><span class="event-dot">3</span><span><strong>决定增加重试上限</strong><small>失败预算内选择 5 次</small></span></button>
+                <button class="event-row active" data-index="3"><time>12:29</time><span class="event-dot">4</span><span><strong>修改刷新实现</strong><small>refresh.ts · +14 −5</small></span></button>
+                <button class="event-row" data-index="4"><time>14:25</time><span class="event-dot">5</span><span><strong>运行验证</strong><small>18 项测试全部通过</small></span></button>
+                <button class="event-row" data-index="5"><time>14:32</time><span class="event-dot">6</span><span><strong>形成结果</strong><small>1 项边界仍需确认</small></span></button>
+              </div>
+              <section class="event-stage">
+                <div class="event-stage-head"><strong id="event-stage-title">修改刷新实现</strong><span class="capture-label"><svg class="icon sm"><use href="#i-check" /></svg>结构化记录</span></div>
+                <div class="event-preview">
+                  <h3 id="event-stage-heading">src/auth/refresh.ts</h3>
+                  <p id="event-stage-copy">增加最多 5 次重试上限，并在耗尽后返回可诊断错误。</p>
+                  <div class="terminal-line"><span>63</span><span><span class="kw">const</span> MAX_ATTEMPTS = <span class="const">5</span>;</span></div>
+                  <div class="terminal-line"><span>65</span><span><span class="kw">while</span> (attempt &lt; MAX_ATTEMPTS) {</span></div>
+                  <div class="terminal-line"><span>70</span><span><span class="kw">if</span> (attempt === MAX_ATTEMPTS) <span class="kw">throw</span> error;</span></div>
+                  <div class="terminal-line success"><span>✓</span><span>change recorded as ledger #173</span></div>
+                </div>
+              </section>
+            </div>
+          </article>
+        </section>
+
+        <aside class="evidence-panel" aria-label="上下文证据">
+          <div class="evidence-scroll">
+            <h2>这条结论凭什么？</h2>
+            <div class="claim">
+              <div class="claim-label"><span>当前主张</span><span>直接记录</span></div>
+              <p id="claim-text">重试循环已改为最多 5 次，并在耗尽后抛出可诊断错误。</p>
+            </div>
+            <div class="panel-label"><span>直接证据</span><span id="evidence-count">3 项</span></div>
+            <div class="evidence-list" id="evidence-list">
+              <button class="evidence-item" data-detail="diff"><span class="evidence-symbol"><svg class="icon sm"><use href="#i-code" /></svg></span><span><strong>代码差异</strong><small>change://173/refresh.ts</small></span><svg class="icon sm"><use href="#i-arrow" /></svg></button>
+              <button class="evidence-item" data-detail="tests"><span class="evidence-symbol"><svg class="icon sm"><use href="#i-test" /></svg></span><span><strong>测试结果 18/18</strong><small>run://184/tests</small></span><svg class="icon sm"><use href="#i-arrow" /></svg></button>
+              <button class="evidence-item" data-detail="ledger"><span class="evidence-symbol"><svg class="icon sm"><use href="#i-book" /></svg></span><span><strong>任务账本 #184</strong><small>ledger://task/184</small></span><svg class="icon sm"><use href="#i-arrow" /></svg></button>
+            </div>
+            <div class="evidence-detail" id="evidence-detail">SHA256 9f7a…3c2d · captured 14:29:13 · source: Pi change ledger</div>
+            <dl class="provenance">
+              <div><dt>来源</dt><dd>Pi Session</dd></div>
+              <div><dt>记录时间</dt><dd id="capture-time">14:29:13</dd></div>
+              <div><dt>序号</dt><dd id="sequence-id">#173</dd></div>
+              <div><dt>可逆性</dt><dd>可回滚</dd></div>
+            </dl>
+            <div class="boundary">
+              <svg class="icon sm"><use href="#i-alert" /></svg>
+              <span><b>记录边界：</b>未记录浏览器弱网实测，因此不能证明真实用户环境下完全不会重复刷新。</span>
+            </div>
+          </div>
+          <div class="evidence-actions">
+            <button class="button primary" data-toast="已打开完整证据视图"><svg class="icon sm"><use href="#i-shield" /></svg>打开完整证据</button>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="checkpoints">
+        <div class="checkpoint-label"><strong>语义检查点</strong><small>不是逐秒录像；只保留影响结果的状态。</small></div>
+        <div class="checkpoint-track" aria-label="语义检查点">
+          <button class="checkpoint" data-index="0"><span class="checkpoint-dot">1</span><span><strong>请求</strong><small>记录目标</small></span><time>12:19</time></button>
+          <button class="checkpoint" data-index="1"><span class="checkpoint-dot">2</span><span><strong>定位</strong><small>复现问题</small></span><time>12:22</time></button>
+          <button class="checkpoint" data-index="2"><span class="checkpoint-dot">3</span><span><strong>决定</strong><small>采用 5 次上限</small></span><time>12:26</time></button>
+          <button class="checkpoint active" data-index="3"><span class="checkpoint-dot">4</span><span><strong>修改</strong><small>更新实现</small></span><time>12:29</time></button>
+          <button class="checkpoint" data-index="4"><span class="checkpoint-dot">5</span><span><strong>验证</strong><small>18/18 通过</small></span><time>14:25</time></button>
+          <button class="checkpoint" data-index="5"><span class="checkpoint-dot">6</span><span><strong>结果</strong><small>形成结论</small></span><time>14:32</time></button>
+        </div>
+        <div class="checkpoint-context">点击任一检查点，三个观察角度都会保持在同一事实位置。</div>
+        <div class="sequence-controls" aria-label="顺序播放控制">
+          <button class="transport-button" id="prev" aria-label="上一步"><svg class="icon"><use href="#i-prev" /></svg></button>
+          <button class="transport-button" id="play" aria-label="播放"><svg class="icon"><use href="#i-play" /></svg></button>
+          <button class="transport-button" id="next" aria-label="下一步"><svg class="icon"><use href="#i-next" /></svg></button>
+          <select aria-label="播放速度"><option>1×</option><option>2×</option><option>4×</option></select>
+        </div>
+      </footer>
+    </main>
+
+    <div class="toast" role="status"><svg class="icon sm"><use href="#i-check" /></svg><span></span></div>
+
+    <script>
+      const app = document.querySelector('.app');
+      const questionButtons = [...document.querySelectorAll('.question')];
+      const checkpoints = [...document.querySelectorAll('.checkpoint')];
+      const eventRows = [...document.querySelectorAll('.event-row')];
+      const claimText = document.querySelector('#claim-text');
+      const captureTime = document.querySelector('#capture-time');
+      const sequenceId = document.querySelector('#sequence-id');
+      const headingMeta = document.querySelector('.heading-copy p');
+      const playButton = document.querySelector('#play');
+      const toast = document.querySelector('.toast');
+      const evidenceDetail = document.querySelector('#evidence-detail');
+      let selectedIndex = 3;
+      let playback = null;
+
+      const facts = [
+        { time: '12:19', title: '收到修复请求', heading: '原始目标', copy: '修复登录态刷新循环；网络异常必须能收敛并返回可诊断错误。', claim: '用户明确要求修复无限刷新，并保留可诊断的失败信息。', id: '#121' },
+        { time: '12:22', title: '复现无限重试', heading: '终端与测试日志', copy: '模拟 503 后刷新请求没有退出条件，直到测试超时被终止。', claim: '当前实现会在持续失败时无限重试，测试记录了这一行为。', id: '#147' },
+        { time: '12:26', title: '决定增加重试上限', heading: '决定记录', copy: '根据 10 秒失败预算，选择最多 5 次指数退避重试。', claim: '5 次上限来自已记录的失败预算折中，而不是系统对用户偏好的猜测。', id: '#156' },
+        { time: '12:29', title: '修改刷新实现', heading: 'src/auth/refresh.ts', copy: '增加最多 5 次重试上限，并在耗尽后返回可诊断错误。', claim: '重试循环已改为最多 5 次，并在耗尽后抛出可诊断错误。', id: '#173' },
+        { time: '14:25', title: '运行验证', heading: '测试结果', copy: '18 项单元测试全部通过，覆盖退出条件、退避与错误返回。', claim: '18 项自动化测试均通过；它们没有覆盖浏览器弱网实测。', id: '#184' },
+        { time: '14:32', title: '形成结果', heading: '任务结果', copy: '核心修复完成，保留一个明确的弱网场景验证边界。', claim: '核心目标已完成，但弱网真实浏览器行为仍缺少直接证据。', id: '#191' },
+      ];
+
+      function setLens(lens) {
+        app.dataset.lens = lens;
+        questionButtons.forEach((button) => button.setAttribute('aria-selected', String(button.dataset.lens === lens)));
+        if (lens !== 'sequence') stopPlayback();
+      }
+
+      function selectCheckpoint(index) {
+        selectedIndex = Math.max(0, Math.min(facts.length - 1, index));
+        const fact = facts[selectedIndex];
+        checkpoints.forEach((button) => button.classList.toggle('active', Number(button.dataset.index) === selectedIndex));
+        eventRows.forEach((button) => button.classList.toggle('active', Number(button.dataset.index) === selectedIndex));
+        claimText.textContent = fact.claim;
+        captureTime.textContent = fact.time + ':13';
+        sequenceId.textContent = fact.id;
+        headingMeta.textContent = `完成于 14:32 · 用时 12分48秒 · 当前停在「${checkpoints[selectedIndex].querySelector('strong').textContent}」检查点`;
+        document.querySelector('#event-stage-title').textContent = fact.title;
+        document.querySelector('#event-stage-heading').textContent = fact.heading;
+        document.querySelector('#event-stage-copy').textContent = fact.copy;
+      }
+
+      function stopPlayback() {
+        if (playback) clearInterval(playback);
+        playback = null;
+        playButton.classList.remove('playing');
+        playButton.innerHTML = '<svg class="icon"><use href="#i-play" /></svg>';
+        playButton.setAttribute('aria-label', '播放');
+      }
+
+      function togglePlayback() {
+        if (playback) {
+          stopPlayback();
+          return;
+        }
+        if (selectedIndex === facts.length - 1) selectCheckpoint(0);
+        playButton.classList.add('playing');
+        playButton.innerHTML = '<svg class="icon"><use href="#i-pause" /></svg>';
+        playButton.setAttribute('aria-label', '暂停');
+        playback = setInterval(() => {
+          if (selectedIndex >= facts.length - 1) return stopPlayback();
+          selectCheckpoint(selectedIndex + 1);
+        }, 1250);
+      }
+
+      function showToast(message) {
+        toast.querySelector('span').textContent = message;
+        toast.classList.add('show');
+        window.setTimeout(() => toast.classList.remove('show'), 1800);
+      }
+
+      questionButtons.forEach((button) => button.addEventListener('click', () => setLens(button.dataset.lens)));
+      document.querySelectorAll('[data-switch]').forEach((button) => button.addEventListener('click', () => setLens(button.dataset.switch)));
+      checkpoints.forEach((button) => button.addEventListener('click', () => selectCheckpoint(Number(button.dataset.index))));
+      eventRows.forEach((button) => button.addEventListener('click', () => selectCheckpoint(Number(button.dataset.index))));
+      document.querySelector('#prev').addEventListener('click', () => selectCheckpoint(selectedIndex - 1));
+      document.querySelector('#next').addEventListener('click', () => selectCheckpoint(selectedIndex + 1));
+      playButton.addEventListener('click', togglePlayback);
+      document.querySelectorAll('.cause-node').forEach((node) => node.addEventListener('click', () => {
+        document.querySelectorAll('.cause-node').forEach((item) => item.classList.remove('selected'));
+        node.classList.add('selected');
+        claimText.textContent = node.dataset.claim;
+      }));
+      document.querySelectorAll('.evidence-item').forEach((item) => item.addEventListener('click', () => {
+        const wasOpen = item.classList.contains('open');
+        document.querySelectorAll('.evidence-item').forEach((row) => row.classList.remove('open'));
+        item.classList.toggle('open', !wasOpen);
+        evidenceDetail.classList.toggle('visible', !wasOpen);
+        if (!wasOpen) evidenceDetail.textContent = `${item.querySelector('small').textContent} · SHA256 9f7a…3c2d · captured ${captureTime.textContent}`;
+      }));
+      document.querySelectorAll('[data-toast]').forEach((button) => button.addEventListener('click', () => showToast(button.dataset.toast)));
+      document.querySelector('.topbar .icon-button').addEventListener('click', () => showToast('这是独立设计 Mock，关闭操作未连接宿主应用'));
+    </script>
+  </body>
+</html>

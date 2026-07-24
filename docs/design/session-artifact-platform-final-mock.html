@@ -1,0 +1,892 @@
+<!doctype html>
+<!--
+  Charter Session Artifact Platform - final product mock.
+  Standalone design artifact only; no product code or external resources.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Charter - Session Artifact Platform</title>
+  <style>
+    :root {
+      --app: #eceae5;
+      --side: #f6f5f1;
+      --paper: #fbfaf7;
+      --card: #ffffff;
+      --line: #e5e1d8;
+      --line-strong: #d6d1c6;
+      --ink: #201e1a;
+      --muted: #6e6a61;
+      --faint: #a39e94;
+      --blue: #3f7bd9;
+      --blue-soft: #edf3fd;
+      --green: #2f9e63;
+      --green-soft: #e9f6ef;
+      --amber: #b06f10;
+      --amber-soft: #fbf1df;
+      --red: #c4453d;
+      --red-soft: #fbedeb;
+      --shadow: 0 16px 44px rgba(47, 42, 32, .10), 0 2px 5px rgba(47, 42, 32, .05);
+      --serif: Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif;
+      --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "SFMono-Regular", Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body {
+      min-width: 680px;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 13% 5%, rgba(255,255,255,.82), transparent 25%),
+        linear-gradient(140deg, #e9e7e1, #f2f0eb 52%, #e7e4dd);
+      font: 13px/1.45 var(--ui);
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, textarea { font: inherit; color: inherit; }
+    button { border: 0; background: none; cursor: pointer; }
+    button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .mono { font-family: var(--mono); }
+    .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+    .mock-bar {
+      height: 42px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #f7f4eb;
+      background: #25374b;
+      border-bottom: 1px solid rgba(255,255,255,.12);
+    }
+    .mock-brand { font-family: var(--serif); font-size: 15px; font-weight: 700; letter-spacing: .01em; }
+    .mock-note { color: #bfcbd6; font-size: 11px; }
+    .mock-flow {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font: 10px/1 var(--mono);
+      color: #aebdca;
+    }
+    .mock-flow b { color: #fff; font-weight: 500; padding: 5px 8px; border: 1px solid rgba(255,255,255,.18); border-radius: 999px; }
+    .mock-flow i { width: 12px; height: 1px; background: #70859a; position: relative; }
+    .mock-flow i::after { content: ""; position: absolute; right: 0; top: -2px; border-left: 4px solid #70859a; border-top: 2px solid transparent; border-bottom: 2px solid transparent; }
+
+    .window {
+      height: calc(100% - 42px);
+      display: grid;
+      grid-template-columns: 52px 194px minmax(0, 1fr);
+      background: var(--paper);
+    }
+
+    /* Global and project navigation */
+    .global-rail {
+      background: #25241f;
+      color: #e9e5dc;
+      padding: 11px 7px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo {
+      width: 32px; height: 32px; border-radius: 9px;
+      display: grid; place-items: center;
+      background: #f0ede4; color: #25241f;
+      font: 700 19px/1 var(--serif);
+      margin-bottom: 8px;
+    }
+    .rail-button {
+      width: 36px; height: 36px; border-radius: 9px;
+      display: grid; place-items: center; color: #9e9a90;
+      position: relative;
+    }
+    .rail-button:hover, .rail-button.active { color: white; background: #3a3831; }
+    .rail-button.active::before { content: ""; position: absolute; left: -7px; width: 3px; height: 18px; border-radius: 0 3px 3px 0; background: #d8b25c; }
+    .rail-spacer { flex: 1; }
+    .rail-icon { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+
+    .project-nav {
+      min-width: 0;
+      background: var(--side);
+      border-right: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+    }
+    .project-head { padding: 16px 14px 12px; border-bottom: 1px solid var(--line); }
+    .eyebrow { color: var(--faint); font: 9px/1.2 var(--mono); letter-spacing: .10em; text-transform: uppercase; }
+    .project-name { margin-top: 7px; display: flex; gap: 7px; align-items: center; font-weight: 650; }
+    .branch { color: var(--muted); margin-top: 4px; font: 10px var(--mono); }
+    .nav-section { padding: 14px 9px 4px; }
+    .nav-label { padding: 0 7px 7px; color: var(--faint); font: 9px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .nav-item {
+      width: 100%; min-width: 0; padding: 8px 8px;
+      display: flex; align-items: center; gap: 8px;
+      border-radius: 8px; text-align: left; color: var(--muted);
+    }
+    .nav-item:hover { background: #ece9e2; }
+    .nav-item.active { background: #e5e2da; color: var(--ink); font-weight: 620; }
+    .nav-item .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .nav-item .count { margin-left: auto; color: var(--faint); font: 10px var(--mono); }
+    .session-item { align-items: flex-start; }
+    .session-item .session-copy { min-width: 0; }
+    .session-item strong, .session-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-item strong { font-size: 11px; }
+    .session-item small { margin-top: 2px; color: var(--faint); font-size: 9px; }
+    .project-foot { margin-top: auto; padding: 10px; border-top: 1px solid var(--line); }
+    .project-foot .nav-item { font-size: 11px; }
+
+    /* Session shell */
+    .session { min-width: 0; min-height: 0; display: grid; grid-template-rows: 51px minmax(0, 1fr); }
+    .session-head {
+      min-width: 0;
+      display: flex; align-items: center; gap: 9px;
+      padding: 0 14px 0 17px;
+      background: rgba(255,255,255,.86);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+    }
+    .session-head h1 { margin: 0; font: 700 17px/1.1 var(--serif); letter-spacing: -.01em; }
+    .status-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; color: #277d4f; background: var(--green-soft); font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .status-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .head-meta { color: var(--faint); font: 10px var(--mono); }
+    .head-spacer { flex: 1; }
+    .head-button { padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); color: var(--muted); font-size: 11px; }
+    .head-button:hover { border-color: var(--line-strong); color: var(--ink); }
+
+    .workspace {
+      min-width: 0; min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(330px, 38%) minmax(580px, 62%);
+    }
+
+    /* Conversation */
+    .conversation {
+      min-width: 0; min-height: 0;
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
+      border-right: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .timeline { overflow: auto; padding: 19px 18px 12px; }
+    .turn-label { display: flex; align-items: center; gap: 8px; color: var(--faint); font: 9px var(--mono); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 13px; }
+    .turn-label::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+    .message { display: flex; gap: 9px; margin: 0 0 14px; align-items: flex-start; }
+    .message.user { flex-direction: row-reverse; }
+    .avatar { flex: none; width: 25px; height: 25px; display: grid; place-items: center; border-radius: 8px; font: 700 10px var(--serif); }
+    .agent .avatar { color: white; background: #3f556b; }
+    .user .avatar { color: white; background: #3b3933; }
+    .bubble { max-width: calc(100% - 34px); border: 1px solid var(--line); background: var(--card); border-radius: 4px 11px 11px 11px; padding: 9px 11px; font-size: 11px; line-height: 1.55; }
+    .user .bubble { color: #f8f5ed; background: #33312c; border-color: #33312c; border-radius: 11px 4px 11px 11px; }
+    .agent-copy { margin: -4px 0 10px 34px; color: var(--muted); font-size: 11px; line-height: 1.55; }
+    .artifact-card {
+      margin: 8px 0 15px 34px;
+      padding: 10px;
+      display: grid; grid-template-columns: 35px minmax(0,1fr) auto;
+      align-items: center; gap: 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      background: var(--card);
+      box-shadow: 0 3px 10px rgba(38,34,27,.04);
+      cursor: pointer;
+    }
+    .artifact-card:hover { border-color: #aaa397; transform: translateY(-1px); }
+    .file-icon { width: 35px; height: 38px; display: grid; place-items: center; position: relative; border: 1px solid var(--line); border-radius: 5px; background: #f8f6f0; color: var(--red); font: 700 8px var(--mono); }
+    .file-icon::after { content: ""; position: absolute; top: -1px; right: -1px; border-left: 7px solid transparent; border-bottom: 7px solid var(--line); }
+    .artifact-card strong { display: block; font: 600 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .artifact-card small { display: block; margin-top: 3px; color: var(--faint); font-size: 9px; }
+    .artifact-card .open { color: var(--blue); font-size: 10px; }
+    .activity { margin: 0 0 13px 34px; display: flex; gap: 7px; align-items: center; color: var(--faint); font-size: 9px; }
+    .activity .check { color: var(--green); }
+
+    .composer { padding: 10px 13px 13px; background: linear-gradient(transparent, var(--paper) 18%); }
+    .compose-box { padding: 8px 9px 8px 11px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--card); box-shadow: 0 8px 24px rgba(35,31,24,.08); }
+    .attachment-row { display: none; gap: 5px; padding-bottom: 7px; }
+    .attachment-row.show { display: flex; }
+    .anchor-chip { max-width: 100%; display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid #cbd8eb; border-radius: 7px; background: var(--blue-soft); color: #305f9f; font: 9px var(--mono); animation: chip-in .28s ease-out; }
+    .anchor-chip .close { color: #7792b7; }
+    @keyframes chip-in { from { transform: translateY(5px); opacity: 0; } }
+    .compose-placeholder { min-height: 32px; color: var(--faint); font-size: 11px; }
+    .compose-bottom { display: flex; align-items: center; gap: 7px; color: var(--faint); font-size: 10px; }
+    .compose-plus { width: 23px; height: 23px; border-radius: 6px; border: 1px solid var(--line); }
+    .compose-model { font-family: var(--mono); }
+    .send { margin-left: auto; width: 27px; height: 27px; border-radius: 8px; background: var(--ink); color: white; }
+
+    /* Artifact canvas */
+    .canvas { min-width: 0; min-height: 0; display: grid; grid-template-rows: 39px minmax(0, 1fr); background: #f0eee9; }
+    .canvas-tabs { min-width: 0; display: flex; align-items: stretch; padding: 0 9px; border-bottom: 1px solid var(--line); background: var(--side); }
+    .canvas-tab { padding: 0 12px; color: var(--faint); border-bottom: 2px solid transparent; font-size: 10px; }
+    .canvas-tab.active { color: var(--ink); border-bottom-color: var(--ink); font-weight: 650; }
+    .canvas-tab .tab-count { margin-left: 3px; color: var(--blue); }
+    .canvas-tools { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+    .icon-button { width: 27px; height: 27px; display: grid; place-items: center; color: var(--muted); border-radius: 6px; }
+    .icon-button:hover { background: #e5e2db; color: var(--ink); }
+
+    .canvas-body {
+      min-width: 0; min-height: 0;
+      display: grid;
+      grid-template-columns: 132px minmax(310px, 1fr) 254px;
+    }
+    .artifact-strip { min-width: 0; overflow: auto; padding: 10px 8px; border-right: 1px solid var(--line); background: var(--side); }
+    .strip-head { padding: 3px 7px 8px; display: flex; align-items: center; color: var(--faint); font: 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .strip-head span { margin-left: auto; color: var(--muted); }
+    .artifact-option {
+      width: 100%; min-height: 47px; padding: 7px;
+      display: grid; grid-template-columns: 25px minmax(0,1fr); gap: 7px; align-items: center;
+      border: 1px solid transparent; border-radius: 8px; text-align: left;
+    }
+    .artifact-option:hover { background: #ece9e2; }
+    .artifact-option.active { background: var(--card); border-color: var(--line-strong); box-shadow: 0 2px 7px rgba(42,36,27,.05); }
+    .type-icon { width: 25px; height: 29px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 4px; background: #faf8f3; color: var(--muted); font: 700 7px var(--mono); }
+    .artifact-option.active .type-icon { color: var(--blue); border-color: #bacbea; background: var(--blue-soft); }
+    .artifact-option strong, .artifact-option small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .artifact-option strong { font: 600 9px var(--mono); }
+    .artifact-option small { color: var(--faint); font-size: 8px; margin-top: 3px; }
+
+    .preview-column { min-width: 0; min-height: 0; display: grid; grid-template-rows: 47px minmax(0,1fr) 29px; background: #e9e7e1; }
+    .preview-head { min-width: 0; display: flex; align-items: center; gap: 7px; padding: 0 10px; background: var(--card); border-bottom: 1px solid var(--line); }
+    .preview-file { min-width: 0; }
+    .preview-file strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 10px var(--mono); }
+    .preview-file small { color: var(--faint); font-size: 8px; }
+    .version-pill { flex: none; padding: 3px 6px; border-radius: 999px; background: var(--green-soft); color: #287a4e; font: 700 8px var(--mono); }
+    .version-pill.old { background: var(--amber-soft); color: var(--amber); }
+    .preview-actions { margin-left: auto; display: flex; gap: 4px; }
+    .tiny-button { flex: none; padding: 5px 7px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); background: var(--card); font-size: 8px; }
+    .tiny-button:hover, .tiny-button.active { color: var(--ink); border-color: var(--line-strong); background: #f5f3ee; }
+
+    .preview-stage { min-width: 0; min-height: 0; overflow: auto; position: relative; padding: 13px; }
+    .artifact-view { display: none; min-height: 100%; }
+    .artifact-view.active { display: block; animation: view-in .20s ease-out; }
+    @keyframes view-in { from { opacity: .45; transform: translateY(3px); } }
+    .preview-status { display: flex; align-items: center; gap: 7px; padding: 0 10px; border-top: 1px solid var(--line); background: var(--side); color: var(--faint); font: 8px var(--mono); }
+    .preview-status .ready { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+    .preview-status .hash { margin-left: auto; }
+
+    /* PDF renderer */
+    .pdf-view { height: 100%; min-height: 455px; display: grid; grid-template-columns: 58px minmax(250px, 1fr); gap: 10px; }
+    .page-thumbs { display: flex; flex-direction: column; gap: 7px; }
+    .page-thumb { height: 67px; padding: 5px; border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--faint); font: 7px var(--mono); }
+    .page-thumb.active { border: 2px solid var(--blue); padding: 4px; color: var(--blue); }
+    .thumb-lines { margin-top: 6px; height: 35px; background: repeating-linear-gradient(#dedbd3 0 1px, transparent 1px 6px); opacity: .8; }
+    .pdf-page { width: min(100%, 465px); min-height: 565px; margin: 0 auto; padding: 40px 43px; position: relative; background: white; box-shadow: 0 2px 12px rgba(34,30,24,.12); }
+    .pdf-kicker { color: var(--red); font: 700 8px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .pdf-page h2 { margin: 9px 0 6px; font: 700 26px/1.04 var(--serif); letter-spacing: -.03em; }
+    .pdf-page .deck { color: var(--muted); font: 12px/1.45 var(--serif); max-width: 275px; }
+    .pdf-rule { margin: 18px 0; height: 1px; background: var(--ink); }
+    .metric-row { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; }
+    .metric { padding-top: 8px; border-top: 2px solid var(--ink); }
+    .metric b { display: block; font: 700 19px var(--serif); }
+    .metric small { color: var(--faint); font-size: 7px; text-transform: uppercase; letter-spacing: .06em; }
+    .pdf-chart { height: 135px; margin: 25px 0 17px; position: relative; border-left: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); background: repeating-linear-gradient(to top, transparent 0 26px, #eeeae2 26px 27px); }
+    .bar { position: absolute; bottom: 0; width: 12%; background: #485f73; }
+    .bar:nth-child(1) { left: 8%; height: 38%; } .bar:nth-child(2) { left: 25%; height: 54%; } .bar:nth-child(3) { left: 42%; height: 46%; }
+    .bar:nth-child(4) { left: 59%; height: 73%; background: #c99b3d; } .bar:nth-child(5) { left: 76%; height: 88%; background: #c99b3d; }
+    .pdf-copy { color: #504c45; font: 9px/1.65 var(--serif); columns: 2; column-gap: 20px; }
+    .selection-box { position: absolute; left: 55%; top: 255px; width: 35%; height: 150px; border: 1.5px solid var(--blue); background: rgba(63,123,217,.08); box-shadow: 0 0 0 3px rgba(63,123,217,.10); }
+    .selection-box::before { content: "Page 4 region"; position: absolute; top: -20px; right: -1px; padding: 3px 6px; border-radius: 4px 4px 0 0; background: var(--blue); color: white; font: 7px var(--mono); white-space: nowrap; }
+
+    /* CSV renderer */
+    .table-shell { min-width: 580px; min-height: 455px; border: 1px solid var(--line-strong); border-radius: 7px; overflow: hidden; background: white; }
+    .table-formula { height: 29px; display: flex; align-items: center; gap: 7px; padding: 0 8px; border-bottom: 1px solid var(--line); color: var(--muted); font: 8px var(--mono); }
+    .cell-name { width: 35px; padding-right: 7px; border-right: 1px solid var(--line); color: var(--blue); }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; font: 8px var(--mono); }
+    th, td { height: 29px; padding: 0 7px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    thead th { background: #f3f1eb; color: var(--muted); font-weight: 600; text-align: center; }
+    th.row-head { width: 32px; text-align: right; color: var(--faint); background: #f8f6f1; font-weight: 400; }
+    td.selected { background: rgba(63,123,217,.12); }
+    td.sel-top { border-top: 2px solid var(--blue); }
+    td.sel-bottom { border-bottom: 2px solid var(--blue); }
+    td.sel-left { border-left: 2px solid var(--blue); }
+    td.sel-right { border-right: 2px solid var(--blue); }
+    .table-footer { padding: 7px 9px; display: flex; gap: 15px; color: var(--faint); font: 8px var(--mono); background: #f8f6f1; }
+    .table-footer b { color: var(--muted); font-weight: 500; }
+
+    /* Video/audio renderer */
+    .media-card { max-width: 720px; margin: 0 auto; overflow: hidden; border-radius: 8px; background: #171b1d; color: white; box-shadow: 0 12px 30px rgba(0,0,0,.18); }
+    .video-frame { height: 330px; position: relative; overflow: hidden; background: linear-gradient(180deg, #8ba8b2 0 50%, #314e47 50%); }
+    .video-frame::before { content: ""; position: absolute; left: -8%; right: -8%; bottom: 28%; height: 36%; background: #243c37; clip-path: polygon(0 78%, 14% 33%, 25% 58%, 43% 4%, 55% 50%, 70% 14%, 84% 62%, 100% 29%, 100% 100%, 0 100%); }
+    .video-frame::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 38%; background: linear-gradient(168deg, transparent 0 28%, #d4c099 29% 43%, #50776a 44%); }
+    .sun { position: absolute; width: 52px; height: 52px; border-radius: 50%; background: #f0d59d; top: 49px; right: 68px; box-shadow: 0 0 40px rgba(247,217,158,.5); }
+    .frame-title { position: absolute; left: 22px; bottom: 24px; z-index: 2; text-shadow: 0 2px 5px #000; }
+    .frame-title small { display: block; font: 8px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+    .frame-title b { font: 700 24px var(--serif); }
+    .frame-anchor { position: absolute; z-index: 4; left: 59%; top: 40%; width: 90px; height: 65px; border: 1.5px solid #f8c75f; background: rgba(248,199,95,.10); }
+    .frame-anchor::after { content: "frame @ 00:18.420"; position: absolute; top: -18px; right: -1px; padding: 3px 5px; background: #e0a72f; color: #241d0d; font: 7px var(--mono); white-space: nowrap; }
+    .media-controls { padding: 10px 12px 12px; }
+    .media-row { display: flex; align-items: center; gap: 9px; }
+    .play { width: 28px; height: 28px; border-radius: 50%; background: white; color: #171b1d; display: grid; place-items: center; }
+    .play.playing { background: #f2c96e; }
+    .time-readout { font: 8px var(--mono); color: #c2c9ca; }
+    .capture { margin-left: auto; color: #c2c9ca; font-size: 8px; border: 1px solid #4b5153; border-radius: 5px; padding: 4px 7px; }
+    .timeline-track { height: 34px; margin-top: 8px; position: relative; cursor: crosshair; }
+    .waveform { position: absolute; inset: 5px 0; opacity: .45; background: repeating-linear-gradient(90deg, #a7b3b5 0 2px, transparent 2px 5px); clip-path: polygon(0 45%,2% 30%,4% 60%,6% 15%,8% 75%,10% 36%,12% 62%,14% 23%,16% 76%,18% 42%,20% 65%,22% 12%,24% 70%,26% 44%,28% 55%,30% 25%,32% 80%,34% 33%,36% 60%,38% 15%,40% 73%,42% 40%,44% 59%,46% 18%,48% 80%,50% 31%,52% 64%,54% 20%,56% 76%,58% 45%,60% 66%,62% 19%,64% 72%,66% 37%,68% 62%,70% 25%,72% 78%,74% 46%,76% 66%,78% 21%,80% 74%,82% 38%,84% 61%,86% 17%,88% 77%,90% 43%,92% 64%,94% 27%,96% 72%,98% 39%,100% 50%,100% 52%,0 52%); }
+    .selected-time { position: absolute; left: 31%; width: 12%; top: 0; bottom: 0; border-left: 1px solid #f2c96e; border-right: 1px solid #f2c96e; background: rgba(242,201,110,.17); }
+    .playhead { position: absolute; left: 37%; top: 0; bottom: 0; width: 1px; background: #fff; }
+    .playhead::before { content: ""; position: absolute; top: -2px; left: -3px; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid white; }
+    .codec-note { margin-top: 8px; display: flex; align-items: center; gap: 6px; color: #7f898c; font: 7px var(--mono); }
+    .codec-note .ok { color: #5fc58e; }
+
+    /* Image / HEIC renderer */
+    .image-workspace { min-height: 455px; display: grid; grid-template-rows: 30px minmax(350px, 1fr); border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: #d8d5ce; }
+    .image-tools { display: flex; align-items: center; gap: 7px; padding: 0 8px; border-bottom: 1px solid var(--line-strong); background: var(--card); color: var(--muted); font-size: 8px; }
+    .conversion { margin-left: auto; display: inline-flex; gap: 5px; align-items: center; color: #287a4e; font: 7px var(--mono); }
+    .conversion::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+    .checker { min-height: 425px; padding: 25px; display: grid; place-items: center; background-color: #ddd9d2; background-image: linear-gradient(45deg,#d2cec6 25%,transparent 25%),linear-gradient(-45deg,#d2cec6 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#d2cec6 75%),linear-gradient(-45deg,transparent 75%,#d2cec6 75%); background-size: 18px 18px; background-position: 0 0,0 9px,9px -9px,-9px 0; }
+    .photo { width: min(100%, 540px); aspect-ratio: 1.45; position: relative; overflow: hidden; box-shadow: 0 8px 28px rgba(33,29,23,.24); background: linear-gradient(180deg,#b6d0d1 0 52%,#577064 52%); }
+    .photo::before { content: ""; position: absolute; inset: 18% -5% 29%; background: linear-gradient(145deg, transparent 0 29%, #56726c 30% 43%, transparent 44%), linear-gradient(215deg, transparent 0 42%, #36554f 43% 56%, transparent 57%); }
+    .photo::after { content: ""; position: absolute; left: -8%; right: -8%; bottom: -16%; height: 55%; border-radius: 50% 50% 0 0; background: #d8c5a2; transform: rotate(-4deg); }
+    .photo-sun { position: absolute; width: 55px; height: 55px; top: 40px; left: 58px; border-radius: 50%; background: #f7e1aa; box-shadow: 0 0 35px #f7e1aa; }
+    .image-region { position: absolute; z-index: 3; left: 54%; top: 25%; width: 28%; height: 32%; border: 2px solid white; box-shadow: 0 0 0 1px var(--blue), 0 2px 6px rgba(0,0,0,.3); background: rgba(63,123,217,.10); }
+    .image-region::before, .image-region::after { content: ""; position: absolute; width: 5px; height: 5px; background: white; border: 1px solid var(--blue); }
+    .image-region::before { left: -4px; top: -4px; } .image-region::after { right: -4px; bottom: -4px; }
+    .image-tag { position: absolute; right: -1px; top: -20px; color: white; background: var(--blue); padding: 3px 6px; font: 7px var(--mono); white-space: nowrap; }
+
+    /* HTML renderer */
+    .html-workspace { min-width: 580px; min-height: 455px; display: grid; grid-template-rows: 33px minmax(380px,1fr) 76px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line-strong); background: white; }
+    .browser-bar { display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--faint); background: #f4f2ed; border-bottom: 1px solid var(--line); }
+    .browser-dot { width: 7px; height: 7px; border-radius: 50%; background: #d6d2c9; }
+    .address { flex: 1; margin-left: 5px; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: white; color: var(--muted); font: 7px var(--mono); }
+    .mode-toggle { display: flex; padding: 2px; border: 1px solid var(--line); border-radius: 6px; background: white; }
+    .mode-toggle button { padding: 3px 6px; border-radius: 4px; color: var(--faint); font-size: 7px; }
+    .mode-toggle button.active { color: var(--ink); background: #e9e6de; font-weight: 650; }
+    .site-preview { padding: 28px; position: relative; background: #f4efe4; font-family: var(--serif); }
+    .site-nav { display: flex; align-items: center; color: #283a32; }
+    .site-logo { font: 700 16px var(--serif); }
+    .site-links { margin-left: auto; display: flex; gap: 16px; font: 8px var(--ui); }
+    .site-grid { max-width: 570px; margin: 45px auto 0; display: grid; grid-template-columns: 1.1fr .9fr; gap: 31px; align-items: center; }
+    .site-copy .label { color: #a45c34; font: 700 7px var(--ui); letter-spacing: .15em; text-transform: uppercase; }
+    .site-copy h2 { margin: 7px 0 9px; color: #26362f; font: 700 29px/.95 var(--serif); letter-spacing: -.04em; }
+    .site-copy p { color: #6e736e; font: 9px/1.55 var(--ui); }
+    .product-card { padding: 13px; border-radius: 4px; background: #f9f6ef; box-shadow: 0 12px 27px rgba(68,55,36,.16); }
+    .product-image { height: 118px; position: relative; overflow: hidden; background: #d7dfd6; }
+    .product-image::before { content: ""; position: absolute; width: 58px; height: 85px; left: calc(50% - 29px); bottom: -9px; border-radius: 28px 28px 6px 6px; background: linear-gradient(100deg,#9c5f35,#d09969); box-shadow: inset 12px 0 15px rgba(255,255,255,.25); }
+    .product-info { padding: 10px 2px 1px; }
+    .product-info b { font-size: 12px; }
+    .product-info span { float: right; color: #8a654a; font: 10px var(--ui); }
+    .buy-button { width: 100%; margin-top: 8px; padding: 7px; border-radius: 3px; background: #2b4137; color: white; font: 8px var(--ui); }
+    .dom-selection { position: absolute; z-index: 4; right: calc(7% + 10px); bottom: 44px; width: 37%; height: 34px; border: 1.5px solid var(--blue); background: rgba(63,123,217,.10); pointer-events: none; }
+    .dom-selection::before { content: "button.buy-button"; position: absolute; left: -1px; top: -17px; padding: 2px 5px; background: var(--blue); color: white; font: 7px var(--mono); }
+    .console { display: grid; grid-template-columns: 70px minmax(0,1fr); border-top: 1px solid var(--line); background: #252722; color: #c7cbc3; font: 7px/1.5 var(--mono); }
+    .console-tabs { padding: 8px; border-right: 1px solid #3e403a; color: #f3c767; }
+    .console-lines { padding: 7px 9px; }
+    .console-lines div::before { content: ">"; color: #6f7871; margin-right: 6px; }
+    .console-lines .warn { color: #e8c36f; }
+    .network-shield { display: inline-flex; gap: 4px; align-items: center; color: #8bd0a4; }
+
+    /* Archive and binary */
+    .archive-shell { min-width: 520px; min-height: 455px; display: grid; grid-template-columns: 190px minmax(300px,1fr); border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: white; }
+    .archive-tree { padding: 12px 9px; background: #f5f3ee; border-right: 1px solid var(--line); font: 8px/1.9 var(--mono); }
+    .tree-row { padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+    .tree-row.indent { padding-left: 18px; }
+    .tree-row.selected { color: #305f9f; background: var(--blue-soft); }
+    .manifest { padding: 19px; }
+    .manifest h3 { margin: 0 0 5px; font: 700 19px var(--serif); }
+    .manifest > p { color: var(--muted); font-size: 9px; margin: 0 0 17px; }
+    .manifest-grid { display: grid; grid-template-columns: 90px 1fr; gap: 0; border-top: 1px solid var(--line); font: 8px var(--mono); }
+    .manifest-grid div { padding: 7px; border-bottom: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; }
+    .manifest-grid div:nth-child(odd) { color: var(--faint); background: #faf9f6; }
+    .verify-box { margin-top: 17px; padding: 10px; display: flex; align-items: center; gap: 8px; border: 1px solid #c8e3d4; border-radius: 7px; color: #287a4e; background: var(--green-soft); font-size: 9px; }
+    .binary-shell { min-height: 455px; display: grid; place-items: center; }
+    .binary-card { width: min(400px,90%); padding: 30px; text-align: center; border: 1px solid var(--line-strong); border-radius: 10px; background: white; box-shadow: 0 7px 24px rgba(35,31,24,.08); }
+    .binary-glyph { width: 58px; height: 67px; margin: 0 auto 15px; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 7px; background: #f5f3ed; color: var(--muted); font: 700 12px var(--mono); }
+    .binary-card h3 { margin: 0 0 6px; font: 700 20px var(--serif); }
+    .binary-card p { color: var(--muted); font-size: 9px; line-height: 1.6; }
+    .binary-actions { display: flex; justify-content: center; gap: 7px; margin-top: 14px; }
+    .binary-actions button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: white; font-size: 8px; }
+    .binary-actions .primary { color: white; background: var(--ink); border-color: var(--ink); }
+
+    /* Feedback inspector */
+    .inspector { min-width: 0; min-height: 0; overflow: auto; background: var(--card); border-left: 1px solid var(--line); }
+    .inspector-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 7px; height: 42px; padding: 0 11px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.94); backdrop-filter: blur(9px); }
+    .inspector-head strong { font: 700 12px var(--serif); }
+    .anchor-state { margin-left: auto; padding: 3px 6px; border-radius: 999px; color: #287a4e; background: var(--green-soft); font: 700 7px var(--mono); text-transform: uppercase; }
+    .anchor-state.stale { color: var(--amber); background: var(--amber-soft); }
+    .stale-banner { display: none; padding: 9px 11px; border-bottom: 1px solid #ead7b1; color: #7d5418; background: var(--amber-soft); font-size: 8px; line-height: 1.45; }
+    .stale-banner.show { display: block; }
+    .stale-banner b { display: block; margin-bottom: 3px; }
+    .stale-actions { display: flex; gap: 5px; margin-top: 6px; }
+    .stale-actions button { padding: 3px 5px; border: 1px solid #dbc18e; border-radius: 4px; background: #fffaf0; font-size: 7px; }
+    .inspector-body { padding: 11px; }
+    .section-label { margin: 0 0 6px; color: var(--faint); font: 8px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .human-anchor { padding: 8px 9px; border: 1px solid #cbd8eb; border-radius: 7px; background: var(--blue-soft); color: #305f9f; font: 9px/1.45 var(--mono); overflow-wrap: anywhere; }
+    .feedback-input { width: 100%; min-height: 58px; resize: vertical; margin: 8px 0 10px; padding: 8px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fdfcf9; font-size: 9px; line-height: 1.45; }
+    .feedback-input:focus { outline: 1px solid var(--blue); border-color: var(--blue); }
+    .attach-button { width: 100%; padding: 8px; border-radius: 7px; color: white; background: var(--ink); font-size: 9px; font-weight: 650; }
+    .attach-button:hover { background: #3c3932; }
+    .payload-head { display: flex; align-items: center; margin: 16px 0 6px; }
+    .payload-head .section-label { margin: 0; }
+    .payload-head button { margin-left: auto; color: var(--blue); font-size: 7px; }
+    .payload { margin: 0; padding: 9px; overflow: auto; border: 1px solid var(--line); border-radius: 7px; color: #5a574f; background: #f7f5f0; font: 7px/1.65 var(--mono); white-space: pre-wrap; }
+    .provenance { margin-top: 14px; }
+    .prov-row { display: grid; grid-template-columns: 50px minmax(0,1fr); gap: 7px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 8px; }
+    .prov-row span:first-child { color: var(--faint); }
+    .prov-row span:last-child { overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
+    .regenerate { width: 100%; margin-top: 10px; padding: 7px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: white; font-size: 8px; }
+    .regenerate:hover { border-color: var(--amber); color: var(--amber); background: #fffaf0; }
+    .toast { position: fixed; z-index: 30; left: 50%; bottom: 18px; padding: 9px 13px; border-radius: 8px; color: white; background: #25241f; box-shadow: var(--shadow); font-size: 10px; opacity: 0; transform: translate(-50%, 8px); pointer-events: none; transition: .22s; }
+    .toast.show { opacity: 1; transform: translate(-50%,0); }
+
+    @media (max-width: 1180px) {
+      .window { grid-template-columns: 52px minmax(0,1fr); }
+      .project-nav { display: none; }
+      .workspace { grid-template-columns: minmax(300px, 36%) minmax(560px, 64%); }
+      .canvas-body { grid-template-columns: 112px minmax(310px,1fr) 230px; }
+      .mock-note { display: none; }
+    }
+
+    @media (max-width: 900px) {
+      body { min-width: 680px; overflow: auto; }
+      .mock-bar { position: sticky; top: 0; z-index: 50; }
+      .window { min-height: 1050px; height: calc(100vh - 42px); grid-template-columns: 44px minmax(0,1fr); }
+      .global-rail { padding-left: 4px; padding-right: 4px; }
+      .rail-button { width: 34px; }
+      .session-head { padding-left: 11px; }
+      .head-meta { display: none; }
+      .workspace { grid-template-columns: 1fr; grid-template-rows: 345px minmax(650px,1fr); }
+      .conversation { border-right: 0; border-bottom: 1px solid var(--line-strong); }
+      .timeline { padding: 13px 14px 8px; }
+      .composer { padding: 7px 10px 9px; }
+      .canvas-body { grid-template-columns: minmax(0,1fr); grid-template-rows: 60px minmax(410px,1fr) 168px; }
+      .artifact-strip { display: flex; gap: 4px; overflow-x: auto; padding: 6px 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .strip-head { flex: 0 0 66px; padding: 0 5px; align-self: center; }
+      .strip-head span { display: none; }
+      .artifact-option { flex: 0 0 94px; min-height: 46px; grid-template-columns: 21px minmax(0,1fr); padding: 5px; }
+      .type-icon { width: 21px; height: 25px; }
+      .artifact-option small { display: none; }
+      .inspector { border-left: 0; border-top: 1px solid var(--line-strong); }
+      .inspector-head { height: 34px; }
+      .inspector-body { display: grid; grid-template-columns: minmax(180px,.8fr) minmax(220px,1fr) 140px; gap: 8px; padding: 8px 10px; }
+      .feedback-input { min-height: 44px; margin: 6px 0; }
+      .attach-button { padding: 6px; }
+      .payload-head, .payload { display: none; }
+      .provenance { margin: 0; }
+      .prov-row { padding: 3px 0; }
+      .regenerate { margin-top: 0; align-self: start; }
+      .stale-banner { position: absolute; right: 10px; bottom: 174px; z-index: 8; width: 260px; border: 1px solid #ead7b1; border-radius: 7px; box-shadow: var(--shadow); }
+      .preview-stage { padding: 10px; }
+      .pdf-page { min-height: 540px; }
+      .media-card { max-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="mock-bar">
+    <div class="mock-brand">Session Artifact Platform</div>
+    <div class="mock-note">Final product mock: preview, precise feedback, revision, and provenance in one Session.</div>
+    <div class="mock-flow" aria-label="Artifact workflow">
+      <b>Generate</b><i></i><b>Preview</b><i></i><b>Anchor</b><i></i><b>Revise</b>
+    </div>
+  </header>
+
+  <main class="window">
+    <nav class="global-rail" aria-label="Global navigation">
+      <div class="logo">C</div>
+      <button class="rail-button active" aria-label="Sessions">
+        <svg class="rail-icon" viewBox="0 0 20 20"><path d="M4 4.5h12v8H9l-3.5 3v-3H4z"/></svg>
+      </button>
+      <button class="rail-button" aria-label="Files">
+        <svg class="rail-icon" viewBox="0 0 20 20"><path d="M3.5 5.5h5l1.5 2h6.5v8h-13z"/></svg>
+      </button>
+      <button class="rail-button" aria-label="Search">
+        <svg class="rail-icon" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="4.5"/><path d="m12 12 4 4"/></svg>
+      </button>
+      <button class="rail-button" aria-label="Source control">
+        <svg class="rail-icon" viewBox="0 0 20 20"><circle cx="6" cy="5" r="2"/><circle cx="14" cy="15" r="2"/><path d="M6 7v4c0 2 1 4 4 4h2M13 5h-2c-2 0-3 1-3 3"/></svg>
+      </button>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" aria-label="Settings">
+        <svg class="rail-icon" viewBox="0 0 20 20"><circle cx="10" cy="10" r="3"/><path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"/></svg>
+      </button>
+    </nav>
+
+    <aside class="project-nav">
+      <div class="project-head">
+        <div class="eyebrow">Workspace</div>
+        <div class="project-name"><span class="dot"></span> Northstar Commerce</div>
+        <div class="branch">main / clean</div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label">Workbench</div>
+        <button class="nav-item active"><span class="dot"></span>Sessions<span class="count">4</span></button>
+        <button class="nav-item">Artifacts<span class="count">18</span></button>
+        <button class="nav-item">Review<span class="count">3</span></button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label">Recent sessions</div>
+        <button class="nav-item session-item active"><span class="dot"></span><span class="session-copy"><strong>Launch package QA</strong><small>7 artifacts - active now</small></span></button>
+        <button class="nav-item session-item"><span class="session-copy"><strong>Checkout redesign</strong><small>12 artifacts - yesterday</small></span></button>
+        <button class="nav-item session-item"><span class="session-copy"><strong>Q2 pricing audit</strong><small>6 artifacts - Jul 19</small></span></button>
+      </div>
+      <div class="project-foot"><button class="nav-item">+ New Session</button></div>
+    </aside>
+
+    <section class="session">
+      <header class="session-head">
+        <h1>Launch package QA</h1>
+        <span class="status-pill">Live</span>
+        <span class="head-meta">task_f83a / codex</span>
+        <span class="head-spacer"></span>
+        <button class="head-button" id="compareTop">Compare versions</button>
+        <button class="head-button">...</button>
+      </header>
+
+      <div class="workspace">
+        <section class="conversation" aria-label="Session conversation">
+          <div class="timeline">
+            <div class="turn-label">Turn 12 - 10:41</div>
+            <div class="message user">
+              <div class="avatar">E</div>
+              <div class="bubble">Run the release checks and package the results. I want to review everything without leaving this Session.</div>
+            </div>
+            <div class="message agent">
+              <div class="avatar">C</div>
+              <div class="bubble">Done. I generated the release bundle and opened the executive report for review.</div>
+            </div>
+            <div class="agent-copy">The bundle contains seven renderable artifacts. Every preview remains tied to the exact file hash used in this turn.</div>
+            <button class="artifact-card" data-open-artifact="pdf">
+              <span class="file-icon">PDF</span>
+              <span><strong>release-readout.pdf</strong><small>12 pages - generated by Codex - v3</small></span>
+              <span class="open">Open</span>
+            </button>
+            <div class="activity"><span class="check">OK</span><span>7 artifacts indexed</span><span>-</span><span>preview cache ready</span></div>
+
+            <div class="turn-label">Feedback - now</div>
+            <div class="message user">
+              <div class="avatar">E</div>
+              <div class="bubble">The conversion story is good. Let me comment directly on the exact cells, frames, and DOM elements that need revision.</div>
+            </div>
+            <div class="message agent">
+              <div class="avatar">C</div>
+              <div class="bubble">Select a region in the preview. I will receive the anchor, version hash, and your note together.</div>
+            </div>
+          </div>
+
+          <div class="composer">
+            <div class="compose-box">
+              <div class="attachment-row" id="attachmentRow"></div>
+              <div class="compose-placeholder" id="composePlaceholder">Reply to Codex...</div>
+              <div class="compose-bottom">
+                <button class="compose-plus">+</button>
+                <span class="compose-model">codex / workspace-write</span>
+                <button class="send" aria-label="Send">^</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="canvas" aria-label="Artifact canvas">
+          <nav class="canvas-tabs" aria-label="Tool canvas tabs">
+            <button class="canvas-tab">File</button>
+            <button class="canvas-tab">Diff</button>
+            <button class="canvas-tab active">Preview<span class="tab-count">7</span></button>
+            <button class="canvas-tab">Terminal</button>
+            <button class="canvas-tab">Review<span class="tab-count">1</span></button>
+            <div class="canvas-tools">
+              <button class="icon-button" title="Expand canvas">[]</button>
+              <button class="icon-button" title="More actions">...</button>
+            </div>
+          </nav>
+
+          <div class="canvas-body">
+            <nav class="artifact-strip" aria-label="Session artifacts">
+              <div class="strip-head">Artifacts <span>7</span></div>
+              <button class="artifact-option active" data-artifact="pdf"><span class="type-icon">PDF</span><span><strong>release-readout.pdf</strong><small>12 pages - v3</small></span></button>
+              <button class="artifact-option" data-artifact="csv"><span class="type-icon">CSV</span><span><strong>test-results.csv</strong><small>24,081 rows</small></span></button>
+              <button class="artifact-option" data-artifact="video"><span class="type-icon">MP4</span><span><strong>launch-cut.mp4</strong><small>02:14 - H.264</small></span></button>
+              <button class="artifact-option" data-artifact="image"><span class="type-icon">HEIC</span><span><strong>hero-final.heic</strong><small>local conversion</small></span></button>
+              <button class="artifact-option" data-artifact="html"><span class="type-icon">HTML</span><span><strong>checkout.html</strong><small>sandbox preview</small></span></button>
+              <button class="artifact-option" data-artifact="archive"><span class="type-icon">ZIP</span><span><strong>release-bundle.zip</strong><small>43 entries</small></span></button>
+              <button class="artifact-option" data-artifact="binary"><span class="type-icon">BIN</span><span><strong>model.weights</strong><small>unknown binary</small></span></button>
+            </nav>
+
+            <section class="preview-column">
+              <header class="preview-head">
+                <div class="preview-file"><strong id="previewName">release-readout.pdf</strong><small id="previewMeta">PDF document - 12 pages - 3.8 MB</small></div>
+                <span class="version-pill" id="versionPill">Current v3</span>
+                <div class="preview-actions">
+                  <button class="tiny-button">Source</button>
+                  <button class="tiny-button">Compare</button>
+                  <button class="tiny-button">External</button>
+                </div>
+              </header>
+
+              <div class="preview-stage">
+                <div class="artifact-view active" data-view="pdf">
+                  <div class="pdf-view">
+                    <div class="page-thumbs">
+                      <div class="page-thumb"><span>01</span><div class="thumb-lines"></div></div>
+                      <div class="page-thumb"><span>02</span><div class="thumb-lines"></div></div>
+                      <div class="page-thumb"><span>03</span><div class="thumb-lines"></div></div>
+                      <div class="page-thumb active"><span>04</span><div class="thumb-lines"></div></div>
+                      <div class="page-thumb"><span>05</span><div class="thumb-lines"></div></div>
+                    </div>
+                    <article class="pdf-page">
+                      <div class="pdf-kicker">Release intelligence / 04</div>
+                      <h2>Launch confidence is rising.</h2>
+                      <div class="deck">A compact readout of conversion, reliability, and the remaining release risks.</div>
+                      <div class="pdf-rule"></div>
+                      <div class="metric-row"><div class="metric"><b>99.4%</b><small>Checks passed</small></div><div class="metric"><b>1.8s</b><small>Median load</small></div><div class="metric"><b>+14%</b><small>Conversion</small></div></div>
+                      <div class="pdf-chart"><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i><i class="bar"></i></div>
+                      <div class="pdf-copy">The revised checkout path removes two points of hesitation while preserving the clarity of the original flow. Reliability remains inside the release threshold across all tested profiles. The remaining opportunity is concentrated in mobile payment confirmation and the first-run loading state.</div>
+                      <div class="selection-box" role="button" tabindex="0" title="Selected PDF region"></div>
+                    </article>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="csv">
+                  <div class="table-shell">
+                    <div class="table-formula"><span class="cell-name">B17:D21</span><span>selected range - 5 rows x 3 columns</span></div>
+                    <table aria-label="CSV table preview">
+                      <thead><tr><th class="row-head"></th><th>A</th><th>B</th><th>C</th><th>D</th><th>E</th></tr></thead>
+                      <tbody>
+                        <tr><th class="row-head">15</th><td>checkout-smoke</td><td>webkit</td><td>desktop</td><td>pass</td><td>1.42s</td></tr>
+                        <tr><th class="row-head">16</th><td>checkout-smoke</td><td>chromium</td><td>desktop</td><td>pass</td><td>1.18s</td></tr>
+                        <tr><th class="row-head">17</th><td>payment-retry</td><td class="selected sel-top sel-left">webkit</td><td class="selected sel-top">mobile</td><td class="selected sel-top sel-right">fail</td><td>3.86s</td></tr>
+                        <tr><th class="row-head">18</th><td>payment-retry</td><td class="selected sel-left">chromium</td><td class="selected">mobile</td><td class="selected sel-right">fail</td><td>3.41s</td></tr>
+                        <tr><th class="row-head">19</th><td>payment-retry</td><td class="selected sel-left">firefox</td><td class="selected">mobile</td><td class="selected sel-right">pass</td><td>2.19s</td></tr>
+                        <tr><th class="row-head">20</th><td>coupon-entry</td><td class="selected sel-left">webkit</td><td class="selected">tablet</td><td class="selected sel-right">flaky</td><td>2.95s</td></tr>
+                        <tr><th class="row-head">21</th><td>coupon-entry</td><td class="selected sel-bottom sel-left">chromium</td><td class="selected sel-bottom">tablet</td><td class="selected sel-bottom sel-right">pass</td><td>1.77s</td></tr>
+                        <tr><th class="row-head">22</th><td>address-form</td><td>webkit</td><td>mobile</td><td>pass</td><td>1.62s</td></tr>
+                        <tr><th class="row-head">23</th><td>address-form</td><td>firefox</td><td>desktop</td><td>pass</td><td>1.25s</td></tr>
+                      </tbody>
+                    </table>
+                    <div class="table-footer"><b>24,081 rows</b><span>UTF-8</span><span>comma delimiter</span><span>quoted multiline fields supported</span></div>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="video">
+                  <div class="media-card">
+                    <div class="video-frame"><div class="sun"></div><div class="frame-title"><small>Northstar / launch film</small><b>Built for the path ahead.</b></div><div class="frame-anchor"></div></div>
+                    <div class="media-controls">
+                      <div class="media-row"><button class="play" id="playButton" aria-label="Play">></button><span class="time-readout" id="timeReadout">00:18.420 / 02:14.000</span><button class="capture" id="captureFrame">Capture current frame</button></div>
+                      <div class="timeline-track" id="mediaTimeline" aria-label="Video timeline"><div class="waveform"></div><div class="selected-time"></div><div class="playhead" id="playhead"></div></div>
+                      <div class="codec-note"><span class="ok">native playback</span><span>H.264 / AAC</span><span>- unsupported codecs offer proxy generation or external open</span></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="image">
+                  <div class="image-workspace">
+                    <div class="image-tools"><button>Fit</button><button>100%</button><button>Region</button><button>Compare original</button><span class="conversion">HEIC decoded locally - original unchanged</span></div>
+                    <div class="checker"><div class="photo"><div class="photo-sun"></div><div class="image-region"><span class="image-tag">x .54-.82 / y .25-.57</span></div></div></div>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="html">
+                  <div class="html-workspace">
+                    <div class="browser-bar"><i class="browser-dot"></i><i class="browser-dot"></i><i class="browser-dot"></i><span class="address">sandbox://artifact/checkout.html - 1280 x 800</span><div class="mode-toggle"><button class="active" data-html-mode="safe">Safe</button><button data-html-mode="interactive">Interactive</button></div></div>
+                    <div class="site-preview">
+                      <div class="site-nav"><span class="site-logo">Field & Form</span><span class="site-links"><span>Objects</span><span>Journal</span><span>About</span></span></div>
+                      <div class="site-grid"><div class="site-copy"><span class="label">Quiet utility</span><h2>Objects made for everyday rituals.</h2><p>Thoughtful forms, honest materials, and a calm place for the things that matter.</p></div><div class="product-card"><div class="product-image"></div><div class="product-info"><b>Arc vessel</b><span>$84</span><button class="buy-button">Add to bag</button></div></div></div>
+                      <div class="dom-selection"></div>
+                    </div>
+                    <div class="console"><div class="console-tabs">Console (1)</div><div class="console-lines"><div class="network-shield">Network blocked by artifact sandbox</div><div class="warn">Image fallback used: /assets/arc-vessel.webp</div></div></div>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="archive">
+                  <div class="archive-shell">
+                    <div class="archive-tree"><div class="tree-row">v release-bundle/</div><div class="tree-row indent">v reports/</div><div class="tree-row indent selected">release-readout.pdf</div><div class="tree-row indent">test-results.csv</div><div class="tree-row indent">v media/</div><div class="tree-row indent">launch-cut.mp4</div><div class="tree-row indent">hero-final.heic</div><div class="tree-row indent">checkout.html</div><div class="tree-row indent">manifest.json</div><div class="tree-row indent">checksums.sha256</div></div>
+                    <div class="manifest"><h3>Archive manifest</h3><p>Browse safely before extraction. Feedback can target an inner path directly.</p><div class="manifest-grid"><div>Inner path</div><div>reports/release-readout.pdf</div><div>Type</div><div>application/pdf</div><div>Size</div><div>3,842,919 bytes</div><div>SHA-256</div><div>a91ce7c9...810f2d</div><div>Modified</div><div>2026-07-22 10:41:08 +0800</div></div><div class="verify-box">OK All 43 entries match checksums.sha256</div></div>
+                  </div>
+                </div>
+
+                <div class="artifact-view" data-view="binary">
+                  <div class="binary-shell"><div class="binary-card"><div class="binary-glyph">BIN</div><h3>No safe renderer found</h3><p>The file is preserved and hashed. Charter will not guess at its format, execute it, or send it to a remote conversion service.</p><div class="binary-actions"><button class="primary">Open externally</button><button>Reveal in files</button><button>Inspect metadata</button></div></div></div>
+                </div>
+              </div>
+
+              <footer class="preview-status"><span class="ready"></span><span id="rendererStatus">PDF renderer ready - local only</span><span class="hash" id="statusHash">sha256:a91ce7c9...810f2d</span></footer>
+            </section>
+
+            <aside class="inspector">
+              <header class="inspector-head"><strong>Feedback anchor</strong><span class="anchor-state" id="anchorState">Current</span></header>
+              <div class="stale-banner" id="staleBanner"><b>This feedback targets v2; v3 is current.</b>The original bytes remain available, so the comment is never silently moved.<div class="stale-actions"><button id="viewOld">View feedback version</button><button id="viewCurrent">Open current</button></div></div>
+              <div class="inspector-body">
+                <div>
+                  <div class="section-label">Selected location</div>
+                  <div class="human-anchor" id="humanAnchor">@release-readout.pdf - page 4 - region (55%, 45%, 35%, 27%)</div>
+                  <textarea class="feedback-input" id="feedbackInput" aria-label="Feedback note">Make this chart's comparison period explicit.</textarea>
+                  <button class="attach-button" id="attachFeedback">Attach to reply</button>
+                </div>
+                <div>
+                  <div class="payload-head"><div class="section-label">Structured payload</div><button id="copyPayload">Copy JSON</button></div>
+                  <pre class="payload" id="payload"></pre>
+                </div>
+                <div class="provenance">
+                  <div class="section-label">Provenance</div>
+                  <div class="prov-row"><span>Task</span><span>task_f83a</span></div>
+                  <div class="prov-row"><span>Created by</span><span>codex / turn_12</span></div>
+                  <div class="prov-row"><span>Hash</span><span id="provHash">a91ce7c9...810f2d</span></div>
+                  <div class="prov-row"><span>Snapshot</span><span>artifact://blob/810f2d</span></div>
+                  <button class="regenerate" id="regenerate">Simulate agent regeneration</button>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+
+  <script>
+    const artifacts = {
+      pdf: {
+        name: 'release-readout.pdf', meta: 'PDF document - 12 pages - 3.8 MB', version: 'Current v3',
+        anchor: '@release-readout.pdf - page 4 - region (55%, 45%, 35%, 27%)',
+        note: "Make this chart's comparison period explicit.", kind: 'pdf_region',
+        anchorData: { page: 4, rect: [0.55, 0.45, 0.35, 0.27] }, hash: 'a91ce7c9...810f2d', status: 'PDF renderer ready - local only'
+      },
+      csv: {
+        name: 'test-results.csv', meta: 'CSV table - 24,081 rows - UTF-8', version: 'Current v5',
+        anchor: '@test-results.csv - B17:D21', note: 'Group these failures by browser and explain the flaky row.', kind: 'table_range',
+        anchorData: { sheet: null, range: 'B17:D21', rows: [17,21], columns: ['B','D'] }, hash: 'f31a90d2...0991cb', status: 'Virtual table - 24,081 rows - 38 rendered'
+      },
+      video: {
+        name: 'launch-cut.mp4', meta: 'MPEG-4 video - 02:14 - H.264 / AAC', version: 'Current v2',
+        anchor: '@launch-cut.mp4 - 00:17.800 to 00:20.240 - frame 00:18.420', note: 'Hold this shot for half a second longer before the title appears.', kind: 'media_range',
+        anchorData: { startMs: 17800, endMs: 20240, frameMs: 18420 }, hash: 'ec9f8341...c4278a', status: 'Native media renderer - frame-accurate feedback'
+      },
+      image: {
+        name: 'hero-final.heic', meta: 'HEIC image - 4032 x 3024 - 4.7 MB', version: 'Current v4',
+        anchor: '@hero-final.heic - region x .54-.82 / y .25-.57', note: 'Lift the shadow detail in this mountain area without changing the original.', kind: 'image_region',
+        anchorData: { rect: [0.54,0.25,0.28,0.32], previewFormat: 'image/png' }, hash: '61ef20ac...1dd049', status: 'HEIC decoded locally - cached preview - original unchanged'
+      },
+      html: {
+        name: 'checkout.html', meta: 'Static HTML - sandboxed origin - 1280 x 800', version: 'Current v7',
+        anchor: '@checkout.html - button.buy-button - viewport 1280x800', note: 'Make the primary action feel more specific than Add to bag.', kind: 'dom_element',
+        anchorData: { selector: 'button.buy-button', rect: [0.56,0.79,0.37,0.08], viewport: [1280,800], mode: 'safe' }, hash: 'bb1398e0...93a0d4', status: 'Safe sandbox - network off - no Node or preload'
+      },
+      archive: {
+        name: 'release-bundle.zip', meta: 'ZIP archive - 43 entries - 186.4 MB', version: 'Current v3',
+        anchor: '@release-bundle.zip - reports/release-readout.pdf', note: 'Keep this report at the archive root so stakeholders find it first.', kind: 'archive_entry',
+        anchorData: { innerPath: 'reports/release-readout.pdf' }, hash: 'd2c6b31e...a52900', status: 'Archive manifest verified - preview without extraction'
+      },
+      binary: {
+        name: 'model.weights', meta: 'Unknown binary - 87.2 MB', version: 'Current v1',
+        anchor: '@model.weights - whole file', note: 'Confirm the producing tool and expected format before sharing this file.', kind: 'whole_file',
+        anchorData: { byteRange: null }, hash: '0ae42dd1...681f03', status: 'Metadata only - execution and remote upload disabled'
+      }
+    };
+
+    let current = 'pdf';
+    let stale = false;
+    let toastTimer;
+
+    const byId = (id) => document.getElementById(id);
+    const escapeHtml = (value) => value.replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+
+    function payloadFor(item) {
+      return JSON.stringify({
+        taskId: 'task_f83a',
+        path: 'artifacts/' + item.name,
+        contentHash: stale ? 'sha256:previous-version' : 'sha256:' + item.hash.replace('...', ''),
+        artifactKind: item.kind,
+        anchor: item.anchorData,
+        snapshot: 'artifact://blob/' + item.hash.slice(-6)
+      }, null, 2);
+    }
+
+    function showToast(message) {
+      const toast = byId('toast');
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    function selectArtifact(type) {
+      current = type;
+      const item = artifacts[type];
+      document.querySelectorAll('.artifact-option').forEach((node) => node.classList.toggle('active', node.dataset.artifact === type));
+      document.querySelectorAll('.artifact-view').forEach((node) => node.classList.toggle('active', node.dataset.view === type));
+      byId('previewName').textContent = item.name;
+      byId('previewMeta').textContent = item.meta;
+      byId('versionPill').textContent = item.version;
+      byId('humanAnchor').textContent = item.anchor;
+      byId('feedbackInput').value = item.note;
+      byId('payload').textContent = payloadFor(item);
+      byId('provHash').textContent = item.hash;
+      byId('statusHash').textContent = 'sha256:' + item.hash;
+      byId('rendererStatus').textContent = item.status;
+      if (stale) setStale(false);
+    }
+
+    function setStale(value) {
+      stale = value;
+      const item = artifacts[current];
+      byId('staleBanner').classList.toggle('show', value);
+      byId('anchorState').classList.toggle('stale', value);
+      byId('anchorState').textContent = value ? 'Stale anchor' : 'Current';
+      byId('versionPill').classList.toggle('old', value);
+      byId('versionPill').textContent = value ? 'Viewing v2' : item.version;
+      byId('payload').textContent = payloadFor(item);
+      byId('regenerate').textContent = value ? 'Restore current version' : 'Simulate agent regeneration';
+    }
+
+    document.querySelectorAll('.artifact-option').forEach((button) => button.addEventListener('click', () => selectArtifact(button.dataset.artifact)));
+    document.querySelectorAll('[data-open-artifact]').forEach((button) => button.addEventListener('click', () => selectArtifact(button.dataset.openArtifact)));
+
+    byId('attachFeedback').addEventListener('click', () => {
+      const item = artifacts[current];
+      const row = byId('attachmentRow');
+      row.innerHTML = '<span class="anchor-chip"><span>' + escapeHtml(item.anchor) + '</span><button class="close" aria-label="Remove attachment">x</button></span>';
+      row.classList.add('show');
+      byId('composePlaceholder').textContent = byId('feedbackInput').value;
+      row.querySelector('.close').addEventListener('click', () => {
+        row.classList.remove('show'); row.innerHTML = ''; byId('composePlaceholder').textContent = 'Reply to Codex...';
+      });
+      showToast('Artifact anchor attached to your reply');
+    });
+
+    byId('regenerate').addEventListener('click', () => {
+      setStale(!stale);
+      showToast(stale ? 'Agent created a new version; old anchor preserved' : 'Returned to current artifact version');
+    });
+    byId('compareTop').addEventListener('click', () => { setStale(true); showToast('Comparing feedback-time bytes with current version'); });
+    byId('viewOld').addEventListener('click', () => { byId('versionPill').textContent = 'Feedback v2'; showToast('Showing immutable feedback-time snapshot'); });
+    byId('viewCurrent').addEventListener('click', () => { setStale(false); showToast('Showing current artifact'); });
+    byId('copyPayload').addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(byId('payload').textContent); showToast('Structured payload copied'); }
+      catch (_) { showToast('Payload ready to copy'); }
+    });
+
+    document.querySelectorAll('[data-html-mode]').forEach((button) => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-html-mode]').forEach((node) => node.classList.toggle('active', node === button));
+      const interactive = button.dataset.htmlMode === 'interactive';
+      artifacts.html.anchorData.mode = interactive ? 'interactive' : 'safe';
+      byId('payload').textContent = payloadFor(artifacts.html);
+      byId('rendererStatus').textContent = interactive ? 'Interactive sandbox - isolated origin - network off' : artifacts.html.status;
+      showToast(interactive ? 'Interactive mode enabled inside isolated sandbox' : 'Safe mode restored');
+    }));
+
+    byId('playButton').addEventListener('click', (event) => {
+      event.currentTarget.classList.toggle('playing');
+      event.currentTarget.textContent = event.currentTarget.classList.contains('playing') ? '||' : '>';
+    });
+    byId('mediaTimeline').addEventListener('click', (event) => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      const totalMs = 134000;
+      const ms = Math.round(ratio * totalMs);
+      const min = Math.floor(ms / 60000);
+      const sec = Math.floor((ms % 60000) / 1000);
+      const milli = ms % 1000;
+      byId('playhead').style.left = (ratio * 100) + '%';
+      byId('timeReadout').textContent = String(min).padStart(2,'0') + ':' + String(sec).padStart(2,'0') + '.' + String(milli).padStart(3,'0') + ' / 02:14.000';
+      artifacts.video.anchorData.frameMs = ms;
+      artifacts.video.anchor = '@launch-cut.mp4 - frame ' + byId('timeReadout').textContent.split(' / ')[0];
+      byId('humanAnchor').textContent = artifacts.video.anchor;
+      byId('payload').textContent = payloadFor(artifacts.video);
+    });
+    byId('captureFrame').addEventListener('click', () => showToast('Current frame added to the feedback snapshot'));
+
+    selectArtifact('pdf');
+  </script>
+</body>
+</html>

@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>会话回放 B — 因果故事图</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="replay-page">
+    <main class="mock-window" data-replay data-duration="38" data-autoplay="true">
+      <header class="appbar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <a class="brand" href="./session-replay-directions.html">C</a>
+        <div class="title-block">
+          <h1>每周经营更新：指标、风险与决策</h1>
+          <p>今天 11:02 · Agent 工作了 38 秒 · 因果视图</p>
+        </div>
+        <div class="appbar-spacer"></div>
+        <nav class="direction-nav" aria-label="回放方向">
+          <a href="./session-replay-a-cinematic.html">A</a
+          ><a class="on" href="./session-replay-b-causal-map.html">B</a
+          ><a href="./session-replay-c-spatial.html">C</a
+          ><a href="./session-replay-d-documentary.html">D</a
+          ><a href="./session-replay-e-audit.html">E</a>
+        </nav>
+        <button class="top-action" data-toast="已生成可分享的因果快照">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+            <path d="M5 12v7h14v-7" /></svg
+          >分享
+        </button>
+        <button class="icon-button" data-toast="可切换为时间视图或导出 SVG" aria-label="更多">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      </header>
+
+      <div class="workspace map-layout">
+        <section class="map-stage">
+          <div
+            class="capture-limit"
+            data-capture-note
+            data-pi=""
+            data-claude="Claude 普通 Terminal 无法证明“为什么”；只展示可观察动作，决策节点需 stream-json / hooks 才能解锁。"
+            data-codex="Codex 普通 Terminal 无法证明“为什么”；只展示可观察动作，决策节点需 JSON / app-server 才能解锁。"
+          ></div>
+          <div class="map-stage-head">
+            <div>
+              <h2>为什么 Agent 得出了这个结果？</h2>
+              <p>沿因果路径回放输入、判断、行动和输出；分支表示被考虑但未采用的路径。</p>
+            </div>
+            <div class="map-tools">
+              <button class="soft-button" data-toast="当前仅显示主路径">主路径</button
+              ><button class="icon-button" data-toast="画布已适配窗口" aria-label="适配窗口">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                  <path d="M4 9V4h5m11 5V4h-5M4 15v5h5m11-5v5h-5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="causal-canvas" data-sequence>
+            <svg class="causal-lines" viewBox="0 0 920 330" preserveAspectRatio="none">
+              <path data-at="4" d="M85 162C130 162 132 112 170 112" />
+              <path data-at="9" d="M288 112C326 112 320 162 360 162" />
+              <path data-at="14" d="M478 162C520 162 510 112 550 112" />
+              <path data-at="20" d="M668 112C700 112 700 162 740 162" />
+              <path data-at="27" d="M858 162H905" />
+              <path data-at="11" d="M229 145V245" />
+              <path data-at="23" d="M609 145V245" />
+            </svg>
+            <div class="story-node" data-at="0" style="left: 1%; top: 42%">
+              <div class="node-type">请求</div>
+              <b>生成经营更新</b><small>来自 COO 的邮件<br />需要指标、风险、建议</small>
+            </div>
+            <div class="story-node" data-at="4" style="left: 18%; top: 25%">
+              <div class="node-type">输入</div>
+              <b>读取 KPI 工作簿</b><small>12 个指标 · 4 个异常<br />来源：ops-weekly.xlsx</small>
+            </div>
+            <div class="story-node decision" data-at="9" style="left: 38%; top: 42%">
+              <div class="node-type">判断</div>
+              <b>什么值得解释？</b><small>收入稳定，但转化率跌幅<br />超过 10% 警戒线</small>
+            </div>
+            <div class="story-node action" data-at="14" style="left: 58%; top: 25%">
+              <div class="node-type">行动</div>
+              <b>分析转化漏斗</b><small>按渠道切分并排除<br />一次性大客户影响</small>
+            </div>
+            <div class="story-node decision" data-at="20" style="left: 78%; top: 42%">
+              <div class="node-type">判断</div>
+              <b>首要风险是什么？</b><small>企业渠道下降 18%<br />影响下周预测</small>
+            </div>
+            <div class="story-node output" data-at="27" style="left: 91%; top: 25%; width: 108px">
+              <div class="node-type">输出</div>
+              <b>更新并发送</b><small>周报、风险登记表<br />邮件待批准</small>
+            </div>
+            <div class="story-node" data-at="11" style="left: 18%; top: 70%">
+              <div class="node-type">补充输入</div>
+              <b>渠道明细表</b><small>sheet: Enterprise</small>
+            </div>
+            <div class="story-node" data-at="23" style="left: 58%; top: 70%">
+              <div class="node-type">证据</div>
+              <b>客户流失备注</b><small>CRM 中的 8 条原因</small>
+            </div>
+            <span class="branch-label" style="left: 22%; top: 66%">需要更多证据</span
+            ><span class="branch-label" style="left: 62%; top: 66%">验证风险解释</span>
+            <div class="map-playhead" style="left: 6%; top: 50%"></div>
+          </div>
+        </section>
+
+        <section class="map-lower">
+          <div class="evidence-cards" data-sequence>
+            <div class="evidence-card" data-at="0">
+              <div class="kind-icon">M</div>
+              <b>更新请求</b><span class="mono">00:00 · 邮件</span>
+            </div>
+            <div class="evidence-card" data-at="4">
+              <div class="kind-icon green">S</div>
+              <b>KPI 工作簿</b><span class="mono">00:04 · 12 指标</span>
+            </div>
+            <div class="evidence-card" data-at="11">
+              <div class="kind-icon green">S</div>
+              <b>渠道明细</b><span class="mono">00:11 · 246 行</span>
+            </div>
+            <div class="evidence-card" data-at="14">
+              <div class="kind-icon violet">F</div>
+              <b>漏斗分析</b><span class="mono">00:14 · 4 渠道</span>
+            </div>
+            <div class="evidence-card" data-at="23">
+              <div class="kind-icon amber">C</div>
+              <b>客户原因</b><span class="mono">00:23 · CRM</span>
+            </div>
+            <div class="evidence-card" data-at="27">
+              <div class="kind-icon">D</div>
+              <b>经营周报</b><span class="mono">00:27 · 已更新</span>
+            </div>
+          </div>
+          <aside class="map-inspector">
+            <h3>当前节点</h3>
+            <div class="inspector-title">
+              <div class="kind-icon js-inspector-icon">M</div>
+              <b class="js-inspector-title">生成经营更新</b>
+            </div>
+            <p class="inspector-body js-inspector-body">
+              目标由用户邮件明确给出。Agent 尚未做任何判断。
+            </p>
+          </aside>
+        </section>
+
+        <section class="replay-transport">
+          <div class="transport-row">
+            <button class="icon-button js-restart" aria-label="重新播放">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 4v6h6" />
+                <path d="M5.5 15a7.5 7.5 0 1 0 1-8" />
+              </svg></button
+            ><button class="play-button js-play" aria-label="播放或暂停">
+              <svg class="play-icon" viewBox="0 0 20 20"><path d="M5 3.5v13l11-6.5z" /></svg
+              ><svg class="pause-icon" viewBox="0 0 20 20">
+                <path d="M4.5 3.5h4v13h-4zm7 0h4v13h-4z" />
+              </svg></button
+            ><span class="transport-time"
+              ><span class="js-current-time">00:00</span> /
+              <span class="js-duration">00:38</span></span
+            >
+            <div class="scrub-wrap">
+              <div class="scrub-bg"></div>
+              <span class="timeline-marker" style="left: 11%" data-at="4" data-seek="4"></span
+              ><span
+                class="timeline-marker"
+                style="left: 24%; --marker: var(--amber)"
+                data-at="9"
+                data-seek="9"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 37%; --marker: var(--green)"
+                data-at="14"
+                data-seek="14"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 53%; --marker: var(--amber)"
+                data-at="20"
+                data-seek="20"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 71%; --marker: var(--violet)"
+                data-at="27"
+                data-seek="27"
+              ></span>
+              <div class="scrub-head"></div>
+              <input class="js-scrubber" type="range" aria-label="回放时间轴" />
+            </div>
+            <button class="soft-button speed-button js-speed">1×</button
+            ><button class="icon-button js-fullscreen" aria-label="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="transport-caption">
+            <i class="pulse-dot"></i><b class="js-caption-title">目标进入系统</b
+            ><span class="js-caption-detail truncate"
+              >用户要的不是数据堆砌，而是“变化、风险、建议”</span
+            >
+          </div>
+        </section>
+        <div class="toast"></div>
+        <div
+          hidden
+          data-caption-at="0"
+          data-title="目标进入系统"
+          data-detail="用户要的不是数据堆砌，而是“变化、风险、建议”"
+        ></div>
+        <div
+          hidden
+          data-caption-at="4"
+          data-title="建立数据基线"
+          data-detail="读取本周 KPI，与上周和目标线比较"
+        ></div>
+        <div
+          hidden
+          data-caption-at="9"
+          data-title="决定解释什么"
+          data-detail="转化率变化超过警戒线，进入主分析路径"
+        ></div>
+        <div
+          hidden
+          data-caption-at="14"
+          data-title="追到渠道层"
+          data-detail="企业渠道贡献了大部分跌幅"
+        ></div>
+        <div
+          hidden
+          data-caption-at="20"
+          data-title="形成风险判断"
+          data-detail="Agent 将现象连接到下周预测影响"
+        ></div>
+        <div
+          hidden
+          data-caption-at="27"
+          data-title="产出可行动更新"
+          data-detail="更新周报与风险登记表，发送动作仍等待用户批准"
+        ></div>
+      </div>
+    </main>
+    <script src="./session-replay-lab.js"></script>
+    <script>
+      const replay = document.querySelector('[data-replay]');
+      const nodes = [...replay.querySelectorAll('.causal-canvas > .story-node')];
+      const details = [
+        ['M', '生成经营更新', '目标由用户邮件明确给出。Agent 尚未做任何判断。'],
+        ['S', '读取 KPI 工作簿', '对 12 个指标做周环比和目标差异计算，4 个指标异常。'],
+        ['?', '什么值得解释？', '转化率跌幅超过预设 10% 警戒线，因此进入深挖路径。'],
+        ['F', '分析转化漏斗', '按渠道切分后，企业渠道解释了 73% 的总跌幅。'],
+        ['!', '首要风险是什么？', '风险不是当周收入，而是企业渠道对下周预测的拖累。'],
+        ['D', '更新并发送', '周报和风险表已更新；邮件只形成草稿，未擅自发送。'],
+      ];
+      replay.addEventListener('replaytick', ({ detail }) => {
+        let active = nodes[0];
+        nodes.forEach((n) => {
+          if (detail.current >= +n.dataset.at && +n.dataset.at >= +active.dataset.at) active = n;
+        });
+        const mainNodes = nodes.filter((n) => +n.dataset.at !== 11 && +n.dataset.at !== 23);
+        let idx = Math.max(0, mainNodes.indexOf(active));
+        if (idx < 0) idx = detail.current < 20 ? 2 : 4;
+        const rect = active.getBoundingClientRect(),
+          canvas = active.parentElement.getBoundingClientRect(),
+          dot = replay.querySelector('.map-playhead');
+        dot.style.left = `${rect.left - canvas.left + rect.width / 2 - 5}px`;
+        dot.style.top = `${rect.top - canvas.top + rect.height / 2 - 5}px`;
+        replay.querySelector('.js-inspector-icon').textContent = details[idx][0];
+        replay.querySelector('.js-inspector-title').textContent = details[idx][1];
+        replay.querySelector('.js-inspector-body').textContent = details[idx][2];
+      });
+    </script>
+  </body>
+</html>

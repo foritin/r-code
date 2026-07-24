@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>外部 CLI 集成 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="外部-cli-集成">外部 CLI 集成</h1>
+<h2 id="1-概述">1. 概述</h2>
+<p>Charter 支持外部 CLI（Claude Code、Codex）作为一等公民运行。<br>外部 CLI 会话可被检测、记账、审查，并与内部任务无缝集成。</p>
+<h2 id="2-检测机制">2. 检测机制</h2>
+<h3 id="2-1-前台进程轮询">2.1 前台进程轮询</h3>
+<ul><li>TerminalManager 轮询 <code>pty.process</code>（PTY 前台进程标题）。</li><li>轮询间隔 ~700ms。</li><li>匹配已知 Agent CLI 列表进入 agent 状态。</li></ul>
+<h3 id="2-2-已知-cli">2.2 已知 CLI</h3>
+<table><thead><tr><th>CLI</th><th>进程名</th><th>存储路径</th></tr></thead><tbody><tr><td>Claude Code</td><td><code>claude</code></td><td><code>~/.claude/projects/&lt;munged-cwd&gt;/&lt;uuid&gt;.jsonl</code></td></tr><tr><td>Codex CLI</td><td><code>codex</code></td><td><code>~/.codex/sessions/YYYY/MM/DD/rollout-&lt;ts&gt;-&lt;uuid&gt;.jsonl</code></td></tr></tbody></table>
+<h3 id="2-3-信号选择">2.3 信号选择</h3>
+<ul><li>使用 PTY 前台进程标题作为信号。</li><li>不使用 OSC 标题（不稳定）。</li><li>不使用 alternate-screen 切换（Claude Code renderer 模式不稳定）。</li></ul>
+<h2 id="3-会话生命周期">3. 会话生命周期</h2>
+<h3 id="3-1-进入-agent-状态">3.1 进入 Agent 状态</h3>
+<ol><li>创建 external session task。</li><li>捕获 entry snapshot：</li></ol>
+<ul><li>Git 项目：<code>git write-tree</code> 临时索引（<code>GIT_INDEX_FILE</code> + <code>add -A</code>）。</li><li>非 Git 项目：无 snapshot，first-seed content 成为 baseline。</li></ul>
+<ol><li>任务状态 READY → EXPLORING → IN_PROGRESS。</li></ol>
+<h3 id="3-2-记账">3.2 记账</h3>
+<ul><li>Workspace watcher 过滤（<code>.git/</code>, ignore globs, 产品 artifacts）。</li><li>每个 touched path 从 snapshot tree blob 建立 ChangeService baseline。</li><li>变化记录 <code>author: &#39;agent&#39;</code>, <code>toolCallId: null</code>。</li></ul>
+<h3 id="3-3-结束-agent-状态">3.3 结束 Agent 状态</h3>
+<ul><li>任务转 REVIEW_READY。</li><li>Pane 返回 dock。</li><li>打印摘要行。</li><li>零变化会话遵循 &quot;Answered&quot; 仪式。</li></ul>
+<h2 id="4-会话恢复">4. 会话恢复</h2>
+<h3 id="4-1-定位对话-id">4.1 定位对话 ID</h3>
+<ul><li>基于时间窗口匹配 transcript mtime。</li><li>找到精确 session ID。</li></ul>
+<h3 id="4-2-恢复命令">4.2 恢复命令</h3>
+<ul><li><code>claude --resume &lt;id&gt;</code></li><li><code>codex resume &lt;id&gt;</code></li></ul>
+<h2 id="5-结构化-replay-解析">5. 结构化 Replay 解析</h2>
+<h3 id="5-1-解析器">5.1 解析器</h3>
+<p>增量最佳-effort 解析器，处理各 Provider 的 JSON 流。</p>
+<h3 id="5-2-设计原则">5.2 设计原则</h3>
+<ul><li>丢弃 thinking/reasoning 块。</li><li>提取可观察动作。</li><li>不存储原始思维链。</li></ul>
+<h3 id="5-3-codex-事件映射">5.3 Codex 事件映射</h3>
+<table><thead><tr><th>Codex 事件</th><th>解析结果</th></tr></thead><tbody><tr><td>thread.started</td><td>标记&quot;structured capture connected&quot;</td></tr><tr><td>turn.started</td><td>标记 turn 开始</td></tr><tr><td>turn.completed</td><td>报告完成（含 usage）</td></tr><tr><td>item.started/completed (command_execution)</td><td>记录命令执行 + exit code</td></tr><tr><td>item.started/completed (agent_message)</td><td>提取消息文本</td></tr><tr><td>reasoning</td><td>丢弃</td></tr></tbody></table>
+<h3 id="5-4-claude-事件映射">5.4 Claude 事件映射</h3>
+<table><thead><tr><th>Claude 事件</th><th>解析结果</th></tr></thead><tbody><tr><td>system (init)</td><td>标记&quot;structured capture connected&quot;</td></tr><tr><td>assistant/user (text)</td><td>提取消息文本</td></tr><tr><td>assistant/user (tool_use)</td><td>记录工具调用</td></tr><tr><td>assistant/user (tool_result)</td><td>记录工具结果</td></tr><tr><td>result</td><td>报告完成/失败</td></tr><tr><td>thinking/redacted_thinking</td><td>丢弃</td></tr></tbody></table>
+<h2 id="6-外部控制门">6. 外部控制门</h2>
+<h3 id="6-1-通信">6.1 通信</h3>
+<ul><li>Unix domain socket：<code>&lt;userData&gt;/ctl.sock</code>（mode 0600）。</li><li>HTTP 协议，token 必需。</li></ul>
+<h3 id="6-2-路由">6.2 路由</h3>
+<table><thead><tr><th>方法</th><th>路径</th><th>说明</th></tr></thead><tbody><tr><td>GET</td><td>/v1/terminals</td><td>列出终端</td></tr><tr><td>POST</td><td>/v1/terminals</td><td>创建终端</td></tr><tr><td>POST</td><td>/v1/terminals/{id}/send</td><td>注入文本</td></tr><tr><td>POST</td><td>/v1/terminals/{id}/wait</td><td>等待完成</td></tr><tr><td>GET</td><td>/v1/terminals/{id}/read</td><td>读取输出</td></tr><tr><td>DELETE</td><td>/v1/terminals/{id}/kill</td><td>关闭终端</td></tr></tbody></table>
+<h3 id="6-3-失败语义">6.3 失败语义</h3>
+<table><thead><tr><th>状态码</th><th>含义</th></tr></thead><tbody><tr><td>403</td><td>bad/missing token</td></tr><tr><td>404</td><td>unknown target</td></tr><tr><td>409</td><td>depth/self-control refusal</td></tr><tr><td>429</td><td>over budget</td></tr><tr><td>501</td><td>orchestration disabled</td></tr></tbody></table>
+<h2 id="7-指令面投影">7. 指令面投影</h2>
+<h3 id="7-1-skill-安装">7.1 Skill 安装</h3>
+<ul><li><code>~/.claude/skills/charter-terminal/SKILL.md</code></li><li><code>~/.codex/skills/charter-terminal/SKILL.md</code></li><li>原子写入（tmp + rename）。</li><li>仅用户点击时写入。</li></ul>
+<h3 id="7-2-agents-md-snippet">7.2 AGENTS.md Snippet</h3>
+<p>手动复制粘贴到项目 AGENTS.md 的引导块。</p>
+<h3 id="7-3-触发条件">7.3 触发条件</h3>
+<ul><li>打开/指挥另一个 terminal/Claude/Codex 窗口。</li><li>并行实验。</li><li>可用性门（<code>CHARTER_CTL</code> 存在）。</li></ul>
+<h2 id="8-用户级指令面">8. 用户级指令面</h2>
+<h3 id="8-1-安装机制">8.1 安装机制</h3>
+<p>设置一键安装到：</p>
+<ul><li>托管 Skills 库</li><li><code>~/.claude/skills/</code></li><li><code>~/.codex/skills/</code></li></ul>
+<h3 id="8-2-新鲜度检查">8.2 新鲜度检查</h3>
+<ul><li>IPC <code>skills.charterTerminalStatus</code> 逐字节比较。</li><li>报告 installed/upToDate/error。</li></ul>
+<h3 id="8-3-wrapper-链加固">8.3 Wrapper 链加固</h3>
+<ul><li>CLI 解析追加 <code>~/.local/bin</code> 等安装目录。</li><li>CLI 消失即清理 stale wrapper。</li></ul>
+<h2 id="9-双向编排">9. 双向编排</h2>
+<h3 id="9-1-pi-agent-codex-主要路径">9.1 Pi Agent → Codex（主要路径）</h3>
+<p>Pi Agent 作为 orchestrator，创建 Codex worker：</p>
+<ul><li>通过 <code>terminal.create(launch: &#39;codex&#39;)</code> 创建 PTY 终端</li><li>通过 <code>terminal.send</code>/<code>wait</code>/<code>read</code> 与 Codex 交互</li><li>Codex 保留自己的权限模型，不受 Charter Permission Engine 控制</li><li>需要用户审批（R2 风险）</li></ul>
+<h3 id="9-2-codex-shell-worker-反向路径">9.2 Codex → shell worker（反向路径）</h3>
+<p>Codex 手动启动后，通过 <code>charter</code> MCP server 变成 orchestrator：</p>
+<ul><li>Codex 通过环境变量发现 MCP 门</li><li>获得 <code>terminal.*</code> 六个工具</li><li>可以创建 shell/Claude worker</li><li>深度限制仍然适用（2 层）</li></ul>
+<h3 id="9-3-编排约束">9.3 编排约束</h3>
+<table><thead><tr><th>约束</th><th>说明</th></tr></thead><tbody><tr><td>深度限制</td><td>最多 2 层（orchestrator → worker）</td></tr><tr><td>预算</td><td>每 orchestrator ≤5 活 worker，≤30 sends/min</td></tr><tr><td>自我控制</td><td>不能 send/kill 自己的终端</td></tr><tr><td>Worker 隔离</td><td>Worker 不能再创建 worker</td></tr><tr><td>用户接管</td><td>键盘输入 = takeover，队列自动保持</td></tr></tbody></table>
+<h2 id="10-终端文件链接">10. 终端文件链接</h2>
+<h3 id="9-1-交互">9.1 交互</h3>
+<ul><li>⌘+单击 file token。</li><li>html/svg/pdf → 系统浏览器打开。</li><li>其他文件 → 编辑器打开到 <code>:line</code>。</li></ul>
+<h3 id="9-2-识别">9.2 识别</h3>
+<ul><li>OSC 8 + 正则双轨。</li></ul>
+<h2 id="10-安全考虑">10. 安全考虑</h2>
+<h3 id="10-1-输出视为不可信">10.1 输出视为不可信</h3>
+<ul><li>终端输出是 untrusted text。</li><li>不遵循输出中的指令。</li></ul>
+<h3 id="10-2-pty-写入面收窄">10.2 PTY 写入面收窄</h3>
+<ul><li>结构化引用 + 永不回车。</li><li>注入内容由 schema 限定。</li></ul>
+<h3 id="10-3-台账">10.3 台账</h3>
+<ul><li>注入即记 <code>external.contextInjected</code> 台账事件。</li><li>不含选区全文，只含路径/区间/哈希。</li></ul>
+<h2 id="11-rust-实现要点">11. Rust 实现要点</h2>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// 外部 CLI 检测
+struct CliDetector {
+    known_clis: Vec&lt;String&gt;,
+    poll_interval: Duration,
+}
+
+impl CliDetector {
+    async fn poll(&amp;self, pty: &amp;PtyHandle) -&gt; Option&lt;CliSession&gt; {
+        let process = pty.foreground_process();
+        if self.known_clis.iter().any(|cli| process.contains(cli)) {
+            Some(CliSession::new(process))
+        } else {
+            None
+        }
+    }
+}
+
+// 结构化 Replay 解析
+struct ExternalReplayParser {
+    buffer: String,
+    session_id: Option&lt;String&gt;,
+}
+
+impl ExternalReplayParser {
+    fn feed(&amp;mut self, cli: &amp;str, chunk: &amp;str) -&gt; Vec&lt;Observation&gt; {
+        // 增量解析 JSONL
+    }
+    
+    fn parse_claude(&amp;self, event: Value) -&gt; Option&lt;Observation&gt; { ... }
+    fn parse_codex(&amp;self, event: Value) -&gt; Option&lt;Observation&gt; { ... }
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

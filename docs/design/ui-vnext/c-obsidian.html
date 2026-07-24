@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>方案 C — Obsidian Glass 黑曜石玻璃</title>
+<style>
+  /* ============================================================
+     方案 C — Obsidian Glass
+     主张：OLED 纯黑上的多层玻璃。界面本身几乎消失，
+     光只从「智能体正在工作的地方」发出 —— 活动即光源。
+     展示画面：Session Room（rail + timeline v2 + Diff 工具画布）。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --void: #020204;
+    --glass-1: rgba(255, 255, 255, 0.028);
+    --glass-2: rgba(255, 255, 255, 0.05);
+    --glass-3: rgba(255, 255, 255, 0.08);
+    --edge: rgba(255, 255, 255, 0.075);
+    --edge-lit: rgba(255, 255, 255, 0.16);
+    --fg: #ecedf2;
+    --fg-muted: #8b8f9c;
+    --fg-faint: #4d515e;
+    --aura-a: #6ee7f2;   /* 会话光谱：当前 room */
+    --aura-b: #8b7cf6;
+    --amber: #eebf6d;
+    --green: #5fe3a1;
+    --red: #f0716a;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+    --mono: 'Berkeley Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--void);
+    color: var(--fg);
+    overflow: hidden;
+    font-size: 13px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 背景极光：极暗、极慢 */
+  .aurora { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+  .aurora i {
+    position: absolute; border-radius: 50%; filter: blur(110px); opacity: 0.16;
+    animation: drift 26s ease-in-out infinite alternate;
+  }
+  .aurora i:nth-child(1) { width: 720px; height: 520px; left: 30%; top: -18%; background: radial-gradient(closest-side, #1d4a5e, transparent); }
+  .aurora i:nth-child(2) { width: 640px; height: 560px; right: -12%; bottom: -22%; background: radial-gradient(closest-side, #2c2360, transparent); animation-delay: -9s; }
+  .aurora i:nth-child(3) { width: 420px; height: 380px; left: -10%; bottom: 6%; background: radial-gradient(closest-side, #123b33, transparent); animation-delay: -17s; }
+  @keyframes drift {
+    from { transform: translate3d(0, 0, 0) scale(1); }
+    to { transform: translate3d(60px, 36px, 0) scale(1.12); }
+  }
+
+  .app {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-rows: 46px 1fr;
+    grid-template-columns: 262px minmax(520px, 1fr) 596px;
+    grid-template-areas: "titlebar titlebar titlebar" "rail room canvas";
+    height: 100vh;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  /* ---------- 玻璃基元 ---------- */
+  .pane {
+    background: var(--glass-1);
+    border: 1px solid var(--edge);
+    border-radius: 16px;
+    backdrop-filter: blur(22px);
+    position: relative;
+    overflow: hidden;
+  }
+  .pane::before { /* 顶部高光 */
+    content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.16), transparent);
+    pointer-events: none;
+  }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar {
+    grid-area: titlebar;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 16px;
+    background: transparent;
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.1); }
+  .tb-brand { font-family: var(--serif); font-size: 15px; letter-spacing: 0.02em; }
+  .tb-path { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .tb-path .sep { color: var(--fg-faint); }
+  .tb-path .room-title { color: var(--fg); font-weight: 500; }
+  .state-chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 12px; border-radius: 20px;
+    background: var(--glass-2); border: 1px solid var(--edge-lit);
+    font-size: 11px; color: var(--fg);
+  }
+  .state-chip .pulse {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--aura-a);
+    box-shadow: 0 0 12px var(--aura-a);
+    animation: chipPulse 1.8s ease-in-out infinite;
+  }
+  @keyframes chipPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+  .tb-right { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+  .gbtn {
+    padding: 5px 14px; border-radius: 9px; cursor: pointer;
+    background: var(--glass-2); border: 1px solid var(--edge);
+    color: var(--fg); font-size: 12px;
+  }
+  .gbtn:hover { background: var(--glass-3); border-color: var(--edge-lit); }
+  .gbtn.lit {
+    background: linear-gradient(135deg, rgba(110,231,242,0.16), rgba(139,124,246,0.16));
+    border-color: rgba(110, 231, 242, 0.4);
+    box-shadow: 0 0 24px rgba(110, 231, 242, 0.12);
+  }
+
+  /* ---------- Rail ---------- */
+  .rail { grid-area: rail; display: flex; flex-direction: column; }
+  .rail-head {
+    padding: 13px 14px 9px; display: flex; align-items: center; gap: 8px;
+  }
+  .rail-tab {
+    padding: 4px 11px; border-radius: 8px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer;
+  }
+  .rail-tab.on { background: var(--glass-3); color: var(--fg); border: 1px solid var(--edge); }
+  .rail-head .k { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+
+  .needs {
+    margin: 3px 12px 9px; padding: 8px 12px; border-radius: 10px;
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    background: linear-gradient(90deg, rgba(238,191,109,0.12), rgba(238,191,109,0.03));
+    border: 1px solid rgba(238, 191, 109, 0.32);
+  }
+  .needs i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 12px var(--amber); }
+  .needs b { font-size: 12px; color: var(--amber); font-weight: 600; }
+  .needs span { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--amber); }
+
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 0 8px 10px; }
+  .rail-scroll::-webkit-scrollbar { width: 7px; }
+  .rail-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+  .rg-head {
+    display: flex; align-items: center; padding: 9px 9px 5px;
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-faint);
+  }
+  .rg-head .cnt { margin-left: auto; font-family: var(--mono); }
+  .srow {
+    position: relative;
+    padding: 8px 10px 8px 16px; border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent;
+    margin-bottom: 1px;
+  }
+  .srow:hover { background: var(--glass-2); }
+  /* 会话光谱：每个会话一条 hue 光边 */
+  .srow::before {
+    content: ""; position: absolute; left: 5px; top: 22%; bottom: 22%;
+    width: 2.5px; border-radius: 2px; background: var(--hue, var(--fg-faint));
+    opacity: 0.4;
+  }
+  .srow.live::before { opacity: 1; box-shadow: 0 0 10px var(--hue); animation: chipPulse 2.2s ease-in-out infinite; }
+  .srow.sel {
+    background: var(--glass-2); border-color: var(--edge-lit);
+    box-shadow: inset 0 0 30px rgba(110, 231, 242, 0.04), 0 0 26px rgba(110, 231, 242, 0.05);
+  }
+  .srow .name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .sub { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .sub .lit { color: var(--fg-muted); }
+
+  .rail-foot {
+    padding: 11px 16px; border-top: 1px solid var(--edge);
+    font-size: 11.5px; color: var(--fg-muted); display: flex; gap: 8px; align-items: center;
+  }
+
+  /* ---------- Room（对话） ---------- */
+  .room { grid-area: room; display: flex; flex-direction: column; background: var(--glass-2); }
+  .timeline { flex: 1; overflow-y: auto; padding: 22px 26px 10px; }
+  .timeline::-webkit-scrollbar { width: 8px; }
+  .timeline::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+
+  .milestone {
+    display: flex; align-items: center; gap: 10px;
+    margin: 16px 0 14px; color: var(--fg-faint); font-size: 11px;
+  }
+  .milestone::before, .milestone::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--edge), transparent); }
+  .milestone .ok { color: var(--green); }
+
+  .you {
+    margin: 10px 0 14px auto; max-width: 78%;
+    padding: 11px 15px; border-radius: 14px 14px 4px 14px;
+    background: var(--glass-3); border: 1px solid var(--edge-lit);
+    font-size: 13.5px; line-height: 1.55;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.3);
+    width: fit-content;
+  }
+  .you .who { font-size: 9.5px; letter-spacing: 0.14em; color: var(--fg-faint); margin-bottom: 4px; }
+
+  .agent { margin: 6px 0 12px; max-width: 92%; font-size: 13.5px; line-height: 1.62; color: var(--fg); }
+  .agent .who {
+    font-size: 9.5px; letter-spacing: 0.14em; margin-bottom: 5px;
+    background: linear-gradient(90deg, var(--aura-a), var(--aura-b));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-weight: 600;
+  }
+  .agent p + p { margin-top: 7px; }
+  .agent .dim { color: var(--fg-muted); }
+
+  /* Plan 卡（已批准的历史卡） */
+  .plan-card {
+    margin: 6px 0 14px; padding: 13px 16px; max-width: 92%;
+    background: var(--glass-1); border: 1px solid var(--edge); border-radius: 13px;
+  }
+  .plan-card .head { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }
+  .plan-card .head b { font-family: var(--serif); font-size: 14px; font-weight: 500; }
+  .plan-card .head .ok { margin-left: auto; font-size: 10.5px; color: var(--green); }
+  .plan-card ol { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .plan-card li { display: flex; gap: 10px; font-size: 12.5px; color: var(--fg-muted); }
+  .plan-card li b {
+    width: 17px; height: 17px; border-radius: 50%; flex-shrink: 0;
+    border: 1px solid var(--edge-lit); color: var(--fg-muted);
+    font-size: 9.5px; display: inline-flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-weight: 400; margin-top: 1px;
+  }
+  .plan-card li.done { color: var(--fg-faint); }
+  .plan-card li.done b { border-color: var(--green); color: var(--green); }
+  .plan-card li.now { color: var(--fg); }
+  .plan-card li.now b { border-color: var(--aura-a); color: var(--aura-a); box-shadow: 0 0 10px rgba(110,231,242,0.3); }
+
+  /* 工具行 */
+  .tool-row {
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 12px; margin: 3px 0; max-width: 92%;
+    border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent;
+    font-family: var(--mono); font-size: 11.5px; color: var(--fg-muted);
+    position: relative; overflow: hidden;
+  }
+  .tool-row:hover { background: var(--glass-1); border-color: var(--edge); }
+  .tool-row .verb { color: var(--fg-faint); width: 44px; flex-shrink: 0; }
+  .tool-row .target { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tool-row .stat { flex-shrink: 0; font-size: 10.5px; }
+  .tool-row .add { color: var(--green); } .tool-row .del { color: var(--red); }
+  .tool-row .ok { color: var(--green); }
+  .tool-row.active {
+    background: var(--glass-1); border-color: rgba(110, 231, 242, 0.28);
+    color: var(--fg);
+  }
+  .tool-row.active::after { /* 活动光带 */
+    content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px;
+    background: linear-gradient(90deg, transparent, var(--aura-a), transparent);
+    animation: beam 1.7s ease-in-out infinite;
+  }
+  @keyframes beam { 0% { transform: translateX(-55%); } 100% { transform: translateX(55%); } }
+  .tool-row .spin {
+    width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+    border: 1.5px solid rgba(110,231,242,0.25); border-top-color: var(--aura-a);
+    animation: rot 1s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* 展开的证据 */
+  .evidence {
+    margin: 2px 0 10px 56px; max-width: 82%;
+    border: 1px solid var(--edge); border-radius: 10px;
+    background: rgba(0, 0, 0, 0.4);
+    font-family: var(--mono); font-size: 11px; line-height: 1.7;
+    padding: 9px 0; overflow: hidden;
+  }
+  .evidence .l { padding: 0 14px; white-space: pre; color: var(--fg-muted); }
+  .evidence .l.add { background: rgba(95, 227, 161, 0.09); color: #b6ecd1; }
+  .evidence .l.del { background: rgba(240, 113, 106, 0.08); color: #f3b6b2; text-decoration: line-through; text-decoration-color: rgba(240,113,106,0.4); }
+
+  .live-caret { display: inline-block; width: 7px; height: 14px; background: var(--aura-a); vertical-align: -2px;
+    animation: blink 1.1s steps(1) infinite; box-shadow: 0 0 10px rgba(110,231,242,0.6); border-radius: 1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* Composer */
+  .composer { padding: 12px 16px 14px; }
+  .comp-box {
+    background: var(--glass-2); border: 1px solid var(--edge-lit); border-radius: 14px;
+    padding: 11px 13px 9px;
+    transition: box-shadow 0.25s, border-color 0.25s;
+  }
+  .comp-box:focus-within {
+    border-color: rgba(110, 231, 242, 0.45);
+    box-shadow: 0 0 0 1px rgba(110,231,242,0.2), 0 0 40px rgba(110, 231, 242, 0.08);
+  }
+  .comp-box input {
+    width: 100%; background: transparent; border: none; outline: none;
+    color: var(--fg); font-size: 13.5px; font-family: var(--sans);
+  }
+  .comp-box input::placeholder { color: var(--fg-faint); }
+  .comp-meta { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+  .ref-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 10px;
+    padding: 3px 9px; border-radius: 7px;
+    background: var(--glass-1); border: 1px solid var(--edge);
+    color: var(--fg-muted);
+  }
+  .ref-chip .x { color: var(--fg-faint); cursor: pointer; }
+  .comp-meta .spacer { flex: 1; }
+  .send {
+    width: 30px; height: 30px; border-radius: 9px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, var(--aura-a), var(--aura-b));
+    color: #06070c; display: inline-flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 20px rgba(110, 231, 242, 0.25);
+  }
+  .send:hover { filter: brightness(1.1); }
+
+  /* ---------- 工具画布（Diff peek） ---------- */
+  .canvas { grid-area: canvas; display: flex; flex-direction: column; }
+  .canvas-tabs {
+    display: flex; align-items: center; gap: 4px; padding: 10px 12px 0;
+  }
+  .ctab {
+    padding: 6px 14px; border-radius: 9px 9px 0 0; font-size: 11.5px;
+    color: var(--fg-muted); cursor: pointer; border: 1px solid transparent; border-bottom: none;
+  }
+  .ctab.on {
+    background: var(--glass-2); color: var(--fg);
+    border-color: var(--edge);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
+  }
+  .ctab .n { font-family: var(--mono); font-size: 9.5px; color: var(--aura-a); margin-left: 5px; }
+  .canvas-head {
+    margin: 0 12px; padding: 10px 12px;
+    display: flex; align-items: center; gap: 10px;
+    background: var(--glass-2); border: 1px solid var(--edge);
+    border-radius: 0 10px 10px 0; border-bottom: none; border-radius: 0;
+    border-top-right-radius: 12px;
+  }
+  .canvas-head .path { font-family: var(--mono); font-size: 11px; color: var(--fg); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .canvas-head .stat { font-family: var(--mono); font-size: 10.5px; }
+  .canvas-head .add { color: var(--green); } .canvas-head .del { color: var(--red); }
+  .canvas-head .following {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10px; color: var(--aura-a);
+    padding: 2.5px 9px; border-radius: 12px;
+    border: 1px solid rgba(110, 231, 242, 0.3);
+    background: rgba(110, 231, 242, 0.06);
+  }
+  .canvas-head .following i { width: 5px; height: 5px; border-radius: 50%; background: var(--aura-a); box-shadow: 0 0 8px var(--aura-a); animation: chipPulse 1.4s infinite; }
+  .canvas-head .open-ed { font-size: 10.5px; color: var(--fg-muted); cursor: pointer; white-space: nowrap; }
+  .canvas-head .open-ed:hover { color: var(--fg); }
+  .canvas-head .open-ed kbd { font-family: var(--mono); font-size: 9px; border: 1px solid var(--edge-lit); border-radius: 4px; padding: 0.5px 4px; margin-left: 4px; }
+
+  .diff-body {
+    flex: 1; margin: 0 12px 12px; overflow-y: auto;
+    background: rgba(0, 0, 0, 0.42);
+    border: 1px solid var(--edge); border-top: none;
+    border-radius: 0 0 12px 12px;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.75;
+    padding: 10px 0;
+  }
+  .diff-body::-webkit-scrollbar { width: 8px; }
+  .diff-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+  .dl { display: flex; white-space: pre; }
+  .dl .no { width: 46px; flex-shrink: 0; text-align: right; padding-right: 12px; color: var(--fg-faint); user-select: none; font-size: 10px; line-height: 1.95; }
+  .dl .code { flex: 1; color: #c6cad6; }
+  .dl.ctx .code { color: #7d8290; }
+  .dl.add { background: rgba(95, 227, 161, 0.08); }
+  .dl.add .code { color: #b9edd2; }
+  .dl.add .no { color: rgba(95, 227, 161, 0.5); }
+  .dl.del { background: rgba(240, 113, 106, 0.07); }
+  .dl.del .code { color: #edb0ac; }
+  .dl.hunk { color: var(--aura-a); padding: 6px 14px 4px; font-size: 10px; opacity: 0.75; }
+  .dl.fresh { position: relative; }
+  .dl.fresh::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(110, 231, 242, 0.12), transparent);
+    animation: freshSweep 2.4s ease-out infinite;
+  }
+  @keyframes freshSweep { 0% { transform: translateX(-100%); } 60%, 100% { transform: translateX(100%); } }
+
+  .k { font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+
+  /* ---------- 注解 ---------- */
+  .annot {
+    position: fixed; right: 18px; bottom: 16px; z-index: 90;
+    max-width: 380px; padding: 11px 14px;
+    background: rgba(10, 12, 18, 0.9); border: 1px solid var(--edge-lit);
+    border-radius: 12px; backdrop-filter: blur(16px);
+    font-size: 11.5px; line-height: 1.6; color: var(--fg-muted);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .annot b { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 600; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: var(--fg-faint); font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="aurora"><i></i><i></i><i></i></div>
+
+<div class="app">
+  <!-- Titlebar -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="tb-brand">Charter</span>
+    <div class="tb-path">
+      <span>desktop-app</span><span class="sep">/</span>
+      <span class="room-title">Migrate settings storage to SQLite</span>
+      <span class="k">⎇ ws/settings-sqlite</span>
+    </div>
+    <div class="state-chip"><span class="pulse"></span>Verifying — npm run check</div>
+    <div class="tb-right">
+      <button class="gbtn">Peek changes</button>
+      <button class="gbtn lit">Open review</button>
+      <button class="gbtn">⌘E</button>
+    </div>
+  </header>
+
+  <!-- Rail -->
+  <aside class="rail pane">
+    <div class="rail-head">
+      <span class="rail-tab on">Sessions</span>
+      <span class="rail-tab">Files</span>
+      <span class="k">⌘K</span>
+    </div>
+    <div class="needs"><i></i><b>Needs you</b><span>2</span></div>
+    <div class="rail-scroll">
+      <div class="rg-head">desktop-app<span class="cnt">4</span></div>
+      <div class="srow live sel" style="--hue:#6ee7f2">
+        <div class="name">Migrate settings storage to SQLite</div>
+        <div class="sub"><span class="lit">verify</span> · npm run check</div>
+      </div>
+      <div class="srow" style="--hue:#eebf6d">
+        <div class="name">Rework onboarding trust prompt copy</div>
+        <div class="sub">plan awaits approval · 21s</div>
+      </div>
+      <div class="srow live" style="--hue:#8b7cf6">
+        <div class="name">Chase flaky external-cli e2e retry</div>
+        <div class="sub"><span class="lit">e2e</span> · 9/24 passed</div>
+      </div>
+      <div class="srow" style="--hue:#5fe3a1">
+        <div class="name">Terminal env fallback for zsh users</div>
+        <div class="sub">answered · no changes</div>
+      </div>
+      <div class="rg-head">charter-site<span class="cnt">2</span></div>
+      <div class="srow" style="--hue:#eebf6d">
+        <div class="name">Bundle terminal env fallback fix</div>
+        <div class="sub">review ready · +214 −89</div>
+      </div>
+      <div class="srow live" style="--hue:#f2a3d8">
+        <div class="name">Ship pricing page with annual toggle</div>
+        <div class="sub"><span class="lit">write</span> · pricing.astro</div>
+      </div>
+      <div class="rg-head">History<span class="cnt">31</span></div>
+      <div class="srow" style="--hue:#4d515e">
+        <div class="name">Harden IPC schema for task events</div>
+        <div class="sub">accepted · 2h ago</div>
+      </div>
+    </div>
+    <div class="rail-foot">Working in <b style="color:var(--fg)">desktop-app</b></div>
+  </aside>
+
+  <!-- Room -->
+  <main class="room pane">
+    <div class="timeline">
+      <div class="milestone"><span class="ok">✓</span> Plan approved <span>· 11m ago</span></div>
+
+      <div class="you">
+        <div class="who">YOU</div>
+        Move settings persistence off scattered JSON files onto SQLite. Keep migration
+        transparent — nobody should lose a preference.
+      </div>
+
+      <div class="plan-card">
+        <div class="head">
+          <b>Plan — 4 steps</b>
+          <span class="ok">✓ approved</span>
+        </div>
+        <ol>
+          <li class="done"><b>✓</b>Introduce settings-store.ts with a versioned SQLite schema and WAL mode</li>
+          <li class="done"><b>✓</b>Write one-shot migration from legacy JSON, with a pre-migration snapshot</li>
+          <li class="now"><b>3</b>Swap every reader/writer to the new store behind the IPC contract</li>
+          <li><b>4</b>Verification — npm run check, unit suite, settings e2e</li>
+        </ol>
+      </div>
+
+      <div class="agent">
+        <div class="who">CHARTER</div>
+        <p>Migration path is safer than expected — the legacy files already carry a
+        <span class="dim">schemaVersion</span> field, so I can key the one-shot migration off it
+        and keep a rollback snapshot beside the database.</p>
+      </div>
+
+      <div class="milestone"><span class="ok">✓</span> Steps 1–2 landed <span>· +182 −54 · 6 files</span></div>
+
+      <div class="tool-row">
+        <span class="verb">edit</span>
+        <span class="target">apps/desktop-main/src/services/settings-store.ts</span>
+        <span class="stat"><span class="add">+96</span> <span class="del">−12</span></span>
+      </div>
+      <div class="tool-row">
+        <span class="verb">edit</span>
+        <span class="target">apps/desktop-main/src/services/settings-migration.ts</span>
+        <span class="stat"><span class="add">+64</span> <span class="del">−0</span></span>
+      </div>
+
+      <div class="evidence">
+        <div class="l del">-  const raw = await fs.readFile(settingsPath, 'utf8')</div>
+        <div class="l del">-  return JSON.parse(raw) as SettingsShape</div>
+        <div class="l add">+  const row = db.prepare('SELECT payload FROM settings WHERE scope = ?').get(scope)</div>
+        <div class="l add">+  return migrate(JSON.parse(row.payload), CURRENT_SCHEMA_VERSION)</div>
+        <div class="l">   // callers stay synchronous — WAL keeps reads cheap</div>
+      </div>
+
+      <div class="tool-row">
+        <span class="verb">run</span>
+        <span class="target">npm run test — settings-store.test.ts</span>
+        <span class="stat ok">✓ 18 passed</span>
+      </div>
+
+      <div class="agent">
+        <div class="who">CHARTER</div>
+        <p>Readers and writers are swapped. Starting full verification now — check, unit
+        suite, then the settings e2e. <span class="live-caret"></span></p>
+      </div>
+
+      <div class="tool-row active">
+        <span class="spin"></span>
+        <span class="verb">run</span>
+        <span class="target">npm run check</span>
+        <span class="stat">41s</span>
+      </div>
+    </div>
+
+    <!-- Composer -->
+    <div class="composer">
+      <div class="comp-box">
+        <input placeholder="Reply — steer, ask, or add context…" />
+        <div class="comp-meta">
+          <span class="ref-chip">⌘ settings-store.ts <span class="x">✕</span></span>
+          <span class="ref-chip">@ attach</span>
+          <span class="spacer"></span>
+          <span class="k">⏎ send</span>
+          <button class="send">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 工具画布：Diff -->
+  <section class="canvas pane">
+    <div class="canvas-tabs">
+      <span class="ctab">Summary</span>
+      <span class="ctab on">Changes <span class="n">6</span></span>
+      <span class="ctab">Preview</span>
+      <span class="ctab">Terminal</span>
+      <span class="ctab">Review</span>
+    </div>
+    <div class="canvas-head">
+      <span class="path">apps/desktop-main/src/services/settings-store.ts</span>
+      <span class="stat"><span class="add">+96</span> <span class="del">−12</span></span>
+      <span class="following"><i></i>live following</span>
+      <span class="open-ed">Open in editor<kbd>⌘⏎</kbd></span>
+    </div>
+    <div class="diff-body">
+      <div class="dl hunk">@@ -1,9 +1,14 @@ settings bootstrap</div>
+      <div class="dl ctx"><span class="no">1</span><span class="code">import { app } from 'electron'</span></div>
+      <div class="dl del"><span class="no">2</span><span class="code">import { promises as fs } from 'node:fs'</span></div>
+      <div class="dl add"><span class="no">2</span><span class="code">import Database from 'better-sqlite3'</span></div>
+      <div class="dl add"><span class="no">3</span><span class="code">import { migrate, CURRENT_SCHEMA_VERSION } from './settings-migration'</span></div>
+      <div class="dl ctx"><span class="no">4</span><span class="code">import type { SettingsShape, SettingsScope } from '@app/ipc-contracts'</span></div>
+      <div class="dl ctx"><span class="no">5</span><span class="code"></span></div>
+      <div class="dl add"><span class="no">6</span><span class="code">const DB_FILE = 'charter-settings.db'</span></div>
+      <div class="dl add"><span class="no">7</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+      <div class="dl add"><span class="no">8</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+      <div class="dl ctx"><span class="no">9</span><span class="code"></span></div>
+      <div class="dl hunk">@@ -18,11 +23,19 @@ read path</div>
+      <div class="dl ctx"><span class="no">23</span><span class="code">export function readSettings(scope: SettingsScope): SettingsShape {</span></div>
+      <div class="dl del"><span class="no">24</span><span class="code">  const raw = await fs.readFile(settingsPath, 'utf8')</span></div>
+      <div class="dl del"><span class="no">25</span><span class="code">  return JSON.parse(raw) as SettingsShape</span></div>
+      <div class="dl add"><span class="no">24</span><span class="code">  const row = readStmt.get(scope)</span></div>
+      <div class="dl add"><span class="no">25</span><span class="code">  if (!row) return defaultsFor(scope)</span></div>
+      <div class="dl add"><span class="no">26</span><span class="code">  return migrate(JSON.parse(row.payload), CURRENT_SCHEMA_VERSION)</span></div>
+      <div class="dl ctx"><span class="no">27</span><span class="code">}</span></div>
+      <div class="dl ctx"><span class="no">28</span><span class="code"></span></div>
+      <div class="dl hunk">@@ -41,6 +52,21 @@ write path — agent is typing here</div>
+      <div class="dl ctx"><span class="no">52</span><span class="code">export function writeSettings(scope: SettingsScope, next: SettingsShape) {</span></div>
+      <div class="dl add fresh"><span class="no">53</span><span class="code">  const tx = db.transaction(() => {</span></div>
+      <div class="dl add fresh"><span class="no">54</span><span class="code">    writeStmt.run(scope, JSON.stringify(next), Date.now())</span></div>
+      <div class="dl add fresh"><span class="no">55</span><span class="code">    journalStmt.run(scope, revisionOf(next))</span></div>
+      <div class="dl add fresh"><span class="no">56</span><span class="code">  })</span></div>
+      <div class="dl add fresh"><span class="no">57</span><span class="code">  tx()</span></div>
+      <div class="dl ctx"><span class="no">58</span><span class="code">}</span></div>
+    </div>
+  </section>
+</div>
+
+<!-- 注解 -->
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').remove()">✕</button>
+  <b>方案 C · Obsidian Glass 黑曜石玻璃</b><br/>
+  OLED 纯黑 + 三层玻璃（rail / 对话 / 工具画布），界面几乎消失，
+  光只从智能体正在工作的地方发出：rail 里每个会话有自己的光谱色、
+  运行中的工具行有流动光带、diff 里刚写下的行有 shimmer 扫光、
+  「live following」徽章表示画布正跟着 agent 的笔尖走。演示/截图最上镜的方向。
+</aside>
+
+<script>
+  // 让"正在验证"的工具行秒表走动
+  (function () {
+    const stat = document.querySelector('.tool-row.active .stat');
+    let s = 41;
+    setInterval(() => { s += 1; stat.textContent = s + 's'; }, 1000);
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Task Room V2 · 审阅画布式</title>
+    <link rel="stylesheet" href="./task-room-v2-shared.css" />
+    <style>
+      .canvas-scroll {
+        min-height: 0;
+        overflow: auto;
+        background: var(--bg-editor);
+      }
+
+      .canvas-layout {
+        width: min(1380px, 100%);
+        min-height: 100%;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: 280px minmax(520px, 1fr) 270px;
+      }
+
+      .brief-panel,
+      .review-panel {
+        min-width: 0;
+        padding: 30px 24px;
+        background: var(--bg-panel);
+      }
+
+      .brief-panel {
+        border-right: 1px solid var(--border);
+      }
+
+      .review-panel {
+        border-left: 1px solid var(--border);
+      }
+
+      .brief-title {
+        margin: 0 0 14px;
+        font-size: 18px;
+        letter-spacing: -0.02em;
+      }
+
+      .brief-copy {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.72;
+      }
+
+      .brief-meta {
+        display: grid;
+        gap: 9px;
+        margin: 22px 0;
+        padding: 16px 0;
+        border-top: 1px solid var(--border);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .brief-meta div {
+        display: grid;
+        gap: 3px;
+      }
+
+      .brief-meta span {
+        color: var(--fg-subtle);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .brief-meta strong {
+        overflow-wrap: anywhere;
+        font-size: 13px;
+      }
+
+      .brief-panel .acceptance-note {
+        padding: 11px;
+      }
+
+      .result-stage {
+        min-width: 0;
+        padding: 42px clamp(28px, 4vw, 64px) 34px;
+        background: var(--bg-card);
+      }
+
+      .result-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 30px;
+      }
+
+      .result-head h1 {
+        max-width: 620px;
+        margin: 0;
+        font-size: clamp(28px, 3vw, 42px);
+        font-weight: 720;
+        letter-spacing: -0.045em;
+        line-height: 1.16;
+      }
+
+      .result-head p {
+        max-width: 650px;
+        margin: 13px 0 0;
+        color: var(--fg-muted);
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      .change-count {
+        flex: none;
+        padding-top: 6px;
+        color: var(--fg-muted);
+        font: 12px/1.5 var(--font-mono);
+        text-align: right;
+      }
+
+      .change-count strong {
+        display: block;
+        color: var(--fg);
+        font-size: 24px;
+      }
+
+      .artifact {
+        border-top: 1px solid var(--border-strong);
+        border-bottom: 1px solid var(--border-strong);
+      }
+
+      .artifact-tabs {
+        display: flex;
+        gap: 22px;
+        min-height: 47px;
+        align-items: center;
+      }
+
+      .artifact-tabs button {
+        position: relative;
+        min-height: 47px;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .artifact-tabs button.active {
+        color: var(--fg);
+      }
+
+      .artifact-tabs button.active::after {
+        position: absolute;
+        right: 0;
+        bottom: -1px;
+        left: 0;
+        height: 2px;
+        background: var(--fg);
+        content: "";
+      }
+
+      .artifact-panel {
+        min-height: 285px;
+        padding: 28px 0;
+        border-top: 1px solid var(--border);
+      }
+
+      .change-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .change-table th,
+      .change-table td {
+        padding: 14px 10px;
+        border-bottom: 1px solid var(--border);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .change-table th {
+        width: 150px;
+        padding-left: 0;
+        color: var(--fg-subtle);
+        font-size: 12px;
+      }
+
+      .change-table td {
+        padding-right: 0;
+        font-size: 14px;
+        line-height: 1.65;
+      }
+
+      .change-table tr:last-child th,
+      .change-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .thought-note {
+        margin: 26px 0 0;
+        display: grid;
+        grid-template-columns: 112px minmax(0, 1fr);
+        gap: 18px;
+        padding: 18px 0;
+        border-top: 1px solid var(--border);
+      }
+
+      .thought-note strong {
+        color: var(--info);
+        font-size: 12px;
+      }
+
+      .thought-note p {
+        margin: 0;
+        color: var(--fg-muted);
+        font-size: 13px;
+        font-style: italic;
+        line-height: 1.7;
+      }
+
+      .activity-band {
+        margin-top: 20px;
+        border-radius: 10px;
+        background: var(--bg-soft);
+      }
+
+      .activity-band > button {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        border: 0;
+        padding: 12px 14px;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .activity-band > button span {
+        color: var(--fg-muted);
+        font-size: 12px;
+      }
+
+      .activity-band .activity-detail {
+        padding: 0 14px 13px;
+      }
+
+      .review-panel h2 {
+        margin: 0 0 18px;
+        font-size: 16px;
+      }
+
+      .review-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .review-list li {
+        display: grid;
+        grid-template-columns: 10px minmax(0, 1fr);
+        gap: 9px;
+        padding: 12px 0;
+        border-top: 1px solid var(--border);
+        color: var(--fg-muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .review-list li::before {
+        width: 8px;
+        height: 8px;
+        margin-top: 5px;
+        border-radius: 50%;
+        background: var(--success);
+        content: "";
+      }
+
+      .review-list li.warn::before {
+        background: var(--warning);
+      }
+
+      .review-list strong {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--fg);
+      }
+
+      .review-actions {
+        display: grid;
+        gap: 9px;
+        margin-top: 24px;
+      }
+
+      .review-actions .primary,
+      .review-actions .secondary,
+      .review-actions .quiet {
+        width: 100%;
+      }
+
+      .accepted-note {
+        margin-top: 15px;
+        border-radius: 9px;
+        padding: 11px;
+        background: var(--success-bg);
+        color: var(--success);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.5;
+      }
+
+      .followup {
+        margin-top: 26px;
+      }
+
+      @media (max-width: 1100px) {
+        .canvas-layout {
+          grid-template-columns: 250px minmax(0, 1fr);
+        }
+
+        .review-panel {
+          grid-column: 1 / -1;
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 24px;
+          border-top: 1px solid var(--border);
+          border-left: 0;
+        }
+
+        .review-panel h2 {
+          grid-column: 1 / -1;
+          margin-bottom: 0;
+        }
+
+        .review-actions {
+          min-width: 220px;
+          margin-top: 0;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .canvas-layout {
+          display: block;
+        }
+
+        .brief-panel,
+        .result-stage,
+        .review-panel {
+          padding: 24px 18px;
+          border: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .result-head {
+          display: block;
+        }
+
+        .change-count {
+          margin-top: 18px;
+          text-align: left;
+        }
+
+        .change-count strong {
+          display: inline;
+          margin-right: 8px;
+        }
+
+        .thought-note {
+          grid-template-columns: 1fr;
+          gap: 7px;
+        }
+
+        .review-panel {
+          display: block;
+        }
+
+        .review-actions {
+          min-width: 0;
+          margin-top: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="titlebar">
+        <div class="titlebar-main">
+          <span class="brand">CHARTER</span>
+          <span class="task-title">调整提交按钮与优惠券过期提示</span>
+        </div>
+        <div class="titlebar-actions">
+          <div class="status-chip"><span data-status-text>等待审阅</span></div>
+          <div class="project-chip">fable5</div>
+        </div>
+      </header>
+
+      <main class="canvas-scroll">
+        <div class="canvas-layout">
+          <aside class="brief-panel" aria-label="用户任务">
+            <p class="eyebrow">你提交的任务</p>
+            <h2 class="brief-title">调整结算页的两个视觉状态</h2>
+            <p class="brief-copy">
+              把「提交订单」按钮底色改成绿色（#2f9e63），优惠券过期提示加一条红色左边框。只改
+              public/index.html。
+            </p>
+            <div class="brief-meta">
+              <div>
+                <span>允许修改</span>
+                <strong class="mono">public/index.html</strong>
+              </div>
+              <div>
+                <span>任务类型</span>
+                <strong>跟进修改</strong>
+              </div>
+            </div>
+            <div class="acceptance-note">
+              <span><strong>验收条件未提供。</strong><br />当前审阅依据来自任务描述。</span>
+            </div>
+          </aside>
+
+          <section class="result-stage" aria-labelledby="result-title-b">
+            <header class="result-head">
+              <div>
+                <p class="eyebrow">Charter 的结果</p>
+                <h1 id="result-title-b">改动完成，范围保持在一个文件内</h1>
+                <p>提交按钮使用新的成功色，优惠券过期提示增加了红色左边框。请直接审阅代码变化。</p>
+              </div>
+              <div class="change-count"><strong>1</strong>个文件<br /><span class="success">+5</span> <span class="danger">−2</span></div>
+            </header>
+
+            <section class="artifact" aria-label="改动内容">
+              <div class="artifact-tabs" data-tabs role="tablist" aria-label="结果视图">
+                <button class="active" type="button" role="tab" aria-selected="true" data-tab="summary">改动摘要</button>
+                <button type="button" role="tab" aria-selected="false" data-tab="code">代码 Diff</button>
+              </div>
+              <div class="artifact-panel" data-panel="summary">
+                <table class="change-table">
+                  <tbody>
+                    <tr>
+                      <th>提交按钮</th>
+                      <td>背景色改为 <span class="mono">#2f9e63</span>，悬停态调整为更深的绿色。</td>
+                    </tr>
+                    <tr>
+                      <th>优惠券提示</th>
+                      <td>过期状态增加 3px 红色左边框，保留原有文案与布局。</td>
+                    </tr>
+                    <tr>
+                      <th>范围检查</th>
+                      <td>仅修改 <span class="mono">public/index.html</span>，没有新增文件。</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="artifact-panel" id="code-b" data-panel="code" hidden>
+                <div class="diff">
+                  <div class="diff-head">
+                    <strong class="mono">public/index.html</strong>
+                    <span><span class="success">+5</span> <span class="danger">−2</span></span>
+                  </div>
+                  <pre class="diff-code"><span class="diff-line remove">-  --primary: #c56b32;</span><span class="diff-line add">+  --success: #2f9e63;</span><span class="diff-line add">+  --danger: #c4453d;</span><span class="diff-line add">+  .coupon-hint { border-left: 3px solid var(--danger); }</span><span class="diff-line add">+  .submit-btn { background: var(--success); }</span><span class="diff-line add">+  .submit-btn:hover { background: #278653; }</span></pre>
+                </div>
+              </div>
+            </section>
+
+            <section class="thought-note" aria-label="Agent 思考">
+              <strong>思考 · 3 秒</strong>
+              <p>我先读取目标文件，确认当前按钮与优惠券提示的样式定义，再做最小范围修改。</p>
+            </section>
+
+            <section class="activity-band" aria-label="执行依据">
+              <button type="button" data-toggle="activity-b" aria-controls="activity-b" aria-expanded="false">
+                <strong>执行依据</strong>
+                <span>读取、计划、修改与验证详情</span>
+              </button>
+              <div class="activity-detail" id="activity-b" hidden>
+                <div class="activity-rows">
+                  <div class="activity-row">
+                    <span class="activity-kind">读取</span>
+                    <span class="activity-main mono">public/index.html</span>
+                    <span class="activity-state">完成</span>
+                  </div>
+                  <div class="activity-row">
+                    <span class="activity-kind">计划</span>
+                    <span class="activity-main">2 步，已自动批准</span>
+                    <span class="activity-state">完成</span>
+                  </div>
+                  <div class="activity-row">
+                    <span class="activity-kind">验证</span>
+                    <span class="activity-main">未运行验证命令</span>
+                    <span class="activity-state warn">待人工审阅</span>
+                  </div>
+                </div>
+                <div class="usage-summary"><span>56 秒</span><span>2.1k / 663 tokens</span><span>$0.0224</span></div>
+              </div>
+            </section>
+
+            <div class="followup">
+              <div class="composer">
+                <textarea id="composer-b" rows="1" aria-label="继续修改" placeholder="继续修改这个任务…"></textarea>
+                <button class="primary" type="button">发送</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="review-panel" aria-label="审阅操作">
+            <h2>审阅清单</h2>
+            <ul class="review-list">
+              <li><span><strong>文件范围正确</strong>仅修改 1 个允许文件</span></li>
+              <li><span><strong>视觉要求已覆盖</strong>按钮绿色与红色左边框</span></li>
+              <li class="warn"><span><strong>自动验证未运行</strong>接受前建议查看 Diff</span></li>
+            </ul>
+            <div class="review-actions">
+              <button class="primary" type="button" data-accept>接受改动</button>
+              <button class="secondary" type="button" data-activate-tab="code">查看代码 Diff</button>
+              <button class="quiet" type="button" data-focus="composer-b">继续修改</button>
+            </div>
+            <div class="accepted-note" data-after-accept hidden>改动已接受，任务完成。</div>
+          </aside>
+        </div>
+      </main>
+    </div>
+    <script src="./task-room-v2-shared.js"></script>
+  </body>
+</html>

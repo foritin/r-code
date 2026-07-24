@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>会话回放 E — 结果审计账本</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="replay-page">
+    <main class="mock-window" data-replay data-duration="38" data-autoplay="true">
+      <header class="appbar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <a class="brand" href="./session-replay-directions.html">C</a>
+        <div class="title-block">
+          <h1>供应商采购审批：PO-88421</h1>
+          <p>今天 16:35 · Agent 工作了 38 秒 · 审计视图</p>
+        </div>
+        <div class="appbar-spacer"></div>
+        <nav class="direction-nav" aria-label="回放方向">
+          <a href="./session-replay-a-cinematic.html">A</a
+          ><a href="./session-replay-b-causal-map.html">B</a
+          ><a href="./session-replay-c-spatial.html">C</a
+          ><a href="./session-replay-d-documentary.html">D</a
+          ><a class="on" href="./session-replay-e-audit.html">E</a>
+        </nav>
+        <button class="top-action" data-toast="已导出包含证据哈希的审计包">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+            <path d="M5 12v7h14v-7" /></svg
+          >导出审计包</button
+        ><button
+          class="icon-button"
+          data-toast="可设置保留期、脱敏范围与验证规则"
+          aria-label="更多"
+        >
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      </header>
+      <div class="workspace audit-layout">
+        <section class="audit-main">
+          <div
+            class="capture-limit"
+            data-capture-note
+            data-pi=""
+            data-claude="Claude Terminal 已有入口快照、最终净 diff 与回滚；中间检查点、内部批准和置信度当前不可证明。"
+            data-codex="Codex Terminal 已有入口快照、最终净 diff 与回滚；中间检查点、内部批准和置信度当前不可证明。"
+          ></div>
+          <div class="outcome-strip">
+            <div class="outcome-cell">
+              <label>最终结果</label>
+              <div class="success-title">
+                <span class="success-check">✓</span>
+                <div>
+                  <strong class="js-outcome">采购已获批</strong><small>PO-88421 · ¥12,450</small>
+                </div>
+              </div>
+            </div>
+            <div class="outcome-cell">
+              <label>综合置信度</label><strong class="confidence js-confidence">92%</strong>
+              <div class="confidence-bar"><i></i></div>
+            </div>
+            <div class="outcome-cell">
+              <label>依据</label><strong class="js-evidence-count">8 项证据</strong
+              ><small>来自 5 个系统</small>
+            </div>
+            <div class="outcome-cell">
+              <label>边界</label><strong>未代替人审批</strong><small>Agent 只准备并验证材料</small>
+            </div>
+          </div>
+          <div class="ledger" data-sequence>
+            <div class="ledger-head">
+              <span>时间</span><span>主张 / 步骤</span><span>证据</span><span>置信度</span
+              ><span>检查点</span>
+            </div>
+            <div class="ledger-row" data-at="0">
+              <time class="mono">00:00</time>
+              <div class="claim"><b>收到采购请求</b><span>Requester: team@company.com</span></div>
+              <div class="evidence-mini">
+                <span class="evidence-token">M</span><span>邮件</span>
+              </div>
+              <span class="score">高</span
+              ><button class="checkpoint-button" data-seek="0">1</button>
+            </div>
+            <div class="ledger-row" data-at="5">
+              <time class="mono">00:05</time>
+              <div class="claim"><b>预算充足</b><span>OpEx 可用额度 ≥ ¥10k</span></div>
+              <div class="evidence-mini">
+                <span
+                  class="evidence-token"
+                  style="color: var(--green); background: var(--green-soft)"
+                  >S</span
+                ><span>预算表</span>
+              </div>
+              <span class="score">96%</span
+              ><button class="checkpoint-button" data-seek="5">2</button>
+            </div>
+            <div class="ledger-row" data-at="11">
+              <time class="mono">00:11</time>
+              <div class="claim"><b>供应商价格合理</b><span>三家报价中位数 +2.1%</span></div>
+              <div class="evidence-mini">
+                <span class="evidence-token">D</span><span class="evidence-token">D</span>
+              </div>
+              <span class="score medium">76%</span
+              ><button class="checkpoint-button" data-seek="11">3</button>
+            </div>
+            <div class="ledger-row" data-at="17">
+              <time class="mono">00:17</time>
+              <div class="claim"><b>没有阻断性风险</b><span>风险登记表无高等级命中</span></div>
+              <div class="evidence-mini">
+                <span
+                  class="evidence-token"
+                  style="color: var(--amber); background: var(--amber-soft)"
+                  >R</span
+                ><span>风险表</span>
+              </div>
+              <span class="score">88%</span
+              ><button class="checkpoint-button" data-seek="17">4</button>
+            </div>
+            <div class="ledger-row" data-at="23">
+              <time class="mono">00:23</time>
+              <div class="claim"><b>请求人工批准</b><span>发送给 Director of Ops</span></div>
+              <div class="evidence-mini">
+                <span
+                  class="evidence-token"
+                  style="color: var(--violet); background: var(--violet-soft)"
+                  >A</span
+                ><span>审批卡片</span>
+              </div>
+              <span class="score">100%</span
+              ><button class="checkpoint-button" data-seek="23">5</button>
+            </div>
+            <div class="ledger-row" data-at="29">
+              <time class="mono">00:29</time>
+              <div class="claim"><b>批准已由负责人授予</b><span>含签名身份与时间戳</span></div>
+              <div class="evidence-mini">
+                <span
+                  class="evidence-token"
+                  style="color: var(--green); background: var(--green-soft)"
+                  >✓</span
+                ><span>审批事件</span>
+              </div>
+              <span class="score">99%</span
+              ><button class="checkpoint-button" data-seek="29">6</button>
+            </div>
+            <div class="ledger-row" data-at="35">
+              <time class="mono">00:35</time>
+              <div class="claim"><b>采购单已创建</b><span>草稿转正式单并通知申请人</span></div>
+              <div class="evidence-mini">
+                <span
+                  class="evidence-token"
+                  style="color: var(--coral); background: var(--coral-soft)"
+                  >PO</span
+                ><span>ERP</span>
+              </div>
+              <span class="score">94%</span
+              ><button class="checkpoint-button" data-seek="35">7</button>
+            </div>
+          </div>
+        </section>
+        <aside class="audit-rail">
+          <div class="rail-head">
+            <h3>当前证据</h3>
+            <span class="rail-count js-rail-count">1 / 8</span>
+          </div>
+          <div data-sequence>
+            <div class="audit-evidence" data-at="0">
+              <div class="kind-icon">M</div>
+              <div><b>Purchase request.eml</b><small>原始请求 · 哈希已记录</small></div>
+            </div>
+            <div class="audit-evidence" data-at="5">
+              <div class="kind-icon green">S</div>
+              <div><b>Budget.xlsx</b><small>Sheet: OpEx · B24</small></div>
+            </div>
+            <div class="audit-evidence" data-at="11">
+              <div class="kind-icon">D</div>
+              <div><b>Vendor comparison.pdf</b><small>3 家供应商 · Page 3</small></div>
+            </div>
+            <div class="audit-evidence" data-at="17">
+              <div class="kind-icon amber">R</div>
+              <div><b>Risk register.xlsx</b><small>Sheet: Risks · 0 high</small></div>
+            </div>
+            <div class="audit-evidence" data-at="23">
+              <div class="kind-icon violet">A</div>
+              <div><b>Approval request</b><small>Director of Ops · pending</small></div>
+            </div>
+            <div class="audit-evidence" data-at="29">
+              <div class="kind-icon green">✓</div>
+              <div><b>Approval event</b><small>Signed by Mina Zhou</small></div>
+            </div>
+            <div class="audit-evidence" data-at="35">
+              <div class="kind-icon coral">PO</div>
+              <div><b>PO-88421</b><small>ERP record · ¥12,450</small></div>
+            </div>
+          </div>
+          <div class="rollback-box">
+            <b>回到检查点</b>
+            <p>查看 Agent 在任一检查点“已知什么、尚未知什么”。回放本身不会改动真实系统。</p>
+            <div class="checkpoint-strip">
+              <button class="checkpoint-button" data-seek="0">1</button
+              ><button class="checkpoint-button" data-seek="5">2</button
+              ><button class="checkpoint-button" data-seek="11">3</button
+              ><button class="checkpoint-button" data-seek="17">4</button
+              ><button class="checkpoint-button" data-seek="23">5</button
+              ><button class="checkpoint-button" data-seek="29">6</button
+              ><button class="checkpoint-button" data-seek="35">7</button>
+            </div>
+            <button
+              class="revert-button"
+              data-toast="这是只读 mock：真实产品会从该检查点创建新的安全分支"
+            >
+              从此检查点创建分支
+            </button>
+          </div>
+        </aside>
+        <section class="replay-transport">
+          <div class="transport-row">
+            <button class="icon-button js-restart" aria-label="重新播放">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 4v6h6" />
+                <path d="M5.5 15a7.5 7.5 0 1 0 1-8" />
+              </svg></button
+            ><button class="play-button js-play" aria-label="播放或暂停">
+              <svg class="play-icon" viewBox="0 0 20 20"><path d="M5 3.5v13l11-6.5z" /></svg
+              ><svg class="pause-icon" viewBox="0 0 20 20">
+                <path d="M4.5 3.5h4v13h-4zm7 0h4v13h-4z" />
+              </svg></button
+            ><span class="transport-time"
+              ><span class="js-current-time">00:00</span> /
+              <span class="js-duration">00:38</span></span
+            >
+            <div class="scrub-wrap">
+              <div class="scrub-bg"></div>
+              <span
+                class="timeline-marker"
+                style="left: 13%; --marker: var(--green)"
+                data-at="5"
+                data-seek="5"
+              ></span
+              ><span class="timeline-marker" style="left: 29%" data-at="11" data-seek="11"></span
+              ><span
+                class="timeline-marker"
+                style="left: 45%; --marker: var(--amber)"
+                data-at="17"
+                data-seek="17"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 61%; --marker: var(--violet)"
+                data-at="23"
+                data-seek="23"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 76%; --marker: var(--green)"
+                data-at="29"
+                data-seek="29"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 92%; --marker: var(--coral)"
+                data-at="35"
+                data-seek="35"
+              ></span>
+              <div class="scrub-head"></div>
+              <input class="js-scrubber" type="range" aria-label="回放时间轴" />
+            </div>
+            <button class="soft-button speed-button js-speed">1×</button
+            ><button class="icon-button js-fullscreen" aria-label="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="transport-caption">
+            <i class="pulse-dot"></i><b class="js-caption-title">请求进入审计链</b
+            ><span class="js-caption-detail truncate">原始邮件成为第一条不可变证据</span>
+          </div>
+        </section>
+        <div class="toast"></div>
+        <div
+          hidden
+          data-caption-at="0"
+          data-title="请求进入审计链"
+          data-detail="原始邮件成为第一条不可变证据"
+        ></div>
+        <div
+          hidden
+          data-caption-at="5"
+          data-title="预算主张被证据支持"
+          data-detail="不是“Agent 说预算够”，而是可回到具体工作表与单元格"
+        ></div>
+        <div
+          hidden
+          data-caption-at="11"
+          data-title="价格判断仍有不确定性"
+          data-detail="三家报价支持“合理”，但置信度只有 76%，因此显式标黄"
+        ></div>
+        <div
+          hidden
+          data-caption-at="17"
+          data-title="风险检查没有发现阻断项"
+          data-detail="无高等级命中不等于零风险，账本保留这一语义差异"
+        ></div>
+        <div
+          hidden
+          data-caption-at="23"
+          data-title="Agent 停在权力边界前"
+          data-detail="它可以准备材料并发起审批，但不能冒充负责人批准"
+        ></div>
+        <div
+          hidden
+          data-caption-at="29"
+          data-title="人类批准成为独立事件"
+          data-detail="批准者身份、时间与内容被记录，不与 Agent 行动混在一起"
+        ></div>
+        <div
+          hidden
+          data-caption-at="35"
+          data-title="结果可追溯也可恢复"
+          data-detail="正式采购单链接回全部主张、证据和检查点"
+        ></div>
+      </div>
+    </main>
+    <script src="./session-replay-lab.js"></script>
+    <script>
+      const replay = document.querySelector('[data-replay]');
+      replay.addEventListener('replaytick', ({ detail }) => {
+        const t = detail.current,
+          steps = [0, 5, 11, 17, 23, 29, 35],
+          count = steps.filter((x) => t >= x).length,
+          confidence =
+            t < 5 ? 42 : t < 11 ? 96 : t < 17 ? 76 : t < 23 ? 88 : t < 29 ? 84 : t < 35 ? 99 : 92;
+        replay.querySelector('.js-confidence').textContent = confidence + '%';
+        replay.style.setProperty('--confidence', confidence + '%');
+        replay.querySelector('.js-evidence-count').textContent = count + ' 项证据';
+        replay.querySelector('.js-rail-count').textContent = count + ' / 8';
+        replay.querySelector('.js-outcome').textContent =
+          t < 23
+            ? '审批材料准备中'
+            : t < 29
+              ? '等待负责人批准'
+              : t < 35
+                ? '采购已获批'
+                : '采购单已创建';
+        replay
+          .querySelectorAll('.checkpoint-button')
+          .forEach((b) =>
+            b.classList.toggle(
+              'active',
+              Math.abs(+b.dataset.seek - Math.max(...steps.filter((x) => t >= x))) < 0.1,
+            ),
+          );
+      });
+    </script>
+  </body>
+</html>

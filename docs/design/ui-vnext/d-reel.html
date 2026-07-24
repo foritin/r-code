@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>方案 D — The Reel 时间胶片</title>
+<style>
+  /* ============================================================
+     方案 D — The Reel
+     主张：Charter 独有的资产是「全过程结构化记录」。
+     把回放从一个功能升维成主界面的日常物理规律 ——
+     Room 底部常驻一条时间胶片，拖动播放头，整个房间
+     （对话 + 工具画布）回到那一刻。竞品没有记录，做不到。
+     试试：拖动下方播放头，或按 ← → 键。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #101113;
+    --bg-deep: #0b0c0d;
+    --bg-panel: #16171a;
+    --bg-card: #1a1c20;
+    --bg-inset: #0d0e10;
+    --border: #26282e;
+    --border-lit: #383b44;
+    --fg: #e4e4e2;
+    --fg-muted: #8f9097;
+    --fg-faint: #55565e;
+    --reel: #f0a05a;           /* 时间系统色：剪辑室琥珀 */
+    --reel-dim: rgba(240, 160, 90, 0.16);
+    --green: #59c98a;
+    --red: #e0655e;
+    --cyan: #6fc3d8;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+    --mono: 'Berkeley Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans); background: var(--bg-deep); color: var(--fg);
+    overflow: hidden; font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+
+  .app { display: grid; grid-template-rows: 44px 1fr 128px; height: 100vh; }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar {
+    display: flex; align-items: center; gap: 13px; padding: 0 16px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #2c2e33; }
+  .tb-brand { font-family: var(--serif); font-size: 15px; }
+  .tb-room { font-size: 12.5px; color: var(--fg-muted); }
+  .tb-room b { color: var(--fg); font-weight: 500; }
+  .tb-room .k { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-left: 8px; }
+
+  .live-badge {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em;
+    padding: 4px 13px; border-radius: 20px;
+    border: 1px solid var(--border-lit);
+    transition: all 0.2s;
+  }
+  .live-badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .live-badge.live { color: var(--green); border-color: rgba(89, 201, 138, 0.45); }
+  .live-badge.live .dot { background: var(--green); box-shadow: 0 0 10px var(--green); animation: rec 1.6s ease-in-out infinite; }
+  .live-badge.replay { color: var(--reel); border-color: rgba(240, 160, 90, 0.5); background: var(--reel-dim); }
+  .live-badge.replay .dot { background: var(--reel); box-shadow: 0 0 10px var(--reel); }
+  @keyframes rec { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+  .jump-live {
+    display: none; cursor: pointer;
+    font-size: 11px; padding: 4px 12px; border-radius: 7px;
+    background: var(--reel); color: #1c1206; border: none; font-weight: 650;
+    box-shadow: 0 2px 14px rgba(240, 160, 90, 0.3);
+  }
+  .jump-live.show { display: inline-block; }
+
+  /* ---------- 主区：对话 + 画布 ---------- */
+  .stage { display: grid; grid-template-columns: minmax(460px, 46%) 1fr; overflow: hidden; }
+
+  /* 对话 */
+  .convo { border-right: 1px solid var(--border); overflow-y: auto; padding: 20px 24px; background: var(--bg); position: relative; }
+  .convo::-webkit-scrollbar { width: 8px; }
+  .convo::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+
+  .ms { display: flex; align-items: center; gap: 10px; margin: 14px 0 12px; color: var(--fg-faint); font-size: 11px; }
+  .ms::before, .ms::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .ms .ok { color: var(--green); }
+  .ms .bad { color: var(--red); }
+
+  .you {
+    margin: 8px 0 12px auto; width: fit-content; max-width: 82%;
+    padding: 10px 14px; border-radius: 13px 13px 4px 13px;
+    background: var(--bg-card); border: 1px solid var(--border-lit);
+    font-size: 13px; line-height: 1.55;
+  }
+  .you .who { font-size: 9px; letter-spacing: 0.16em; color: var(--fg-faint); margin-bottom: 4px; }
+  .agent { margin: 6px 0 10px; max-width: 94%; font-size: 13px; line-height: 1.6; }
+  .agent .who { font-size: 9px; letter-spacing: 0.16em; color: var(--reel); margin-bottom: 4px; font-weight: 700; }
+  .agent .dim { color: var(--fg-muted); }
+
+  .plan {
+    margin: 6px 0 12px; padding: 12px 15px; max-width: 94%;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .plan .head { display: flex; gap: 9px; align-items: center; font-family: var(--serif); font-size: 13.5px; margin-bottom: 8px; }
+  .plan .head .st { margin-left: auto; font-size: 10px; font-family: var(--mono); }
+  .plan ol { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .plan li { display: flex; gap: 9px; font-size: 12px; color: var(--fg-muted); }
+  .plan li b {
+    width: 16px; height: 16px; border-radius: 50%; border: 1px solid var(--border-lit);
+    font-family: var(--mono); font-size: 9px; font-weight: 400;
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;
+  }
+  .plan li.done b { border-color: var(--green); color: var(--green); }
+
+  .trow {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 11px; margin: 2px 0; max-width: 94%;
+    border-radius: 9px; font-family: var(--mono); font-size: 11px; color: var(--fg-muted);
+    border: 1px solid transparent;
+  }
+  .trow:hover { background: var(--bg-panel); border-color: var(--border); }
+  .trow .verb { color: var(--fg-faint); width: 40px; flex-shrink: 0; }
+  .trow .target { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trow .add { color: var(--green); } .trow .del { color: var(--red); }
+  .trow .fail { color: var(--red); }
+  .trow .ok { color: var(--green); }
+  .trow.running { border-color: rgba(111, 195, 216, 0.3); color: var(--fg); background: var(--bg-panel); }
+  .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(111,195,216,0.25); border-top-color: var(--cyan); animation: rot 1s linear infinite; flex-shrink: 0; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+
+  /* 帧可见性：data-t > 当前时刻的元素隐藏 */
+  .convo [data-t] { transition: opacity 0.2s; }
+  .convo [data-t].future { display: none; }
+  /* 播放头所在的"当下"元素 */
+  .now-glow { position: relative; }
+  .now-glow::after {
+    content: ""; position: absolute; inset: -3px -6px; border-radius: 11px;
+    border: 1px solid rgba(240, 160, 90, 0.45);
+    box-shadow: 0 0 24px rgba(240, 160, 90, 0.12);
+    pointer-events: none;
+    animation: nowPulse 2s ease-in-out infinite;
+  }
+  @keyframes nowPulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+  /* ---------- 画布（monitor） ---------- */
+  .monitor { display: flex; flex-direction: column; background: var(--bg-panel); overflow: hidden; }
+  .mon-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 16px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted);
+  }
+  .mon-head .lens { color: var(--fg); }
+  .mon-head .stamp { margin-left: auto; color: var(--reel); }
+  .mon-head .idx { color: var(--fg-faint); }
+  .mon-body { flex: 1; overflow-y: auto; position: relative; }
+  .mon-body::-webkit-scrollbar { width: 8px; }
+  .mon-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+
+  .frame { display: none; padding: 0 0 20px; }
+  .frame.on { display: block; }
+
+  .empty-state {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100%; min-height: 400px; gap: 12px; color: var(--fg-faint);
+  }
+  .empty-state .big { font-family: var(--serif); font-size: 18px; color: var(--fg-muted); }
+  .empty-state .sub { font-size: 12px; max-width: 40ch; text-align: center; line-height: 1.6; }
+
+  .file-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px; font-family: var(--mono); font-size: 11px;
+    color: var(--fg); border-bottom: 1px solid var(--border); background: var(--bg-card);
+    position: sticky; top: 0;
+  }
+  .file-head .add { color: var(--green); } .file-head .del { color: var(--red); }
+  .file-head .badge {
+    margin-left: auto; font-size: 9.5px; padding: 2px 8px; border-radius: 10px;
+    border: 1px solid var(--border-lit); color: var(--fg-muted);
+  }
+  .dl { display: flex; white-space: pre; font-family: var(--mono); font-size: 11.5px; line-height: 1.8; }
+  .dl .no { width: 44px; flex-shrink: 0; text-align: right; padding-right: 12px; color: var(--fg-faint); font-size: 10px; line-height: 2; user-select: none; }
+  .dl .code { flex: 1; color: #c3c4c9; }
+  .dl.ctx .code { color: #77787f; }
+  .dl.add { background: rgba(89, 201, 138, 0.09); } .dl.add .code { color: #b4e3c8; }
+  .dl.del { background: rgba(224, 101, 94, 0.08); } .dl.del .code { color: #e8aca7; }
+  .dl.hunk { color: var(--cyan); padding: 6px 16px 3px; font-size: 10px; opacity: 0.7; }
+
+  .fail-block {
+    margin: 14px 16px; border: 1px solid rgba(224, 101, 94, 0.4); border-radius: 10px;
+    background: rgba(224, 101, 94, 0.06); overflow: hidden;
+  }
+  .fail-block .fh {
+    display: flex; gap: 9px; align-items: center;
+    padding: 8px 13px; font-size: 11px; color: var(--red);
+    border-bottom: 1px solid rgba(224, 101, 94, 0.25);
+    font-family: var(--mono);
+  }
+  .fail-block pre {
+    padding: 10px 14px; font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+    color: var(--fg-muted); overflow-x: auto;
+  }
+  .fail-block .hl { color: var(--red); }
+
+  /* ---------- 时间胶片 ---------- */
+  .reel {
+    background: var(--bg); border-top: 1px solid var(--border-lit);
+    padding: 10px 18px 12px;
+    display: flex; flex-direction: column; gap: 7px;
+    position: relative;
+    user-select: none;
+  }
+  .reel-info {
+    display: flex; align-items: center; gap: 14px;
+    font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+  }
+  .reel-info .rec { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted); }
+  .reel-info .rec i { width: 6px; height: 6px; border-radius: 50%; background: var(--red); animation: rec 1.4s infinite; }
+  .reel-info .cursor-t { color: var(--reel); min-width: 130px; }
+  .reel-info .hint-keys { margin-left: auto; letter-spacing: 0.04em; }
+  .reel-info kbd { border: 1px solid var(--border-lit); border-radius: 3px; padding: 0 4px; font-size: 9px; }
+
+  .track { position: relative; height: 64px; cursor: crosshair; }
+  /* 章节色带 */
+  .chapters { position: absolute; inset: 0 0 auto; height: 16px; display: flex; border-radius: 5px; overflow: hidden; }
+  .chapter { position: relative; height: 100%; }
+  .chapter i {
+    position: absolute; inset: 0; opacity: 0.32;
+  }
+  .chapter span {
+    position: absolute; left: 8px; top: 1.5px; font-family: var(--mono);
+    font-size: 8.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .chapter.plan i { background: var(--reel); }
+  .chapter.work i { background: var(--cyan); }
+  .chapter.crisis i { background: var(--red); }
+  .chapter.verify i { background: var(--green); }
+
+  /* 事件刻度 */
+  .ticks { position: absolute; left: 0; right: 0; top: 22px; height: 26px; }
+  .tick { position: absolute; bottom: 0; width: 2px; border-radius: 1px; background: var(--fg-faint); opacity: 0.75; }
+  .tick.edit { background: var(--cyan); }
+  .tick.run { background: var(--green); }
+  .tick.fail { background: var(--red); }
+  .tick.gate { background: var(--reel); width: 3px; }
+
+  /* 里程碑旗标 */
+  .flags { position: absolute; left: 0; right: 0; top: 50px; height: 14px; }
+  .flag {
+    position: absolute; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 8.5px; color: var(--fg-faint);
+    white-space: nowrap;
+  }
+  .flag.g { color: var(--green); } .flag.r { color: var(--red); } .flag.a { color: var(--reel); }
+
+  /* 播放头 */
+  .playhead {
+    position: absolute; top: -4px; bottom: 12px; width: 2px;
+    background: var(--reel); border-radius: 1px;
+    box-shadow: 0 0 14px rgba(240, 160, 90, 0.55);
+    pointer-events: none;
+    z-index: 5;
+  }
+  .playhead::before {
+    content: ""; position: absolute; top: -5px; left: 50%; transform: translateX(-50%);
+    border: 6px solid transparent; border-top-color: var(--reel);
+  }
+  .playhead .grab {
+    position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+    width: 26px; height: 26px; border-radius: 50%;
+  }
+  /* LIVE 端标记 */
+  .live-end {
+    position: absolute; right: 0; top: -2px; bottom: 14px; width: 3px;
+    background: var(--green); opacity: 0.65; border-radius: 2px;
+  }
+
+  /* 缓冲进度感：胶片底 */
+  .track::after {
+    content: ""; position: absolute; left: 0; right: 0; top: 22px; height: 26px;
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0 6px, transparent 6px 12px);
+    pointer-events: none; border-radius: 4px;
+  }
+
+  /* ---------- 注解 ---------- */
+  .annot {
+    position: fixed; right: 16px; top: 56px; z-index: 90;
+    max-width: 360px; padding: 11px 14px;
+    background: rgba(18, 19, 22, 0.94); border: 1px solid var(--border-lit);
+    border-radius: 11px; font-size: 11.5px; line-height: 1.6; color: var(--fg-muted);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  }
+  .annot b { color: var(--reel); font-weight: 600; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: var(--fg-faint); font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Titlebar -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="tb-brand">Charter</span>
+    <span class="tb-room">desktop-app / <b>Migrate settings storage to SQLite</b><span class="k">⎇ ws/settings-sqlite</span></span>
+    <span class="live-badge live" id="badge"><span class="dot"></span><span id="badge-t">LIVE</span></span>
+    <button class="jump-live" id="jump">Jump to live ⏎</button>
+  </header>
+
+  <!-- 舞台 -->
+  <div class="stage">
+    <!-- 对话（元素带 data-t 时间戳，秒） -->
+    <div class="convo" id="convo">
+      <div class="you" data-t="0">
+        <div class="who">YOU · 14:02</div>
+        Move settings persistence off scattered JSON files onto SQLite. Keep migration
+        transparent — nobody should lose a preference.
+      </div>
+
+      <div class="plan" data-t="18" id="plan-card">
+        <div class="head">Plan — 4 steps <span class="st" id="plan-st">proposed</span></div>
+        <ol>
+          <li id="pl-1"><b>1</b>Introduce settings-store.ts with a versioned SQLite schema, WAL mode</li>
+          <li id="pl-2"><b>2</b>One-shot migration from legacy JSON with a pre-migration snapshot</li>
+          <li id="pl-3"><b>3</b>Swap every reader/writer to the new store behind the IPC contract</li>
+          <li id="pl-4"><b>4</b>Verification — npm run check, unit suite, settings e2e</li>
+        </ol>
+      </div>
+
+      <div class="ms" data-t="41"><span class="ok">✓</span> Plan approved · 14:02</div>
+
+      <div class="trow" data-t="96"><span class="verb">read</span><span class="target">apps/desktop-main/src/services/settings.ts</span></div>
+      <div class="trow" data-t="150"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+58</span> <span class="del">−0</span></span></div>
+      <div class="trow" data-t="230"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-migration.ts</span><span><span class="add">+64</span> <span class="del">−0</span></span></div>
+
+      <div class="agent" data-t="290">
+        <div class="who">CHARTER · 14:07</div>
+        Legacy files already carry a <span class="dim">schemaVersion</span> field — keying the
+        one-shot migration off it and keeping a rollback snapshot beside the database.
+      </div>
+
+      <div class="trow" data-t="380"><span class="verb">edit</span><span class="target">packages/ipc-contracts/src/channels.ts</span><span><span class="add">+12</span> <span class="del">−3</span></span></div>
+      <div class="trow" data-t="450"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+38</span> <span class="del">−12</span></span></div>
+
+      <div class="trow" data-t="572"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="fail">✗ 2 failed</span></div>
+      <div class="ms" data-t="574"><span class="bad">✗</span> Tests failed — WAL journal path · 14:11</div>
+
+      <div class="agent" data-t="590">
+        <div class="who">CHARTER · 14:11</div>
+        Two failures: the journal table wasn't created before the first transaction ran.
+        Moving schema bootstrap ahead of statement preparation.
+      </div>
+
+      <div class="trow" data-t="640"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+9</span> <span class="del">−4</span></span></div>
+      <div class="trow" data-t="700"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="ok">✓ 18 passed</span></div>
+      <div class="ms" data-t="702"><span class="ok">✓</span> Steps 1–3 landed · +182 −54 · 6 files · 14:13</div>
+
+      <div class="agent" data-t="720">
+        <div class="who">CHARTER · 14:14</div>
+        Readers and writers are swapped. Starting full verification — check, unit suite,
+        then the settings e2e.
+      </div>
+      <div class="trow running" data-t="740"><span class="spin"></span><span class="verb">run</span><span class="target">npm run check</span><span id="check-s">41s</span></div>
+    </div>
+
+    <!-- 画布 monitor -->
+    <div class="monitor">
+      <div class="mon-head">
+        <span class="lens">Changes</span><span>·</span><span>settings-store.ts</span>
+        <span class="stamp" id="mon-stamp">T+12:34 — LIVE</span>
+        <span class="idx" id="mon-idx">event 24 / 24</span>
+      </div>
+      <div class="mon-body">
+
+        <!-- Frame 0: plan 时刻 -->
+        <div class="frame" data-frame="0">
+          <div class="empty-state">
+            <div class="big">No changes yet</div>
+            <div class="sub">The plan is on the table — nothing has been written.
+            Approval opens the gate; every edit after it will land on this reel.</div>
+          </div>
+        </div>
+
+        <!-- Frame 1: 初版 diff -->
+        <div class="frame" data-frame="1">
+          <div class="file-head">apps/desktop-main/src/services/settings-store.ts
+            <span><span class="add">+58</span> <span class="del">−0</span></span>
+            <span class="badge">as of T+04:10</span>
+          </div>
+          <div class="dl hunk">@@ new file @@</div>
+          <div class="dl add"><span class="no">1</span><span class="code">import Database from 'better-sqlite3'</span></div>
+          <div class="dl add"><span class="no">2</span><span class="code">import { app } from 'electron'</span></div>
+          <div class="dl add"><span class="no">3</span><span class="code">import { join } from 'node:path'</span></div>
+          <div class="dl add"><span class="no">4</span><span class="code"></span></div>
+          <div class="dl add"><span class="no">5</span><span class="code">const DB_FILE = 'charter-settings.db'</span></div>
+          <div class="dl add"><span class="no">6</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+          <div class="dl add"><span class="no">7</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+          <div class="dl add"><span class="no">8</span><span class="code"></span></div>
+          <div class="dl add"><span class="no">9</span><span class="code">const readStmt = db.prepare('SELECT payload FROM settings WHERE scope = ?')</span></div>
+          <div class="dl add"><span class="no">10</span><span class="code">const writeStmt = db.prepare('INSERT OR REPLACE INTO settings …')</span></div>
+        </div>
+
+        <!-- Frame 2: 失败时刻 -->
+        <div class="frame" data-frame="2">
+          <div class="file-head">apps/desktop-main/src/services/settings-store.ts
+            <span><span class="add">+112</span> <span class="del">−15</span></span>
+            <span class="badge">as of T+09:32</span>
+          </div>
+          <div class="fail-block">
+            <div class="fh">✗ npm run test — settings-store.test.ts · 2 failed</div>
+            <pre>  ● creates journal row on first write
+
+  <span class="hl">SqliteError: no such table: settings_journal</span>
+      at prepare (settings-store.ts:10:24)
+      at writeSettings (settings-store.ts:57:3)
+
+  ● migration keeps legacy values
+  <span class="hl">SqliteError: no such table: settings_journal</span></pre>
+          </div>
+          <div class="dl hunk">@@ -1,10 +1,12 @@ statements prepared before schema bootstrap — the bug</div>
+          <div class="dl ctx"><span class="no">6</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+          <div class="dl ctx"><span class="no">7</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+          <div class="dl del"><span class="no">8</span><span class="code">const journalStmt = db.prepare('INSERT INTO settings_journal …')</span></div>
+          <div class="dl ctx"><span class="no">9</span><span class="code">// bootstrapSchema(db) runs later — too late for prepare()</span></div>
+        </div>
+
+        <!-- Frame 3: 现在 -->
+        <div class="frame on" data-frame="3">
+          <div class="file-head">apps/desktop-main/src/services/settings-store.ts
+            <span><span class="add">+96</span> <span class="del">−12</span></span>
+            <span class="badge" style="color:var(--green);border-color:rgba(89,201,138,0.4)">live — following the agent</span>
+          </div>
+          <div class="dl hunk">@@ -1,9 +1,14 @@ bootstrap now precedes prepare()</div>
+          <div class="dl ctx"><span class="no">5</span><span class="code">const DB_FILE = 'charter-settings.db'</span></div>
+          <div class="dl add"><span class="no">6</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+          <div class="dl add"><span class="no">7</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+          <div class="dl add"><span class="no">8</span><span class="code">bootstrapSchema(db) // tables exist before any prepare()</span></div>
+          <div class="dl add"><span class="no">9</span><span class="code">const readStmt = db.prepare('SELECT payload FROM settings WHERE scope = ?')</span></div>
+          <div class="dl ctx"><span class="no">10</span><span class="code"></span></div>
+          <div class="dl hunk">@@ -41,6 +52,21 @@ write path</div>
+          <div class="dl ctx"><span class="no">52</span><span class="code">export function writeSettings(scope: SettingsScope, next: SettingsShape) {</span></div>
+          <div class="dl add"><span class="no">53</span><span class="code">  const tx = db.transaction(() => {</span></div>
+          <div class="dl add"><span class="no">54</span><span class="code">    writeStmt.run(scope, JSON.stringify(next), Date.now())</span></div>
+          <div class="dl add"><span class="no">55</span><span class="code">    journalStmt.run(scope, revisionOf(next))</span></div>
+          <div class="dl add"><span class="no">56</span><span class="code">  })</span></div>
+          <div class="dl add"><span class="no">57</span><span class="code">  tx()</span></div>
+          <div class="dl ctx"><span class="no">58</span><span class="code">}</span></div>
+          <div class="dl ctx"><span class="no">59</span><span class="code"></span></div>
+          <div class="dl hunk">@@ -63,4 +78,9 @@ journal read-back for review rail</div>
+          <div class="dl ctx"><span class="no">78</span><span class="code">export function readJournal(scope: SettingsScope): JournalRow[] {</span></div>
+          <div class="dl add"><span class="no">79</span><span class="code">  return journalReadStmt.all(scope) as JournalRow[]</span></div>
+          <div class="dl del"><span class="no">80</span><span class="code">  // TODO: page this once history grows</span></div>
+          <div class="dl add"><span class="no">80</span><span class="code">  // paged: LIMIT 200 OFFSET ? — review rail requests pages lazily</span></div>
+          <div class="dl ctx"><span class="no">81</span><span class="code">}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 时间胶片 -->
+  <footer class="reel">
+    <div class="reel-info">
+      <span class="rec"><i></i>recording since 14:02</span>
+      <span class="cursor-t" id="cursor-t">T+12:34 · now</span>
+      <span>24 events · 4 gates · 1 failure recovered</span>
+      <span class="hint-keys">drag the playhead · <kbd>←</kbd><kbd>→</kbd> step · <kbd>⏎</kbd> live</span>
+    </div>
+    <div class="track" id="track">
+      <div class="chapters">
+        <div class="chapter plan" style="width:9%"><i></i><span>Plan</span></div>
+        <div class="chapter work" style="width:52%"><i></i><span>Work</span></div>
+        <div class="chapter crisis" style="width:17%"><i></i><span>Fix</span></div>
+        <div class="chapter verify" style="width:22%"><i></i><span>Verify</span></div>
+      </div>
+      <div class="ticks" id="ticks"></div>
+      <div class="flags">
+        <div class="flag a" style="left:5.4%">◆ approved</div>
+        <div class="flag a" style="left:30%">◆ permission</div>
+        <div class="flag r" style="left:75.5%">✗ tests</div>
+        <div class="flag g" style="left:92.5%">✓ tests</div>
+      </div>
+      <div class="live-end"></div>
+      <div class="playhead" id="playhead" style="left: 100%"><span class="grab"></span></div>
+    </div>
+  </footer>
+</div>
+
+<!-- 注解 -->
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').remove()">✕</button>
+  <b>方案 D · The Reel 时间胶片</b><br/>
+  Room 底部常驻一条「时间胶片」：章节色带（Plan / Work / Fix / Verify）、事件刻度、里程碑旗标。
+  <b>拖动播放头</b>（或按 ← →），左侧对话与右侧画布同步回到那一刻 —— 回放不再是单独功能，
+  而是主界面的物理规律。竞品没有全过程结构化记录，做不到这条轴。松手回到最右即回到 LIVE。
+</aside>
+
+<script>
+(function () {
+  const TOTAL = 754;                    // 会话总秒数 T+12:34
+  const track = document.getElementById('track');
+  const playhead = document.getElementById('playhead');
+  const badge = document.getElementById('badge');
+  const badgeT = document.getElementById('badge-t');
+  const jump = document.getElementById('jump');
+  const cursorT = document.getElementById('cursor-t');
+  const monStamp = document.getElementById('mon-stamp');
+  const monIdx = document.getElementById('mon-idx');
+  const convo = document.getElementById('convo');
+  const timed = Array.from(convo.querySelectorAll('[data-t]'));
+  const frames = Array.from(document.querySelectorAll('.frame'));
+  const planSt = document.getElementById('plan-st');
+  const planCard = document.getElementById('plan-card');
+
+  // 事件刻度：真实感分布
+  (function seedTicks () {
+    const ticks = document.getElementById('ticks');
+    const events = [
+      [2,'gate'],[5.4,'gate'],[8,'edit'],[12,'edit'],[16,'run'],[19,'edit'],[23,'edit'],[26,'edit'],
+      [30,'gate'],[33,'edit'],[36,'edit'],[40,'run'],[44,'edit'],[48,'edit'],[52,'edit'],[56,'edit'],
+      [60,'run'],[64,'edit'],[70,'edit'],[75.5,'fail'],[80,'edit'],[85,'edit'],[92.5,'run'],[97,'run']
+    ];
+    events.forEach(([pct, cls]) => {
+      const t = document.createElement('i');
+      t.className = 'tick ' + cls;
+      t.style.left = pct + '%';
+      t.style.height = (cls === 'gate' ? 24 : 10 + Math.random() * 12) + 'px';
+      ticks.appendChild(t);
+    });
+  })();
+
+  function fmt (s) {
+    const m = Math.floor(s / 60), r = Math.floor(s % 60).toString().padStart(2, '0');
+    return 'T+' + String(m).padStart(2, '0') + ':' + r;
+  }
+
+  function frameFor (sec) {
+    if (sec < 41) return 0;          // plan 提出，未批
+    if (sec < 560) return 1;         // 编写中
+    if (sec < 700) return 2;         // 失败与修复
+    return 3;                        // 现在
+  }
+
+  let cur = TOTAL;
+  function setTime (sec, fromDrag) {
+    cur = Math.max(0, Math.min(TOTAL, sec));
+    const pct = cur / TOTAL * 100;
+    playhead.style.left = pct + '%';
+    const live = cur >= TOTAL - 0.5;
+
+    // 徽章
+    badge.className = 'live-badge ' + (live ? 'live' : 'replay');
+    badgeT.textContent = live ? 'LIVE' : 'REPLAY ' + fmt(cur);
+    jump.classList.toggle('show', !live);
+    cursorT.textContent = live ? fmt(TOTAL) + ' · now' : fmt(cur);
+    monStamp.textContent = live ? 'T+12:34 — LIVE' : fmt(cur) + ' — REPLAY';
+
+    // 对话帧
+    let lastVisible = null;
+    timed.forEach(el => {
+      const t = parseFloat(el.dataset.t);
+      const future = t > cur;
+      el.classList.toggle('future', future);
+      if (!future) lastVisible = el;
+      el.classList.remove('now-glow');
+    });
+    if (lastVisible && !live) lastVisible.classList.add('now-glow');
+    if (fromDrag && lastVisible) lastVisible.scrollIntoView({ block: 'nearest' });
+    if (live) convo.scrollTop = convo.scrollHeight;
+
+    // plan 卡状态随时间变化
+    if (cur < 41) { planSt.textContent = 'proposed'; planSt.style.color = 'var(--reel)'; }
+    else { planSt.textContent = '✓ approved'; planSt.style.color = 'var(--green)'; }
+    ['pl-1','pl-2','pl-3'].forEach((id, i) => {
+      const li = document.getElementById(id);
+      li.classList.toggle('done', cur >= [230, 290, 700][i]);
+    });
+
+    // monitor 帧
+    const f = frameFor(cur);
+    frames.forEach(fr => fr.classList.toggle('on', parseInt(fr.dataset.frame) === f));
+    const evCount = Math.max(1, Math.round(cur / TOTAL * 24));
+    monIdx.textContent = 'event ' + evCount + ' / 24';
+  }
+
+  // 拖动
+  let dragging = false;
+  function posToSec (clientX) {
+    const r = track.getBoundingClientRect();
+    return (clientX - r.left) / r.width * TOTAL;
+  }
+  track.addEventListener('mousedown', e => { dragging = true; setTime(posToSec(e.clientX), true); });
+  window.addEventListener('mousemove', e => { if (dragging) setTime(posToSec(e.clientX), true); });
+  window.addEventListener('mouseup', () => { dragging = false; });
+
+  // 键盘
+  window.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft') { setTime(cur - 15, true); e.preventDefault(); }
+    if (e.key === 'ArrowRight') { setTime(cur + 15, true); e.preventDefault(); }
+    if (e.key === 'Enter') { setTime(TOTAL); }
+  });
+  jump.addEventListener('click', () => setTime(TOTAL));
+
+  // LIVE 时秒表继续走
+  const checkS = document.getElementById('check-s');
+  let s = 41;
+  setInterval(() => {
+    if (cur >= TOTAL - 0.5) { s += 1; checkS.textContent = s + 's'; }
+  }, 1000);
+
+  setTime(TOTAL);
+})();
+</script>
+</body>
+</html>

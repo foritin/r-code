@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>方案 E — Conductor 指挥官终端</title>
+<style>
+  /* ============================================================
+     方案 E — Conductor
+     主张：当你同时经营 10+ 个并行会话，卡片和聊天流都太慢。
+     一切都是行：等宽数字、严格列对齐、单键操作、批量门决策、
+     全能 ⌘K。Bloomberg 的密度 × Linear 的秩序 × Superhuman 的键感。
+     给「经营一支智能体车队」的重度用户的操作系统。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0e0f11;
+    --bg-panel: #131417;
+    --bg-row-hover: #17181c;
+    --bg-row-sel: #1a1d24;
+    --bg-inset: #0a0b0d;
+    --border: #212329;
+    --border-lit: #31343d;
+    --fg: #dfe1e6;
+    --fg-muted: #878b96;
+    --fg-faint: #4c505b;
+    --blue: #8fb8e8;
+    --blue-deep: rgba(143, 184, 232, 0.14);
+    --amber: #e5b567;
+    --green: #63c78d;
+    --red: #e2685f;
+    --violet: #a794e8;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+    --mono: 'Berkeley Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans); background: var(--bg); color: var(--fg);
+    overflow: hidden; font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+
+  .app { display: grid; grid-template-rows: 42px 34px 1fr 30px; height: 100vh; }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar {
+    display: flex; align-items: center; gap: 13px; padding: 0 15px;
+    border-bottom: 1px solid var(--border); background: var(--bg-panel);
+  }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #26282e; }
+  .tb-brand { font-family: var(--serif); font-size: 15px; }
+  .tb-view { display: flex; gap: 2px; margin-left: 10px; }
+  .vtab {
+    padding: 4px 12px; border-radius: 6px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer;
+  }
+  .vtab.on { background: var(--blue-deep); color: var(--blue); }
+  .tb-stats {
+    margin-left: auto; display: flex; gap: 16px;
+    font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .tb-stats b { font-weight: 500; }
+  .tb-stats .a { color: var(--amber); } .tb-stats .g { color: var(--green); }
+
+  /* ---------- 过滤条 ---------- */
+  .filterbar {
+    display: flex; align-items: center; gap: 8px; padding: 0 15px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint);
+  }
+  .fchip {
+    padding: 2.5px 10px; border-radius: 5px; cursor: pointer;
+    border: 1px solid transparent; color: var(--fg-muted);
+  }
+  .fchip.on { border-color: var(--border-lit); background: var(--bg-row-sel); color: var(--fg); }
+  .fchip .n { color: var(--fg-faint); margin-left: 5px; }
+  .filterbar .q { margin-left: auto; display: flex; align-items: center; gap: 7px; }
+  .filterbar kbd { border: 1px solid var(--border-lit); border-radius: 3px; padding: 0 4px; font-size: 9px; }
+
+  /* ---------- 表格 ---------- */
+  .board { overflow-y: auto; position: relative; }
+  .board::-webkit-scrollbar { width: 9px; }
+  .board::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 5px; }
+
+  .ghead {
+    position: sticky; top: 0; z-index: 3;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 15px 6px;
+    background: var(--bg);
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--fg-faint);
+  }
+  .ghead.attn { color: var(--amber); }
+  .ghead .line { flex: 1; height: 1px; background: var(--border); }
+  .ghead .cnt { letter-spacing: 0; }
+
+  .row {
+    display: grid;
+    grid-template-columns: 30px 42px minmax(230px, 1.15fr) 108px 130px minmax(200px, 1fr) 74px 96px 58px 148px;
+    gap: 10px; align-items: center;
+    padding: 0 15px; height: 34px;
+    font-size: 12px;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .row:hover { background: var(--bg-row-hover); }
+  .row.kb {
+    background: var(--bg-row-sel); border-left-color: var(--blue);
+    box-shadow: inset 0 0 0 1px rgba(143, 184, 232, 0.14);
+  }
+  .row.checked { background: rgba(143, 184, 232, 0.07); }
+  .row.settled { opacity: 0.5; }
+
+  .cell-check { display: flex; align-items: center; }
+  .cbox {
+    width: 13px; height: 13px; border-radius: 3.5px;
+    border: 1px solid var(--border-lit); background: transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 9px; color: transparent;
+  }
+  .row.checked .cbox { background: var(--blue); border-color: var(--blue); color: #0c1017; }
+  .cell-id { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+
+  .cell-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .lamp { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .lamp.run { background: var(--green); box-shadow: 0 0 8px rgba(99,199,141,0.7); animation: lampB 2.4s ease-in-out infinite; }
+  .lamp.attn { background: var(--amber); box-shadow: 0 0 9px rgba(229,181,103,0.8); animation: lampB 1.7s ease-in-out infinite; }
+  .lamp.done { background: var(--fg-faint); box-shadow: none; }
+  .lamp.fail { background: var(--red); box-shadow: 0 0 9px rgba(226,104,95,0.7); }
+  @keyframes lampB { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+  .cell-title .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .cell-proj, .cell-branch { font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell-branch { color: var(--fg-faint); }
+  .cell-branch.wt { color: var(--violet); }
+
+  .cell-act { font-family: var(--mono); font-size: 10.5px; color: var(--blue); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cell-act .v { color: var(--fg-faint); }
+  .cell-act.attn { color: var(--amber); }
+  .cell-act.idle { color: var(--fg-faint); }
+
+  /* gates 微型指示：三格 */
+  .cell-gates { display: flex; gap: 3px; }
+  .gseg { width: 16px; height: 4px; border-radius: 2px; background: var(--border-lit); }
+  .gseg.done { background: var(--green); opacity: 0.85; }
+  .gseg.now { background: var(--blue); animation: lampB 1.6s infinite; }
+  .gseg.wait { background: var(--amber); animation: lampB 1.2s infinite; }
+  .gseg.fail { background: var(--red); }
+
+  .cell-diff { font-family: var(--mono); font-size: 10.5px; text-align: right; white-space: nowrap; }
+  .cell-diff .add { color: var(--green); } .cell-diff .del { color: var(--red); }
+  .cell-diff.none { color: var(--fg-faint); }
+  .cell-time { font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); text-align: right; }
+
+  .cell-keys { display: flex; gap: 5px; justify-content: flex-end; }
+  .kact {
+    font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint);
+    border: 1px solid var(--border); border-radius: 4px; padding: 1.5px 6px;
+    white-space: nowrap;
+  }
+  .row.kb .kact, .row:hover .kact { color: var(--fg-muted); border-color: var(--border-lit); }
+  .kact.hot { color: var(--amber); border-color: rgba(229, 181, 103, 0.4); }
+  .row.kb .kact.hot { color: var(--amber); }
+
+  /* ---------- 批量操作条 ---------- */
+  .bulk {
+    position: fixed; left: 50%; bottom: 46px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg-panel); border: 1px solid var(--border-lit);
+    border-radius: 11px; padding: 9px 11px 9px 16px;
+    box-shadow: 0 22px 60px rgba(0,0,0,0.6), 0 0 0 1px rgba(143,184,232,0.06);
+    animation: bulkIn 0.24s cubic-bezier(0.2, 1.2, 0.4, 1) both;
+    z-index: 30;
+  }
+  @keyframes bulkIn { from { transform: translate(-50%, 14px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+  .bulk .n { font-family: var(--mono); font-size: 11px; color: var(--blue); }
+  .bulk .sep { width: 1px; height: 18px; background: var(--border-lit); }
+  .bbtn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 5px 12px; border-radius: 7px; cursor: pointer;
+    background: transparent; border: 1px solid var(--border-lit);
+    color: var(--fg); font-size: 11.5px;
+  }
+  .bbtn:hover { border-color: var(--fg-faint); }
+  .bbtn.primary { background: var(--amber); border-color: var(--amber); color: #1a1206; font-weight: 600; }
+  .bbtn kbd { font-family: var(--mono); font-size: 9px; opacity: 0.65; }
+
+  /* ---------- ⌘K 面板 ---------- */
+  .veil {
+    position: fixed; inset: 0; z-index: 40;
+    background: rgba(5, 6, 8, 0.38);
+    display: flex; justify-content: center; align-items: flex-start; padding-top: 9vh;
+  }
+  .veil.hidden { display: none; }
+  .palette {
+    width: 620px; border-radius: 14px; overflow: hidden;
+    background: rgba(19, 20, 24, 0.96);
+    border: 1px solid var(--border-lit);
+    box-shadow: 0 40px 120px rgba(0,0,0,0.7), 0 0 0 1px rgba(143, 184, 232, 0.07), 0 0 80px rgba(143, 184, 232, 0.05);
+    animation: palIn 0.22s cubic-bezier(0.2, 1.1, 0.4, 1) both;
+  }
+  @keyframes palIn { from { transform: translateY(-10px) scale(0.985); opacity: 0; } to { transform: none; opacity: 1; } }
+  .pal-input {
+    display: flex; align-items: center; gap: 11px;
+    padding: 15px 18px; border-bottom: 1px solid var(--border);
+  }
+  .pal-input .prompt { font-family: var(--mono); color: var(--blue); font-size: 14px; }
+  .pal-input .text { font-size: 15px; color: var(--fg); }
+  .pal-input .cursor { display: inline-block; width: 8px; height: 17px; background: var(--blue); vertical-align: -3px; animation: blink 1.05s steps(1) infinite; border-radius: 1px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .pal-input .scope {
+    margin-left: auto; font-family: var(--mono); font-size: 9.5px;
+    padding: 3px 9px; border-radius: 5px; border: 1px solid var(--border-lit); color: var(--fg-faint);
+  }
+  .pal-group {
+    padding: 8px 8px 4px;
+  }
+  .pal-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--fg-faint); padding: 4px 12px 5px; }
+  .pal-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    font-size: 13px;
+  }
+  .pal-item:hover { background: var(--bg-row-hover); }
+  .pal-item.sel { background: var(--blue-deep); box-shadow: inset 0 0 0 1px rgba(143, 184, 232, 0.22); }
+  .pal-item .ic { width: 15px; text-align: center; color: var(--fg-faint); font-family: var(--mono); font-size: 11px; flex-shrink: 0; }
+  .pal-item.sel .ic { color: var(--blue); }
+  .pal-item .main { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pal-item .main em { font-style: normal; color: var(--blue); }
+  .pal-item .ctx { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); flex-shrink: 0; }
+  .pal-item .keys { display: flex; gap: 4px; flex-shrink: 0; }
+  .pal-item kbd {
+    font-family: var(--mono); font-size: 9px; color: var(--fg-muted);
+    border: 1px solid var(--border-lit); border-radius: 4px; padding: 1px 5px;
+    background: var(--bg-inset);
+  }
+  .pal-foot {
+    display: flex; align-items: center; gap: 14px;
+    padding: 9px 16px; border-top: 1px solid var(--border);
+    font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint);
+  }
+  .pal-foot .r { margin-left: auto; }
+
+  /* ---------- Status bar ---------- */
+  .statusbar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 0 15px; border-top: 1px solid var(--border);
+    background: var(--bg-panel);
+    font-family: var(--mono); font-size: 10px; color: var(--fg-faint);
+  }
+  .statusbar .mode {
+    color: var(--blue); border: 1px solid rgba(143,184,232,0.35);
+    padding: 1px 8px; border-radius: 4px; letter-spacing: 0.12em; font-size: 9px;
+  }
+  .statusbar .r { margin-left: auto; display: flex; gap: 14px; }
+  .statusbar .ok::before { content: "● "; color: var(--green); }
+
+  /* ---------- 注解 ---------- */
+  .annot {
+    position: fixed; right: 16px; bottom: 44px; z-index: 90;
+    max-width: 370px; padding: 11px 14px;
+    background: rgba(16, 17, 20, 0.95); border: 1px solid var(--border-lit);
+    border-radius: 11px; font-size: 11.5px; line-height: 1.6; color: var(--fg-muted);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.55);
+  }
+  .annot b { color: var(--blue); font-weight: 600; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: var(--fg-faint); font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: var(--fg); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Titlebar -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="tb-brand">Charter</span>
+    <nav class="tb-view">
+      <span class="vtab on">Sessions</span>
+      <span class="vtab">Projects</span>
+      <span class="vtab">Ledger</span>
+    </nav>
+    <div class="tb-stats">
+      <span>run <b class="g">5</b></span>
+      <span>needs you <b class="a">3</b></span>
+      <span>verified today <b>14</b></span>
+      <span>net <b class="g">+163</b></span>
+    </div>
+  </header>
+
+  <!-- 过滤条 -->
+  <div class="filterbar">
+    <span class="fchip on">All<span class="n">12</span></span>
+    <span class="fchip">Needs you<span class="n">3</span></span>
+    <span class="fchip">Running<span class="n">5</span></span>
+    <span class="fchip">desktop-app<span class="n">6</span></span>
+    <span class="fchip">charter-site<span class="n">4</span></span>
+    <span class="fchip">api-gateway<span class="n">2</span></span>
+    <span class="q">filter <kbd>f</kbd> · command <kbd>⌘K</kbd></span>
+  </div>
+
+  <!-- 行看板 -->
+  <main class="board">
+
+    <div class="ghead attn"><span>Needs you</span><span class="line"></span><span class="cnt">3 — decisions block the fleet</span></div>
+
+    <div class="row checked">
+      <span class="cell-check"><span class="cbox">✓</span></span>
+      <span class="cell-id">C-217</span>
+      <span class="cell-title"><span class="lamp attn"></span><span class="t">Rework onboarding trust prompt copy</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act attn">plan awaits approval — 3 steps · 21s</span>
+      <span class="cell-gates"><span class="gseg wait"></span><span class="gseg"></span><span class="gseg"></span></span>
+      <span class="cell-diff none">—</span>
+      <span class="cell-time">0:21</span>
+      <span class="cell-keys"><span class="kact hot">a approve</span><span class="kact">e edit</span></span>
+    </div>
+
+    <div class="row checked kb">
+      <span class="cell-check"><span class="cbox">✓</span></span>
+      <span class="cell-id">C-214</span>
+      <span class="cell-title"><span class="lamp attn"></span><span class="t">Grant: run npm run db:migrate on staging schema</span></span>
+      <span class="cell-proj">api-gateway</span>
+      <span class="cell-branch wt">⎇ ws/db-migrate</span>
+      <span class="cell-act attn">permission requested — write outside sandbox</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg wait"></span><span class="gseg"></span></span>
+      <span class="cell-diff"><span class="add">+38</span> <span class="del">−4</span></span>
+      <span class="cell-time">2:04</span>
+      <span class="cell-keys"><span class="kact hot">g grant</span><span class="kact">d deny</span></span>
+    </div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-209</span>
+      <span class="cell-title"><span class="lamp attn"></span><span class="t">Bundle terminal env fallback fix</span></span>
+      <span class="cell-proj">charter-site</span>
+      <span class="cell-branch wt">⎇ ws/env-fallback</span>
+      <span class="cell-act attn">review ready — all checks passed</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg wait"></span></span>
+      <span class="cell-diff"><span class="add">+214</span> <span class="del">−89</span></span>
+      <span class="cell-time">31:40</span>
+      <span class="cell-keys"><span class="kact hot">r review</span><span class="kact">p peek</span></span>
+    </div>
+
+    <div class="ghead"><span>Running</span><span class="line"></span><span class="cnt">5</span></div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-221</span>
+      <span class="cell-title"><span class="lamp run"></span><span class="t">Migrate settings storage to SQLite</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch wt">⎇ ws/settings-sqlite</span>
+      <span class="cell-act" id="live-1"><span class="v">verify</span> npm run check · 41s</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+      <span class="cell-diff"><span class="add">+96</span> <span class="del">−12</span></span>
+      <span class="cell-time">12:34</span>
+      <span class="cell-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+    </div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-222</span>
+      <span class="cell-title"><span class="lamp run"></span><span class="t">Ship pricing page with annual toggle</span></span>
+      <span class="cell-proj">charter-site</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act" id="live-2"><span class="v">write</span> src/pages/pricing.astro</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg now"></span><span class="gseg"></span></span>
+      <span class="cell-diff"><span class="add">+152</span> <span class="del">−9</span></span>
+      <span class="cell-time">4:03</span>
+      <span class="cell-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+    </div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-219</span>
+      <span class="cell-title"><span class="lamp run"></span><span class="t">Chase flaky external-cli e2e retry</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act" id="live-3"><span class="v">run</span> test:e2e · 9/24 passed</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+      <span class="cell-diff"><span class="add">+31</span> <span class="del">−17</span></span>
+      <span class="cell-time">18:42</span>
+      <span class="cell-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+    </div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-223</span>
+      <span class="cell-title"><span class="lamp run"></span><span class="t">Index docs for retrieval-quality eval</span></span>
+      <span class="cell-proj">api-gateway</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act" id="live-4"><span class="v">read</span> docs/retrieval/chunking.md</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg now"></span><span class="gseg"></span></span>
+      <span class="cell-diff"><span class="add">+8</span> <span class="del">−0</span></span>
+      <span class="cell-time">1:12</span>
+      <span class="cell-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+    </div>
+
+    <div class="row">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-224</span>
+      <span class="cell-title"><span class="lamp run"></span><span class="t">Draft ADR: rate-limit strategy for gateway</span></span>
+      <span class="cell-proj">api-gateway</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act" id="live-5"><span class="v">write</span> docs/adr/ADR-0031-rate-limits.md</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg now"></span><span class="gseg"></span></span>
+      <span class="cell-diff"><span class="add">+64</span> <span class="del">−0</span></span>
+      <span class="cell-time">6:58</span>
+      <span class="cell-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+    </div>
+
+    <div class="ghead"><span>Settled</span><span class="line"></span><span class="cnt">4 today · 31 this week</span></div>
+
+    <div class="row settled">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-208</span>
+      <span class="cell-title"><span class="lamp done"></span><span class="t">Harden IPC schema for task events</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act idle">accepted · merged clean</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg done"></span></span>
+      <span class="cell-diff"><span class="add">+96</span> <span class="del">−31</span></span>
+      <span class="cell-time">2h</span>
+      <span class="cell-keys"><span class="kact">⏎ replay</span></span>
+    </div>
+
+    <div class="row settled">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-205</span>
+      <span class="cell-title"><span class="lamp done"></span><span class="t">Answer: why zsh drops PATH in login shells</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch">main</span>
+      <span class="cell-act idle">answered · no file changes</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg done"></span></span>
+      <span class="cell-diff none">—</span>
+      <span class="cell-time">4h</span>
+      <span class="cell-keys"><span class="kact">⏎ replay</span></span>
+    </div>
+
+    <div class="row settled">
+      <span class="cell-check"><span class="cbox"></span></span>
+      <span class="cell-id">C-201</span>
+      <span class="cell-title"><span class="lamp fail"></span><span class="t">Probe: upgrade Electron to 33 (rolled back)</span></span>
+      <span class="cell-proj">desktop-app</span>
+      <span class="cell-branch wt">⎇ ws/electron-33</span>
+      <span class="cell-act idle">rolled back · worktree discarded, main untouched</span>
+      <span class="cell-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg fail"></span></span>
+      <span class="cell-diff none">—</span>
+      <span class="cell-time">1d</span>
+      <span class="cell-keys"><span class="kact">⏎ replay</span></span>
+    </div>
+  </main>
+
+  <!-- Status bar -->
+  <footer class="statusbar">
+    <span class="mode">NORMAL</span>
+    <span>j/k navigate · x select · ⏎ open · a approve · g grant · r review · ? help</span>
+    <span class="r">
+      <span class="ok">claude-fable-5</span>
+      <span>3 providers</span>
+      <span>recording all sessions</span>
+    </span>
+  </footer>
+</div>
+
+<!-- 批量操作条 -->
+<div class="bulk">
+  <span class="n">2 selected</span>
+  <span class="sep"></span>
+  <button class="bbtn primary">Resolve both <kbd>⏎</kbd></button>
+  <button class="bbtn">Approve plan C-217 <kbd>a</kbd></button>
+  <button class="bbtn">Grant C-214 once <kbd>g</kbd></button>
+  <button class="bbtn">Clear <kbd>esc</kbd></button>
+</div>
+
+<!-- ⌘K 面板（打开状态；点空白处关闭，⌘K 或 / 重新打开） -->
+<div class="veil" id="veil">
+  <div class="palette">
+    <div class="pal-input">
+      <span class="prompt">›</span>
+      <span class="text">appr<span class="cursor"></span></span>
+      <span class="scope">FLEET-WIDE</span>
+    </div>
+    <div class="pal-group">
+      <div class="pal-label">Gate actions</div>
+      <div class="pal-item sel">
+        <span class="ic">◆</span>
+        <span class="main"><em>Appr</em>ove plan — Rework onboarding trust prompt copy</span>
+        <span class="ctx">C-217 · desktop-app</span>
+        <span class="keys"><kbd>⏎</kbd></span>
+      </div>
+      <div class="pal-item">
+        <span class="ic">◆</span>
+        <span class="main"><em>Appr</em>ove every pending plan after reading summaries</span>
+        <span class="ctx">2 pending</span>
+        <span class="keys"><kbd>⌘</kbd><kbd>⏎</kbd></span>
+      </div>
+      <div class="pal-item">
+        <span class="ic">⚑</span>
+        <span class="main">Grant permission — npm run db:migrate (once)</span>
+        <span class="ctx">C-214 · api-gateway</span>
+        <span class="keys"><kbd>g</kbd></span>
+      </div>
+    </div>
+    <div class="pal-group">
+      <div class="pal-label">Sessions</div>
+      <div class="pal-item">
+        <span class="ic">●</span>
+        <span class="main">Open — Bundle terminal env fallback fix (review ready)</span>
+        <span class="ctx">C-209 · charter-site</span>
+        <span class="keys"><kbd>⏎</kbd></span>
+      </div>
+      <div class="pal-item">
+        <span class="ic">＋</span>
+        <span class="main">New session in desktop-app — type an intent…</span>
+        <span class="ctx">composer</span>
+        <span class="keys"><kbd>n</kbd></span>
+      </div>
+    </div>
+    <div class="pal-foot">
+      <span>fuzzy over sessions · gates · files · commands</span>
+      <span class="r">↑↓ move · ⏎ run · esc close — 点空白处可收起看表格</span>
+    </div>
+  </div>
+</div>
+
+<!-- 注解 -->
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').remove()">✕</button>
+  <b>方案 E · Conductor 指挥官终端</b><br/>
+  给同时经营 10+ 会话的重度用户：一切都是行 —— 状态灯 / 编号 / 实时动作列 / 三段门微条 /
+  等宽 diffstat，严格列对齐。j/k 键盘航行，行尾是单键操作（a approve · g grant · r review），
+  多选浮出批量决策条；⌘K 是舰队级命令面板（图中打开态：输入 "appr" 直达门操作）。
+  Bloomberg 密度 × Linear 秩序。
+</aside>
+
+<script>
+  // ⌘K 面板开关：点空白关闭看表格，⌘K / '/' / esc 切换
+  (function () {
+    const veil = document.getElementById('veil');
+    veil.addEventListener('mousedown', e => { if (e.target === veil) veil.classList.add('hidden'); });
+    window.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { veil.classList.toggle('hidden'); e.preventDefault(); }
+      else if (e.key === '/' && veil.classList.contains('hidden')) { veil.classList.remove('hidden'); e.preventDefault(); }
+      else if (e.key === 'Escape') veil.classList.add('hidden');
+    });
+  })();
+
+  // 实时动作列轮换
+  (function () {
+    const feeds = {
+      'live-1': ['<span class="v">verify</span> npm run check · {s}s', '<span class="v">verify</span> tsc --noEmit · {s}s'],
+      'live-2': ['<span class="v">write</span> src/pages/pricing.astro', '<span class="v">write</span> src/components/PlanToggle.tsx', '<span class="v">run</span> npm run build — site'],
+      'live-3': ['<span class="v">run</span> test:e2e · 9/24 passed', '<span class="v">run</span> test:e2e · 11/24 passed', '<span class="v">read</span> tests/e2e/external-cli.spec.ts:214'],
+      'live-4': ['<span class="v">read</span> docs/retrieval/chunking.md', '<span class="v">read</span> docs/retrieval/scoring.md', '<span class="v">write</span> eval/retrieval-index.json'],
+      'live-5': ['<span class="v">write</span> docs/adr/ADR-0031-rate-limits.md', '<span class="v">read</span> src/middleware/throttle.ts']
+    };
+    let sec = 41;
+    setInterval(() => { sec += 1; }, 1000);
+    Object.keys(feeds).forEach((id, k) => {
+      let i = 0;
+      setInterval(() => {
+        i = (i + 1) % feeds[id].length;
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = feeds[id][i].replace('{s}', sec);
+      }, 2800 + k * 650);
+    });
+  })();
+</script>
+</body>
+</html>

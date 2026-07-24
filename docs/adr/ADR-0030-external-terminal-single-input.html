@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0030: 外部会话单输入口 — CLI 自己的输入行是 Room 唯一的对话面 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0030-外部会话单输入口-cli-自己的输入行是-room-唯一的对话面">ADR-0030: 外部会话单输入口 — CLI 自己的输入行是 Room 唯一的对话面</h1>
+<ul><li>Status: Accepted (user decision 2026-07-20，HTML mockup 浏览器验收：<code>docs/design/external-terminal-single-input.html</code>，选区注入选定 B 案)</li><li>日期: 2026-07-20</li><li>Relates to: ADR-0017 (外部会话一等 Task Room), ADR-0024 (Room 上下文投喂对齐), ADR-0022 (code context refs)</li><li>Supersedes in part: ADR-0017/ADR-0024 中外部 Room 底部 product composer（<code>ExternalContextComposer</code> + <code>external.message</code> 通道）的全部表述</li></ul>
+<h2 id="背景">背景</h2>
+<p>外部 CLI 会话（Claude Code / Codex）的 Task Room 同屏存在两个输入口：终端里 CLI<br>自己的输入行，和底部的 product composer（打字后由主进程 bracketed-paste + 延时<br>回车代发）。用户验收时无法分辨第二个输入框的职责（&quot;下面那个框是干嘛的？&quot;），<br>且代发消息&quot;凭空出现在终端里&quot;的观感与 CLI 原生心智模型冲突。用户裁定：<strong>删除<br>底部 composer，终端是唯一输入口</strong>；拖拽文件与代码选区直接落进 CLI 自己的输入行。</p>
+<h2 id="决策">决策</h2>
+<ol><li><strong><code>ExternalContextComposer</code> 删除</strong>，<code>external.message</code> 通道与<br><code>ExternalSessionService.sendMessage</code> 一并移除（唯一调用方就是该 composer）。 Home 启动带首条 prompt 的路径（launch intent → <code>armPromptDelivery</code>）不受影响。</li><li><strong>新通道 <code>external.injectContext</code></strong>（v1，schema:<br><code>{ taskId, ref: file{path,isFolder} | selection{code: CodeContextRef} }</code>）： 主进程校验后把引用写进会话 PTY——bracketed paste、<strong>刻意不带回车</strong>。 文件 → <code>@path </code>（目录带尾斜杠）；选区 → <code>formatPromptWithCodeContext</code> 的 冻结快照块（B 案：字节随粘贴走，后续文件改动不影响所引内容）。 payload 构造为纯函数 <code>externalInjectText</code>（单测覆盖&quot;永不含 CR&quot;契约）。</li><li><strong>拖拽落点 = 终端</strong>。外部 Room 的终端列接管 dragover/drop：树内拖拽<br>（dragRefs 相对路径）与 OS 文件（<code>workspace.relativize</code>）注入 <code>@引用</code>； 项目外条目跳过并 toast 说明（@引用按契约是项目相对路径）。live 态显示蓝色 落点提示（&quot;松手插入，不代发&quot;）；ended 态拦截并引导 Resume（沿用 <code>externalStore.resumeTask</code>）。</li><li><strong>选区上下文分流</strong>：<code>addCodeContext</code> 对外部任务不再进 draftStore chips，<br>改走 <code>external.injectContext</code>（selection）；受管（Pi）会话路径不变。</li><li><strong>记账保留</strong>：注入即记 <code>external.contextInjected</code> 台账事件（cli、kind、<br>path、行区间、selectionHash），activity 映射为用户侧条目。会话命名来源由 composer 首条消息改为 <strong>typed-line 首次提交行</strong>（placeholder 守卫， launch-intent 命名不被覆盖；产品写入经 <code>writeProduct</code> 屏蔽不参与命名）。</li></ol>
+<h2 id="替代方案">替代方案</h2>
+<ul><li><strong>保留 composer 仅去掉输入框（只留 chips）</strong>：仍是双入口心智，被否。</li><li><strong>选区 A 案（注入 <code>@path#行号</code> 活引用）</strong>：CLI 发送时读活文件，无法表达<br>&quot;选中那一刻的字节&quot;（diff/旧版本选区），用户选定 B 案。</li><li><strong>注入后代发回车</strong>：违背&quot;所见即所发&quot;，回到 composer 的隐式代发问题，被否。</li></ul>
+<h2 id="安全与数据影响">安全与数据影响</h2>
+<p>PTY 写入面从&quot;任意文本 + 代发回车&quot;收窄为&quot;结构化引用 + 永不回车&quot;：注入内容由<br>schema 限定（路径强制项目相对、选区走既有 CodeContextRef 校验），TUI 处于<br>对话框态时最坏结果是输入行出现未发送字符，不会触发提交。台账事件不含选区<br>全文，只含路径/区间/哈希（全文已进 PTY，属会话终端记录）。</p>
+<h2 id="迁移-回滚">迁移/回滚</h2>
+<p>无数据迁移（<code>external.message</code> 无持久化消费方）。回滚 = revert 本次提交。</p>
+<h2 id="验证证据">验证证据</h2>
+<ul><li>单测：<code>external-session.test.ts</code>（<code>externalInjectText</code> 文件/目录/选区/无 CR）、<br><code>code-context.test.ts</code>（<code>ExternalInjectRefSchema</code> 路径逃逸拒绝）。</li><li>e2e：<code>code-context.spec.ts</code>（claude/codex 冻结快照经真实 PTY 到达假 CLI，<br>经 <code>external.injectContext</code>）、<code>claude-session-identity.spec.ts</code>（observed 回复 presence 流程改为直接向 Room 终端打字触发）。</li><li><code>npm run check</code> 通过；mock 定稿见 <code>docs/design/external-terminal-single-input.html</code>。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

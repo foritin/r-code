@@ -1,0 +1,1556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Charter · Terminal Parallel vNext</title>
+  <style>
+    :root {
+      --page: #ebe9e4;
+      --app: #fbfaf7;
+      --panel: #f7f6f2;
+      --editor: #fffefb;
+      --terminal: #fff;
+      --ink: #26231f;
+      --muted: #736e65;
+      --faint: #a09a90;
+      --border: #dfdcd4;
+      --border-strong: #cbc6bb;
+      --active: #ebe8e0;
+      --hover: #f0eee8;
+      --warning: #b77012;
+      --warning-wash: #fbf3e5;
+      --success: #21814d;
+      --success-wash: #eaf5ed;
+      --cyan: #06b9c7;
+      --blue: #2674b8;
+      --red: #b74736;
+      --purple: #7b4d91;
+      --black: #171713;
+      --mono: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      --sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      --side-width: 560px;
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body {
+      overflow: hidden;
+      color: var(--ink);
+      background: var(--page);
+      font-family: var(--sans);
+      font-size: 12px;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid rgba(38, 116, 184, .55);
+      outline-offset: 2px;
+    }
+
+    .prototype-bar {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px;
+      border-bottom: 1px solid #d5d1c8;
+      background: #f5f2eb;
+      white-space: nowrap;
+    }
+    .prototype-title { font-weight: 750; margin-right: 6px; }
+    .prototype-verdict {
+      color: var(--muted);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .prototype-spacer { flex: 1; }
+    .step-button, .film-button {
+      height: 29px;
+      border: 1px solid var(--border-strong);
+      background: #fffcf6;
+      padding: 0 10px;
+      border-radius: 5px;
+    }
+    .step-button:hover, .film-button:hover { background: #fff; }
+    .step-button.active {
+      border-color: var(--warning);
+      color: var(--warning);
+      background: #fff8ec;
+    }
+    .film-button {
+      border-color: var(--black);
+      color: #fff;
+      background: var(--black);
+      font-weight: 650;
+    }
+    .film-button:hover { background: #36332d; }
+
+    .app {
+      height: calc(100vh - 46px);
+      min-width: 1040px;
+      display: grid;
+      grid-template-rows: 38px minmax(0, 1fr) 23px;
+      background: var(--app);
+    }
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 13px 0 74px;
+      border-bottom: 1px solid var(--border);
+      background: #f8f7f3;
+      user-select: none;
+    }
+    .brand { font-weight: 700; font-size: 13px; }
+    .top-chip {
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      color: var(--muted);
+      background: #fbfaf6;
+      max-width: 260px;
+    }
+    .top-chip.focused { color: var(--ink); }
+    .title-spacer { flex: 1; }
+    .command-chip { font-size: 11px; }
+    .live-summary {
+      color: var(--success);
+      font-size: 11px;
+    }
+
+    .wb-main {
+      display: flex;
+      min-height: 0;
+      min-width: 0;
+    }
+    .activitybar {
+      width: 46px;
+      flex: 0 0 46px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 7px 0;
+      border-right: 1px solid var(--border);
+      background: #f8f7f3;
+    }
+    .activity-button {
+      width: 36px;
+      height: 36px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-left: 2px solid transparent;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+      font-size: 17px;
+    }
+    .activity-button.active {
+      background: var(--active);
+      color: var(--ink);
+      border-left-color: var(--ink);
+    }
+    .activity-button:hover { background: var(--hover); color: var(--ink); }
+    .activity-spacer { flex: 1; }
+
+    .explorer {
+      width: 236px;
+      flex: 0 0 236px;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: #f8f7f3;
+      overflow: hidden;
+    }
+    .rail-title {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: .11em;
+    }
+    .project-head {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 11px;
+      font-weight: 700;
+    }
+    .project-head .project-actions { margin-left: auto; display: flex; gap: 5px; color: var(--muted); }
+    .project-path {
+      padding: 0 11px 8px 26px;
+      color: var(--faint);
+      font: 9.5px var(--mono);
+      border-bottom: 1px solid var(--border);
+    }
+    .tree { padding: 7px 6px; overflow: auto; flex: 1; }
+    .tree-row {
+      width: 100%;
+      height: 29px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 5px;
+      padding: 0 7px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      border-radius: 4px;
+    }
+    .tree-row:hover { background: var(--hover); }
+    .tree-row.active { background: var(--active); }
+    .tree-icon { color: var(--muted); font: 9px var(--mono); text-align: center; }
+    .tree-status { color: var(--warning); font-size: 9px; }
+    .explorer-note {
+      margin: 8px;
+      padding: 10px;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.55;
+    }
+    .explorer-note strong { color: var(--ink); display: block; margin-bottom: 3px; }
+
+    .center {
+      flex: 1;
+      min-width: 330px;
+      display: flex;
+      flex-direction: column;
+      background: var(--editor);
+    }
+    .editor {
+      flex: 1;
+      min-height: 180px;
+      display: grid;
+      grid-template-rows: 35px 29px minmax(0, 1fr);
+      border-bottom: 1px solid var(--border);
+    }
+    .editor-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: #faf9f5;
+    }
+    .editor-tab {
+      min-width: 210px;
+      height: 35px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 11px;
+      border: 0;
+      border-right: 1px solid var(--border);
+      background: #fffefb;
+      box-shadow: inset 0 -2px var(--warning);
+      text-align: left;
+    }
+    .tab-kind { color: var(--blue); font: 9px var(--mono); }
+    .tab-project { margin-left: auto; color: var(--faint); font-size: 9px; }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 12px;
+      color: var(--muted);
+      border-bottom: 1px solid #eeeae2;
+      font-size: 10.5px;
+    }
+    .editor-body {
+      position: relative;
+      overflow: hidden;
+      background: #fffefc;
+    }
+    .code {
+      position: absolute;
+      inset: 0;
+      overflow: auto;
+      padding: 15px 68px 38px 0;
+      counter-reset: line;
+      font: 11.5px/1.75 var(--mono);
+      background: linear-gradient(to right, #faf8f3 0 44px, transparent 44px);
+    }
+    .line {
+      min-height: 20px;
+      padding-left: 62px;
+      position: relative;
+      white-space: pre;
+    }
+    .line::before {
+      counter-increment: line;
+      content: counter(line);
+      position: absolute;
+      left: 0;
+      width: 35px;
+      padding-right: 8px;
+      text-align: right;
+      color: #9c968c;
+      border-right: 1px solid #eeeae2;
+    }
+    .line.changed { box-shadow: inset 2px 0 var(--warning); background: #fff8ed; }
+    .kw { color: #c04231; }
+    .type { color: var(--blue); }
+    .str { color: #b45f38; }
+    .fn { color: var(--purple); }
+    .comment { color: #899086; }
+    .minimap {
+      position: absolute;
+      right: 9px;
+      top: 11px;
+      bottom: 11px;
+      width: 48px;
+      border-left: 1px solid #eeeae2;
+      opacity: .48;
+      background: repeating-linear-gradient(to bottom, transparent 0 4px, rgba(38,116,184,.35) 4px 5px, transparent 5px 8px, rgba(192,66,49,.25) 8px 9px);
+    }
+
+    .dock {
+      flex: 0 0 270px;
+      min-height: 170px;
+      display: grid;
+      grid-template-rows: 33px minmax(0, 1fr);
+      background: var(--terminal);
+    }
+    .dock-tabs {
+      display: flex;
+      align-items: center;
+      gap: 1px;
+      padding: 0 8px;
+      border-bottom: 1px solid var(--border);
+      background: #faf9f5;
+    }
+    .dock-tab {
+      height: 33px;
+      padding: 0 9px;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+    .dock-tab.active { color: var(--ink); border-bottom-color: var(--ink); }
+    .dock-tabs .dock-spacer { flex: 1; }
+    .dock-close { border: 0; background: transparent; color: var(--muted); font-size: 15px; }
+    .dock-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 260px;
+    }
+    .terminal-main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 35px minmax(0, 1fr);
+      border-right: 1px solid var(--border);
+    }
+    .session-bar {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--warning-wash);
+      white-space: nowrap;
+    }
+    .session-bar.shell {
+      background: #f8f7f3;
+      color: var(--muted);
+    }
+    .pulse {
+      width: 7px;
+      height: 7px;
+      flex: none;
+      border-radius: 50%;
+      background: var(--warning);
+      animation: breathe 1.6s ease-in-out infinite;
+    }
+    @keyframes breathe { 50% { opacity: .35; } }
+    .agent-name { color: var(--warning); font-weight: 750; }
+    .ext {
+      color: var(--warning);
+      font: 9px var(--mono);
+      font-weight: 750;
+      background: rgba(183,112,18,.1);
+      padding: 2px 5px;
+      border-radius: 4px;
+    }
+    .context-chip {
+      min-width: 0;
+      max-width: 190px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--muted);
+      font: 9.5px var(--mono);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(38,35,31,.05);
+    }
+    .file-count {
+      color: var(--warning);
+      font: 9.5px var(--mono);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(183,112,18,.08);
+    }
+    .bar-spacer { flex: 1; }
+    .small-button {
+      height: 24px;
+      flex: none;
+      padding: 0 8px;
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      background: #fffefb;
+      color: var(--muted);
+      font-size: 10.5px;
+    }
+    .small-button:hover { background: #fff; color: var(--ink); }
+    .small-button.primary {
+      color: var(--warning);
+      border-color: rgba(183,112,18,.48);
+      font-weight: 650;
+    }
+
+    .terminal-output {
+      position: relative;
+      min-height: 0;
+      overflow: auto;
+      padding: 9px 10px 24px;
+      color: #2b2925;
+      background: #fff;
+      font: 10.5px/1.48 var(--mono);
+    }
+    .terminal-line { white-space: pre-wrap; }
+    .prompt { color: var(--cyan); font-weight: 650; }
+    .branch { color: var(--purple); }
+    .green { color: #55a83a; }
+    .orange { color: var(--warning); }
+    .dim { color: #8b857b; }
+    .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 1.05em;
+      vertical-align: -.14em;
+      background: #37332e;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .terminal-context {
+      position: sticky;
+      right: 0;
+      bottom: 0;
+      float: right;
+      padding: 4px 7px;
+      color: var(--muted);
+      background: #f1efe9;
+      font-size: 9px;
+    }
+
+    .terminal-list {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: auto;
+      background: #fbfaf7;
+    }
+    .new-terminal-row {
+      height: 35px;
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+    }
+    .new-terminal-button {
+      flex: 1;
+      height: 35px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 0 11px;
+    }
+    .new-terminal-button:hover { background: var(--hover); }
+    .new-terminal-menu {
+      width: 34px;
+      height: 35px;
+      border: 0;
+      border-left: 1px solid var(--border);
+      background: transparent;
+    }
+    .new-terminal-menu:hover { background: var(--hover); }
+    .terminal-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 13px minmax(0, 1fr) auto;
+      gap: 6px;
+      align-items: start;
+      padding: 8px 8px;
+      border: 0;
+      border-bottom: 1px solid #eeeae2;
+      background: transparent;
+      text-align: left;
+    }
+    .terminal-row:hover { background: var(--hover); }
+    .terminal-row.selected { background: var(--active); }
+    .terminal-row.promoted { background: #f8efe3; }
+    .row-dot {
+      width: 7px;
+      height: 7px;
+      margin-top: 4px;
+      border-radius: 50%;
+      background: var(--warning);
+    }
+    .row-dot.shell { background: var(--muted); }
+    .row-main { min-width: 0; }
+    .row-title {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row-context, .row-cwd {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 9.5px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .row-cwd { font-family: var(--mono); color: var(--faint); }
+    .row-place {
+      color: var(--warning);
+      font-size: 9px;
+      white-space: nowrap;
+      margin-top: 1px;
+    }
+    .row-close {
+      width: 23px;
+      height: 23px;
+      margin: -3px -3px 0 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+    }
+    .row-actions {
+      grid-column: 2 / 4;
+      display: flex;
+      gap: 5px;
+      margin-top: 2px;
+    }
+    .row-action {
+      height: 21px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 0;
+      font-size: 9.5px;
+    }
+    .row-action:hover { color: var(--ink); text-decoration: underline; }
+    .row-action.move { color: var(--warning); margin-left: auto; padding-right: 2px; }
+
+    .agent-panel {
+      width: 300px;
+      flex: 0 0 300px;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: #f8f7f3;
+    }
+    .agent-panel.hidden { display: none; }
+    .agent-head {
+      height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 11px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .agent-head .agent-spacer { flex: 1; }
+    .task-button {
+      height: 29px;
+      padding: 0 12px;
+      border: 1px solid var(--black);
+      border-radius: 4px;
+      background: var(--black);
+      color: #fff;
+      font-weight: 650;
+    }
+    .agent-empty {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      padding: 25px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    .side-resizer {
+      display: none;
+      position: relative;
+      flex: 0 0 12px;
+      width: 12px;
+      margin-right: -12px;
+      z-index: 10;
+      cursor: col-resize;
+      touch-action: none;
+    }
+    .side-resizer::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: transparent;
+    }
+    .side-resizer:hover::after, .side-resizer.dragging::after { background: var(--blue); }
+    .side-resizer.visible { display: block; }
+
+    .external-side {
+      width: var(--side-width);
+      flex: 0 0 var(--side-width);
+      display: none;
+      min-width: 0;
+      flex-direction: column;
+      border-left: 1px solid var(--border);
+      background: #f8f7f3;
+      animation: sideIn .28s ease;
+    }
+    .external-side.visible { display: flex; }
+    @keyframes sideIn { from { opacity: 0; transform: translateX(18px); } }
+    .side-head {
+      min-height: 64px;
+      display: grid;
+      grid-template-columns: 8px minmax(0, 1fr) auto;
+      gap: 7px 9px;
+      align-items: center;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--warning-wash);
+    }
+    .side-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warning);
+      animation: breathe 1.6s ease-in-out infinite;
+    }
+    .side-identity { min-width: 0; }
+    .side-title {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      font-weight: 750;
+    }
+    .side-context {
+      margin-top: 4px;
+      color: var(--muted);
+      font: 9.5px var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .side-actions { display: flex; gap: 5px; }
+    .side-context-row {
+      grid-column: 2 / 4;
+      display: flex;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 9.5px;
+    }
+    .side-terminal {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding: 11px 12px 30px;
+      background: #fff;
+      font: 10.5px/1.55 var(--mono);
+    }
+    .side-terminal .terminal-line { max-width: 90ch; }
+    .changes {
+      flex: 0 0 152px;
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid var(--border);
+      background: #faf9f5;
+    }
+    .changes-head {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .07em;
+    }
+    .changes-count {
+      min-width: 20px;
+      height: 18px;
+      display: inline-grid;
+      place-items: center;
+      border-radius: 9px;
+      color: var(--warning);
+      background: rgba(183,112,18,.1);
+      font-size: 9px;
+    }
+    .change-row {
+      height: 32px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      font: 10.5px var(--mono);
+    }
+    .change-row:hover { background: var(--hover); }
+    .change-row span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .diffstat { color: var(--success); }
+    .diffstat .minus { color: var(--red); }
+
+    .statusbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 10px;
+      border-top: 1px solid var(--border);
+      background: #f8f7f3;
+      color: var(--muted);
+      font-size: 9.5px;
+    }
+    .status-spacer { flex: 1; }
+    .status-live { color: var(--success); }
+
+    .caption {
+      position: fixed;
+      left: 50%;
+      bottom: 38px;
+      z-index: 70;
+      min-width: 400px;
+      max-width: 670px;
+      transform: translate(-50%, 12px);
+      opacity: 0;
+      padding: 11px 14px;
+      border: 1px solid #d5c5ad;
+      border-radius: 6px;
+      background: #fffaf0;
+      box-shadow: 0 12px 34px rgba(52,46,35,.18);
+      transition: .2s ease;
+      pointer-events: none;
+      line-height: 1.55;
+    }
+    .caption.show { opacity: 1; transform: translate(-50%, 0); }
+    .caption strong { color: var(--warning); margin-right: 7px; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 46px 0 0;
+      z-index: 90;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(41,38,33,.34);
+      backdrop-filter: blur(2px);
+    }
+    .modal-backdrop.open { display: grid; }
+    .modal {
+      width: min(590px, calc(100vw - 36px));
+      max-height: calc(100vh - 84px);
+      overflow: auto;
+      border: 1px solid var(--border-strong);
+      border-radius: 8px;
+      background: #fffefb;
+      box-shadow: 0 18px 55px rgba(35,31,25,.22);
+    }
+    .modal-head {
+      min-height: 60px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .modal-head h2 { margin: 0; font-size: 16px; }
+    .modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 10px; }
+    .modal-close { margin-left: auto; width: 30px; height: 30px; border: 0; background: transparent; }
+    .modal-body { padding: 16px; }
+    .form-section + .form-section { margin-top: 17px; }
+    .form-label {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+    .form-hint { color: var(--muted); font-weight: 400; font-size: 10px; }
+    .type-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 7px;
+    }
+    .type-option {
+      min-height: 58px;
+      padding: 9px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #fff;
+      text-align: left;
+    }
+    .type-option.selected {
+      border-color: var(--warning);
+      background: var(--warning-wash);
+      box-shadow: inset 2px 0 var(--warning);
+    }
+    .type-option strong { display: block; }
+    .type-option small { display: block; margin-top: 5px; color: var(--muted); }
+    .context-list { display: grid; gap: 6px; }
+    .context-option {
+      min-height: 53px;
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      padding: 7px 10px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      background: #fff;
+      text-align: left;
+    }
+    .context-option.selected { border-color: #d5a66b; background: #fff9ef; }
+    .radio {
+      width: 14px;
+      height: 14px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      border: 1px solid #aaa399;
+    }
+    .context-option.selected .radio::after {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warning);
+    }
+    .context-copy { min-width: 0; }
+    .context-copy strong { display: block; font-size: 11.5px; }
+    .context-copy small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font: 9.5px var(--mono);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .context-kind { color: var(--muted); font-size: 9px; }
+    .resolved {
+      margin-top: 9px;
+      display: grid;
+      grid-template-columns: 78px minmax(0, 1fr);
+      gap: 5px 9px;
+      padding: 10px;
+      border-left: 2px solid var(--warning);
+      background: #f5f2eb;
+      font: 9.5px/1.55 var(--mono);
+    }
+    .resolved-key { color: var(--muted); }
+    .modal-foot {
+      min-height: 59px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      background: #faf8f3;
+    }
+    .modal-note { flex: 1; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .button {
+      height: 31px;
+      padding: 0 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: #fff;
+    }
+    .button.primary {
+      border-color: var(--black);
+      background: var(--black);
+      color: #fff;
+      font-weight: 650;
+    }
+
+    @media (max-width: 1220px) {
+      .explorer { width: 205px; flex-basis: 205px; }
+      .agent-panel { width: 250px; flex-basis: 250px; }
+      .dock-body { grid-template-columns: minmax(0, 1fr) 225px; }
+      .prototype-verdict { display: none; }
+      .external-side { width: min(var(--side-width), 48vw); flex-basis: min(var(--side-width), 48vw); }
+      .context-chip { max-width: 120px; }
+    }
+    @media (max-width: 1080px) {
+      .explorer { display: none; }
+      .agent-panel { display: none; }
+      .prototype-bar .step-button:nth-of-type(4) { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="prototype-bar">
+    <span class="prototype-title">Terminal Parallel vNext</span>
+    <span class="prototype-verdict">底部是母体 · 右侧是单一 focus slot · Editor 只保持一个 focused workspace</span>
+    <span class="prototype-spacer"></span>
+    <button class="step-button active" type="button" data-step="dock">1 · 都在底部</button>
+    <button class="step-button" type="button" data-step="codex-side">2 · Codex 右侧</button>
+    <button class="step-button" type="button" data-step="claude-side">3 · 换 Claude</button>
+    <button class="step-button" type="button" data-step="return">4 · 全部归位</button>
+    <button class="step-button" id="openNewTerminal" type="button">5 · 新终端</button>
+    <button class="film-button" id="playFilm" type="button">▶ 播放流程</button>
+  </header>
+
+  <main class="app">
+    <header class="titlebar">
+      <span class="brand">Charter</span>
+      <span class="top-chip">⌂ Home</span>
+      <span class="top-chip focused">▱ Charter IDE · focused</span>
+      <span class="live-summary" id="topSummary">2 terminal sessions live across 2 projects</span>
+      <span class="title-spacer"></span>
+      <span class="top-chip command-chip">⌘⇧P Commands</span>
+    </header>
+
+    <div class="wb-main">
+      <nav class="activitybar" aria-label="主导航">
+        <button class="activity-button active" type="button" title="Explorer">▱</button>
+        <button class="activity-button" type="button" title="Search">⌕</button>
+        <button class="activity-button" type="button" title="Source Control">⑂</button>
+        <button class="activity-button" type="button" title="Tasks">▣</button>
+        <span class="activity-spacer"></span>
+        <button class="activity-button" type="button" title="Settings">≡</button>
+      </nav>
+
+      <aside class="explorer">
+        <div class="rail-title">EXPLORER · FOCUSED WORKSPACE</div>
+        <div class="project-head">
+          <span>Charter IDE</span>
+          <span class="project-actions"><span>＋</span><span>↻</span><span>◉</span></span>
+        </div>
+        <div class="project-path">~/git/charter</div>
+        <div class="tree">
+          <button class="tree-row" type="button"><span class="tree-icon">▾</span><span>src</span><span></span></button>
+          <button class="tree-row active" type="button"><span class="tree-icon">TSX</span><span>TerminalPanel.tsx</span><span class="tree-status">M</span></button>
+          <button class="tree-row" type="button"><span class="tree-icon">TS</span><span>externalStore.ts</span><span class="tree-status">M</span></button>
+          <button class="tree-row" type="button"><span class="tree-icon">TS</span><span>terminal.test.ts</span><span></span></button>
+          <button class="tree-row" type="button"><span class="tree-icon">▾</span><span>tests</span><span></span></button>
+          <button class="tree-row" type="button"><span class="tree-icon">{ }</span><span>package.json</span><span></span></button>
+          <button class="tree-row" type="button"><span class="tree-icon">MD</span><span>README.md</span><span></span></button>
+        </div>
+        <div class="explorer-note">
+          <strong>Editor 是单一 lens</strong>
+          Claude 的 Writing launch 不会被强塞进这里；点它的改动先开 task-scoped Peek。
+        </div>
+      </aside>
+
+      <section class="center">
+        <section class="editor" aria-label="代码编辑器">
+          <div class="editor-tabs">
+            <button class="editor-tab" type="button">
+              <span class="tab-kind">TSX</span><span>TerminalPanel.tsx</span><span class="tab-project">Charter IDE</span>
+            </button>
+          </div>
+          <div class="breadcrumb"><span>Charter IDE</span><span>›</span><span>src</span><span>›</span><span>TerminalPanel.tsx</span></div>
+          <div class="editor-body">
+            <div class="code">
+              <div class="line"><span class="kw">import</span> React, { useEffect, useRef } <span class="kw">from</span> <span class="str">'react'</span>;</div>
+              <div class="line"><span class="kw">import</span> { Terminal } <span class="kw">from</span> <span class="str">'@xterm/xterm'</span>;</div>
+              <div class="line"><span class="kw">import</span> { useExternalStore } <span class="kw">from</span> <span class="str">'../store/externalStore'</span>;</div>
+              <div class="line"> </div>
+              <div class="line"><span class="comment">/** Same xterm instance moves between dock and side focus slot. */</span></div>
+              <div class="line"><span class="kw">export function</span> <span class="fn">mountTerminal</span>(host: <span class="type">HTMLElement</span>, item: <span class="type">TermInstance</span>) {</div>
+              <div class="line">  <span class="kw">const</span> element = item.term.element;</div>
+              <div class="line changed">  <span class="kw">if</span> (!element) item.term.open(host);</div>
+              <div class="line changed">  <span class="kw">else if</span> (element.parentElement !== host) host.replaceChildren(element);</div>
+              <div class="line">  item.fit.fit();</div>
+              <div class="line">  item.term.refresh(<span class="purple">0</span>, item.term.rows - <span class="purple">1</span>);</div>
+              <div class="line">  item.term.focus();</div>
+              <div class="line">}</div>
+              <div class="line"> </div>
+              <div class="line"><span class="kw">export function</span> <span class="fn">promote</span>(terminalId: <span class="type">string</span>) {</div>
+              <div class="line changed">  <span class="kw">const</span> context = terminalContexts.get(terminalId);</div>
+              <div class="line changed">  sideSlot.swap({ terminalId, context });</div>
+              <div class="line">}</div>
+              <div class="line"> </div>
+              <div class="line"><span class="comment">// Explorer stays bound to the focused editor workspace.</span></div>
+              <div class="line"><span class="comment">// Terminal sessions stay bound to their own host-resolved contexts.</span></div>
+            </div>
+            <div class="minimap"></div>
+          </div>
+        </section>
+
+        <section class="dock" id="dock">
+          <div class="dock-tabs">
+            <button class="dock-tab" type="button">Problems</button>
+            <button class="dock-tab" type="button">Output</button>
+            <button class="dock-tab active" type="button">Terminal</button>
+            <button class="dock-tab" type="button">Tests</button>
+            <button class="dock-tab" type="button">Agent Log</button>
+            <span class="dock-spacer"></span>
+            <button class="dock-close" type="button" title="收起 Bottom Panel">×</button>
+          </div>
+          <div class="dock-body">
+            <div class="terminal-main">
+              <div class="session-bar" id="dockSessionBar">
+                <span class="pulse"></span>
+                <span class="agent-name" id="dockAgentName">✳ codex</span>
+                <span class="ext">EXT · unmanaged</span>
+                <span class="context-chip" id="dockContext">Charter IDE · ~/git/charter</span>
+                <span class="file-count" id="dockFiles">4 files</span>
+                <span class="bar-spacer"></span>
+                <button class="small-button" type="button">⤢ Room</button>
+                <button class="small-button primary" id="dockMoveButton" type="button">⇥ Move to side panel</button>
+              </div>
+              <div class="terminal-output" id="dockOutput"></div>
+            </div>
+
+            <aside class="terminal-list" aria-label="终端会话">
+              <div class="new-terminal-row">
+                <button class="new-terminal-button" id="quickNewTerminal" type="button">＋ New Terminal</button>
+                <button class="new-terminal-menu" id="newTerminalMenu" type="button" title="选择类型和工作上下文">⌄</button>
+              </div>
+
+              <button class="terminal-row" type="button" data-terminal="claude">
+                <span class="row-dot"></span>
+                <span class="row-main">
+                  <span class="row-title">✳ Claude Code <span class="ext">EXT</span></span>
+                  <span class="row-context">Writing launch · 润色发布稿</span>
+                  <span class="row-cwd">~/Documents/ai-writing</span>
+                </span>
+                <span><span class="row-place">LIVE</span><button class="row-close" type="button">×</button></span>
+                <span class="row-actions"><span class="row-action">⤢ Room</span><span class="row-action move" data-move="claude">⇥ Move to side</span></span>
+              </button>
+
+              <button class="terminal-row selected" type="button" data-terminal="codex">
+                <span class="row-dot"></span>
+                <span class="row-main">
+                  <span class="row-title">✳ Codex <span class="ext">EXT</span></span>
+                  <span class="row-context">Charter IDE · 修复终端并发</span>
+                  <span class="row-cwd">~/git/charter</span>
+                </span>
+                <span><span class="row-place">LIVE</span><button class="row-close" type="button">×</button></span>
+                <span class="row-actions"><span class="row-action">⤢ Room</span><span class="row-action move" data-move="codex">⇥ Move to side</span></span>
+              </button>
+
+              <button class="terminal-row" id="shellRow" type="button" data-terminal="shell" hidden>
+                <span class="row-dot shell"></span>
+                <span class="row-main">
+                  <span class="row-title">zsh</span>
+                  <span class="row-context">Scratch · 临时命令</span>
+                  <span class="row-cwd">~/.charter/scratch/terminal-3</span>
+                </span>
+                <span><span class="row-place">IDLE</span><button class="row-close" type="button">×</button></span>
+              </button>
+            </aside>
+          </div>
+        </section>
+      </section>
+
+      <aside class="agent-panel" id="agentPanel">
+        <div class="agent-head"><span>No task selected</span><span class="agent-spacer"></span><button class="task-button" type="button">＋ Task</button></div>
+        <div class="agent-empty">Create a managed task to work with Charter's agent.<br><br>外部 CLI 移到右侧时，这个 rail 临时让位；归位后恢复。</div>
+      </aside>
+
+      <div class="side-resizer" id="sideResizer" role="separator" aria-label="Resize session panel" aria-orientation="vertical" tabindex="0"></div>
+      <aside class="external-side" id="externalSide" aria-label="External session">
+        <div class="side-head">
+          <span class="side-dot"></span>
+          <div class="side-identity">
+            <div class="side-title"><span id="sideAgent">✳ codex</span><span class="ext">EXT · unmanaged</span></div>
+            <div class="side-context" id="sideCwd">Charter IDE · ~/git/charter</div>
+          </div>
+          <div class="side-actions">
+            <button class="small-button" type="button">⤢ Room</button>
+            <button class="small-button primary" id="returnDock" type="button">⇤ Return to dock</button>
+          </div>
+          <div class="side-context-row"><span id="sideTask">修复终端并发</span><span id="sideSnapshot">snapshot 9a21c4f</span><span id="sideFiles">4 files changed</span></div>
+        </div>
+        <div class="side-terminal" id="sideTerminal"></div>
+        <div class="changes">
+          <div class="changes-head">SESSION CHANGES <span class="changes-count" id="changeCount">4</span><span style="margin-left:auto;font-weight:400;letter-spacing:0">点文件先开 Peek，不切 Editor 项目</span></div>
+          <button class="change-row" type="button"><span id="changeFile1">TerminalPanel.tsx</span><span class="diffstat">+18 <span class="minus">−6</span></span></button>
+          <button class="change-row" type="button"><span id="changeFile2">externalStore.ts</span><span class="diffstat">+9 <span class="minus">−2</span></span></button>
+          <button class="change-row" type="button"><span id="changeFile3">terminal.test.ts</span><span class="diffstat">+24 <span class="minus">−0</span></span></button>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <span>⊗ 0</span><span>△ 0</span>
+      <span class="status-spacer"></span>
+      <span>Editor: <strong>Charter IDE</strong></span>
+      <span>Terminal contexts: <strong id="contextCount">2 projects</strong></span>
+      <span class="status-live" id="liveStatus">● 2 agents live</span>
+      <span>vNext mock</span>
+    </footer>
+  </main>
+
+  <div class="caption" id="caption" role="status" aria-live="polite"></div>
+
+  <div class="modal-backdrop" id="newTerminalModal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head">
+        <div>
+          <h2 id="modalTitle">New Terminal</h2>
+          <p>创建一个普通 Terminal session；类型只决定可选的启动命令。</p>
+        </div>
+        <button class="modal-close" id="modalClose" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <section class="form-section">
+          <div class="form-label">01 · 类型 <span class="form-hint">仍然是真实 shell + PTY</span></div>
+          <div class="type-grid">
+            <button class="type-option selected" type="button" data-type="Shell"><strong>Shell</strong><small>打开默认 shell</small></button>
+            <button class="type-option" type="button" data-type="Claude Code"><strong>Claude Code</strong><small>创建后运行 claude</small></button>
+            <button class="type-option" type="button" data-type="Codex"><strong>Codex</strong><small>创建后运行 codex</small></button>
+          </div>
+        </section>
+
+        <section class="form-section">
+          <div class="form-label">02 · Working context <span class="form-hint">不改变 Editor focus</span></div>
+          <div class="context-list">
+            <button class="context-option selected" type="button" data-context="charter">
+              <span class="radio"></span><span class="context-copy"><strong>Charter IDE</strong><small>~/git/charter</small></span><span class="context-kind">FOCUSED</span>
+            </button>
+            <button class="context-option" type="button" data-context="writing">
+              <span class="radio"></span><span class="context-copy"><strong>Writing launch</strong><small>~/Documents/ai-writing</small></span><span class="context-kind">RECENT PROJECT</span>
+            </button>
+            <button class="context-option" type="button" data-context="worktree">
+              <span class="radio"></span><span class="context-copy"><strong>Task worktree · Terminal resize</strong><small>~/.charter/worktrees/charter/terminal-resize</small></span><span class="context-kind">ISOLATED</span>
+            </button>
+            <button class="context-option" type="button" data-context="scratch">
+              <span class="radio"></span><span class="context-copy"><strong>Scratch</strong><small>~/.charter/scratch/terminal-new</small></span><span class="context-kind">TEMPORARY</span>
+            </button>
+          </div>
+          <div class="resolved">
+            <span class="resolved-key">resolved cwd</span><span id="resolvedCwd">~/git/charter</span>
+            <span class="resolved-key">owner</span><span id="resolvedOwner">project: Charter IDE</span>
+            <span class="resolved-key">editor focus</span><span>unchanged: Charter IDE</span>
+            <span class="resolved-key">accounting</span><span id="resolvedAccounting">snapshot + watcher · external unmanaged</span>
+          </div>
+        </section>
+      </div>
+      <footer class="modal-foot">
+        <span class="modal-note">Host 通过 project/task/scratch identity 解析 cwd；Renderer 不提交任意绝对路径。</span>
+        <button class="button" id="modalCancel" type="button">Cancel</button>
+        <button class="button primary" id="createTerminal" type="button">Create Shell</button>
+      </footer>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      var placement = null;
+      var activeDock = 'codex';
+      var filmRunning = false;
+      var captionTimer = null;
+      var sideWidth = 560;
+      var dragStart = null;
+
+      var terminalData = {
+        codex: {
+          label: 'codex',
+          project: 'Charter IDE',
+          cwd: '~/git/charter',
+          task: '修复终端并发',
+          files: 4,
+          snapshot: 'snapshot 9a21c4f',
+          output: [
+            '<span class="prompt">~/git/charter</span> on <span class="branch">main</span> via <span class="green">● v24.18.0</span>',
+            '<span class="green">❯</span> codex',
+            '╭────────────────────────────────────────────────────────╮',
+            '│ <span class="orange">Codex</span> · working on terminal concurrency              │',
+            '╰────────────────────────────────────────────────────────╯',
+            '<span class="dim">• Read TerminalPanel.tsx and externalStore.ts</span>',
+            '<span class="dim">• Running terminal.test.ts</span>',
+            '<span class="green">✓ 7 tests passed</span>',
+            '',
+            'Working… <span class="cursor"></span>'
+          ]
+        },
+        claude: {
+          label: 'claude',
+          project: 'Writing launch',
+          cwd: '~/Documents/ai-writing',
+          task: '润色发布稿',
+          files: 12,
+          snapshot: 'snapshot 7bd88e1',
+          output: [
+            '<span class="prompt">~/Documents/ai-writing</span> on <span class="branch">main</span>',
+            '<span class="green">❯</span> claude',
+            '',
+            '<span class="orange">Claude Code</span>',
+            '<span class="dim">Reading product-note.md…</span>',
+            '<span class="dim">Editing the opening and keeping the author voice.</span>',
+            '<span class="green">✓ Updated 12 lines in product-note.md</span>',
+            '',
+            'Waiting for review… <span class="cursor"></span>'
+          ]
+        },
+        shell: {
+          label: 'zsh',
+          project: 'Scratch',
+          cwd: '~/.charter/scratch/terminal-3',
+          task: '临时命令',
+          files: 0,
+          snapshot: '',
+          output: [
+            '<span class="prompt">~/.charter/scratch/terminal-3</span>',
+            '<span class="green">❯</span> <span class="cursor"></span>'
+          ]
+        }
+      };
+
+      function caption(step, message) {
+        window.clearTimeout(captionTimer);
+        var element = document.getElementById('caption');
+        element.innerHTML = '<strong>' + step + '</strong>' + message;
+        element.classList.add('show');
+        captionTimer = window.setTimeout(function () {
+          element.classList.remove('show');
+        }, 2600);
+      }
+
+      function terminalHtml(data, includeContext) {
+        var lines = data.output.map(function (line) {
+          return '<div class="terminal-line">' + line + '</div>';
+        }).join('');
+        if (includeContext) {
+          lines += '<span class="terminal-context">cwd ' + data.cwd + ' · PTY live</span>';
+        }
+        return lines;
+      }
+
+      function setActiveDock(id) {
+        if (placement === id) {
+          caption('焦点', terminalData[id].label + ' 已在右侧；点击右侧终端即可输入。');
+          return;
+        }
+        activeDock = id;
+        render();
+      }
+
+      function render() {
+        var sideOpen = placement !== null;
+        document.getElementById('externalSide').classList.toggle('visible', sideOpen);
+        document.getElementById('sideResizer').classList.toggle('visible', sideOpen);
+        document.getElementById('agentPanel').classList.toggle('hidden', sideOpen);
+
+        document.querySelectorAll('.terminal-row[data-terminal]').forEach(function (row) {
+          var id = row.dataset.terminal;
+          var promoted = id === placement;
+          row.classList.toggle('promoted', promoted);
+          row.classList.toggle('selected', id === activeDock && !promoted);
+          var place = row.querySelector('.row-place');
+          if (place) place.textContent = promoted ? 'IN SIDE' : (id === 'shell' ? 'IDLE' : 'LIVE');
+          var move = row.querySelector('[data-move]');
+          if (move) {
+            if (promoted) move.textContent = '↗ Focus side';
+            else if (placement) move.textContent = '⇄ Replace in side';
+            else move.textContent = '⇥ Move to side';
+          }
+        });
+
+        if (placement === activeDock) {
+          activeDock = placement === 'codex' ? 'claude' : 'codex';
+        }
+        var dockData = terminalData[activeDock];
+        var bar = document.getElementById('dockSessionBar');
+        var isShell = activeDock === 'shell';
+        bar.classList.toggle('shell', isShell);
+        bar.querySelector('.pulse').style.display = isShell ? 'none' : '';
+        document.getElementById('dockAgentName').textContent = isShell ? 'zsh' : '✳ ' + dockData.label;
+        document.getElementById('dockAgentName').classList.toggle('agent-name', !isShell);
+        bar.querySelector('.ext').style.display = isShell ? 'none' : '';
+        document.getElementById('dockContext').textContent = dockData.project + ' · ' + dockData.cwd;
+        document.getElementById('dockFiles').textContent = dockData.files + ' files';
+        document.getElementById('dockFiles').style.display = isShell ? 'none' : '';
+        bar.querySelectorAll('.small-button').forEach(function (button) {
+          button.style.display = isShell ? 'none' : '';
+        });
+        var moveButton = document.getElementById('dockMoveButton');
+        moveButton.textContent = placement ? '⇄ Replace side panel' : '⇥ Move to side panel';
+        document.getElementById('dockOutput').innerHTML = terminalHtml(dockData, true);
+
+        if (sideOpen) {
+          var sideData = terminalData[placement];
+          document.getElementById('sideAgent').textContent = '✳ ' + sideData.label;
+          document.getElementById('sideCwd').textContent = sideData.project + ' · ' + sideData.cwd;
+          document.getElementById('sideTask').textContent = sideData.task;
+          document.getElementById('sideSnapshot').textContent = sideData.snapshot;
+          document.getElementById('sideFiles').textContent = sideData.files + ' files changed';
+          document.getElementById('sideTerminal').innerHTML = terminalHtml(sideData, false);
+          document.getElementById('changeCount').textContent = sideData.files;
+          if (placement === 'claude') {
+            document.getElementById('changeFile1').textContent = 'product-note.md';
+            document.getElementById('changeFile2').textContent = 'launch-copy.md';
+            document.getElementById('changeFile3').textContent = 'README.md';
+          } else {
+            document.getElementById('changeFile1').textContent = 'TerminalPanel.tsx';
+            document.getElementById('changeFile2').textContent = 'externalStore.ts';
+            document.getElementById('changeFile3').textContent = 'terminal.test.ts';
+          }
+        }
+      }
+
+      function promote(id, announce) {
+        if (id === 'shell') return;
+        var replacing = placement && placement !== id;
+        var previous = placement;
+        placement = id;
+        activeDock = id === 'codex' ? 'claude' : 'codex';
+        render();
+        selectStep(id === 'codex' ? 'codex-side' : 'claude-side');
+        if (announce) {
+          if (replacing) {
+            caption('原子换位', terminalData[previous].label + ' 回到底部，' + terminalData[id].label + ' 使用同一 PTY 移到右侧；两个进程都不停。');
+          } else {
+            caption('用户意图', terminalData[id].label + ' 移到右侧；另一个 Agent 留在底部继续运行。');
+          }
+        }
+      }
+
+      function returnToDock(announce) {
+        var previous = placement;
+        placement = null;
+        if (previous) activeDock = previous;
+        render();
+        selectStep('return');
+        if (announce) caption('完全可逆', terminalData[previous].label + ' 回到原来的 Bottom Panel；之前的 Agent Panel 恢复。');
+      }
+
+      function selectStep(step) {
+        document.querySelectorAll('.step-button[data-step]').forEach(function (button) {
+          button.classList.toggle('active', button.dataset.step === step);
+        });
+      }
+
+      document.querySelectorAll('.terminal-row[data-terminal]').forEach(function (row) {
+        row.addEventListener('click', function (event) {
+          if (event.target.closest('.row-close')) return;
+          var move = event.target.closest('[data-move]');
+          if (move) {
+            event.preventDefault();
+            event.stopPropagation();
+            var id = move.dataset.move;
+            if (placement === id) {
+              caption('焦点', terminalData[id].label + ' 已在右侧 focus slot。');
+            } else {
+              promote(id, true);
+            }
+            return;
+          }
+          setActiveDock(row.dataset.terminal);
+        });
+      });
+
+      document.getElementById('dockMoveButton').addEventListener('click', function () {
+        promote(activeDock, true);
+      });
+      document.getElementById('returnDock').addEventListener('click', function () {
+        returnToDock(true);
+      });
+
+      document.querySelectorAll('.step-button[data-step]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          var step = button.dataset.step;
+          if (step === 'dock') {
+            placement = null;
+            activeDock = 'codex';
+            render();
+            selectStep('dock');
+            caption('起点', 'Claude 与 Codex 都是 Bottom Panel 里的独立 terminal session，各自显示 project 和 cwd。');
+          } else if (step === 'codex-side') {
+            promote('codex', true);
+          } else if (step === 'claude-side') {
+            if (!placement) promote('codex', false);
+            promote('claude', true);
+          } else if (step === 'return') {
+            if (!placement) placement = 'claude';
+            returnToDock(true);
+          }
+        });
+      });
+
+      var modal = document.getElementById('newTerminalModal');
+      var selectedType = 'Shell';
+      var selectedContext = 'charter';
+      var contexts = {
+        charter: ['~/git/charter', 'project: Charter IDE', 'snapshot + watcher · external unmanaged'],
+        writing: ['~/Documents/ai-writing', 'project: Writing launch', 'snapshot + watcher · external unmanaged'],
+        worktree: ['~/.charter/worktrees/charter/terminal-resize', 'task worktree: Terminal resize', 'isolated worktree · task-owned'],
+        scratch: ['~/.charter/scratch/terminal-new', 'scratch context', 'no project accounting']
+      };
+
+      function openModal() {
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+      }
+      function closeModal() {
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      document.getElementById('openNewTerminal').addEventListener('click', openModal);
+      document.getElementById('newTerminalMenu').addEventListener('click', openModal);
+      document.getElementById('quickNewTerminal').addEventListener('click', function () {
+        document.getElementById('shellRow').hidden = false;
+        activeDock = 'shell';
+        render();
+        document.getElementById('topSummary').textContent = '3 terminal sessions · 2 agents live across 2 projects';
+        document.getElementById('contextCount').textContent = '2 projects + scratch';
+        caption('快速创建', '直接创建当前 focused workspace 的 shell；需要其他目录时再打开右侧下拉。');
+      });
+      document.getElementById('modalClose').addEventListener('click', closeModal);
+      document.getElementById('modalCancel').addEventListener('click', closeModal);
+      modal.addEventListener('click', function (event) {
+        if (event.target === modal) closeModal();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && modal.classList.contains('open')) closeModal();
+      });
+
+      document.querySelectorAll('.type-option').forEach(function (option) {
+        option.addEventListener('click', function () {
+          selectedType = option.dataset.type;
+          document.querySelectorAll('.type-option').forEach(function (item) {
+            item.classList.toggle('selected', item === option);
+          });
+          document.getElementById('createTerminal').textContent = 'Create ' + selectedType;
+        });
+      });
+      document.querySelectorAll('.context-option').forEach(function (option) {
+        option.addEventListener('click', function () {
+          selectedContext = option.dataset.context;
+          document.querySelectorAll('.context-option').forEach(function (item) {
+            item.classList.toggle('selected', item === option);
+          });
+          document.getElementById('resolvedCwd').textContent = contexts[selectedContext][0];
+          document.getElementById('resolvedOwner').textContent = contexts[selectedContext][1];
+          document.getElementById('resolvedAccounting').textContent = contexts[selectedContext][2];
+        });
+      });
+      document.getElementById('createTerminal').addEventListener('click', function () {
+        closeModal();
+        document.getElementById('shellRow').hidden = false;
+        activeDock = 'shell';
+        terminalData.shell.project = selectedContext === 'writing' ? 'Writing launch' : selectedContext === 'worktree' ? 'Task worktree' : selectedContext === 'scratch' ? 'Scratch' : 'Charter IDE';
+        terminalData.shell.cwd = contexts[selectedContext][0];
+        terminalData.shell.output = [
+          '<span class="prompt">' + contexts[selectedContext][0] + '</span>',
+          '<span class="green">❯</span> ' + (selectedType === 'Shell' ? '' : selectedType === 'Codex' ? 'codex' : 'claude'),
+          selectedType === 'Shell' ? '<span class="cursor"></span>' : '<span class="dim">Launching ' + selectedType + ' in a normal PTY…</span><span class="cursor"></span>'
+        ];
+        render();
+        document.getElementById('topSummary').textContent = '3 terminal sessions · independent working contexts';
+        document.getElementById('contextCount').textContent = '3 contexts';
+        caption('已创建', selectedType + ' terminal 使用 ' + contexts[selectedContext][0] + '；Editor 仍然聚焦 Charter IDE。');
+      });
+
+      document.querySelectorAll('.change-row').forEach(function (row) {
+        row.addEventListener('click', function () {
+          caption('Task-scoped Peek', row.querySelector('span').textContent + ' 在临时 Peek 中打开；不会静默切换 Editor 的 focused workspace。');
+        });
+      });
+
+      var resizer = document.getElementById('sideResizer');
+      resizer.addEventListener('pointerdown', function (event) {
+        event.preventDefault();
+        resizer.setPointerCapture(event.pointerId);
+        dragStart = { id: event.pointerId, x: event.clientX, width: sideWidth };
+        resizer.classList.add('dragging');
+      });
+      resizer.addEventListener('pointermove', function (event) {
+        if (!dragStart || dragStart.id !== event.pointerId) return;
+        sideWidth = Math.max(480, Math.min(900, dragStart.width + dragStart.x - event.clientX));
+        document.documentElement.style.setProperty('--side-width', sideWidth + 'px');
+        resizer.setAttribute('aria-valuenow', String(sideWidth));
+      });
+      function finishResize(event) {
+        if (!dragStart || dragStart.id !== event.pointerId) return;
+        dragStart = null;
+        resizer.classList.remove('dragging');
+      }
+      resizer.addEventListener('pointerup', finishResize);
+      resizer.addEventListener('pointercancel', finishResize);
+      resizer.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowLeft') sideWidth = Math.min(900, sideWidth + 16);
+        else if (event.key === 'ArrowRight') sideWidth = Math.max(480, sideWidth - 16);
+        else if (event.key === 'Home') sideWidth = 480;
+        else if (event.key === 'End') sideWidth = 900;
+        else return;
+        event.preventDefault();
+        document.documentElement.style.setProperty('--side-width', sideWidth + 'px');
+        resizer.setAttribute('aria-valuenow', String(sideWidth));
+      });
+
+      document.getElementById('playFilm').addEventListener('click', function () {
+        if (filmRunning) return;
+        filmRunning = true;
+        var button = document.getElementById('playFilm');
+        placement = null;
+        activeDock = 'codex';
+        render();
+        selectStep('dock');
+        button.textContent = '1 / 5 · Bottom';
+        caption('步骤 1', '两个 Agent 都从 Bottom Panel 出发，各自绑定不同 project/cwd。');
+
+        window.setTimeout(function () {
+          button.textContent = '2 / 5 · Codex side';
+          promote('codex', false);
+          caption('步骤 2', '用户把 Codex 移到右侧；Claude 留在底部继续运行。');
+        }, 2300);
+        window.setTimeout(function () {
+          button.textContent = '3 / 5 · Swap';
+          promote('claude', false);
+          caption('步骤 3', '一个点击原子换位：Codex 归位、Claude 到右侧，两个 PTY 都不断。');
+        }, 4700);
+        window.setTimeout(function () {
+          button.textContent = '4 / 5 · Return';
+          returnToDock(false);
+          caption('步骤 4', '右侧 focus slot 关闭，原来的 Agent Panel 恢复。');
+        }, 7100);
+        window.setTimeout(function () {
+          button.textContent = '5 / 5 · Context';
+          openModal();
+          caption('步骤 5', '目录只在创建这个 Terminal 时选择；Editor focus 不变。');
+        }, 9300);
+        window.setTimeout(function () {
+          button.textContent = '↻ 再播放一次';
+          filmRunning = false;
+        }, 11900);
+      });
+
+      render();
+    })();
+  </script>
+</body>
+</html>

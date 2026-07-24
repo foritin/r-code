@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>持久化与数据模型 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="持久化与数据模型">持久化与数据模型</h1>
+<h2 id="1-概述">1. 概述</h2>
+<p>持久层封装在 persistence crate，接口不暴露底层 SQLite 类型，<br>必要时可换实现。</p>
+<h2 id="2-数据库选型">2. 数据库选型</h2>
+<h3 id="2-1-当前实现">2.1 当前实现</h3>
+<ul><li><code>node:sqlite</code>（Node 24 内建，Electron 43 验证可用）。</li><li>同步 API + WAL + 事务。</li></ul>
+<h3 id="2-2-rust-替代">2.2 Rust 替代</h3>
+<ul><li><code>rusqlite</code> — 同步 SQLite 访问。</li><li><code>sqlx</code> — 异步 SQLite 访问（与 Tokio 集成更好）。</li></ul>
+<h2 id="3-核心数据模型">3. 核心数据模型</h2>
+<h3 id="3-1-任务-tasks">3.1 任务 (tasks)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    goal TEXT,
+    mode TEXT NOT NULL,  -- ask | edit | auto
+    state TEXT NOT NULL, -- idle | exploring | in_progress | review_ready | archived
+    archived INTEGER DEFAULT 0,
+    worktree_path TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-2-轮次-agentruns">3.2 轮次 (agent_runs)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE agent_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    model TEXT,
+    review_state TEXT NOT NULL, -- pending | accepted | auto_accepted | rolled_back | answered
+    reviewed_at INTEGER,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    usage_json TEXT  -- token usage, cost, etc.
+);</code></pre></div>
+<h3 id="3-3-工具调用-toolcalls">3.3 工具调用 (tool_calls)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE tool_calls (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id),
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    tool_name TEXT NOT NULL,
+    input_json TEXT NOT NULL,
+    output_json TEXT,
+    risk_level TEXT NOT NULL,
+    status TEXT NOT NULL, -- running | ok | error | denied
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER
+);</code></pre></div>
+<h3 id="3-4-文件变更-filechanges">3.4 文件变更 (file_changes)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE file_changes (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    tool_call_id TEXT REFERENCES tool_calls(id),
+    path TEXT NOT NULL,
+    kind TEXT NOT NULL, -- create | modify | delete | rename
+    before_hash TEXT,
+    after_hash TEXT,
+    created_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-5-文件基线-filebaselines">3.5 文件基线 (file_baselines)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE file_baselines (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    blob_id TEXT NOT NULL,
+    captured_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-6-内容寻址-blob-blobs">3.6 内容寻址 Blob (blobs)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE blobs (
+    id TEXT PRIMARY KEY,  -- content hash
+    size INTEGER NOT NULL,
+    ref_count INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-7-权限请求-permissionrequests">3.7 权限请求 (permission_requests)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE permission_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    tool_call_id TEXT REFERENCES tool_calls(id),
+    tool_name TEXT NOT NULL,
+    risk_level TEXT NOT NULL,
+    status TEXT NOT NULL, -- pending | approved | denied
+    resolved_at INTEGER,
+    created_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-8-工作空间-workspaces">3.8 工作空间 (workspaces)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE workspaces (
+    id TEXT PRIMARY KEY,
+    canonical_path TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    trust_state TEXT NOT NULL, -- untrusted | trusted
+    last_opened_at INTEGER,
+    created_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="3-9-任务事件-taskevents">3.9 任务事件 (task_events)</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE task_events (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    type TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);</code></pre></div>
+<h2 id="4-事务与备份">4. 事务与备份</h2>
+<h3 id="4-1-事务">4.1 事务</h3>
+<ul><li>所有写操作走事务。</li><li>WAL 模式支持并发读。</li></ul>
+<h3 id="4-2-备份">4.2 备份</h3>
+<ul><li>定期备份到 userData 目录。</li><li>校验和验证。</li><li>恢复机制。</li></ul>
+<h2 id="5-迁移策略">5. 迁移策略</h2>
+<h3 id="5-1-版本化迁移">5.1 版本化迁移</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE schema_version (
+    version INTEGER NOT NULL,
+    applied_at INTEGER NOT NULL
+);</code></pre></div>
+<h3 id="5-2-迁移文件">5.2 迁移文件</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">migrations/
+  001_initial.sql
+  002_add_task_archived.sql
+  003_add_run_review_state.sql
+  ...</code></pre></div>
+<h2 id="6-记账策略">6. 记账策略</h2>
+<h3 id="6-1-全量记录">6.1 全量记录</h3>
+<ul><li>所有工具调用入 <code>tool_calls</code>。</li><li>调用者身份（task/session id 或 <code>terminal:&lt;id&gt;</code>）。</li></ul>
+<h3 id="6-2-输出处理">6.2 输出处理</h3>
+<ul><li><code>send</code> 注入文本完整记录（已过分类）。</li><li><code>read</code>/<code>wait</code> 只记元数据。</li><li>捕获的输出不持久化。</li></ul>
+<h3 id="6-3-滚动缓冲">6.3 滚动缓冲</h3>
+<ul><li>每终端 ANSI-stripped 滚动缓冲 ~200 KB。</li><li>仅内存，随终端消亡。</li></ul>
+<h2 id="7-搜索索引">7. 搜索索引</h2>
+<h3 id="7-1-全文搜索">7.1 全文搜索</h3>
+<ul><li>任务标题、目标。</li><li>文件路径。</li></ul>
+<h3 id="7-2-索引策略">7.2 索引策略</h3>
+<ul><li>SQLite FTS5。</li><li>或 tantivy 独立索引。</li></ul>
+<h2 id="8-rust-实现要点">8. Rust 实现要点</h2>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// 数据库连接
+struct Database {
+    conn: rusqlite::Connection,
+}
+
+impl Database {
+    fn open(path: &amp;Path) -&gt; Result&lt;Self, DbError&gt; {
+        let conn = rusqlite::Connection::open(path)?;
+        conn.pragma_update(None, &quot;journal_mode&quot;, &quot;WAL&quot;)?;
+        conn.pragma_update(None, &quot;foreign_keys&quot;, &quot;ON&quot;)?;
+        Ok(Self { conn })
+    }
+    
+    fn migrate(&amp;self) -&gt; Result&lt;(), DbError&gt; { ... }
+}
+
+// Repository 模式
+struct TaskRepository {
+    db: Arc&lt;Database&gt;,
+}
+
+impl TaskRepository {
+    fn create(&amp;self, task: &amp;Task) -&gt; Result&lt;(), DbError&gt; { ... }
+    fn get(&amp;self, id: &amp;str) -&gt; Result&lt;Option&lt;Task&gt;, DbError&gt; { ... }
+    fn list(&amp;self, scope: TaskScope) -&gt; Result&lt;Vec&lt;Task&gt;, DbError&gt; { ... }
+    fn update_state(&amp;self, id: &amp;str, state: TaskState) -&gt; Result&lt;(), DbError&gt; { ... }
+}
+
+// 内容寻址 Blob
+struct BlobStore {
+    db: Arc&lt;Database&gt;,
+    blobs_dir: PathBuf,
+}
+
+impl BlobStore {
+    fn put(&amp;self, content: &amp;[u8]) -&gt; Result&lt;String, BlobError&gt; {
+        let hash = blake3::hash(content).to_hex().to_string();
+        // dedup: if hash exists, increment ref_count
+        // else write to disk
+        Ok(hash)
+    }
+    
+    fn get(&amp;self, hash: &amp;str) -&gt; Result&lt;Vec&lt;u8&gt;, BlobError&gt; { ... }
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>New project — no Name field (mockup)</title>
+    <style>
+      /* Parchment light theme (from theme.css [data-skin='index']) */
+      :root {
+        --font-mono: 'Courier Prime', 'American Typewriter', 'SFMono-Regular', Menlo, monospace;
+        --bg-page: #f3e7cf;
+        --bg-card: #fff8e9;
+        --bg-input: #fffdf6;
+        --bg-hover: #eee0c8;
+        --bg-active: #e3d0b0;
+        --border: #d8c4a3;
+        --border-soft: #e9d9bd;
+        --border-strong: #b99d78;
+        --fg: #392a21;
+        --fg-muted: #795f4f;
+        --fg-faint: #a48570;
+        --accent: #b94e32;
+        --accent-fg: #fffaf0;
+        --danger: #a43129;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg-page);
+        color: var(--fg);
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 26px;
+        padding: 40px 20px 60px;
+      }
+      h1 { font-size: 15px; font-weight: 650; margin: 0; color: var(--fg); }
+      .caption { color: var(--fg-muted); font-size: 12.5px; max-width: 720px; text-align: center; }
+      .caption b { color: var(--fg); }
+      .row { display: flex; gap: 28px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+      .stage { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+      .stage-label {
+        font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+        color: var(--fg-faint); font-weight: 700;
+      }
+
+      /* --- dialog (mirrors NewProjectDialog.tsx classes) --- */
+      .modal {
+        width: 460px;
+        background: var(--bg-card);
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        box-shadow: 0 12px 48px rgba(48, 34, 25, 0.28);
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      .modal-header {
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600;
+      }
+      .modal-close { background: none; border: none; color: var(--fg-muted); cursor: pointer; font-size: 16px; padding: 4px 8px; border-radius: 4px; }
+      .modal-body { padding: 4px 14px 14px; display: flex; flex-direction: column; gap: 10px; }
+
+      .hm-seg { display: inline-flex; background: var(--bg-hover); border-radius: 999px; padding: 3px; gap: 2px; align-self: flex-start; }
+      .hm-seg button { font-size: 12px; color: var(--fg-muted); padding: 4px 12px; border-radius: 999px; border: none; background: transparent; cursor: pointer; white-space: nowrap; }
+      .hm-seg button.on { background: var(--bg-card); color: var(--fg); font-weight: 550; box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+
+      .hm-field label { display: block; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-faint); margin-bottom: 5px; font-weight: 600; }
+      .hm-field input { width: 100%; background: transparent; border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; color: var(--fg); outline: none; }
+      .hm-field input.mono { font-family: var(--font-mono); }
+      .hm-field .with-btn { display: flex; gap: 6px; }
+      .hm-field .with-btn input { flex: 1; }
+      .hm-sec { font-size: 11.5px; color: var(--fg-faint); margin-top: 3px; }
+      .derived { font-size: 11.5px; color: var(--fg-muted); margin-top: 5px; }
+      .derived b { color: var(--fg); font-family: var(--font-mono); }
+
+      .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 5px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); cursor: pointer; font-size: 12.5px; }
+      .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      .checkline { display: flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
+      .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+
+      .note { max-width: 720px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; }
+      .note h2 { font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fg-faint); margin: 0 0 8px; }
+      .note ul { margin: 0; padding-left: 18px; }
+      .note li { margin: 4px 0; color: var(--fg-muted); }
+      .note li b { color: var(--fg); }
+      del { color: var(--danger); text-decoration-color: var(--danger); }
+    </style>
+  </head>
+  <body>
+    <h1>New project — the folder path is the project (no more Name field)</h1>
+    <p class="caption">
+      One field: <b>type the full path to the new project folder</b>. Missing folders are created
+      for you, and the project opens under the folder's own name. Browse… still there.
+    </p>
+
+    <div class="row">
+      <!-- Empty folder -->
+      <div class="stage">
+        <div class="stage-label">Empty folder</div>
+        <div class="modal">
+          <div class="modal-header"><span>New project</span><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <div class="hm-seg">
+              <button class="on">Empty folder</button>
+              <button>Clone from Git</button>
+            </div>
+
+            <div class="hm-field">
+              <label>Project folder</label>
+              <div class="with-btn">
+                <input class="mono" value="/Users/edy/Downloads/charter" />
+                <button class="btn">Browse…</button>
+              </div>
+              <div class="derived">Opens as <b>charter</b> — created if the path doesn't exist yet.</div>
+            </div>
+
+            <label class="checkline">
+              <input type="checkbox" checked />
+              Initialize a git repository (recommended — enables isolated worktree tasks)
+            </label>
+
+            <div class="actions">
+              <button class="btn">Cancel</button>
+              <button class="btn primary">Create</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clone -->
+      <div class="stage">
+        <div class="stage-label">Clone from Git</div>
+        <div class="modal">
+          <div class="modal-header"><span>New project</span><button class="modal-close">✕</button></div>
+          <div class="modal-body">
+            <div class="hm-seg">
+              <button>Empty folder</button>
+              <button class="on">Clone from Git</button>
+            </div>
+
+            <div class="hm-field">
+              <label>Repository URL</label>
+              <input value="https://github.com/user/repo.git" />
+              <div class="hm-sec">
+                Public repos, or private ones your git/SSH setup can already reach — no password
+                prompts here.
+              </div>
+            </div>
+
+            <div class="hm-field">
+              <label>Clone into</label>
+              <div class="with-btn">
+                <input class="mono" value="/Users/edy/Downloads/repo" />
+                <button class="btn">Browse…</button>
+              </div>
+              <div class="derived">Opens as <b>repo</b> — prefilled from the URL, editable.</div>
+            </div>
+
+            <div class="actions">
+              <button class="btn">Cancel</button>
+              <button class="btn primary">Clone</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="note">
+      <h2>What changes</h2>
+      <ul>
+        <li><del>NAME field removed.</del> The project name is the last segment of the path.</li>
+        <li><b>Location → full project folder path</b> (was: parent folder). Before, <span style="font-family:var(--font-mono)">/…/charter</span> + name <span style="font-family:var(--font-mono)">charter</span> created <span style="font-family:var(--font-mono)">/…/charter/charter</span>. Now the path <i>is</i> the folder.</li>
+        <li><b>Auto-create</b>: any missing folders in the path are created (recursive). A path that already exists and is non-empty is rejected.</li>
+        <li><b>Browse…</b> unchanged — pick/create a folder in the OS dialog.</li>
+        <li><b>Clone</b>: destination prefilled from the repo name, still editable.</li>
+      </ul>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4b 概念稿 · 会话即对话（一个 Session 聊天+干活，账按轮记）</title>
+<style>
+  :root {
+    --bg-editor: #fbfaf7;
+    --bg-card: #ffffff;
+    --border: #e5e1d8;
+    --border-strong: #d8d3c8;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --blue: #3d78e6;
+    --green: #3a9b62;
+    --amber: #d99025;
+    --red: #c94f3d;
+    --violet: #7b5bd6;
+    --blue-soft: #eef3fd;
+    --green-soft: #ecf6f0;
+    --amber-soft: #fbf3e4;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13.5px/1.6 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    color: var(--fg); background: #efede8;
+    display: flex; flex-direction: column;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  .mock-banner {
+    flex: none; display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px; background: #1d3557; color: #e3ecf8; font-size: 12px;
+  }
+  .mock-banner strong { color: #a8c6ee; }
+  .mock-banner label {
+    margin-left: auto; flex: none; display: flex; align-items: center; gap: 6px;
+    background: #2d4a75; border-radius: 20px; padding: 4px 12px; cursor: pointer;
+  }
+
+  .new { position: relative; }
+  body:has(#ann:checked) .new { outline: 1.5px dashed var(--violet); outline-offset: 3px; border-radius: 8px; }
+  body:has(#ann:checked) .new::after {
+    content: attr(data-t);
+    position: absolute; top: -9px; right: 8px; z-index: 5;
+    background: var(--violet); color: #fff;
+    font-size: 10px; font-weight: 650; line-height: 1; padding: 3px 7px; border-radius: 8px;
+    pointer-events: none; white-space: nowrap;
+  }
+
+  .app { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; background: var(--bg-editor); }
+
+  /* ---------- room column ---------- */
+  .room { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; }
+
+  .room-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 20px; background: var(--bg-card); border-bottom: 1px solid var(--border);
+  }
+  .room-head .back { color: var(--fg-muted); font-size: 13px; }
+  .room-head h1 { margin: 0 6px 0 2px; font-size: 15px; font-weight: 680; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--border); border-radius: 16px;
+    padding: 2px 10px; font-size: 11.5px; color: var(--fg-muted); background: var(--bg-card);
+  }
+  .chip.live { border-color: #cbe5d4; background: var(--green-soft); color: #22713f; font-weight: 620; }
+  .chip.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); font-style: normal; }
+  .room-head .spacer { flex: 1; }
+  .room-head .archive { color: var(--fg-muted); font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; }
+
+  .timeline { overflow-y: auto; padding: 18px 24px 10px; min-width: 0; }
+  .tl-inner { max-width: 860px; margin: 0 auto; }
+
+  /* turn separator */
+  .turn-sep {
+    display: flex; align-items: center; gap: 10px;
+    margin: 22px 0 10px; color: var(--fg-muted); font-size: 10.5px; letter-spacing: .04em;
+  }
+  .turn-sep:first-child { margin-top: 0; }
+  .turn-sep i { flex: 1; border-top: 1px solid var(--border); font-style: normal; }
+  .turn-sep b { font-weight: 680; color: var(--fg); }
+
+  .msg { display: flex; gap: 10px; margin: 12px 0; }
+  .msg.user { flex-direction: row-reverse; }
+  .msg .ava {
+    flex: none; width: 28px; height: 28px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .msg.user .ava { background: #4a4640; }
+  .msg.agent .ava { background: var(--blue); }
+  .msg .bubble {
+    max-width: 78%; padding: 9px 13px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--bg-card); font-size: 13px;
+  }
+  .msg.user .bubble { background: #2c2a26; color: #f2f0ec; border-color: #2c2a26; }
+  .msg .bubble code { background: rgba(61,120,230,.09); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+  .msg.user .bubble code { background: rgba(255,255,255,.14); }
+
+  .act-row {
+    display: flex; align-items: center; gap: 9px;
+    margin: 4px 0 4px 38px; padding: 5px 10px;
+    border-radius: 8px; font-size: 12px; color: var(--fg-muted);
+  }
+  .act-row:hover { background: var(--bg-card); }
+  .act-row .ic { flex: none; width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); font-size: 10.5px; }
+  .act-row b { color: var(--fg); font-weight: 600; }
+  .act-row .diff b { color: var(--green); } .act-row .diff em { color: var(--red); font-style: normal; }
+  .act-row.ok .ic { background: var(--green-soft); border-color: #cbe5d4; color: var(--green); }
+  .act-row time { margin-left: auto; font-size: 10.5px; }
+
+  .plan-static {
+    margin: 6px 0 6px 38px; padding: 8px 12px;
+    border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: 8px;
+    background: var(--bg-card); font-size: 12px; color: var(--fg-muted);
+  }
+  .plan-static b { color: var(--fg); }
+
+  /* ---- per-turn settlement bar (the core new component) ---- */
+  .turn-settle {
+    margin: 12px 0 4px 38px;
+    border: 1px solid var(--border-strong); border-radius: 12px;
+    background: var(--bg-card);
+    box-shadow: 0 2px 10px rgba(32,30,26,.05);
+    overflow: hidden;
+  }
+  .turn-settle .ts-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px;
+  }
+  .turn-settle .ts-state {
+    flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+    padding: 2px 9px; border-radius: 12px;
+    background: var(--amber-soft); color: #9a6410;
+  }
+  .turn-settle .ts-copy { min-width: 0; font-size: 12.5px; }
+  .turn-settle .ts-copy b { font-weight: 650; }
+  .turn-settle .ts-copy .diff b { color: var(--green); } .turn-settle .ts-copy .diff em { color: var(--red); font-style: normal; }
+  .turn-settle .ts-actions { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; }
+  .btn-primary { background: var(--fg); color: var(--bg-card); padding: 6px 14px; border-radius: 8px; font-weight: 640; font-size: 12px; }
+  .btn-ghost { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 12px; background: var(--bg-card); }
+  .btn-more { width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px; color: var(--fg-muted); }
+  .turn-settle .ts-note {
+    padding: 6px 14px 8px; border-top: 1px dashed var(--border);
+    font-size: 11px; color: var(--fg-muted);
+    display: flex; gap: 14px; align-items: center;
+  }
+  .turn-settle .ts-note .menu-hint { margin-left: auto; color: var(--fg-muted); }
+
+  /* settled quiet milestones */
+  .turn-done {
+    display: flex; align-items: center; gap: 8px;
+    margin: 10px 0 2px 38px; font-size: 11.5px; color: var(--fg-muted);
+  }
+  .turn-done .ok { color: var(--green); }
+  .turn-done .lnk { color: var(--blue); }
+
+  /* streaming turn */
+  .streaming { margin: 6px 0 6px 38px; display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--fg-muted); }
+  .streaming .dotty { display: inline-flex; gap: 3px; }
+  .streaming .dotty i { width: 5px; height: 5px; border-radius: 50%; background: var(--blue); font-style: normal; opacity: .4; animation: b 1.2s infinite; }
+  .streaming .dotty i:nth-child(2) { animation-delay: .2s; } .streaming .dotty i:nth-child(3) { animation-delay: .4s; }
+  @keyframes b { 0%,100% { opacity: .25 } 50% { opacity: 1 } }
+
+  /* composer */
+  .composer { padding: 12px 24px 16px; background: linear-gradient(transparent, var(--bg-editor) 30%); }
+  .composer .box {
+    max-width: 860px; margin: 0 auto;
+    border: 1px solid var(--border-strong); border-radius: 14px; background: var(--bg-card);
+    box-shadow: 0 4px 18px rgba(32,30,26,.07);
+    padding: 10px 14px;
+  }
+  .composer .hint { color: var(--fg-muted); font-size: 13px; padding: 2px 2px 10px; }
+  .composer .row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--fg-muted); }
+  .composer .pills { display: flex; gap: 2px; background: var(--bg-editor); border-radius: 14px; padding: 2px; }
+  .composer .pills span { padding: 3px 10px; border-radius: 12px; }
+  .composer .pills .on { background: var(--bg-card); color: var(--red); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .composer .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: var(--fg); color: var(--bg-card); }
+
+  /* ---------- right rail ---------- */
+  .rail { border-left: 1px solid var(--border); background: var(--bg-card); overflow-y: auto; padding: 14px 16px; }
+  .rail h3 { margin: 0 0 10px; font-size: 12px; display: flex; align-items: center; gap: 7px; }
+  .rail .sec { margin-bottom: 18px; }
+  .rail .sec > span { display: block; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--fg-muted); border-top: 1px solid var(--border); padding-top: 10px; margin-bottom: 6px; }
+  .turn-list { display: flex; flex-direction: column; gap: 3px; }
+  .turn-item {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    padding: 6px 8px; border-radius: 8px; font-size: 12px;
+  }
+  .turn-item:hover { background: var(--bg-editor); }
+  .turn-item .st { flex: none; width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 9px; color: #fff; }
+  .turn-item .st.ans { background: var(--fg-muted); }
+  .turn-item .st.rev { background: var(--amber); }
+  .turn-item .st.run { background: var(--blue); }
+  .turn-item .st.acc { background: var(--green); }
+  .turn-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .turn-item small { flex: none; color: var(--fg-muted); font-size: 10.5px; }
+  .rail .file { display: flex; gap: 7px; align-items: center; font-size: 11.5px; padding: 3px 0; }
+  .rail .file .mono { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+  .rail .file .diff b { color: var(--green); } .rail .file .diff em { color: var(--red); font-style: normal; }
+  .rail .quiet { font-size: 11.5px; color: var(--fg-muted); }
+</style>
+</head>
+<body>
+
+<header class="mock-banner">
+  <strong>4b 概念稿 · 会话即对话（第 2 轮修订）</strong>
+  <span>按你的反馈改：对话流保持纯净——删掉了"第 N 轮"分隔和内联验收条；验收/回滚全部收进右侧 Summary 的轮次列表（复用现有 Review 通道）。对话就是对话，账在右边。</span>
+  <label><input type="checkbox" id="ann" checked> 标注改动点</label>
+</header>
+
+<div class="app">
+  <!-- ==================== room ==================== -->
+  <section class="room">
+    <header class="room-head">
+      <span class="back">‹ All Sessions</span>
+      <h1>结算页价格计算</h1>
+      <span class="chip live new" data-t="① 会话不再终结"><i></i>ACTIVE · 进行中</span>
+      <span class="chip">📁 fable5</span>
+      <span class="chip">⎇ main</span>
+      <span class="spacer"></span>
+      <button class="archive new" data-t="⑤ 归档是唯一关门">归档会话</button>
+    </header>
+
+    <div class="timeline">
+      <div class="tl-inner">
+
+        <!-- chat turn: no separators, no milestones — just the conversation -->
+        <div class="msg user">
+          <span class="ava">你</span>
+          <div class="bubble">结算金额偶尔差一分钱，是哪里的问题？</div>
+        </div>
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="bubble">定位到了：客户端用 <code>toFixed(2)</code> 做四舍五入，浮点数在 .005 边界上会向下取。服务端是 BigDecimal，两边口径不一致。建议把计算收到服务端，客户端只展示。</div>
+        </div>
+
+        <!-- work turn: actions inline, settlement lives in the right rail -->
+        <div class="msg user">
+          <span class="ava">你</span>
+          <div class="bubble">行，把价格计算搬到服务端，客户端只展示。</div>
+        </div>
+        <div class="plan-static">✓ 计划已批准 · <b>服务端新增 pricing 接口，客户端改为展示（3 步）</b></div>
+        <div class="act-row"><span class="ic">✎</span><span>写入 <b class="mono">server/pricing.ts</b> <span class="diff">· <b>+64</b> <em>−0</em></span></span><time>12:09</time></div>
+        <div class="act-row"><span class="ic">✎</span><span>写入 <b class="mono">src/checkout/total.ts</b> <span class="diff">· <b>+31</b> <em>−48</em></span></span><time>12:11</time></div>
+        <div class="act-row ok"><span class="ic">✓</span><span><b>npm test — 143 通过 / 0 失败</b></span><time>12:12</time></div>
+        <div class="msg agent">
+          <span class="ava">C</span>
+          <div class="bubble">搬完了。金额计算全部走服务端 <code>pricing.ts</code>（分为单位的整数运算），客户端只格式化展示，一分钱误差的来源已移除。</div>
+        </div>
+
+        <!-- running turn: the user just keeps talking -->
+        <div class="msg user">
+          <span class="ava">你</span>
+          <div class="bubble">顺便把优惠券的计算也检查一下，逻辑应该在同一处。</div>
+        </div>
+        <div class="streaming">
+          <span class="ic" style="width:20px;height:20px;border:1px solid var(--border);border-radius:6px;display:grid;place-items:center;background:var(--bg-card)">⌕</span>
+          正在读取 <b class="mono" style="color:var(--fg)">src/checkout/coupon.ts</b>
+          <span class="dotty"><i></i><i></i><i></i></span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- composer: always Reply, never "starts a new Session" -->
+    <footer class="composer">
+      <div class="box new" data-t="② 永远是 Reply — Follow-up 开新会话已删除">
+        <div class="hint">回复 — 继续这场会话…</div>
+        <div class="row">
+          <span>@</span>
+          <span class="pills"><span>Read</span><span>Approve</span><span>Auto</span><span class="on">Full</span></span>
+          <span style="margin-left:8px">⚡ Claude Sonnet 5 · medium ▾</span>
+          <button class="send">↑</button>
+        </div>
+      </div>
+    </footer>
+  </section>
+
+  <!-- ==================== right rail ==================== -->
+  <aside class="rail">
+    <h3>📖 Summary</h3>
+
+    <div class="sec new" data-t="③ 账本在右栏：轮次列表 + 验收动作（复用 Review 通道）">
+      <span>轮次 · 3 · 1 轮待验收</span>
+      <div class="turn-list">
+        <button class="turn-item"><span class="st ans">1</span><span class="t">差一分钱的原因</span><small>Answered</small></button>
+        <div class="turn-item expanded" style="display:block;background:var(--amber-soft);border:1px solid #f0dcb6;border-radius:10px;padding:8px 10px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="st rev">2</span><span class="t">价格计算迁移到服务端</span><small><b>待审阅</b></small>
+          </div>
+          <div style="font-size:11px;color:var(--fg-muted);margin:6px 0 8px 24px">3 个文件 <span class="diff"><b style="color:var(--green)">+118</b> <em style="color:var(--red);font-style:normal">−57</em></span> · 验证通过 143/143</div>
+          <div style="display:flex;gap:6px;margin-left:24px">
+            <button class="btn-primary" style="padding:4px 11px;font-size:11.5px">审阅改动</button>
+            <button class="btn-ghost" style="padding:4px 10px;font-size:11.5px">接受</button>
+            <button class="btn-ghost new" data-t="④ 回滚按轮（最新已结轮逆序）" style="padding:4px 10px;font-size:11.5px" title="字节级恢复到本轮开始前">回滚此轮</button>
+          </div>
+        </div>
+        <button class="turn-item"><span class="st run">3</span><span class="t">检查优惠券计算</span><small>进行中</small></button>
+      </div>
+      <div class="quiet" style="margin-top:6px;font-size:10.5px">点击轮次 → Review 面板只看该轮的改动；未验收不影响继续对话</div>
+    </div>
+
+    <div class="sec">
+      <span>Changed · 本会话累计</span>
+      <div class="file"><span>✎</span><span class="mono">server/pricing.ts</span><span class="diff"><b>+64</b> <em>−0</em></span></div>
+      <div class="file"><span>✎</span><span class="mono">src/checkout/total.ts</span><span class="diff"><b>+31</b> <em>−48</em></span></div>
+      <div class="file"><span>✎</span><span class="mono">src/checkout/total.spec.ts</span><span class="diff"><b>+23</b> <em>−9</em></span></div>
+      <div class="quiet" style="margin-top:4px">全部来自第 2 轮 · 点击轮次可只看该轮</div>
+    </div>
+
+    <div class="sec">
+      <span>Verification</span>
+      <div class="quiet">✓ npm test · 143/143 · 第 2 轮 12:12</div>
+    </div>
+
+    <div class="sec new" data-t="⑤ 会话级动作">
+      <span>会话</span>
+      <div class="quiet">开始于 12:02 · 3 轮 · 1 轮待验收</div>
+      <div class="quiet" style="margin-top:6px">🗂 归档会话（对话只读，改动保持现状）<br>↩ 回滚全部（回到会话开始前）</div>
+    </div>
+  </aside>
+</div>
+</body>
+</html>

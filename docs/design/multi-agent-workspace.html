@@ -1,0 +1,1573 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>翻箱 · 多 Agent 并行工作台</title>
+  <style>
+    :root {
+      --paper: #f7f3eb;
+      --paper-2: #fbf9f4;
+      --paper-3: #f1ece2;
+      --ink: #292722;
+      --muted: #827d73;
+      --faint: #aba59a;
+      --line: #ded7cb;
+      --line-strong: #cbc2b5;
+      --rust: #c85636;
+      --rust-dark: #a64129;
+      --rust-wash: #f4e5dc;
+      --green: #2a7c54;
+      --green-wash: #e7f1e9;
+      --terminal: #242321;
+      --terminal-2: #2d2b28;
+      --terminal-ink: #dcd7cd;
+      --blue: #2868a0;
+      --violet: #7657a5;
+      --shadow: 0 18px 60px rgba(67, 52, 37, .14);
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      --serif: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body {
+      overflow: hidden;
+      color: var(--ink);
+      background: #e9e3d9;
+      font-family: var(--sans);
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid rgba(200, 86, 54, .42);
+      outline-offset: 2px;
+    }
+
+    .app {
+      width: 100vw;
+      height: 100vh;
+      min-width: 980px;
+      display: grid;
+      grid-template-rows: 58px minmax(0, 1fr) 32px;
+      background: var(--paper-2);
+    }
+
+    .topbar {
+      display: grid;
+      grid-template-columns: 260px minmax(340px, 1fr) 320px;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: rgba(251, 249, 244, .97);
+      z-index: 20;
+    }
+    .brand {
+      height: 100%;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 20px;
+      border-right: 1px solid var(--line);
+    }
+    .brand-mark {
+      width: 28px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      color: var(--rust);
+      border: 1.5px solid currentColor;
+      font: 700 15px/1 var(--serif);
+      transform: rotate(-1deg);
+    }
+    .brand-name {
+      font: 700 19px/1 var(--serif);
+      letter-spacing: .02em;
+    }
+    .page-name {
+      color: var(--muted);
+      font-size: 12px;
+      margin-left: 2px;
+    }
+    .top-search-wrap {
+      display: flex;
+      justify-content: center;
+      padding: 0 24px;
+    }
+    .top-search {
+      width: min(560px, 100%);
+      height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      background: #fffdf9;
+      color: var(--muted);
+    }
+    .search-icon { font-size: 15px; color: var(--faint); }
+    .shortcut { margin-left: auto; font: 11px var(--mono); color: var(--faint); }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+      padding: 0 14px;
+    }
+    .icon-button {
+      width: 32px;
+      height: 32px;
+      border: 0;
+      background: transparent;
+      display: inline-grid;
+      place-items: center;
+      color: #5f5b54;
+      cursor: pointer;
+    }
+    .icon-button:hover { background: var(--paper-3); }
+    .avatar {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: 1px solid rgba(200, 86, 54, .5);
+      color: var(--rust);
+      background: #fff8f2;
+      display: grid;
+      place-items: center;
+      font: 14px var(--serif);
+      margin-left: 3px;
+    }
+
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 270px minmax(440px, 1fr) 460px;
+    }
+    .rail, .editor, .sessions { min-width: 0; min-height: 0; }
+    .rail {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: #faf7f1;
+    }
+    .section-header {
+      height: 52px;
+      flex: 0 0 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .eyebrow {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      color: #615d56;
+    }
+    .text-action {
+      border: 0;
+      background: transparent;
+      color: var(--rust);
+      cursor: pointer;
+      padding: 6px 4px;
+      font-weight: 600;
+    }
+    .text-action:hover { color: var(--rust-dark); }
+    .roots {
+      flex: 1;
+      overflow: auto;
+      padding: 8px 7px 18px;
+    }
+    .root { margin-bottom: 9px; }
+    .root-head {
+      width: 100%;
+      height: 39px;
+      border: 0;
+      background: transparent;
+      display: grid;
+      grid-template-columns: 16px minmax(0, 1fr) auto auto;
+      align-items: center;
+      gap: 6px;
+      padding: 0 9px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .root-head:hover { background: #f2ede4; }
+    .chevron { color: var(--muted); transition: transform .18s ease; }
+    .root.collapsed .chevron { transform: rotate(-90deg); }
+    .root-title {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 650;
+    }
+    .root-path {
+      display: block;
+      margin-top: 2px;
+      color: var(--faint);
+      font: 10px var(--mono);
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .root-live {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(42, 124, 84, .08);
+    }
+    .kebab { color: var(--muted); }
+    .tree { padding: 0 0 2px 20px; }
+    .root.collapsed .tree { display: none; }
+    .folder-row, .file-row {
+      width: 100%;
+      height: 34px;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 7px;
+      padding: 0 9px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      color: #4d4942;
+      cursor: pointer;
+    }
+    .folder-row:hover, .file-row:hover { background: #f1ece3; }
+    .file-row.active {
+      background: #eee8de;
+      color: var(--ink);
+      box-shadow: inset 2px 0 0 var(--rust);
+    }
+    .node-icon {
+      color: var(--muted);
+      font: 10px var(--mono);
+      text-align: center;
+    }
+    .file-row[data-kind="md"] .node-icon { color: var(--rust); }
+    .file-row[data-kind="ts"] .node-icon { color: var(--blue); }
+    .file-row[data-kind="test"] .node-icon { color: #b15a35; }
+    .node-status { color: var(--faint); font: 10px var(--mono); }
+    .rail-foot {
+      height: 44px;
+      flex: 0 0 44px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      border-top: 1px solid var(--line);
+    }
+    .rail-foot .icon-button { width: 30px; height: 30px; }
+
+    .editor {
+      display: grid;
+      grid-template-rows: 42px 37px minmax(0, 1fr) 25px;
+      background: #fbfaf6;
+      border-right: 1px solid var(--line);
+    }
+    .tabs {
+      display: flex;
+      min-width: 0;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background: #f8f5ef;
+    }
+    .tab {
+      position: relative;
+      height: 42px;
+      flex: 0 1 250px;
+      min-width: 150px;
+      max-width: 270px;
+      border: 0;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      text-align: left;
+      cursor: pointer;
+      color: #615c54;
+      overflow: hidden;
+    }
+    .tab:hover { background: #fcfaf5; }
+    .tab.active {
+      color: var(--ink);
+      background: #fcfbf7;
+    }
+    .tab.active::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 2px;
+      background: var(--rust);
+    }
+    .tab-file {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .tab-root {
+      color: var(--faint);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .tab-close { margin-left: auto; color: var(--faint); }
+    .tab-add {
+      width: 40px;
+      flex: 0 0 40px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 16px;
+      color: var(--muted);
+      border-bottom: 1px solid #ebe5dc;
+      font-size: 11px;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .crumb-sep { color: var(--faint); }
+    .root-chip {
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 7px;
+      border: 1px solid var(--line);
+      background: #f8f4ec;
+      color: #635f58;
+      font-size: 10px;
+    }
+    .editor-stage {
+      position: relative;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .editor-view {
+      position: absolute;
+      inset: 0;
+      display: none;
+      overflow: auto;
+    }
+    .editor-view.active { display: block; }
+
+    .code-view {
+      background:
+        linear-gradient(to right, #f6f2eb 0 52px, transparent 52px),
+        #fcfbf8;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.78;
+      counter-reset: line;
+      padding: 16px 86px 70px 0;
+    }
+    .code-lines { margin: 0; padding: 0; list-style: none; }
+    .code-line {
+      position: relative;
+      min-height: 22px;
+      padding-left: 72px;
+      white-space: pre;
+    }
+    .code-line::before {
+      counter-increment: line;
+      content: counter(line);
+      position: absolute;
+      left: 0;
+      width: 42px;
+      color: #999288;
+      text-align: right;
+      padding-right: 10px;
+      border-right: 1px solid #eee8df;
+    }
+    .code-line.changed {
+      background: linear-gradient(90deg, rgba(200,86,54,.07), transparent 80%);
+      box-shadow: inset 3px 0 0 var(--rust);
+    }
+    .code-line.executing {
+      animation: lineFlash 1.1s ease-in-out infinite alternate;
+    }
+    @keyframes lineFlash {
+      from { background-color: rgba(42,124,84,.03); }
+      to { background-color: rgba(42,124,84,.13); }
+    }
+    .kw { color: #be3f2f; }
+    .type { color: var(--blue); }
+    .str { color: #b95d32; }
+    .fn { color: var(--violet); }
+    .comment { color: #8c9288; font-style: italic; }
+    .num { color: #8b4b9b; }
+    .minimap {
+      position: absolute;
+      top: 16px;
+      right: 12px;
+      width: 60px;
+      height: calc(100% - 34px);
+      opacity: .58;
+      background:
+        repeating-linear-gradient(to bottom,
+          transparent 0 3px,
+          rgba(38,104,160,.42) 3px 4px,
+          transparent 4px 7px,
+          rgba(190,63,47,.3) 7px 8px,
+          transparent 8px 11px);
+      mask-image: linear-gradient(to bottom, #000 0 86%, transparent);
+      border-left: 1px solid #ece6dd;
+    }
+
+    .markdown-view {
+      padding: 44px clamp(38px, 7vw, 96px) 100px;
+      background: #fdfbf7;
+    }
+    .md-kicker {
+      color: var(--rust);
+      font-size: 11px;
+      letter-spacing: .12em;
+      font-weight: 700;
+      margin-bottom: 18px;
+    }
+    .markdown-view h1 {
+      margin: 0 0 23px;
+      font: 500 clamp(30px, 3vw, 43px)/1.22 var(--serif);
+      max-width: 780px;
+    }
+    .markdown-view p {
+      margin: 0 0 15px;
+      max-width: 760px;
+      font: 16px/1.95 var(--serif);
+      color: #3e3a34;
+    }
+    .md-selection {
+      background: #f6e4d8;
+      border-bottom: 1px solid rgba(200,86,54,.45);
+    }
+    .md-caret {
+      display: inline-block;
+      width: 1px;
+      height: 1.12em;
+      background: var(--rust);
+      vertical-align: -.17em;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .md-callout {
+      max-width: 740px;
+      margin-top: 26px;
+      padding: 16px 18px;
+      border-left: 3px solid var(--rust);
+      background: #f5eee6;
+      color: #514b42;
+      line-height: 1.7;
+    }
+
+    .empty-view {
+      place-items: center;
+      color: var(--muted);
+      background: #fbfaf7;
+    }
+    .empty-view.active { display: grid; }
+    .empty-inner { text-align: center; }
+    .empty-icon { font-size: 32px; opacity: .55; margin-bottom: 12px; }
+    .empty-inner strong { display: block; color: var(--ink); margin-bottom: 6px; }
+
+    .editor-status {
+      display: flex;
+      align-items: center;
+      gap: 17px;
+      padding: 0 12px;
+      border-top: 1px solid var(--line);
+      background: #f8f5ef;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .editor-status .grow { flex: 1; }
+
+    .sessions {
+      display: grid;
+      grid-template-rows: 52px auto minmax(0, 1fr);
+      background: #f8f5ef;
+    }
+    .session-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 14px 0 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .session-head .eyebrow { margin-right: auto; }
+    .live-count {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #4e4a43;
+      font-size: 11px;
+    }
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px rgba(42,124,84,.08);
+    }
+    .primary-button {
+      height: 32px;
+      border: 1px solid var(--rust);
+      background: var(--rust);
+      color: #fff;
+      padding: 0 13px;
+      font-weight: 650;
+      cursor: pointer;
+      box-shadow: 0 3px 8px rgba(200,86,54,.15);
+    }
+    .primary-button:hover { background: var(--rust-dark); border-color: var(--rust-dark); }
+    .secondary-button {
+      height: 31px;
+      border: 1px solid var(--line-strong);
+      background: #fffdf8;
+      padding: 0 11px;
+      cursor: pointer;
+    }
+    .secondary-button:hover { background: var(--paper-3); }
+    .demo-button { color: var(--rust); border-color: rgba(200,86,54,.35); }
+
+    .session-list {
+      padding: 10px 10px 9px;
+      border-bottom: 1px solid var(--line);
+      background: #faf8f3;
+    }
+    .session-card {
+      position: relative;
+      width: 100%;
+      min-height: 116px;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr) auto;
+      grid-template-rows: 29px auto;
+      column-gap: 9px;
+      padding: 11px 12px 10px;
+      border: 1px solid var(--line);
+      background: #fdfbf7;
+      text-align: left;
+      cursor: pointer;
+    }
+    .session-card + .session-card { margin-top: 8px; }
+    .session-card:hover { border-color: var(--line-strong); }
+    .session-card.selected {
+      background: #f8eee7;
+      border-color: #dec7b9;
+      box-shadow: inset 3px 0 0 var(--rust);
+    }
+    .session-card.busy .agent-icon { animation: agentPulse .75s ease-in-out infinite alternate; }
+    @keyframes agentPulse { to { transform: scale(1.08); color: var(--rust); } }
+    .agent-icon {
+      width: 29px;
+      height: 29px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .agent-title {
+      align-self: center;
+      font-weight: 700;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .agent-live {
+      align-self: center;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--green);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+    .session-meta {
+      grid-column: 2 / 4;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 5px 12px;
+      margin-top: 6px;
+      min-width: 0;
+      color: #645f57;
+      font-size: 11px;
+    }
+    .meta-line {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .meta-key {
+      display: inline-block;
+      width: 43px;
+      color: #9a9389;
+    }
+    .change-count { color: var(--green); font-weight: 700; align-self: end; }
+    .follow-button {
+      position: absolute;
+      top: 10px;
+      right: 55px;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      background: #fffdf8;
+      color: #5e5951;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .follow-button:hover { border-color: var(--rust); color: var(--rust); }
+
+    .session-detail {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 43px minmax(0, 1fr);
+      background: #f7f4ed;
+    }
+    .detail-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px 0 16px;
+      border-bottom: 1px solid var(--line);
+      min-width: 0;
+    }
+    .detail-title {
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-weight: 650;
+    }
+    .detail-head .root-chip { margin-left: 2px; }
+    .detail-actions { display: flex; gap: 2px; margin-left: auto; }
+    .detail-actions .icon-button { width: 29px; height: 29px; }
+    .terminal {
+      position: relative;
+      min-height: 0;
+      overflow: auto;
+      margin: 0 7px 7px;
+      padding: 14px 15px 34px;
+      background: var(--terminal);
+      color: var(--terminal-ink);
+      font: 11px/1.62 var(--mono);
+      scrollbar-color: #6a655e transparent;
+    }
+    .terminal-line { white-space: pre-wrap; }
+    .prompt { color: #f0e6d6; }
+    .term-dim { color: #8d8981; }
+    .term-green { color: #83bd68; }
+    .term-rust { color: #e18a65; }
+    .term-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 1.05em;
+      background: #d7d0c5;
+      vertical-align: -.14em;
+      animation: blink 1s step-end infinite;
+    }
+    .terminal-badge {
+      position: sticky;
+      left: 0;
+      bottom: 0;
+      display: inline-block;
+      margin-top: 18px;
+      padding: 5px 7px;
+      background: #35322e;
+      color: #bdb6aa;
+      font-size: 10px;
+    }
+
+    .global-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 16px;
+      border-top: 1px solid var(--line);
+      background: #fbf9f4;
+      color: #777168;
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .status-accent {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--rust);
+    }
+    .status-sep { color: #c2bbb0; }
+    .global-status .right-status { margin-left: auto; display: flex; gap: 15px; }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 50px;
+      z-index: 80;
+      min-width: 310px;
+      max-width: 520px;
+      transform: translate(-50%, 18px);
+      opacity: 0;
+      pointer-events: none;
+      padding: 11px 14px;
+      border: 1px solid #d8c8ba;
+      background: #fffaf3;
+      color: #4b443c;
+      box-shadow: var(--shadow);
+      transition: .22s ease;
+      font-size: 12px;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast strong { color: var(--rust); margin-right: 7px; }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(45, 40, 34, .34);
+      backdrop-filter: blur(3px);
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      width: min(570px, calc(100vw - 42px));
+      max-height: calc(100vh - 54px);
+      overflow: auto;
+      background: #fcfaf5;
+      border: 1px solid #d5cdc0;
+      box-shadow: var(--shadow);
+    }
+    .modal-head {
+      height: 58px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .modal-head h2 {
+      margin: 0;
+      font: 600 19px var(--serif);
+    }
+    .modal-head p {
+      margin: 3px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+    }
+    .modal-head .icon-button { margin-left: auto; }
+    .modal-body { padding: 18px; }
+    .form-section + .form-section { margin-top: 18px; }
+    .form-label {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+    .form-hint { color: var(--muted); font-weight: 400; letter-spacing: 0; }
+    .provider-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .provider-option {
+      min-height: 54px;
+      display: grid;
+      grid-template-columns: 35px 1fr;
+      align-items: center;
+      gap: 9px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      background: #fffdf9;
+      text-align: left;
+      cursor: pointer;
+    }
+    .provider-option.selected {
+      border-color: var(--rust);
+      background: #faf0e9;
+      box-shadow: inset 2px 0 0 var(--rust);
+    }
+    .provider-option .agent-icon { grid-row: 1 / 3; }
+    .provider-option strong { align-self: end; }
+    .provider-option small { align-self: start; color: var(--muted); }
+    .task-input, .workspace-select {
+      width: 100%;
+      height: 39px;
+      border: 1px solid var(--line-strong);
+      background: #fffefa;
+      color: var(--ink);
+      padding: 0 11px;
+    }
+    .scope-list {
+      display: grid;
+      gap: 7px;
+    }
+    .scope-option {
+      width: 100%;
+      min-height: 53px;
+      display: grid;
+      grid-template-columns: 20px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      background: #fffdf9;
+      text-align: left;
+      cursor: pointer;
+    }
+    .scope-option.selected {
+      border-color: #d5a995;
+      background: #f9eee7;
+    }
+    .radio {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: 1px solid #aaa298;
+      display: grid;
+      place-items: center;
+    }
+    .scope-option.selected .radio::after {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--rust);
+    }
+    .scope-copy strong { display: block; font-size: 12px; }
+    .scope-copy small { display: block; margin-top: 3px; color: var(--muted); }
+    .recommended {
+      color: var(--rust);
+      font-size: 9px;
+      letter-spacing: .06em;
+      font-weight: 700;
+    }
+    .cwd-preview {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: 80px 1fr;
+      gap: 5px 10px;
+      padding: 11px 12px;
+      border-left: 2px solid var(--rust);
+      background: #f2ede5;
+      font: 10px/1.55 var(--mono);
+    }
+    .cwd-preview .key { color: var(--muted); }
+    .modal-foot {
+      min-height: 61px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 11px 18px;
+      border-top: 1px solid var(--line);
+      background: #f7f3eb;
+    }
+    .modal-foot-note {
+      margin-right: auto;
+      color: var(--muted);
+      font-size: 10px;
+      max-width: 270px;
+      line-height: 1.5;
+    }
+    .modal-foot .primary-button { min-width: 118px; }
+
+    .mobile-tabs { display: none; }
+
+    @media (max-width: 1220px) {
+      .app { min-width: 820px; }
+      .topbar { grid-template-columns: 230px minmax(280px, 1fr) 260px; }
+      .workspace { grid-template-columns: 230px minmax(390px, 1fr) 390px; }
+      .session-card { min-height: 111px; }
+      .follow-button { display: none; }
+    }
+
+    @media (max-width: 920px) {
+      body { overflow: auto; }
+      .app {
+        min-width: 0;
+        height: 100dvh;
+        grid-template-rows: 54px minmax(0, 1fr) 42px;
+      }
+      .topbar { grid-template-columns: 1fr auto; }
+      .brand { border-right: 0; padding: 0 14px; }
+      .brand-mark { width: 25px; height: 29px; }
+      .brand-name { font-size: 17px; }
+      .page-name { display: none; }
+      .top-search-wrap { display: none; }
+      .top-actions .icon-button:nth-child(-n+2) { display: none; }
+      .workspace { display: block; min-height: 0; }
+      .rail, .editor, .sessions {
+        width: 100%;
+        height: 100%;
+        display: none;
+        border-right: 0;
+      }
+      .workspace[data-mobile-panel="roots"] .rail { display: flex; }
+      .workspace[data-mobile-panel="editor"] .editor { display: grid; }
+      .workspace[data-mobile-panel="sessions"] .sessions { display: grid; }
+      .code-view { padding-right: 58px; }
+      .minimap { width: 36px; }
+      .global-status { display: none; }
+      .mobile-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border-top: 1px solid var(--line);
+        background: #fbf9f4;
+      }
+      .mobile-tab {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .mobile-tab.active {
+        color: var(--rust);
+        box-shadow: inset 0 2px 0 var(--rust);
+      }
+      .session-list { max-height: 245px; overflow: auto; }
+      .toast { bottom: 58px; min-width: min(330px, calc(100vw - 28px)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" aria-label="翻箱多 Agent 并行工作台原型">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">箱</span>
+        <span class="brand-name">翻箱 FanBox</span>
+        <span class="page-name">并行工作台</span>
+      </div>
+      <div class="top-search-wrap">
+        <div class="top-search" role="search">
+          <span class="search-icon">⌕</span>
+          <span>搜索文件、符号、会话…</span>
+          <span class="shortcut">⌘K</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button class="secondary-button demo-button" id="demoButton" type="button">▶ 演示并行</button>
+        <button class="icon-button" type="button" title="历史">↶</button>
+        <button class="icon-button" type="button" title="通知">♢</button>
+        <button class="icon-button" type="button" title="设置">⚙</button>
+        <span class="avatar">林</span>
+      </div>
+    </header>
+
+    <div class="workspace" id="workspace" data-mobile-panel="editor">
+      <aside class="rail" aria-label="工作区">
+        <div class="section-header">
+          <span class="eyebrow">WORKING SETS / 工作区</span>
+          <button class="text-action" id="mountButton" type="button">＋ 挂载</button>
+        </div>
+        <div class="roots">
+          <section class="root" data-root="writing">
+            <button class="root-head" type="button" aria-expanded="true">
+              <span class="chevron">⌄</span>
+              <span class="root-title">Writing launch<span class="root-path">~/Documents/ai-writing</span></span>
+              <span class="root-live" title="Claude 正在此工作区运行"></span>
+              <span class="kebab">⋮</span>
+            </button>
+            <div class="tree">
+              <div class="folder-row"><span class="node-icon">▱</span><span>assets</span><span></span></div>
+              <button class="file-row" type="button" data-file="product-note" data-kind="md">
+                <span class="node-icon">MD</span><span>product-note.md</span><span class="node-status">M</span>
+              </button>
+              <button class="file-row" type="button" data-file="cover" data-kind="image">
+                <span class="node-icon">▧</span><span>cover.png</span><span></span>
+              </button>
+            </div>
+          </section>
+
+          <section class="root" data-root="charter">
+            <button class="root-head" type="button" aria-expanded="true">
+              <span class="chevron">⌄</span>
+              <span class="root-title">Charter IDE<span class="root-path">~/git/charter</span></span>
+              <span class="root-live" title="Codex 正在此工作区运行"></span>
+              <span class="kebab">⋮</span>
+            </button>
+            <div class="tree">
+              <div class="folder-row"><span class="node-icon">▾</span><span>src</span><span></span></div>
+              <button class="file-row active" type="button" data-file="terminal" data-kind="ts">
+                <span class="node-icon">TSX</span><span>TerminalPanel.tsx</span><span class="node-status">M</span>
+              </button>
+              <button class="file-row" type="button" data-file="store" data-kind="ts">
+                <span class="node-icon">TS</span><span>externalStore.ts</span><span></span>
+              </button>
+              <button class="file-row" type="button" data-file="test" data-kind="test">
+                <span class="node-icon">TS</span><span>terminal.test.ts</span><span class="node-status">M</span>
+              </button>
+              <div class="folder-row"><span class="node-icon">▱</span><span>tests</span><span></span></div>
+              <div class="file-row"><span class="node-icon">{ }</span><span>package.json</span><span></span></div>
+              <div class="file-row"><span class="node-icon">MD</span><span>README.md</span><span></span></div>
+            </div>
+          </section>
+        </div>
+        <div class="rail-foot">
+          <button class="icon-button" type="button" title="布局">▥</button>
+          <button class="icon-button" type="button" title="工作区设置">⚙</button>
+        </div>
+      </aside>
+
+      <section class="editor" aria-label="编辑器">
+        <div class="tabs" role="tablist">
+          <button class="tab" type="button" data-file="product-note" role="tab" aria-selected="false">
+            <span class="node-icon">MD</span>
+            <span class="tab-file">product-note.md</span>
+            <span class="tab-root">Writing</span>
+            <span class="tab-close">×</span>
+          </button>
+          <button class="tab active" type="button" data-file="terminal" role="tab" aria-selected="true">
+            <span class="node-icon">TSX</span>
+            <span class="tab-file">TerminalPanel.tsx</span>
+            <span class="tab-root">Charter</span>
+            <span class="tab-close">×</span>
+          </button>
+          <button class="tab-add" type="button" title="打开文件">＋</button>
+        </div>
+        <div class="breadcrumb" id="breadcrumb">
+          <span class="root-chip">Charter IDE</span>
+          <span class="crumb-sep">›</span><span>src</span>
+          <span class="crumb-sep">›</span><span>TerminalPanel.tsx</span>
+        </div>
+        <div class="editor-stage">
+          <div class="editor-view code-view active" id="view-terminal" data-view="terminal">
+            <ol class="code-lines">
+              <li class="code-line"><span class="kw">import</span> React, { useEffect, useRef, useState } <span class="kw">from</span> <span class="str">'react'</span>;</li>
+              <li class="code-line"><span class="kw">import</span> { Terminal } <span class="kw">from</span> <span class="str">'@xterm/xterm'</span>;</li>
+              <li class="code-line"><span class="kw">import</span> { FitAddon } <span class="kw">from</span> <span class="str">'@xterm/addon-fit'</span>;</li>
+              <li class="code-line"><span class="kw">import</span> { useTerminalStore } <span class="kw">from</span> <span class="str">'./externalStore'</span>;</li>
+              <li class="code-line"> </li>
+              <li class="code-line"><span class="kw">export interface</span> <span class="type">TerminalPanelProps</span> {</li>
+              <li class="code-line">  id: <span class="type">string</span>;</li>
+              <li class="code-line">  cwd: <span class="type">string</span>;</li>
+              <li class="code-line">  sessionId: <span class="type">string</span>;</li>
+              <li class="code-line">  onClose?: () =&gt; <span class="type">void</span>;</li>
+              <li class="code-line">}</li>
+              <li class="code-line"> </li>
+              <li class="code-line"><span class="kw">export const</span> <span class="fn">TerminalPanel</span>: React.FC&lt;<span class="type">TerminalPanelProps</span>&gt; = ({</li>
+              <li class="code-line">  id, cwd, sessionId, onClose,</li>
+              <li class="code-line">}) =&gt; {</li>
+              <li class="code-line">  <span class="kw">const</span> containerRef = useRef&lt;<span class="type">HTMLDivElement</span>&gt;(<span class="kw">null</span>);</li>
+              <li class="code-line">  <span class="kw">const</span> termRef = useRef&lt;<span class="type">Terminal</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>);</li>
+              <li class="code-line">  <span class="kw">const</span> fitRef = useRef&lt;<span class="type">FitAddon</span> | <span class="kw">null</span>&gt;(<span class="kw">null</span>);</li>
+              <li class="code-line"> </li>
+              <li class="code-line">  <span class="kw">const</span> { attach, detach, send } = <span class="fn">useTerminalStore</span>();</li>
+              <li class="code-line">  <span class="kw">const</span> [initialized, setInitialized] = useState(<span class="kw">false</span>);</li>
+              <li class="code-line"> </li>
+              <li class="code-line">  useEffect(() =&gt; {</li>
+              <li class="code-line">    <span class="kw">if</span> (!containerRef.current) <span class="kw">return</span>;</li>
+              <li class="code-line changed executing">    <span class="kw">const</span> term = <span class="kw">new</span> <span class="type">Terminal</span>({ cursorBlink: <span class="kw">true</span>, fontSize: <span class="num">13</span> });</li>
+              <li class="code-line changed">    <span class="kw">const</span> fit = <span class="kw">new</span> <span class="type">FitAddon</span>();</li>
+              <li class="code-line">    term.loadAddon(fit);</li>
+              <li class="code-line changed">    attach(sessionId, term, { cwd });</li>
+              <li class="code-line">    term.open(containerRef.current);</li>
+              <li class="code-line">    fit.fit();</li>
+              <li class="code-line">    setInitialized(<span class="kw">true</span>);</li>
+              <li class="code-line"> </li>
+              <li class="code-line">    <span class="kw">return</span> () =&gt; {</li>
+              <li class="code-line">      detach(sessionId);</li>
+              <li class="code-line">      term.dispose();</li>
+              <li class="code-line">    };</li>
+              <li class="code-line">  }, [attach, cwd, detach, sessionId]);</li>
+              <li class="code-line"> </li>
+              <li class="code-line">  <span class="kw">return</span> &lt;div ref={containerRef} data-session={sessionId} /&gt;;</li>
+              <li class="code-line">};</li>
+            </ol>
+            <div class="minimap" aria-hidden="true"></div>
+          </div>
+
+          <article class="editor-view markdown-view" id="view-product-note" data-view="product-note">
+            <div class="md-kicker">PRODUCT NOTE · DRAFT 03</div>
+            <h1>让模型并行工作，而不是让工作区围着模型转</h1>
+            <p>真正自然的工作台，不应该要求你先做一个影响全局的选择：选 Claude，就失去 Codex；切到另一个目录，就把刚才打开的上下文全部带走。</p>
+            <p><span class="md-selection">编辑器负责承载你正在看的材料，会话负责声明 Agent 能够操作的边界。</span> 两者可以互相关联，但不应该绑定成同一个状态。</p>
+            <p>因此，每个 Agent 都有独立的 working set、cwd、权限和任务历史。Claude 可以在发布稿里润色句子，Codex 同时在另一个仓库里跑测试。你看到哪，跟随哪，但其他任务不会被暂停。<span class="md-caret"></span></p>
+            <div class="md-callout">当前由 Claude Code 编辑 · cwd: ~/Documents/ai-writing · 本会话变更 +12</div>
+          </article>
+
+          <div class="editor-view empty-view" id="view-cover" data-view="cover">
+            <div class="empty-inner"><div class="empty-icon">▧</div><strong>cover.png</strong><span>图片标注工具将在这里打开</span></div>
+          </div>
+          <div class="editor-view empty-view" id="view-store" data-view="store">
+            <div class="empty-inner"><div class="empty-icon">{ }</div><strong>externalStore.ts</strong><span>Monaco 代码编辑器</span></div>
+          </div>
+          <div class="editor-view empty-view" id="view-test" data-view="test">
+            <div class="empty-inner"><div class="empty-icon">✓</div><strong>terminal.test.ts</strong><span>Codex 正在运行此测试</span></div>
+          </div>
+        </div>
+        <div class="editor-status">
+          <span id="languageStatus">TypeScript React</span>
+          <span class="grow"></span>
+          <span id="positionStatus">Ln 25, Col 5</span>
+          <span>Spaces: 2</span><span>UTF-8</span><span>LF</span>
+        </div>
+      </section>
+
+      <aside class="sessions" aria-label="Agent 会话">
+        <div class="session-head">
+          <span class="eyebrow">SESSIONS / 会话</span>
+          <span class="live-count"><span id="liveCount">2 live</span><span class="live-dot"></span></span>
+          <button class="primary-button" id="newSessionButton" type="button">＋ 新会话</button>
+        </div>
+        <div class="session-list" id="sessionList">
+          <article class="session-card" data-session="claude" tabindex="0" role="button" aria-label="查看 Claude Code 会话">
+            <span class="agent-icon">C</span>
+            <span class="agent-title">Claude Code</span>
+            <span class="agent-live"><span class="live-dot"></span>LIVE</span>
+            <button class="follow-button" type="button" data-follow="claude">跟随</button>
+            <div class="session-meta">
+              <span class="meta-line"><span class="meta-key">任务</span>润色发布稿</span>
+              <span></span>
+              <span class="meta-line"><span class="meta-key">工作区</span>Writing launch</span>
+              <span></span>
+              <span class="meta-line"><span class="meta-key">cwd</span>~/Documents/ai-writing</span>
+              <span></span>
+              <span class="meta-line session-activity"><span class="meta-key">正在编辑</span>product-note.md</span>
+              <span class="change-count">+12</span>
+            </div>
+          </article>
+
+          <article class="session-card selected" data-session="codex" tabindex="0" role="button" aria-label="查看 Codex 会话">
+            <span class="agent-icon">O</span>
+            <span class="agent-title">Codex</span>
+            <span class="agent-live"><span class="live-dot"></span>LIVE</span>
+            <button class="follow-button" type="button" data-follow="codex">跟随</button>
+            <div class="session-meta">
+              <span class="meta-line"><span class="meta-key">任务</span>修复终端并发</span>
+              <span></span>
+              <span class="meta-line"><span class="meta-key">工作区</span>Charter IDE</span>
+              <span></span>
+              <span class="meta-line"><span class="meta-key">cwd</span>~/git/charter</span>
+              <span></span>
+              <span class="meta-line session-activity"><span class="meta-key">正在运行</span>terminal.test.ts</span>
+              <span class="change-count">+4</span>
+            </div>
+          </article>
+        </div>
+
+        <section class="session-detail">
+          <div class="detail-head">
+            <span class="detail-title" id="detailTitle">Codex · 修复终端并发</span>
+            <span class="root-chip" id="detailScope">Charter IDE</span>
+            <div class="detail-actions">
+              <button class="icon-button" id="detailFollow" type="button" title="在编辑器中跟随">↗</button>
+              <button class="icon-button" type="button" title="暂停">Ⅱ</button>
+              <button class="icon-button" type="button" title="更多">⋮</button>
+            </div>
+          </div>
+          <div class="terminal" id="terminal">
+            <div id="terminalCodex">
+              <div class="terminal-line"><span class="prompt">$</span> pnpm test terminal.test.ts</div>
+              <div class="terminal-line term-dim">&gt; charter@0.1.0 test ~/git/charter</div>
+              <div class="terminal-line term-dim">&gt; vitest run terminal.test.ts</div>
+              <div class="terminal-line"> </div>
+              <div class="terminal-line"><span class="term-green">RUN</span>  v1.5.0  ~/git/charter</div>
+              <div class="terminal-line">  <span class="term-green">✓</span> tests/terminal.test.ts (7)</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> spawns process and captures output</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> handles rapid input without dropping</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> emits data in correct order</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> resizes terminal on container change</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> cleans up on unmount</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> isolates sessions</div>
+              <div class="terminal-line">    <span class="term-green">✓</span> supports concurrent terminals</div>
+              <div class="terminal-line"> </div>
+              <div class="terminal-line"><span class="term-green">Test Files  1 passed</span> (1)</div>
+              <div class="terminal-line"><span class="term-green">Tests       7 passed</span> (7)</div>
+              <div class="terminal-line"><span class="term-green">Time        512ms</span></div>
+              <div class="terminal-line"> </div>
+              <div class="terminal-line"><span class="term-rust">✦</span> Done in 0.98s. <span class="term-cursor"></span></div>
+              <span class="terminal-badge">cwd ~/git/charter · session isolated</span>
+            </div>
+            <div id="terminalClaude" hidden>
+              <div class="terminal-line"><span class="prompt">$</span> claude "润色发布稿，保持作者语气"</div>
+              <div class="terminal-line term-dim">Working in ~/Documents/ai-writing</div>
+              <div class="terminal-line"> </div>
+              <div class="terminal-line"><span class="term-rust">●</span> Read product-note.md</div>
+              <div class="terminal-line"><span class="term-rust">●</span> Reworked opening for clearer contrast</div>
+              <div class="terminal-line"><span class="term-rust">●</span> Kept product terms: working set, cwd, session</div>
+              <div class="terminal-line"><span class="term-green">✓</span> Wrote 12 line changes</div>
+              <div class="terminal-line"> </div>
+              <div class="terminal-line">Waiting for review… <span class="term-cursor"></span></div>
+              <span class="terminal-badge">cwd ~/Documents/ai-writing · session isolated</span>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="global-status">
+      <span class="status-accent"></span>
+      <span id="workspaceCount">2 workspaces</span><span class="status-sep">·</span>
+      <span id="agentCount">2 agents live</span><span class="status-sep">·</span>
+      <span>changes isolated by session</span>
+      <span class="right-status"><span>⌘ main</span><span>同步完成</span><span>UTF-8</span><span>本地优先</span></span>
+    </footer>
+
+    <nav class="mobile-tabs" aria-label="移动端面板">
+      <button class="mobile-tab" type="button" data-panel="roots">工作区</button>
+      <button class="mobile-tab active" type="button" data-panel="editor">编辑器</button>
+      <button class="mobile-tab" type="button" data-panel="sessions">会话 · 2</button>
+    </nav>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <div class="modal-backdrop" id="newSessionModal" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header class="modal-head">
+        <div>
+          <h2 id="modalTitle">新建 Agent 会话</h2>
+          <p>Agent 与作用域一起创建，不改变编辑器当前打开的工作区。</p>
+        </div>
+        <button class="icon-button" id="closeModal" type="button" aria-label="关闭">×</button>
+      </header>
+      <div class="modal-body">
+        <section class="form-section">
+          <div class="form-label">01 · 选择 Agent <span class="form-hint">每个会话独立</span></div>
+          <div class="provider-grid" id="providerGrid">
+            <button class="provider-option" type="button" data-provider="Claude Code">
+              <span class="agent-icon">C</span><strong>Claude Code</strong><small>长文本与复杂任务</small>
+            </button>
+            <button class="provider-option selected" type="button" data-provider="Codex">
+              <span class="agent-icon">O</span><strong>Codex</strong><small>代码实现与验证</small>
+            </button>
+          </div>
+        </section>
+
+        <section class="form-section">
+          <label class="form-label" for="taskInput">02 · 任务</label>
+          <input class="task-input" id="taskInput" value="检查编辑器跨目录状态" placeholder="告诉 Agent 要做什么">
+        </section>
+
+        <section class="form-section">
+          <div class="form-label">03 · 执行作用域 <span class="form-hint">只约束这个会话</span></div>
+          <div class="scope-list" id="scopeList">
+            <button class="scope-option selected" type="button" data-scope="active">
+              <span class="radio"></span>
+              <span class="scope-copy"><strong>从当前文件推断</strong><small>TerminalPanel.tsx → Charter IDE</small></span>
+              <span class="recommended">推荐</span>
+            </button>
+            <button class="scope-option" type="button" data-scope="writing">
+              <span class="radio"></span>
+              <span class="scope-copy"><strong>Writing launch</strong><small>~/Documents/ai-writing</small></span>
+              <span></span>
+            </button>
+            <button class="scope-option" type="button" data-scope="charter">
+              <span class="radio"></span>
+              <span class="scope-copy"><strong>Charter IDE</strong><small>~/git/charter</small></span>
+              <span></span>
+            </button>
+            <button class="scope-option" type="button" data-scope="scratch">
+              <span class="radio"></span>
+              <span class="scope-copy"><strong>临时草稿</strong><small>创建隔离的 scratch 工作区</small></span>
+              <span></span>
+            </button>
+          </div>
+          <div class="cwd-preview" aria-live="polite">
+            <span class="key">primary cwd</span><span id="cwdValue">~/git/charter</span>
+            <span class="key">working set</span><span id="workingSetValue">Charter IDE · 当前文件自动推断</span>
+            <span class="key">permissions</span><span>write inside scope · ask outside</span>
+          </div>
+        </section>
+      </div>
+      <footer class="modal-foot">
+        <span class="modal-foot-note">编辑器保持 2 个工作区和现有标签页不变；新会话只获得上面的执行边界。</span>
+        <button class="secondary-button" id="cancelModal" type="button">取消</button>
+        <button class="primary-button" id="startSession" type="button">启动 Codex</button>
+      </footer>
+    </section>
+  </div>
+
+  <script>
+    (function () {
+      var workspace = document.getElementById('workspace');
+      var toast = document.getElementById('toast');
+      var toastTimer;
+      var activeFile = 'terminal';
+      var selectedSession = 'codex';
+      var demoRunning = false;
+      var sessionNumber = 2;
+
+      var fileData = {
+        'terminal': {
+          root: 'Charter IDE',
+          breadcrumb: ['Charter IDE', 'src', 'TerminalPanel.tsx'],
+          language: 'TypeScript React',
+          position: 'Ln 25, Col 5'
+        },
+        'product-note': {
+          root: 'Writing launch',
+          breadcrumb: ['Writing launch', 'product-note.md'],
+          language: 'Markdown · 所见即所得',
+          position: '386 字'
+        },
+        'cover': {
+          root: 'Writing launch',
+          breadcrumb: ['Writing launch', 'cover.png'],
+          language: 'Image',
+          position: '1600 × 900'
+        },
+        'store': {
+          root: 'Charter IDE',
+          breadcrumb: ['Charter IDE', 'src', 'externalStore.ts'],
+          language: 'TypeScript',
+          position: 'Ln 1, Col 1'
+        },
+        'test': {
+          root: 'Charter IDE',
+          breadcrumb: ['Charter IDE', 'tests', 'terminal.test.ts'],
+          language: 'TypeScript',
+          position: 'Ln 1, Col 1'
+        }
+      };
+
+      var sessions = {
+        claude: {
+          title: 'Claude Code · 润色发布稿',
+          scope: 'Writing launch',
+          file: 'product-note'
+        },
+        codex: {
+          title: 'Codex · 修复终端并发',
+          scope: 'Charter IDE',
+          file: 'terminal'
+        }
+      };
+
+      function showToast(step, message) {
+        window.clearTimeout(toastTimer);
+        toast.innerHTML = '<strong>' + step + '</strong>' + message;
+        toast.classList.add('show');
+        toastTimer = window.setTimeout(function () {
+          toast.classList.remove('show');
+        }, 2300);
+      }
+
+      function setFile(file) {
+        if (!fileData[file]) return;
+        activeFile = file;
+        document.querySelectorAll('.editor-view').forEach(function (view) {
+          view.classList.toggle('active', view.dataset.view === file);
+        });
+        document.querySelectorAll('.file-row[data-file]').forEach(function (row) {
+          row.classList.toggle('active', row.dataset.file === file);
+        });
+        document.querySelectorAll('.tab[data-file]').forEach(function (tab) {
+          var selected = tab.dataset.file === file;
+          tab.classList.toggle('active', selected);
+          tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+        });
+
+        var data = fileData[file];
+        var breadcrumb = document.getElementById('breadcrumb');
+        breadcrumb.innerHTML = data.breadcrumb.map(function (item, index) {
+          if (index === 0) return '<span class="root-chip">' + item + '</span>';
+          return '<span class="crumb-sep">›</span><span>' + item + '</span>';
+        }).join('');
+        document.getElementById('languageStatus').textContent = data.language;
+        document.getElementById('positionStatus').textContent = data.position;
+      }
+
+      function setSession(session, follow) {
+        if (!sessions[session]) return;
+        selectedSession = session;
+        document.querySelectorAll('.session-card').forEach(function (card) {
+          card.classList.toggle('selected', card.dataset.session === session);
+        });
+        document.getElementById('detailTitle').textContent = sessions[session].title;
+        document.getElementById('detailScope').textContent = sessions[session].scope;
+        document.getElementById('terminalCodex').hidden = session !== 'codex';
+        document.getElementById('terminalClaude').hidden = session !== 'claude';
+        document.getElementById('terminal').scrollTop = 0;
+        if (follow) {
+          setFile(sessions[session].file);
+          if (window.innerWidth <= 920) {
+            setMobilePanel('editor');
+          }
+        }
+      }
+
+      function setBusy(session, busy, activity) {
+        var card = document.querySelector('.session-card[data-session="' + session + '"]');
+        if (!card) return;
+        card.classList.toggle('busy', busy);
+        if (activity) {
+          card.querySelector('.session-activity').innerHTML = activity;
+        }
+      }
+
+      function setMobilePanel(panel) {
+        workspace.dataset.mobilePanel = panel;
+        document.querySelectorAll('.mobile-tab').forEach(function (tab) {
+          tab.classList.toggle('active', tab.dataset.panel === panel);
+        });
+      }
+
+      document.querySelectorAll('.root-head').forEach(function (head) {
+        head.addEventListener('click', function () {
+          var root = head.closest('.root');
+          var collapsed = root.classList.toggle('collapsed');
+          head.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        });
+      });
+
+      document.querySelectorAll('[data-file]').forEach(function (element) {
+        if (element.classList.contains('tab') || element.classList.contains('file-row')) {
+          element.addEventListener('click', function () {
+            setFile(element.dataset.file);
+          });
+        }
+      });
+
+      document.querySelectorAll('.session-card').forEach(function (card) {
+        card.addEventListener('click', function (event) {
+          if (event.target.closest('.follow-button')) return;
+          setSession(card.dataset.session, false);
+        });
+        card.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setSession(card.dataset.session, false);
+          }
+        });
+      });
+
+      document.querySelectorAll('[data-follow]').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+          event.stopPropagation();
+          var session = button.dataset.follow;
+          setSession(session, true);
+          showToast('跟随', sessions[session].scope + ' 的活动文件已在中间打开；其他会话继续运行。');
+        });
+      });
+
+      document.getElementById('detailFollow').addEventListener('click', function () {
+        setSession(selectedSession, true);
+        showToast('跟随', '只切换编辑器焦点，不切换全局目录。');
+      });
+
+      document.querySelectorAll('.mobile-tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          setMobilePanel(tab.dataset.panel);
+        });
+      });
+
+      var modal = document.getElementById('newSessionModal');
+      var provider = 'Codex';
+      var scope = 'active';
+      var scopeData = {
+        active: ['~/git/charter', 'Charter IDE · 当前文件自动推断'],
+        writing: ['~/Documents/ai-writing', 'Writing launch'],
+        charter: ['~/git/charter', 'Charter IDE'],
+        scratch: ['~/.fanbox/scratch/session-new', '临时草稿 · 自动清理']
+      };
+
+      function openModal() {
+        modal.classList.add('open');
+        modal.setAttribute('aria-hidden', 'false');
+        window.setTimeout(function () { document.getElementById('taskInput').focus(); }, 30);
+      }
+      function closeModal() {
+        modal.classList.remove('open');
+        modal.setAttribute('aria-hidden', 'true');
+      }
+      document.getElementById('newSessionButton').addEventListener('click', openModal);
+      document.getElementById('mountButton').addEventListener('click', function () {
+        openModal();
+        showToast('作用域', '挂载目录可以复用，但目录的写入权限仍按会话分配。');
+      });
+      document.getElementById('closeModal').addEventListener('click', closeModal);
+      document.getElementById('cancelModal').addEventListener('click', closeModal);
+      modal.addEventListener('click', function (event) {
+        if (event.target === modal) closeModal();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && modal.classList.contains('open')) closeModal();
+      });
+
+      document.querySelectorAll('.provider-option').forEach(function (option) {
+        option.addEventListener('click', function () {
+          provider = option.dataset.provider;
+          document.querySelectorAll('.provider-option').forEach(function (item) {
+            item.classList.toggle('selected', item === option);
+          });
+          document.getElementById('startSession').textContent = '启动 ' + provider;
+        });
+      });
+
+      document.querySelectorAll('.scope-option').forEach(function (option) {
+        option.addEventListener('click', function () {
+          scope = option.dataset.scope;
+          document.querySelectorAll('.scope-option').forEach(function (item) {
+            item.classList.toggle('selected', item === option);
+          });
+          document.getElementById('cwdValue').textContent = scopeData[scope][0];
+          document.getElementById('workingSetValue').textContent = scopeData[scope][1];
+        });
+      });
+
+      document.getElementById('startSession').addEventListener('click', function () {
+        sessionNumber += 1;
+        document.getElementById('liveCount').textContent = sessionNumber + ' live';
+        document.getElementById('agentCount').textContent = sessionNumber + ' agents live';
+        document.querySelector('.mobile-tab[data-panel="sessions"]').textContent = '会话 · ' + sessionNumber;
+        closeModal();
+        showToast('已启动', provider + ' 使用独立 cwd ' + scopeData[scope][0] + '；现有两个会话未受影响。');
+      });
+
+      document.getElementById('demoButton').addEventListener('click', function () {
+        if (demoRunning) return;
+        demoRunning = true;
+        var button = document.getElementById('demoButton');
+        button.textContent = '1 / 4 · 同时启动';
+        setBusy('claude', true, '<span class="meta-key">正在编辑</span>product-note.md · 第 2 段');
+        setBusy('codex', true, '<span class="meta-key">正在运行</span>terminal.test.ts · 7 tests');
+        showToast('步骤 1', 'Claude 与 Codex 同时运行，各自使用自己的 cwd。');
+
+        window.setTimeout(function () {
+          button.textContent = '2 / 4 · 跟随 Codex';
+          setSession('codex', true);
+          showToast('步骤 2', '跟随 Codex 只打开 Charter 文件，不会暂停 Claude。');
+        }, 2300);
+
+        window.setTimeout(function () {
+          button.textContent = '3 / 4 · 跟随 Claude';
+          setSession('claude', true);
+          showToast('步骤 3', '编辑器切到 Writing；Codex 的测试会话仍然 live。');
+        }, 4700);
+
+        window.setTimeout(function () {
+          button.textContent = '4 / 4 · 新建会话';
+          openModal();
+          showToast('步骤 4', '新会话才选择 Agent 与执行作用域；默认从当前文件推断。');
+        }, 7100);
+
+        window.setTimeout(function () {
+          setBusy('claude', false);
+          setBusy('codex', false);
+          button.textContent = '↻ 再演示一次';
+          demoRunning = false;
+        }, 9800);
+      });
+    })();
+  </script>
+</body>
+</html>

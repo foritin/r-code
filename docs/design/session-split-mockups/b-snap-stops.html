@@ -1,0 +1,213 @@
+<!doctype html>
+<!-- Charter session split · Variant B discussion mock. NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 分栏方案 B：磁吸档位</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      .divider {
+        cursor: col-resize;
+      }
+
+      .divider:hover::before,
+      .divider.dragging::before {
+        left: 4px;
+        width: 3px;
+        background: var(--border-strong);
+      }
+
+      .divider.dragging::before {
+        background: var(--info);
+      }
+
+      .stops {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        gap: 24px;
+        padding: 12px 0;
+        border-radius: 999px;
+        background: var(--card);
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 2px 8px rgba(62, 40, 25, 0.14);
+        width: 13px;
+        justify-items: center;
+        opacity: 0.55;
+        transition: opacity 120ms ease;
+      }
+
+      .divider:hover .stops,
+      .divider.dragging .stops,
+      .divider:focus-visible .stops {
+        opacity: 1;
+      }
+
+      .stops button {
+        position: relative;
+        width: 9px;
+        height: 9px;
+        padding: 0;
+        border: 1px solid var(--border-strong);
+        border-radius: 50%;
+        background: var(--editor);
+        transition:
+          transform 120ms ease,
+          background 120ms ease;
+      }
+
+      .stops button.on {
+        border-color: var(--bark-edge);
+        background: var(--bark);
+      }
+
+      .stops button.near {
+        transform: scale(1.7);
+        border-color: var(--info);
+      }
+
+      .stops button:hover {
+        transform: scale(1.5);
+      }
+
+      .stops button::after {
+        position: absolute;
+        top: 50%;
+        right: 16px;
+        padding: 4px 9px;
+        border: 1px solid var(--bark-edge);
+        border-radius: 6px;
+        background: var(--bark);
+        color: var(--bark-fg);
+        font: 10px var(--font-sans);
+        white-space: nowrap;
+        content: attr(data-label);
+        opacity: 0;
+        transform: translateY(-50%);
+        transition: opacity 120ms ease;
+        pointer-events: none;
+      }
+
+      .stops button:hover::after,
+      .stops button.near::after {
+        opacity: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="mock-shell">
+      <nav class="mock-controls" aria-label="Mock 说明">
+        <strong>方案 B · 磁吸档位</strong>
+        <span class="explain">三个有名字的停靠位：对话优先 62 / 均衡 50 / 工具优先 38 · 拖动自动吸附 · 点圆点直达 · 双击轮换</span>
+        <span class="spacer"></span>
+        <span class="ratio-readout" id="ratio">对话优先 · 62% / 38%</span>
+      </nav>
+
+      <section class="app-window">
+        <aside class="session-rail">
+          <button class="new-session" type="button">＋ New Session</button>
+          <div class="rail-label"><span>fable5</span><small>3</small></div>
+          <div class="session-row active">
+            <i>✳</i>
+            <span><strong>Session 4ed53b65-…fdf4c7</strong><span>claude terminal output · 23m</span></span>
+          </div>
+          <div class="session-row">
+            <i>✳</i>
+            <span><strong>Session 4ed53b65-…</strong><span>Answered · no file changes</span></span>
+          </div>
+          <div class="rail-label"><span>charter</span><small>1</small></div>
+          <div class="session-row">
+            <i>π</i>
+            <span><strong>hi</strong><span>Answered · no file changes</span></span>
+          </div>
+        </aside>
+
+        <section class="split-zone" id="split-zone">
+          <section class="pane pane-main" id="pane-main" aria-label="Session conversation">
+            <header class="session-head-mini">
+              <b>✳ claude</b><span class="ext">EXT · unmanaged</span><span class="live">LIVE · following</span>
+            </header>
+            <div class="terminal-block">有序列表：
+1. 有序列表项一
+2. 有序列表项二
+渲染为：
+1. 有序列表项一
+2. 有序列表项二
+
+区别：
+<table>
+  <tr><td>特性</td><td>无序列表</td><td>有序列表</td></tr>
+  <tr><td>符号</td><td>- / * / +</td><td>数字 + .</td></tr>
+  <tr><td>用途</td><td>项目无顺序关系</td><td>项目有先后顺序</td></tr>
+  <tr><td>视觉效果</td><td>圆点/方块</td><td>1. 2. 3. 等编号</td></tr>
+</table>
+这段代码就是在演示这两种最基本的列表格式。
+
+<span class="dim">✳ Cogitated for 6s</span>
+
+<span class="dim">※ recap: Created and polished a moon rotation HTML
+visualization with 3D effects, star field, and interactive
+controls.                                    56238 tokens</span>
+
+❯
+<span class="statusline"><span class="accent">[Haiku 4.5]</span> fable5 · master
+28% (55k/200k) · $0.31 · 105m38s
+▸▸ bypass permissions on (shift+tab to cycle)</span></div>
+            <div class="composer-mini">Reply — steer the agent or add context…</div>
+          </section>
+
+          <div
+            class="divider"
+            id="divider"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="在三个布局档位之间切换"
+            tabindex="0"
+            title="拖动吸附到最近档位 · 双击轮换"
+          >
+            <div class="stops" id="stops">
+              <button type="button" data-pct="62" data-label="对话优先 · 62 / 38"></button>
+              <button type="button" data-pct="50" data-label="均衡 · 50 / 50"></button>
+              <button type="button" data-pct="38" data-label="工具优先 · 38 / 62"></button>
+            </div>
+          </div>
+
+          <aside class="pane pane-tools" aria-label="Session tools">
+            <nav class="tool-tabs-mini">
+              <span>Summary</span><b>Diff</b><span>Preview</span><span>Terminal</span><span>Review</span>
+              <button class="expand" type="button" title="打开 Diff 时自动跳到「工具优先」档">Balance</button>
+            </nav>
+            <div class="tool-body-mini">
+              <h2>1 file changed</h2>
+              <div class="changed-file"><span>example.md</span><small>+36&nbsp; −0</small></div>
+              <div class="diff-card">
+                <header>example.md</header>
+                <div class="hunk-head">@@ -1,0 +1,36 @@</div>
+                <div class="diff-line"><span class="no">1</span><span class="mark">+</span><span class="code"><span class="md"># 示例文档</span></span></div>
+                <div class="diff-line"><span class="no">2</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">3</span><span class="mark">+</span><span class="code">这是一个简单的 Markdown 文件，展示常用语法。</span></div>
+                <div class="diff-line"><span class="no">4</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">5</span><span class="mark">+</span><span class="code"><span class="md">## 文本样式</span></span></div>
+                <div class="diff-line"><span class="no">6</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">7</span><span class="mark">+</span><span class="code">普通文字、**加粗**、*斜体*、`行内代码`、~~删除线~~。</span></div>
+                <div class="diff-line"><span class="no">8</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">9</span><span class="mark">+</span><span class="code"><span class="md">## 列表</span></span></div>
+                <div class="diff-line"><span class="no">10</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">11</span><span class="mark">+</span><span class="code">- 无序列表项一</span></div>
+                <div class="diff-line"><span class="no">12</span><span class="mark">+</span><span class="code">- 无序列表项二</span></div>
+                <div class="diff-line"><span class="no">13</span><span class="mark">+</span><span class="code"> </span></div>
+                <div class="diff-line"><span class="no">14</span><span class="mark">+</span><span class="code">1. 有序列表项一</span></div>
+                <div class="diff-line"><span class="no">15</span><span class="mark">+</span><span class="code">2. 有序列表项二</span></div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="split-chip" id="chip"><span id="chip-text">对话优先</span><b id="chip-sub">62 / 38</b></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="./b-snap-stops.js"></script>
+  </body>
+</html>

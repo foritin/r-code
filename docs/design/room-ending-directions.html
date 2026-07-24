@@ -1,0 +1,2124 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Task Room · 收尾呈现三方向（替代 Final report 卡片）</title>
+    <style>
+      /* ============ Studio tokens — ported 1:1 from src/styles/theme.css ============ */
+      :root {
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+      }
+      [data-theme='light'] {
+        color-scheme: light;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --fg-inverse: #fbfaf7;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --warning: #b06f10;
+        --success: #2f9e63;
+        --info: #3f7bd9;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --shadow-menu: 0 30px 90px rgba(30, 26, 18, 0.22);
+      }
+      [data-theme='dark'] {
+        color-scheme: dark;
+        --bg-app: #171614;
+        --bg-titlebar: #1d1c19;
+        --bg-sidebar: #1d1c19;
+        --bg-editor: #1a1917;
+        --bg-input: #24231f;
+        --bg-card: #21201c;
+        --bg-hover: #292823;
+        --bg-active: #31302a;
+        --border: #33312b;
+        --border-soft: #2a2924;
+        --border-strong: #4a473f;
+        --fg: #e8e6e0;
+        --fg-muted: #a29d92;
+        --fg-faint: #6e6a61;
+        --fg-inverse: #1a1917;
+        --accent: #e8e6e0;
+        --accent-fg: #1a1917;
+        --danger: #e06b62;
+        --warning: #d29a3a;
+        --success: #46b477;
+        --info: #6ca1e8;
+        --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.35);
+        --shadow-menu: 0 30px 90px rgba(0, 0, 0, 0.6);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        font-family: var(--font-ui);
+        font-size: 13px;
+        color: var(--fg);
+        background: var(--bg-app);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* ============ page chrome（说明层，不属于产品 UI） ============ */
+      .topbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 12px 22px 0;
+        min-width: 0;
+      }
+      .topbar h1 {
+        font-family: var(--font-display);
+        font-size: 17px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        margin: 0;
+        white-space: nowrap;
+      }
+      .vtabs {
+        display: flex;
+        gap: 4px;
+        background: var(--bg-hover);
+        border-radius: 999px;
+        padding: 3px;
+      }
+      .vtabs button {
+        border: none;
+        background: none;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--fg-muted);
+        padding: 5px 16px;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .vtabs button.on {
+        background: var(--bg-card);
+        color: var(--fg);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+      }
+      .rationale {
+        flex: 1;
+        min-width: 0;
+        font-size: 12px;
+        color: var(--fg-muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rationale b {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .topbtn {
+        flex: none;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg-muted);
+        font-family: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 5px 13px;
+        cursor: pointer;
+      }
+      .topbtn:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      .stage {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 14px 22px;
+      }
+
+      /* ============ app window mock ============ */
+      .window {
+        width: min(880px, 100%);
+        height: min(660px, 100%);
+        background: var(--bg-editor);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--shadow-menu);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .tr-head {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--bg-titlebar);
+      }
+      .lights {
+        display: flex;
+        gap: 7px;
+        margin-right: 4px;
+      }
+      .lights i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--bg-active);
+        border: 1px solid var(--border-strong);
+      }
+      .tr-title {
+        font-size: 13.5px;
+        font-weight: 620;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tr-proj {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 11px;
+        color: var(--fg-muted);
+        background: var(--bg-hover);
+        border-radius: 999px;
+        padding: 3px 10px;
+        white-space: nowrap;
+      }
+      .tr-sp {
+        flex: 1;
+      }
+      .tr-state {
+        font-size: 11px;
+        color: var(--fg-faint);
+        white-space: nowrap;
+      }
+      .tr-state.ready {
+        color: var(--success);
+        font-weight: 650;
+      }
+
+      .rt-scroll {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+        padding: 10px 22px 14px;
+        scrollbar-width: thin;
+      }
+      .rt-scroll > * {
+        max-width: 620px;
+      }
+
+      /* ============ timeline — mirrors src/styles/room.css ============ */
+      .rt-milestone {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 14px 0 10px;
+        font-size: 11.5px;
+        color: var(--fg-faint);
+        max-width: none;
+        animation: fadein 0.3s ease;
+      }
+      .rt-milestone::before {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--border-soft);
+      }
+      .rt-milestone b {
+        color: var(--fg-muted);
+        font-weight: 600;
+      }
+      .rt-ms-ic {
+        width: 14px;
+        text-align: center;
+        flex: none;
+      }
+      .rt-milestone.ok .rt-ms-ic {
+        color: var(--success);
+      }
+      .rt-ms-meta {
+        color: var(--fg-faint);
+      }
+      .rt-ms-line {
+        flex: 1;
+        height: 1px;
+        background: var(--border-soft);
+      }
+      @keyframes fadein {
+        from {
+          opacity: 0;
+          transform: translateY(4px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+
+      .rt-bubble {
+        padding: 2px 0;
+        margin: 0 0 14px;
+        font-size: 13px;
+        line-height: 1.7;
+        max-width: 82%;
+        animation: fadein 0.3s ease;
+      }
+      .rt-bubble.you {
+        background: var(--bg-hover);
+        border-radius: 13px 13px 4px 13px;
+        padding: 9px 13px;
+        margin-left: auto;
+        max-width: 78%;
+        line-height: 1.65;
+      }
+      .rt-text {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      .rt-text code {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        background: var(--bg-hover);
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      .rt-live-caret {
+        width: 6px;
+        height: 11px;
+        background: var(--info);
+        display: inline-block;
+        animation: pulse 0.9s infinite;
+        margin-left: 3px;
+        vertical-align: text-bottom;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      .rt-tool {
+        margin: 0 0 2px;
+        border-radius: 8px;
+        animation: fadein 0.25s ease;
+      }
+      .rt-tool-line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 4px 2px;
+        background: transparent;
+        border: none;
+        color: var(--fg-muted);
+        font-size: 12.3px;
+        font-family: inherit;
+        cursor: pointer;
+        text-align: left;
+        min-width: 0;
+      }
+      .rt-tool-verb {
+        flex: none;
+        color: var(--fg-faint);
+      }
+      .rt-tool-target {
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        color: var(--fg);
+        background: var(--bg-hover);
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        padding: 1px 7px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .rt-tool-target.link:hover {
+        background: var(--bg-active);
+        border-color: var(--border);
+      }
+      .rt-tool-sp {
+        flex: 1;
+      }
+      .rt-tool-stat {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        flex: none;
+      }
+      .plus {
+        color: var(--success);
+        font-style: normal;
+      }
+      .minus {
+        color: var(--danger);
+        font-style: normal;
+      }
+      .rt-tool-state {
+        flex: none;
+        font-size: 11px;
+        font-weight: 650;
+      }
+      .rt-tool-state.ok {
+        color: var(--success);
+      }
+      .rt-tool-state.err {
+        color: var(--danger);
+      }
+      .rt-tool-livechip {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 9.5px;
+        font-weight: 700;
+        color: var(--info);
+      }
+      .rt-tool-livechip i {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--info);
+        animation: pulse 1.1s infinite;
+      }
+      .rt-tool-detail {
+        padding: 2px 11px 9px;
+        border-top: 1px dashed var(--border-soft);
+      }
+      .rt-tool-detail pre {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        max-height: 140px;
+        overflow: auto;
+        white-space: pre-wrap;
+        margin: 4px 0 0;
+        color: var(--fg-muted);
+      }
+
+      .rt-note {
+        font-size: 11px;
+        color: var(--fg-faint);
+        padding: 1px 2px;
+        margin: 0 0 6px;
+        animation: fadein 0.25s ease;
+      }
+      .rt-note.ok {
+        color: var(--success);
+      }
+      .rt-usage {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        color: var(--fg-faint);
+        text-align: right;
+        margin: -2px 0 8px;
+        animation: fadein 0.25s ease;
+      }
+
+      .rt-plan {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        box-shadow: var(--shadow-card);
+        padding: 11px 14px 12px;
+        margin: 0 0 10px;
+        animation: fadein 0.3s ease;
+      }
+      .rt-plan-head {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      .rt-plan-v {
+        font-size: 10px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0 7px;
+        color: var(--fg-muted);
+      }
+      .rt-plan-meta {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--fg-faint);
+      }
+      .rt-plan-sum {
+        font-size: 12.5px;
+        margin-bottom: 7px;
+      }
+      .rt-plan-steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .rt-plan-steps li {
+        display: flex;
+        align-items: baseline;
+        gap: 9px;
+        font-size: 12.5px;
+        padding: 3px 0;
+      }
+      .rt-step-n {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--bg-hover);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        font-weight: 650;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transform: translateY(2px);
+      }
+
+      .rt-think {
+        margin: 2px 0 6px 2px;
+        border-left: 2px solid transparent;
+        padding-left: 8px;
+        animation: fadein 0.25s ease;
+      }
+      .rt-think.open,
+      .rt-think.live {
+        border-left-color: var(--border);
+      }
+      .rt-think-head {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+        background: transparent;
+        color: var(--fg-faint);
+        font-size: 11px;
+        font-family: inherit;
+        padding: 2px 4px 2px 0;
+        cursor: pointer;
+        border-radius: 5px;
+        max-width: 100%;
+      }
+      .rt-think-head:hover {
+        color: var(--fg-muted);
+      }
+      .rt-think-star {
+        font-size: 10px;
+        color: var(--accent);
+        opacity: 0.75;
+      }
+      .rt-think-label.shimmer {
+        background: linear-gradient(90deg, var(--fg-faint) 25%, var(--fg) 50%, var(--fg-faint) 75%);
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+        animation: shimmer 1.6s linear infinite;
+      }
+      @keyframes shimmer {
+        0% {
+          background-position: 200% 0;
+        }
+        100% {
+          background-position: -200% 0;
+        }
+      }
+      .rt-think-preview {
+        font-style: italic;
+        color: var(--fg-faint);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .rt-think-body {
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: var(--fg-faint);
+        white-space: pre-wrap;
+        padding: 2px 0 4px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+
+      /* ============ 方向 A：时间线原生的一行收尾 ============ */
+      .rt-end {
+        margin: 0 0 10px;
+        animation: fadein 0.35s ease;
+      }
+      .rt-endline {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        padding: 5px 2px;
+        background: transparent;
+        border: none;
+        color: var(--fg-muted);
+        font-size: 12.3px;
+        font-family: inherit;
+        cursor: pointer;
+        text-align: left;
+        min-width: 0;
+      }
+      .rt-endline:hover .rt-end-chev {
+        color: var(--fg);
+      }
+      .rt-end-chev {
+        flex: none;
+        font-size: 9px;
+        color: var(--fg-faint);
+        width: 10px;
+      }
+      .rt-end-files {
+        font-weight: 600;
+        color: var(--fg);
+        flex: none;
+      }
+      .rt-end-checks {
+        flex: none;
+        font-size: 11px;
+        color: var(--success);
+        font-weight: 650;
+      }
+      .rt-end-detail {
+        padding: 2px 2px 4px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+      .rt-end-frow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 3px 2px;
+        border: none;
+        background: transparent;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--fg-muted);
+        cursor: pointer;
+        text-align: left;
+        border-radius: 6px;
+        min-width: 0;
+      }
+      .rt-end-frow:hover {
+        background: var(--bg-hover);
+      }
+      .rt-end-fold {
+        font-size: 11px;
+        color: var(--fg-faint);
+        margin-top: 3px;
+      }
+      .rt-end-fold summary {
+        cursor: pointer;
+      }
+      .rt-end-fold div {
+        white-space: pre-wrap;
+        padding: 4px 0 2px;
+        line-height: 1.6;
+      }
+      .rt-end-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 8px;
+        padding-left: 18px;
+      }
+
+      .btn {
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg);
+        font-family: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 5px 14px;
+        cursor: pointer;
+      }
+      .btn:hover {
+        background: var(--bg-hover);
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .btn.primary:hover {
+        opacity: 0.88;
+      }
+      .btn.quietdanger {
+        border: none;
+        background: none;
+        color: var(--fg-faint);
+        font-size: 11.5px;
+        padding: 4px 6px;
+      }
+      .btn.quietdanger:hover {
+        color: var(--danger);
+        background: none;
+      }
+
+      /* ============ 方向 B：composer 上方的审阅条 ============ */
+      .reviewbar {
+        flex: none;
+        display: none;
+        align-items: center;
+        gap: 10px;
+        margin: 0 22px 8px;
+        max-width: 620px;
+        padding: 8px 8px 8px 14px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        box-shadow: var(--shadow-card);
+        font-size: 12.3px;
+        color: var(--fg-muted);
+      }
+      .reviewbar.show {
+        display: flex;
+        animation: barin 0.3s ease;
+      }
+      @keyframes barin {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .reviewbar .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--success);
+        flex: none;
+      }
+      .reviewbar b {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .reviewbar .meta {
+        color: var(--fg-faint);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
+      }
+      .reviewbar .sp {
+        flex: 1;
+      }
+      .reviewbar .more {
+        border: none;
+        background: none;
+        color: var(--fg-faint);
+        font-size: 14px;
+        cursor: pointer;
+        padding: 3px 8px;
+        border-radius: 6px;
+      }
+      .reviewbar .more:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+
+      /* ============ 方向 C：答案自带回执 chips ============ */
+      .receipt {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px dashed var(--border-soft);
+        animation: fadein 0.35s ease;
+      }
+      .receipt .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border: 1px solid var(--border-soft);
+        background: var(--bg-hover);
+        border-radius: 7px;
+        padding: 2px 9px;
+        cursor: pointer;
+        font-family: var(--font-mono);
+        font-size: 10.8px;
+        color: var(--fg);
+        white-space: nowrap;
+      }
+      .receipt .chip:hover {
+        background: var(--bg-active);
+        border-color: var(--border);
+      }
+      .receipt .chip.check {
+        font-family: var(--font-ui);
+        color: var(--success);
+        font-weight: 650;
+        font-size: 11px;
+      }
+      .receipt .rlink {
+        margin-left: auto;
+        border: none;
+        background: none;
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--fg);
+        font-weight: 600;
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 5px;
+        white-space: nowrap;
+      }
+      .receipt .rlink:hover {
+        background: var(--bg-hover);
+      }
+
+      /* ============ merged model · effort control — ported from home.css ============ */
+      .me {
+        position: relative;
+        flex: 0 1 auto;
+        min-width: 0;
+      }
+      .me-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 100%;
+        border: none;
+        background: transparent;
+        color: var(--fg-muted);
+        font-family: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 5px 9px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .me-btn:hover {
+        background: var(--bg-hover);
+      }
+      .me-btn .me-spark {
+        color: var(--fg-faint);
+        font-size: 11px;
+      }
+      .me-btn .me-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 190px;
+      }
+      .me-btn .me-eff-lbl {
+        color: var(--fg-faint);
+        flex: none;
+      }
+      .me-btn .me-eff-lbl::before {
+        content: '·';
+        margin-right: 5px;
+      }
+      .me-btn .me-chev {
+        color: var(--fg-faint);
+        flex: none;
+        font-size: 10px;
+      }
+      .me-pop {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        right: 0;
+        width: 272px;
+        max-height: 46vh;
+        overflow-y: auto;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--shadow-card);
+        padding: 6px;
+        z-index: 30;
+      }
+      .me-cap {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        padding: 8px 8px 4px;
+      }
+      .me-prov {
+        font-size: 11px;
+        color: var(--fg-faint);
+        padding: 6px 8px 2px;
+      }
+      .me-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: var(--fg);
+        font-family: inherit;
+        font-size: 13px;
+        text-align: left;
+        padding: 7px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .me-row:hover {
+        background: var(--bg-hover);
+      }
+      .me-row .ck {
+        color: var(--accent);
+        opacity: 0;
+        font-weight: 700;
+        width: 13px;
+        flex: none;
+      }
+      .me-row.on .ck {
+        opacity: 1;
+      }
+      .me-row .mname {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .me-div {
+        height: 1px;
+        background: var(--border-soft);
+        margin: 6px 4px;
+      }
+      .me-eff {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 2px 6px 6px;
+      }
+      .me-eff button {
+        font-family: inherit;
+        font-size: 11.5px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg-muted);
+        border-radius: 999px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      .me-eff button.on {
+        background: var(--bg-active);
+        border-color: transparent;
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .me-eff button:disabled {
+        opacity: 0.32;
+        cursor: default;
+      }
+
+      /* ============ composer + activity strip ============ */
+      .tr-activity {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 22px;
+        border-top: 1px solid var(--border-soft);
+        font-size: 11.5px;
+        color: var(--fg-muted);
+        min-height: 30px;
+      }
+      .tr-activity .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--info);
+        flex: none;
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+      .tr-activity .lbl {
+        color: var(--fg);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .tr-activity .meta {
+        color: var(--fg-faint);
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        white-space: nowrap;
+      }
+      .tr-activity.idle .dot {
+        background: var(--fg-faint);
+        animation: none;
+      }
+      .tr-activity.idle .lbl {
+        color: var(--fg-faint);
+      }
+
+      .tr-composer {
+        flex: none;
+        display: flex;
+        gap: 9px;
+        align-items: flex-end;
+        padding: 4px 22px 16px;
+      }
+      .tr-ccard {
+        flex: 1;
+        max-width: 620px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        box-shadow: var(--shadow-card);
+        padding: 10px 12px;
+      }
+      .tr-cinput {
+        font-size: 13px;
+        color: var(--fg-faint);
+        padding: 2px 2px 12px;
+      }
+      .tr-cfoot {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tr-cfoot .mode {
+        font-size: 11px;
+        color: var(--fg-faint);
+      }
+      .send {
+        margin-left: auto;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 13px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      /* ============ playback bar ============ */
+      .playbar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 10px 22px 16px;
+        max-width: 960px;
+        width: 100%;
+        margin: 0 auto;
+      }
+      .pb-btn {
+        flex: none;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 13px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: var(--shadow-card);
+      }
+      .pb-btn:hover {
+        background: var(--bg-hover);
+      }
+      .pb-scrub {
+        flex: 1;
+        appearance: none;
+        height: 4px;
+        border-radius: 999px;
+        background: var(--border-strong);
+        outline: none;
+        cursor: pointer;
+      }
+      .pb-scrub::-webkit-slider-thumb {
+        appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 2px solid var(--bg-editor);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+      }
+      .pb-time {
+        flex: none;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .pb-speed {
+        flex: none;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg-muted);
+        font-family: inherit;
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 4px 11px;
+        cursor: pointer;
+      }
+      .pb-speed:hover {
+        background: var(--bg-hover);
+      }
+      .pb-hint {
+        flex: none;
+        font-size: 11px;
+        color: var(--fg-faint);
+        white-space: nowrap;
+      }
+
+      /* ============ toast + tweaks ============ */
+      #toast {
+        position: fixed;
+        left: 50%;
+        bottom: 84px;
+        transform: translateX(-50%) translateY(10px);
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 7px 16px;
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.2s,
+          transform 0.2s;
+        box-shadow: var(--shadow-menu);
+        z-index: 60;
+        max-width: 80vw;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      #toast.show {
+        opacity: 1;
+        transform: translateX(-50%);
+      }
+
+      .tweaks {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 50;
+      }
+      .tweaks-toggle {
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        font-family: inherit;
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 6px 14px;
+        cursor: pointer;
+        box-shadow: var(--shadow-card);
+      }
+      .tweaks-panel {
+        display: none;
+        position: absolute;
+        right: 0;
+        bottom: 40px;
+        width: 240px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--shadow-menu);
+        padding: 12px 14px;
+      }
+      .tweaks.open .tweaks-panel {
+        display: block;
+      }
+      .tweaks-panel h3 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .tw-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11.5px;
+        color: var(--fg-muted);
+        padding: 5px 0;
+      }
+      .tw-seg {
+        display: flex;
+        background: var(--bg-hover);
+        border-radius: 999px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .tw-seg button {
+        border: none;
+        background: none;
+        font-family: inherit;
+        font-size: 10.5px;
+        color: var(--fg-muted);
+        padding: 2px 9px;
+        border-radius: 999px;
+        cursor: pointer;
+      }
+      .tw-seg button.on {
+        background: var(--bg-card);
+        color: var(--fg);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .rt-think-label.shimmer {
+          animation: none;
+          -webkit-text-fill-color: currentColor;
+        }
+        .tr-activity .dot,
+        .rt-live-caret,
+        .rt-tool-livechip i {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Task 收尾 · 三个方向</h1>
+      <nav class="vtabs" id="vtabs">
+        <button data-v="A" class="on">A · 一行收尾</button>
+        <button data-v="B">B · 审阅条</button>
+        <button data-v="C">C · 回执 chips</button>
+      </nav>
+      <p class="rationale" id="rationale"></p>
+      <button class="topbtn" id="themeBtn">深色</button>
+    </header>
+
+    <main class="stage">
+      <div class="window">
+        <div class="tr-head">
+          <span class="lights" aria-hidden><i></i><i></i><i></i></span>
+          <span class="tr-title" id="taskTitle">Debounce the sidebar search input</span>
+          <span class="tr-proj">bullpen<span style="color: var(--fg-faint)">·</span>main</span>
+          <span class="tr-sp"></span>
+          <span class="tr-state" id="taskState">queued</span>
+        </div>
+        <div class="rt-scroll" id="tl"></div>
+        <div class="reviewbar" id="reviewbar">
+          <span class="dot"></span>
+          <span><b>Ready to review</b></span>
+          <span class="meta" id="rbMeta"></span>
+          <span class="sp"></span>
+          <button class="btn primary" onclick="toast('真实产品中：打开 Review 视图')">
+            Review changes
+          </button>
+          <button
+            class="more"
+            title="Roll back all… / Agent summary"
+            onclick="toast('溢出菜单：Roll back all… · Agent summary')"
+          >
+            ⋯
+          </button>
+        </div>
+        <div class="tr-activity idle" id="activity">
+          <span class="dot"></span><span class="lbl" id="actLbl">Waiting…</span
+          ><span class="meta" id="actMeta"></span>
+        </div>
+        <div class="tr-composer">
+          <div class="tr-ccard">
+            <div class="tr-cinput">Reply to keep steering this task…</div>
+            <div class="tr-cfoot">
+              <span class="mode">Balanced</span>
+              <span style="flex: 1"></span>
+              <div class="me" id="me">
+                <button class="me-btn" id="meBtn" aria-haspopup="menu" aria-expanded="false">
+                  <span class="me-spark">✦</span>
+                  <span class="me-name" id="meName"></span>
+                  <span class="me-eff-lbl" id="meEff"></span>
+                  <span class="me-chev">⌄</span>
+                </button>
+                <div class="me-pop" id="mePop" style="display: none" role="menu"></div>
+              </div>
+              <button
+                class="send"
+                aria-label="send"
+                onclick="toast(`发送后：本任务后续用 ${MODELS[MODEL_IX].name} · ${EFFORT}`)"
+              >
+                ↑
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="playbar">
+      <button class="pb-btn" id="playBtn" title="播放 / 暂停（空格）">▶</button>
+      <input class="pb-scrub" id="scrub" type="range" min="0" max="1000" value="0" />
+      <span class="pb-time" id="timeLbl">0:00 / 0:31</span>
+      <button class="pb-speed" id="speedBtn">1×</button>
+      <span class="pb-hint">空格 播放 · 1/2/3 切方向 · 行/chip/回复框模型 可点</span>
+    </footer>
+
+    <div id="toast"></div>
+
+    <div class="tweaks" id="tweaks">
+      <button
+        class="tweaks-toggle"
+        onclick="document.getElementById('tweaks').classList.toggle('open')"
+      >
+        Tweaks
+      </button>
+      <div class="tweaks-panel">
+        <h3>Tweaks</h3>
+        <div class="tw-row">
+          <span>主题</span>
+          <span class="tw-seg" id="twTheme"
+            ><button data-t="light" class="on">浅</button><button data-t="dark">深</button></span
+          >
+        </div>
+        <div class="tw-row">
+          <span>倍速</span>
+          <span class="tw-seg" id="twSpeed"
+            ><button data-s="1" class="on">1×</button><button data-s="1.5">1.5×</button
+            ><button data-s="2">2×</button></span
+          >
+        </div>
+        <div class="tw-row">
+          <span>场景</span>
+          <span class="tw-seg" id="twScen"
+            ><button data-sc="change" class="on">有改动</button
+            ><button data-sc="answer">纯回答</button></span
+          >
+        </div>
+      </div>
+    </div>
+
+    <script>
+      'use strict';
+      /* ================================================================
+   播放引擎：script = 按 t(ms) 排序的 op 列表。播放时按序执行 mount；
+   流式文本 / live→done 翻转由 dynamics 每帧驱动。回拖 = 清空重放到 t。
+   ================================================================ */
+
+      const $ = (id) => document.getElementById(id);
+      const tl = $('tl');
+      let VARIANT = 'A';
+      let SCENARIO = 'change';
+      let SPEED = 1;
+
+      const RATIONALE = {
+        A: '<b>时间线原生：</b>报告卡片取消 —— 收尾是一条 ✓ Done 里程碑 + 一条默认只占一行、可展开的证据行。',
+        B: '<b>报告是状态，不是事件：</b>时间线只留 ✓ Done；待审阅时 composer 上方出现审阅条，接受后消失。',
+        C: '<b>答案即报告：</b>最后一条回复下面挂一排可点的证据 chips + Review 链接，不再另起一块。',
+      };
+
+      const openSet = new Set(); // 展开状态，重放后保留
+      function toast(msg) {
+        const el = $('toast');
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(toast._t);
+        toast._t = setTimeout(() => el.classList.remove('show'), 1800);
+      }
+
+      /* ---------- 元素工厂（复刻 RoomTimeline 的呈现） ---------- */
+      function el(tag, cls, html) {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (html !== undefined) n.innerHTML = html;
+        return n;
+      }
+      function milestone(label, meta, tone = 'ok', icon = '✓') {
+        return el(
+          'div',
+          `rt-milestone ${tone}`,
+          `<span class="rt-ms-ic">${icon}</span><b>${label}</b>${meta ? `<span class="rt-ms-meta">${meta}</span>` : ''}<span class="rt-ms-line"></span>`,
+        );
+      }
+      function bubble(who, text) {
+        const b = el('div', `rt-bubble ${who}`);
+        b.appendChild(el('div', 'rt-text', md(text)));
+        return b;
+      }
+      function md(t) {
+        // 极简 markdown：`code` 与换行
+        return t
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/`([^`]+)`/g, '<code>$1</code>');
+      }
+      function toolRow(id, verb, liveVerb, target, opts = {}) {
+        const row = el('div', 'rt-tool');
+        row.dataset.id = id;
+        const stat =
+          opts.add !== undefined
+            ? `<span class="rt-tool-stat"><i class="plus">+${opts.add}</i> <i class="minus">−${opts.del}</i></span>`
+            : '';
+        row.innerHTML = `<button class="rt-tool-line">
+       <span class="rt-tool-verb">${liveVerb}</span>
+       <span class="rt-tool-target link" title="Peek at ${target}">${target}</span>
+       <span class="rt-tool-sp"></span>${stat}
+       <span class="rt-tool-livechip"><i></i>${opts.writing ? 'writing' : 'running'}</span>
+     </button>
+     <div class="rt-tool-detail" style="display:none"><pre>${opts.detail ?? '{}'}</pre></div>`;
+        row.querySelector('.rt-tool-line').addEventListener('click', () => {
+          const d = row.querySelector('.rt-tool-detail');
+          const open = d.style.display === 'none';
+          d.style.display = open ? '' : 'none';
+          open ? openSet.add(id) : openSet.delete(id);
+        });
+        row.querySelector('.rt-tool-target').addEventListener('click', (e) => {
+          e.stopPropagation();
+          toast(`真实产品中：in-room peek → ${target}`);
+        });
+        if (openSet.has(id)) row.querySelector('.rt-tool-detail').style.display = '';
+        row._finish = (ok) => {
+          const chip = row.querySelector('.rt-tool-livechip');
+          if (chip)
+            chip.outerHTML = ok
+              ? '<span class="rt-tool-state ok">✓</span>'
+              : '<span class="rt-tool-state err">failed</span>';
+          row.querySelector('.rt-tool-verb').textContent = verb;
+        };
+        return row;
+      }
+      function thinkBlock(id, text) {
+        const t = el('div', 'rt-think live');
+        t.innerHTML = `<button class="rt-think-head">
+       <span class="rt-think-star">✦</span>
+       <span class="rt-think-label shimmer">Thinking…</span>
+       <span class="rt-think-preview" style="display:none"></span>
+       <span style="font-size:9px;opacity:.7">▸</span>
+     </button>
+     <div class="rt-think-body"></div>`;
+        const body = t.querySelector('.rt-think-body');
+        t.querySelector('.rt-think-head').addEventListener('click', () => {
+          if (t.classList.contains('live')) return;
+          const open = body.style.display === 'none';
+          body.style.display = open ? '' : 'none';
+          t.classList.toggle('open', open);
+          t.querySelector('.rt-think-preview').style.display = open ? 'none' : '';
+          open ? openSet.add(id) : openSet.delete(id);
+        });
+        t._setText = (s) => {
+          body.textContent = s;
+        };
+        t._fold = (secs) => {
+          t.classList.remove('live');
+          const lbl = t.querySelector('.rt-think-label');
+          lbl.classList.remove('shimmer');
+          lbl.textContent = `Thought for ${secs}s`;
+          const pv = t.querySelector('.rt-think-preview');
+          pv.textContent = '— ' + text.replace(/\s+/g, ' ').slice(0, 90);
+          const keepOpen = openSet.has(id);
+          body.style.display = keepOpen ? '' : 'none';
+          pv.style.display = keepOpen ? 'none' : '';
+          t.classList.toggle('open', keepOpen);
+        };
+        return t;
+      }
+      function planCard(summary, steps) {
+        const c = el('div', 'rt-plan');
+        c.innerHTML = `<div class="rt-plan-head"><b>Plan</b><span class="rt-plan-v">v1</span><span class="rt-plan-meta">${steps.length} steps</span></div>
+     <div class="rt-plan-sum">${md(summary)}</div>
+     <ol class="rt-plan-steps">${steps.map((s, i) => `<li><span class="rt-step-n">${i + 1}</span><span>${s}</span></li>`).join('')}</ol>`;
+        return c;
+      }
+
+      /* ---------- 三个方向的收尾 ---------- */
+      const STATS = {
+        files: 2,
+        add: 64,
+        del: 19,
+        list: [
+          { p: 'src/hooks/useDebounce.ts', add: 38, del: 0 },
+          { p: 'src/views/SearchView.tsx', add: 26, del: 19 },
+        ],
+      };
+      const AGENT_SUM =
+        'Added a 200 ms debounce hook and rewired SearchView to render from the last committed results, so the list never unmounts mid-query. Verified with npm run check and the renderer test suite.';
+
+      function endingA() {
+        const wrap = el('div');
+        wrap.appendChild(milestone('Done', `47s · outcome: completed`));
+        const end = el('div', 'rt-end');
+        const id = 'end-a';
+        end.innerHTML = `<button class="rt-endline">
+       <span class="rt-end-chev">▸</span>
+       <span class="rt-end-files">${STATS.files} files</span>
+       <span class="rt-tool-stat"><i class="plus">+${STATS.add}</i> <i class="minus">−${STATS.del}</i></span>
+       <span style="color:var(--fg-faint)">·</span>
+       <span class="rt-end-checks">✓ checks 2/2</span>
+       <span class="rt-tool-sp"></span>
+     </button>
+     <div class="rt-end-detail" style="display:none">
+       ${STATS.list
+         .map(
+           (f) =>
+             `<button class="rt-end-frow" data-p="${f.p}">
+            <span class="rt-tool-target link">${f.p}</span>
+            <span class="rt-tool-sp"></span>
+            <span class="rt-tool-stat"><i class="plus">+${f.add}</i> <i class="minus">−${f.del}</i></span>
+          </button>`,
+         )
+         .join('')}
+       <button class="rt-end-frow"><span style="color:var(--success);font-weight:650">✓</span> npm run check <span class="rt-tool-sp"></span><span style="color:var(--fg-faint);font-size:10.5px">4.2s</span></button>
+       <button class="rt-end-frow"><span style="color:var(--success);font-weight:650">✓</span> npm test -w desktop-renderer <span class="rt-tool-sp"></span><span style="color:var(--fg-faint);font-size:10.5px">6.8s</span></button>
+       <details class="rt-end-fold"><summary>Agent's own summary（未经验证的叙述）</summary><div>${AGENT_SUM}</div></details>
+     </div>
+     <div class="rt-end-actions" style="display:none">
+       <button class="btn primary">Review changes</button>
+       <button class="btn quietdanger">Roll back all…</button>
+     </div>`;
+        const detail = end.querySelector('.rt-end-detail');
+        const actions = end.querySelector('.rt-end-actions');
+        const line = end.querySelector('.rt-endline');
+        const setOpen = (open) => {
+          detail.style.display = open ? '' : 'none';
+          line.querySelector('.rt-end-chev').textContent = open ? '▾' : '▸';
+          open ? openSet.add(id) : openSet.delete(id);
+          if (open) tl.scrollTop = tl.scrollHeight; // 展开的证据别被裁在折叠线下
+        };
+        line.addEventListener('click', () => setOpen(detail.style.display === 'none'));
+        if (openSet.has(id)) setOpen(true);
+        actions.style.display = ''; // REVIEW_READY：动作常显，一行即可
+        end
+          .querySelectorAll('.rt-end-frow[data-p]')
+          .forEach((b) =>
+            b.addEventListener('click', () => toast(`真实产品中：in-room peek → ${b.dataset.p}`)),
+          );
+        end
+          .querySelector('.btn.primary')
+          .addEventListener('click', () => toast('真实产品中：打开 Review 视图'));
+        end
+          .querySelector('.quietdanger')
+          .addEventListener('click', () => toast('真实产品中：二次确认后回滚全部'));
+        wrap.appendChild(end);
+        return wrap;
+      }
+      function endingB() {
+        $('rbMeta').textContent = `${STATS.files} files +${STATS.add} −${STATS.del} · checks 2/2 ✓`;
+        $('reviewbar').classList.add('show');
+        return milestone('Done', '47s');
+      }
+      function endingC(lastBubble) {
+        const r = el('div', 'receipt');
+        r.innerHTML =
+          STATS.list
+            .map(
+              (f) =>
+                `<button class="chip" data-p="${f.p}">${f.p.split('/').pop()} <i class="plus">+${f.add}</i>${f.del ? ` <i class="minus">−${f.del}</i>` : ''}</button>`,
+            )
+            .join('') +
+          `<button class="chip check" data-c="npm run check">✓ check</button>
+     <button class="chip check" data-c="npm test">✓ test</button>
+     <button class="rlink">Review changes →</button>`;
+        r.querySelectorAll('.chip[data-p]').forEach((b) =>
+          b.addEventListener('click', () => toast(`真实产品中：in-room peek → ${b.dataset.p}`)),
+        );
+        r.querySelectorAll('.chip[data-c]').forEach((b) =>
+          b.addEventListener('click', () => toast(`真实产品中：展开 ${b.dataset.c} 的输出`)),
+        );
+        r.querySelector('.rlink').addEventListener('click', () =>
+          toast('真实产品中：打开 Review 视图'),
+        );
+        (lastBubble ?? tl).appendChild(r);
+        return milestone('Done', '47s · review from the receipt above');
+      }
+
+      /* ---------- 剧本 ---------- */
+      const THINK1 =
+        'The flicker likely comes from SearchView clearing its result list on every input event, before the new query resolves. I should check how searchStore publishes results and whether the input is wired straight into the query call. If so, a small debounce hook plus keeping the previous result set mounted should fix both symptoms.';
+      const ANSWER1 =
+        'Debounced the search input with a new `useDebounce` hook (200 ms) and moved SearchView to render from the last committed result set, so the list stays mounted while a query is in flight — no more clearing between keystrokes.\n\nBoth checks pass: `npm run check` and the renderer tests.';
+      const THINK2 =
+        'Auto-accept only exists in the opt-in Full mode per ADR-0012. The decision point should live in task-service after run.completed — let me confirm the fallback paths to review on verification failure or merge conflict.';
+      const ANSWER2 =
+        'Auto-accept is decided in `task-service.ts`: after `run.completed`, Full mode (ADR-0012) calls `maybeAutoAccept()`, which re-checks verification results and falls back to `REVIEW_READY` on any failure or merge conflict. Outside Full mode nothing is ever accepted automatically.';
+
+      function act(label, meta) {
+        return { activity: [label, meta ?? ''] };
+      }
+
+      function buildScript() {
+        const ops = [];
+        const push = (t, fn, extra) => ops.push({ t, fn, ...extra });
+        let lastAgentBubble = null;
+
+        if (SCENARIO === 'change') {
+          $('taskTitle').textContent = 'Debounce the sidebar search input';
+          push(
+            300,
+            () => {
+              tl.appendChild(
+                bubble(
+                  'you',
+                  'The sidebar search flickers on every keystroke — debounce it and keep the results from jumping.',
+                ),
+              );
+            },
+            act('Reading your request'),
+          );
+          // thinking：流式 + 折叠
+          let think;
+          push(
+            1000,
+            () => {
+              think = thinkBlock('think1', THINK1);
+              tl.appendChild(think);
+            },
+            {
+              stream: { t0: 1000, t1: 3800, text: THINK1, set: (s) => think?._setText(s) },
+              ...act('Thinking'),
+            },
+          );
+          push(4000, () => think?._fold(3));
+          // 探索
+          let r1, r2, r3;
+          push(
+            4200,
+            () => {
+              r1 = toolRow('t1', 'Read', 'Reading', 'src/views/SearchView.tsx', {
+                detail: '{ "path": "src/views/SearchView.tsx" }',
+              });
+              tl.appendChild(r1);
+            },
+            act('Reading SearchView.tsx'),
+          );
+          push(5000, () => r1?._finish(true));
+          push(
+            5200,
+            () => {
+              r2 = toolRow('t2', 'Searched', 'Searching', '"onSearchInput"', {
+                detail: '{ "query": "onSearchInput", "glob": "src/**" }',
+              });
+              tl.appendChild(r2);
+            },
+            act('Searching the renderer'),
+          );
+          push(5800, () => r2?._finish(true));
+          push(
+            6000,
+            () => {
+              r3 = toolRow('t3', 'Read', 'Reading', 'src/store/searchStore.ts', {
+                detail: '{ "path": "src/store/searchStore.ts" }',
+              });
+              tl.appendChild(r3);
+            },
+            act('Reading searchStore.ts'),
+          );
+          push(6800, () => r3?._finish(true));
+          push(7000, () => tl.appendChild(milestone('Explored the codebase', '7s')));
+          push(
+            7300,
+            () =>
+              tl.appendChild(
+                planCard('Debounce the query and keep stale results mounted while loading.', [
+                  'Add a reusable `useDebounce` hook (200 ms)',
+                  'Route SearchView input through the debounced value',
+                  'Render from the last committed results while a query is in flight',
+                ]),
+              ),
+            act('Proposing a plan'),
+          );
+          push(8800, () =>
+            tl.appendChild(el('div', 'rt-note ok', '✓ Plan approved automatically (auto mode)')),
+          );
+          push(9200, () => tl.appendChild(milestone('Worked', ''))); // 写代码
+          let w1, w2;
+          push(
+            9500,
+            () => {
+              w1 = toolRow('t4', 'Write', 'Writing', 'src/hooks/useDebounce.ts', {
+                add: 38,
+                del: 0,
+                writing: true,
+                detail:
+                  '{ "path": "src/hooks/useDebounce.ts", "content": "export function useDebounce<T>(value: T, ms = 200): T { …" }',
+              });
+              tl.appendChild(w1);
+            },
+            act('Writing useDebounce.ts'),
+          );
+          push(11600, () => w1?._finish(true));
+          push(
+            11900,
+            () => {
+              w2 = toolRow('t5', 'Write', 'Writing', 'src/views/SearchView.tsx', {
+                add: 26,
+                del: 19,
+                writing: true,
+                detail:
+                  '{ "path": "src/views/SearchView.tsx", "patch": "@@ -41,7 +41,9 @@ const query = useDebounce(raw, 200); …" }',
+              });
+              tl.appendChild(w2);
+            },
+            act('Writing SearchView.tsx'),
+          );
+          push(13800, () => w2?._finish(true));
+          push(14200, () => tl.appendChild(milestone('Ran verification', '')));
+          let v1, v2;
+          push(
+            14500,
+            () => {
+              v1 = toolRow('t6', 'Verify', 'Verifying', 'npm run check', {
+                detail: '> tsc --noEmit && eslint .\n(clean)',
+              });
+              tl.appendChild(v1);
+            },
+            act('npm run check'),
+          );
+          push(17600, () => v1?._finish(true));
+          push(
+            17900,
+            () => {
+              v2 = toolRow('t7', 'Verify', 'Verifying', 'npm test -w desktop-renderer', {
+                detail: '> vitest run\nTest Files  14 passed (14)\nTests  96 passed (96)',
+              });
+              tl.appendChild(v2);
+            },
+            act('npm test'),
+          );
+          push(20300, () => v2?._finish(true));
+          // 答案
+          let ab, abText;
+          push(
+            20800,
+            () => {
+              ab = bubble('agent', '');
+              abText = ab.querySelector('.rt-text');
+              tl.appendChild(ab);
+              lastAgentBubble = ab;
+            },
+            {
+              stream: {
+                t0: 20800,
+                t1: 26300,
+                text: ANSWER1,
+                set: (s) => {
+                  if (abText) abText.innerHTML = md(s);
+                },
+              },
+              ...act('Answering'),
+            },
+          );
+          push(26600, () => tl.appendChild(el('div', 'rt-usage', '9.8k in · 2.4k out')));
+          // 收尾：三方向分叉
+          push(27000, () => {
+            if (VARIANT === 'A') tl.appendChild(endingA());
+            else if (VARIANT === 'B') tl.appendChild(endingB());
+            else
+              tl.appendChild(
+                endingC(
+                  lastAgentBubble?.querySelector('.rt-text')?.parentElement ?? lastAgentBubble,
+                ),
+              );
+            $('taskState').textContent = 'review ready';
+            $('taskState').classList.add('ready');
+            setActivity(null);
+          });
+          return { ops, duration: 30500 };
+        }
+
+        /* 纯回答场景：三方向收尾完全一致 —— 冗余天然消失 */
+        $('taskTitle').textContent = 'Where is auto-accept decided?';
+        push(
+          300,
+          () =>
+            tl.appendChild(
+              bubble('you', 'Where does auto-accept get decided after a task completes?'),
+            ),
+          act('Reading your request'),
+        );
+        let think;
+        push(
+          1000,
+          () => {
+            think = thinkBlock('think2', THINK2);
+            tl.appendChild(think);
+          },
+          {
+            stream: { t0: 1000, t1: 3200, text: THINK2, set: (s) => think?._setText(s) },
+            ...act('Thinking'),
+          },
+        );
+        push(3400, () => think?._fold(2));
+        let r1, r2;
+        push(
+          3600,
+          () => {
+            r1 = toolRow('a1', 'Read', 'Reading', 'src/services/task-service.ts', {
+              detail: '{ "path": "src/services/task-service.ts" }',
+            });
+            tl.appendChild(r1);
+          },
+          act('Reading task-service.ts'),
+        );
+        push(4400, () => r1?._finish(true));
+        push(
+          4600,
+          () => {
+            r2 = toolRow('a2', 'Searched', 'Searching', '"maybeAutoAccept"', {
+              detail: '{ "query": "maybeAutoAccept" }',
+            });
+            tl.appendChild(r2);
+          },
+          act('Searching'),
+        );
+        push(5200, () => r2?._finish(true));
+        let ab, abText;
+        push(
+          5600,
+          () => {
+            ab = bubble('agent', '');
+            abText = ab.querySelector('.rt-text');
+            tl.appendChild(ab);
+          },
+          {
+            stream: {
+              t0: 5600,
+              t1: 11000,
+              text: ANSWER2,
+              set: (s) => {
+                if (abText) abText.innerHTML = md(s);
+              },
+            },
+            ...act('Answering'),
+          },
+        );
+        push(11400, () => tl.appendChild(el('div', 'rt-usage', '6.1k in · 0.9k out')));
+        push(11800, () => {
+          tl.appendChild(milestone('Answered', 'nothing changed on disk'));
+          $('taskState').textContent = 'answered';
+          $('taskState').classList.add('ready');
+          setActivity(null);
+        });
+        return { ops, duration: 14000 };
+      }
+
+      /* ---------- 播放器 ---------- */
+      let script = null;
+      let now = 0;
+      let playing = false;
+      let lastFrame = 0;
+      let cursor = 0; // 下一个待执行 op
+
+      function setActivity(pair) {
+        const strip = $('activity');
+        if (!pair) {
+          strip.classList.add('idle');
+          $('actLbl').textContent =
+            SCENARIO === 'change' ? 'Review ready — reply to steer or open Review' : 'Answered';
+          $('actMeta').textContent = '';
+          return;
+        }
+        strip.classList.remove('idle');
+        $('actLbl').textContent = pair[0];
+        $('actMeta').textContent = pair[1];
+      }
+
+      function resetDom() {
+        tl.innerHTML = '';
+        $('reviewbar').classList.remove('show');
+        $('taskState').textContent = 'working';
+        $('taskState').classList.remove('ready');
+        setActivity(['Starting…', '']);
+      }
+
+      function seek(toMs, autoplayAfter) {
+        resetDom();
+        script = script ?? buildScript();
+        now = Math.max(0, Math.min(toMs, script.duration));
+        cursor = 0;
+        while (cursor < script.ops.length && script.ops[cursor].t <= now) {
+          const op = script.ops[cursor];
+          op.fn();
+          if (op.activity) setActivity(op.activity);
+          cursor++;
+        }
+        applyStreams();
+        tl.scrollTop = tl.scrollHeight;
+        updateBar();
+        if (autoplayAfter) play();
+      }
+
+      function applyStreams() {
+        for (const op of script.ops) {
+          if (!op.stream || op.t > now) continue;
+          const { t0, t1, text, set } = op.stream;
+          const p = Math.max(0, Math.min(1, (now - t0) / (t1 - t0)));
+          set(text.slice(0, Math.round(text.length * p)));
+        }
+      }
+
+      function tick(ts) {
+        if (!playing) return;
+        if (lastFrame) now += (ts - lastFrame) * SPEED;
+        lastFrame = ts;
+        let mounted = false;
+        while (cursor < script.ops.length && script.ops[cursor].t <= now) {
+          const op = script.ops[cursor];
+          op.fn();
+          if (op.activity) setActivity(op.activity);
+          cursor++;
+          mounted = true;
+        }
+        applyStreams();
+        if (mounted || script.ops.some((o) => o.stream && o.t <= now && now <= o.stream.t1 + 100)) {
+          tl.scrollTop = tl.scrollHeight;
+        }
+        updateBar();
+        if (now >= script.duration) {
+          pause();
+          now = script.duration;
+          updateBar();
+          return;
+        }
+        requestAnimationFrame(tick);
+      }
+
+      function play() {
+        if (now >= (script?.duration ?? 0)) return restart();
+        playing = true;
+        lastFrame = 0;
+        $('playBtn').textContent = '⏸';
+        requestAnimationFrame(tick);
+      }
+      function pause() {
+        playing = false;
+        $('playBtn').textContent = '▶';
+      }
+      function restart() {
+        openSet.clear();
+        script = buildScript();
+        seek(0, false);
+        play();
+      }
+
+      function fmt(ms) {
+        const s = Math.round(ms / 1000);
+        return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+      }
+      function updateBar() {
+        $('scrub').value = String(Math.round((now / script.duration) * 1000));
+        $('timeLbl').textContent = `${fmt(now)} / ${fmt(script.duration)}`;
+      }
+
+      /* ---------- 控件 ---------- */
+      $('playBtn').addEventListener('click', () => (playing ? pause() : play()));
+      $('scrub').addEventListener('input', (e) => {
+        pause();
+        seek((Number(e.target.value) / 1000) * script.duration, false);
+      });
+      $('speedBtn').addEventListener('click', () => {
+        SPEED = SPEED === 1 ? 1.5 : SPEED === 1.5 ? 2 : 1;
+        $('speedBtn').textContent = `${SPEED}×`;
+        syncSeg('twSpeed', 'data-s', String(SPEED));
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+          e.preventDefault();
+          playing ? pause() : play();
+        }
+        if (e.key === '1') switchVariant('A');
+        if (e.key === '2') switchVariant('B');
+        if (e.key === '3') switchVariant('C');
+      });
+
+      function switchVariant(v) {
+        VARIANT = v;
+        document
+          .querySelectorAll('#vtabs button')
+          .forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+        $('rationale').innerHTML = RATIONALE[v];
+        // 已经播到收尾 → 原地重演收尾；否则从头播，看完整流程
+        if (script && now >= script.duration - 100) {
+          script = buildScript();
+          seek(script.duration, false);
+        } else restart();
+      }
+      $('vtabs').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (b) switchVariant(b.dataset.v);
+      });
+
+      function setTheme(t) {
+        document.documentElement.dataset.theme = t;
+        $('themeBtn').textContent = t === 'light' ? '深色' : '浅色';
+        syncSeg('twTheme', 'data-t', t);
+      }
+      $('themeBtn').addEventListener('click', () =>
+        setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'),
+      );
+
+      function syncSeg(id, attr, val) {
+        document
+          .querySelectorAll(`#${id} button`)
+          .forEach((b) => b.classList.toggle('on', b.getAttribute(attr) === val));
+      }
+      $('twTheme').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (b) setTheme(b.dataset.t);
+      });
+      $('twSpeed').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (b) {
+          SPEED = Number(b.dataset.s);
+          $('speedBtn').textContent = `${SPEED}×`;
+          syncSeg('twSpeed', 'data-s', b.dataset.s);
+        }
+      });
+      $('twScen').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        SCENARIO = b.dataset.sc;
+        syncSeg('twScen', 'data-sc', b.dataset.sc);
+        restart();
+      });
+
+      /* ================================================================
+   回复框的模型 · Effort 控件 —— 与 Home 首次输入框同一个 ModelEffortControl：
+   provider 分组的模型列表 + 按所选模型支持档位裁剪的 effort 段选，
+   切模型时把 effort 收敛到最近的受支持档位（复刻 ui.tsx 的 clamp）。
+   ================================================================ */
+      const LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+      const MODELS = [
+        {
+          prov: 'Anthropic',
+          name: 'Claude Fable 5',
+          levels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        },
+        {
+          prov: 'Anthropic',
+          name: 'Claude Opus 4.8',
+          levels: ['off', 'low', 'medium', 'high', 'xhigh'],
+        },
+        { prov: 'Anthropic', name: 'Claude Haiku 4.5', levels: ['off', 'low', 'medium'] },
+        { prov: 'OpenAI', name: 'o4-mini', levels: ['low', 'medium', 'high'] },
+        { prov: 'OpenAI', name: 'GPT-4.1', levels: ['off'] },
+      ];
+      let MODEL_IX = 0;
+      let EFFORT = 'medium';
+
+      function clampEffort(levels, want) {
+        if (levels.includes(want)) return want;
+        const ix = LEVELS.indexOf(want);
+        let best = levels[0],
+          bestD = Infinity;
+        for (const l of levels) {
+          const d = Math.abs(LEVELS.indexOf(l) - ix);
+          if (d < bestD) {
+            best = l;
+            bestD = d;
+          }
+        }
+        return best;
+      }
+      function renderMe() {
+        const m = MODELS[MODEL_IX];
+        $('meName').textContent = m.name;
+        const effortDisabled = m.levels.length === 1 && m.levels[0] === 'off';
+        $('meEff').textContent = effortDisabled ? '' : EFFORT;
+        $('meEff').style.display = effortDisabled ? 'none' : '';
+        const pop = $('mePop');
+        let html = '<div class="me-cap">Model</div>';
+        let lastProv = null;
+        MODELS.forEach((mm, i) => {
+          if (mm.prov !== lastProv) {
+            html += `<div class="me-prov">${mm.prov}</div>`;
+            lastProv = mm.prov;
+          }
+          html += `<button class="me-row ${i === MODEL_IX ? 'on' : ''}" data-ix="${i}" role="menuitemradio" aria-checked="${i === MODEL_IX}"><span class="ck">✓</span><span class="mname">${mm.name}</span></button>`;
+        });
+        html +=
+          '<div class="me-div"></div><div class="me-cap">Reasoning effort</div><div class="me-eff">';
+        for (const l of LEVELS) {
+          const ok = m.levels.includes(l);
+          html += `<button data-l="${l}" class="${EFFORT === l ? 'on' : ''}" ${ok ? '' : 'disabled'}>${l}</button>`;
+        }
+        html += '</div>';
+        pop.innerHTML = html;
+        pop.querySelectorAll('.me-row').forEach((b) =>
+          b.addEventListener('click', () => {
+            MODEL_IX = Number(b.dataset.ix);
+            EFFORT = clampEffort(MODELS[MODEL_IX].levels, EFFORT);
+            renderMe();
+            toast(`下一条回复起：${MODELS[MODEL_IX].name} · ${EFFORT}`);
+          }),
+        );
+        pop.querySelectorAll('.me-eff button:not([disabled])').forEach((b) =>
+          b.addEventListener('click', () => {
+            EFFORT = b.dataset.l;
+            renderMe();
+            toast(`下一条回复起：${MODELS[MODEL_IX].name} · ${EFFORT}`);
+          }),
+        );
+      }
+      $('meBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        const pop = $('mePop');
+        const open = pop.style.display === 'none';
+        pop.style.display = open ? '' : 'none';
+        $('meBtn').setAttribute('aria-expanded', String(open));
+      });
+      document.addEventListener('mousedown', (e) => {
+        if (!$('me').contains(e.target)) {
+          $('mePop').style.display = 'none';
+          $('meBtn').setAttribute('aria-expanded', 'false');
+        }
+      });
+      renderMe();
+
+      /* ---------- go ---------- */
+      VARIANT = 'B'; // 用户选定的方向作为默认
+      document
+        .querySelectorAll('#vtabs button')
+        .forEach((b) => b.classList.toggle('on', b.dataset.v === 'B'));
+      $('rationale').innerHTML = RATIONALE.B;
+      if (matchMedia('(prefers-color-scheme: dark)').matches) setTheme('dark');
+      script = buildScript();
+      seek(0, false);
+      play();
+    </script>
+  </body>
+</html>

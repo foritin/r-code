@@ -1,0 +1,887 @@
+<!doctype html>
+<!-- Charter — follow-up composer parity + combined model·effort control.
+     Design mockup (docs/design). NOT product code. Open in a browser.
+     Two changes proposed:
+       1. The Task Room follow-up input gets the SAME card + bottom-row UI as
+          the Home (first) composer, instead of the bare pill it is today.
+       2. Model and reasoning effort are merged into ONE control ("Model · effort")
+          — a popover, like Codex — so effort always reads against its model.
+     The model·effort popover and the theme toggle are live. Try them. -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — follow-up composer + model·effort mockup</title>
+    <style>
+      body[data-theme='light'] {
+        --backdrop: #e8e6e2;
+        --side: #f6f5f1;
+        --main: #ffffff;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg2: #6e6a61;
+        --fg3: #a39e94;
+        --hover: #e8e5de;
+        --active: #e2dfd7;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --warn: #b06f10;
+        --ok: #2f9e63;
+        --info: #3f7bd9;
+        --card-shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --pop-shadow: 0 12px 40px rgba(30, 26, 18, 0.18);
+      }
+      body[data-theme='dark'] {
+        --backdrop: #141312;
+        --side: #1d1c19;
+        --main: #161513;
+        --card: #21201c;
+        --border: #33312b;
+        --border-soft: #2a2924;
+        --border-strong: #4a473f;
+        --fg: #e8e6e0;
+        --fg2: #a29d92;
+        --fg3: #6e6a61;
+        --hover: #292823;
+        --active: #31302a;
+        --accent: #e8e6e0;
+        --accent-fg: #1a1917;
+        --danger: #e06b62;
+        --warn: #d29a3a;
+        --ok: #46b477;
+        --info: #6ca1e8;
+        --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.35);
+        --pop-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--backdrop);
+        color: var(--fg);
+        padding: 60px 24px 80px;
+        min-height: 100vh;
+      }
+
+      /* ---------- control bar ---------- */
+      .bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 50;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 18px;
+        background: var(--side);
+        border-bottom: 1px solid var(--border);
+      }
+      .bar b {
+        font-size: 13px;
+      }
+      .bar .sp {
+        flex: 1;
+      }
+      .bar button {
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+      }
+
+      .wrap {
+        max-width: 760px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 34px;
+      }
+      .lead {
+        font-size: 13px;
+        color: var(--fg2);
+        line-height: 1.6;
+      }
+      .sec-h {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        margin: 0 0 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sec-h .tag {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 2px 7px;
+        border-radius: 999px;
+        text-transform: none;
+      }
+      .tag.after {
+        color: var(--ok);
+        background: color-mix(in srgb, var(--ok) 16%, transparent);
+      }
+      .tag.before {
+        color: var(--fg3);
+        background: var(--hover);
+      }
+      .note {
+        font-size: 12px;
+        color: var(--fg3);
+        margin-top: 9px;
+        line-height: 1.55;
+      }
+
+      /* ---------- composer card (shared by Home + Task Room) ---------- */
+      .composer {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+      .card {
+        width: 100%;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--card-shadow);
+      }
+      .chiprow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 12px 0;
+        flex-wrap: wrap;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg2);
+        font: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 4px 11px;
+        cursor: pointer;
+      }
+      .chip:hover {
+        background: var(--hover);
+      }
+      .chip .sep {
+        opacity: 0.5;
+      }
+      .ta {
+        display: block;
+        width: 100%;
+        border: none;
+        outline: none;
+        resize: none;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        font-size: 14.5px;
+        line-height: 1.55;
+        padding: 10px 16px 4px;
+      }
+      .ta.small {
+        font-size: 13.5px;
+        min-height: 24px;
+      }
+      .ta::placeholder {
+        color: var(--fg3);
+      }
+
+      /* bottom row */
+      .btmrow {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 8px 8px 10px;
+      }
+      .btmrow .spacer {
+        flex: 1;
+      }
+      .iconbtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        color: var(--fg2);
+        cursor: pointer;
+      }
+      .iconbtn:hover {
+        background: var(--hover);
+      }
+      .iconbtn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      /* trust / approval segmented control */
+      .seg {
+        display: inline-flex;
+        background: var(--hover);
+        border-radius: 999px;
+        padding: 3px;
+        gap: 2px;
+      }
+      .seg button {
+        font: inherit;
+        font-size: 12px;
+        color: var(--fg2);
+        padding: 4px 9px;
+        border-radius: 999px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .seg button.on {
+        background: var(--card);
+        color: var(--fg);
+        font-weight: 550;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+      .seg button.danger {
+        color: var(--danger);
+        opacity: 0.75;
+      }
+      .seg button.danger.on {
+        background: color-mix(in srgb, var(--danger) 14%, var(--card));
+        color: var(--danger);
+        opacity: 1;
+        font-weight: 650;
+      }
+      .chip.lite {
+        border-color: transparent;
+      }
+
+      /* send */
+      .send {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: none;
+        background: var(--hover);
+        color: var(--fg3);
+        cursor: pointer;
+        margin-left: 4px;
+      }
+      .send.ready {
+        background: var(--accent);
+        color: var(--accent-fg);
+        box-shadow: var(--card-shadow);
+      }
+      .send svg {
+        width: 15px;
+        height: 15px;
+      }
+
+      .hint {
+        font-size: 12px;
+        color: var(--fg3);
+        padding: 9px 4px 0;
+      }
+      .hint b {
+        color: var(--fg2);
+        font-weight: 550;
+      }
+
+      /* ---------- combined MODEL · EFFORT control ---------- */
+      .me {
+        position: relative;
+      }
+      .me-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+        background: transparent;
+        color: var(--fg2);
+        font: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 5px 9px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .me-btn:hover {
+        background: var(--hover);
+      }
+      .me-btn .spark {
+        color: var(--fg3);
+      }
+      .me-btn .eff {
+        color: var(--fg3);
+      }
+      .me-btn .eff::before {
+        content: '·';
+        margin-right: 5px;
+        color: var(--fg3);
+      }
+      .me-btn svg.chev {
+        width: 12px;
+        height: 12px;
+        color: var(--fg3);
+      }
+
+      .me-pop {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        right: 0;
+        width: 268px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--pop-shadow);
+        padding: 6px;
+        z-index: 20;
+      }
+      .me-pop[hidden] {
+        display: none;
+      }
+      .me-cap {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        padding: 8px 8px 4px;
+      }
+      .me-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        font-size: 13px;
+        text-align: left;
+        padding: 7px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .me-row:hover {
+        background: var(--hover);
+      }
+      .me-row .ck {
+        width: 14px;
+        height: 14px;
+        flex: none;
+        color: var(--accent);
+        opacity: 0;
+      }
+      .me-row.on .ck {
+        opacity: 1;
+      }
+      .me-row .mname {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .me-row .mprov {
+        font-size: 11px;
+        color: var(--fg3);
+      }
+      .me-div {
+        height: 1px;
+        background: var(--border-soft);
+        margin: 6px 4px;
+      }
+      /* effort segment inside popover */
+      .me-eff {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        padding: 2px 6px 6px;
+      }
+      .me-eff button {
+        font: inherit;
+        font-size: 11.5px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg2);
+        border-radius: 999px;
+        padding: 3px 10px;
+        cursor: pointer;
+      }
+      .me-eff button.on {
+        background: var(--active);
+        border-color: transparent;
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .me-eff button:disabled {
+        opacity: 0.32;
+        cursor: default;
+      }
+
+      /* frame chrome so the composer reads as living inside a surface */
+      .frame {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 18px;
+      }
+      .frame.room {
+        background: var(--main);
+      }
+      .room-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--fg2);
+        padding: 0 4px 12px;
+        border-bottom: 1px solid var(--border-soft);
+        margin-bottom: 14px;
+      }
+      .room-head .st {
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--ok);
+        background: color-mix(in srgb, var(--ok) 16%, transparent);
+        border-radius: 999px;
+        padding: 2px 8px;
+      }
+      /* the current bare follow-up pill (BEFORE) */
+      .oldpill {
+        display: flex;
+        gap: 9px;
+        align-items: flex-end;
+      }
+      .oldpill textarea {
+        flex: 1;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        box-shadow: var(--card-shadow);
+        padding: 9px 16px;
+        font: inherit;
+        font-size: 12.5px;
+        color: var(--fg);
+        resize: none;
+      }
+      .oldpill textarea::placeholder {
+        color: var(--fg3);
+      }
+    </style>
+  </head>
+  <body data-theme="light">
+    <div class="bar">
+      <b>Charter — follow-up composer parity + combined model·effort</b>
+      <span class="sp"></span>
+      <button id="themeBtn" onclick="toggleTheme()">◐ Dark</button>
+    </div>
+
+    <div class="wrap">
+      <div class="lead">
+        Two proposed changes. The <b>model · effort</b> pill and the theme toggle are live — click
+        the pill, switch models, and watch the effort options follow the model.
+      </div>
+
+      <!-- ============ 1. combined model · effort ============ -->
+      <section>
+        <div class="sec-h">
+          1 · Combined model + effort control <span class="tag after">NEW</span>
+        </div>
+        <div class="note" style="margin: 0 0 14px">
+          Today effort and model are two separate dropdowns, so an effort like “medium” floats free
+          of the model it belongs to. Merged into one pill (like Codex), the effort always reads
+          against its model, and switching models re-scopes the effort choices to what that model
+          actually supports.
+        </div>
+        <div class="frame" style="display: flex; justify-content: flex-end">
+          <!-- standalone demo of the control, popover open -->
+          <div class="me" id="demoMe"></div>
+        </div>
+      </section>
+
+      <!-- ============ 2a. Home / first composer ============ -->
+      <section>
+        <div class="sec-h">2 · First input box (Home composer) — with the merged control</div>
+        <div class="composer">
+          <div class="card">
+            <div class="chiprow">
+              <button class="chip">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="14"
+                  height="14"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                </svg>
+                <span>pi-agentic-ide</span>
+                <span class="sep">·</span>
+                <svg
+                  viewBox="0 0 24 24"
+                  width="13"
+                  height="13"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <circle cx="6" cy="6" r="2.5" />
+                  <circle cx="6" cy="18" r="2.5" />
+                  <circle cx="18" cy="12" r="2.5" />
+                  <path d="M6 8.5v7M8.3 12H15" />
+                </svg>
+                <span>main</span>
+                <svg
+                  viewBox="0 0 24 24"
+                  width="13"
+                  height="13"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+            </div>
+            <textarea
+              class="ta"
+              rows="2"
+              placeholder="Describe a task, ask a question, or paste an error…"
+            ></textarea>
+            <div class="btmrow">
+              <button class="iconbtn" title="Attach project files">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 8v8M8 12h8" />
+                  <circle cx="12" cy="12" r="9" />
+                </svg>
+              </button>
+              <div class="seg">
+                <button>Read</button>
+                <button class="on">Approve</button>
+                <button>Auto</button>
+                <button class="danger">Full</button>
+              </div>
+              <button class="chip lite">Advanced</button>
+              <span class="spacer"></span>
+              <div class="me" id="homeMe"></div>
+              <button class="send ready" title="Start task">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="hint">
+            <b>Approve changes</b> — plans first; every write/command asks you. ⏎ to start · ⇧⏎ new
+            line.
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 2b. Task Room follow-up ============ -->
+      <section>
+        <div class="sec-h">
+          3 · Follow-up composer (Task Room)
+          <span class="tag before">BEFORE</span>
+        </div>
+        <div class="frame room">
+          <div class="room-head">
+            <span>← Home</span>
+            <b style="color: var(--fg)">Add rate limiting to the login API</b>
+            <span class="st">Accepted</span>
+          </div>
+          <div class="oldpill">
+            <textarea
+              rows="1"
+              placeholder="Follow up — starts a new task in this project…"
+            ></textarea>
+            <button class="send" title="Send">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+            </button>
+          </div>
+          <div class="note">
+            Bare pill — no project/branch, no trust level, no model. A follow-up “starts a new
+            task”, yet you can’t set how it runs.
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sec-h">
+          3 · Follow-up composer (Task Room)
+          <span class="tag after">AFTER — parity with the first composer</span>
+        </div>
+        <div class="frame room">
+          <div class="room-head">
+            <span>← Home</span>
+            <b style="color: var(--fg)">Add rate limiting to the login API</b>
+            <span class="st">Accepted</span>
+          </div>
+          <div class="composer">
+            <div class="card">
+              <div class="chiprow">
+                <button class="chip">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="14"
+                    height="14"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                  </svg>
+                  <span>pi-agentic-ide</span>
+                  <span class="sep">·</span>
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="13"
+                    height="13"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                  >
+                    <circle cx="6" cy="6" r="2.5" />
+                    <circle cx="6" cy="18" r="2.5" />
+                    <circle cx="18" cy="12" r="2.5" />
+                    <path d="M6 8.5v7M8.3 12H15" />
+                  </svg>
+                  <span>main</span>
+                </button>
+              </div>
+              <textarea
+                class="ta small"
+                rows="1"
+                placeholder="Follow up — starts a new task in this project…"
+              ></textarea>
+              <div class="btmrow">
+                <button class="iconbtn" title="Attach project files">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 8v8M8 12h8" />
+                    <circle cx="12" cy="12" r="9" />
+                  </svg>
+                </button>
+                <div class="seg">
+                  <button>Read</button>
+                  <button class="on">Approve</button>
+                  <button>Auto</button>
+                  <button class="danger">Full</button>
+                </div>
+                <span class="spacer"></span>
+                <div class="me" id="roomMe"></div>
+                <button class="send" title="Send">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div class="hint">
+              Seeded from this task’s mode & model — change any of it for the follow-up. ⏎ to start.
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          Same card, same bottom row as the first composer — project/branch chip, trust level, the
+          merged model·effort pill, send. Seeded from the finished task but fully editable, since a
+          follow-up really is a new task.
+          <br />While the agent is <b>running</b> (a steer reply) or a <b>plan awaits</b>, the trust
+          &amp; model controls stay hidden — you can’t re-pick them mid-run — so the row collapses
+          back toward the simple pill in those states. (Shown here: the “Accepted → follow-up”
+          state.)
+        </div>
+      </section>
+    </div>
+
+    <script>
+      function toggleTheme() {
+        const b = document.body;
+        const next = b.dataset.theme === 'light' ? 'dark' : 'light';
+        b.dataset.theme = next;
+        document.getElementById('themeBtn').textContent = next === 'light' ? '◐ Dark' : '◑ Light';
+      }
+
+      // ---- model catalogue (mirrors ModelDescriptorDto: displayName, provider, supported levels)
+      const MODELS = [
+        {
+          id: 'anthropic::sonnet',
+          prov: 'Anthropic',
+          name: 'Claude Sonnet 4.5',
+          short: 'Sonnet 4.5',
+          levels: ['off', 'low', 'medium', 'high', 'max'],
+        },
+        {
+          id: 'anthropic::opus',
+          prov: 'Anthropic',
+          name: 'Claude Opus 4.8',
+          short: 'Opus 4.8',
+          levels: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+        },
+        {
+          id: 'openai::codex',
+          prov: 'OpenAI',
+          name: 'GPT-5.6 Codex',
+          short: 'GPT-5.6 Codex',
+          levels: ['minimal', 'low', 'medium', 'high'],
+        },
+      ];
+      const CHEV =
+        '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>';
+      const CK =
+        '<svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12l5 5L20 6"/></svg>';
+      const SPARK = '<span class="spark">✦</span>';
+
+      // A self-contained model·effort widget bound to a container element.
+      function mountME(el, state, opts) {
+        opts = opts || {};
+        function clamp(model, lvl) {
+          if (model.levels.includes(lvl)) return lvl;
+          const order = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+          const i = order.indexOf(lvl);
+          for (let j = i + 1; j < order.length; j++)
+            if (model.levels.includes(order[j])) return order[j];
+          for (let j = i - 1; j >= 0; j--) if (model.levels.includes(order[j])) return order[j];
+          return model.levels[0];
+        }
+        function render() {
+          const m = MODELS.find((x) => x.id === state.model);
+          const effLabel = state.eff === 'off' ? 'no thinking' : state.eff;
+          const rows = MODELS.map((x, i) => {
+            const head =
+              i === 0 || MODELS[i - 1].prov !== x.prov
+                ? '<div class="me-cap">' + x.prov + '</div>'
+                : '';
+            return (
+              head +
+              '<button class="me-row ' +
+              (x.id === state.model ? 'on' : '') +
+              '" data-m="' +
+              x.id +
+              '">' +
+              CK +
+              '<span class="mname">' +
+              x.name +
+              '</span></button>'
+            );
+          }).join('');
+          const order = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+          const effBtns = order
+            .map((lvl) => {
+              const ok = m.levels.includes(lvl);
+              const lab = lvl === 'off' ? 'off' : lvl;
+              return (
+                '<button data-e="' +
+                lvl +
+                '" class="' +
+                (state.eff === lvl ? 'on' : '') +
+                '" ' +
+                (ok ? '' : 'disabled') +
+                '>' +
+                lab +
+                '</button>'
+              );
+            })
+            .join('');
+          el.innerHTML =
+            '<button class="me-btn" data-toggle>' +
+            SPARK +
+            '<span class="mn">' +
+            m.short +
+            '</span>' +
+            '<span class="eff">' +
+            effLabel +
+            '</span>' +
+            CHEV +
+            '</button>' +
+            '<div class="me-pop" ' +
+            (state.open ? '' : 'hidden') +
+            '>' +
+            '<div class="me-cap">Model</div>' +
+            rows +
+            '<div class="me-div"></div>' +
+            '<div class="me-cap">Reasoning effort</div>' +
+            '<div class="me-eff">' +
+            effBtns +
+            '</div>' +
+            '</div>';
+          el.querySelector('[data-toggle]').onclick = (e) => {
+            e.stopPropagation();
+            state.open = !state.open;
+            closeOthers(el);
+            render();
+          };
+          el.querySelectorAll('[data-m]').forEach((b) => {
+            b.onclick = (e) => {
+              e.stopPropagation();
+              state.model = b.dataset.m;
+              const nm = MODELS.find((x) => x.id === state.model);
+              state.eff = clamp(nm, state.eff);
+              render();
+            };
+          });
+          el.querySelectorAll('[data-e]').forEach((b) => {
+            if (b.disabled) return;
+            b.onclick = (e) => {
+              e.stopPropagation();
+              state.eff = b.dataset.e;
+              render();
+            };
+          });
+        }
+        el._close = () => {
+          if (state.open) {
+            state.open = false;
+            render();
+          }
+        };
+        render();
+      }
+
+      const widgets = [];
+      function closeOthers(except) {
+        widgets.forEach((w) => {
+          if (w !== except && w._close) w._close();
+        });
+      }
+      document.addEventListener('click', () => closeOthers(null));
+
+      function make(id, open) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        widgets.push(el);
+        mountME(el, { model: 'anthropic::sonnet', eff: 'high', open: !!open });
+      }
+      make('demoMe', true); // popover open so the merged control is visible at a glance
+      make('homeMe', false);
+      make('roomMe', false);
+    </script>
+  </body>
+</html>

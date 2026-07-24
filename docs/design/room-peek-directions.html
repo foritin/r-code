@@ -1,0 +1,2397 @@
+<!doctype html>
+<!-- Charter — 会话内看文件：方向 A/B/C 对比 mockup v2 (docs/design). NOT product code.
+     v2: 每个方向带"自动演示"——模拟光标 + 字幕 + agent 流式输出，交互过程自己演给你看；演示外也可自由点击。
+     A = Room 内驻留式文件 peek 分屏 · B = ⌘E 连续转场（聊天列不动） · C = 单一工作台（pane 化） -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — 会话内看文件：方向 A / B / C（可交互演示）</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      html {
+        scroll-behavior: smooth;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--page);
+        color: var(--text);
+        padding: 30px 26px 110px;
+        --page: #eceae5;
+        --side: #f6f5f1;
+        --main: #fbfaf7;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --text: #201e1a;
+        --text2: #6e6a61;
+        --text3: #a39e94;
+        --chip: #f0eee8;
+        --hover: #e8e5de;
+        --active: #e2dfd7;
+        --accent: #1b1a16;
+        --accent-text: #fff;
+        --ok: #2f9e63;
+        --ok-bg: #e7f5ec;
+        --run: #3f7bd9;
+        --run-bg: #e9f1fd;
+        --warn: #b06f10;
+        --warn-bg: #faf0dc;
+        --danger: #c4453d;
+        --plus-bg: #e9f6ee;
+        --minus-bg: #fbeceb;
+        --code-bg: #fcfbf8;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        transition: background 0.25s;
+      }
+      body.dark {
+        --page: #16140f;
+        --side: #1d1a15;
+        --main: #211e18;
+        --card: #262219;
+        --border: #3a352a;
+        --border-soft: #302b21;
+        --text: #ece8de;
+        --text2: #a49e90;
+        --text3: #746e60;
+        --chip: #2c2820;
+        --hover: #2e2a21;
+        --active: #363126;
+        --accent: #ece8de;
+        --accent-text: #1b1a16;
+        --ok: #4cba7d;
+        --ok-bg: #22301f;
+        --run: #6f9fe8;
+        --run-bg: #1e2738;
+        --warn: #d9a04a;
+        --warn-bg: #362b16;
+        --danger: #e06a60;
+        --plus-bg: #203026;
+        --minus-bg: #382220;
+        --code-bg: #1d1a14;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .pagehead {
+        max-width: 1200px;
+        margin: 0 auto 14px;
+      }
+      .pagehead h1 {
+        font-size: 19px;
+        letter-spacing: -0.01em;
+      }
+      .pagehead p {
+        color: var(--text2);
+        font-size: 13px;
+        margin-top: 5px;
+        line-height: 1.7;
+        max-width: 880px;
+      }
+      .dirtabs {
+        max-width: 1200px;
+        margin: 18px auto 0;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        position: sticky;
+        top: 12px;
+        z-index: 50;
+      }
+      .dirtab {
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--text2);
+        border-radius: 999px;
+        padding: 7px 16px;
+        font-size: 12.8px;
+        font-weight: 560;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+        font-family: inherit;
+      }
+      .dirtab b {
+        font-weight: 700;
+        margin-right: 5px;
+      }
+      .dirtab.on {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      .themebtn {
+        margin-left: auto;
+      }
+
+      section.dir {
+        display: none;
+      }
+      body[data-dir='a'] #dir-a,
+      body[data-dir='b'] #dir-b,
+      body[data-dir='c'] #dir-c {
+        display: block;
+      }
+
+      .caption {
+        max-width: 1200px;
+        margin: 22px auto 12px;
+      }
+      .caption h2 {
+        font-size: 15px;
+      }
+      .caption h2 span {
+        color: var(--text3);
+        font-weight: 400;
+        font-size: 12px;
+        margin-left: 8px;
+      }
+      .caption p {
+        color: var(--text2);
+        font-size: 12.8px;
+        line-height: 1.75;
+        margin-top: 6px;
+        max-width: 900px;
+      }
+      .caption .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 10px;
+        flex-wrap: wrap;
+      }
+      .demobtn {
+        background: var(--accent);
+        color: var(--accent-text);
+        border: none;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 650;
+        padding: 9px 20px;
+        cursor: pointer;
+        font-family: inherit;
+        box-shadow: var(--shadow);
+      }
+      .demobtn:hover {
+        opacity: 0.88;
+      }
+      .try {
+        background: var(--run-bg);
+        color: var(--run);
+        font-size: 12px;
+        border-radius: 8px;
+        padding: 6px 11px;
+        line-height: 1.6;
+      }
+      .kbd-i {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 0 4px;
+        background: var(--card);
+      }
+
+      .win {
+        max-width: 1200px;
+        margin: 0 auto;
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22);
+        overflow: hidden;
+        display: flex;
+        height: 660px;
+        position: relative;
+      }
+
+      /* ---------- sidebar ---------- */
+      .side {
+        width: 218px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border-soft);
+        display: flex;
+        flex-direction: column;
+        padding: 12px 9px 10px;
+      }
+      .traffic {
+        display: flex;
+        gap: 7px;
+        padding: 2px 8px 12px;
+      }
+      .traffic i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--border);
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 9px 12px;
+        font-weight: 650;
+        font-size: 14px;
+      }
+      .nrow {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 9px;
+        border-radius: 8px;
+        font-size: 12.6px;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .nrow:hover {
+        background: var(--hover);
+      }
+      .nrow.sel {
+        background: var(--active);
+        font-weight: 560;
+      }
+      .nrow .ic {
+        color: var(--text3);
+        flex: none;
+        width: 14px;
+        text-align: center;
+        font-size: 12px;
+      }
+      .nrow .grow {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sec {
+        font-size: 10.5px;
+        color: var(--text3);
+        padding: 14px 10px 5px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: none;
+      }
+      .dot.run {
+        background: var(--run);
+        animation: pulse 1.6s infinite;
+      }
+      .dot.idle {
+        background: var(--text3);
+        opacity: 0.45;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(63, 123, 217, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 0 4px transparent;
+        }
+      }
+      .kbd {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 9.5px;
+        color: var(--text3);
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 0 4px;
+      }
+      .sgrow {
+        flex: 1;
+      }
+      .sbottom {
+        border-top: 1px solid var(--border-soft);
+        padding-top: 7px;
+      }
+      .sbottom .nrow {
+        color: var(--text2);
+        font-size: 12.3px;
+      }
+
+      /* ---------- task room ---------- */
+      .room {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+      .rhead {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 11px 14px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .rback {
+        border: none;
+        background: none;
+        color: var(--text2);
+        font-size: 13px;
+        cursor: pointer;
+        padding: 3px 6px;
+        border-radius: 6px;
+        font-family: inherit;
+      }
+      .rback:hover {
+        background: var(--hover);
+      }
+      .rtitle {
+        font-weight: 650;
+        font-size: 13.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .pchip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        background: var(--chip);
+        border-radius: 999px;
+        font-size: 11px;
+        color: var(--text2);
+        padding: 2px 9px;
+        font-family: var(--mono);
+        flex: none;
+      }
+      .statechip {
+        font-size: 10.5px;
+        font-weight: 650;
+        border-radius: 999px;
+        padding: 2px 9px;
+        background: var(--run-bg);
+        color: var(--run);
+        flex: none;
+      }
+      .rsp {
+        flex: 1;
+      }
+      .ghostbtn {
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text2);
+        border-radius: 8px;
+        font-size: 11.5px;
+        padding: 4px 10px;
+        cursor: pointer;
+        font-family: inherit;
+        flex: none;
+      }
+      .ghostbtn:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .ghostbtn.glow {
+        box-shadow:
+          0 0 0 3px var(--run-bg),
+          0 0 0 1.5px var(--run);
+        color: var(--text);
+      }
+
+      .rbody {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+      }
+      .rmain {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .tl {
+        flex: 1;
+        overflow-y: auto;
+        padding: 18px 26px 8px;
+      }
+      .you {
+        max-width: 78%;
+        margin-left: auto;
+        background: var(--chip);
+        border-radius: 13px 13px 4px 13px;
+        padding: 9px 13px;
+        font-size: 13px;
+        line-height: 1.65;
+        margin-bottom: 14px;
+      }
+      .agent {
+        max-width: 82%;
+        font-size: 13px;
+        line-height: 1.7;
+        margin-bottom: 14px;
+        color: var(--text);
+      }
+      .mile {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text3);
+        font-size: 11.5px;
+        margin: 14px 0;
+      }
+      .mile::before,
+      .mile::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: var(--border-soft);
+      }
+      .mile .ok {
+        color: var(--ok);
+      }
+      .trow2 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 12.3px;
+        color: var(--text2);
+        padding: 4px 2px;
+        border-radius: 7px;
+      }
+      .trow2 .verb {
+        color: var(--text3);
+        flex: none;
+      }
+      .fchip {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--text);
+        background: var(--chip);
+        border: 1px solid var(--border-soft);
+        border-radius: 6px;
+        padding: 1px 7px;
+        cursor: pointer;
+        position: relative;
+      }
+      .fchip:hover {
+        background: var(--hover);
+        border-color: var(--border);
+      }
+      .fchip.activef {
+        background: var(--active);
+        border-color: var(--border);
+        font-weight: 600;
+      }
+      body.fresh .fchip[data-f] {
+        animation: hintring 2.2s ease-out infinite;
+      }
+      @keyframes hintring {
+        0% {
+          box-shadow: 0 0 0 0 rgba(63, 123, 217, 0.45);
+        }
+        60% {
+          box-shadow: 0 0 0 7px rgba(63, 123, 217, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(63, 123, 217, 0);
+        }
+      }
+      .dstat {
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      .dstat .plus {
+        color: var(--ok);
+      }
+      .dstat .minus {
+        color: var(--danger);
+      }
+      .okword {
+        color: var(--ok);
+        font-size: 11.5px;
+      }
+      .fadein {
+        animation: fadein 0.45s ease;
+      }
+      @keyframes fadein {
+        from {
+          opacity: 0;
+          transform: translateY(5px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .caret::after {
+        content: '▍';
+        color: var(--run);
+        animation: blink 0.9s infinite;
+        font-size: 12px;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .activity {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 26px;
+        font-size: 11.5px;
+        color: var(--text2);
+        border-top: 1px solid var(--border-soft);
+      }
+      .activity .adot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--run);
+        animation: pulse 1.6s infinite;
+        flex: none;
+      }
+      .activity .mono {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--text3);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .rcomposer {
+        margin: 8px 22px 16px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 13px;
+        box-shadow: var(--shadow);
+        padding: 10px 12px;
+      }
+      .rcomposer .ph {
+        color: var(--text3);
+        font-size: 13px;
+        padding: 1px 2px 16px;
+        min-height: 34px;
+      }
+      .rcomposer .ph.typing {
+        color: var(--text);
+      }
+      .rcomposer .foot {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .rcomposer .meta {
+        font-size: 11px;
+        color: var(--text3);
+      }
+      .send {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--accent-text);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-left: auto;
+        font-size: 12px;
+        cursor: pointer;
+        flex: none;
+      }
+
+      /* ---------- rail ---------- */
+      .rail {
+        width: 250px;
+        flex: none;
+        border-left: 1px solid var(--border-soft);
+        padding: 14px 14px 12px;
+        overflow-y: auto;
+        transition:
+          width 0.28s ease,
+          padding 0.28s ease,
+          opacity 0.2s;
+      }
+      .rail h4 {
+        font-size: 10.5px;
+        color: var(--text3);
+        font-weight: 650;
+        letter-spacing: 0.05em;
+        margin: 16px 0 7px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .rail h4:first-child {
+        margin-top: 0;
+      }
+      .livechip {
+        background: var(--run-bg);
+        color: var(--run);
+        font-size: 9px;
+        border-radius: 999px;
+        padding: 1px 6px;
+        font-weight: 700;
+      }
+      .board {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .btile {
+        background: var(--card);
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        padding: 7px 8px;
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+      }
+      .btile:hover {
+        border-color: var(--border);
+      }
+      .btile .bp {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--text2);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .btile .bh {
+        display: flex;
+        gap: 2px;
+        margin-top: 6px;
+        align-items: flex-end;
+        height: 12px;
+      }
+      .btile .bh i {
+        width: 4px;
+        background: var(--run);
+        opacity: 0.55;
+        border-radius: 1px;
+      }
+      .btile.hot {
+        border-color: var(--run);
+      }
+      .btile.hot .bp {
+        color: var(--text);
+        font-weight: 600;
+      }
+      .btile.ripple::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 9px;
+        background: var(--run);
+        opacity: 0.22;
+        animation: tileripple 0.9s ease-out;
+      }
+      @keyframes tileripple {
+        from {
+          opacity: 0.28;
+        }
+        to {
+          opacity: 0;
+        }
+      }
+      .frow {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 5px 7px;
+        border-radius: 7px;
+        cursor: pointer;
+        font-size: 11.8px;
+      }
+      .frow:hover {
+        background: var(--hover);
+      }
+      .frow.activef {
+        background: var(--active);
+      }
+      .frow .badge-m {
+        font-family: var(--mono);
+        font-size: 9.5px;
+        font-weight: 700;
+        flex: none;
+        width: 13px;
+        text-align: center;
+      }
+      .frow .badge-m.A {
+        color: var(--ok);
+      }
+      .frow .badge-m.M {
+        color: var(--warn);
+      }
+      .frow .fp {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-family: var(--mono);
+        font-size: 11px;
+      }
+      .frow .dstat {
+        flex: none;
+      }
+      .vrow {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 11.8px;
+        padding: 4px 7px;
+      }
+      .vrow .fp {
+        flex: 1;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text2);
+      }
+      .note {
+        background: var(--chip);
+        border-radius: 9px;
+        padding: 9px 11px;
+        font-size: 11.8px;
+        color: var(--text2);
+        line-height: 1.6;
+      }
+
+      /* =========== A: peek =========== */
+      .peek {
+        width: 0;
+        flex: none;
+        border-left: 1px solid var(--border-soft);
+        background: var(--code-bg);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        opacity: 0;
+        transition:
+          width 0.32s ease,
+          opacity 0.22s ease;
+      }
+      .awin.peek-open .peek {
+        width: 46%;
+        opacity: 1;
+      }
+      .awin.peek-open .rail {
+        width: 0;
+        padding: 14px 0;
+        opacity: 0;
+        border-left-color: transparent;
+      }
+      .railtab {
+        position: absolute;
+        right: 0;
+        top: 56px;
+        display: none;
+        z-index: 5;
+        writing-mode: vertical-rl;
+        font-size: 10.5px;
+        color: var(--text2);
+        background: var(--side);
+        border: 1px solid var(--border);
+        border-right: none;
+        border-radius: 8px 0 0 8px;
+        padding: 10px 4px;
+        cursor: pointer;
+        letter-spacing: 0.08em;
+      }
+      .awin.peek-open .railtab {
+        display: block;
+      }
+      .pkhead {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px 0;
+      }
+      .pktabs {
+        display: flex;
+        gap: 4px;
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+      }
+      .pktab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text2);
+        background: var(--chip);
+        border: 1px solid var(--border-soft);
+        border-radius: 7px;
+        padding: 3px 8px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .pktab.on {
+        background: var(--card);
+        color: var(--text);
+        border-color: var(--border);
+        font-weight: 600;
+      }
+      .pktab .x {
+        color: var(--text3);
+        font-size: 12px;
+        padding: 0 1px;
+      }
+      .pktab .x:hover {
+        color: var(--danger);
+      }
+      .pkclose {
+        border: none;
+        background: none;
+        color: var(--text3);
+        font-size: 15px;
+        cursor: pointer;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .pkclose:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .pkbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+      }
+      .seg2 {
+        display: flex;
+        background: var(--chip);
+        border-radius: 999px;
+        padding: 2px;
+        gap: 2px;
+      }
+      .seg2 button {
+        border: none;
+        background: none;
+        font-size: 11px;
+        color: var(--text2);
+        padding: 3px 12px;
+        border-radius: 999px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .seg2 button.on {
+        background: var(--card);
+        color: var(--text);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+      .rotag {
+        font-size: 10px;
+        color: var(--text3);
+        border: 1px solid var(--border-soft);
+        border-radius: 999px;
+        padding: 1px 8px;
+        flex: none;
+      }
+      .pksp {
+        flex: 1;
+      }
+      .pkbody {
+        flex: 1;
+        overflow-y: auto;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.75;
+        padding: 6px 0 20px;
+      }
+      .cline {
+        display: flex;
+        white-space: pre;
+      }
+      .cline .ln {
+        width: 44px;
+        flex: none;
+        text-align: right;
+        padding-right: 14px;
+        color: var(--text3);
+        user-select: none;
+        font-size: 10px;
+        line-height: inherit;
+      }
+      .cline .ct {
+        flex: 1;
+        padding-right: 16px;
+      }
+      .cline.plus {
+        background: var(--plus-bg);
+      }
+      .cline.minus {
+        background: var(--minus-bg);
+      }
+      .cline.plus .ln::after {
+        content: '+';
+        margin-left: 4px;
+        color: var(--ok);
+      }
+      .cline.minus .ln::after {
+        content: '−';
+        margin-left: 4px;
+        color: var(--danger);
+      }
+      .cline.flash {
+        animation: lineflash 1.4s ease-out;
+      }
+      @keyframes lineflash {
+        0% {
+          background: var(--run-bg);
+        }
+        100% {
+        }
+      }
+      .hunkh {
+        font-size: 10px;
+        color: var(--text3);
+        background: var(--chip);
+        padding: 3px 16px;
+        margin: 8px 0 4px;
+      }
+      .tok-k {
+        color: #9a4fb3;
+      }
+      .dark .tok-k {
+        color: #c792ea;
+      }
+      .tok-s {
+        color: #a3691c;
+      }
+      .dark .tok-s {
+        color: #ecc48d;
+      }
+      .tok-f {
+        color: #2f6fce;
+      }
+      .dark .tok-f {
+        color: #82aaff;
+      }
+      .tok-c {
+        color: var(--text3);
+        font-style: italic;
+      }
+
+      /* =========== B =========== */
+      .bwin .world {
+        flex: 0 0 0px;
+        min-width: 0;
+        overflow: hidden;
+        opacity: 0;
+        display: flex;
+        border-right: 1px solid transparent;
+        transition:
+          flex-basis 0.4s ease,
+          opacity 0.28s ease;
+      }
+      .bwin.slow .world {
+        transition-duration: 1.1s, 0.8s;
+      }
+      .bwin.edit .world {
+        flex: 1 1 auto;
+        opacity: 1;
+        border-right-color: var(--border-soft);
+      }
+      .bwin .room {
+        flex: 1 1 auto;
+        transition: flex 0.4s ease;
+      }
+      .bwin.slow .room {
+        transition-duration: 1.1s;
+      }
+      .bwin.edit .room {
+        flex: 0 0 375px;
+      }
+      .bwin.edit .rail {
+        width: 0;
+        padding: 0;
+        opacity: 0;
+        border-left-color: transparent;
+      }
+      .bwin.edit .rcomposer {
+        margin: 8px 12px 12px;
+      }
+      .bwin.edit .tl {
+        padding: 14px 14px 8px;
+      }
+      .bwin.edit .activity {
+        padding: 7px 14px;
+      }
+      .bwin.edit .rhead .ghostbtn.oe {
+        display: none;
+      }
+      .bwin .room.trace {
+        box-shadow: inset 0 0 0 2px var(--run);
+      }
+      .bwin .room.trace::before {
+        content: '你的对话 — 同一列';
+        position: absolute;
+        top: 6px;
+        right: 10px;
+        z-index: 8;
+        background: var(--run);
+        color: #fff;
+        font-size: 10px;
+        font-weight: 650;
+        border-radius: 999px;
+        padding: 2px 9px;
+      }
+      .etree {
+        width: 190px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border-soft);
+        padding: 12px 8px;
+        font-size: 12px;
+      }
+      .etree .th {
+        font-size: 10.5px;
+        color: var(--text3);
+        font-weight: 650;
+        letter-spacing: 0.05em;
+        padding: 0 8px 8px;
+      }
+      .etree .fitem {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        color: var(--text2);
+        font-family: var(--mono);
+        font-size: 11px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .etree .fitem:hover {
+        background: var(--hover);
+      }
+      .etree .fitem.sel {
+        background: var(--active);
+        color: var(--text);
+        font-weight: 600;
+      }
+      .etree .fitem .gm {
+        margin-left: auto;
+        font-size: 9.5px;
+        font-weight: 700;
+      }
+      .etree .fitem .gm.M {
+        color: var(--warn);
+      }
+      .etree .fitem .gm.A {
+        color: var(--ok);
+      }
+      .emain {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--code-bg);
+      }
+      .etabs {
+        display: flex;
+        gap: 2px;
+        padding: 8px 10px 0;
+        background: var(--main);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .etab {
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 5px 12px;
+        border-radius: 8px 8px 0 0;
+        color: var(--text2);
+        cursor: pointer;
+      }
+      .etab.on {
+        background: var(--code-bg);
+        color: var(--text);
+        border: 1px solid var(--border-soft);
+        border-bottom-color: var(--code-bg);
+        font-weight: 600;
+      }
+      .ecode {
+        flex: 1;
+        overflow-y: auto;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.75;
+        padding: 8px 0;
+      }
+      .estatus {
+        border-top: 1px solid var(--border-soft);
+        background: var(--main);
+        font-size: 10.5px;
+        color: var(--text3);
+        padding: 4px 12px;
+        display: flex;
+        gap: 14px;
+      }
+      .cmdE {
+        position: absolute;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        z-index: 20;
+        background: var(--accent);
+        color: var(--accent-text);
+        border: none;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 8px 18px;
+        cursor: pointer;
+        font-family: inherit;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+      }
+
+      /* =========== C =========== */
+      .cstates {
+        max-width: 1200px;
+        margin: 0 auto 10px;
+        display: flex;
+        gap: 6px;
+      }
+      .cstate {
+        background: var(--card);
+        border: 1px solid var(--border);
+        color: var(--text2);
+        border-radius: 8px;
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .cstate.on {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      .panes {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        gap: 10px;
+        padding: 12px;
+        background: var(--page);
+      }
+      .pane {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow: hidden;
+        box-shadow: var(--shadow);
+      }
+      .pane.proom {
+        flex: 1.1;
+      }
+      .pane.pfile {
+        flex: 1;
+      }
+      .pane.pterm {
+        flex: 0.7;
+      }
+      .phead {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border-soft);
+        font-size: 11.5px;
+        color: var(--text2);
+        cursor: grab;
+      }
+      .phead .pt {
+        font-weight: 650;
+        color: var(--text);
+      }
+      .phead .mono {
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+      .phead .px {
+        margin-left: auto;
+        border: none;
+        background: none;
+        color: var(--text3);
+        cursor: pointer;
+        font-size: 13px;
+        border-radius: 5px;
+        padding: 1px 6px;
+      }
+      .phead .px:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .pbody {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .pane .tl {
+        padding: 14px 16px 8px;
+      }
+      .pane .rcomposer {
+        margin: 8px 12px 12px;
+      }
+      .termbody {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text2);
+        padding: 12px 14px;
+        line-height: 1.8;
+      }
+      .termbody .p {
+        color: var(--ok);
+      }
+      .cwin .launcher {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 30px;
+      }
+      .greet {
+        font-family: 'Charter', Georgia, serif;
+        font-size: 21px;
+        font-weight: 650;
+        margin-bottom: 4px;
+      }
+      .greet-sub {
+        color: var(--text3);
+        font-size: 12.5px;
+        margin-bottom: 18px;
+      }
+      .bigcomposer {
+        width: 560px;
+        max-width: 90%;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        padding: 11px 13px;
+      }
+      .addpane {
+        border: 1px dashed var(--border);
+        background: none;
+        color: var(--text3);
+        border-radius: 10px;
+        font-size: 12px;
+        padding: 0 12px;
+        cursor: pointer;
+        font-family: inherit;
+        flex: none;
+        align-self: stretch;
+      }
+      .addpane:hover {
+        color: var(--text);
+        border-color: var(--text3);
+      }
+
+      /* =========== demo engine =========== */
+      #demoCursor {
+        position: fixed;
+        z-index: 1000;
+        width: 24px;
+        height: 24px;
+        pointer-events: none;
+        left: -60px;
+        top: -60px;
+        transition:
+          left 0.62s cubic-bezier(0.3, 0.75, 0.3, 1),
+          top 0.62s cubic-bezier(0.3, 0.75, 0.3, 1),
+          transform 0.12s;
+        filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.35));
+        display: none;
+      }
+      #demoCursor.press {
+        transform: scale(0.78);
+      }
+      .clickripple {
+        position: fixed;
+        z-index: 999;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2.5px solid var(--run);
+        pointer-events: none;
+        animation: crip 0.55s ease-out forwards;
+      }
+      @keyframes crip {
+        from {
+          opacity: 0.95;
+          transform: scale(0.6);
+        }
+        to {
+          opacity: 0;
+          transform: scale(3.2);
+        }
+      }
+      #demoCap {
+        position: fixed;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%) translateY(110px);
+        z-index: 998;
+        background: var(--accent);
+        color: var(--accent-text);
+        border-radius: 13px;
+        padding: 13px 20px;
+        font-size: 14px;
+        font-weight: 550;
+        line-height: 1.55;
+        box-shadow: 0 14px 50px rgba(0, 0, 0, 0.4);
+        transition: transform 0.3s ease;
+        max-width: 78vw;
+        display: flex;
+        gap: 14px;
+        align-items: center;
+      }
+      #demoCap.show {
+        transform: translateX(-50%) translateY(0);
+      }
+      #demoCap .step {
+        flex: none;
+        font-size: 11px;
+        opacity: 0.65;
+        font-family: var(--mono);
+      }
+      #demoCap .stop {
+        flex: none;
+        cursor: pointer;
+        opacity: 0.7;
+        font-size: 12px;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        padding: 2px 10px;
+      }
+      #demoCap .stop:hover {
+        opacity: 1;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 90px;
+        transform: translateX(-50%) translateY(80px);
+        background: var(--accent);
+        color: var(--accent-text);
+        font-size: 12.5px;
+        border-radius: 10px;
+        padding: 10px 18px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+        z-index: 99;
+        opacity: 0;
+        transition: all 0.3s ease;
+        pointer-events: none;
+        max-width: 82vw;
+        text-align: center;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body data-dir="a" class="fresh">
+    <div class="pagehead">
+      <h1>会话内看文件 — 三个方向（自动演示 + 自由体验）</h1>
+      <p>
+        每个方向点 <b>▶ 播放演示</b>：模拟光标会自己移动点击、agent
+        持续流式工作、字幕逐步讲解——完整看一遍交互流程； 演示随时按
+        <span class="kbd-i">Esc</span> 停止，之后所有元素都可以自己点。
+      </p>
+      <div class="dirtabs">
+        <button class="dirtab on" data-d="a"><b>A</b>Room 内文件 peek 分屏</button>
+        <button class="dirtab" data-d="b"><b>B</b>⌘E 连续转场（聊天列不动）</button>
+        <button class="dirtab" data-d="c"><b>C</b>单一工作台（pane 化）</button>
+        <button class="dirtab themebtn" id="themeToggle">◐ 深/浅色</button>
+      </div>
+    </div>
+
+    <!-- ================= A ================= -->
+    <section class="dir" id="dir-a">
+      <div class="caption">
+        <h2>
+          方向 A — Task Room 内驻留式文件 peek<span
+            >推荐先做 · 改动最小 · ≈ Claude Code file pane / Conductor 右栏</span
+          >
+        </h2>
+        <p>
+          点文件默认在会话旁打开驻留面板（非弹层）：<b>改动 / 文件</b> 双模、可 pin
+          页签、只读起步；聊天照常继续，Editor 降级为显式逃生舱。
+        </p>
+        <div class="row">
+          <button class="demobtn" onclick="demoA()">▶ 播放演示（约 45 秒）</button>
+          <span class="try"
+            >或自己点：时间线 / CHANGES 里任何文件名 · <span class="kbd-i">Esc</span> 收回</span
+          >
+        </div>
+      </div>
+      <div class="win awin" id="awin">
+        <aside class="side">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <div class="brand">✦ Charter</div>
+          <div class="nrow">
+            <span class="ic">＋</span><span class="grow">New task</span><span class="kbd">⌘N</span>
+          </div>
+          <div class="nrow"><span class="ic">☰</span><span class="grow">Inbox</span></div>
+          <div class="sec">RUNNING</div>
+          <div class="nrow sel">
+            <span class="dot run"></span><span class="grow">Add CSV export to reports</span>
+          </div>
+          <div class="nrow">
+            <span class="dot idle"></span><span class="grow">Fix flaky auth e2e</span>
+          </div>
+          <div class="sec">PROJECTS</div>
+          <div class="nrow"><span class="ic">▸</span><span class="grow">acme-app</span></div>
+          <div class="nrow"><span class="ic">▸</span><span class="grow">charter-docs</span></div>
+          <div class="sgrow"></div>
+          <div class="sbottom">
+            <div class="nrow">
+              <span class="ic">⌗</span><span class="grow">Editor</span><span class="kbd">⌘E</span>
+            </div>
+            <div class="nrow"><span class="ic">⚙</span><span class="grow">Settings</span></div>
+          </div>
+        </aside>
+        <div class="room">
+          <div class="rhead">
+            <button class="rback">‹ Home</button>
+            <span class="rtitle">Add CSV export to reports</span>
+            <span class="pchip">acme-app · main</span>
+            <span class="statechip">Working</span>
+            <span class="rsp"></span>
+            <button class="ghostbtn">Replay</button>
+            <button
+              class="ghostbtn"
+              onclick="toast('显式逃生舱：带任务上下文切到 Editor（原有行为保留）')"
+            >
+              Open in editor
+            </button>
+          </div>
+          <div class="rbody">
+            <div class="rmain">
+              <div class="tl" id="atl">
+                <div class="you">给报表页加一个导出 CSV 按钮，导出当前筛选条件下的全部行。</div>
+                <div class="mile"><span class="ok">✓</span> Plan approved · 2m</div>
+                <div class="trow2">
+                  <span class="verb">Read</span
+                  ><span class="fchip" data-f="ReportPage">src/reports/ReportPage.tsx</span>
+                </div>
+                <div class="trow2">
+                  <span class="verb">Write</span
+                  ><span class="fchip" data-f="export">src/reports/export.ts</span
+                  ><span class="dstat"
+                    ><span class="plus">+24</span> <span class="minus">−0</span></span
+                  >
+                </div>
+                <div class="trow2">
+                  <span class="verb">Write</span
+                  ><span class="fchip" data-f="ReportPage">src/reports/ReportPage.tsx</span
+                  ><span class="dstat"
+                    ><span class="plus">+18</span> <span class="minus">−2</span></span
+                  >
+                </div>
+                <div class="trow2">
+                  <span class="verb">Run</span
+                  ><span class="fchip" style="cursor: default">npm test</span
+                  ><span class="okword">passed</span>
+                </div>
+                <div class="agent">
+                  CSV 导出已经接好：新增
+                  <span class="fchip" data-f="export">src/reports/export.ts</span>
+                  负责序列化（含引号转义与
+                  BOM），按钮挂在筛选栏右侧。接下来我会补一个空结果集的用例。
+                </div>
+              </div>
+              <div class="activity">
+                <span class="adot"></span><span id="aact">Writing tests</span
+                ><span class="mono" id="aactm"
+                  >src/reports/export.test.ts · 12s · ↑2.1k ↓14.6k</span
+                >
+              </div>
+              <div class="rcomposer">
+                <div class="ph" id="aph">Reply, or steer the task…</div>
+                <div class="foot">
+                  <span class="meta">claude-sonnet-5 · effort med</span
+                  ><span class="send" id="asend">↑</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="peek" id="peek">
+              <div class="pkhead">
+                <div class="pktabs" id="pktabs"></div>
+                <button class="pkclose" onclick="closePeek()" title="Esc">✕</button>
+              </div>
+              <div class="pkbar">
+                <div class="seg2">
+                  <button id="modeDiff" class="on" onclick="setMode('diff')">改动</button>
+                  <button id="modeFile" onclick="setMode('file')">文件</button>
+                </div>
+                <span class="rotag">read-only</span>
+                <span class="dstat" id="pkstat"></span>
+                <span class="pksp"></span>
+                <button
+                  class="ghostbtn"
+                  id="pkescape"
+                  onclick="toast('显式逃生舱：在 Editor 中打开此文件（⌘点击文件也直达）')"
+                >
+                  Open in editor ⌘↵
+                </button>
+              </div>
+              <div class="pkbody" id="pkbody"></div>
+            </div>
+
+            <div class="railtab" onclick="closePeek()">CHANGES · 2</div>
+
+            <aside class="rail">
+              <h4>This task <span class="livechip">LIVE</span></h4>
+              <div class="board">
+                <div class="btile hot" id="tile-export" onclick="openPeek('export')">
+                  <div class="bp">export.ts</div>
+                  <div class="bh">
+                    <i style="height: 4px"></i><i style="height: 9px"></i
+                    ><i style="height: 12px"></i><i style="height: 7px"></i>
+                  </div>
+                </div>
+                <div class="btile" id="tile-report" onclick="openPeek('ReportPage')">
+                  <div class="bp">ReportPage.tsx</div>
+                  <div class="bh">
+                    <i style="height: 8px"></i><i style="height: 5px"></i><i style="height: 3px"></i
+                    ><i style="height: 2px"></i>
+                  </div>
+                </div>
+              </div>
+              <h4>Changes</h4>
+              <div class="frow" data-fk="export" onclick="openPeek('export')">
+                <span class="badge-m A">A</span><span class="fp">src/reports/export.ts</span
+                ><span class="dstat"><span class="plus">+24</span></span>
+              </div>
+              <div class="frow" data-fk="ReportPage" onclick="openPeek('ReportPage')">
+                <span class="badge-m M">M</span><span class="fp">src/reports/ReportPage.tsx</span
+                ><span class="dstat"
+                  ><span class="plus">+18</span> <span class="minus">−2</span></span
+                >
+              </div>
+              <h4>Verification</h4>
+              <div class="vrow">
+                <span class="fp">npm test</span><span class="okword">passed</span>
+              </div>
+              <h4>Your decision</h4>
+              <div class="note">Task is still running. Review opens when it's ready.</div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= B ================= -->
+    <section class="dir" id="dir-b">
+      <div class="caption">
+        <h2>
+          方向 B — ⌘E 连续转场：聊天列不动，世界换<span
+            >与 A 互补 · 治"切换像换了个应用" · ≈ Devin 常驻分屏的转场版</span
+          >
+        </h2>
+        <p>
+          进 Editor 不再是整面替换：会话列原位收窄靠右成为 agent
+          面板（同一列内容、同一滚动位置），编辑器世界从左侧滑入；⌘E 原路收回。
+        </p>
+        <div class="row">
+          <button class="demobtn" onclick="demoB()">▶ 播放演示（约 35 秒）</button>
+          <span class="try"
+            >或自己点：窗口底部 <span class="kbd-i">⌘E</span> 按钮（键盘按
+            <span class="kbd-i">E</span> 也行）来回切换</span
+          >
+        </div>
+      </div>
+      <div class="win bwin" id="bwin">
+        <aside class="side">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <div class="brand">✦ Charter</div>
+          <div class="nrow">
+            <span class="ic">＋</span><span class="grow">New task</span><span class="kbd">⌘N</span>
+          </div>
+          <div class="nrow"><span class="ic">☰</span><span class="grow">Inbox</span></div>
+          <div class="sec">RUNNING</div>
+          <div class="nrow sel">
+            <span class="dot run"></span><span class="grow">Add CSV export to reports</span>
+          </div>
+          <div class="sec">PROJECTS</div>
+          <div class="nrow"><span class="ic">▸</span><span class="grow">acme-app</span></div>
+          <div class="sgrow"></div>
+          <div class="sbottom">
+            <div class="nrow" onclick="toggleEdit()">
+              <span class="ic">⌗</span><span class="grow">Editor</span><span class="kbd">⌘E</span>
+            </div>
+            <div class="nrow"><span class="ic">⚙</span><span class="grow">Settings</span></div>
+          </div>
+        </aside>
+
+        <div class="world">
+          <div class="etree">
+            <div class="th">ACME-APP</div>
+            <div class="fitem">▸ e2e</div>
+            <div class="fitem">▾ src</div>
+            <div class="fitem" style="padding-left: 22px">▾ reports</div>
+            <div class="fitem sel" data-bf="export" style="padding-left: 36px">
+              export.ts<span class="gm A">A</span>
+            </div>
+            <div class="fitem" data-bf="ReportPage" style="padding-left: 36px">
+              ReportPage.tsx<span class="gm M">M</span>
+            </div>
+            <div class="fitem" style="padding-left: 36px">useReportData.ts</div>
+            <div class="fitem" style="padding-left: 22px">▸ auth</div>
+            <div class="fitem">package.json</div>
+          </div>
+          <div class="emain">
+            <div class="etabs">
+              <span class="etab on" data-bf="export">export.ts</span
+              ><span class="etab" data-bf="ReportPage">ReportPage.tsx</span>
+            </div>
+            <div class="ecode" id="bcode"></div>
+            <div class="estatus">
+              <span>main*</span><span>TypeScript</span><span>LF · UTF-8</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="room" id="broom">
+          <div class="rhead">
+            <button class="rback">‹ Home</button>
+            <span class="rtitle">Add CSV export…</span>
+            <span class="statechip">Working</span>
+            <span class="rsp"></span>
+            <button class="ghostbtn oe" onclick="toggleEdit()">Open in editor</button>
+          </div>
+          <div class="rbody">
+            <div class="rmain">
+              <div class="tl" id="btl">
+                <div class="you">给报表页加一个导出 CSV 按钮，导出当前筛选条件下的全部行。</div>
+                <div class="mile"><span class="ok">✓</span> Plan approved · 2m</div>
+                <div class="trow2">
+                  <span class="verb">Write</span><span class="fchip">src/reports/export.ts</span
+                  ><span class="dstat"><span class="plus">+24</span></span>
+                </div>
+                <div class="trow2">
+                  <span class="verb">Write</span
+                  ><span class="fchip">src/reports/ReportPage.tsx</span
+                  ><span class="dstat"
+                    ><span class="plus">+18</span> <span class="minus">−2</span></span
+                  >
+                </div>
+                <div class="trow2">
+                  <span class="verb">Run</span
+                  ><span class="fchip" style="cursor: default">npm test</span
+                  ><span class="okword">passed</span>
+                </div>
+                <div class="agent">
+                  CSV 导出已经接好，测试通过。同一个对话，在两种布局里都是它。
+                </div>
+              </div>
+              <div class="activity">
+                <span class="adot"></span><span>Writing tests</span
+                ><span class="mono">export.test.ts · 12s</span>
+              </div>
+              <div class="rcomposer">
+                <div class="ph" id="bph">Reply, or steer the task…</div>
+                <div class="foot">
+                  <span class="meta">claude-sonnet-5</span><span class="send" id="bsend">↑</span>
+                </div>
+              </div>
+            </div>
+            <aside class="rail">
+              <h4>Changes</h4>
+              <div class="frow">
+                <span class="badge-m A">A</span><span class="fp">src/reports/export.ts</span
+                ><span class="dstat"><span class="plus">+24</span></span>
+              </div>
+              <div class="frow">
+                <span class="badge-m M">M</span><span class="fp">src/reports/ReportPage.tsx</span
+                ><span class="dstat"
+                  ><span class="plus">+18</span> <span class="minus">−2</span></span
+                >
+              </div>
+              <h4>Verification</h4>
+              <div class="vrow">
+                <span class="fp">npm test</span><span class="okword">passed</span>
+              </div>
+            </aside>
+          </div>
+        </div>
+        <button class="cmdE" onclick="toggleEdit()" id="cmdEBtn">⌘E 切到 Editor</button>
+      </div>
+    </section>
+
+    <!-- ================= C ================= -->
+    <section class="dir" id="dir-c">
+      <div class="caption">
+        <h2>
+          方向 C — 单一工作台：surface 概念消失，一切皆 pane<span
+            >长期方向 · 大改 · ≈ Claude Code 桌面版</span
+          >
+        </h2>
+        <p>
+          内容区是可插拔的 pane 组合：任务房间、文件、终端都是平级面板。点文件 = 旁边多开一个
+          pane，关掉即回。
+        </p>
+        <div class="row">
+          <button class="demobtn" onclick="demoC()">▶ 播放演示（约 20 秒）</button>
+          <span class="try">或自己点：状态按钮 / 房间里的文件 chip / pane 右上角 ✕</span>
+        </div>
+      </div>
+      <div class="cstates">
+        <button class="cstate" data-cs="launcher">启动台</button>
+        <button class="cstate on" data-cs="room">任务房间</button>
+        <button class="cstate" data-cs="roomfile">房间 + 文件</button>
+        <button class="cstate" data-cs="roomfileterm">房间 + 文件 + 终端</button>
+      </div>
+      <div class="win cwin" id="cwin">
+        <aside class="side">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <div class="brand">✦ Charter</div>
+          <div class="nrow" onclick="setCState('launcher')">
+            <span class="ic">⌂</span><span class="grow">Home</span>
+          </div>
+          <div class="nrow">
+            <span class="ic">＋</span><span class="grow">New task</span><span class="kbd">⌘N</span>
+          </div>
+          <div class="sec">RUNNING</div>
+          <div class="nrow sel" onclick="setCState('room')">
+            <span class="dot run"></span><span class="grow">Add CSV export to reports</span>
+          </div>
+          <div class="sec">PROJECTS</div>
+          <div class="nrow"><span class="ic">▸</span><span class="grow">acme-app</span></div>
+          <div class="sgrow"></div>
+          <div class="sbottom">
+            <div class="nrow" onclick="setCState('roomfile')">
+              <span class="ic">⌗</span><span class="grow">File pane</span
+              ><span class="kbd">⌘E</span>
+            </div>
+            <div class="nrow"><span class="ic">⚙</span><span class="grow">Settings</span></div>
+          </div>
+        </aside>
+
+        <div class="launcher hidden" id="cLauncher">
+          <div class="greet">What should we build?</div>
+          <div class="greet-sub">acme-app · main</div>
+          <div class="bigcomposer">
+            <div class="ph" style="color: var(--text3); font-size: 13.5px; padding: 2px 2px 20px">
+              Describe the outcome…
+            </div>
+            <div class="foot" style="display: flex; align-items: center; gap: 8px">
+              <span class="meta" style="font-size: 11px; color: var(--text3)"
+                >Approve changes · claude-sonnet-5</span
+              ><span class="send">↑</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panes" id="cPanes">
+          <div class="pane proom">
+            <div class="phead">
+              <span class="pt">Task</span><span>Add CSV export to reports</span
+              ><span class="statechip" style="margin-left: 2px">Working</span
+              ><button class="px" title="⌘\">✕</button>
+            </div>
+            <div class="pbody" style="display: flex; flex-direction: column">
+              <div class="tl" style="flex: 1">
+                <div class="you">给报表页加一个导出 CSV 按钮。</div>
+                <div class="trow2">
+                  <span class="verb">Write</span
+                  ><span class="fchip" id="cchip" onclick="setCState('roomfile')"
+                    >src/reports/export.ts</span
+                  ><span class="dstat"><span class="plus">+24</span></span>
+                </div>
+                <div class="trow2">
+                  <span class="verb">Run</span
+                  ><span class="fchip" style="cursor: default">npm test</span
+                  ><span class="okword">passed</span>
+                </div>
+                <div class="agent">
+                  导出已接好。点上面的文件 chip，会在旁边开一个文件 pane，不换页面。
+                </div>
+              </div>
+              <div class="rcomposer">
+                <div class="ph">Reply…</div>
+                <div class="foot">
+                  <span class="meta">claude-sonnet-5</span><span class="send">↑</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="pane pfile hidden" id="cFilePane">
+            <div class="phead">
+              <span class="pt">File</span><span class="mono">src/reports/export.ts</span
+              ><span class="rotag">read-only</span
+              ><button class="px" id="cFileX" title="⌘\" onclick="setCState('room')">✕</button>
+            </div>
+            <div class="pbody"><div class="pkbody" id="ccode" style="padding-top: 8px"></div></div>
+          </div>
+          <div class="pane pterm hidden" id="cTermPane">
+            <div class="phead">
+              <span class="pt">Terminal</span><span class="mono">acme-app</span
+              ><button class="px" onclick="setCState('roomfile')">✕</button>
+            </div>
+            <div class="pbody termbody">
+              <div><span class="p">➜</span> npm test</div>
+              <div>PASS src/reports/export.test.ts</div>
+              <div>Tests: 6 passed, 6 total</div>
+              <div><span class="p">➜</span> ▊</div>
+            </div>
+          </div>
+          <button class="addpane" onclick="toast('新开 pane：会话 / 文件 / 终端 / Diff')">
+            ＋
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <div class="toast" id="toast"></div>
+    <div id="demoCap">
+      <span class="step" id="demoStep"></span><span id="demoText"></span
+      ><span class="stop" onclick="stopDemo()">停止 Esc</span>
+    </div>
+    <div id="demoCursor">
+      <svg width="24" height="24" viewBox="0 0 24 24">
+        <path
+          d="M5.5 2.5 L5.5 18.5 L9.6 14.9 L12.2 21 L14.9 19.8 L12.3 13.8 L17.8 13.3 Z"
+          fill="#111"
+          stroke="#fff"
+          stroke-width="1.4"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </div>
+
+    <script>
+      // ================= data =================
+      const FILES = {
+        export: {
+          path: 'src/reports/export.ts',
+          stat: '<span class="plus">+24</span> <span class="minus">−0</span>',
+          file: [
+            [
+              1,
+              '<span class="tok-c">// Serialize the filtered report rows to CSV (RFC 4180).</span>',
+            ],
+            [
+              2,
+              '<span class="tok-k">import</span> { ReportRow } <span class="tok-k">from</span> <span class="tok-s">\'./types\'</span>;',
+            ],
+            [3, ''],
+            [4, '<span class="tok-k">const</span> BOM = <span class="tok-s">\'\\ufeff\'</span>;'],
+            [5, ''],
+            [
+              6,
+              '<span class="tok-k">function</span> <span class="tok-f">escapeCell</span>(v: unknown): string {',
+            ],
+            [
+              7,
+              '  <span class="tok-k">const</span> s = String(v ?? <span class="tok-s">\'\'</span>);',
+            ],
+            [
+              8,
+              '  <span class="tok-k">return</span> /[",\\n]/.test(s) ? <span class="tok-s">`"${s.replace(/"/g, \'""\')}"`</span> : s;',
+            ],
+            [9, '}'],
+            [10, ''],
+            [
+              11,
+              '<span class="tok-k">export function</span> <span class="tok-f">toCsv</span>(rows: ReportRow[]): string {',
+            ],
+            [
+              12,
+              '  <span class="tok-k">if</span> (rows.length === 0) <span class="tok-k">return</span> BOM;',
+            ],
+            [13, '  <span class="tok-k">const</span> headers = Object.keys(rows[0]);'],
+            [14, '  <span class="tok-k">const</span> body = rows.map((r) =>'],
+            [
+              15,
+              '    headers.map((h) => <span class="tok-f">escapeCell</span>(r[h])).join(<span class="tok-s">\',\'</span>),',
+            ],
+            [16, '  );'],
+            [
+              17,
+              '  <span class="tok-k">return</span> BOM + [headers.join(<span class="tok-s">\',\'</span>), ...body].join(<span class="tok-s">\'\\n\'</span>);',
+            ],
+            [18, '}'],
+            [19, ''],
+            [
+              20,
+              '<span class="tok-k">export function</span> <span class="tok-f">downloadCsv</span>(rows: ReportRow[], name: string) {',
+            ],
+            [
+              21,
+              '  <span class="tok-k">const</span> blob = <span class="tok-k">new</span> Blob([<span class="tok-f">toCsv</span>(rows)], { type: <span class="tok-s">\'text/csv\'</span> });',
+            ],
+            [
+              22,
+              '  <span class="tok-c">// anchor-click download; revoke the object URL after.</span>',
+            ],
+            [23, '  triggerDownload(blob, <span class="tok-s">`${name}.csv`</span>);'],
+            [24, '}'],
+          ],
+          diff: { header: '@@ -0,0 +1,24 @@ new file — src/reports/export.ts', lines: 'allplus' },
+        },
+        ReportPage: {
+          path: 'src/reports/ReportPage.tsx',
+          stat: '<span class="plus">+18</span> <span class="minus">−2</span>',
+          file: [
+            [
+              42,
+              '<span class="tok-k">export function</span> <span class="tok-f">ReportToolbar</span>(props: ToolbarProps) {',
+            ],
+            [
+              43,
+              '  <span class="tok-k">const</span> { rows, filters } = <span class="tok-f">useReportData</span>(props.query);',
+            ],
+            [44, '  <span class="tok-k">return</span> ('],
+            [45, '    &lt;div className=<span class="tok-s">"report-toolbar"</span>&gt;'],
+            [46, '      &lt;FilterBar filters={filters} /&gt;'],
+            [47, '      &lt;ExportCsvButton rows={rows} name={props.query.name} /&gt;'],
+            [48, '    &lt;/div&gt;'],
+            [49, '  );'],
+            [50, '}'],
+          ],
+          diff: {
+            header: '@@ -42,8 +42,24 @@ function ReportToolbar',
+            lines: [
+              [' ', 'export function ReportToolbar(props: ToolbarProps) {'],
+              ['-', '  const { rows } = useReportData(props.query);'],
+              ['+', '  const { rows, filters } = useReportData(props.query);'],
+              [' ', '  return ('],
+              [' ', '    &lt;div className="report-toolbar"&gt;'],
+              [' ', '      &lt;FilterBar filters={filters} /&gt;'],
+              ['+', '      &lt;ExportCsvButton rows={rows} name={props.query.name} /&gt;'],
+              [' ', '    &lt;/div&gt;'],
+              [' ', '  );'],
+            ],
+          },
+        },
+      };
+
+      const q = (s) => document.querySelector(s);
+      const qa = (s) => [...document.querySelectorAll(s)];
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // ================= page chrome =================
+      qa('.dirtab[data-d]').forEach((b) =>
+        b.addEventListener('click', () => {
+          stopDemo();
+          document.body.dataset.dir = b.dataset.d;
+          qa('.dirtab[data-d]').forEach((x) => x.classList.toggle('on', x === b));
+        }),
+      );
+      const applyTheme = (dark) => document.body.classList.toggle('dark', dark);
+      applyTheme(matchMedia('(prefers-color-scheme: dark)').matches);
+      q('#themeToggle').onclick = () => applyTheme(!document.body.classList.contains('dark'));
+      document.addEventListener('pointerdown', () => document.body.classList.remove('fresh'), {
+        once: true,
+      });
+
+      let toastTimer;
+      function toast(msg) {
+        const t = q('#toast');
+        t.textContent = msg;
+        t.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+      }
+
+      // ================= code rendering =================
+      function renderCode(el, key, m) {
+        const f = FILES[key];
+        let html = '';
+        if (m === 'file') {
+          for (const [ln, ct] of f.file)
+            html += `<div class="cline"><span class="ln">${ln}</span><span class="ct">${ct}</span></div>`;
+        } else {
+          html += `<div class="hunkh">${f.diff.header}</div>`;
+          if (f.diff.lines === 'allplus') {
+            f.file.forEach(
+              ([ln, ct]) =>
+                (html += `<div class="cline plus"><span class="ln">${ln}</span><span class="ct">${ct}</span></div>`),
+            );
+          } else {
+            let n = 42;
+            for (const [sign, ct] of f.diff.lines) {
+              const cls = sign === '+' ? 'plus' : sign === '-' ? 'minus' : '';
+              html += `<div class="cline ${cls}"><span class="ln">${sign === '-' ? '' : n}</span><span class="ct">${ct}</span></div>`;
+              if (sign !== '-') n++;
+            }
+          }
+        }
+        el.innerHTML = html;
+      }
+
+      // ================= A: peek =================
+      const pinned = [];
+      let activeKey = null;
+      let mode = 'diff';
+
+      function renderPeek() {
+        const tabs = q('#pktabs');
+        tabs.innerHTML = '';
+        for (const key of pinned) {
+          const f = FILES[key];
+          const t = document.createElement('span');
+          t.className = 'pktab' + (key === activeKey ? ' on' : '');
+          t.innerHTML = `${f.path.split('/').pop()} <span class="x" title="关闭">✕</span>`;
+          t.onclick = (e) => {
+            if (e.target.classList.contains('x')) {
+              pinned.splice(pinned.indexOf(key), 1);
+              if (activeKey === key) activeKey = pinned[pinned.length - 1] ?? null;
+              if (!activeKey) return closePeek();
+            } else activeKey = key;
+            renderPeek();
+          };
+          tabs.appendChild(t);
+        }
+        if (!activeKey) return;
+        q('#pkstat').innerHTML = FILES[activeKey].stat;
+        q('#modeDiff').classList.toggle('on', mode === 'diff');
+        q('#modeFile').classList.toggle('on', mode === 'file');
+        renderCode(q('#pkbody'), activeKey, mode);
+        qa('#awin .fchip[data-f]').forEach((el) =>
+          el.classList.toggle('activef', el.dataset.f === activeKey),
+        );
+        qa('#awin .frow[data-fk]').forEach((el) =>
+          el.classList.toggle('activef', el.dataset.fk === activeKey),
+        );
+      }
+      function openPeek(key) {
+        if (!pinned.includes(key)) pinned.push(key);
+        activeKey = key;
+        q('#awin').classList.add('peek-open');
+        renderPeek();
+      }
+      function setMode(m) {
+        mode = m;
+        renderPeek();
+      }
+      function closePeek() {
+        q('#awin').classList.remove('peek-open');
+        qa('#awin .activef').forEach((el) => el.classList.remove('activef'));
+      }
+      qa('#awin .fchip[data-f]').forEach((c) =>
+        c.addEventListener('click', () => openPeek(c.dataset.f)),
+      );
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (demoRunning) return stopDemo();
+          if (q('#awin').classList.contains('peek-open')) closePeek();
+        }
+        if (
+          (e.key === 'e' || e.key === 'E') &&
+          document.body.dataset.dir === 'b' &&
+          e.target === document.body &&
+          !demoRunning
+        )
+          toggleEdit();
+      });
+
+      // ================= B =================
+      let bFile = 'export';
+      function bShow(key) {
+        bFile = key;
+        renderCode(q('#bcode'), key, 'file');
+        qa('#bwin .etab').forEach((t) => t.classList.toggle('on', t.dataset.bf === key));
+        qa('#bwin .fitem[data-bf]').forEach((t) => t.classList.toggle('sel', t.dataset.bf === key));
+      }
+      bShow('export');
+      qa('#bwin .etab, #bwin .fitem[data-bf]').forEach((t) =>
+        t.addEventListener('click', () => bShow(t.dataset.bf)),
+      );
+      function toggleEdit() {
+        const w = q('#bwin');
+        const on = w.classList.toggle('edit');
+        q('#cmdEBtn').textContent = on ? '⌘E 收回 Editor' : '⌘E 切到 Editor';
+      }
+
+      // ================= C =================
+      renderCode(q('#ccode'), 'export', 'file');
+      function setCState(s) {
+        q('#cLauncher').classList.toggle('hidden', s !== 'launcher');
+        q('#cPanes').classList.toggle('hidden', s === 'launcher');
+        q('#cFilePane').classList.toggle('hidden', s !== 'roomfile' && s !== 'roomfileterm');
+        q('#cTermPane').classList.toggle('hidden', s !== 'roomfileterm');
+        qa('.cstate').forEach((b) => b.classList.toggle('on', b.dataset.cs === s));
+      }
+      qa('.cstate').forEach((b) => b.addEventListener('click', () => setCState(b.dataset.cs)));
+
+      // ================= demo engine =================
+      let demoRunning = false;
+      let demoToken = 0;
+      const cur = q('#demoCursor');
+      const cap = q('#demoCap');
+
+      function stopDemo() {
+        if (!demoRunning) return;
+        demoRunning = false;
+        demoToken++;
+        cur.style.display = 'none';
+        cap.classList.remove('show');
+        q('#pkescape').classList.remove('glow');
+        q('#broom').classList.remove('trace');
+        q('#bwin').classList.remove('slow');
+      }
+      function guard(tok) {
+        if (!demoRunning || tok !== demoToken) throw new Error('demo-stopped');
+      }
+
+      function say(text, stepTxt) {
+        q('#demoText').innerHTML = text;
+        q('#demoStep').textContent = stepTxt || '';
+        cap.classList.add('show');
+      }
+      async function moveTo(el, tok, dx = 0, dy = 0) {
+        guard(tok);
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        await sleep(150);
+        const r = el.getBoundingClientRect();
+        cur.style.display = 'block';
+        cur.style.left = r.left + r.width / 2 + dx + 'px';
+        cur.style.top = r.top + r.height / 2 + dy + 'px';
+        await sleep(700);
+        guard(tok);
+      }
+      async function clickIt(el, tok) {
+        await moveTo(el, tok);
+        cur.classList.add('press');
+        const r = el.getBoundingClientRect();
+        const rip = document.createElement('div');
+        rip.className = 'clickripple';
+        rip.style.left = r.left + r.width / 2 - 7 + 'px';
+        rip.style.top = r.top + r.height / 2 - 7 + 'px';
+        document.body.appendChild(rip);
+        setTimeout(() => rip.remove(), 600);
+        await sleep(130);
+        cur.classList.remove('press');
+        el.click();
+        await sleep(320);
+        guard(tok);
+      }
+      async function typeInto(el, text, tok, cps = 26) {
+        el.classList.add('typing', 'caret');
+        el.textContent = '';
+        for (const ch of text) {
+          guard(tok);
+          el.textContent += ch;
+          await sleep(cps + Math.random() * 22);
+        }
+        el.classList.remove('caret');
+      }
+      function addRow(tl, html) {
+        const d = document.createElement('div');
+        d.innerHTML = html;
+        const el = d.firstElementChild;
+        el.classList.add('fadein');
+        tl.appendChild(el);
+        tl.scrollTop = tl.scrollHeight;
+        return el;
+      }
+      async function streamAgent(tl, text, tok, cps = 24) {
+        const el = addRow(tl, '<div class="agent caret"></div>');
+        for (const ch of text) {
+          guard(tok);
+          el.textContent += ch;
+          tl.scrollTop = tl.scrollHeight;
+          await sleep(cps + Math.random() * 18);
+        }
+        el.classList.remove('caret');
+        return el;
+      }
+      function startDemo(winSel) {
+        stopDemo();
+        demoRunning = true;
+        const tok = ++demoToken;
+        document.body.classList.remove('fresh');
+        q(winSel).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return tok;
+      }
+      const done = () => {
+        say('演示结束 —— 现在可以自由点击体验 ✦', '完');
+        cur.style.display = 'none';
+        setTimeout(() => {
+          if (!demoRunning) return;
+          demoRunning = false;
+          cap.classList.remove('show');
+        }, 3200);
+      };
+      const swallow = (e) => {
+        if (e.message !== 'demo-stopped') throw e;
+      };
+
+      // ================= demo A =================
+      async function demoA() {
+        const tok = startDemo('#awin');
+        try {
+          closePeek();
+          pinned.length = 0;
+          activeKey = null;
+          mode = 'diff';
+          renderPeek();
+          const tl = q('#atl');
+          await sleep(800);
+          say('你在 Home 的任务房间里正常 chat 开发，agent 正在干活……', '1/8');
+          q('#tile-export').classList.add('ripple');
+          setTimeout(() => q('#tile-export').classList.remove('ripple'), 950);
+          await sleep(2400);
+          guard(tok);
+
+          say('想看 agent 写的 export.ts？<b>直接点时间线里的文件名</b>', '2/8');
+          await sleep(900);
+          await clickIt(q('#atl .fchip[data-f=export]'), tok);
+          await sleep(500);
+
+          say('peek 在会话旁滑开：<b>改动</b>模式 · read-only。注意：左边聊天完全没有中断', '3/8');
+          await sleep(1800);
+          guard(tok);
+          q('#aact').textContent = 'Writing tests';
+          addRow(
+            tl,
+            '<div class="trow2"><span class="verb">Write</span><span class="fchip">src/reports/export.test.ts</span><span class="dstat"><span class="plus">+31</span> <span class="minus">−0</span></span></div>',
+          );
+          q('#tile-export').classList.add('ripple');
+          setTimeout(() => q('#tile-export').classList.remove('ripple'), 950);
+          await sleep(600);
+          await streamAgent(tl, '空结果集用例已加上：toCsv([]) 只输出 BOM，不再产生空行。', tok);
+          say('看左边——agent 还在继续输出，peek 不挡任何事', '4/8');
+          await sleep(1600);
+          guard(tok);
+
+          say('切到<b>文件</b>模式，看整个文件的当前全貌', '5/8');
+          await clickIt(q('#modeFile'), tok);
+          await sleep(1500);
+
+          say('再点另一个文件 —— pin 成页签，随时切换', '6/8');
+          await clickIt(q('#atl .fchip[data-f=ReportPage]'), tok);
+          await sleep(1500);
+
+          say('你也可以随时插话：composer 一直活着', '7/8');
+          await moveTo(q('#aph'), tok);
+          await typeInto(q('#aph'), '导出按钮加个 loading 态，防止连点', tok);
+          await clickIt(q('#asend'), tok);
+          q('#aph').textContent = 'Reply, or steer the task…';
+          q('#aph').classList.remove('typing');
+          addRow(tl, '<div class="you">导出按钮加个 loading 态，防止连点</div>');
+          await sleep(400);
+          await streamAgent(tl, '好，加 loading 态：导出期间按钮禁用并显示进度。', tok);
+
+          say(
+            '需要完整 IDE 才走逃生舱：<b>Open in editor</b>（或 ⌘点击文件直达）。最后 Esc 收回',
+            '8/8',
+          );
+          q('#pkescape').classList.add('glow');
+          await moveTo(q('#pkescape'), tok);
+          await sleep(1700);
+          guard(tok);
+          q('#pkescape').classList.remove('glow');
+          closePeek();
+          await sleep(600);
+          done();
+        } catch (e) {
+          swallow(e);
+        }
+      }
+
+      // ================= demo B =================
+      async function demoB() {
+        const tok = startDemo('#bwin');
+        try {
+          if (q('#bwin').classList.contains('edit')) toggleEdit();
+          q('#bwin').classList.add('slow');
+          await sleep(800);
+          say('同一个任务房间。这次你需要真正的编辑器 —— 但<b>不换世界</b>', '1/6');
+          q('#broom').classList.add('trace');
+          await sleep(2300);
+          guard(tok);
+
+          say('按 ⌘E ——盯住蓝框：你的对话列', '2/6');
+          await clickIt(q('#cmdEBtn'), tok);
+          await sleep(1500);
+
+          say(
+            '对话列没有被替换：<b>原位收窄、靠右停驻</b>——内容、滚动位置、正在输入的草稿全都还在',
+            '3/6',
+          );
+          await sleep(2600);
+          guard(tok);
+
+          say('左边是完整编辑器：文件树、页签、代码。点一个文件试试', '4/6');
+          await clickIt(q('#bwin .fitem[data-bf=ReportPage]'), tok);
+          await sleep(1600);
+
+          say('右边随时继续指挥 agent —— 对话从来没离开过', '5/6');
+          await moveTo(q('#bph'), tok);
+          await typeInto(q('#bph'), '把导出加进 e2e 冒烟里', tok);
+          await clickIt(q('#bsend'), tok);
+          q('#bph').textContent = 'Reply, or steer the task…';
+          q('#bph').classList.remove('typing');
+          addRow(q('#btl'), '<div class="you">把导出加进 e2e 冒烟里</div>');
+          await sleep(1200);
+          guard(tok);
+
+          say('⌘E 原路收回 —— 聊天始终是那一列，从头到尾', '6/6');
+          await clickIt(q('#cmdEBtn'), tok);
+          await sleep(1400);
+          q('#broom').classList.remove('trace');
+          q('#bwin').classList.remove('slow');
+          done();
+        } catch (e) {
+          swallow(e);
+        }
+      }
+
+      // ================= demo C =================
+      async function demoC() {
+        const tok = startDemo('#cwin');
+        try {
+          setCState('room');
+          await sleep(800);
+          say('单一工作台：没有"表面"了，任务房间只是一个 pane', '1/4');
+          await sleep(2000);
+          guard(tok);
+
+          say('点文件 = 旁边就地多开一个文件 pane，不换页面', '2/4');
+          await clickIt(q('#cchip'), tok);
+          await sleep(1600);
+
+          say('终端也是平级 pane，随手插拔', '3/4');
+          await clickIt(q('.cstate[data-cs=roomfileterm]'), tok);
+          await sleep(1800);
+          guard(tok);
+
+          say('关掉即回 —— pane 的心智：可开、可关、可换位', '4/4');
+          await clickIt(q('#cFileX'), tok);
+          await sleep(900);
+          done();
+        } catch (e) {
+          swallow(e);
+        }
+      }
+    </script>
+  </body>
+</html>

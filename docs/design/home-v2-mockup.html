@@ -1,0 +1,1466 @@
+<!doctype html>
+<!-- Charter Home v2 — high-fidelity design mockup (docs/design). NOT product code.
+     Open in a browser. Top control bar switches mock state (①②③) and theme. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — Home v2 mockup</title>
+    <style>
+      :root {
+        --radius: 12px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--backdrop);
+        padding: 64px 24px 48px;
+        min-height: 100vh;
+      }
+      body[data-theme='light'] {
+        --backdrop: #e8e6e2;
+        --side: #f7f6f3;
+        --main: #ffffff;
+        --card: #ffffff;
+        --border: #e7e4df;
+        --border-soft: #eeece7;
+        --text: #1c1b19;
+        --text2: #71706b;
+        --text3: #a3a19b;
+        --chip: #f1efeb;
+        --chip-hover: #e9e6e1;
+        --active: #e9e6e0;
+        --accent: #151515;
+        --accent-text: #ffffff;
+        --card-shadow: 0 1px 2px rgba(20, 18, 12, 0.05), 0 12px 32px rgba(20, 18, 12, 0.07);
+        --win-shadow: 0 24px 80px rgba(20, 18, 12, 0.28);
+        --ok: #2e9e5b;
+        --run: #3b82f6;
+        --done: #b4b2ac;
+        --warn: #b06a00;
+      }
+      body[data-theme='dark'] {
+        --backdrop: #101012;
+        --side: #1d1e20;
+        --main: #161719;
+        --card: #1e1f23;
+        --border: #2c2d31;
+        --border-soft: #26272b;
+        --text: #ececea;
+        --text2: #9d9c97;
+        --text3: #6c6b67;
+        --chip: #26272c;
+        --chip-hover: #2e3035;
+        --active: #2c2e33;
+        --accent: #ececea;
+        --accent-text: #161719;
+        --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+        --win-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+        --ok: #34c268;
+        --run: #5b9bff;
+        --done: #6c6b67;
+        --warn: #e5a43b;
+      }
+
+      /* ---- mockup control bar (not part of the product) ---- */
+      .ctl {
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 99;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: #fff8dc;
+        border: 1px solid #e6d693;
+        color: #6b5d1f;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        white-space: nowrap;
+      }
+      .ctl .tag {
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        margin-right: 4px;
+      }
+      .ctl .lab {
+        opacity: 0.7;
+        margin-left: 8px;
+      }
+      .ctl button {
+        border: 1px solid transparent;
+        background: transparent;
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 12px;
+        color: #6b5d1f;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .ctl button:hover {
+        background: #f3e9bd;
+      }
+      .ctl button.on {
+        background: #1c1b19;
+        color: #fff;
+      }
+
+      /* ---- app window ---- */
+      .win {
+        position: relative;
+        max-width: 1240px;
+        height: 780px;
+        margin: 0 auto;
+        display: flex;
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: var(--win-shadow);
+        color: var(--text);
+      }
+
+      /* ---- sidebar ---- */
+      .side {
+        width: 264px;
+        flex: none;
+        background: var(--side);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        padding: 14px 10px 10px;
+      }
+      .tl {
+        display: flex;
+        gap: 8px;
+        padding: 2px 8px 0;
+      }
+      .tl span {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+      }
+      .tl .r {
+        background: #ff5f57;
+      }
+      .tl .y {
+        background: #febc2e;
+      }
+      .tl .g {
+        background: #28c840;
+      }
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 18px 8px 12px;
+      }
+      .brand-row .flag {
+        width: 17px;
+        height: 17px;
+      }
+      .brand-row b {
+        font-size: 15.5px;
+        font-weight: 650;
+        letter-spacing: -0.01em;
+      }
+      .brand-row .sp {
+        flex: 1;
+      }
+      .iconbtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        color: var(--text2);
+        cursor: pointer;
+      }
+      .iconbtn:hover {
+        background: var(--chip);
+      }
+      .iconbtn svg {
+        width: 16px;
+        height: 16px;
+      }
+
+      .nav-item,
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        font-size: 13.5px;
+        color: var(--text);
+        cursor: pointer;
+        user-select: none;
+      }
+      .nav-item svg,
+      .row > svg {
+        width: 16px;
+        height: 16px;
+        color: var(--text2);
+        flex: none;
+      }
+      .nav-item:hover,
+      .row:hover {
+        background: var(--chip);
+      }
+      .badge {
+        margin-left: auto;
+        font-size: 11px;
+        background: var(--chip);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 1px 7px;
+        color: var(--text2);
+      }
+      .sec-label {
+        font-size: 12px;
+        color: var(--text3);
+        padding: 16px 10px 4px;
+        font-weight: 500;
+      }
+      .row.muted span {
+        color: var(--text2);
+      }
+      .row .pcheck {
+        margin-left: auto;
+        width: 14px;
+        height: 14px;
+        opacity: 0;
+        color: var(--text2);
+      }
+      .row .tt {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: none;
+        margin: 0 4px 0 5px;
+      }
+      .dot.ok {
+        background: var(--ok);
+      }
+      .dot.run {
+        background: var(--run);
+        animation: pulse 1.6s infinite;
+      }
+      .dot.done {
+        background: var(--done);
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(91, 155, 255, 0.45);
+        }
+        50% {
+          box-shadow: 0 0 0 4px rgba(91, 155, 255, 0);
+        }
+      }
+      .grow {
+        flex: 1;
+      }
+      .side-bottom {
+        border-top: 1px solid var(--border-soft);
+        padding-top: 8px;
+        margin-top: 8px;
+      }
+      .side-bottom .row {
+        font-size: 13px;
+        color: var(--text2);
+      }
+      .side-bottom .row svg {
+        width: 15px;
+        height: 15px;
+      }
+
+      /* ---- main ---- */
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: var(--main);
+        min-width: 0;
+      }
+      .hero {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 24px;
+      }
+      .hero .mark {
+        width: 46px;
+        height: 46px;
+        color: var(--text3);
+        margin-bottom: 10px;
+      }
+      .hero h1 {
+        margin: 0;
+        font-size: 27px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .hero .sub {
+        font-size: 13.5px;
+        color: var(--text2);
+      }
+      .composer-wrap {
+        padding: 0 28px 22px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+      .card {
+        width: 100%;
+        max-width: 740px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: var(--card-shadow);
+      }
+      .chiprow {
+        display: flex;
+        align-items: center;
+        padding: 10px 12px 0;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text2);
+        font-size: 12.5px;
+        border-radius: 999px;
+        padding: 5px 11px;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .chip:hover {
+        background: var(--chip);
+      }
+      .chip svg {
+        width: 14px;
+        height: 14px;
+      }
+      .chip .sep {
+        opacity: 0.5;
+      }
+      .chip.lite {
+        border-color: transparent;
+      }
+      .ta {
+        display: block;
+        width: 100%;
+        border: none;
+        outline: none;
+        resize: none;
+        background: transparent;
+        color: var(--text);
+        font-family: inherit;
+        font-size: 15px;
+        line-height: 1.55;
+        padding: 12px 16px 4px;
+        min-height: 64px;
+      }
+      .ta::placeholder {
+        color: var(--text3);
+      }
+      .adv {
+        padding: 2px 16px 6px;
+        display: grid;
+        gap: 10px;
+      }
+      .field label {
+        display: block;
+        font-size: 10.5px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text3);
+        margin-bottom: 5px;
+        font-weight: 600;
+      }
+      .field input {
+        width: 100%;
+        background: transparent;
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 7px 10px;
+        font-size: 13px;
+        color: var(--text);
+        outline: none;
+        font-family: inherit;
+      }
+      .field input:focus {
+        border-color: var(--text3);
+      }
+      .vchips {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .vchip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12.5px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 4px 10px;
+        color: var(--text2);
+      }
+      .vchip svg {
+        width: 13px;
+        height: 13px;
+      }
+      .vchip.on {
+        background: var(--chip);
+        border-color: transparent;
+        color: var(--text);
+      }
+      .vchip.add {
+        border-style: dashed;
+        color: var(--text3);
+      }
+      .btmrow {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 10px 10px;
+      }
+      .btmrow .spacer {
+        flex: 1;
+      }
+      .send {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: none;
+        background: var(--chip);
+        color: var(--text3);
+        cursor: pointer;
+        margin-left: 4px;
+      }
+      .send svg {
+        width: 16px;
+        height: 16px;
+      }
+      .hint {
+        font-size: 12px;
+        color: var(--text3);
+        padding: 10px 0 0;
+        text-align: center;
+      }
+
+      /* ---- mission control (state ④) ---- */
+      .active-block {
+        width: 100%;
+        max-width: 740px;
+        margin-top: 18px;
+      }
+      .active-label {
+        font-size: 10.5px;
+        color: var(--text3);
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        padding: 0 2px 8px;
+      }
+      .tcard {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--card);
+        padding: 12px 14px;
+        margin-bottom: 8px;
+        cursor: pointer;
+      }
+      .tcard:hover {
+        background: var(--chip);
+      }
+      .tcard.attention {
+        border-color: color-mix(in srgb, var(--warn) 50%, var(--border));
+      }
+      .tcard .tinfo {
+        min-width: 0;
+        flex: 1;
+      }
+      .tcard .ttitle {
+        font-size: 13.5px;
+        font-weight: 550;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tcard .tmeta {
+        font-size: 12px;
+        color: var(--text2);
+        margin-top: 3px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        white-space: nowrap;
+        overflow: hidden;
+      }
+      .tcard .tmeta code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        background: var(--chip);
+        border-radius: 5px;
+        padding: 1px 5px;
+      }
+      .stchip {
+        flex: none;
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-weight: 550;
+      }
+      .stchip.warn {
+        background: color-mix(in srgb, var(--warn) 16%, transparent);
+        color: var(--warn);
+      }
+      .stchip.run {
+        background: color-mix(in srgb, var(--run) 14%, transparent);
+        color: var(--run);
+      }
+      .tcard .act {
+        flex: none;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 6px 13px;
+        border: none;
+        cursor: pointer;
+        background: var(--accent);
+        color: var(--accent-text);
+        font-family: inherit;
+      }
+      .tcard .act.ghost {
+        background: var(--chip);
+        color: var(--text2);
+      }
+      @keyframes glowrow {
+        0%,
+        100% {
+          box-shadow: 0 0 0 0 rgba(52, 194, 104, 0);
+        }
+        50% {
+          box-shadow: 0 0 14px 0 rgba(52, 194, 104, 0.4);
+        }
+      }
+
+      /* ---- overlays: ⌘K palette (⑤) and session replay (⑥) ---- */
+      .ovl {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        border-radius: 12px;
+        background: rgba(10, 10, 10, 0.32);
+        backdrop-filter: blur(2px);
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 120px;
+      }
+      .ovl.center {
+        align-items: center;
+        padding-top: 0;
+      }
+      .pal {
+        width: 560px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--win-shadow);
+        overflow: hidden;
+      }
+      .pal .pin {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--border-soft);
+        color: var(--text);
+        font-size: 14px;
+      }
+      .pal .pin svg {
+        width: 16px;
+        height: 16px;
+        color: var(--text3);
+        flex: none;
+      }
+      .pal .pin .ph {
+        color: var(--text3);
+      }
+      .pal .pgroup {
+        font-size: 10.5px;
+        color: var(--text3);
+        padding: 12px 16px 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
+        font-weight: 600;
+      }
+      .pal .pitem {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 16px;
+        font-size: 13.5px;
+        cursor: pointer;
+      }
+      .pal .pitem svg {
+        width: 15px;
+        height: 15px;
+        color: var(--text2);
+        flex: none;
+      }
+      .pal .pitem:hover,
+      .pal .pitem.sel {
+        background: var(--chip);
+      }
+      .pal .pitem .sub {
+        color: var(--text3);
+        font-size: 12px;
+        margin-left: auto;
+      }
+      .pal .tbadge {
+        margin-left: auto;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 10.5px;
+        background: var(--chip);
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 1px 6px;
+        color: var(--text2);
+      }
+      .pal .pfoot {
+        border-top: 1px solid var(--border-soft);
+        margin-top: 8px;
+        padding: 9px 16px;
+        font-size: 11.5px;
+        color: var(--text3);
+        display: flex;
+        gap: 14px;
+      }
+      .replay {
+        width: 680px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--win-shadow);
+        padding: 16px 18px;
+      }
+      .replay h3 {
+        margin: 0 0 2px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .replay .rsub {
+        font-size: 12px;
+        color: var(--text2);
+        margin-bottom: 14px;
+      }
+      .rbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .rplay {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: none;
+        flex: none;
+        background: var(--accent);
+        color: var(--accent-text);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .rplay svg {
+        width: 14px;
+        height: 14px;
+      }
+      .rtrack {
+        flex: 1;
+        height: 4px;
+        border-radius: 4px;
+        background: var(--chip);
+        position: relative;
+      }
+      .rtrack .tick {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 2px;
+        height: 8px;
+        border-radius: 2px;
+        background: var(--text3);
+        opacity: 0.35;
+      }
+      .rtrack .fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 30%;
+        background: var(--run);
+        border-radius: 4px;
+      }
+      .rtrack .knob {
+        position: absolute;
+        left: 30%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--card);
+        border: 2px solid var(--run);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+      }
+      .rcount {
+        font-size: 12px;
+        color: var(--text2);
+        flex: none;
+      }
+      .rstep {
+        font-size: 12px;
+        color: var(--text2);
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .rstep code {
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+        background: var(--chip);
+        border-radius: 5px;
+        padding: 1px 6px;
+      }
+      .rfiles {
+        margin-top: 12px;
+        border-top: 1px solid var(--border-soft);
+        padding-top: 10px;
+        display: grid;
+        gap: 4px;
+      }
+      .rfile {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 12.5px;
+        padding: 4px 8px;
+      }
+      .rfile svg {
+        width: 14px;
+        height: 14px;
+        color: var(--text2);
+        flex: none;
+      }
+      .rfile .diffstat {
+        margin-left: auto;
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 11px;
+        color: var(--text3);
+      }
+      .rfile .plus {
+        color: var(--ok);
+      }
+      .rfile .minus {
+        color: #d4574e;
+      }
+      .rfile.future {
+        opacity: 0.38;
+      }
+      .rfile.cur {
+        background: var(--chip);
+        border-radius: 7px;
+      }
+
+      /* ---- mock states ----
+     composer groups: gA (fresh: ①④⑤) / gB (mid-charter: ②③⑥) */
+      body:not([data-state='1']) .show-1 {
+        display: none !important;
+      }
+      body[data-state='1'] .selproj {
+        display: none !important;
+      }
+      body[data-state='2'] .gA,
+      body[data-state='3'] .gA,
+      body[data-state='6'] .gA {
+        display: none !important;
+      }
+      body[data-state='1'] .gB,
+      body[data-state='4'] .gB,
+      body[data-state='5'] .gB {
+        display: none !important;
+      }
+      body:not([data-state='3']) .show-3 {
+        display: none !important;
+      }
+      body[data-state='3'] .show-12 {
+        display: none !important;
+      }
+      body:not([data-state='4']) .show-4 {
+        display: none !important;
+      }
+      body:not([data-state='5']) .show-5 {
+        display: none !important;
+      }
+      body:not([data-state='6']) .show-6 {
+        display: none !important;
+      }
+      body[data-state='2'] .send,
+      body[data-state='3'] .send,
+      body[data-state='6'] .send {
+        background: var(--accent);
+        color: var(--accent-text);
+      }
+      body[data-state='3'] #nav-new {
+        background: var(--active);
+      }
+      body:not([data-state='1']) #proj-demo {
+        background: var(--active);
+      }
+      body:not([data-state='1']) #proj-demo .pcheck {
+        opacity: 1;
+      }
+      body[data-state='4'] #proj-demo {
+        animation: glowrow 2.2s ease-in-out infinite;
+      }
+    </style>
+  </head>
+  <body data-theme="light" data-state="1">
+    <div class="ctl">
+      <span class="tag">MOCKUP · Home v2</span>
+      <span class="lab">状态</span>
+      <button data-st="1" class="on" onclick="setState(1)">① 初始</button>
+      <button data-st="2" onclick="setState(2)">② 已选项目</button>
+      <button data-st="3" onclick="setState(3)">③ New Task 高级</button>
+      <button data-st="4" onclick="setState(4)">④ 指挥台</button>
+      <button data-st="5" onclick="setState(5)">⑤ ⌘K</button>
+      <button data-st="6" onclick="setState(6)">⑥ 回放</button>
+      <span class="lab">主题</span>
+      <button data-th="light" class="on" onclick="setTheme('light')">Light</button>
+      <button data-th="dark" onclick="setTheme('dark')">Dark</button>
+    </div>
+
+    <div class="win">
+      <!-- ================= sidebar ================= -->
+      <aside class="side">
+        <div class="tl"><span class="r"></span><span class="y"></span><span class="g"></span></div>
+
+        <div class="brand-row">
+          <svg
+            class="flag"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+            <line x1="4" y1="22" x2="4" y2="15" />
+          </svg>
+          <b>Charter</b>
+          <span class="sp"></span>
+          <button class="iconbtn" title="Search">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+          </button>
+        </div>
+
+        <div class="nav-item" id="nav-new" onclick="setState(3)">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+          <span>New Task</span>
+        </div>
+        <div class="nav-item">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <polyline points="22 12 16 12 14 15 10 15 8 12 2 12" />
+            <path
+              d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"
+            />
+          </svg>
+          <span>Reviews</span>
+          <span class="badge">1</span>
+        </div>
+
+        <div class="sec-label">Projects</div>
+        <div class="row" id="proj-demo" onclick="setState(2)">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+            />
+          </svg>
+          <span class="tt">demo-api</span>
+          <svg
+            class="pcheck"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M20 6 9 17l-5-5" />
+          </svg>
+        </div>
+        <div class="row">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path
+              d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+            />
+          </svg>
+          <span class="tt">charter</span>
+        </div>
+        <div class="row muted">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M5 12h14" />
+            <path d="M12 5v14" />
+          </svg>
+          <span>Open folder…</span>
+        </div>
+
+        <div class="sec-label">Tasks</div>
+        <div class="row task" onclick="setState(4)">
+          <span class="dot ok"></span><span class="tt">Wire retry logic into sync worker</span>
+        </div>
+        <div class="row task" onclick="setState(4)">
+          <span class="dot run"></span><span class="tt">Refactor auth utils</span>
+        </div>
+        <div class="row task">
+          <span class="dot done"></span><span class="tt">Fix flaky CI test</span>
+        </div>
+
+        <div class="grow"></div>
+
+        <div class="side-bottom">
+          <div class="row">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect width="18" height="18" x="3" y="3" rx="2" />
+              <path d="M3 9h18" />
+              <path d="M9 21V9" />
+            </svg>
+            <span>Open IDE workspace</span>
+          </div>
+          <div class="row">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <line x1="21" x2="14" y1="4" y2="4" />
+              <line x1="10" x2="3" y1="4" y2="4" />
+              <line x1="21" x2="12" y1="12" y2="12" />
+              <line x1="8" x2="3" y1="12" y2="12" />
+              <line x1="21" x2="16" y1="20" y2="20" />
+              <line x1="12" x2="3" y1="20" y2="20" />
+              <line x1="14" x2="14" y1="2" y2="6" />
+              <line x1="8" x2="8" y1="10" y2="14" />
+              <line x1="16" x2="16" y1="18" y2="22" />
+            </svg>
+            <span>Settings</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ================= main ================= -->
+      <main class="main">
+        <div class="hero">
+          <svg
+            class="mark"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" />
+            <line x1="4" y1="22" x2="4" y2="15" />
+          </svg>
+          <h1>What should we build?</h1>
+          <div class="sub">
+            Describe the outcome. Review every plan, diff and verification before it lands.
+          </div>
+        </div>
+
+        <div class="composer-wrap">
+          <div class="card">
+            <div class="chiprow">
+              <button class="chip show-1">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                  />
+                </svg>
+                Select a project
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <button class="chip selproj">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+                  />
+                </svg>
+                demo-api
+                <span class="sep">·</span>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <line x1="6" x2="6" y1="3" y2="15" />
+                  <circle cx="18" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <path d="M18 9a9 9 0 0 1-9 9" />
+                </svg>
+                main
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+            </div>
+
+            <textarea
+              class="ta gA"
+              placeholder="Describe a task, ask a question, or paste an error…"
+            ></textarea>
+            <textarea class="ta gB">
+Add rate limiting to the /login endpoint and cover it with tests</textarea>
+
+            <div class="adv show-3">
+              <div class="field">
+                <label>Boundaries</label>
+                <input value="Only touch src/auth/** — don't change public API signatures" />
+              </div>
+              <div class="field">
+                <label>Success criteria</label>
+                <input
+                  value="429 after 5 failed attempts within a minute; existing tests stay green"
+                />
+              </div>
+              <div class="field">
+                <label>Verification</label>
+                <div class="vchips">
+                  <span class="vchip on"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                    npm test</span
+                  >
+                  <span class="vchip">npm run lint</span>
+                  <span class="vchip add"
+                    ><svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M5 12h14" />
+                      <path d="M12 5v14" />
+                    </svg>
+                    Add command</span
+                  >
+                </div>
+              </div>
+            </div>
+
+            <div class="btmrow">
+              <button class="iconbtn" title="Attach">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M5 12h14" />
+                  <path d="M12 5v14" />
+                </svg>
+              </button>
+              <button class="chip lite">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" />
+                  <path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" />
+                  <path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" />
+                  <path
+                    d="m7 15-1.76-1.76a2 2 0 0 0-2.83 2.82l3.6 3.6C7.5 21.14 9.2 22 12 22h2a8 8 0 0 0 8-8V7a2 2 0 0 0-2-2a2 2 0 0 0-2 2v4"
+                  />
+                </svg>
+                <span class="gA">Ask before edits</span><span class="gB">Auto · pause on risk</span>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <button class="chip lite show-12" onclick="setState(3)">Advanced</button>
+              <button class="chip lite show-3" onclick="setState(2)">Simple</button>
+              <span class="spacer"></span>
+              <button class="chip lite">
+                claude-sonnet-5
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </button>
+              <button class="send" title="Start task">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="m5 12 7-7 7 7" />
+                  <path d="M12 19V5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="hint">
+            ⏎ start task · ⇧⏎ new line — every change is reviewed before it lands
+          </div>
+
+          <!-- state ④: mission control — live task cards under the composer -->
+          <div class="active-block show-4">
+            <div class="active-label">Needs you</div>
+            <div class="tcard attention">
+              <span class="stchip warn">Plan approval</span>
+              <div class="tinfo">
+                <div class="ttitle">Refactor auth utils</div>
+                <div class="tmeta">demo-api · proposed a 4-step plan · 2m ago</div>
+              </div>
+              <button class="act">Review plan</button>
+            </div>
+            <div class="active-label" style="padding-top: 10px">Running</div>
+            <div class="tcard">
+              <span class="stchip run">Running</span>
+              <div class="tinfo">
+                <div class="ttitle">Wire retry logic into sync worker</div>
+                <div class="tmeta">
+                  <span class="dot run" style="margin: 0"></span> apply_patch
+                  <code>src/sync/retry.ts</code> · 12 files touched · step 7/23
+                </div>
+              </div>
+              <button class="act ghost">Watch</button>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- state ⑤: ⌘K palette -->
+      <div class="ovl show-5">
+        <div class="pal">
+          <div class="pin">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <path d="m21 21-4.3-4.3" />
+            </svg>
+            <span>auth</span><span class="ph">— search projects, tasks, files…</span>
+          </div>
+          <div class="pgroup">Tasks</div>
+          <div class="pitem sel">
+            <span class="dot run" style="margin: 0"></span> Refactor auth utils
+            <span class="sub">demo-api · running</span>
+          </div>
+          <div class="pgroup">Files</div>
+          <div class="pitem">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            limiter.ts <span class="sub">src/auth/limiter.ts</span>
+          </div>
+          <div class="pitem">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            session.ts <span class="sub">src/auth/session.ts</span>
+          </div>
+          <div class="pgroup">Projects</div>
+          <div class="pitem">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"
+              />
+            </svg>
+            demo-api <span class="tbadge">node</span>
+          </div>
+          <div class="pfoot"><span>↑↓ navigate</span><span>⏎ open</span><span>esc close</span></div>
+        </div>
+      </div>
+
+      <!-- state ⑥: session replay (lives in review/task detail; shown here as a card) -->
+      <div class="ovl center show-6">
+        <div class="replay">
+          <h3>Session replay</h3>
+          <div class="rsub">Wire retry logic into sync worker · demo-api · 23 steps · 18 min</div>
+          <div class="rbar">
+            <button class="rplay">
+              <svg viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <polygon points="7 4 20 12 7 20 7 4" />
+              </svg>
+            </button>
+            <div class="rtrack">
+              <span class="tick" style="left: 8%"></span
+              ><span class="tick" style="left: 18%"></span>
+              <span class="tick" style="left: 42%"></span
+              ><span class="tick" style="left: 57%"></span>
+              <span class="tick" style="left: 73%"></span
+              ><span class="tick" style="left: 90%"></span>
+              <div class="fill"></div>
+              <div class="knob"></div>
+            </div>
+            <span class="rcount">step 7 / 23</span>
+          </div>
+          <div class="rstep"><code>apply_patch</code> src/sync/retry.ts · +18 −4 · 14:32:05</div>
+          <div class="rfiles">
+            <div class="rfile cur">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <path d="M14 2v6h6" />
+              </svg>
+              src/sync/retry.ts
+              <span class="diffstat"
+                ><span class="plus">+18</span> <span class="minus">−4</span></span
+              >
+            </div>
+            <div class="rfile">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <path d="M14 2v6h6" />
+              </svg>
+              src/sync/queue.ts
+              <span class="diffstat"
+                ><span class="plus">+6</span> <span class="minus">−1</span></span
+              >
+            </div>
+            <div class="rfile future">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                <path d="M14 2v6h6" />
+              </svg>
+              src/sync/retry.test.ts <span class="diffstat">created at step 12</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function setState(n) {
+        document.body.dataset.state = String(n);
+        document.querySelectorAll('.ctl [data-st]').forEach(function (b) {
+          b.classList.toggle('on', b.dataset.st === String(n));
+        });
+      }
+      function setTheme(t) {
+        document.body.dataset.theme = t;
+        document.querySelectorAll('.ctl [data-th]').forEach(function (b) {
+          b.classList.toggle('on', b.dataset.th === t);
+        });
+      }
+      var q = new URLSearchParams(location.hash.slice(1));
+      if (q.get('s')) setState(q.get('s'));
+      if (q.get('t')) setTheme(q.get('t'));
+    </script>
+  </body>
+</html>

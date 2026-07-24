@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Charter Rust 重构可行性分析 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="charter-rust-重构可行性分析">Charter Rust 重构可行性分析</h1>
+<h2 id="概述">概述</h2>
+<p>本文档从技术角度全面评估使用 Rust 重构 Charter 桌面应用的可行性，<br>包括架构设计、技术选型、工作量估算和风险评估。</p>
+<hr>
+<h2 id="1-重构目标">1. 重构目标</h2>
+<ul><li>保留现有功能完整性</li><li>提升性能表现</li><li>增强内存安全性</li><li>降低资源占用</li><li>维持跨平台能力（macOS / Windows / Linux）</li></ul>
+<hr>
+<h2 id="2-技术选型">2. 技术选型</h2>
+<h3 id="2-1-桌面框架">2.1 桌面框架</h3>
+<p><strong>选择：Tauri v2</strong></p>
+<table><thead><tr><th>对比项</th><th>Electron</th><th>Tauri v2</th></tr></thead><tbody><tr><td>后端语言</td><td>Node.js</td><td>Rust</td></tr><tr><td>渲染引擎</td><td>Chromium</td><td>系统 WebView</td></tr><tr><td>二进制大小</td><td>~150 MB</td><td>~10-15 MB</td></tr><tr><td>启动速度</td><td>较慢</td><td>较快</td></tr><tr><td>内存占用</td><td>较高</td><td>较低</td></tr><tr><td>跨平台</td><td>支持</td><td>支持</td></tr></tbody></table>
+<h3 id="2-2-核心依赖映射">2.2 核心依赖映射</h3>
+<table><thead><tr><th>功能模块</th><th>当前实现</th><th>Rust 替代方案</th></tr></thead><tbody><tr><td>SQLite</td><td>node:sqlite</td><td>rusqlite / sqlx</td></tr><tr><td>PTY</td><td>node-pty</td><td>portable-pty</td></tr><tr><td>Git</td><td>Node git 库</td><td>git2 (libgit2 bindings)</td></tr><tr><td>文件监听</td><td>chokidar</td><td>notify</td></tr><tr><td>HTTP 客户端</td><td>Node fetch</td><td>reqwest</td></tr><tr><td>配置持久化</td><td>JSON 文件</td><td>serde + toml/json</td></tr><tr><td>搜索</td><td>ripgrep 二进制</td><td>直接调用 rg 或 tantivy</td></tr><tr><td>构建</td><td>esbuild + Vite</td><td>Trunk (Wasm) 或保留 Vite</td></tr></tbody></table>
+<h3 id="2-3-agent-运行时方案">2.3 Agent 运行时方案</h3>
+<p>由于当前 Pi SDK 为 JS/ESM+wasm 专用，存在三条可选路径：</p>
+<ul><li><strong>路径 A</strong>：使用 deno_core 或 rquickjs 嵌入 JS 运行时，直接加载 Pi SDK</li><li><strong>路径 B</strong>：自行封装 LLM 调用与工具定义，重写 Agent 运行时</li><li><strong>路径 C</strong>：通过 MCP 协议解耦，Agent 作为独立二进制通过 MCP 与宿主通信</li></ul>
+<p>路径 C 最为优雅，但依赖生态支持；路径 A 兼容现有 SDK 但复杂度高。</p>
+<hr>
+<h2 id="3-架构设计">3. 架构设计</h2>
+<h3 id="3-1-进程拓扑">3.1 进程拓扑</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">┌─────────────────────────────────────────────────────────┐
+│  Tauri Rust 后端 (Main)                                 │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐    │
+│  │ SQLite   │ │ PTY      │ │ Tool Gateway         │    │
+│  │ rusqlite │ │portable- │ │ Permission Engine    │    │
+│  │          │ │pty       │ │ Command Classifier   │    │
+│  └──────────┘ └──────────┘ └──────────────────────┘    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐    │
+│  │ Git      │ │ Search   │ │ Replay Parser        │    │
+│  │ git2     │ │ rg/tantivy│ │ serde_json 流式      │    │
+│  └──────────┘ └──────────┘ └──────────────────────┘    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────────────┐    │
+│  │ IPC      │ │ Replay   │ │ External CLI         │    │
+│  │ tokio    │ │ Service  │ │ Orchestration        │    │
+│  └──────────┘ └──────────┘ └──────────────────────┘    │
+│                        ▲                                │
+│                  IPC (Unix Socket)                      │
+│                        ▼                                │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  Agent Worker (独立进程)                         │   │
+│  │  - Pi SDK 绑定 或 替代 SDK                       │   │
+│  │  - 通过 MCP/IPC 回调 Tool Gateway                │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘</code></pre></div>
+<h3 id="3-2-ipc-机制">3.2 IPC 机制</h3>
+<p>使用 <code>tokio::net::UnixStream</code>（macOS/Linux）或 Named Pipe（Windows）<br>替代 Electron 的 MessagePort。协议采用 JSON-RPC 2.0 风格，<br>使用 serde 进行序列化/反序列化。</p>
+<hr>
+<h2 id="4-模块重构计划">4. 模块重构计划</h2>
+<h3 id="4-1-第一阶-基础设施">4.1 第一阶：基础设施</h3>
+<table><thead><tr><th>模块</th><th>工作量</th><th>优先级</th></tr></thead><tbody><tr><td>Tauri 骨架 + IPC</td><td>1-2 人月</td><td>P0</td></tr><tr><td>持久化层 (SQLite)</td><td>1 人月</td><td>P0</td></tr><tr><td>配置管理</td><td>0.5 人月</td><td>P0</td></tr></tbody></table>
+<h3 id="4-2-第二阶-核心服务">4.2 第二阶：核心服务</h3>
+<table><thead><tr><th>模块</th><th>工作量</th><th>优先级</th></tr></thead><tbody><tr><td>Tool Gateway + Permission Engine</td><td>2-3 人月</td><td>P0</td></tr><tr><td>PTY + 终端服务</td><td>1-2 人月</td><td>P0</td></tr><tr><td>Git 服务</td><td>1 人月</td><td>P1</td></tr><tr><td>文件监听</td><td>0.5 人月</td><td>P1</td></tr></tbody></table>
+<h3 id="4-3-第三阶-agent-集成">4.3 第三阶：Agent 集成</h3>
+<table><thead><tr><th>模块</th><th>工作量</th><th>优先级</th></tr></thead><tbody><tr><td>Agent Worker + IPC</td><td>2-4 人月</td><td>P0</td></tr><tr><td>Replay 解析器</td><td>0.5 人月</td><td>P1</td></tr><tr><td>外部 CLI 编排</td><td>1 人月</td><td>P1</td></tr></tbody></table>
+<h3 id="4-4-第四阶-渲染层迁移">4.4 第四阶：渲染层迁移</h3>
+<table><thead><tr><th>模块</th><th>工作量</th><th>优先级</th></tr></thead><tbody><tr><td>React 代码适配 Tauri IPC</td><td>1-2 人月</td><td>P1</td></tr><tr><td>Monaco Editor 集成</td><td>1 人月</td><td>P1</td></tr></tbody></table>
+<h3 id="4-5-测试与验证">4.5 测试与验证</h3>
+<table><thead><tr><th>模块</th><th>工作量</th><th>优先级</th></tr></thead><tbody><tr><td>单元测试 + 集成测试</td><td>1.5 人月</td><td>P0</td></tr><tr><td>E2E 测试 (Playwright)</td><td>1-2 人月</td><td>P0</td></tr></tbody></table>
+<h3 id="4-6-总工作量估算">4.6 总工作量估算</h3>
+<p><strong>合计：13-21 人月</strong>（约 1-1.5 年单人全职）</p>
+<hr>
+<h2 id="5-收益分析">5. 收益分析</h2>
+<h3 id="5-1-性能提升">5.1 性能提升</h3>
+<ul><li>二进制大小减少约 90%</li><li>启动速度显著提升</li><li>内存占用大幅降低</li><li>CPU 密集型任务（如 Replay 解析）性能提升明显</li></ul>
+<h3 id="5-2-安全性增强">5.2 安全性增强</h3>
+<ul><li>内存安全由编译器保证（消除 use-after-free、buffer overflow 等）</li><li>进程隔离模型保持不变</li><li>权限引擎逻辑不变，但实现更可靠</li></ul>
+<h3 id="5-3-维护性">5.3 维护性</h3>
+<ul><li>类型系统更强大，运行时错误减少</li><li>依赖管理更清晰（Cargo）</li><li>但 Rust 学习曲线较陡</li></ul>
+<hr>
+<h2 id="6-风险评估">6. 风险评估</h2>
+<h3 id="6-1-高风险">6.1 高风险</h3>
+<ul><li><strong>Pi SDK 无 Rust 绑定</strong>：Agent 运行时是唯一无现成方案的部分</li><li><strong>MCP 生态成熟度</strong>：Rust 的 MCP SDK 不如 JS 版完善</li></ul>
+<h3 id="6-2-中风险">6.2 中风险</h3>
+<ul><li><strong>Monaco Editor 集成</strong>：Web 组件在 Tauri WebView 中的深度集成需重新适配</li><li><strong>测试基础设施</strong>：Playwright Tauri 适配器不如 Electron 版成熟</li><li><strong>跨平台构建</strong>：macOS/Windows 交叉编译 CI 复杂度增加</li></ul>
+<h3 id="6-3-低风险">6.3 低风险</h3>
+<ul><li>Tauri 框架本身成熟稳定</li><li>系统级操作 crate 均已生产就绪</li><li>渲染层 React/TS 代码大部分可复用</li></ul>
+<hr>
+<h2 id="7-建议实施路径">7. 建议实施路径</h2>
+<h3 id="7-1-原型阶段-2-4-周">7.1 原型阶段（2-4 周）</h3>
+<ol><li>使用 Tauri 搭建最小可用骨架</li><li>实现基础 IPC 通信</li><li>验证 React 渲染层在 WebView 中的运行</li></ol>
+<h3 id="7-2-核心迁移阶段-2-3-月">7.2 核心迁移阶段（2-3 月）</h3>
+<ol><li>优先迁移 Tool Gateway 和 Permission Engine</li><li>迁移持久化层和 Git 服务</li><li>迁移 PTY 终端服务</li></ol>
+<h3 id="7-3-agent-集成阶段-1-2-月">7.3 Agent 集成阶段（1-2 月）</h3>
+<ol><li>确定 Agent 运行时方案（建议路径 C：MCP 解耦）</li><li>实现 Agent Worker 进程</li><li>实现与 Tool Gateway 的 IPC</li></ol>
+<h3 id="7-4-验证阶段-1-2-月">7.4 验证阶段（1-2 月）</h3>
+<ol><li>完整测试覆盖</li><li>性能基准对比</li><li>E2E 验证</li></ol>
+<hr>
+<h2 id="8-结论">8. 结论</h2>
+<p><strong>技术上完全可行，但工作量大、周期长。</strong> 这不是简单的&quot;重写&quot;，<br>而是&quot;重新构建一个新产品&quot;。建议作为独立项目推进，<br>而非在当前产品上直接替换。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

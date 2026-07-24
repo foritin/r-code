@@ -1,0 +1,1578 @@
+<!doctype html>
+<!-- Charter — 外部 CLI 会话交互重设计 mock (docs/design). NOT product code.
+     背景：ADR-0017 决策 4「检测升格」上线后实测不可用 —— 检测触发的自动搬家在用户
+     正要输入的瞬间把终端整体挪走（350px 竖栏 + xterm 二次挂载 no-op → TUI 不可见、
+     无法输入）。本稿把「搬家」的发起权交还用户：检测只做原地装饰，升格是一次点击。
+     终态（右栏 / Room / 记账 / Review）沿用已批准的 external-cli-final-mock.html，
+     仅重设计触发与过渡，并把竖栏宽度按 TUI ≥80 列修正为 600px 起。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — 外部 CLI 交互重设计：原地装饰、意图升格</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--page);
+        color: var(--text);
+        padding: 30px 26px 90px;
+        --page: #eceae5;
+        --side: #f6f5f1;
+        --main: #fbfaf7;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --text: #201e1a;
+        --text2: #6e6a61;
+        --text3: #a39e94;
+        --chip: #f0eee8;
+        --hover: #e8e5de;
+        --accent: #1b1a16;
+        --accent-text: #fff;
+        --ok: #2f9e63;
+        --ok-bg: #e7f5ec;
+        --run: #3f7bd9;
+        --run-bg: #e9f1fd;
+        --warn: #b06f10;
+        --warn-bg: #faf0dc;
+        --danger: #c4453d;
+        --term-bg: #1d1a15;
+        --term-fg: #e8e2d4;
+        --term-dim: #8d8571;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        transition: background 0.25s;
+      }
+      body.dark {
+        --page: #16140f;
+        --side: #1d1a15;
+        --main: #211e18;
+        --card: #262219;
+        --border: #3a352a;
+        --border-soft: #302b21;
+        --text: #ece8de;
+        --text2: #a49e90;
+        --text3: #746e60;
+        --chip: #2c2820;
+        --hover: #2e2a21;
+        --accent: #ece8de;
+        --accent-text: #1b1a16;
+        --ok: #4cba7d;
+        --ok-bg: #22301f;
+        --run: #6f9fe8;
+        --run-bg: #1e2738;
+        --warn: #d9a04a;
+        --warn-bg: #362b16;
+        --danger: #e06a60;
+        --term-bg: #14110c;
+        --term-fg: #e8e2d4;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .pagehead {
+        max-width: 1240px;
+        margin: 0 auto 14px;
+      }
+      .pagehead h1 {
+        font-size: 23px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .pagehead p {
+        color: var(--text2);
+        font-size: 13.5px;
+        line-height: 1.75;
+        margin-top: 8px;
+        max-width: 980px;
+      }
+      .pagehead b {
+        color: var(--text);
+      }
+      .pagehead .meta {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--text3);
+      }
+
+      .why {
+        max-width: 1240px;
+        margin: 0 auto 22px;
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .why .w {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        box-shadow: var(--shadow);
+      }
+      .why .w .k {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--danger);
+        letter-spacing: 0.02em;
+      }
+      .why .w p {
+        font-size: 12.5px;
+        color: var(--text2);
+        line-height: 1.7;
+        margin-top: 6px;
+      }
+      .why .w code {
+        font-family: var(--mono);
+        font-size: 11px;
+        background: var(--chip);
+        padding: 1px 5px;
+        border-radius: 5px;
+      }
+
+      .ctl {
+        position: fixed;
+        top: 12px;
+        right: 18px;
+        z-index: 99;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        background: #fff8dc;
+        border: 1px solid #e6d693;
+        color: #6b5d1f;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      }
+      .ctl button {
+        border: 1px solid #d9c87e;
+        background: #fffdf2;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        color: #6b5d1f;
+      }
+
+      /* ── 影片控制条（播放/进度/章节） ────────────────────── */
+      .vbar {
+        max-width: 1240px;
+        margin: 10px auto 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .vbtn {
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text);
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 12.5px;
+        cursor: pointer;
+        flex: none;
+      }
+      .vbtn:hover {
+        background: var(--hover);
+      }
+      .vprog {
+        flex: 1;
+        height: 6px;
+        border-radius: 3px;
+        background: var(--chip);
+        position: relative;
+        overflow: hidden;
+      }
+      .vfill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 0%;
+        background: var(--accent);
+        border-radius: 3px;
+        transition: width 0.12s linear;
+      }
+      .vtime {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text3);
+        min-width: 86px;
+        text-align: right;
+        flex: none;
+      }
+      .chaps {
+        max-width: 1240px;
+        margin: 8px auto 0;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .chap {
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text2);
+        border-radius: 999px;
+        padding: 5px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .chap.on {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+      }
+      .chap.done {
+        border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+        color: var(--text);
+      }
+
+      /* ── 模拟光标（影片主角） ────────────────────────────── */
+      .fakecur {
+        position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 60;
+        pointer-events: none;
+        transform: translate(560px, 210px);
+        transition: transform 0.65s cubic-bezier(0.25, 0.8, 0.25, 1);
+        filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.45));
+      }
+      .fakecur .ring {
+        position: absolute;
+        left: -8px;
+        top: -8px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 2.5px solid var(--run);
+        opacity: 0;
+      }
+      .fakecur.click .ring {
+        animation: ripple 0.45s ease-out;
+      }
+      @keyframes ripple {
+        from {
+          opacity: 0.9;
+          transform: scale(0.35);
+        }
+        to {
+          opacity: 0;
+          transform: scale(1.2);
+        }
+      }
+
+      /* ── 字幕（帧内底部，视频语法） ──────────────────────── */
+      .subs {
+        position: absolute;
+        left: 50%;
+        bottom: 12px;
+        transform: translateX(-50%);
+        z-index: 55;
+        max-width: 84%;
+        background: rgba(18, 15, 10, 0.85);
+        color: #f2eee4;
+        font-size: 13px;
+        line-height: 1.65;
+        padding: 8px 16px;
+        border-radius: 10px;
+        text-align: center;
+        opacity: 0;
+        transition: opacity 0.35s;
+        pointer-events: none;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      }
+      .subs.show {
+        opacity: 1;
+      }
+      .subs b {
+        color: #fff;
+      }
+      .subs .warn2 {
+        color: #ff9d94;
+      }
+
+      /* ── 迷你 IDE ───────────────────────────────────────── */
+      .ide {
+        max-width: 1240px;
+        margin: 0 auto;
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        height: 660px;
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+      .tbar {
+        height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--border);
+        background: var(--side);
+        font-size: 12px;
+        color: var(--text2);
+        flex: none;
+      }
+      .dots {
+        display: flex;
+        gap: 6px;
+        margin-right: 6px;
+      }
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: var(--border);
+      }
+      .tbar .app {
+        font-weight: 700;
+        color: var(--text);
+      }
+      .body {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .rail {
+        width: 44px;
+        border-right: 1px solid var(--border);
+        background: var(--side);
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding-top: 10px;
+        gap: 14px;
+        color: var(--text3);
+        font-size: 15px;
+      }
+      .tree {
+        width: 200px;
+        border-right: 1px solid var(--border);
+        background: var(--side);
+        flex: none;
+        padding: 10px 0;
+        font-size: 12px;
+        color: var(--text2);
+      }
+      .tree .h {
+        padding: 0 14px 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text3);
+      }
+      .tree .f {
+        padding: 4px 14px 4px 26px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .tree .f .b {
+        font-size: 9.5px;
+        font-weight: 700;
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-radius: 6px;
+        padding: 1px 6px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .tree .f.on .b {
+        opacity: 1;
+      }
+
+      .center {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .editor {
+        flex: 1;
+        min-height: 0;
+        padding: 16px 20px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.8;
+        color: var(--text2);
+        overflow: hidden;
+      }
+      .editor .ln {
+        white-space: pre;
+      }
+      .editor .kw {
+        color: var(--run);
+      }
+
+      /* 底部坞 */
+      .dock {
+        flex: none;
+        height: 260px;
+        border-top: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        background: var(--main);
+        transition:
+          height 0.35s cubic-bezier(0.3, 0.9, 0.3, 1),
+          opacity 0.3s;
+        overflow: hidden;
+      }
+      .ide.dock-away .dock {
+        height: 0;
+        opacity: 0;
+        border-top-width: 0;
+      }
+      .dock-tabs {
+        height: 32px;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 10px;
+        border-bottom: 1px solid var(--border-soft);
+        font-size: 12px;
+        color: var(--text3);
+        flex: none;
+      }
+      .dock-tab {
+        padding: 4px 10px;
+      }
+      .dock-tab.on {
+        color: var(--text);
+        font-weight: 600;
+        border-bottom: 2px solid var(--accent);
+      }
+      .dock-main {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .dock-host {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .term-tabs {
+        width: 170px;
+        border-left: 1px solid var(--border-soft);
+        flex: none;
+        font-size: 12px;
+        color: var(--text2);
+        padding: 8px;
+      }
+      .term-tab {
+        padding: 6px 8px;
+        border-radius: 8px;
+        background: var(--hover);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      /* 徽章 */
+      .badge-agent {
+        color: var(--warn);
+        font-weight: 700;
+        display: none;
+        align-items: center;
+        gap: 5px;
+      }
+      .badge-ext {
+        font-size: 9.5px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        color: var(--warn);
+        background: var(--warn-bg);
+        border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+        border-radius: 6px;
+        padding: 1px 5px;
+      }
+      .ide.detected .badge-agent {
+        display: inline-flex;
+      }
+      .ide.detected .badge-shell {
+        display: none;
+      }
+      /* 结束后徽章回落为 shell（会话条保留结束态） */
+      .ide.ended .badge-agent {
+        display: none;
+      }
+      .ide.ended .badge-shell {
+        display: inline;
+      }
+
+      /* ── 会话条（本稿核心新物） ─────────────────────────── */
+      .sbar {
+        flex: none;
+        height: 0;
+        opacity: 0;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        font-size: 12px;
+        background: color-mix(in srgb, var(--warn) 7%, var(--main));
+        border-bottom: 1px solid var(--border-soft);
+        transition:
+          height 0.3s cubic-bezier(0.3, 0.9, 0.3, 1),
+          opacity 0.3s;
+        white-space: nowrap;
+      }
+      .show-sbar .sbar {
+        height: 34px;
+        opacity: 1;
+      }
+      .sbar .live-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--warn);
+        animation: breathe 1.6s ease-in-out infinite;
+        flex: none;
+      }
+      @keyframes breathe {
+        50% {
+          opacity: 0.35;
+        }
+      }
+      .sbar .cli {
+        font-weight: 700;
+        color: var(--text);
+      }
+      .sbar .snap,
+      .sbar .files {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--text2);
+        background: var(--chip);
+        border-radius: 6px;
+        padding: 2px 7px;
+      }
+      .sbar .files b {
+        color: var(--warn);
+      }
+      .sbar .files.pulse {
+        animation: fpulse 0.5s;
+      }
+      @keyframes fpulse {
+        30% {
+          transform: scale(1.12);
+          background: var(--warn-bg);
+        }
+      }
+      .sbar .sp {
+        flex: 1;
+      }
+      .sbar button {
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text2);
+        border-radius: 7px;
+        padding: 3px 10px;
+        font-size: 11.5px;
+        cursor: pointer;
+      }
+      .sbar button:hover {
+        background: var(--hover);
+        color: var(--text);
+      }
+      .sbar button.primary {
+        border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+        color: var(--warn);
+        font-weight: 600;
+      }
+      /* 结束态 */
+      .ide.ended .sbar {
+        background: color-mix(in srgb, var(--ok) 7%, var(--main));
+      }
+      .ide.ended .sbar .live-dot {
+        background: var(--ok);
+        animation: none;
+      }
+      .ide.ended .sbar .st-live {
+        display: none;
+      }
+      .sbar .st-end {
+        display: none;
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .ide.ended .sbar .st-end {
+        display: inline;
+      }
+      .ide.ended .sbar button.review {
+        border-color: color-mix(in srgb, var(--ok) 45%, transparent);
+        color: var(--ok);
+        font-weight: 700;
+      }
+      .sbar button.review,
+      .ide.ended .sbar button.to-side {
+        display: none;
+      }
+      .ide.ended .sbar button.review {
+        display: inline-block;
+      }
+
+      /* 终端画面（同一节点，被 JS 真实 appendChild 搬家 —— 与产品修复同机制） */
+      .term {
+        flex: 1;
+        min-height: 0;
+        background: var(--term-bg);
+        color: var(--term-fg);
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.65;
+        padding: 10px 14px;
+        overflow: hidden;
+        white-space: pre-wrap;
+      }
+      .term .dim {
+        color: var(--term-dim);
+      }
+      .term .wbox {
+        color: #d8b365;
+      }
+      .term .cur {
+        display: inline-block;
+        width: 7px;
+        height: 13px;
+        background: var(--term-fg);
+        vertical-align: -2px;
+        animation: blink 1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      /* 右侧竖栏（≥80 列版本） */
+      .col {
+        width: 0;
+        flex: none;
+        border-left: 1px solid var(--border);
+        background: var(--side);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        overflow: hidden;
+        opacity: 0;
+        transition:
+          width 0.35s cubic-bezier(0.3, 0.9, 0.3, 1),
+          opacity 0.3s;
+      }
+      .ide.promoted .col {
+        width: 600px;
+        opacity: 1;
+      }
+      .col-head {
+        height: 34px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 12px;
+        font-size: 12px;
+        border-bottom: 1px solid var(--border-soft);
+        background: color-mix(in srgb, var(--warn) 7%, var(--side));
+        white-space: nowrap;
+      }
+      .ide.ended .col-head {
+        background: color-mix(in srgb, var(--ok) 7%, var(--side));
+      }
+      .col-head .w80 {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--text3);
+        margin-left: 4px;
+      }
+      .col-host {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .col .strip {
+        flex: none;
+        max-height: 38%;
+        border-top: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+      }
+      .strip-h {
+        padding: 7px 12px 4px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text3);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .strip-h .cnt {
+        font-size: 10px;
+        padding: 0 7px;
+        border-radius: 8px;
+        background: var(--warn-bg);
+        color: var(--warn);
+        font-weight: 800;
+      }
+      .strip-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 5px 12px;
+        font-size: 12px;
+        color: var(--text2);
+        border-top: 1px solid var(--border-soft);
+      }
+      .strip-row .pm {
+        font-family: var(--mono);
+        font-size: 10.5px;
+      }
+      .strip-row .p {
+        color: var(--ok);
+      }
+      .strip-row .m {
+        color: var(--danger);
+        margin-left: 5px;
+      }
+      .strip-row {
+        display: none;
+      }
+      .strip-row.on {
+        display: flex;
+      }
+      .strip-empty {
+        padding: 4px 12px 10px;
+        font-size: 11.5px;
+        color: var(--text3);
+      }
+      .ide.touched .strip-empty {
+        display: none;
+      }
+
+      /* toast（帧内右上，给底部字幕让位） */
+      .toast {
+        position: absolute;
+        right: 16px;
+        top: 48px;
+        z-index: 55;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-left: 3px solid var(--ok);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        font-size: 12px;
+        color: var(--text2);
+        padding: 10px 14px;
+        max-width: 380px;
+        opacity: 0;
+        transform: translateY(8px);
+        transition: all 0.3s;
+        pointer-events: none;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: none;
+      }
+
+      /* 原则与细节 */
+      .sect {
+        max-width: 1240px;
+        margin: 26px auto 0;
+      }
+      .sect h2 {
+        font-size: 16px;
+        font-weight: 700;
+        margin-bottom: 10px;
+      }
+      .grid3 {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 12px;
+      }
+      .grid2 {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px 16px;
+        box-shadow: var(--shadow);
+      }
+      .card h3 {
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 6px;
+      }
+      .card p,
+      .card li {
+        font-size: 12.5px;
+        color: var(--text2);
+        line-height: 1.75;
+      }
+      .card ul {
+        padding-left: 18px;
+      }
+      .card code {
+        font-family: var(--mono);
+        font-size: 11px;
+        background: var(--chip);
+        padding: 1px 5px;
+        border-radius: 5px;
+      }
+      .card .tag {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        border-radius: 6px;
+        padding: 1px 7px;
+        margin-left: 6px;
+        vertical-align: 1px;
+      }
+      .tag.keep {
+        color: var(--ok);
+        background: var(--ok-bg);
+      }
+      .tag.new {
+        color: var(--run);
+        background: var(--run-bg);
+      }
+      .tag.fix {
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+      }
+      .foot {
+        max-width: 1240px;
+        margin: 26px auto 0;
+        font-size: 12px;
+        color: var(--text3);
+        line-height: 1.8;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="ctl">
+      影片自动循环 · 可暂停/章节跳转
+      <button id="theme">◐ 亮/暗</button>
+    </div>
+
+    <div class="pagehead">
+      <h1>外部 CLI 交互重设计 — 原地装饰、意图升格</h1>
+      <p>
+        重设计 ADR-0017 决策 4 的<b>触发与过渡</b>：检测到 <code>claude</code>/<code>codex</code>
+        会话时<b>不再自动搬动终端</b>，而是在原地滑入一条「会话条」（徽章、快照、实时文件计数、动作）。
+        搬进右侧竖栏（修正为 <b>600px，容纳 TUI ≥80 列</b>）或打开 Session Room
+        由<b>用户一键发起</b>。终态与安全语义（EXT 徽章 / 入场快照 / FS 记账 / REVIEW_READY）
+        与已批准的 <code>external-cli-final-mock.html</code> 完全一致 —— 变的只有「谁来发起搬家」。
+      </p>
+      <div class="meta">
+        docs/design/external-cli-attach-redesign.html · 2026-07-15 · 修订 ADR-0017 决策 4 · 批准后落
+        ADR 修订 + 实现（含 xterm 挂载底座修复）
+      </div>
+    </div>
+
+    <div class="why">
+      <div class="w">
+        <div class="k">为什么不是修修补补 ①</div>
+        <p>
+          自动升格恰好在你<b>正要打第一条 prompt</b> 的时刻（检测延迟
+          ≤700ms）把正在输入的终端整体搬走、 底部坞折叠 ——
+          焦点被偷、空间锚点消失。移动用户正在打字的表面，本身就是错的交互。
+        </p>
+      </div>
+      <div class="w">
+        <div class="k">为什么不是修修补补 ②</div>
+        <p>
+          布局突变建立在<b>弱信号</b>上（进程标题 700ms 轮询 + <code>ps</code> 兜底 + 退出去抖）。
+          信号一抖整个工作台跟着抖。新设计里信号只影响徽章与会话条 —— 布局永远不因检测而变。
+        </p>
+      </div>
+      <div class="w">
+        <div class="k">为什么不是修修补补 ③</div>
+        <p>
+          旧竖栏固定 <code>350px</code> ≈ 45 列，而 Claude 的 TUI 需要 <b>≥80 列</b>才不破版 ——
+          即使实现完美也是挤坏的。修正：竖栏 600px 起、可拖；「大屏」形态推荐 Room（中央栏天然宽）。
+        </p>
+      </div>
+    </div>
+
+    <div class="ide" id="ide">
+      <div class="tbar">
+        <div class="dots">
+          <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        </div>
+        <span class="app">Charter</span><span>·</span><span>my-project</span>
+      </div>
+      <div class="body">
+        <div class="rail">▤<br /></div>
+        <div class="tree">
+          <div class="h">Explorer</div>
+          <div class="f t1"><span>server.ts</span><span class="b">外部改动</span></div>
+          <div class="f t2"><span>routes.ts</span><span class="b">外部改动</span></div>
+          <div class="f t3"><span>util.ts</span><span class="b">外部改动</span></div>
+          <div class="f"><span>package.json</span></div>
+        </div>
+
+        <div class="center">
+          <div class="editor" id="editor"></div>
+
+          <!-- 底部坞：终端的默认居所；检测后也不离开 -->
+          <div class="dock" id="dock">
+            <div class="dock-tabs">
+              <span class="dock-tab">Problems</span>
+              <span class="dock-tab">Output</span>
+              <span class="dock-tab on">Terminal</span>
+            </div>
+            <div class="dock-main">
+              <div class="dock-host" id="dockHost">
+                <!-- 会话条：检测的全部 UI 后果都发生在这一条里 -->
+                <div class="sbar" id="sbarDock"></div>
+                <!-- 终端画面节点由 JS 在 dock ⇄ 竖栏之间 appendChild 搬家（同产品修复机制） -->
+              </div>
+              <div class="term-tabs">
+                <div class="term-tab">
+                  <span class="badge-shell">● zsh</span>
+                  <span class="badge-agent">✳ claude <span class="badge-ext">EXT</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右侧竖栏：仅在用户点了「移到侧栏」后存在；600px ≈ 80 列 @12px -->
+        <div class="col" id="col">
+          <div class="col-head">
+            <span
+              class="live-dot"
+              style="
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: var(--warn);
+                flex: none;
+              "
+            ></span>
+            <span class="cli" style="font-weight: 700">✳ claude</span>
+            <span class="badge-ext">EXT</span>
+            <span class="w80">600px · ≥80 col</span>
+            <span class="sp" style="flex: 1"></span>
+            <button
+              class="sb-btn"
+              id="toRoom2"
+              style="
+                border: 1px solid var(--border);
+                background: var(--card);
+                color: var(--text2);
+                border-radius: 7px;
+                padding: 3px 10px;
+                font-size: 11.5px;
+                cursor: pointer;
+              "
+            >
+              ⤢ Room
+            </button>
+            <button
+              class="sb-btn"
+              id="toDock"
+              style="
+                border: 1px solid var(--border);
+                background: var(--card);
+                color: var(--text2);
+                border-radius: 7px;
+                padding: 3px 10px;
+                font-size: 11.5px;
+                cursor: pointer;
+              "
+            >
+              ⇤ 归位到坞
+            </button>
+          </div>
+          <div class="col-host" id="colHost"></div>
+          <div class="strip">
+            <div class="strip-h">Session changes <span class="cnt" id="cnt2">0</span></div>
+            <div class="strip-empty">还没有文件改动。</div>
+            <div class="strip-row">
+              <span>server.ts</span
+              ><span class="pm"><span class="p">+18</span><span class="m">−2</span></span>
+            </div>
+            <div class="strip-row">
+              <span>routes.ts</span
+              ><span class="pm"><span class="p">+7</span><span class="m">−0</span></span>
+            </div>
+            <div class="strip-row">
+              <span>util.ts</span
+              ><span class="pm"><span class="p">+1</span><span class="m">−0</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+      <!-- 影片主角：模拟光标 + 帧内字幕 -->
+      <div class="fakecur" id="fakecur">
+        <span class="ring"></span>
+        <svg width="20" height="21" viewBox="0 0 20 21">
+          <path
+            d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z"
+            fill="#fff"
+            stroke="#1b1a16"
+            stroke-width="1.3"
+            stroke-linejoin="round"
+          />
+        </svg>
+      </div>
+      <div class="subs" id="subs"></div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 永远不动正在输入的表面 <span class="tag new">NEW</span></h3>
+          <p>
+            检测的全部 UI 后果收敛为：终端 tab 徽章 <code>✳ claude EXT</code>、窗格顶部 34px
+            会话条、一次 toast、树行「外部改动」徽章。零布局变化、零焦点转移 ——
+            你打的每个键都落在原处。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 搬家 = 用户意图 <span class="tag new">NEW</span></h3>
+          <p>
+            会话条提供两个升格出口：<code>⇥ 移到侧栏</code>（600px 竖栏 + changes strip，可拖宽、可
+            <code>⇤ 归位</code>）与 <code>⤢ Room</code>（大屏形态，中央栏天然 ≥80 列）。 偏好项
+            <code>检测后自动移到侧栏</code> 保留给想要旧行为的人，<b>默认关</b>。
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · 结束不跳回 <span class="tag new">NEW</span></h3>
+          <p>
+            <code>/exit</code> 后：会话条变绿色结束态（<code>✻ 已结束 · N files · Review</code>），
+            scrollback 摘要行照旧。终端<b>留在用户放它的地方</b> ——
+            在侧栏就显示归位按钮，绝不自动再搬一次。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分（已批准，原样保留）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>安全语义 <span class="tag keep">KEEP</span></h3>
+          <p>
+            EXT·unmanaged 徽章、入场快照（临时 index <code>write-tree</code>）、FS watcher 记账、
+            字节级回滚、<code>REVIEW_READY</code> 永不自动 ACCEPTED —— 一字不改。
+          </p>
+        </div>
+        <div class="card">
+          <h3>Session Room <span class="tag keep">KEEP</span></h3>
+          <p>
+            外部任务的 Room 形态不变：终端占中央栏（本来就是用户主动打开的），changes rail、
+            live-follow peek、Review 入口照旧。
+          </p>
+        </div>
+        <div class="card">
+          <h3>任务与账本 <span class="tag keep">KEEP</span></h3>
+          <p>
+            外部会话 = 一等任务（<code>external_json</code>）、任务列表/通知/Mission Control
+            照常呈现。会话结束零改动走 PIVOT-031「Answered」。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>随本次一并修复的底座缺陷（任何设计都需要）</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>xterm 挂载模型 <span class="tag fix">FIX</span></h3>
+          <p>
+            xterm 6 的 <code>open()</code> 只在首次调用时创建并挂载 DOM，再次调用是
+            no-op（不搬元素）。现有三处
+            <code>host.innerHTML=''; term.open(host)</code> 全部换成统一的
+            <code>mountTerminal(host, item)</code>：首次 <code>open()</code>， 之后
+            <code>host.appendChild(term.element)</code> 真搬家 + <code>fit()</code> +
+            <code>focus()</code>。
+          </p>
+        </div>
+        <div class="card">
+          <h3>由同一根因连坐的路径 <span class="tag fix">FIX</span></h3>
+          <ul>
+            <li>
+              升格面板空白、无法输入（本次事故，E2E 现红：<code>external-cli.spec.ts:89</code>）
+            </li>
+            <li>会话结束归位后 <code>active=null</code>，坞里空白且点 tab 也回不来</li>
+            <li>双终端 tab 切换 A→B→A 后 A 空白</li>
+            <li>⌘E Home ⇄ Editor 往返后当前终端空白</li>
+          </ul>
+          <p>E2E 补强：升格后向终端敲键必须回显（stdin 达 PTY）；以上路径各一条断言。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>边界与暂不做</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>多会话并存</h3>
+          <p>
+            升格位一次一个（与现状一致）：第二个会话照常获得徽章 + 会话条 + Room 入口，
+            其「移到侧栏」在占位时置灰（tooltip 说明）。竖栏 tab 化留待后续。
+          </p>
+        </div>
+        <div class="card">
+          <h3>键盘焦点白名单</h3>
+          <p>
+            TUI 要吃掉几乎所有按键（Esc/⌘K…）。终端聚焦时全局快捷键收缩到白名单 + 焦点描边 + 跳出键
+            —— 方向稿已记录，<b>本轮不做</b>，单独排期。
+          </p>
+        </div>
+        <div class="card">
+          <h3>stdin 桥 / 转写解析</h3>
+          <p>
+            composer→CLI stdin 桥与 transcript 解析（stream-json / app-server）仍按 ADR-0017
+            记录为终态路径，不在本轮。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      批准后动作：ADR-0017 增补修订（决策 4 触发方式：自动 → 意图；竖栏尺寸修正）→ 实现（会话条、
+      升格动作、mountTerminal 底座、归位修复）→ E2E：external-cli.spec 现有断言转绿 + 新增交互回归
+      （输入回显 / tab 切换 / ⌘E 往返 / 归位）→ 截图复核。
+    </div>
+
+    <script>
+      const ide = document.getElementById('ide');
+      const dockHost = document.getElementById('dockHost');
+      const colHost = document.getElementById('colHost');
+      const sbarDock = document.getElementById('sbarDock');
+      const toast = document.getElementById('toast');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+
+      // 终端画面 —— 单一 DOM 节点，演示与产品修复相同的 appendChild 搬家机制。
+      const term = document.createElement('div');
+      term.className = 'term';
+      dockHost.appendChild(term);
+
+      // 编辑器假代码由 JS 注入，避免 HTML 格式化引入意外换行。
+      document.getElementById('editor').innerHTML = [
+        '<div class="ln"><span class="kw">import</span> { createServer } <span class="kw">from</span> "./server";</div>',
+        '<div class="ln"> </div>',
+        '<div class="ln"><span class="kw">export function</span> main(): <span class="kw">void</span> {</div>',
+        '<div class="ln">  createServer().listen(3000);</div>',
+        '<div class="ln">}</div>',
+      ].join('');
+
+      // ── 终端内容素材 ─────────────────────────────────────
+      const SH = '<span class="dim">my-project %</span> ';
+      const PROMPT = '<span class="dim">&gt;</span> ';
+      // 欢迎框按纯文本宽度程序化补齐，右边框永远对齐（框内只用 ASCII）。
+      const BOX_W = 74;
+      const strip = (s) => s.replace(/<[^>]+>/g, '');
+      const boxLine = (s) =>
+        '<span class="wbox">│</span> ' +
+        s +
+        '&nbsp;'.repeat(Math.max(0, BOX_W - 3 - strip(s).length)) +
+        '<span class="wbox">│</span>';
+      const BOX = [
+        '<span class="wbox">╭' + '─'.repeat(BOX_W - 2) + '╮</span>',
+        boxLine(
+          '* <b>Claude Code</b>  <span class="dim">v2.1.209 - my-project - claude-fable-5</span>',
+        ),
+        boxLine(''),
+        boxLine('<span class="dim">? for shortcuts</span>'),
+        '<span class="wbox">╰' + '─'.repeat(BOX_W - 2) + '╯</span>',
+      ];
+      const ASK = '给 server.ts 加上优雅退出';
+      const THINK = '\n\n  ✻ <span class="dim">Thinking…</span>\n';
+      const EDITS = [
+        { html: '  ⏺ <b>Edit</b> <span class="dim">server.ts (+18 −2)</span>', tree: 't1' },
+        { html: '  ⏺ <b>Edit</b> <span class="dim">routes.ts (+7 −0)</span>', tree: 't2' },
+        { html: '  ⏺ <b>Edit</b> <span class="dim">util.ts (+1 −0)</span>', tree: 't3' },
+      ];
+      const S0_END = SH + 'claude\n';
+      const S1_END = S0_END + BOX.join('\n') + '\n\n' + PROMPT;
+      const S3_END = S1_END + ASK + THINK + EDITS.map((e) => e.html).join('\n') + '\n\n' + PROMPT;
+      const S5_END =
+        S3_END +
+        '/exit\n<span class="dim">✻ session ended — 3 files changed, tracked for review</span>\n' +
+        SH;
+
+      // 会话条内容（活动 / 结束两态由 .ended 切换）
+      sbarDock.innerHTML = [
+        '<span class="live-dot"></span>',
+        '<span class="cli">✳ claude</span>',
+        '<span class="badge-ext">EXT · unmanaged</span>',
+        '<span class="snap" title="入场快照 — 回滚按字节还原">snap a1b2c3f</span>',
+        '<span class="files st-live" id="cnt1"><b>0</b> files</span>',
+        '<span class="st-end">✻ 已结束 · 3 files</span>',
+        '<span class="sp"></span>',
+        '<button class="review">Review</button>',
+        '<button id="toRoom1">⤢ Room</button>',
+        '<button class="primary to-side" id="toSide">⇥ 移到侧栏</button>',
+      ].join('');
+
+      const cnt1 = document.getElementById('cnt1');
+      const cnt2 = document.getElementById('cnt2');
+
+      function mountTerm(host) {
+        host.appendChild(term); // appendChild 即搬家 —— 与产品修复同机制
+      }
+      function setTerm(html) {
+        term.innerHTML = html + '<span class="cur"></span>';
+        term.scrollTop = 1e6; // 跟随输出（真实终端行为）
+      }
+      let toastTimer = null;
+      function showToast(msg) {
+        toast.textContent = msg;
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toast.classList.remove('show'), 3400);
+      }
+      function say(html) {
+        subs.innerHTML = html;
+        subs.classList.add('show');
+      }
+      function filesCount(n) {
+        cnt1.innerHTML = '<b>' + n + '</b> files';
+        cnt2.textContent = String(n);
+        if (n > 0) ide.classList.add('touched');
+        cnt1.classList.remove('pulse');
+        void cnt1.offsetWidth;
+        cnt1.classList.add('pulse');
+        document.querySelectorAll('.strip-row').forEach((r, i) => r.classList.toggle('on', i < n));
+      }
+      function treeOn(cls) {
+        const row = document.querySelector('.tree .f.' + cls);
+        if (row) row.classList.add('on');
+      }
+
+      // ── 影片引擎：单一时间线，可暂停、可章节跳转、循环播放 ──
+      const ABORT = Symbol('abort');
+      let token = 0;
+      let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms;
+          let last = performance.now();
+          const tick = () => {
+            if (my !== token) {
+              reject(ABORT);
+              return;
+            }
+            const n = performance.now();
+            if (!paused) {
+              left -= n - last;
+              clock.inScene += n - last;
+            }
+            last = n;
+            if (left <= 0) resolve();
+            else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+
+      async function typeTerm(base, text) {
+        for (let i = 1; i <= text.length; i++) {
+          setTerm(base + text.slice(0, i));
+          await wait(60 + (i % 3) * 25);
+        }
+      }
+
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = ide.getBoundingClientRect();
+        const x = r.left - box.left + r.width * fx;
+        const y = r.top - box.top + r.height * fy;
+        cursor.style.transform = 'translate(' + x + 'px, ' + y + 'px)';
+        await wait(700);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click');
+        void cursor.offsetWidth;
+        cursor.classList.add('click');
+        await wait(280);
+      }
+
+      // ── 分镜（每幕 play=动画演出，snap=末态直达，供章节跳转） ──
+      const SCENES = [
+        {
+          label: '① 起会话',
+          est: 3000,
+          async play() {
+            say('你在底部坞的终端里工作。现在起一个 <b>claude</b> 会话 —— 直接敲命令。');
+            await moveCursorTo(term, 0.32, 0.45);
+            await clickCursor();
+            await wait(450);
+            await typeTerm(SH, 'claude');
+            await wait(450);
+            setTerm(S0_END);
+          },
+          snap() {
+            setTerm(S0_END);
+          },
+        },
+        {
+          label: '② TUI 起来',
+          est: 3100,
+          async play() {
+            say('TUI 原地起来。坞是横向的 —— <b>80 列绰绰有余，不破版</b>。');
+            let acc = S0_END;
+            for (const ln of BOX) {
+              acc += ln + '\n';
+              setTerm(acc);
+              await wait(110);
+            }
+            setTerm(S1_END);
+            await wait(2400);
+          },
+          snap() {
+            setTerm(S1_END);
+          },
+        },
+        {
+          label: '③ 检测 = 原地装饰',
+          est: 8000,
+          async play() {
+            await wait(700); // 检测轮询延迟
+            ide.classList.add('detected');
+            dockHost.classList.add('show-sbar');
+            showToast('检测到 claude 会话 — 已拍入场快照，改动将被跟踪（EXT）。');
+            say(
+              '<b>~700ms 后检测命中</b>：tab 徽章、会话条（快照 · 计数 · Room · 移到侧栏）、一次 toast。<b>终端一像素没动，焦点还在你的光标上。</b>',
+            );
+            await wait(4200);
+            say(
+              '<span class="warn2">旧交互此刻：整个终端被自动搬进 350px 竖栏、坞折叠 —— 且因挂载 bug 变成空白、无法输入（本次事故）。</span>',
+            );
+            await wait(3000);
+          },
+          snap() {
+            ide.classList.add('detected');
+            dockHost.classList.add('show-sbar');
+          },
+        },
+        {
+          label: '④ 对话与记账',
+          est: 8000,
+          async play() {
+            say('你照常跟 claude 对话 —— 没有任何东西打断你的输入。');
+            await typeTerm(S1_END, ASK);
+            setTerm(S1_END + ASK + THINK);
+            await wait(1400);
+            say(
+              'claude 开始改文件：会话条计数实时跳、树行闪「外部改动」徽章 —— 记账机制原样（watcher + 快照基线），只是呈现在原地。',
+            );
+            let acc = S1_END + ASK + THINK;
+            let n = 0;
+            for (const e of EDITS) {
+              n += 1;
+              acc += e.html + '\n';
+              setTerm(acc);
+              filesCount(n);
+              treeOn(e.tree);
+              await wait(1300);
+            }
+            setTerm(S3_END);
+            await wait(1200);
+          },
+          snap() {
+            setTerm(S3_END);
+            filesCount(3);
+            treeOn('t1');
+            treeOn('t2');
+            treeOn('t3');
+          },
+        },
+        {
+          label: '⑤ 你点「移到侧栏」',
+          est: 7400,
+          async play() {
+            say('想给它一块常驻竖屏？<b>升格是你的动作，不是检测的副作用。</b>');
+            await wait(600);
+            await moveCursorTo(document.getElementById('toSide'));
+            await clickCursor();
+            ide.classList.add('promoted', 'dock-away');
+            mountTerm(colHost);
+            await wait(1100);
+            say(
+              '同一 xterm/PTY 真实搬进 <b>600px 竖栏（≥80 列）</b>，带 Session changes strip；坞随之收起 —— 这次是你点出来的，可预期。想要大屏点 <b>⤢ Room</b>。',
+            );
+            await wait(4600);
+          },
+          snap() {
+            ide.classList.add('promoted', 'dock-away');
+            mountTerm(colHost);
+          },
+        },
+        {
+          label: '⑥ /exit 结束',
+          est: 6000,
+          async play() {
+            say('会话结束 —— 在终端里正常 <b>/exit</b>。');
+            await typeTerm(S3_END, '/exit');
+            await wait(400);
+            setTerm(S5_END);
+            ide.classList.add('ended');
+            showToast('外部会话结束 — 3 个文件改动，等待 Review。');
+            say(
+              '结束态：头部变绿 + <b>Review</b> 入口，scrollback 打摘要行，任务落 <b>REVIEW_READY</b>（永不自动 ACCEPTED）。<b>终端留在你放它的地方。</b>',
+            );
+            await wait(4800);
+          },
+          snap() {
+            setTerm(S5_END);
+            ide.classList.add('ended');
+          },
+        },
+        {
+          label: '⑦ 归位（可选）',
+          est: 7000,
+          async play() {
+            say('想回坞？点 <b>⇤ 归位到坞</b>。');
+            await wait(400);
+            await moveCursorTo(document.getElementById('toDock'));
+            await clickCursor();
+            ide.classList.remove('promoted', 'dock-away');
+            mountTerm(dockHost);
+            await wait(1200);
+            say(
+              '整段流程里，唯二的布局变化（⑤⑦）都是你亲手点出来的。<b>检测只装饰，意图才搬家。</b>',
+            );
+            await wait(4200);
+          },
+          snap() {
+            ide.classList.remove('promoted', 'dock-away');
+            mountTerm(dockHost);
+          },
+        },
+      ];
+
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+
+      function resetAll() {
+        ide.classList.remove('detected', 'touched', 'promoted', 'dock-away', 'ended');
+        dockHost.classList.remove('show-sbar');
+        document.querySelectorAll('.tree .f.on').forEach((el) => el.classList.remove('on'));
+        document.querySelectorAll('.strip-row.on').forEach((el) => el.classList.remove('on'));
+        cnt1.innerHTML = '<b>0</b> files';
+        cnt2.textContent = '0';
+        toast.classList.remove('show');
+        subs.classList.remove('show');
+        mountTerm(dockHost);
+        setTerm(SH);
+        cursor.style.transform = 'translate(560px, 210px)';
+      }
+
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i;
+            clock.inScene = 0;
+            markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est; // 进度满格
+          await wait(1500);
+          if (my === token) seek(0); // 循环
+        } catch (e) {
+          if (e !== ABORT) throw e;
+        }
+      }
+
+      function seek(n) {
+        token += 1;
+        resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n;
+        clock.inScene = 0;
+        markChap(n);
+        void run(n);
+      }
+
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap';
+        b.textContent = s.label;
+        b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+
+      // 进度条 / 时间码
+      const fmt = (ms) => {
+        const s = Math.max(0, Math.round(ms / 1000));
+        return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+      };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+
+      // 控制
+      playBtn.onclick = () => {
+        paused = !paused;
+        playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停';
+      };
+      document.getElementById('vreplay').onclick = () => {
+        paused = false;
+        playBtn.textContent = '⏸ 暂停';
+        seek(0);
+      };
+      // 真实按钮也可点：直接跳到对应分镜
+      document.getElementById('toSide').onclick = () => seek(4);
+      document.getElementById('toDock').onclick = () => seek(6);
+      document.getElementById('toRoom1').onclick = () =>
+        showToast('（演示）打开 Session Room — 形态见 external-cli-final-mock.html 章节⑤。');
+      document.getElementById('toRoom2').onclick = () =>
+        showToast('（演示）打开 Session Room — 形态见 external-cli-final-mock.html 章节⑤。');
+      document.getElementById('theme').onclick = () => document.body.classList.toggle('dark');
+
+      seek(0);
+    </script>
+  </body>
+</html>

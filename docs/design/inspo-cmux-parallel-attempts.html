@@ -1,0 +1,860 @@
+<!doctype html>
+<!-- Charter — 竞品移植研究 · cmux ③「并行工位」(docs/design). NOT product code.
+     Discussion artifact: 把 cmux 的「同一任务并行扇出到多个模型 + 结果对比 + 加冕采纳」
+     移植成 Charter 的并行尝试组：composer 并行 pill ×N（每份尝试独占 worktree，复用
+     PIVOT-029/030 多挂载与隔离）、Home 组卡三条 lane、对比台按证据排序、人来加冕，
+     采纳走既有验收门，其余归档（Replay 可追溯）。影片可播放：▶ / ⏸ / 章节直达。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 并行工位 — cmux 移植研究 ③</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #eceae5; color: #201e1a; padding: 30px 26px 70px;
+        --side: #f6f5f1; --main: #fbfaf7; --card: #ffffff;
+        --border: #e5e1d8; --border-soft: #edeae3;
+        --text: #201e1a; --text2: #6e6a61; --text3: #a39e94;
+        --chip: #f0eee8; --hover: #e8e5de; --active: #e2dfd7;
+        --accent: #1b1a16; --accent-text: #fff;
+        --ok: #2f9e63; --ok-bg: #e7f5ec;
+        --run: #3f7bd9; --run-bg: #e9f1fd;
+        --warn: #b06f10; --warn-bg: #faf0dc;
+        --danger: #c4453d; --danger-bg: #fbeae9;
+        --crown: #a8791a;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      .pagehead { max-width: 1260px; margin: 0 auto 8px; }
+      .pagehead h1 { font-size: 19px; letter-spacing: -0.01em; }
+      .pagehead p { color: var(--text2); font-size: 13px; margin-top: 5px; line-height: 1.7; max-width: 1020px; }
+      .pagehead b { color: var(--text); }
+      .meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+      .stage { max-width: 1260px; margin: 14px auto 0; position: relative; }
+      .win {
+        background: var(--main); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22); overflow: hidden;
+        display: flex; flex-direction: column; height: 700px; position: relative;
+      }
+      .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .traffic { display: flex; gap: 7px; }
+      .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+      .titlebar .brand { font-weight: 650; font-size: 12.5px; margin-left: 4px; }
+      .titlebar .proj { font-size: 11.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 11px; }
+      .titlebar .k { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--card); }
+      .cols { flex: 1; min-height: 0; display: flex; }
+      .side { width: 218px; flex: none; background: var(--side); border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; padding: 10px 9px; gap: 1px; overflow: hidden; }
+      .sec { font-size: 10.5px; color: var(--text3); padding: 10px 10px 5px; font-weight: 600; letter-spacing: 0.04em; }
+      .nrow { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 8px; font-size: 12.6px; }
+      .nrow .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nrow .dim2 { color: var(--text3); font-size: 10.5px; font-family: var(--mono); }
+      .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+      .dot.run { background: var(--run); animation: pulse 1.6s infinite; }
+      .dot.ok { background: var(--ok); }
+      .dot.warn { background: var(--warn); }
+      @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(63,123,217,.35); } 50% { box-shadow: 0 0 0 4px transparent; } }
+      .ticker { margin-top: auto; font-family: var(--mono); font-size: 9.8px; color: var(--text3); padding: 8px 9px; border-top: 1px solid var(--border-soft); line-height: 1.9; }
+      .ticker b { color: var(--text2); font-weight: 600; }
+
+      /* ── 中央：launcher + mission control ─────── */
+      .center { flex: 1; min-width: 0; overflow: hidden; padding: 26px 30px 0; display: flex; flex-direction: column; align-items: center; }
+      .hero { font-family: 'Songti SC', 'Noto Serif CJK SC', Georgia, serif; font-size: 21px; margin: 6px 0 16px; }
+      .composer { width: 660px; max-width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow); padding: 11px 13px 10px; position: relative; flex: none; }
+      .composer .input { font-size: 13.3px; min-height: 38px; color: var(--text); line-height: 1.6; }
+      .composer .input .ph { color: var(--text3); }
+      .composer .caret { display: inline-block; width: 1px; height: 15px; background: var(--text); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+      .composer .row2 { display: flex; align-items: center; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+      .pill { font-size: 10.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 10px; }
+      .pill.par { border-style: dashed; }
+      .pill.par.on { background: var(--run-bg); border: 1px solid #bcd2f2; color: var(--run); font-weight: 650; }
+      .send { margin-left: auto; width: 26px; height: 26px; border-radius: 8px; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; font-size: 13px; }
+      /* 并行 popover */
+      .parpop {
+        position: absolute; z-index: 20; left: 130px; top: 86px; width: 360px;
+        background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+        box-shadow: 0 24px 60px rgba(30, 26, 18, 0.22); padding: 10px; display: none; font-size: 12px;
+      }
+      .parpop.show { display: block; animation: popin 0.25s cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+      @keyframes popin { from { transform: translateY(-6px) scale(0.97); opacity: 0; } }
+      .parpop .gt { font-size: 10px; color: var(--text3); letter-spacing: 0.05em; padding: 3px 6px 6px; }
+      .parpop .drv { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px; }
+      .parpop .drv:hover { background: var(--hover); }
+      .parpop .cb { width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; flex: none; }
+      .parpop .drv.on .cb { background: var(--accent); border-color: var(--accent); }
+      .parpop .drv .nm { font-weight: 600; }
+      .parpop .drv .sub { margin-left: auto; font-family: var(--mono); font-size: 9.8px; color: var(--text3); }
+      .parpop .note { margin: 7px 6px 3px; font-size: 11px; color: var(--text2); line-height: 1.65; background: var(--side); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 9px; }
+      .parpop .note b { color: var(--text); }
+
+      /* ── 组卡 ─────────────────────────────────── */
+      .mc { width: 660px; max-width: 100%; margin-top: 18px; flex: 1; min-height: 0; overflow: hidden; }
+      .mc .mh { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; font-weight: 600; margin-bottom: 8px; }
+      .gcard { background: var(--card); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow); overflow: hidden; opacity: 0; transform: translateY(10px); transition: all 0.4s; }
+      .gcard.show { opacity: 1; transform: none; }
+      .gh { display: flex; align-items: center; gap: 9px; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); }
+      .gh .t { font-weight: 650; font-size: 13px; }
+      .gh .par3 { font-size: 10px; background: var(--run-bg); color: var(--run); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+      .gh .prog { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3); }
+      .gh .cmp { display: none; font-size: 11.5px; border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 4px 12px; font-weight: 600; }
+      .gcard.alldone .gh .cmp { display: inline-block; animation: glowbtn 1.6s ease-in-out infinite; }
+      @keyframes glowbtn { 50% { box-shadow: 0 0 0 4px rgba(63, 123, 217, 0.14); border-color: #bcd2f2; } }
+      .lane { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+      .lane:last-child { border-bottom: 0; }
+      .lane .drvn { font-weight: 650; width: 150px; flex: none; }
+      .lane .wt { font-family: var(--mono); font-size: 9px; color: var(--text3); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; flex: none; }
+      .lane .act { flex: 1; min-width: 0; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; }
+      .lane .pm { font-family: var(--mono); font-size: 10.5px; flex: none; }
+      .lane .pm .p { color: var(--ok); } .lane .pm .m { color: var(--danger); }
+      .lane .st { flex: none; font-size: 10px; border-radius: 999px; padding: 2px 9px; font-weight: 650; }
+      .lane .st.run { background: var(--run-bg); color: var(--run); }
+      .lane .st.ready { background: var(--ok-bg); color: var(--ok); }
+      .lane .st.fix { background: var(--warn-bg); color: var(--warn); }
+      .lane .st.arch { background: var(--chip); color: var(--text3); }
+      .gcard.collapsed .lane.arch-row { opacity: 0.55; }
+
+      /* ── 对比台 ───────────────────────────────── */
+      .cmpov {
+        position: absolute; inset: 26px 34px; z-index: 30; background: var(--main);
+        border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 40px 110px rgba(30, 26, 18, 0.4);
+        display: none; flex-direction: column; overflow: hidden;
+      }
+      .cmpov.show { display: flex; animation: ovin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.06); }
+      @keyframes ovin { from { transform: translateY(16px) scale(0.985); opacity: 0; } }
+      .cmph { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .cmph .t { font-weight: 700; font-size: 13.5px; }
+      .cmph .sub { font-size: 11px; color: var(--text3); }
+      .cmph .x { margin-left: auto; color: var(--text3); font-size: 14px; }
+      .cmpcols { flex: 1; min-height: 0; display: flex; gap: 0; }
+      .ccol { flex: 1; min-width: 0; border-right: 1px solid var(--border-soft); display: flex; flex-direction: column; padding: 12px 14px; position: relative; }
+      .ccol:last-child { border-right: 0; }
+      .ccol.win2 { background: linear-gradient(180deg, rgba(63, 123, 217, 0.05), transparent 70%); }
+      .ccol .ch { display: flex; align-items: center; gap: 7px; margin-bottom: 3px; }
+      .ccol .ch .nm { font-weight: 700; font-size: 12.8px; }
+      .ccol .evbest { font-size: 9px; background: var(--run-bg); color: var(--run); border-radius: 999px; padding: 1px 7px; font-weight: 700; }
+      .ccol .meta3 { font-family: var(--mono); font-size: 10px; color: var(--text3); margin-bottom: 8px; }
+      .ccol .sum { font-family: 'Songti SC', 'Noto Serif CJK SC', Georgia, serif; font-size: 12.5px; line-height: 1.7; color: var(--text); margin-bottom: 10px; min-height: 62px; }
+      .ccol .bh { font-size: 9.5px; color: var(--text3); letter-spacing: 0.05em; font-weight: 700; margin: 7px 0 5px; }
+      .frow { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10.3px; color: var(--text2); padding: 2px 0; }
+      .frow .pm { margin-left: auto; }
+      .frow .p { color: var(--ok); } .frow .m { color: var(--danger); }
+      .frow.ovl { background: var(--warn-bg); margin: 0 -6px; padding: 2px 6px; border-radius: 5px; cursor: pointer; }
+      .frow.ovl .lap { color: var(--warn); font-size: 9px; border: 1px solid #e5cfa2; border-radius: 4px; padding: 0 4px; }
+      .krow { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text2); padding: 2.5px 0; }
+      .krow .ic2 { width: 14px; text-align: center; flex: none; }
+      .krow .ok2 { color: var(--ok); } .krow .bad { color: var(--danger); } .krow .na { color: var(--text3); }
+      .krow .sup { font-size: 9px; color: var(--text3); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+      .ccol .adopt { margin-top: auto; border: 1px solid var(--border); background: var(--card); border-radius: 9px; padding: 6px 0; text-align: center; font-size: 12px; font-weight: 650; }
+      .ccol.win2 .adopt { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+      .cmpfoot { flex: none; padding: 9px 18px; border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--text2); background: var(--side); display: flex; gap: 8px; align-items: center; }
+      .cmpfoot b { color: var(--text); }
+      /* 重叠深看条 */
+      .lapview { position: absolute; left: 10px; right: 10px; bottom: 54px; z-index: 5; background: var(--card); border: 1px solid var(--border); border-radius: 11px; box-shadow: 0 20px 50px rgba(30, 26, 18, 0.25); padding: 10px 12px; display: none; }
+      .lapview.show { display: block; animation: popin 0.25s; }
+      .lapview .lt { font-size: 11px; font-weight: 650; margin-bottom: 7px; }
+      .lapview .two { display: flex; gap: 10px; }
+      .lapview .half { flex: 1; min-width: 0; }
+      .lapview .half .hh { font-size: 9.5px; color: var(--text3); font-weight: 700; margin-bottom: 4px; }
+      .lapview pre { font-family: var(--mono); font-size: 10px; line-height: 1.65; background: var(--side); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 9px; white-space: pre-wrap; color: var(--text2); }
+      .lapview .add { color: var(--ok); }
+
+      /* ── 采纳确认 sheet ───────────────────────── */
+      .adoptsheet {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -46%); z-index: 40;
+        width: 460px; background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+        box-shadow: 0 40px 100px rgba(30, 26, 18, 0.4); padding: 16px 18px; display: none;
+      }
+      .adoptsheet.show { display: block; animation: ovin 0.3s; }
+      .adoptsheet h4 { font-size: 13.5px; margin-bottom: 9px; }
+      .adoptsheet .pre { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); padding: 4px 0; }
+      .adoptsheet .pre .ok2 { color: var(--ok); }
+      .adoptsheet .btns { display: flex; gap: 8px; margin-top: 13px; }
+      .adoptsheet .btns .go { flex: 1; background: var(--accent); color: var(--accent-text); border-radius: 9px; text-align: center; padding: 7px 0; font-size: 12.5px; font-weight: 650; }
+      .adoptsheet .btns .no { border: 1px solid var(--border); border-radius: 9px; padding: 7px 16px; font-size: 12.5px; color: var(--text2); }
+
+      /* ── 影片附件 ─────────────────────────────── */
+      .toast { position: absolute; right: 16px; top: 48px; z-index: 50; max-width: 340px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 11px; box-shadow: var(--shadow); font-size: 12px; padding: 9px 13px; opacity: 0; transform: translateY(-8px); transition: all 0.3s; pointer-events: none; }
+      .toast.show { opacity: 1; transform: none; }
+      .subs { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 60; max-width: 820px; width: max-content; background: rgba(20, 18, 14, 0.92); color: #f4f2ec; border-radius: 10px; padding: 9px 16px; font-size: 13px; line-height: 1.65; text-align: center; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
+      .subs.show { opacity: 1; }
+      .subs b { color: #ffd89b; }
+      .fakecur { position: absolute; z-index: 70; left: 0; top: 0; transform: translate(620px, 300px); transition: transform 0.65s cubic-bezier(0.3, 0.7, 0.3, 1); pointer-events: none; }
+      .fakecur .ring { position: absolute; left: -7px; top: -7px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(27, 26, 22, 0.55); opacity: 0; }
+      .fakecur.click .ring { animation: ripple 0.32s ease-out; }
+      @keyframes ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1.15); opacity: 0; } }
+
+      /* ── 播放器 / 论述区 ──────────────────────── */
+      .vbar { max-width: 1260px; margin: 12px auto 0; display: flex; align-items: center; gap: 10px; }
+      .vbtn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+      .vbtn:hover { background: var(--hover); }
+      .vprog { flex: 1; height: 7px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .vfill { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.15s linear; }
+      .vtime { font-family: var(--mono); font-size: 11px; color: var(--text2); min-width: 84px; text-align: right; }
+      .chaps { max-width: 1260px; margin: 8px auto 0; display: flex; gap: 6px; flex-wrap: wrap; }
+      .chap { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 11.5px; cursor: pointer; }
+      .chap:hover { background: var(--hover); }
+      .chap.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .chap.done { color: var(--text3); }
+      .sect { max-width: 1260px; margin: 34px auto 0; }
+      .sect h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+      .sect h2 span { color: var(--text3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); }
+      .card h3 { font-size: 12.8px; margin-bottom: 7px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+      .card p, .card li { font-size: 12px; color: var(--text2); line-height: 1.75; }
+      .card ul { padding-left: 16px; }
+      .card code { font-family: var(--mono); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px; }
+      .tag { font-size: 9.5px; border-radius: 99px; padding: 1px 8px; font-weight: 700; letter-spacing: 0.04em; }
+      .tag.new { background: var(--run-bg); color: var(--run); }
+      .tag.keep { background: var(--ok-bg); color: var(--ok); }
+      .tag.skip { background: var(--danger-bg); color: var(--danger); }
+      .tag.src { background: var(--warn-bg); color: var(--warn); }
+      table.map { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+      table.map th, table.map td { text-align: left; font-size: 12px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; line-height: 1.7; }
+      table.map th { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; background: var(--side); }
+      table.map td:first-child { width: 30%; color: var(--text); font-weight: 600; }
+      table.map td:nth-child(2) { width: 34%; color: var(--text2); }
+      table.map td:last-child { color: var(--text2); }
+      .foot { max-width: 1260px; margin: 30px auto 0; font-size: 11.5px; color: var(--text3); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="pagehead">
+      <h1>并行工位 — 把 cmux 的「多模型并行 + 加冕」移植进 Charter（研究稿 ③）</h1>
+      <p>
+        cmux 的核心主张：<b>同一个任务同时派给多个 coding agent（Claude Code / Codex / Gemini …），各自跑在隔离环境里，
+        跑完对比、选最好的那份</b>。这解决的是真问题——模型选择焦虑与串行等待。Charter 的底座其实已经就位：
+        任务级 worktree 隔离（PIVOT-030）、多挂载引擎（PIVOT-029）、并发上限与排队（maxConcurrentRuns）。
+        缺的只是三件呈现层的事：<b>并行 pill、组卡、对比台</b>。关键改造：manaflow 用 Crown 自动加冕（可人工覆盖），
+        我们翻转默认——<b>按证据排序、由人加冕</b>：采纳走既有验收门，REVIEW_READY 永不自动 ACCEPTED。
+      </p>
+      <p style="font-size:11.8px">
+        血统注：cmux 团队后来把这套「并行编排」演进为姊妹项目 <b>manaflow</b>（隔离 VS Code 工作区 · Live Preview · Crown · 一键 PR），
+        “cmux”之名如今属于他们的 <b>Ghostty 内核 agent 终端</b>（通知环 / 未读徽章，见研究稿 ②）。本稿沿用你的语境统称 cmux，事实以两个仓库为准。
+      </p>
+      <div class="meta">讨论稿 · 2026-07-16 · 竞品移植研究（cmux→manaflow：并行扇出 / 隔离工作区 / Crown 评选 / 对比）· 仅浅色 · 影片约 55s</div>
+    </div>
+
+    <div class="stage">
+      <div class="win" id="app">
+        <div class="titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span class="brand">Charter</span>
+          <span class="proj">checkout-web · main</span>
+          <span class="k">并行 = 任务的属性，不是新世界</span>
+        </div>
+        <div class="cols">
+          <div class="side">
+            <div class="sec">需要你</div>
+            <div class="nrow" id="needyou" style="display:none"><span class="dot warn"></span><span class="grow">优惠券提示 · 3 份结果可对比</span><span class="dim2">组</span></div>
+            <div class="sec">进行中</div>
+            <div class="nrow" id="siderun" style="display:none"><span class="dot run"></span><span class="grow">优惠券失效提示</span><span class="dim2" id="sidecnt">×3</span></div>
+            <div class="nrow"><span class="dot run"></span><span class="grow">t-409 · 迁移 pnpm</span></div>
+            <div class="sec">项目</div>
+            <div class="nrow"><span style="color:var(--text3)">▸</span><span class="grow">checkout-web</span></div>
+            <div class="nrow"><span style="color:var(--text3)">▸</span><span class="grow">pricing-api</span></div>
+            <div class="ticker" id="ticker">
+              <div><b>t-409</b> 编辑 package.json</div>
+            </div>
+          </div>
+
+          <div class="center">
+            <div class="hero">该做点什么？</div>
+            <div class="composer" id="composer">
+              <div class="input" id="cinput"><span class="ph">描述你的意图，@ 引用文件…</span></div>
+              <div class="row2">
+                <span class="pill">checkout-web · main</span>
+                <span class="pill">受控修改</span>
+                <span class="pill" id="modelpill">claude-sonnet-4.6 · 中</span>
+                <span class="pill par" id="parpill">⫽ 并行 ×1</span>
+                <span class="send" id="sendbtn">↑</span>
+              </div>
+              <div class="parpop" id="parpop">
+                <div class="gt">并行尝试 — 同一张 Charter，几个驱动一起开工</div>
+                <div class="drv on"><span class="cb">✓</span><span class="nm">claude-sonnet-4.6</span><span class="sub">effort 中</span></div>
+                <div class="drv on" id="drv2"><span class="cb">✓</span><span class="nm">gpt-5.2-codex</span><span class="sub">effort 中</span></div>
+                <div class="drv" id="drv3"><span class="cb"></span><span class="nm">gemini-3-pro</span><span class="sub">effort 中</span></div>
+                <div class="note">
+                  每份尝试<b>独占一棵 worktree</b>（互不沾染，主树不动）；预计成本 <b>×3</b>、
+                  并发受 maxConcurrentRuns 限制（超出排队）。跑完在<b>对比台</b>里挑一份采纳，其余归档。
+                </div>
+              </div>
+            </div>
+
+            <div class="mc">
+              <div class="mh">进行中</div>
+              <div class="gcard" id="gcard">
+                <div class="gh">
+                  <span class="t">优惠券过期：行内提示 + 禁用提交</span>
+                  <span class="par3">并行 ×3</span>
+                  <span class="prog" id="gprog">0/3 就绪</span>
+                  <button class="cmp" id="cmpbtn">对比 3 份结果</button>
+                </div>
+                <div class="lane" id="lane1">
+                  <span class="drvn">claude-sonnet-4.6</span><span class="wt">wt/a</span>
+                  <span class="act" id="act1">排队中…</span>
+                  <span class="pm" id="pm1"></span>
+                  <span class="st run" id="st1">排队</span>
+                </div>
+                <div class="lane" id="lane2">
+                  <span class="drvn">gpt-5.2-codex</span><span class="wt">wt/b</span>
+                  <span class="act" id="act2">排队中…</span>
+                  <span class="pm" id="pm2"></span>
+                  <span class="st run" id="st2">排队</span>
+                </div>
+                <div class="lane" id="lane3">
+                  <span class="drvn">gemini-3-pro</span><span class="wt">wt/c</span>
+                  <span class="act" id="act3">排队中…</span>
+                  <span class="pm" id="pm3"></span>
+                  <span class="st run" id="st3">排队</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 对比台 -->
+        <div class="cmpov" id="cmpov">
+          <div class="cmph">
+            <span class="t">对比台 · 优惠券过期：行内提示 + 禁用提交</span>
+            <span class="sub">按证据排序（验证 → 改动面 → 成本），与模型名无关</span>
+            <span class="x">✕</span>
+          </div>
+          <div class="cmpcols">
+            <div class="ccol win2" id="colB">
+              <div class="ch"><span class="nm">gpt-5.2-codex</span><span class="evbest">证据最全</span></div>
+              <div class="meta3">wt/b · 4m02s · $0.31</div>
+              <div class="sum">在 CouponField 内联失效分支，提交按钮用 <b>disabled + aria</b> 双通道；新增 8 条单测覆盖过期/临期边界。</div>
+              <div class="bh">改动 · 3 文件</div>
+              <div class="frow ovl" id="lapcell"><span>CouponField.tsx</span><span class="lap">3 份都改了 · 深看</span><span class="pm"><span class="p">+34</span> <span class="m">−6</span></span></div>
+              <div class="frow"><span>CouponField.test.tsx</span><span class="pm"><span class="p">+58</span></span></div>
+              <div class="frow"><span>i18n/zh.json</span><span class="pm"><span class="p">+2</span></span></div>
+              <div class="bh">验证</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>typecheck</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>vitest · 96 通过</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>e2e:checkout · 12 通过</div>
+              <div class="adopt" id="adoptB">采纳这一份</div>
+            </div>
+            <div class="ccol" id="colA">
+              <div class="ch"><span class="nm">claude-sonnet-4.6</span></div>
+              <div class="meta3">wt/a · 5m40s · $0.42</div>
+              <div class="sum">把过期校验抽成 <b>useCouponState</b> hook，改动更系统但面更大；单测 5 条。</div>
+              <div class="bh">改动 · 5 文件</div>
+              <div class="frow ovl"><span>CouponField.tsx</span><span class="lap">重叠</span><span class="pm"><span class="p">+21</span> <span class="m">−18</span></span></div>
+              <div class="frow"><span>useCouponState.ts</span><span class="pm"><span class="p">+64</span></span></div>
+              <div class="frow"><span>CouponField.test.tsx</span><span class="pm"><span class="p">+41</span></span></div>
+              <div class="frow"><span>SummaryPanel.tsx</span><span class="pm"><span class="p">+9</span> <span class="m">−3</span></span></div>
+              <div class="frow"><span>i18n/zh.json</span><span class="pm"><span class="p">+2</span></span></div>
+              <div class="bh">验证</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>typecheck</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>vitest · 93 通过 <span class="sup">首跑 2 失败 · superseded</span></div>
+              <div class="krow"><span class="ic2 na">—</span>e2e 未运行 <span class="sup">Unverified</span></div>
+              <div class="adopt">采纳这一份</div>
+            </div>
+            <div class="ccol" id="colC">
+              <div class="ch"><span class="nm">gemini-3-pro</span></div>
+              <div class="meta3">wt/c · 3m18s · $0.19</div>
+              <div class="sum">最小改动：仅在提交回调里拦截过期券并 toast 提示——<b>没有行内提示</b>，与验收条件不符。</div>
+              <div class="bh">改动 · 1 文件</div>
+              <div class="frow ovl"><span>CouponField.tsx</span><span class="lap">重叠</span><span class="pm"><span class="p">+9</span> <span class="m">−1</span></span></div>
+              <div class="bh">验证</div>
+              <div class="krow"><span class="ic2 ok2">✓</span>typecheck</div>
+              <div class="krow"><span class="ic2 bad">✗</span>e2e:checkout · 2 失败（缺行内提示）</div>
+              <div class="adopt">采纳这一份</div>
+            </div>
+            <div class="lapview" id="lapview">
+              <div class="lt">CouponField.tsx — 两份写法并排（重叠深看）</div>
+              <div class="two">
+                <div class="half">
+                  <div class="hh">gpt-5.2-codex（内联分支）</div>
+                  <pre><span class="add">+ if (expired) return (</span>
+<span class="add">+   &lt;InlineHint tone="warn"&gt;{t('coupon.expired')}&lt;/InlineHint&gt;</span>
+<span class="add">+ );</span>
+<span class="add">+ &lt;Submit disabled={expired} aria-disabled={expired}/&gt;</span></pre>
+                </div>
+                <div class="half">
+                  <div class="hh">claude-sonnet-4.6（抽 hook）</div>
+                  <pre><span class="add">+ const { expired, hint } = useCouponState(coupon);</span>
+<span class="add">+ if (hint) return &lt;InlineHint tone="warn"&gt;{hint}&lt;/InlineHint&gt;;</span>
+<span class="add">+ &lt;Submit disabled={expired}/&gt;</span></pre>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="cmpfoot">
+            <b>加冕是你的动作。</b>manaflow 的 Crown 自动选优（可覆盖）；Charter 只做证据排序——验证矩阵、改动面、成本摆在明处，采纳永远经过验收门。组模式下 Full 自动接受不适用。
+          </div>
+        </div>
+
+        <!-- 采纳确认 -->
+        <div class="adoptsheet" id="adoptsheet">
+          <h4>采纳 gpt-5.2-codex 的结果（wt/b → main）</h4>
+          <div class="pre"><span class="ok2">✓</span>合并预检：3 个文件基线一致，无冲突</div>
+          <div class="pre"><span class="ok2">✓</span>验证：typecheck / vitest / e2e 全绿（本次代码修订）</div>
+          <div class="pre"><span style="color:var(--text3)">↺</span>其余 2 份将归档：worktree 回收，Replay 保留可追溯</div>
+          <div class="btns"><span class="go" id="adoptgo">接受并合回主树</span><span class="no">再看看</span></div>
+        </div>
+
+        <div class="toast" id="toast"></div>
+        <div class="subs" id="subs"></div>
+        <div class="fakecur" id="fakecur">
+          <span class="ring"></span>
+          <svg width="20" height="21" viewBox="0 0 20 21"><path d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z" fill="#fff" stroke="#1b1a16" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>借了什么、怎么落地 <span>cmux 行为 → Charter 落法（改造点加粗）</span></h2>
+      <table class="map">
+        <tr><th>cmux → manaflow 原样</th><th>用户为什么爱</th><th>Charter 落法</th></tr>
+        <tr>
+          <td>同一任务并行派给多个 agent/模型（Claude Code / Codex / Cursor / Gemini / Amp / Opencode…），各自跑在隔离工作区（云端或本地 Docker 的独立 VS Code 实例）</td>
+          <td>不用赌「哪个模型行」——都试，挑结果；等待从串行变并行</td>
+          <td><b>并行 pill ×N</b>：composer 一个开关，扇出 N 份尝试。隔离直接复用任务级 worktree（PIVOT-030）与多挂载引擎（PIVOT-029），<b>不引入容器与内嵌 VS Code</b>；并发走 maxConcurrentRuns 排队，成本 ×N 在弹层明示</td>
+        </tr>
+        <tr>
+          <td>任务仪表盘：每个 run 的状态、完成/需要输入的提醒</td>
+          <td>并行多了之后，「谁跑完了、谁卡住了」必须一眼可见</td>
+          <td><b>组卡</b>：mission control 里一张卡三条 lane（驱动 · worktree · 实时动作 · ±diffstat · 状态）。通知<b>按组聚合</b>（「1/3 就绪」「3 份可对比」），不是 ×3 轰炸——延续 PIVOT-014 卫生规则</td>
+        </tr>
+        <tr>
+          <td>结果对比 + Crown 评选：跑完自动分析各 run 并给最佳标记，diff 视图里可复核、可人工覆盖</td>
+          <td>省掉逐份看 diff 的时间，直接从赢家开始</td>
+          <td><b>对比台 + 证据排序 + 人加冕</b>：列按证据排（验证矩阵 → 改动面 → 成本），重叠文件可并排深看两种写法。<b>不让 LLM 替你选</b>——「哪份对」的裁决权在验收门（REVIEW_READY 永不自动 ACCEPTED；组模式下 Full 自动接受停用）</td>
+        </tr>
+        <tr>
+          <td>选定后一键合并/建 PR，其余 run 关闭</td>
+          <td>收尾干净，不留一地烂摊子</td>
+          <td><b>采纳 = 既有验收门</b>：合并预检（基线冲突检查）→ 接受合回主树（字节校验）；其余尝试归档——worktree 回收、<b>Replay 完整保留</b>（输过的方案也查得回）。PR 草稿见研究稿 ④</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 并行是任务的属性，不是新世界 <span class="tag new">NEW</span><span class="tag src">源自 cmux</span></h3>
+          <p>
+            cmux 是「为并行而生的独立 app」；Charter 把它收敛成 composer 上的<b>一个 pill</b>。
+            没有新表面、没有新心智：组卡住在 mission control，采纳走验收门，回滚/Replay/通知全是既有机制。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 证据排序，人来加冕 <span class="tag new">NEW</span></h3>
+          <p>
+            对比台不评「谁写得优雅」，只陈列可核查的事实：验证矩阵（含 superseded/Unverified 的诚实标注）、
+            改动面、重叠写法、成本时长。<b>LLM 评审可以以后作为参考列加入，但裁决永远是人。</b>
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · 输家也有尊严 <span class="tag keep">KEEP</span></h3>
+          <p>
+            未被采纳的尝试归档而非蒸发：worktree 回收省磁盘，但事件账本与 Replay 完整保留——
+            下周想「当时 sonnet 那份是怎么写的」，还查得回（HIST-001/002）。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分（安全语义原样）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>隔离与合并 <span class="tag keep">KEEP</span></h3>
+          <p>
+            每份尝试 = 一个标准任务 + 一棵 worktree：权限、工具网关、变更记账全部 per-mount（PIVOT-029/030）。
+            合并预检、冲突二次确认、字节级回滚，一字不改。
+          </p>
+        </div>
+        <div class="card">
+          <h3>验收门唯一 <span class="tag keep">KEEP</span></h3>
+          <p>
+            「采纳」没有旁路：它就是那扇既有的门（Review v2 + 验证证据 + 接受/回滚）。
+            对比台只是把三扇门并排摆开，方便你先挑再进。
+          </p>
+        </div>
+        <div class="card">
+          <h3>并发与成本诚实 <span class="tag keep">KEEP</span></h3>
+          <p>
+            maxConcurrentRuns（默认 3）之外排队、per-task 命令并发限制（CMD-006）不变；
+            成本 ×N 在扇出前明示，跑完后每列如实展示 usage。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>刻意不搬的（以及为什么）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>LLM 自动加冕 <span class="tag skip">SKIP</span></h3>
+          <p>
+            manaflow 的 Crown 自动颁发（虽可人工覆盖）。默认自动与 Charter 的根性冲突：完成 = REVIEW_READY，
+            裁决 = 人 + 证据。自动加冕会把「看起来对」加冕成「对」；LLM 评审以后可以作为<b>参考列</b>加入，绝不作为默认裁决。
+          </p>
+        </div>
+        <div class="card">
+          <h3>devcontainer / 云沙箱 <span class="tag skip">SKIP · V1</span></h3>
+          <p>
+            cmux 每任务起容器换来的是环境隔离；Charter V1 的 worktree + 工具网关 + 权限引擎已覆盖
+            文件与命令边界。容器化（防 <code>rm -rf</code> 级失控）价值真实，但属于独立 ADR 的大决定，不随并行搭车。
+          </p>
+        </div>
+        <div class="card">
+          <h3>内嵌 VS Code 实例 <span class="tag skip">SKIP</span></h3>
+          <p>
+            cmux 给每个任务开一个 VS Code；Charter 自己就是 IDE——Room、peek、编辑器已是任务的观察面。
+            再嵌一个编辑器等于宣布自家编辑器不可信。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      研究稿 ③ / ④ · 源：cmux→manaflow 并行扇出 / 隔离工作区（Docker/云）/ Crown 评选（可人工覆盖；多方第三方语料佐证，README 原文未见 “crown” 一词）/ 收尾清理 · 同系列：① inspo-ghostty-quick-console.html ·
+      ② inspo-ghostty-legible-terminal.html · ④ inspo-cmux-preview-gate-pr.html · 采纳流程：讨论 → ADR（尝试组语义：组内任务关系、
+      归档策略、Full 模式停用规则、非 git 项目降级串行）→ 实现 → E2E（扇出×3 各自 worktree、对比台证据排序断言、采纳合并字节校验、
+      归档后 Replay 可达、组通知聚合一次一条）。
+    </div>
+
+    <script>
+      const gcard = document.getElementById('gcard');
+      const gprog = document.getElementById('gprog');
+      const cmpbtn = document.getElementById('cmpbtn');
+      const cmpov = document.getElementById('cmpov');
+      const lapview = document.getElementById('lapview');
+      const adoptsheet = document.getElementById('adoptsheet');
+      const parpill = document.getElementById('parpill');
+      const parpop = document.getElementById('parpop');
+      const cinput = document.getElementById('cinput');
+      const sendbtn = document.getElementById('sendbtn');
+      const needyou = document.getElementById('needyou');
+      const siderun = document.getElementById('siderun');
+      const ticker = document.getElementById('ticker');
+      const toast = document.getElementById('toast');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+      const stage = document.querySelector('.stage');
+      const lanes = [1, 2, 3].map((i) => ({
+        act: document.getElementById('act' + i),
+        pm: document.getElementById('pm' + i),
+        st: document.getElementById('st' + i),
+        el: document.getElementById('lane' + i),
+      }));
+
+      const GOAL = '优惠券过期时，结算页给出行内提示并禁用提交，补上单测。';
+
+      // ── 影片引擎 ──────────────────────────────
+      const ABORT = Symbol('abort');
+      let token = 0; let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms; let last = performance.now();
+          const tick = () => {
+            if (my !== token) { reject(ABORT); return; }
+            const n = performance.now();
+            if (!paused) { left -= n - last; clock.inScene += n - last; }
+            last = n;
+            if (left <= 0) resolve(); else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = stage.getBoundingClientRect();
+        cursor.style.transform = `translate(${r.left - box.left + r.width * fx}px, ${r.top - box.top + r.height * fy}px)`;
+        await wait(660);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click');
+        await wait(260);
+      }
+      function say(html) { subs.innerHTML = html; subs.classList.add('show'); }
+      let toastTimer = null;
+      function showToast(msg) {
+        toast.textContent = msg; toast.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3400);
+      }
+      function setLane(i, act, pm, st, stCls) {
+        lanes[i].act.textContent = act;
+        lanes[i].pm.innerHTML = pm;
+        lanes[i].st.textContent = st;
+        lanes[i].st.className = 'st ' + stCls;
+      }
+      function tick(html) {
+        const d = document.createElement('div');
+        d.innerHTML = html;
+        ticker.prepend(d);
+        while (ticker.children.length > 3) ticker.lastChild.remove();
+      }
+
+      // ── 分镜 ──────────────────────────────────
+      const SCENES = [
+        {
+          label: '① 写 Charter · 开并行',
+          est: 11000,
+          async play() {
+            say('照常写你的 Charter——并行不是一个新入口，它就在 composer 上。');
+            let typed = '';
+            for (const ch of GOAL) {
+              typed += ch;
+              cinput.innerHTML = typed + '<span class="caret"></span>';
+              await wait(46);
+            }
+            await wait(500);
+            say('点 <b>⫽ 并行</b> pill：挑几个驱动一起上。');
+            await moveCursorTo(parpill);
+            await clickCursor();
+            parpop.classList.add('show');
+            await wait(1600);
+            const d3 = document.getElementById('drv3');
+            await moveCursorTo(d3);
+            await clickCursor();
+            d3.classList.add('on');
+            d3.querySelector('.cb').textContent = '✓';
+            parpill.textContent = '⫽ 并行 ×3';
+            parpill.classList.add('on');
+            say('弹层把账算在明处：<b>每份尝试独占一棵 worktree、成本 ×3、超并发排队</b>。没有小字。');
+            await wait(3400);
+            parpop.classList.remove('show');
+          },
+          snap() {
+            cinput.textContent = GOAL;
+            parpill.textContent = '⫽ 并行 ×3';
+            parpill.classList.add('on');
+          },
+        },
+        {
+          label: '② 扇出：一卡三 lane',
+          est: 9800,
+          async play() {
+            await moveCursorTo(sendbtn);
+            await clickCursor();
+            cinput.innerHTML = '<span class="ph">描述你的意图，@ 引用文件…</span>';
+            gcard.classList.add('show');
+            siderun.style.display = 'flex';
+            say('mission control 长出一张<b>组卡</b>：三条 lane = 三个标准任务，各自的 worktree 已建好（wt/a·b·c）。');
+            await wait(1400);
+            setLane(0, '读取 CouponField.tsx', '', '进行', 'run');
+            setLane(1, '计划：内联分支 + aria', '', '进行', 'run');
+            tick('<b>组</b> wt/a·b 开工');
+            await wait(1600);
+            setLane(2, '读取 validate.ts', '', '进行', 'run');
+            tick('<b>组</b> wt/c 开工');
+            await wait(1400);
+            setLane(0, '编辑 CouponField.tsx', '<span class="p">+21</span> <span class="m">−18</span>', '进行', 'run');
+            setLane(1, '编辑 CouponField.tsx', '<span class="p">+34</span> <span class="m">−6</span>', '进行', 'run');
+            say('lane 上滚动的是既有的实时动作流（PIVOT-013）——只是三条并排。主树一个字节没动。');
+            await wait(3200);
+          },
+          snap() {
+            gcard.classList.add('show');
+            siderun.style.display = 'flex';
+            setLane(0, '编辑 CouponField.tsx', '<span class="p">+21</span> <span class="m">−18</span>', '进行', 'run');
+            setLane(1, '编辑 CouponField.tsx', '<span class="p">+34</span> <span class="m">−6</span>', '进行', 'run');
+            setLane(2, '读取 validate.ts', '', '进行', 'run');
+            cinput.innerHTML = '<span class="ph">描述你的意图，@ 引用文件…</span>';
+            parpill.textContent = '⫽ 并行 ×3'; parpill.classList.add('on');
+          },
+        },
+        {
+          label: '③ 分化：先到先就绪',
+          est: 9200,
+          async play() {
+            setLane(1, '验证 vitest + e2e 全绿', '<span class="p">+94</span> <span class="m">−6</span>', '可审查', 'ready');
+            gprog.textContent = '1/3 就绪';
+            showToast('并行组：1/3 就绪（gpt-5.2-codex）');
+            say('lane 各走各的命：codex 先到 <b>REVIEW_READY</b>。通知按<b>组</b>聚合——不会 ×3 轰炸你。');
+            await wait(3000);
+            setLane(2, 'e2e 2 失败 → 自行修复中', '<span class="p">+9</span> <span class="m">−1</span>', '修复中', 'fix');
+            say('gemini 那份 e2e 红了——旧失败标 superseded、agent 继续修（VER-005），不糊弄。');
+            await wait(3000);
+            setLane(0, '验证 vitest 93 通过', '<span class="p">+137</span> <span class="m">−21</span>', '可审查', 'ready');
+            setLane(2, '验证复跑：仍 2 失败', '<span class="p">+9</span> <span class="m">−1</span>', '可审查', 'ready');
+            gprog.textContent = '3/3 就绪';
+            gcard.classList.add('alldone');
+            needyou.style.display = 'flex';
+            showToast('并行组：3 份结果可对比');
+            await wait(2400);
+          },
+          snap() {
+            gcard.classList.add('show', 'alldone');
+            siderun.style.display = 'flex'; needyou.style.display = 'flex';
+            setLane(0, '验证 vitest 93 通过', '<span class="p">+137</span> <span class="m">−21</span>', '可审查', 'ready');
+            setLane(1, '验证 vitest + e2e 全绿', '<span class="p">+94</span> <span class="m">−6</span>', '可审查', 'ready');
+            setLane(2, '验证复跑：仍 2 失败', '<span class="p">+9</span> <span class="m">−1</span>', '可审查', 'ready');
+            gprog.textContent = '3/3 就绪';
+          },
+        },
+        {
+          label: '④ 对比台：证据排序',
+          est: 10500,
+          async play() {
+            say('都齐了。进<b>对比台</b>——');
+            await moveCursorTo(cmpbtn);
+            await clickCursor();
+            cmpov.classList.add('show');
+            await wait(1800);
+            say('列序按<b>证据</b>排：codex 全绿靠最前；sonnet 的 e2e 没跑，如实标 <b>Unverified</b>；gemini 的 e2e 红着。manaflow 的 Crown 在这里自动加冕——我们只陈列事实，<b>冠冕在你手里</b>。');
+            await wait(6600);
+          },
+          snap() {
+            SCENES[2].snap();
+            cmpov.classList.add('show');
+          },
+        },
+        {
+          label: '⑤ 重叠深看',
+          est: 7800,
+          async play() {
+            say('三份都动了 <b>CouponField.tsx</b>——黄色重叠行点开，两种写法并排：内联分支 vs 抽 hook。挑的是<b>方案</b>，不只是 diff。');
+            await moveCursorTo(document.getElementById('lapcell'));
+            await clickCursor();
+            lapview.classList.add('show');
+            await wait(5600);
+            lapview.classList.remove('show');
+          },
+          snap() {
+            SCENES[2].snap();
+            cmpov.classList.add('show');
+            lapview.classList.add('show');
+          },
+        },
+        {
+          label: '⑥ 加冕 → 验收门',
+          est: 10200,
+          async play() {
+            lapview.classList.remove('show');
+            say('加冕：<b>采纳 codex 这份</b>。');
+            await moveCursorTo(document.getElementById('adoptB'));
+            await clickCursor();
+            adoptsheet.classList.add('show');
+            say('采纳没有旁路——就是那扇既有验收门：<b>合并预检</b>（基线冲突检查）→ 接受合回主树（字节校验）→ 其余归档。');
+            await wait(3600);
+            await moveCursorTo(document.getElementById('adoptgo'));
+            await clickCursor();
+            adoptsheet.classList.remove('show');
+            cmpov.classList.remove('show');
+            gcard.classList.add('collapsed');
+            gprog.textContent = '已采纳 1 · 归档 2';
+            gcard.classList.remove('alldone');
+            setLane(1, '已合回 main（字节校验通过）', '<span class="p">+94</span> <span class="m">−6</span>', '已接受', 'ready');
+            lanes[0].el.classList.add('arch-row');
+            lanes[2].el.classList.add('arch-row');
+            setLane(0, '已归档 · worktree 已回收 · Replay 可追溯', '', '归档', 'arch');
+            setLane(2, '已归档 · worktree 已回收 · Replay 可追溯', '', '归档', 'arch');
+            needyou.style.display = 'none';
+            showToast('已接受 gpt-5.2-codex 的结果；其余 2 份已归档（Replay 保留）');
+            await wait(3400);
+          },
+          snap() {
+            cmpov.classList.remove('show'); lapview.classList.remove('show'); adoptsheet.classList.remove('show');
+            gcard.classList.add('show', 'collapsed');
+            siderun.style.display = 'flex';
+            gprog.textContent = '已采纳 1 · 归档 2';
+            setLane(1, '已合回 main（字节校验通过）', '<span class="p">+94</span> <span class="m">−6</span>', '已接受', 'ready');
+            lanes[0].el.classList.add('arch-row');
+            lanes[2].el.classList.add('arch-row');
+            setLane(0, '已归档 · worktree 已回收 · Replay 可追溯', '', '归档', 'arch');
+            setLane(2, '已归档 · worktree 已回收 · Replay 可追溯', '', '归档', 'arch');
+            cinput.innerHTML = '<span class="ph">描述你的意图，@ 引用文件…</span>';
+            parpill.textContent = '⫽ 并行 ×3'; parpill.classList.add('on');
+          },
+        },
+        {
+          label: '⑦ 收束',
+          est: 6400,
+          async play() {
+            say('cmux→manaflow 证明了并行的价值；Charter 把它收进自己的骨架：<b>一个 pill 扇出、一张卡看全、一座台对比、一扇门采纳</b>。模型选择焦虑，从此交给证据。');
+            await wait(6200);
+          },
+          snap() { SCENES[5].snap(); },
+        },
+      ];
+
+      // ── 播放器 ────────────────────────────────
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+      function resetAll() {
+        cinput.innerHTML = '<span class="ph">描述你的意图，@ 引用文件…</span>';
+        parpill.textContent = '⫽ 并行 ×1'; parpill.classList.remove('on');
+        parpop.classList.remove('show');
+        const d3 = document.getElementById('drv3');
+        d3.classList.remove('on'); d3.querySelector('.cb').textContent = '';
+        gcard.classList.remove('show', 'alldone', 'collapsed');
+        gprog.textContent = '0/3 就绪';
+        lanes.forEach((l, i) => {
+          l.el.classList.remove('arch-row');
+          setLane(i, '排队中…', '', '排队', 'run');
+        });
+        cmpov.classList.remove('show'); lapview.classList.remove('show'); adoptsheet.classList.remove('show');
+        needyou.style.display = 'none'; siderun.style.display = 'none';
+        ticker.innerHTML = '<div><b>t-409</b> 编辑 package.json</div>';
+        toast.classList.remove('show'); subs.classList.remove('show');
+        cursor.style.transform = 'translate(620px, 300px)';
+      }
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i; clock.inScene = 0; markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est;
+          await wait(1500);
+          if (my === token) seek(0);
+        } catch (e) { if (e !== ABORT) throw e; }
+      }
+      function seek(n) {
+        token += 1; resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n; clock.inScene = 0; markChap(n);
+        void run(n);
+      }
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap'; b.textContent = s.label; b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+      const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+      playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停'; };
+      document.getElementById('vreplay').onclick = () => { paused = false; playBtn.textContent = '⏸ 暂停'; seek(0); };
+
+      seek(0);
+    </script>
+  </body>
+</html>

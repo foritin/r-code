@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Replay V3 design comparison</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { width: 1672px; margin: 0; padding: 24px; background: #efeee9; color: #242521; font: 600 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      h1 { margin: 0 0 18px; font-size: 24px; }
+      h2 { margin: 0 0 10px; font-size: 14px; }
+      p { margin: -4px 0 18px; color: #67675f; font-size: 12px; font-weight: 500; }
+      .panel { margin-bottom: 22px; padding: 12px; border: 1px solid #d5d2c8; border-radius: 10px; background: white; }
+      .panel > img { display: block; width: 100%; height: auto; border: 1px solid #dedbd4; }
+      .focus-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .focus { height: 450px; overflow: hidden; border: 1px solid #dedbd4; background: #fff; }
+      .source-focus img { width: 1600px; height: auto; }
+      .implementation-focus img { width: 800px; height: auto; }
+      .label { display: flex; justify-content: space-between; margin-bottom: 8px; color: #73736c; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+    </style>
+  </head>
+  <body>
+    <h1>Agent Replay V3 — design QA comparison</h1>
+    <p>The source is a five-projection concept board; the implementation is the unified Recap projection using the same visual language.</p>
+    <section class="panel">
+      <div class="label"><span>Source visual truth</span><span>1672 × 941</span></div>
+      <img src="../../session-replay-five-directions-concept.png" alt="Five-direction Agent Replay concept" />
+    </section>
+    <section class="panel">
+      <div class="label"><span>Browser-rendered implementation</span><span>1672 × 941 · Recap · final event</span></div>
+      <img src="./preview-recap.png" alt="Unified Agent Replay V3 implementation" />
+    </section>
+    <section class="panel">
+      <div class="label"><span>Focused region comparison</span><span>Replay hierarchy, stage, evidence, controls</span></div>
+      <div class="focus-grid">
+        <div>
+          <h2>Source A — low-friction replay</h2>
+          <div class="focus source-focus"><img src="../../session-replay-five-directions-concept.png" alt="Source concept A crop" /></div>
+        </div>
+        <div>
+          <h2>Implementation — unified Recap</h2>
+          <div class="focus implementation-focus"><img src="./preview-recap.png" alt="Implementation recap crop" /></div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

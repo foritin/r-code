@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Projects 面板快速开会话 — mockup（已收窄）</title>
+    <style>
+      /* Tokens mirror apps/desktop-renderer/src/styles/theme.css (studio skin). */
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-overlay: rgba(32, 30, 26, 0.4);
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --shadow-menu: 0 30px 90px rgba(30, 26, 18, 0.22);
+      }
+      :root[data-theme='dark'] {
+        color-scheme: dark;
+        --bg-app: #171614;
+        --bg-titlebar: #1d1c19;
+        --bg-sidebar: #1d1c19;
+        --bg-editor: #1a1917;
+        --bg-input: #24231f;
+        --bg-card: #21201c;
+        --bg-chip: #292823;
+        --bg-hover: #292823;
+        --bg-overlay: rgba(0, 0, 0, 0.55);
+        --border: #33312b;
+        --border-soft: #2a2924;
+        --fg: #e8e6e0;
+        --fg-muted: #a29d92;
+        --fg-faint: #6e6a61;
+        --accent: #e8e6e0;
+        --accent-fg: #1a1917;
+        --warning: #d29a3a;
+        --warning-bg: #342a14;
+        --success: #46b477;
+        --success-bg: #17301f;
+        --info: #6ca1e8;
+        --info-bg: #182739;
+        --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.35);
+        --shadow-menu: 0 30px 90px rgba(0, 0, 0, 0.6);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        background: var(--bg-app);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+      }
+      svg {
+        flex: none;
+      }
+
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        flex-wrap: wrap;
+      }
+      .toolbar h1 {
+        margin: 0 10px 0 0;
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .toolbar h1 small {
+        color: var(--fg-muted);
+        font-weight: 400;
+      }
+      .tabs {
+        display: flex;
+        gap: 4px;
+      }
+      .tabs button,
+      .theme-toggle {
+        padding: 5px 11px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 11.5px;
+        cursor: pointer;
+      }
+      .tabs button.active {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-fg);
+      }
+      .theme-toggle {
+        margin-left: auto;
+      }
+
+      .stage {
+        display: grid;
+        grid-template-columns: auto minmax(320px, 460px);
+        gap: 28px;
+        justify-content: center;
+        align-content: start;
+        padding: 30px 24px 60px;
+      }
+      .rail-wrap {
+        position: relative;
+      }
+      .caption-bar {
+        min-height: 40px;
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 10px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow-card);
+        font-size: 12.5px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      .caption-bar.show {
+        opacity: 1;
+      }
+      .caption-bar .step-no {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-size: 10.5px;
+        font-weight: 700;
+      }
+
+      /* ── Session Rail（复刻 session-workbench.css） ── */
+      .sr-rail {
+        width: 302px;
+        height: 640px;
+        display: grid;
+        grid-template-columns: 46px minmax(0, 1fr);
+        background: var(--bg-sidebar);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: var(--shadow-card);
+        user-select: none;
+      }
+      .sr-activity {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 9px 5px 8px;
+        border-right: 1px solid var(--border-soft);
+        background: var(--bg-titlebar);
+      }
+      .sr-activity-brand {
+        width: 29px;
+        height: 29px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 7px;
+        border-radius: 8px;
+        background: var(--fg);
+        color: var(--bg-editor);
+      }
+      .sr-activity-item {
+        position: relative;
+        width: 34px;
+        height: 34px;
+        display: grid;
+        place-items: center;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+      .sr-activity-item:hover {
+        background: var(--bg-hover);
+      }
+      .sr-activity-item.active {
+        background: var(--bg-chip);
+        color: var(--fg);
+      }
+      .sr-activity-spacer {
+        flex: 1;
+      }
+      .sr-mini-badge {
+        position: absolute;
+        top: 3px;
+        right: 3px;
+        min-width: 13px;
+        height: 13px;
+        padding: 0 3px;
+        border-radius: 999px;
+        background: var(--warning);
+        color: #fff;
+        font-size: 8.5px;
+        font-weight: 700;
+        line-height: 13px;
+      }
+      .sr-panel {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        padding: 10px 9px 8px;
+      }
+      .sr-head {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 9px;
+      }
+      .sr-head strong {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fg-muted);
+      }
+      .sr-new-wrap {
+        margin-left: auto;
+        display: flex;
+      }
+      .sr-new {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 5px 9px;
+        border: 1px solid var(--border);
+        border-radius: 8px 0 0 8px;
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .sr-new-menu {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        border: 1px solid var(--border);
+        border-left: 0;
+        border-radius: 0 8px 8px 0;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+      .sr-attention {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 8px;
+        padding: 7px 9px;
+        border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+        border-radius: 9px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 11px;
+        cursor: pointer;
+      }
+      .sr-attention strong {
+        font-weight: 700;
+      }
+      .sr-attention span {
+        margin-left: auto;
+        font-size: 10px;
+        opacity: 0.85;
+      }
+      .sr-attention b {
+        min-width: 16px;
+        height: 16px;
+        display: grid;
+        place-items: center;
+        border-radius: 999px;
+        background: var(--warning);
+        color: #fff;
+        font-size: 9.5px;
+      }
+      .sr-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+
+      /* 组头 —— 保持现状，无快速生成图标 */
+      .sr-group-head {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 6px 6px;
+        border: 0;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--fg-muted);
+        font-size: 11px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .sr-group-head:hover {
+        background: var(--bg-hover);
+        color: var(--fg);
+      }
+      .sr-group-head strong {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 650;
+      }
+      .sr-group-needs {
+        flex: none;
+        padding: 1px 6px;
+        border-radius: 999px;
+        background: var(--warning-bg);
+        color: var(--warning);
+        font-size: 8.5px;
+        font-weight: 700;
+      }
+      .sr-group-count {
+        flex: none;
+        margin-left: auto;
+        color: var(--fg-faint);
+        font-size: 9px;
+        font-family: Menlo, monospace;
+      }
+      .sr-group-items {
+        margin: 1px 0 6px 11px;
+        padding-left: 6px;
+        border-left: 1px solid var(--border-soft);
+      }
+
+      /* Session rows */
+      .sr-session {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        align-items: start;
+        gap: 7px;
+        margin-bottom: 3px;
+        padding: 7px 8px;
+        border: 1px solid transparent;
+        border-radius: 11px;
+        background: transparent;
+        color: var(--fg);
+        text-align: left;
+        cursor: pointer;
+      }
+      .sr-session:hover {
+        background: var(--bg-hover);
+      }
+      .sr-session.flash {
+        animation: rowin 0.5s ease;
+      }
+      @keyframes rowin {
+        from {
+          background: var(--success-bg);
+          transform: translateY(-3px);
+        }
+      }
+      .sr-provider {
+        width: 25px;
+        height: 25px;
+        display: inline-grid;
+        place-items: center;
+        --pm-hole: var(--bg-sidebar);
+      }
+      .sr-provider.claude {
+        color: #d97757;
+      }
+      .sr-provider.codex,
+      .sr-provider.pi,
+      .sr-provider.shell {
+        color: var(--fg);
+      }
+      .sr-copy {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+      .sr-title {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .sr-title b {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 550;
+      }
+      .sr-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--fg-faint);
+      }
+      .sr-dot.live {
+        background: var(--success);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+      }
+      .sr-state {
+        flex: none;
+        font-size: 8.5px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+      }
+      .sr-state.run {
+        color: var(--info);
+      }
+      .sr-state.warn {
+        color: var(--warning);
+      }
+      .sr-state.ok {
+        color: var(--success);
+      }
+      .sr-meta,
+      .sr-detail {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 10px;
+        color: var(--fg-muted);
+      }
+      .sr-detail {
+        color: var(--fg-faint);
+      }
+
+      /* Projects 面板 —— 唯一的快速开会话入口 */
+      .sr-project-wrap {
+        position: relative;
+      }
+      .sr-project {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 2px;
+        padding: 7px 8px;
+        border: 0;
+        border-radius: 9px;
+        background: transparent;
+        color: var(--fg);
+        font-size: 11.5px;
+        cursor: pointer;
+        text-align: left;
+      }
+      .sr-project-wrap:hover .sr-project,
+      .sr-project-wrap.hover-force .sr-project {
+        background: var(--bg-hover);
+      }
+      .sr-project.active {
+        background: var(--bg-chip);
+      }
+      .sr-project small {
+        margin-left: auto;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+        transition: opacity 0.15s;
+      }
+      .sr-project-wrap:hover .sr-project small,
+      .sr-project-wrap.hover-force .sr-project small {
+        opacity: 0;
+      }
+      .sr-project.muted {
+        color: var(--fg-muted);
+      }
+      .qs {
+        position: absolute;
+        right: 5px;
+        top: 50%;
+        transform: translateY(-50%);
+        display: flex;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 8px;
+        background: var(--bg-sidebar);
+        border: 1px solid var(--border-soft);
+        box-shadow: var(--shadow-card);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.15s;
+      }
+      .sr-project-wrap:hover .qs,
+      .sr-project-wrap.hover-force .qs {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .qs-btn {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      .qs-btn:hover,
+      .qs-btn.hover-force {
+        background: var(--bg-hover);
+      }
+
+      .sr-foot {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 8px;
+        padding: 7px 9px;
+        border: 1px solid var(--border-soft);
+        border-radius: 9px;
+        background: var(--bg-chip);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        cursor: pointer;
+      }
+      .sr-foot span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sr-foot small {
+        margin-left: auto;
+        color: var(--fg-faint);
+      }
+
+      /* 说明卡 */
+      .notes {
+        display: grid;
+        gap: 12px;
+        align-content: start;
+      }
+      .note-card {
+        padding: 14px 16px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-card);
+      }
+      .note-card h2 {
+        margin: 0 0 8px;
+        font-size: 12.5px;
+      }
+      .note-card ul {
+        margin: 0;
+        padding-left: 16px;
+        display: grid;
+        gap: 6px;
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: var(--fg-muted);
+      }
+      .note-card li b {
+        color: var(--fg);
+        font-weight: 600;
+      }
+
+      /* 模拟光标 */
+      .demo-cursor {
+        position: absolute;
+        z-index: 9;
+        width: 20px;
+        height: 20px;
+        pointer-events: none;
+        opacity: 0;
+        transition:
+          left 0.65s cubic-bezier(0.3, 0.8, 0.3, 1),
+          top 0.65s cubic-bezier(0.3, 0.8, 0.3, 1),
+          opacity 0.25s;
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.4));
+      }
+      .demo-cursor.show {
+        opacity: 1;
+      }
+      .demo-cursor .pulse {
+        position: absolute;
+        left: -4px;
+        top: -4px;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        border: 2px solid var(--info);
+        opacity: 0;
+      }
+      .demo-cursor.clicking .pulse {
+        animation: pulse 0.45s ease-out;
+      }
+      @keyframes pulse {
+        from {
+          transform: scale(0.4);
+          opacity: 1;
+        }
+        to {
+          transform: scale(1.5);
+          opacity: 0;
+        }
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 26px;
+        transform: translateX(-50%) translateY(8px);
+        padding: 9px 16px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg);
+        font-size: 12px;
+        box-shadow: var(--shadow-menu);
+        opacity: 0;
+        transition:
+          opacity 0.25s,
+          transform 0.25s;
+        z-index: 20;
+      }
+      .toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <h1>Projects 面板快速开会话<small> · 收窄版：仅项目行 hover，π / Claude / Codex 三入口；组头不动；行标题不硬编码 CLI 名</small></h1>
+      <div class="tabs" id="tabs"></div>
+      <button class="theme-toggle" id="theme-toggle">☀ / ☾</button>
+    </div>
+    <div class="stage">
+      <div class="rail-wrap" id="rail-wrap">
+        <div class="caption-bar" id="caption"></div>
+      </div>
+      <div class="notes">
+        <div class="note-card">
+          <h2>已确认的范围（本稿）</h2>
+          <ul>
+            <li><b>唯一入口在 Projects 面板</b>：项目行 hover 露出 π / Claude / Codex 三个图标。组头、会话列表一概不加。</li>
+            <li><b>Claude / Codex</b>：一步点击，在该项目创建外部 PTY 会话（<code>{ kind: 'recent', projectPath }</code>），不改全局 working context。</li>
+            <li><b>π</b>：把该项目设为工作上下文并聚焦 composer —— 原生会话需要 intent，一步把你带到「可以开始说话」的状态。</li>
+            <li><b>行标题不硬编码</b>：图标已表达 provider，终端会话默认标题显示 “New session”（自定义命名则显示命名），不再出现 “Claude Code”/“Codex” 字样标题。</li>
+            <li><b>兜底不变</b>：“+ New Session” 与 chevron 弹窗保持现状。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      /* ── 品牌 mark（与 home-icons.tsx 实现一致） ── */
+      const CLAUDE_PATH =
+        'm4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6957-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215L0 11.8109l.0546-.3521.4797-.3218.686.0607 1.5178.1032 2.2767.1578 1.6514.0972 2.4468.2549h.3886l.0546-.1578-.1335-.0972-.1032-.0971-2.3557-1.5967-2.5501-1.688-1.3356-.9714-.7225-.4917-.3643-.4614-.1578-1.0079.6557-.7225.8804.0607.2246.0607.8925.686 1.9066 1.4753 2.4892 1.8331.3643.3035.1457-.1032.0182-.0729-.1639-.2732-1.3538-2.4467-1.445-2.4893-.6435-1.032-.17-.6193c-.0607-.2549-.1032-.4674-.1032-.7285l.7468-1.0139.4128-.1336.9964.1336.4189.3642.6193 1.4147 1.0017 2.2282 1.5542 3.0295.4553.8986.2428.8318.0911.2549h.1578v-.1457l.1275-1.706.2368-2.0947.2306-2.6957.079-.7589.3764-.9107.7468-.4918.5828.2793.4796.686-.0667.4432-.2853 1.8573-.5586 2.9081-.3643 1.9492h.2125l.2428-.2429.9835-1.3053 1.6514-2.0644.7286-.8197.85-.9046.5464-.4311h1.0321l.7589 1.129-.34 1.1655-1.0624 1.3477-.8804 1.1411-1.263 1.7-.7892 1.36.0728.1093.1882-.0182 2.8536-.6071 1.5421-.2793 1.8394-.3157.8318.3886.0911.3946-.3278.8075-1.9673.4857-2.3071.4614-3.4364.8136-.0425.0304.0486.0607 1.5481.1457.6618.0364h1.6211l3.0174.2246.7893.5222.4736.6374-.079.4857-1.2145.6193-1.6393-.3886-3.8252-.9107-1.3113-.3278h-.1821v.1093l1.0927 1.0686 2.0037 1.809 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9248-1.6211h-.1275v.1699l.4432.6496 2.3435 3.5214.1214 1.0807-.17.3521-.6071.2125-.6678-.1214-1.3721-1.9249-1.4147-2.1675-1.1412-1.9431-.1396.0789-.6743 7.2563-.3157.3704-.7286.2792-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9248.3157-1.5299.2853-1.9006.1699-.6314-.0121-.0425-.1396.0182-1.4328 1.9673-2.1797 2.9445-1.7242 1.8452-.4128.164-.7165-.3704.0668-.6618.4007-.5889 2.3861-3.0356 1.439-1.882.9288-1.0868-.006-.1578h-.0546l-6.338 4.1165-1.129.1457-.4857-.4553.0607-.7468.2307-.2428 1.9066-1.3114Z';
+      const OPENAI_PATH =
+        'M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.073zM13.2599 22.4301a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6455zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.8956zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654 2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z';
+
+      function mark(provider, size = 17) {
+        if (provider === 'claude')
+          return `<svg viewBox="0 0 24 24" width="${size}" height="${size}"><path fill="currentColor" d="${CLAUDE_PATH}"/></svg>`;
+        if (provider === 'codex')
+          return `<svg viewBox="0 0 24 24" width="${size}" height="${size}"><circle cx="12" cy="12" r="11" fill="currentColor"/><path fill="var(--pm-hole,#fff)" transform="translate(4.56 4.56) scale(0.62)" d="${OPENAI_PATH}"/></svg>`;
+        return `<svg viewBox="0 0 24 24" width="${size}" height="${size}"><rect x="1" y="1" width="22" height="22" rx="6.5" fill="currentColor"/><g fill="none" stroke="var(--pm-hole,#fff)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 8.1h10.8"/><path d="M9.7 8.1v8"/><path d="M14.5 8.1c0 3.1-.15 5.4.3 6.9.2.7.7 1.1 1.4 1.1.5 0 .9-.2 1.2-.6"/></g></svg>`;
+      }
+      const ic = (paths, size = 14) =>
+        `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+      const I = {
+        flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+        terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+        inbox:
+          '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+        folder:
+          '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+        search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+        chevron: '<path d="m6 9 6 6 6-6"/>',
+        branch:
+          '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+        layout:
+          '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+        sliders:
+          '<line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/>',
+        plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+        clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+      };
+
+      /* ── 数据 ── */
+      const baseGroups = () => [
+        {
+          key: 'fable5',
+          name: 'fable5',
+          needs: 1,
+          rows: [
+            {
+              provider: 'pi',
+              title: 'Document PTY data flow architecture',
+              state: 'REVIEW',
+              tone: 'warn',
+              branch: 'charter/pty-docs',
+              detail: 'Ready to review · 2 files changed',
+              live: false,
+            },
+            {
+              provider: 'claude',
+              title: 'New session',
+              state: 'LIVE',
+              tone: 'run',
+              branch: 'main',
+              detail: 'Reading terminal output',
+              live: true,
+            },
+          ],
+        },
+        { key: 'history', name: 'History', needs: 0, rows: [], collapsed: true, history: true },
+      ];
+
+      const projects = [
+        { name: 'fable5', sessions: 2, active: true },
+        { name: 'termio', sessions: 0 },
+        { name: 'charter', sessions: 0 },
+      ];
+
+      const state = { s: 1, view: 'sessions', groups: baseGroups() };
+
+      /* ── 渲染 ── */
+      function qsChip(scope) {
+        return `<span class="qs">
+          <span class="qs-btn" title="在 ${scope} 开始 Pi 会话（设为工作上下文并聚焦 composer）" data-spawn="pi" data-project="${scope}"><span class="sr-provider pi" style="width:auto;height:auto">${mark('pi', 15)}</span></span>
+          <span class="qs-btn" title="在 ${scope} 新建 Claude Code 会话" data-spawn="claude" data-project="${scope}"><span class="sr-provider claude" style="width:auto;height:auto">${mark('claude', 15)}</span></span>
+          <span class="qs-btn" title="在 ${scope} 新建 Codex 会话" data-spawn="codex" data-project="${scope}"><span class="sr-provider codex" style="width:auto;height:auto">${mark('codex', 15)}</span></span>
+        </span>`;
+      }
+
+      function rowHtml(row, flash = false) {
+        return `<div class="sr-session ${flash ? 'flash' : ''}">
+          <span class="sr-provider ${row.provider}">${mark(row.provider)}</span>
+          <span class="sr-copy">
+            <span class="sr-title"><span class="sr-dot ${row.live ? 'live' : ''}"></span><b>${row.title}</b><span class="sr-state ${row.tone}">${row.state}</span></span>
+            <span class="sr-meta">${ic(I.branch, 10)} ${row.branch}</span>
+            <span class="sr-detail">${row.detail}</span>
+          </span>
+        </div>`;
+      }
+
+      function groupHtml(g) {
+        const collapsed = g.collapsed;
+        return `<section>
+          <button class="sr-group-head" data-group="${g.key}">
+            <span style="transform:rotate(${collapsed ? -90 : 0}deg);display:inline-flex">${ic(I.chevron, 12)}</span>
+            ${ic(g.history ? I.clock : I.folder, 12)}
+            <strong>${g.name}</strong>
+            ${g.needs ? `<span class="sr-group-needs">${g.needs} need you</span>` : ''}
+            <span class="sr-group-count">${g.history ? 4 : g.rows.length}</span>
+          </button>
+          ${collapsed ? '' : `<div class="sr-group-items">${g.rows.map((r) => rowHtml(r, r.__flash)).join('')}</div>`}
+        </section>`;
+      }
+
+      function sessionsPanel() {
+        return `<div class="sr-head">
+            <strong>Sessions</strong>
+            <div class="sr-new-wrap">
+              <button class="sr-new">${ic(I.plus, 13)} New Session</button>
+              <button class="sr-new-menu">${ic(I.chevron, 12)}</button>
+            </div>
+          </div>
+          <button class="sr-attention">${ic(I.inbox, 13)}<strong>Needs you</strong><span>Open inbox</span><b>1</b></button>
+          <div class="sr-scroll">${state.groups.map((g) => groupHtml(g)).join('')}</div>
+          <button class="sr-foot">${ic(I.folder, 13)}<span>fable5</span><small>Change</small></button>`;
+      }
+
+      function projectsPanel(opts = {}) {
+        return `<div class="sr-head"><strong>Projects</strong></div>
+          <div class="sr-scroll">
+            ${projects
+              .map(
+                (p) => `<div class="sr-project-wrap ${opts.hover === p.name ? 'hover-force' : ''}">
+                  <button class="sr-project ${p.active ? 'active' : ''}" data-project-row="${p.name}">
+                    ${ic(I.folder, 13)}<span>${p.name}</span>
+                    <small>${p.sessions ? `${p.sessions} sessions` : 'no sessions yet'}</small>
+                  </button>
+                  ${qsChip(p.name)}
+                </div>`,
+              )
+              .join('')}
+            <button class="sr-project muted">${ic(I.folder, 13)}<span>Open folder…</span></button>
+            <button class="sr-project muted">${ic(I.plus, 13)}<span>New project…</span></button>
+          </div>
+          <button class="sr-foot">${ic(I.folder, 13)}<span>fable5</span><small>Change</small></button>`;
+      }
+
+      function railHtml(opts = {}) {
+        const view = state.view;
+        return `<aside class="sr-rail">
+          <nav class="sr-activity">
+            <span class="sr-activity-brand">${ic(I.flag, 14)}</span>
+            <button class="sr-activity-item ${view === 'sessions' ? 'active' : ''}" data-view="sessions">${ic(I.terminal, 16)}</button>
+            <button class="sr-activity-item" data-view="inbox">${ic(I.inbox, 16)}<span class="sr-mini-badge">1</span></button>
+            <button class="sr-activity-item ${view === 'projects' ? 'active' : ''}" data-view="projects">${ic(I.folder, 16)}</button>
+            <button class="sr-activity-item">${ic(I.search, 16)}</button>
+            <span class="sr-activity-spacer"></span>
+            <button class="sr-activity-item">${ic(I.layout, 16)}</button>
+            <button class="sr-activity-item">${ic(I.sliders, 16)}</button>
+          </nav>
+          <section class="sr-panel">${view === 'projects' ? projectsPanel(opts) : sessionsPanel()}</section>
+        </aside>
+        <div class="demo-cursor" id="cursor"><span class="pulse"></span><svg viewBox="0 0 24 24" width="20" height="20"><path fill="#fff" stroke="#000" stroke-width="1.6" d="M5 3l14 8.5-6.2 1.2 3.4 6.3-2.8 1.5-3.4-6.3L5 18.5z"/></svg></div>`;
+      }
+
+      /* ── 状态机 ── */
+      const wrap = document.getElementById('rail-wrap');
+      const caption = document.getElementById('caption');
+      const toast = document.getElementById('toast');
+      let demoTimers = [];
+      const clearDemo = () => {
+        demoTimers.forEach(clearTimeout);
+        demoTimers = [];
+      };
+      const later = (fn, ms) => demoTimers.push(setTimeout(fn, ms));
+
+      function showToast(msg, ms = 2400) {
+        toast.textContent = msg;
+        toast.classList.add('show');
+        setTimeout(() => toast.classList.remove('show'), ms);
+      }
+      function setCaption(no, text) {
+        if (!text) {
+          caption.classList.remove('show');
+          return;
+        }
+        caption.innerHTML = `<span class="step-no">${no}</span><span>${text}</span>`;
+        caption.classList.add('show');
+      }
+
+      function render(opts = {}) {
+        wrap.querySelector('.sr-rail')?.remove();
+        wrap.querySelector('#cursor')?.remove();
+        caption.insertAdjacentHTML('beforebegin', railHtml(opts));
+        state.groups.forEach((g) => g.rows.forEach((r) => delete r.__flash));
+        bind();
+      }
+
+      function spawn(provider, project) {
+        if (provider === 'pi') {
+          state.view = 'sessions';
+          render();
+          showToast(`已把 ${project} 设为工作上下文，composer 已聚焦 —— 直接输入 intent 开始`);
+          return;
+        }
+        let g = state.groups.find((x) => x.name === project);
+        if (!g) {
+          g = { key: project, name: project, needs: 0, rows: [] };
+          state.groups.splice(state.groups.length - 1, 0, g);
+        }
+        g.rows.unshift({
+          provider,
+          title: 'New session',
+          state: 'LIVE',
+          tone: 'run',
+          branch: 'main',
+          detail: 'PTY starting · state preserved',
+          live: true,
+          __flash: true,
+        });
+        state.view = 'sessions';
+        render();
+        showToast(
+          `已在 ${project} 创建${provider === 'claude' ? ' Claude Code ' : ' Codex '}会话${g.rows.length === 1 ? '（该项目的第一个会话）' : ''}`,
+        );
+      }
+
+      function bind() {
+        wrap.querySelectorAll('[data-spawn]').forEach((el) =>
+          el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            spawn(el.dataset.spawn, el.dataset.project);
+          }),
+        );
+        wrap.querySelectorAll('[data-view]').forEach((el) =>
+          el.addEventListener('click', () => {
+            if (el.dataset.view === 'inbox') return showToast('Inbox 面板（此稿不涉及）');
+            state.view = el.dataset.view;
+            render();
+          }),
+        );
+        wrap.querySelectorAll('[data-group]').forEach((el) =>
+          el.addEventListener('click', () => {
+            const g = state.groups.find((x) => x.key === el.dataset.group);
+            if (g) {
+              g.collapsed = !g.collapsed;
+              render();
+            }
+          }),
+        );
+      }
+
+      /* ── 演示 ── */
+      function moveCursorTo(el, dx = 0, dy = 0) {
+        const cursor = wrap.querySelector('#cursor');
+        const wr = wrap.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
+        cursor.style.left = `${r.left - wr.left + r.width / 2 + dx}px`;
+        cursor.style.top = `${r.top - wr.top + r.height / 2 + dy}px`;
+        cursor.classList.add('show');
+      }
+      function clickPulse() {
+        const cursor = wrap.querySelector('#cursor');
+        cursor.classList.remove('clicking');
+        void cursor.offsetWidth;
+        cursor.classList.add('clicking');
+      }
+
+      function runDemo() {
+        clearDemo();
+        state.groups = baseGroups();
+        state.view = 'projects';
+        render();
+        setCaption(1, 'Projects 面板 —— 项目行 hover 露出 π / Claude / Codex');
+        later(() => {
+          const row = wrap.querySelector('[data-project-row="termio"]');
+          row.closest('.sr-project-wrap').classList.add('hover-force');
+          moveCursorTo(row, 40, 0);
+        }, 800);
+        later(() => {
+          setCaption(2, '一步：给还没有会话的 termio 开出第一个 Codex 会话');
+          const btn = wrap.querySelector('[data-project="termio"][data-spawn="codex"]');
+          moveCursorTo(btn);
+          later(() => {
+            clickPulse();
+            later(() => spawn('codex', 'termio'), 450);
+          }, 900);
+        }, 2800);
+        later(() => {
+          setCaption(3, 'π 入口：切工作上下文 + 聚焦 composer，直接开始说 intent');
+          const proj = wrap.querySelector('[data-view="projects"]');
+          moveCursorTo(proj);
+          later(() => {
+            clickPulse();
+            later(() => {
+              state.view = 'projects';
+              render();
+              const row = wrap.querySelector('[data-project-row="charter"]');
+              row.closest('.sr-project-wrap').classList.add('hover-force');
+              moveCursorTo(row.querySelector('[data-spawn="pi"]'));
+              later(() => {
+                clickPulse();
+                later(() => spawn('pi', 'charter'), 400);
+              }, 900);
+            }, 400);
+          }, 800);
+        }, 6600);
+        later(() => {
+          wrap.querySelector('#cursor').classList.remove('show');
+          setCaption('↻', '演示结束，2 秒后重播');
+          later(runDemo, 2000);
+        }, 11400);
+      }
+
+      /* ── 状态 ── */
+      const STATES = [
+        { n: 1, label: '① Sessions（无变化）' },
+        { n: 2, label: '② Projects hover' },
+        { n: 3, label: '③ 点击创建后' },
+        { n: 4, label: '④ 自动演示' },
+      ];
+
+      function applyState(n) {
+        clearDemo();
+        state.s = n;
+        state.groups = baseGroups();
+        state.view = 'sessions';
+        setCaption(0, '');
+        if (n === 1) {
+          render();
+          setCaption('①', 'Sessions 面板零改动 —— 注意终端会话标题是 “New session”，不再硬编码 CLI 名');
+        } else if (n === 2) {
+          state.view = 'projects';
+          render({ hover: 'termio' });
+          setCaption('②', '项目行 hover —— π / Claude / Codex 三个入口；0 会话的项目同样可用');
+        } else if (n === 3) {
+          state.groups.splice(1, 0, {
+            key: 'termio',
+            name: 'termio',
+            needs: 0,
+            rows: [
+              {
+                provider: 'codex',
+                title: 'New session',
+                state: 'LIVE',
+                tone: 'run',
+                branch: 'main',
+                detail: 'PTY starting · state preserved',
+                live: true,
+              },
+            ],
+          });
+          render();
+          setCaption('③', '点击后 —— 新会话出现在对应项目组，标题 “New session”，图标表达 provider');
+        } else {
+          runDemo();
+        }
+        document
+          .querySelectorAll('#tabs button')
+          .forEach((b) => b.classList.toggle('active', Number(b.dataset.s) === n));
+        history.replaceState(null, '', `#s=${n}&t=${document.documentElement.dataset.theme}`);
+      }
+
+      const tabs = document.getElementById('tabs');
+      tabs.innerHTML = STATES.map((s) => `<button data-s="${s.n}">${s.label}</button>`).join('');
+      tabs
+        .querySelectorAll('button')
+        .forEach((b) => b.addEventListener('click', () => applyState(Number(b.dataset.s))));
+      document.getElementById('theme-toggle').addEventListener('click', () => {
+        const root = document.documentElement;
+        root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+        applyState(state.s);
+      });
+
+      const params = new URLSearchParams(location.hash.slice(1));
+      if (params.get('t') === 'dark') document.documentElement.dataset.theme = 'dark';
+      applyState(Number(params.get('s')) || 1);
+    </script>
+  </body>
+</html>

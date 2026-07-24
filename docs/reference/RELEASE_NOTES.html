@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Charter 1.0 Beta 3 — Unsigned Preview · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="charter-1-0-beta-3-unsigned-preview">Charter 1.0 Beta 3 — Unsigned Preview</h1>
+<p>Charter&#39;s complete Session-first desktop workflow is available as a public, zero-cost preview for<br>macOS Apple Silicon, Windows x64 and Linux x64.</p>
+<p>This SemVer Beta is an <strong>unsigned prerelease</strong> published with GitHub&#39;s Prerelease flag; it is not<br>Stable or Latest.</p>
+<h2 id="new-since-beta-2">New since Beta 2</h2>
+<ul><li>Session review remains actionable at 200% zoom and narrow desktop viewports, including accept,<br>request-changes, rollback, confirmation and Full Review controls.</li><li>Quick Console context switching now locks while a real shell command is running and unlocks only<br>after the host observes its completion boundary. Labels consistently describe the host-managed context cwd instead of implying that shell <code>cd</code> retargets the product.</li><li>Replay, artifacts, Markdown authoring, Preview and Session evidence surfaces have clearer hierarchy,<br>keyboard focus behavior and truthful state transitions across all four visual skins.</li><li>Review and rollback preserve the documented Git boundary: accepting keeps workspace bytes without<br>creating a commit, while rollback restores recorded changes byte-for-byte.</li><li>Terminal and external-session coverage now exercises alternate-screen programs, Ctrl-D, native<br>multiline paste, busy-state context protection and stable reply-animation evidence.</li></ul>
+<h2 id="highlights">Highlights</h2>
+<ul><li>One durable Session for conversation, plans, managed Agent work, external Claude Code/Codex PTYs,<br>live file activity, Preview, Terminal, verification, review, rollback, Replay and Memory.</li><li>Sandboxed Electron renderer, versioned IPC, host-side Tool Gateway policy, content/path containment,<br>secret redaction and packaged Electron fuse hardening.</li><li>Byte-exact file rollback, crash/interruption recovery, database migration backup/restore and<br>deterministic 50-task soak coverage.</li><li>Release artifacts accompanied by an SPDX SBOM, third-party license inventory, machine-readable<br>manifest and SHA-256 checksums.</li></ul>
+<h2 id="important-installation-notice">Important installation notice</h2>
+<p>These artifacts are <strong>unsigned and not notarized</strong>. macOS Gatekeeper and Windows SmartScreen/Smart App<br>Control may warn or block them. Do not disable operating-system security globally. If your local policy<br>does not allow unsigned applications, build from source or wait for a signed release.</p>
+<p>Before running a download, verify it against <code>SHA256SUMS.txt</code> attached to this Release.</p>
+<p>The Linux tarball uses Chromium&#39;s setuid sandbox. After extracting it, configure the helper before<br>launching Charter (replace <code>&lt;extracted-directory&gt;</code> with the directory created by the archive):</p>
+<div class="code-block"><span class="code-block__lang">sh</span><button class="copy-code" type="button">复制</button><pre><code class="language-sh">sudo chown root:root &lt;extracted-directory&gt;/chrome-sandbox
+sudo chmod 4755 &lt;extracted-directory&gt;/chrome-sandbox
+&lt;extracted-directory&gt;/charter</code></pre></div>
+<p>Do not launch the Linux build with <code>--no-sandbox</code>.</p>
+<h2 id="updates-and-data">Updates and data</h2>
+<p>Updates are manual in this preview. Quit Charter, back up its application-data directory, verify the<br>new artifact, and replace the app. Before applying a database schema migration, Charter automatically<br>creates a timestamped backup and restores it if the migration fails.</p>
+<p>Read the<br><a href="KNOWN_LIMITATIONS.html">known limitations</a>,<br><a href="RECOVERY.html">recovery guide</a>,<br><a href="PRIVACY.html">privacy notice</a>, and<br><a href="SECURITY.html">security policy</a> before using<br>the preview on important repositories.</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Charter · Shell UX Refresh Mock</title>
+<style>
+  /* ============ tokens（对齐 theme.css，字号按新 type scale 提升） ============ */
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', monospace;
+    --bg-app: #eceae5; --bg-sidebar: #f6f5f1; --bg-editor: #fbfaf7;
+    --bg-card: #ffffff; --bg-chip: #edeae3; --bg-hover: #e8e5de;
+    --bg-selected: #e9e6df; --border: #e5e1d8; --border-strong: #cfcabf;
+    --fg: #201e1a;
+    --fg-muted: #5c584f;   /* 原 #6e6a61 → 提升对比 */
+    --fg-faint: #8a857a;   /* 原 #a39e94 → 仅用于真正可忽略的信息 */
+    --accent: #1b1a16; --accent-fg: #fff;
+    --danger: #c4453d; --danger-bg: #fdecea;
+    --warning: #b06f10; --warning-bg: #faf0dc;
+    --success: #2f9e63; --success-bg: #e7f5ec;
+    --info: #3f7bd9; --info-bg: #e9f1fd;
+    /* 新 type scale：正文 13 / 次要 12 / 最小 11（仅徽章） */
+    --fs-body: 13px; --fs-secondary: 12px; --fs-min: 11px;
+    --fs-title: 15px; --fs-display: 20px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: var(--font-ui); font-size: var(--fs-body); color: var(--fg);
+    background: var(--bg-app); height: 100vh; display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ============ demo chrome（不属于产品 UI） ============ */
+  .chrome {
+    display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+    background: #262420; color: #e8e5de; font-size: var(--fs-secondary); flex: none;
+  }
+  .chrome b { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .chrome .tabs { display: flex; gap: 4px; }
+  .chrome .tabs button { padding: 5px 12px; border-radius: 6px; color: #b5b0a4; }
+  .chrome .tabs button.on { background: #3d3a33; color: #fff; }
+  .chrome .sp { flex: 1; }
+  .chrome .lang { display: flex; gap: 2px; background: #3d3a33; border-radius: 6px; padding: 2px; }
+  .chrome .lang button { padding: 3px 10px; border-radius: 4px; color: #b5b0a4; }
+  .chrome .lang button.on { background: #6e675b; color: #fff; }
+  .chrome .anno-toggle { color: #b5b0a4; padding: 4px 10px; border: 1px solid #4a463e; border-radius: 6px; }
+  .chrome .anno-toggle.on { color: #e6c886; border-color: #8a6d34; }
+
+  /* 标注角标：对应 11 条问题清单的编号 */
+  .tag {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin: 0 3px; vertical-align: 2px;
+    border-radius: 8px; background: #7a5cc5; color: #fff;
+    font-size: 10px; font-style: normal; font-weight: 700; cursor: help;
+  }
+  body.no-anno .tag { display: none; }
+
+  /* ============ 应用布局 ============ */
+  .app { flex: 1; display: flex; min-height: 0; }
+
+  /* 活动条（ADR-0023 方向 D，保留） */
+  .abar {
+    width: 46px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    align-items: center; padding: 12px 0 10px; gap: 4px;
+  }
+  .abar button {
+    width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; color: var(--fg-muted); position: relative; font-size: 15px;
+  }
+  .abar button.on { background: var(--bg-selected); color: var(--fg); }
+  .abar .badge {
+    position: absolute; top: 2px; right: 2px; min-width: 14px; height: 14px;
+    border-radius: 7px; background: var(--warning); color: #fff;
+    font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  .abar .grow { flex: 1; }
+
+  /* Session Rail：288px（原 264px），正文 13px */
+  .rail {
+    width: 288px; flex: none; background: var(--bg-sidebar);
+    border-right: 1px solid var(--border); display: flex; flex-direction: column;
+    padding: 10px 8px 8px; overflow-y: auto; position: relative;
+  }
+  .rail::after { /* 可拖拽把手示意 */
+    content: ""; position: absolute; right: 0; top: 0; bottom: 0; width: 3px; cursor: col-resize;
+  }
+  .rail-head { display: flex; align-items: center; padding: 2px 8px 10px; gap: 8px; }
+  .rail-head h1 { font-size: var(--fs-title); font-weight: 650; font-family: var(--font-display); }
+  .rail-head .sp { flex: 1; }
+  .btn-new {
+    display: flex; align-items: center; gap: 6px; background: var(--accent); color: var(--accent-fg);
+    border-radius: 7px; padding: 5px 11px; font-size: var(--fs-secondary); font-weight: 600;
+  }
+  .needs-you {
+    display: flex; align-items: center; gap: 8px; margin: 0 2px 8px;
+    background: var(--warning-bg); border: 1px solid #ecd9b0; color: var(--warning);
+    border-radius: 8px; padding: 7px 10px; font-weight: 600; font-size: var(--fs-body); width: calc(100% - 4px);
+  }
+  .needs-you .n { margin-left: auto; background: var(--warning); color: #fff; border-radius: 8px; min-width: 18px; height: 17px; font-size: var(--fs-min); display: flex; align-items: center; justify-content: center; padding: 0 5px; }
+  .grp-head {
+    display: flex; align-items: center; gap: 6px; padding: 7px 8px 4px;
+    font-size: var(--fs-secondary); font-weight: 650; color: var(--fg-muted); width: 100%;
+  }
+  .grp-head .chev { transition: transform .15s; font-size: 10px; }
+  .grp-head.closed .chev { transform: rotate(-90deg); }
+  .grp-head .cnt { color: var(--fg-faint); font-weight: 500; }
+  .grp-head .need { margin-left: auto; background: var(--warning-bg); color: var(--warning); border-radius: 8px; padding: 1px 7px; font-size: var(--fs-min); font-weight: 700; }
+  .srow {
+    display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left;
+    padding: 7px 10px 7px 22px; border-radius: 8px; position: relative;
+  }
+  .srow:hover { background: var(--bg-hover); }
+  .srow.sel { background: var(--bg-selected); }
+  .srow.sel::before { content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .srow .l1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .srow .tt { font-size: var(--fs-body); font-weight: 520; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .l2 { display: flex; align-items: center; gap: 6px; font-size: var(--fs-secondary); color: var(--fg-muted); padding-left: 15px; white-space: nowrap; overflow: hidden; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.run { background: var(--success); animation: pulse 1.6s infinite; }
+  .dot.warn { background: var(--warning); }
+  .dot.idle { background: var(--border-strong); }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .pmark {
+    width: 15px; height: 15px; border-radius: 4px; flex: none; display: inline-flex;
+    align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff;
+  }
+  .pmark.pi { background: #1b1a16; } .pmark.claude { background: #c96f4a; } .pmark.codex { background: #4a4a58; }
+  .chip {
+    font-size: var(--fs-min); font-weight: 650; border-radius: 6px; padding: 1px 7px; flex: none;
+  }
+  .chip.warn { background: var(--warning-bg); color: var(--warning); }
+  .chip.ok { background: var(--success-bg); color: var(--success); }
+  .chip.err { background: var(--danger-bg); color: var(--danger); }
+  .chip.ghost { background: var(--bg-chip); color: var(--fg-muted); font-weight: 550; }
+  .rail .grow { flex: 1; }
+  .ctx-row {
+    display: flex; align-items: center; gap: 8px; margin: 8px 2px 0; padding: 8px 10px;
+    border-top: 1px solid var(--border); font-size: var(--fs-secondary); color: var(--fg-muted);
+  }
+  .ctx-row b { color: var(--fg); font-weight: 600; }
+  .ctx-row a { margin-left: auto; color: var(--info); text-decoration: none; cursor: pointer; }
+
+  /* 主区域 */
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-editor); }
+  .screen { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .screen.on { display: flex; }
+
+  /* ============ 屏 1：首屏引导 ============ */
+  .home-wrap { flex: 1; overflow-y: auto; display: flex; justify-content: center; padding: 48px 40px 24px; }
+  .home { width: 100%; max-width: 860px; }
+  .home h2 { font-family: var(--font-display); font-size: 26px; font-weight: 600; }
+  .home .sub { color: var(--fg-muted); margin: 8px 0 24px; font-size: 14px; }
+  .pcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .pcard {
+    text-align: left; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px;
+    box-shadow: 0 1px 2px rgba(30,26,18,.05); transition: border-color .12s;
+  }
+  .pcard:hover { border-color: var(--border-strong); }
+  .pcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .pcard .pmark { width: 26px; height: 26px; border-radius: 7px; font-size: 14px; }
+  .pcard b { font-size: 14px; }
+  .pcard small { color: var(--fg-muted); font-size: var(--fs-secondary); line-height: 1.55; }
+  .home-ctx {
+    display: flex; align-items: center; gap: 8px; margin: 18px 0 26px; padding: 10px 14px;
+    background: var(--bg-sidebar); border: 1px solid var(--border); border-radius: 9px;
+    font-size: var(--fs-body); color: var(--fg-muted);
+  }
+  .home-ctx b { color: var(--fg); }
+  .home-ctx code { font-family: var(--font-mono); font-size: var(--fs-secondary); color: var(--fg-faint); }
+  .home-ctx a { margin-left: auto; color: var(--info); cursor: pointer; }
+  .home h3 { font-size: var(--fs-body); font-weight: 650; color: var(--fg-muted); margin-bottom: 10px; }
+  .examples { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+  .examples button {
+    border: 1px solid var(--border); background: var(--bg-card); border-radius: 16px;
+    padding: 6px 14px; font-size: var(--fs-body); color: var(--fg);
+  }
+  .examples button:hover { border-color: var(--border-strong); background: var(--bg-hover); }
+  .hint-card {
+    display: flex; gap: 10px; align-items: baseline; background: var(--info-bg);
+    border: 1px solid #cfdff7; border-radius: 9px; padding: 10px 14px;
+    font-size: var(--fs-body); color: #2c5aa8;
+  }
+  kbd {
+    font-family: var(--font-ui); font-size: var(--fs-min); background: var(--bg-card);
+    border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px;
+  }
+
+  /* ============ Composer（屏 1、屏 2 共用样式） ============ */
+  .composer-zone { flex: none; padding: 12px 40px 18px; display: flex; justify-content: center; }
+  .composer { width: 100%; max-width: 860px; position: relative; }
+  .composer .box {
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(30,26,18,.05), 0 8px 28px rgba(30,26,18,.06); padding: 12px 14px 10px;
+  }
+  .composer textarea {
+    width: 100%; border: none; outline: none; resize: none; font: inherit; font-size: 14px;
+    background: transparent; height: 44px; color: var(--fg);
+  }
+  .composer textarea::placeholder { color: var(--fg-faint); }
+  .composer .row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  .modes { display: flex; background: var(--bg-chip); border-radius: 8px; padding: 2px; }
+  .modes button { padding: 4px 12px; border-radius: 6px; font-size: var(--fs-secondary); font-weight: 600; color: var(--fg-muted); }
+  .modes button.on { background: var(--bg-card); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .modes button.full.on { color: var(--danger); }
+  .mode-hint { font-size: var(--fs-secondary); color: var(--fg-muted); }
+  .composer .send {
+    margin-left: auto; background: var(--accent); color: var(--accent-fg);
+    border-radius: 8px; padding: 6px 16px; font-weight: 600; font-size: var(--fs-body);
+  }
+
+  /* 模式能力边界矩阵（弹层，屏 2 常开演示） */
+  .mode-pop {
+    position: absolute; bottom: calc(100% + 10px); left: 0; width: 560px;
+    background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 12px;
+    box-shadow: 0 18px 50px rgba(30,26,18,.16); padding: 14px 16px; z-index: 5;
+  }
+  .mode-pop h4 { font-size: var(--fs-body); margin-bottom: 10px; }
+  .mtx { width: 100%; border-collapse: collapse; font-size: var(--fs-secondary); }
+  .mtx th { text-align: left; color: var(--fg-muted); font-weight: 600; padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .mtx td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  .mtx tr:last-child td { border-bottom: none; }
+  .mtx tr.on td { background: var(--bg-selected); }
+  .mtx td:first-child { font-weight: 650; white-space: nowrap; }
+  .mtx td:first-child small { display: block; font-weight: 400; color: var(--fg-muted); }
+  .yes { color: var(--success); font-weight: 700; }
+  .no  { color: var(--fg-faint); }
+  .ask { color: var(--warning); font-weight: 650; }
+
+  /* ============ 屏 2：Session Room ============ */
+  .room-head {
+    flex: none; padding: 14px 28px 0; display: flex; flex-direction: column; gap: 12px;
+  }
+  .room-head .t { display: flex; align-items: baseline; gap: 10px; }
+  .room-head h2 { font-family: var(--font-display); font-size: var(--fs-display); font-weight: 600; }
+  .room-head .meta { font-size: var(--fs-secondary); color: var(--fg-muted); display: flex; gap: 8px; align-items: center; }
+  /* 权威状态条：唯一状态 + 唯一主 CTA */
+  .status-strip {
+    display: flex; align-items: center; gap: 12px; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 11px; padding: 11px 14px;
+    box-shadow: 0 1px 2px rgba(30,26,18,.04);
+  }
+  .status-strip .st { display: flex; align-items: center; gap: 9px; font-weight: 650; font-size: var(--fs-body); }
+  .status-strip .vchip { display: flex; align-items: center; gap: 5px; }
+  .status-strip .sp { flex: 1; }
+  .btn-primary {
+    background: var(--accent); color: var(--accent-fg); border-radius: 8px;
+    padding: 7px 18px; font-weight: 650; font-size: var(--fs-body);
+  }
+  .btn-ghost { color: var(--fg-muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: var(--fs-body); }
+  .timeline { flex: 1; overflow-y: auto; padding: 20px 28px; display: flex; justify-content: center; }
+  .timeline .col { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 14px; }
+  .turn-user {
+    align-self: flex-end; max-width: 78%; background: var(--bg-chip);
+    border-radius: 12px 12px 3px 12px; padding: 10px 14px; font-size: var(--fs-body); line-height: 1.6;
+  }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 11px; padding: 12px 15px;
+  }
+  .card .ch { display: flex; align-items: center; gap: 8px; font-size: var(--fs-secondary); font-weight: 650; color: var(--fg-muted); margin-bottom: 8px; }
+  .card ul { padding-left: 18px; font-size: var(--fs-body); line-height: 1.8; color: var(--fg); }
+  .filerow { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: var(--fs-secondary); padding: 3px 0; }
+  .filerow .add { color: var(--success); } .filerow .del { color: var(--danger); }
+  .prose { font-size: var(--fs-body); line-height: 1.7; }
+
+  /* ============ 屏 3：Review ============ */
+  .surface-nav {
+    flex: none; display: flex; align-items: center; gap: 6px; padding: 12px 28px 0;
+  }
+  .surface-nav button {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+    padding: 7px 14px; border-radius: 9px; border: 1px solid transparent;
+  }
+  .surface-nav button b { font-size: var(--fs-body); }
+  .surface-nav button small { font-size: var(--fs-min); color: var(--fg-faint); }
+  .surface-nav button.on { background: var(--bg-card); border-color: var(--border-strong); }
+  .surface-nav button.on small { color: var(--fg-muted); }
+  .surface-now { padding: 8px 28px 0; font-size: var(--fs-secondary); color: var(--fg-muted); }
+  .review-body { flex: 1; min-height: 0; display: flex; gap: 0; padding: 14px 28px 0; }
+  .rv-files { width: 240px; flex: none; padding-right: 16px; }
+  .rv-files h4, .rv-checks h4 { font-size: var(--fs-secondary); font-weight: 650; color: var(--fg-muted); margin-bottom: 8px; }
+  .rv-file { display: flex; align-items: center; gap: 7px; width: 100%; text-align: left; padding: 6px 9px; border-radius: 7px; font-family: var(--font-mono); font-size: var(--fs-secondary); }
+  .rv-file.sel { background: var(--bg-selected); }
+  .rv-file .stat { margin-left: auto; font-size: var(--fs-min); }
+  .rv-diff { flex: 1; min-width: 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-family: var(--font-mono); font-size: var(--fs-secondary); }
+  .rv-diff .dh { padding: 8px 14px; border-bottom: 1px solid var(--border); color: var(--fg-muted); background: var(--bg-sidebar); font-size: var(--fs-min); }
+  .dl { display: flex; padding: 1px 14px; line-height: 1.75; white-space: pre; }
+  .dl.add { background: rgba(47,158,99,.13); } .dl.del { background: rgba(196,69,61,.11); }
+  .dl .ln { width: 34px; flex: none; color: var(--fg-faint); }
+  .rv-checks { width: 300px; flex: none; padding-left: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .vbanner {
+    background: var(--warning-bg); border: 1px solid #ecd9b0; border-radius: 9px;
+    padding: 10px 12px; font-size: var(--fs-body); color: var(--warning); font-weight: 600;
+    display: flex; gap: 8px; align-items: baseline;
+  }
+  .ckrow {
+    display: flex; align-items: center; gap: 9px; background: var(--bg-card);
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; font-size: var(--fs-body);
+  }
+  .ckrow .name { font-weight: 550; }
+  .ckrow .sp { flex: 1; }
+  .ckrow .act { color: var(--info); font-size: var(--fs-secondary); }
+  .ck-ic { width: 17px; height: 17px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 800; color: #fff; }
+  .ck-ic.ok { background: var(--success); } .ck-ic.err { background: var(--danger); }
+  .ck-ic.notrun { background: transparent; border: 2px dashed var(--warning); }
+  .ck-ic.noconf { background: transparent; border: 2px dotted var(--fg-faint); }
+  .decision-bar {
+    flex: none; display: flex; align-items: center; gap: 12px; padding: 14px 28px 18px;
+    border-top: 1px solid var(--border); margin-top: 14px; background: var(--bg-editor);
+  }
+  .decision-note { font-size: var(--fs-secondary); color: var(--fg-muted); }
+  .decision-bar .sp { flex: 1; }
+  .btn-warnaccept {
+    background: var(--warning); color: #fff; border-radius: 8px; padding: 8px 18px;
+    font-weight: 650; font-size: var(--fs-body); display: flex; flex-direction: column; align-items: center; line-height: 1.3;
+  }
+  .btn-warnaccept small { font-size: var(--fs-min); font-weight: 500; opacity: .9; }
+
+  /* ============ 底部规格注脚 ============ */
+  .specnote {
+    flex: none; background: #262420; color: #9d988c; font-size: var(--fs-min);
+    padding: 7px 16px; display: flex; gap: 20px; align-items: center; overflow-x: auto; white-space: nowrap;
+  }
+  .specnote b { color: #d8d4c9; font-weight: 600; }
+  .specnote .tag { cursor: default; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════ demo 工具条（非产品 UI）═══════════ -->
+<div class="chrome">
+  <b>Charter · UX Refresh Mock</b>
+  <div class="tabs">
+    <button class="on" data-screen="home"  data-i18n="tab.home">首屏引导</button>
+    <button data-screen="room" data-i18n="tab.room">Session 工作区</button>
+    <button data-screen="review" data-i18n="tab.review">审阅与验收</button>
+  </div>
+  <span class="sp"></span>
+  <button class="anno-toggle on" id="annoBtn" data-i18n="chrome.anno">标注：开</button>
+  <div class="lang">
+    <button data-lang="system" data-i18n="lang.system">跟随系统</button>
+    <button data-lang="zh" class="on">中文</button>
+    <button data-lang="en">EN</button>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- ═══════════ 活动条（ADR-0023 保留）═══════════ -->
+  <nav class="abar">
+    <button class="on" title="Sessions">☰</button>
+    <button title="Inbox">▤<span class="badge">2</span></button>
+    <button title="Projects">▣</button>
+    <button title="Search ⌘K">⌕</button>
+    <span class="grow"></span>
+    <button title="Editor ⌘E">⌗</button>
+    <button title="Settings">⚙</button>
+  </nav>
+
+  <!-- ═══════════ Session Rail ═══════════ -->
+  <aside class="rail">
+    <div class="rail-head">
+      <h1>Session<i class="tag" title="#3 用户一级对象统一叫 Session">3</i><i class="tag" title="#1 正文 13px、次要 12px，muted 对比度提升">1</i></h1>
+      <span class="sp"></span>
+      <button class="btn-new"><span data-i18n="rail.new">新建 Session</span> <kbd style="border-color:#555;background:transparent;color:#ddd">⌘N</kbd></button>
+    </div>
+
+    <button class="needs-you">⚠ <span data-i18n="rail.needsYou">需要你处理</span><i class="tag" title="#9 Needs you 单独聚合，点击进入分诊列表">9</i><span class="n">2</span></button>
+
+    <button class="grp-head"><span class="chev">▾</span> bullpen <span class="cnt">· 4</span><span class="need" data-i18n="rail.needBadge">2 需处理</span></button>
+
+    <button class="srow sel">
+      <span class="l1"><span class="dot warn"></span><span class="tt" data-i18n="s1.title">修复登录跳转循环</span><span class="chip warn" data-i18n="s1.chip">待审阅</span></span>
+      <span class="l2">fix/login-loop · <span data-i18n="s1.meta">改动 3 个文件</span></span>
+    </button>
+
+    <button class="srow">
+      <span class="l1"><span class="pmark claude">✳</span><span class="tt" data-i18n="s2.title">重构支付模块</span><span class="dot run" style="margin-left:auto"></span></span>
+      <span class="l2">✎ <span data-i18n="s2.ticker">正在编辑 payments/api.ts…</span><i class="tag" title="#10 Provider 图标替代 EXT 文本；先建 Session 再启动 PTY">10</i></span>
+    </button>
+
+    <button class="srow">
+      <span class="l1"><span class="pmark codex">◆</span><span class="tt" data-i18n="s3.title">依赖升级排查</span><span class="chip ghost" data-i18n="s3.chip">已导入</span></span>
+      <span class="l2" data-i18n="s3.meta">手工启动的 CLI · 只读跟踪</span>
+    </button>
+
+    <button class="srow">
+      <span class="l1"><span class="dot idle"></span><span class="tt" data-i18n="s4.title">解释 webpack 配置</span></span>
+      <span class="l2" data-i18n="s4.meta">只读问答 · 昨天</span>
+    </button>
+
+    <button class="grp-head closed" data-collapse><span class="chev">▾</span> blog <span class="cnt">· 2</span><span class="need" data-i18n="rail.needBadge1">1 需处理</span></button>
+
+    <button class="grp-head closed" data-collapse><span class="chev">▾</span> <span data-i18n="rail.history">历史</span> <span class="cnt">· 12</span><i class="tag" title="#9 已结束 Session 收进跨项目 History，默认折叠">9</i></button>
+
+    <span class="grow"></span>
+    <div class="ctx-row">
+      <span data-i18n="rail.ctx">当前项目</span> <b>bullpen</b><i class="tag" title="#3 Project 是上下文，不是并列对象">3</i>
+      <a data-i18n="rail.change">切换</a>
+    </div>
+  </aside>
+
+  <!-- ═══════════ 主区域 ═══════════ -->
+  <main>
+
+    <!-- ═══ 屏 1：首屏引导 ═══ -->
+    <section class="screen on" id="screen-home">
+      <div class="home-wrap"><div class="home">
+        <h2><span data-i18n="home.h">开始一个新 Session</span><i class="tag" title="#8 首屏直接给三个 Provider 入口 + 当前项目 + 示例">8</i></h2>
+        <p class="sub" data-i18n="home.sub">选择由谁来执行。文件、进程和审阅记录都会留在这个 Session 里。</p>
+        <div class="pcards">
+          <button class="pcard sel">
+            <span class="pmark pi">π</span><b>Pi Session</b>
+            <small data-i18n="home.pi">托管执行：计划、工具调用、验证与审阅全程可控，完成后由你验收。</small>
+          </button>
+          <button class="pcard">
+            <span class="pmark claude">✳</span><b>Claude Code</b>
+            <small data-i18n="home.claude">在保留的终端里运行 Claude 原生交互界面，改动同样可追踪、可审阅。</small>
+          </button>
+          <button class="pcard">
+            <span class="pmark codex">◆</span><b>Codex</b>
+            <small data-i18n="home.codex">在保留的终端里运行 Codex，适合独立实现或对 Pi 的结果做第二遍复查。</small>
+          </button>
+        </div>
+        <div class="home-ctx">
+          <span data-i18n="home.ctx">将在此项目中工作：</span><b>bullpen</b>
+          <code>~/git/bullpen</code>
+          <a data-i18n="home.change">切换项目</a>
+        </div>
+        <h3 data-i18n="home.try">不知道从哪开始？试试这些</h3>
+        <div class="examples">
+          <button data-i18n="home.ex1">解释这个仓库的构建流程</button>
+          <button data-i18n="home.ex2">给侧栏加上键盘导航</button>
+          <button data-i18n="home.ex3">找出登录模块最近引入的回归</button>
+        </div>
+        <div class="hint-card">💡 <span><span data-i18n="home.hint">在编辑器中选中代码后按</span> <kbd>⌘.</kbd> <span data-i18n="home.hint2">可以就地发起修复，不用先建 Session。</span></span></div>
+      </div></div>
+      <div class="composer-zone"><div class="composer">
+        <div class="box">
+          <textarea data-i18n-ph="composer.ph" placeholder="描述你想做什么，或直接提问…"></textarea>
+          <div class="row">
+            <div class="modes">
+              <button data-i18n="mode.ask">只读问答</button>
+              <button class="on" data-i18n="mode.edit">修改前确认</button>
+              <button data-i18n="mode.auto">低风险自动</button>
+              <button class="full" data-i18n="mode.full">完全自动</button>
+            </div>
+            <span class="mode-hint"><span data-i18n="mode.editHint">每次写文件或运行命令前都会先问你</span><i class="tag" title="#5 模式带边界说明，展开可见完整矩阵">5</i></span>
+            <button class="send" data-i18n="composer.start">开始</button>
+          </div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- ═══ 屏 2：Session Room ═══ -->
+    <section class="screen" id="screen-room">
+      <div class="room-head">
+        <div class="t">
+          <h2 data-i18n="s1.title">修复登录跳转循环</h2>
+          <span class="meta"><span class="pmark pi">π</span> Pi · bullpen · <code style="font-family:var(--font-mono)">fix/login-loop</code></span>
+        </div>
+        <div class="status-strip">
+          <span class="st"><span class="dot warn"></span><span data-i18n="room.status">已完成 · 等待你审阅</span><i class="tag" title="#6 唯一权威状态条：一个状态 + 一个主动作，其余表面只读">6</i></span>
+          <span class="chip ok vchip">✓ <span data-i18n="room.verify">验证 4/4 通过</span><i class="tag" title="#7 验证结果始终可见，与状态并列">7</i></span>
+          <span class="sp"></span>
+          <button class="btn-primary" data-i18n="room.cta">审阅改动</button>
+          <button class="btn-ghost">⋯</button>
+        </div>
+      </div>
+      <div class="timeline"><div class="col">
+        <div class="turn-user" data-i18n="tl.user">登录后偶发跳回 /login，帮我查一下原因并修复。</div>
+        <div class="card">
+          <div class="ch">▤ <span data-i18n="tl.plan">计划 · 已批准</span></div>
+          <ul>
+            <li data-i18n="tl.p1">复现：token 刷新与路由守卫存在竞态</li>
+            <li data-i18n="tl.p2">修复 session.ts 中的过期判断，改为单一时钟源</li>
+            <li data-i18n="tl.p3">补充回归测试并运行验证</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="ch">✎ <span data-i18n="tl.files">修改了 3 个文件</span></div>
+          <div class="filerow">src/auth/session.ts <span class="stat"><span class="add">+18</span> <span class="del">−7</span></span></div>
+          <div class="filerow">src/router/guard.ts <span class="stat"><span class="add">+4</span> <span class="del">−2</span></span></div>
+          <div class="filerow">tests/auth/session.test.ts <span class="stat"><span class="add">+42</span></span></div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="ck-ic ok">✓</span> <span data-i18n="tl.verifyRun">验证 · npm test — 4 项全部通过</span></div>
+        </div>
+        <div class="card prose" data-i18n="tl.summary">根因是 guard 在 token 刷新完成前读取了旧的过期时间。已将过期判断收敛到 SessionClock 单一来源，并补充了并发刷新场景的回归测试。</div>
+      </div></div>
+      <div class="composer-zone"><div class="composer">
+        <!-- 模式矩阵弹层（演示常开） -->
+        <div class="mode-pop">
+          <h4><span data-i18n="mtx.h">每种模式能做什么</span><i class="tag" title="#5 能力边界矩阵：修改文件 / 运行命令 / 何时询问 / 是否自动接受">5</i></h4>
+          <table class="mtx">
+            <tr><th></th><th data-i18n="mtx.c1">修改文件</th><th data-i18n="mtx.c2">运行命令</th><th data-i18n="mtx.c3">何时询问你</th><th data-i18n="mtx.c4">结果验收</th></tr>
+            <tr><td data-i18n="mode.ask">只读问答<small data-i18n="mtx.r1s">只回答问题</small></td><td class="no" data-i18n="mtx.no">从不</td><td class="no" data-i18n="mtx.no2">从不</td><td class="no">—</td><td class="no">—</td></tr>
+            <tr><td data-i18n="mode.edit">修改前确认<small data-i18n="mtx.r2s">默认，最稳妥</small></td><td class="yes">✓</td><td class="yes">✓</td><td class="ask" data-i18n="mtx.every">每次写入/执行前</td><td data-i18n="mtx.manual">你手动接受</td></tr>
+            <tr class="on"><td data-i18n="mode.auto">低风险自动<small data-i18n="mtx.r3s">当前选择</small></td><td class="yes">✓</td><td class="yes">✓</td><td class="ask" data-i18n="mtx.risky">仅高风险操作</td><td data-i18n="mtx.manual2">你手动接受</td></tr>
+            <tr><td data-i18n="mode.full">完全自动<small data-i18n="mtx.r4s">可随时回滚</small></td><td class="yes">✓</td><td class="yes">✓</td><td class="no" data-i18n="mtx.never">不询问</td><td class="ask" data-i18n="mtx.autoacc">自动接受 · 验证失败会暂停</td></tr>
+          </table>
+        </div>
+        <div class="box">
+          <textarea data-i18n-ph="composer.reply" placeholder="继续对话，或下达新指令…"></textarea>
+          <div class="row">
+            <div class="modes">
+              <button data-i18n="mode.ask">只读问答</button>
+              <button data-i18n="mode.edit">修改前确认</button>
+              <button class="on" data-i18n="mode.auto">低风险自动</button>
+              <button class="full" data-i18n="mode.full">完全自动</button>
+            </div>
+            <span class="mode-hint" data-i18n="mode.autoHint">低风险操作直接执行，高风险先询问</span>
+            <button class="send" data-i18n="composer.send">发送</button>
+          </div>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- ═══ 屏 3：Review（未验证态） ═══ -->
+    <section class="screen" id="screen-review">
+      <div class="surface-nav">
+        <button><b data-i18n="sf.peek">速览</b><small data-i18n="sf.peekS">只读，不做决定</small></button>
+        <button class="on"><b data-i18n="sf.review">审阅</b><small data-i18n="sf.reviewS">检查改动，决定接受或退回</small></button>
+        <button><b data-i18n="sf.preview">预览</b><small data-i18n="sf.previewS">运行起来看效果</small></button>
+        <button><b data-i18n="sf.editor">编辑器</b><small data-i18n="sf.editorS">手工修改代码</small></button>
+        <i class="tag" title="#11 四个入口并排出现，各带一句边界说明；只有「审阅」有接受按钮">11</i>
+      </div>
+      <div class="surface-now" data-i18n="sf.now">你正在审阅「重构支付模块」的改动 —— 这是唯一可以做出接受决定的界面。</div>
+      <div class="review-body">
+        <div class="rv-files">
+          <h4 data-i18n="rv.files">改动的文件 · 2</h4>
+          <button class="rv-file sel">payments/api.ts <span class="stat"><span class="add" style="color:var(--success)">+31</span> <span style="color:var(--danger)">−12</span></span></button>
+          <button class="rv-file">payments/hooks.ts <span class="stat"><span style="color:var(--success)">+9</span></span></button>
+        </div>
+        <div class="rv-diff">
+          <div class="dh">payments/api.ts</div>
+          <div class="dl"><span class="ln">40</span>  const client = getClient();</div>
+          <div class="dl del"><span class="ln">41</span>- return client.charge(amount);</div>
+          <div class="dl add"><span class="ln">41</span>+ const idempotencyKey = makeKey(order.id);</div>
+          <div class="dl add"><span class="ln">42</span>+ return client.charge(amount, { idempotencyKey });</div>
+          <div class="dl"><span class="ln">43</span>  }</div>
+        </div>
+        <div class="rv-checks">
+          <div class="vbanner">⚠ <span data-i18n="ck.banner">这个 Session 的改动尚未验证</span><i class="tag" title="#7 四种验证状态明确区分；未验证时接受按钮改变文案与配色">7</i></div>
+          <h4 data-i18n="ck.h">检查项</h4>
+          <div class="ckrow"><span class="ck-ic ok">✓</span><span class="name">build</span><span class="sp"></span><span class="chip ok" data-i18n="ck.pass">通过</span></div>
+          <div class="ckrow"><span class="ck-ic err">✕</span><span class="name">lint</span><span class="sp"></span><span class="chip err" data-i18n="ck.fail">失败 · 2</span></div>
+          <div class="ckrow"><span class="ck-ic notrun"></span><span class="name">unit tests</span><span class="sp"></span><span class="chip warn" data-i18n="ck.notrun">未运行</span><a class="act" data-i18n="ck.run">运行</a></div>
+          <div class="ckrow"><span class="ck-ic noconf"></span><span class="name" data-i18n="ck.accName">验收标准</span><span class="sp"></span><span class="chip ghost" data-i18n="ck.noconf">未配置</span><a class="act" data-i18n="ck.conf">配置</a></div>
+        </div>
+      </div>
+      <div class="decision-bar">
+        <span class="decision-note" data-i18n="ck.note">全部检查通过后，右侧按钮会变为常规的「接受改动」。</span>
+        <span class="sp"></span>
+        <button class="btn-ghost" data-i18n="rv.back">退回并说明</button>
+        <button class="btn-warnaccept"><span data-i18n="rv.acceptUnverified">接受未验证的改动</span><small data-i18n="rv.acceptSub">1 项失败 · 1 项未运行 · 1 项未配置</small></button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="specnote">
+  <span><b data-i18n="spec.type">字号规范</b>：<span data-i18n="spec.typeV">正文 13px · 次要 12px · 徽章 11px（最小值）· 标题 15–20px；muted 文字对比度 ≥ 4.5:1</span><i class="tag">1</i></span>
+  <span><b data-i18n="spec.map">标注</b>：<span data-i18n="spec.mapV">紫色编号对应问题清单 #1–#11，悬停查看说明</span></span>
+</footer>
+
+<script>
+const D = {
+  "tab.home": ["首屏引导","First-run"], "tab.room": ["Session 工作区","Session workspace"], "tab.review": ["审阅与验收","Review & accept"],
+  "chrome.anno": ["标注：开","Callouts: on"], "chrome.annoOff": ["标注：关","Callouts: off"], "lang.system": ["跟随系统","System"],
+  "rail.new": ["新建 Session","New session"], "rail.needsYou": ["需要你处理","Needs you"],
+  "rail.needBadge": ["2 需处理","2 need you"], "rail.needBadge1": ["1 需处理","1 needs you"],
+  "rail.history": ["历史","History"], "rail.ctx": ["当前项目","Working project"], "rail.change": ["切换","Change"],
+  "s1.title": ["修复登录跳转循环","Fix login redirect loop"], "s1.chip": ["待审阅","Review ready"], "s1.meta": ["改动 3 个文件","3 files changed"],
+  "s2.title": ["重构支付模块","Refactor payments module"], "s2.ticker": ["正在编辑 payments/api.ts…","Editing payments/api.ts…"],
+  "s3.title": ["依赖升级排查","Dependency upgrade triage"], "s3.chip": ["已导入","Imported"], "s3.meta": ["手工启动的 CLI · 只读跟踪","Hand-started CLI · tracked read-only"],
+  "s4.title": ["解释 webpack 配置","Explain the webpack config"], "s4.meta": ["只读问答 · 昨天","Read-only Q&A · yesterday"],
+  "home.h": ["开始一个新 Session","Start a new session"],
+  "home.sub": ["选择由谁来执行。文件、进程和审阅记录都会留在这个 Session 里。","Pick who runs it. Files, processes and review history stay attached to the session."],
+  "home.pi": ["托管执行：计划、工具调用、验证与审阅全程可控，完成后由你验收。","Managed runs with plans, tools, verification and review — you accept the result."],
+  "home.claude": ["在保留的终端里运行 Claude 原生交互界面，改动同样可追踪、可审阅。","Claude's native interactive surface in a preserved terminal — changes stay tracked and reviewable."],
+  "home.codex": ["在保留的终端里运行 Codex，适合独立实现或对 Pi 的结果做第二遍复查。","Codex in a preserved terminal — implementation or an independent second review."],
+  "home.ctx": ["将在此项目中工作：","Will work in project:"], "home.change": ["切换项目","Change project"],
+  "home.try": ["不知道从哪开始？试试这些","Not sure where to start? Try one of these"],
+  "home.ex1": ["解释这个仓库的构建流程","Explain this repo's build pipeline"],
+  "home.ex2": ["给侧栏加上键盘导航","Add keyboard navigation to the sidebar"],
+  "home.ex3": ["找出登录模块最近引入的回归","Find the recent regression in the login module"],
+  "home.hint": ["在编辑器中选中代码后按","Select code in the editor and press"],
+  "home.hint2": ["可以就地发起修复，不用先建 Session。","to fix it in place — no session needed first."],
+  "composer.ph": ["描述你想做什么，或直接提问…","Describe what you want done, or just ask…"],
+  "composer.reply": ["继续对话，或下达新指令…","Continue the conversation, or give a new instruction…"],
+  "composer.start": ["开始","Start"], "composer.send": ["发送","Send"],
+  "mode.ask": ["只读问答","Read-only"], "mode.edit": ["修改前确认","Approve changes"], "mode.auto": ["低风险自动","Auto · safe"], "mode.full": ["完全自动","Full auto"],
+  "mode.editHint": ["每次写文件或运行命令前都会先问你","Asks before every file write or command"],
+  "mode.autoHint": ["低风险操作直接执行，高风险先询问","Low-risk actions run; risky ones ask first"],
+  "room.status": ["已完成 · 等待你审阅","Finished · waiting on your review"],
+  "room.verify": ["验证 4/4 通过","Verification 4/4 passed"], "room.cta": ["审阅改动","Review changes"],
+  "tl.user": ["登录后偶发跳回 /login，帮我查一下原因并修复。","After login it sometimes bounces back to /login — find the cause and fix it."],
+  "tl.plan": ["计划 · 已批准","Plan · approved"],
+  "tl.p1": ["复现：token 刷新与路由守卫存在竞态","Reproduce: race between token refresh and the route guard"],
+  "tl.p2": ["修复 session.ts 中的过期判断，改为单一时钟源","Fix the expiry check in session.ts — single clock source"],
+  "tl.p3": ["补充回归测试并运行验证","Add a regression test and run verification"],
+  "tl.files": ["修改了 3 个文件","Changed 3 files"],
+  "tl.verifyRun": ["验证 · npm test — 4 项全部通过","Verification · npm test — all 4 passed"],
+  "tl.summary": ["根因是 guard 在 token 刷新完成前读取了旧的过期时间。已将过期判断收敛到 SessionClock 单一来源，并补充了并发刷新场景的回归测试。","Root cause: the guard read a stale expiry before token refresh finished. Expiry checks now go through a single SessionClock source, with a regression test for the concurrent-refresh case."],
+  "mtx.h": ["每种模式能做什么","What each mode can do"],
+  "mtx.c1": ["修改文件","Edits files"], "mtx.c2": ["运行命令","Runs commands"], "mtx.c3": ["何时询问你","When it asks you"], "mtx.c4": ["结果验收","Accepting results"],
+  "mtx.r1s": ["只回答问题","Answers only"], "mtx.r2s": ["默认，最稳妥","Default, safest"], "mtx.r3s": ["当前选择","Current"], "mtx.r4s": ["可随时回滚","Roll back anytime"],
+  "mtx.no": ["从不","Never"], "mtx.no2": ["从不","Never"], "mtx.every": ["每次写入/执行前","Before every write/run"],
+  "mtx.risky": ["仅高风险操作","Only risky actions"], "mtx.never": ["不询问","Never asks"],
+  "mtx.manual": ["你手动接受","You accept manually"], "mtx.manual2": ["你手动接受","You accept manually"],
+  "mtx.autoacc": ["自动接受 · 验证失败会暂停","Auto-accepts · pauses on failed verification"],
+  "sf.peek": ["速览","Peek"], "sf.peekS": ["只读，不做决定","Read-only, no decisions"],
+  "sf.review": ["审阅","Review"], "sf.reviewS": ["检查改动，决定接受或退回","Inspect changes, accept or return"],
+  "sf.preview": ["预览","Preview"], "sf.previewS": ["运行起来看效果","Run it and see"],
+  "sf.editor": ["编辑器","Editor"], "sf.editorS": ["手工修改代码","Edit code by hand"],
+  "sf.now": ["你正在审阅「重构支付模块」的改动 —— 这是唯一可以做出接受决定的界面。","You are reviewing “Refactor payments module” — the only surface where an accept decision can be made."],
+  "rv.files": ["改动的文件 · 2","Changed files · 2"],
+  "ck.banner": ["这个 Session 的改动尚未验证","This session's changes are not verified yet"],
+  "ck.h": ["检查项","Checks"], "ck.pass": ["通过","Passed"], "ck.fail": ["失败 · 2","Failed · 2"],
+  "ck.notrun": ["未运行","Not run"], "ck.run": ["运行","Run"], "ck.accName": ["验收标准","Acceptance criteria"],
+  "ck.noconf": ["未配置","Not configured"], "ck.conf": ["配置","Configure"],
+  "ck.note": ["全部检查通过后，右侧按钮会变为常规的「接受改动」。","Once every check passes, the button on the right becomes a plain “Accept changes”."],
+  "rv.back": ["退回并说明","Request changes"],
+  "rv.acceptUnverified": ["接受未验证的改动","Accept unverified changes"],
+  "rv.acceptSub": ["1 项失败 · 1 项未运行 · 1 项未配置","1 failed · 1 not run · 1 not configured"],
+  "spec.type": ["字号规范","Type scale"],
+  "spec.typeV": ["正文 13px · 次要 12px · 徽章 11px（最小值）· 标题 15–20px；muted 文字对比度 ≥ 4.5:1","Body 13px · secondary 12px · badge 11px (floor) · titles 15–20px; muted text contrast ≥ 4.5:1"],
+  "spec.map": ["标注","Callouts"],
+  "spec.mapV": ["紫色编号对应问题清单 #1–#11，悬停查看说明","Purple numbers map to issues #1–#11 — hover for detail"],
+};
+let lang = 0; // 0=zh 1=en
+function apply() {
+  document.querySelectorAll('[data-i18n]').forEach(el => { const e = D[el.dataset.i18n]; if (e) el.textContent = e[lang]; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => { const e = D[el.dataset.i18nPh]; if (e) el.placeholder = e[lang]; });
+  document.documentElement.lang = lang ? 'en' : 'zh';
+}
+document.querySelectorAll('.lang button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.lang button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  const v = b.dataset.lang;
+  lang = v === 'en' ? 1 : v === 'zh' ? 0 : (navigator.language || '').startsWith('zh') ? 0 : 1;
+  apply();
+});
+document.querySelectorAll('.chrome .tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.chrome .tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === 'screen-' + b.dataset.screen));
+});
+document.querySelectorAll('[data-collapse]').forEach(b => b.onclick = () => b.classList.toggle('closed'));
+const annoBtn = document.getElementById('annoBtn');
+annoBtn.onclick = () => {
+  document.body.classList.toggle('no-anno');
+  const off = document.body.classList.contains('no-anno');
+  annoBtn.classList.toggle('on', !off);
+  annoBtn.textContent = D[off ? 'chrome.annoOff' : 'chrome.anno'][lang];
+};
+apply();
+</script>
+</body>
+</html>

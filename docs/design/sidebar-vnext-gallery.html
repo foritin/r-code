@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter Sidebar VNext · Direction Gallery</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #e8e8e5;
+        --surface: #f7f7f4;
+        --text: #202226;
+        --muted: #686d75;
+        --border: #cfd0cd;
+        --accent: #3166e3;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      }
+
+      button {
+        color: inherit;
+        font: inherit;
+      }
+
+      .gallery {
+        height: 100vh;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .gallery-header {
+        display: grid;
+        grid-template-columns: minmax(240px, 0.7fr) minmax(620px, 2fr);
+        align-items: center;
+        gap: 22px;
+        padding: 13px 18px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .gallery-title {
+        min-width: 0;
+        display: grid;
+        gap: 3px;
+      }
+
+      .gallery-title strong {
+        font-size: 13px;
+      }
+
+      .gallery-title span {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .direction-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+      }
+
+      .direction-tab {
+        min-height: 43px;
+        display: grid;
+        grid-template-columns: 23px minmax(0, 1fr);
+        grid-template-rows: auto auto;
+        align-items: center;
+        gap: 1px 7px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+        padding: 6px 9px;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .direction-tab:hover {
+        border-color: #aeb1b6;
+      }
+
+      .direction-tab.active {
+        border-color: var(--accent);
+        background: #eef2fc;
+        box-shadow: inset 0 0 0 1px rgba(49, 102, 227, 0.08);
+      }
+
+      .direction-tab b {
+        grid-row: 1 / 3;
+        width: 22px;
+        height: 22px;
+        display: grid;
+        place-items: center;
+        border-radius: 6px;
+        background: #24262b;
+        color: #fff;
+        font-size: 10px;
+      }
+
+      .direction-tab strong,
+      .direction-tab span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .direction-tab strong {
+        font-size: 10.5px;
+      }
+
+      .direction-tab span {
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .preview-wrap {
+        min-height: 0;
+        padding: 12px;
+      }
+
+      iframe {
+        width: 100%;
+        height: 100%;
+        display: block;
+        border: 1px solid #bfc1bf;
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: 0 18px 52px rgba(30, 32, 38, 0.16);
+      }
+
+      @media (max-width: 900px) {
+        .gallery-header {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .direction-tab span {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="gallery">
+      <header class="gallery-header">
+        <div class="gallery-title">
+          <strong>Charter · Sidebar VNext</strong>
+          <span>同一批会话、同一主工作区，只比较左侧导航模型</span>
+        </div>
+        <nav class="direction-tabs" aria-label="Sidebar directions">
+          <button class="direction-tab" data-src="./sidebar-vnext-focus.html" type="button">
+            <b>A</b><strong>Focus Rail</strong><span>最低改造成本 · 清晰排序</span>
+          </button>
+          <button class="direction-tab" data-src="./sidebar-vnext-grouped.html" type="button">
+            <b>B</b><strong>Project Groups</strong><span>会话按项目组织</span>
+          </button>
+          <button class="direction-tab" data-src="./sidebar-vnext-activity.html" type="button">
+            <b>C</b><strong>Activity Rail</strong><span>长期扩展 · IDE 双轨导航</span>
+          </button>
+          <button class="direction-tab active" data-src="./sidebar-vnext-hybrid.html" type="button">
+            <b>D</b><strong>Grouped Activity</strong><span>融合稿 · C 外壳 × B 分组</span>
+          </button>
+        </nav>
+      </header>
+      <section class="preview-wrap">
+        <iframe id="preview" title="Charter sidebar direction preview" src="./sidebar-vnext-hybrid.html"></iframe>
+      </section>
+    </main>
+    <script>
+      const preview = document.querySelector("#preview");
+      document.querySelectorAll("[data-src]").forEach((button) => {
+        button.addEventListener("click", () => {
+          document.querySelectorAll("[data-src]").forEach((item) => item.classList.remove("active"));
+          button.classList.add("active");
+          preview.src = button.dataset.src;
+        });
+      });
+    </script>
+  </body>
+</html>

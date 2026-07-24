@@ -1,0 +1,600 @@
+<!doctype html>
+<!-- Charter · 上下文附件 方案 C「全窗拖放 + Context 页签」。NOT product code. -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 方案 C 全窗拖放 + Context 页签</title>
+    <link rel="stylesheet" href="./shared.css" />
+    <style>
+      .window-dropveil {
+        position: fixed;
+        z-index: 200;
+        inset: 44px 0 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-overlay);
+        backdrop-filter: blur(2px);
+      }
+
+      .dropveil-inner {
+        display: grid;
+        gap: 14px;
+        justify-items: center;
+      }
+
+      .dropveil-title {
+        color: #fdf4e0;
+        font-family: var(--font-display);
+        font-size: 16px;
+        letter-spacing: 0.01em;
+        text-shadow: 0 2px 12px rgba(45, 33, 27, 0.4);
+      }
+
+      .dropveil-cards {
+        display: flex;
+        gap: 16px;
+      }
+
+      .drop-target-card {
+        width: 285px;
+        display: grid;
+        gap: 7px;
+        justify-items: center;
+        padding: 26px 22px 22px;
+        border: 2px dashed var(--border-strong);
+        border-radius: 16px;
+        background: var(--bg-card);
+        box-shadow: var(--shadow-menu);
+        text-align: center;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+
+      .drop-target-card > .ci {
+        font-size: 26px;
+        color: var(--fg-muted);
+      }
+
+      .drop-target-card strong {
+        font-family: var(--font-display);
+        font-size: 15px;
+      }
+
+      .drop-target-card small {
+        color: var(--fg-muted);
+        font-size: 11px;
+        line-height: 1.6;
+      }
+
+      .drop-target-card.armed {
+        border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 6%, var(--bg-card));
+        transform: scale(1.03);
+      }
+
+      .drop-target-card.armed > .ci,
+      .drop-target-card.armed strong {
+        color: var(--accent);
+      }
+
+      .dropveil-hint {
+        color: rgba(253, 244, 224, 0.75);
+        font-size: 11px;
+      }
+
+      /* Context tab body */
+
+      .ctx-group {
+        margin-bottom: 22px;
+      }
+
+      .ctx-group > header {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 6px;
+        color: var(--fg);
+        font-size: 12.5px;
+        font-weight: 700;
+      }
+
+      .ctx-group > header .ci {
+        font-size: 12px;
+        color: var(--fg-muted);
+      }
+
+      .ctx-group > header .ci.pin {
+        color: var(--accent);
+      }
+
+      .ctx-group > header small {
+        color: var(--fg-faint);
+        font-size: 10px;
+        font-weight: 400;
+      }
+
+      .ctx-group > header .spacer {
+        flex: 1;
+      }
+
+      .ctx-note {
+        margin: 0 0 8px;
+        color: var(--fg-faint);
+        font-size: 10.5px;
+        line-height: 1.6;
+      }
+
+      .ctx-list {
+        overflow: hidden;
+        border: 1px solid var(--border-soft);
+        border-radius: 10px;
+        background: var(--bg-input);
+      }
+
+      .ctx-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-height: 42px;
+        padding: 5px 11px;
+      }
+
+      .ctx-row + .ctx-row {
+        border-top: 1px solid var(--border-soft);
+      }
+
+      .ctx-row > .ci {
+        font-size: 14px;
+        color: var(--fg-muted);
+      }
+
+      .ctx-row.is-folder > .ci {
+        color: var(--warning);
+      }
+
+      .ctx-row.is-image > .ci {
+        color: var(--info);
+      }
+
+      .ctx-row .thumb {
+        width: 26px;
+        height: 26px;
+        flex: none;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        object-fit: cover;
+      }
+
+      .ctx-row .who {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .ctx-row .who b {
+        display: block;
+        overflow: hidden;
+        font: 600 11px var(--font-mono);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .ctx-row .who small {
+        display: block;
+        overflow: hidden;
+        margin-top: 2px;
+        color: var(--fg-faint);
+        font-size: 9.5px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .src-badge {
+        flex: none;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: var(--bg-chip);
+        color: var(--fg-muted);
+        font-size: 9px;
+      }
+
+      .ctx-row .act {
+        flex: none;
+        color: var(--fg-faint);
+        font-size: 10px;
+      }
+
+      .ctx-row .act:hover {
+        color: var(--danger);
+        text-decoration: underline;
+      }
+
+      .ctx-empty {
+        padding: 14px 12px;
+        color: var(--fg-faint);
+        font-size: 11px;
+      }
+
+      .ctx-dropnote {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-top: 4px;
+        padding: 12px 13px;
+        border: 1.5px dashed var(--border-strong);
+        border-radius: 10px;
+        color: var(--fg-muted);
+        font-size: 11px;
+        line-height: 1.6;
+      }
+
+      .ctx-dropnote .ci {
+        color: var(--fg-faint);
+        font-size: 14px;
+      }
+
+      /* composer context pill */
+
+      .ctx-pill {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 0 10px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        font-size: 10.5px;
+        white-space: nowrap;
+      }
+
+      .ctx-pill:hover {
+        border-color: var(--border-strong);
+        color: var(--fg);
+      }
+
+      .ctx-pill .ci {
+        font-size: 11px;
+      }
+
+      .ctx-pill b {
+        font: 700 10px var(--font-mono);
+      }
+
+      .tool-panel.flash {
+        animation: panel-flash 700ms ease;
+      }
+
+      @keyframes panel-flash {
+        0%,
+        60% {
+          box-shadow: inset 0 0 0 2px var(--accent);
+        }
+        100% {
+          box-shadow: none;
+        }
+      }
+
+      .tab-hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="mock-shell">
+      <header class="mock-controls">
+        <strong>方案 C · 全窗拖放 + Context 页签</strong>
+        <span class="explain"
+          >不放文件树:从 Finder 拖进窗口任意位置,浮层给出两个投放目标(本条消息 /
+          固定为项目上下文);右侧新增 Context 页签统一管理。</span
+        >
+        <span class="spacer"></span>
+        <button type="button" data-act="veil">显示拖放浮层</button>
+        <button type="button" data-act="demo">演示:拖入 2 项</button>
+        <button type="button" data-act="reset">重置</button>
+        <a href="./index.html">方案总览</a>
+      </header>
+
+      <div class="app-window">
+        <nav class="activity-rail" aria-label="Activity">
+          <div class="app-mark">C</div>
+          <button type="button" class="rail-icon active" title="Sessions">
+            <span class="ci ci-terminal"></span>
+          </button>
+          <button type="button" class="rail-icon" title="Inbox">
+            <span class="ci ci-inbox"></span>
+          </button>
+          <button type="button" class="rail-icon" title="Files">
+            <span class="ci ci-folder"></span>
+          </button>
+          <button type="button" class="rail-icon" title="Search">
+            <span class="ci ci-search"></span>
+          </button>
+          <span class="spacer"></span>
+          <button type="button" class="rail-icon" title="Layout">
+            <span class="ci ci-layout"></span>
+          </button>
+        </nav>
+
+        <aside class="session-rail">
+          <div class="rail-head">
+            <div class="rail-title-row">
+              <h2>Sessions</h2>
+              <span class="spacer"></span>
+              <small>7 sessions</small>
+            </div>
+            <label class="rail-search">
+              <span class="ci ci-search"></span>
+              <input placeholder="Search sessions…" />
+              <span class="ci ci-filter"></span>
+            </label>
+            <div class="new-session-bar">
+              <button type="button" class="grow"><span class="ci ci-add"></span>New Session</button>
+              <button type="button" class="project-pick">
+                <span class="ci ci-folder"></span>fable5<span class="ci ci-chevron-down"></span>
+              </button>
+            </div>
+          </div>
+          <div class="rail-scroll">
+            <div class="rail-group-label">
+              <span class="ci ci-chevron-down"></span>
+              <span class="ci ci-folder"></span>
+              <span>fable5</span>
+              <span class="spacer"></span>
+              <small>3</small>
+            </div>
+            <div class="session-row">
+              <span class="dot live"></span>
+              <div class="session-copy">
+                <strong>Session 4ed53b65-…fdf4c7</strong>
+                <span>claude terminal output</span>
+              </div>
+              <div class="session-side"><time>now</time></div>
+            </div>
+            <div class="session-row">
+              <span class="dot"></span>
+              <div class="session-copy">
+                <strong>Session 4ed53b65-…</strong>
+                <span>Answered · no file changes</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Answered</span>
+                <time>54m</time>
+              </div>
+            </div>
+            <div class="rail-rule"></div>
+            <div class="rail-group-label">
+              <span class="ci ci-history"></span>
+              <span>History</span>
+              <span class="spacer"></span>
+              <small>4</small>
+            </div>
+            <div class="session-row active">
+              <span class="dot live"></span>
+              <div class="session-copy">
+                <strong>把「提交订单」按钮…</strong>
+                <span>fable5 · Accepted</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Accepted</span>
+                <time>50m</time>
+              </div>
+            </div>
+            <div class="session-row">
+              <span class="dot"></span>
+              <div class="session-copy">
+                <strong>hi</strong>
+                <span>fable5 · Accepted</span>
+              </div>
+              <div class="session-side">
+                <span class="state-pill ok">Accepted</span>
+                <time>15h</time>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <header class="session-head">
+          <a class="back-link" href="#"><span class="ci ci-arrow-right"></span>All Sessions</a>
+          <div class="session-identity">
+            <h1>把「提交订单」按钮底色改成绿色(#2f9e63),优惠券过期提示加一条红色左…</h1>
+            <div class="head-chips">
+              <span class="meta-chip"><span class="ci ci-folder"></span>fable5</span>
+              <span class="meta-chip"><span class="ci ci-git-branch"></span>main</span>
+              <span class="meta-chip"><span class="ci ci-target"></span>anthropic</span>
+            </div>
+          </div>
+          <span class="head-status"><span class="ci ci-check"></span>Accepted</span>
+          <button type="button" class="quiet-icon"><span class="ci ci-kebab"></span></button>
+        </header>
+
+        <main class="conversation">
+          <div class="conversation-scroll">
+            <div class="thread">
+              <p>
+                也就是说,这是一个纯前端样式微调任务:改一个按钮颜色 +
+                给一个提示加边框,且改动范围锁定在
+                <span class="code-token">public/index.html</span>。
+              </p>
+              <div class="done-line">
+                <span class="ci ci-check"></span>
+                <strong>完成</strong>
+                <span>1 个文件 +5 −2 · 未验证</span>
+              </div>
+              <div class="user-bubble">hi</div>
+              <p>
+                Hi! 之前你问的"提交订单"按钮改绿色 +
+                优惠券过期提示加红色左边框的任务,要现在开始吗?我可以先看一下
+                <span class="code-token">public/index.html</span>
+                的相关代码,然后提出修改计划。
+              </p>
+              <div class="done-line">
+                <span class="ci ci-check-all"></span>
+                <strong>Changes accepted</strong>
+                <span>accepting is not a git commit</span>
+              </div>
+              <p class="run-detail">运行详情</p>
+            </div>
+          </div>
+
+          <div class="composer-wrap">
+            <div class="composer" id="composer">
+              <div class="composer-top">
+                <span class="project-chip"><span class="ci ci-folder"></span>fable5</span>
+              </div>
+              <div class="context-shelf" id="shelf">
+                <div class="shelf-caption">
+                  <span class="ci ci-references"></span>
+                  <span id="shelfCount">0 项引用 · 随这条消息一起发送</span>
+                  <span class="spacer"></span>
+                  <button type="button" id="shelfClear">清空</button>
+                </div>
+              </div>
+              <textarea
+                id="draft"
+                rows="2"
+                placeholder="Follow up — starts a new Session in this project…"
+              ></textarea>
+              <div class="composer-footer">
+                <button type="button" class="tool-button" title="引用项目文件(@)">
+                  <span class="ci ci-mention"></span>
+                </button>
+                <button type="button" class="ctx-pill" id="ctxPill" title="查看并管理上下文">
+                  <span class="ci ci-references"></span>上下文<b id="ctxPillCount">1</b>
+                </button>
+                <div class="mode-track">
+                  <button type="button">Read</button>
+                  <button type="button">Approve</button>
+                  <button type="button" class="active">Auto</button>
+                  <button type="button">Full</button>
+                </div>
+                <span class="spacer"></span>
+                <button type="button" class="model-pick">
+                  <span class="ci ci-zap"></span>Claude Sonnet 5<small>· medium</small
+                  ><span class="ci ci-chevron-down"></span>
+                </button>
+                <button type="button" class="send-button" id="sendButton" title="Send">
+                  <span class="ci ci-arrow-up"></span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        <section class="tool-panel" id="toolPanel">
+          <div class="tool-tabs">
+            <button type="button" data-tab="summary"><span class="ci ci-book"></span>Summary</button>
+            <button type="button">Diff</button>
+            <button type="button">Preview</button>
+            <button type="button">Terminal</button>
+            <button type="button" class="active" data-tab="context">
+              <span class="ci ci-references"></span>Context<span class="tab-count" id="ctxTabCount"
+                >1</span
+              >
+            </button>
+          </div>
+
+          <div class="tool-body tab-hidden" id="tabSummary">
+            <div class="status-block">
+              <span class="ring"><span class="ci ci-check"></span></span>
+              <dl>
+                <dt>Session status</dt>
+                <dd>Accepted</dd>
+                <small>No action is currently running.</small>
+              </dl>
+            </div>
+            <div class="panel-section">
+              <header>
+                <h3>Changed files</h3>
+                <span class="tab-count">0</span>
+              </header>
+              <p class="empty-note">Nothing touched yet.</p>
+            </div>
+            <div class="panel-section">
+              <header>
+                <h3>Verification</h3>
+                <span class="tab-count">0</span>
+              </header>
+              <p class="empty-note">No verification configured.</p>
+            </div>
+          </div>
+
+          <div class="tool-body" id="tabContext">
+            <div class="ctx-group">
+              <header>
+                <span class="ci ci-references"></span>
+                <span>这条草稿会带上</span>
+                <small id="draftGroupCount">0 项</small>
+                <span class="spacer"></span>
+              </header>
+              <p class="ctx-note">发送后随消息进入时间线;只影响下一条 follow-up。</p>
+              <div class="ctx-list" id="draftList">
+                <div class="ctx-empty">还没有草稿引用 — 拖文件进窗口,或点 @ 引用。</div>
+              </div>
+            </div>
+
+            <div class="ctx-group">
+              <header>
+                <span class="ci ci-pinned pin"></span>
+                <span>项目固定上下文</span>
+                <small id="pinnedGroupCount">1 项</small>
+              </header>
+              <p class="ctx-note">fable5 的每个新 Session 都会自动携带,直到解除固定。</p>
+              <div class="ctx-list" id="pinnedList"></div>
+            </div>
+
+            <div class="ctx-group">
+              <header>
+                <span class="ci ci-history"></span>
+                <span>历史消息里的引用</span>
+                <small>1 项</small>
+              </header>
+              <div class="ctx-list">
+                <div class="ctx-row">
+                  <span class="ci ci-file-code"></span>
+                  <span class="who">
+                    <b>public/index.html</b>
+                    <small>50 分钟前 · 「把提交订单按钮…」的任务描述里</small>
+                  </span>
+                  <span class="src-badge">选区引用</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="ctx-dropnote">
+              <span class="ci ci-cloud-upload"></span>
+              <span
+                >把文件、文件夹或图片<strong>拖进窗口任意位置</strong>——浮层会让你选择放进「这条消息」还是「固定为项目上下文」。</span
+              >
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="window-dropveil hidden" id="dropveil">
+      <div class="dropveil-inner">
+        <div class="dropveil-title">加入 fable5 的上下文</div>
+        <div class="dropveil-cards">
+          <div class="drop-target-card" id="targetDraft">
+            <span class="ci ci-references"></span>
+            <strong>这条消息</strong>
+            <small>随下一条 follow-up 发送<br />只影响这一次运行</small>
+          </div>
+          <div class="drop-target-card" id="targetPinned">
+            <span class="ci ci-pinned"></span>
+            <strong>固定为项目上下文</strong>
+            <small>fable5 之后的每个新 Session<br />都会自动携带</small>
+          </div>
+        </div>
+        <div class="dropveil-hint">支持文件 · 文件夹 · 图片 — 松开到目标卡片上即可</div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status"></div>
+    <script src="./shared.js"></script>
+    <script src="./c-drop-anywhere.js"></script>
+  </body>
+</html>

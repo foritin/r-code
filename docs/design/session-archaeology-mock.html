@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Charter · 会话考古 Mock（长在现有系统上：真实类名 / 真实 tokens / 真实布局）</title>
+<style>
+  /* ═══ 1:1 来自 styles/theme.css（studio/light）═══ */
+  :root {
+    color-scheme: light;
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+    --bg-app: #eceae5; --bg-titlebar: #f6f5f1; --bg-sidebar: #f6f5f1; --bg-editor: #fbfaf7;
+    --bg-input: #ffffff; --bg-card: #ffffff; --bg-chip: #edeae3; --bg-hover: #e8e5de;
+    --bg-active: #e2dfd7; --bg-selected: #e9e6df;
+    --border: #e5e1d8; --border-soft: #edeae3; --border-strong: #cfcabf;
+    --fg: #201e1a; --fg-muted: #6e6a61; --fg-faint: #a39e94; --fg-inverse: #fbfaf7;
+    --accent: #1b1a16; --accent-fg: #ffffff;
+    --danger: #c4453d; --danger-bg: #fdecea;
+    --warning: #b06f10; --warning-bg: #faf0dc;
+    --success: #2f9e63; --success-bg: #e7f5ec;
+    --info: #3f7bd9; --info-bg: #e9f1fd;
+    --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+    --message-user-bg: var(--accent); --message-user-fg: var(--accent-fg);
+    --message-user-border: color-mix(in srgb, var(--accent) 82%, var(--fg));
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font: 13px/1.5 var(--font-ui); color: var(--fg); background: var(--bg-app);
+    height: 100vh; display: flex; flex-direction: column; -webkit-font-smoothing: antialiased;
+  }
+  button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+
+  /* ═══ demo 工具条（非产品 UI）═══ */
+  .chrome {
+    display: flex; align-items: center; gap: 14px; padding: 8px 16px;
+    background: #262420; color: #e8e5de; font-size: 12px; flex: none;
+  }
+  .chrome b { font-family: var(--font-display); font-size: 14px; font-weight: 600; }
+  .chrome .tabs { display: flex; gap: 4px; }
+  .chrome .tabs button { padding: 5px 12px; border-radius: 6px; color: #b5b0a4; }
+  .chrome .tabs button.on { background: #3d3a33; color: #fff; }
+  .chrome .sp { flex: 1; }
+  .chrome .anno-toggle { color: #b5b0a4; padding: 4px 10px; border: 1px solid #4a463e; border-radius: 6px; }
+  .chrome .anno-toggle.on { color: #e6c886; border-color: #8a6d34; }
+  .tag {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin: 0 3px; vertical-align: 2px;
+    border-radius: 8px; background: #7a5cc5; color: #fff;
+    font-size: 10px; font-style: normal; font-weight: 700; cursor: help; z-index: 3; position: relative;
+  }
+  body.no-anno .tag { display: none; }
+
+  .app { flex: 1; display: flex; min-height: 0; }
+
+  /* ═══ 1:1 来自 session-workbench.css：rail = 44px 活动条 + 面板 ═══ */
+  .sr-rail {
+    position: relative; width: 320px; min-width: 320px; min-height: 0;
+    display: none; grid-template-columns: 44px minmax(0, 1fr);
+    border-right: 1px solid var(--border); background: var(--bg-sidebar); font-family: var(--font-ui);
+    user-select: none;
+  }
+  .sr-rail.on { display: grid; }
+  .sr-rail.view-projects { width: 288px; min-width: 288px; grid-template-columns: 44px 244px; }
+  .sr-activity {
+    min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 9px 5px 8px; border-right: 1px solid var(--border-soft); background: var(--bg-titlebar);
+  }
+  .sr-activity-brand {
+    width: 30px; height: 30px; display: grid; place-items: center; flex: none; margin-bottom: 8px;
+    border-radius: 7px; background: var(--fg); color: var(--bg-editor);
+    box-shadow: 0 5px 15px color-mix(in srgb, var(--fg) 15%, transparent);
+    font: 700 13px var(--font-display);
+  }
+  .sr-activity-item {
+    position: relative; width: 34px; height: 34px; display: grid; place-items: center; flex: none;
+    border: 1px solid transparent; border-radius: 8px; color: var(--fg-muted); font-size: 14px;
+  }
+  .sr-activity-item:hover { background: var(--bg-hover); color: var(--fg); }
+  .sr-activity-item.active {
+    border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+    background: var(--bg-card); color: var(--accent);
+    box-shadow: inset 2px 0 0 var(--accent), var(--shadow-card);
+  }
+  .sr-mini-badge {
+    position: absolute; top: 0; right: 0; min-width: 15px; height: 15px; display: grid; place-items: center;
+    padding: 0 3px; border: 2px solid var(--bg-titlebar); border-radius: 999px;
+    background: var(--warning); color: var(--accent-fg); font: 700 8px var(--font-mono);
+  }
+  .sr-activity-spacer { flex: 1; }
+
+  .sr-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-sidebar); }
+  .sr-head { display: grid; gap: 9px; padding: 13px 12px 11px; border-bottom: 1px solid var(--border-soft); }
+  .sr-heading-row { min-width: 0; min-height: 24px; display: flex; align-items: center; gap: 8px; }
+  .sr-heading-row strong {
+    min-width: 0; overflow: hidden; color: var(--fg); font-family: var(--font-display);
+    font-size: 14px; font-weight: 650; letter-spacing: 0.02em; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sr-heading-row small { flex: none; margin-left: auto; color: var(--fg-faint); font-size: 10px; }
+  .sr-search-row { display: grid; grid-template-columns: minmax(0, 1fr) 34px; gap: 6px; }
+  .sr-search-box {
+    min-width: 0; height: 34px; display: flex; align-items: center; gap: 7px; padding: 0 10px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--fg-muted);
+    font-size: 11.5px;
+  }
+  .sr-search-box .ph { color: var(--fg-faint); }
+  .sr-filter {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--fg-muted);
+  }
+  .sr-new-wrap { display: grid; grid-template-columns: minmax(0, 1fr) minmax(72px, auto); }
+  .sr-new, .sr-new-menu {
+    min-height: 36px; display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--fg); background: var(--fg); color: var(--fg-inverse);
+  }
+  .sr-new { gap: 7px; border-radius: 8px 0 0 8px; font: 650 12px var(--font-ui); }
+  .sr-new-menu {
+    gap: 4px; padding: 0 8px; border-left-color: color-mix(in srgb, var(--fg-inverse) 24%, transparent);
+    border-radius: 0 8px 8px 0; color: color-mix(in srgb, var(--fg-inverse) 84%, transparent); font-size: 10.5px;
+  }
+  .sr-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 8px 10px; }
+
+  .sr-group-head { display: flex; align-items: center; width: 100%; padding: 8px 6px 5px; }
+  .sr-group-toggle { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--fg-muted); font: 650 10.5px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; }
+  .sr-group-chevron { font-size: 8px; }
+  .sr-group-count { color: var(--fg-faint); font-weight: 500; }
+  .sr-group-need { margin-left: auto; background: var(--warning-bg); color: var(--warning); border-radius: 8px; padding: 1px 7px; font: 700 9px var(--font-ui); }
+
+  .sr-row-wrap { position: relative; }
+  .sr-session {
+    position: relative; width: 100%; min-height: 58px; display: grid;
+    grid-template-columns: 25px minmax(0, 1fr); align-items: start; gap: 7px;
+    margin-bottom: 2px; padding: 7px; border: 1px solid transparent; border-radius: 8px;
+    background: transparent; color: var(--fg); text-align: left;
+  }
+  .sr-session:hover { background: var(--bg-hover); }
+  .sr-session.selected {
+    border-color: color-mix(in srgb, var(--info) 24%, transparent); background: var(--info-bg);
+    box-shadow: inset 3px 0 0 var(--info), 0 4px 12px color-mix(in srgb, var(--info) 8%, transparent);
+  }
+  .sr-provider { width: 24px; height: 24px; display: inline-grid; place-items: center; flex: none; font-size: 13px; font-weight: 700; }
+  .sr-provider.claude { color: #d97757; }
+  .sr-provider.codex, .sr-provider.pi { color: var(--fg); }
+  .sr-session-copy { min-width: 0; display: grid; gap: 5px; }
+  .sr-session-title, .sr-session-detail { min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .sr-session-title b { min-width: 0; flex: 1; overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .sr-live-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--fg-faint); }
+  .sr-live-dot.live { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 16%, transparent); }
+  .sr-state {
+    min-height: 18px; display: inline-flex; align-items: center; flex: none; padding: 0 6px;
+    border-radius: 999px; background: var(--warning-bg); color: var(--warning); font: 700 9px var(--font-ui);
+  }
+  .sr-state.answered { background: var(--success-bg); color: var(--success); }
+  .sr-state.neutral { background: var(--bg-chip); color: var(--fg-muted); }
+  .sr-state.found { background: var(--info-bg); color: var(--info); }
+  .sr-session-detail { color: var(--fg-muted); font-size: 10.5px; }
+  .sr-session-detail > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sr-session-detail time { flex: none; color: var(--fg-faint); font-size: 9.5px; }
+  .sr-actions { position: absolute; right: 7px; bottom: 4px; display: flex; gap: 3px; opacity: 0; }
+  .sr-row-wrap:hover .sr-actions { opacity: 1; }
+  .sr-actions button {
+    width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--fg-muted); font-size: 10px;
+  }
+  .sr-actions .sr-resume:hover { color: var(--success); }
+
+  /* 1:1 projects 面板 */
+  .sr-project-wrap { position: relative; min-height: 52px; display: flex; align-items: center; margin-bottom: 4px; border: 1px solid transparent; border-radius: 9px; }
+  .sr-project-wrap:hover, .sr-project-wrap.active { border-color: var(--border-soft); background: var(--bg-hover); }
+  .sr-project-wrap.active { box-shadow: inset 3px 0 0 var(--accent); }
+  .sr-project { min-width: 0; min-height: 50px; display: flex; align-items: center; gap: 8px; flex: 1; padding: 7px; border-radius: 9px; color: var(--fg-muted); text-align: left; }
+  .sr-project-copy { min-width: 0; display: grid; gap: 3px; flex: 1; }
+  .sr-project-copy strong { color: var(--fg); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sr-project-copy small { color: var(--fg-faint); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 4px; }
+  .sr-project-current { width: 20px; height: 20px; display: grid; place-items: center; flex: none; color: var(--success); }
+  .pm { display: inline-grid; place-items: center; font-weight: 800; }
+  .pm.claude { color: #d97757; }
+
+  /* ═══ 1:1 来自 room.css：主区域 ═══ */
+  main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-editor); }
+  .screen { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .screen.on { display: flex; }
+  .tr-head { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); flex: none; }
+  .tr-back { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); font-size: 12.5px; border-radius: 999px; padding: 5px 10px; }
+  .tr-back:hover { background: var(--bg-hover); }
+  .tr-title { font-size: 13.5px; font-weight: 620; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tr-proj {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-muted);
+    background: var(--bg-hover); border-radius: 999px; padding: 3px 10px;
+  }
+  .tr-sp { flex: 1; }
+  .ghostbtn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted);
+    background: transparent; border: 1px solid var(--border); border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+  }
+  .ghostbtn:hover { background: var(--bg-hover); color: var(--fg); }
+  .ghostbtn.primary { background: var(--fg); border-color: var(--fg); color: var(--fg-inverse); }
+  .tr-mode { flex: none; display: flex; align-items: baseline; gap: 6px; padding: 8px 22px 2px; font-size: 11px; color: var(--fg-muted); }
+  .tr-mode .live { color: var(--info); }
+
+  .rt-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; min-height: 0; padding: 14px 24px 18px; }
+  .rt-col { position: relative; width: min(760px, 100%); margin: 0 auto; }
+  .rt-bubble { display: flex; flex-direction: column; align-items: flex-start; width: fit-content; max-width: 100%; margin: 4px 0 18px; font-size: 14px; line-height: 1.68; }
+  .rt-bubble.you { align-items: flex-end; margin-left: auto; max-width: 72%; }
+  .rt-bubble.you .rt-text {
+    border: 1px solid var(--message-user-border); border-radius: 12px 12px 3px 12px;
+    background: var(--message-user-bg); color: var(--message-user-fg); padding: 10px 13px;
+    box-shadow: 0 5px 16px color-mix(in srgb, var(--message-user-bg) 12%, transparent);
+  }
+  .rt-bubble.agent { width: 100%; margin-right: auto; }
+  .rt-bubble.agent .rt-text { width: 100%; color: var(--fg); }
+  .rt-milestone { display: flex; align-items: center; gap: 8px; margin: 12px 0; min-height: 32px; font-size: 12.5px; color: var(--fg-muted); }
+  .rt-milestone b { color: var(--fg); font-size: 12.5px; font-weight: 650; }
+  .rt-ms-ic { width: 20px; text-align: center; flex: none; }
+  .rt-milestone.ok .rt-ms-ic { color: var(--success); }
+  .rt-ms-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--info); animation: rt-pulse 1.6s ease-in-out infinite; }
+  @keyframes rt-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .rt-ms-meta { color: var(--fg-muted); font-size: 12px; }
+  .mono { font-family: var(--font-mono); }
+
+  /* composer（对齐 tr-composer/tr-ccard 观感） */
+  .tr-composer { flex: none; padding: 10px 24px 16px; display: flex; justify-content: center; }
+  .tr-ccard {
+    width: min(760px, 100%); background: var(--bg-input); border: 1px solid var(--border-strong);
+    border-radius: 12px; box-shadow: var(--shadow-card); padding: 11px 13px 9px;
+  }
+  .tr-ccard textarea { width: 100%; border: 0; outline: 0; resize: none; font: 13.5px var(--font-ui); background: transparent; color: var(--fg); height: 28px; }
+  .tr-ccard textarea::placeholder { color: var(--fg-faint); }
+  .tr-cfoot { display: flex; align-items: center; gap: 8px; font-size: 10.5px; color: var(--fg-faint); margin-top: 5px; }
+
+  /* ═══ 本功能新增（唯一的新 CSS，其余全是既有类）═══ */
+  /* 考古清单页：main 区新 surface，行结构刻意复用 sr-session 的密度与字号 */
+  .arch-scroll { flex: 1; overflow-y: auto; padding: 16px 24px; }
+  .arch-col { width: min(760px, 100%); margin: 0 auto; display: flex; flex-direction: column; }
+  .arch-sec { display: flex; align-items: center; gap: 6px; padding: 12px 2px 5px; color: var(--fg-muted); font: 650 10.5px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; }
+  .arch-row {
+    position: relative; display: grid; grid-template-columns: 25px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+    min-height: 54px; padding: 8px 10px; margin-bottom: 3px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: 9px;
+  }
+  .arch-row:hover { border-color: var(--border-strong); }
+  .arch-row .sr-session-copy { gap: 4px; }
+  .arch-row .acts { display: flex; gap: 6px; }
+  .arch-row .acts .ghostbtn { padding: 4px 11px; font-size: 11.5px; }
+  .arch-row.tracked { opacity: .62; }
+  /* 收编房间里的只读历史区与账本分界线 */
+  .imported-zone { position: relative; padding: 14px 14px 4px; margin: 6px 0 14px; border: 1px dashed var(--border-strong); border-radius: 12px; background: color-mix(in srgb, var(--bg-chip) 40%, transparent); }
+  .imported-zone > * { opacity: .68; }
+  .imported-label {
+    position: absolute; top: -8px; left: 12px; opacity: 1; background: var(--bg-editor);
+    padding: 0 8px; font: 650 9.5px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; color: var(--fg-faint);
+  }
+  .ledger-seam { display: flex; align-items: center; gap: 10px; margin: 4px 0 14px; color: var(--success); font: 650 11px var(--font-ui); }
+  .ledger-seam::before, .ledger-seam::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--success) 35%, transparent); }
+  .cmdchip { display: inline-flex; align-items: center; gap: 6px; font: 11px var(--font-mono); background: var(--bg-chip); border: 1px solid var(--border); border-radius: 7px; padding: 3px 9px; color: var(--fg-muted); }
+</style>
+</head>
+<body>
+
+<!-- ═══ demo 工具条 ═══ -->
+<div class="chrome">
+  <b>Charter · 会话考古</b>
+  <div class="tabs">
+    <button class="on" data-screen="discover">① Projects 面板 · 发现</button>
+    <button data-screen="history">② 项目会话史 · 考古</button>
+    <button data-screen="adopted">③ Resume · 收编后</button>
+  </div>
+  <span>真实类名 / 真实 tokens（theme.css studio-light）/ 真实布局（sr-rail 320px·双列）</span>
+  <span class="sp"></span>
+  <button class="anno-toggle on" id="annoBtn">标注：开</button>
+</div>
+
+<div class="app">
+
+  <!-- ═══ Rail 形态 1：view-projects（288px，屏① 用）—— 1:1 现有 projectsPanel ═══ -->
+  <aside class="sr-rail view-projects on" id="rail-projects">
+    <div class="sr-activity">
+      <span class="sr-activity-brand">C</span>
+      <button class="sr-activity-item" title="Sessions">☰</button>
+      <button class="sr-activity-item" title="Inbox">▤<span class="sr-mini-badge">2</span></button>
+      <button class="sr-activity-item active" title="Projects">▣</button>
+      <span class="sr-activity-spacer"></span>
+      <button class="sr-activity-item" title="Editor">⌗</button>
+      <button class="sr-activity-item" title="Settings">⚙</button>
+    </div>
+    <div class="sr-panel">
+      <header class="sr-head">
+        <div class="sr-heading-row"><strong>Projects</strong><small>working context</small></div>
+        <div class="sr-search-row">
+          <label class="sr-search-box">⌕ <span class="ph">Search projects…</span></label>
+          <button class="sr-filter">＋</button>
+        </div>
+      </header>
+      <div class="sr-scroll">
+        <div class="sr-project-wrap active">
+          <button class="sr-project">
+            <span>📁</span>
+            <span class="sr-project-copy">
+              <strong>bullpen</strong>
+              <small>7 sessions · <span class="pm claude">✳</span><span class="pm">◆</span> 5 discovered outside<i class="tag" title="①-1 现有项目行只追加『N discovered outside』：数据来自对 ~/.claude/projects/<munged-cwd>/ 的只读 stat（正向 munge 精确命中，你机器上这个文件夹现在有 32 个 jsonl）+ ~/.codex/sessions 近 30 天日期目录扫描。绝不写入这两个目录（ADR-0017 边界教训）">1</i></small>
+            </span>
+            <span class="sr-project-current">✓</span>
+          </button>
+        </div>
+        <div class="sr-project-wrap">
+          <button class="sr-project">
+            <span>📁</span>
+            <span class="sr-project-copy">
+              <strong>blog</strong>
+              <small>2 sessions · <span class="pm claude">✳</span> 1 discovered outside</small>
+            </span>
+          </button>
+        </div>
+
+        <div class="sr-group-head" style="margin-top:8px">
+          <span class="sr-group-toggle"><span class="sr-group-chevron">▾</span> <strong>Agent activity · 30d</strong> <span class="sr-group-count">· 3</span></span>
+          <i class="tag" title="①-2 跨项目考古组：从未在 Charter 打开过、但 agent 目录里有痕迹的项目。真实 cwd 不靠反解 munge 猜 —— 直接读 transcript 里的 cwd 字段（已在你机器上验证：claude 每条记录带 cwd，codex 第一行 session_meta.payload.cwd）">2</i>
+        </div>
+        <div class="sr-project-wrap">
+          <button class="sr-project">
+            <span style="opacity:.55">▢</span>
+            <span class="sr-project-copy">
+              <strong style="color:var(--fg-muted)">~/git/blog-gen</strong>
+              <small><span class="pm claude">✳</span> 6 sessions · 3d ago · never opened here</small>
+            </span>
+          </button>
+        </div>
+        <div class="sr-project-wrap">
+          <button class="sr-project">
+            <span style="opacity:.55">▢</span>
+            <span class="sr-project-copy">
+              <strong style="color:var(--fg-muted)">~/git/vibeai</strong>
+              <small><span class="pm">◆</span> 1 session · Jun 30<i class="tag" title="①-3 这条就是从你机器上真实的 rollout-2026-06-30…jsonl 的 session_meta 读出来的 cwd=/Users/guwanhua/git/vibeai —— Codex 按日期存放，项目归属在文件头一行">3</i></small>
+            </span>
+          </button>
+        </div>
+        <div class="sr-project-wrap">
+          <button class="sr-project">
+            <span style="opacity:.55">▢</span>
+            <span class="sr-project-copy">
+              <strong style="color:var(--fg-muted)">~/lab/fanbox-notes</strong>
+              <small><span class="pm claude">✳</span><span class="pm">◆</span> 4 sessions · 1w ago</small>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══ Rail 形态 2：Sessions（320px，屏②③ 用）—— 1:1 现有 sessionsPanel ═══ -->
+  <aside class="sr-rail" id="rail-sessions">
+    <div class="sr-activity">
+      <span class="sr-activity-brand">C</span>
+      <button class="sr-activity-item active" title="Sessions">☰</button>
+      <button class="sr-activity-item" title="Inbox">▤<span class="sr-mini-badge">2</span></button>
+      <button class="sr-activity-item" title="Projects">▣</button>
+      <span class="sr-activity-spacer"></span>
+      <button class="sr-activity-item" title="Editor">⌗</button>
+      <button class="sr-activity-item" title="Settings">⚙</button>
+    </div>
+    <div class="sr-panel">
+      <header class="sr-head">
+        <div class="sr-heading-row"><strong>Sessions</strong><small>bullpen</small></div>
+        <div class="sr-search-row">
+          <label class="sr-search-box">⌕ <span class="ph">Search sessions…</span></label>
+          <button class="sr-filter">≔</button>
+        </div>
+        <div class="sr-new-wrap">
+          <button class="sr-new">＋ New Session</button>
+          <button class="sr-new-menu"><span>Claude</span> ▾</button>
+        </div>
+      </header>
+      <div class="sr-scroll">
+        <div class="sr-group-head">
+          <span class="sr-group-toggle"><span class="sr-group-chevron">▾</span> <strong>bullpen</strong> <span class="sr-group-count">· 5</span></span>
+          <span class="sr-group-need">2 need you</span>
+        </div>
+        <div class="sr-row-wrap">
+          <button class="sr-session">
+            <span class="sr-provider pi">π</span>
+            <span class="sr-session-copy">
+              <span class="sr-session-title"><b>Fix login redirect loop</b><span class="sr-state">Review</span></span>
+              <span class="sr-session-detail"><span>3 files changed · checks 4/4</span><time>2h</time></span>
+            </span>
+          </button>
+        </div>
+        <div class="sr-row-wrap" id="adopted-row" style="display:none">
+          <button class="sr-session selected">
+            <span class="sr-provider claude">✳</span>
+            <span class="sr-session-copy">
+              <span class="sr-session-title"><b>给博客加 RSS 输出</b><span class="sr-state found">Resumed</span><span class="sr-live-dot live"></span></span>
+              <span class="sr-session-detail"><span>resumed external session · claude</span><time>now</time></span>
+            </span>
+          </button>
+          <i class="tag" style="position:absolute;right:4px;top:4px" title="③-1 收编后就是一条普通 external session：live dot、结算、审阅、回滚全套照走；唯一的痕迹是 Resumed 徽章">4</i>
+        </div>
+        <div class="sr-row-wrap">
+          <button class="sr-session">
+            <span class="sr-provider claude">✳</span>
+            <span class="sr-session-copy">
+              <span class="sr-session-title"><b>Refactor payments module</b><span class="sr-live-dot live"></span></span>
+              <span class="sr-session-detail"><span>✎ editing payments/api.ts…</span><time>now</time></span>
+            </span>
+          </button>
+        </div>
+        <div class="sr-row-wrap">
+          <button class="sr-session">
+            <span class="sr-provider pi">π</span>
+            <span class="sr-session-copy">
+              <span class="sr-session-title"><b>Explain the webpack config</b><span class="sr-state answered">Settled</span></span>
+              <span class="sr-session-detail"><span>read-only Q&A</span><time>1d</time></span>
+            </span>
+          </button>
+          <span class="sr-actions"><button class="sr-resume">⏵</button><button>▣</button></span>
+        </div>
+        <div class="sr-group-head">
+          <span class="sr-group-toggle"><span class="sr-group-chevron closed">▸</span> <strong>History</strong> <span class="sr-group-count">· 12</span></span>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+
+    <!-- ═══ 屏①：Projects 面板打开时，主区域 = 选中项目的考古页 ═══ -->
+    <section class="screen on" id="screen-discover">
+      <div class="tr-head">
+        <span class="tr-title">bullpen</span>
+        <span class="tr-proj"><span class="mono">~/git/bullpen</span></span>
+        <span class="tr-sp"></span>
+        <button class="ghostbtn">↻ Rescan<i class="tag" title="①-4 扫描时机：打开 Projects 面板时增量扫 + 手动 Rescan；只 readdir/stat + 每文件夹读一行拿 cwd，扫描不解析全文，百级会话毫秒级">5</i></button>
+      </div>
+      <div class="tr-mode"><span>7 Charter sessions · 5 discovered outside Charter</span></div>
+      <div class="arch-scroll"><div class="arch-col">
+        <div class="arch-sec">Discovered outside Charter<i class="tag" title="①-5 标题 = transcript 第一条用户消息（FanBox 同款启发）；文件数 / skill 从 jsonl 解析，external-replay-parser 已具备该能力">6</i></div>
+        <div class="arch-row">
+          <span class="sr-provider claude">✳</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>给博客加 RSS 输出</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span>4 files touched · skill: baoyu-format-markdown</span><time>3d</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">View</button><button class="ghostbtn primary">⏵ Resume</button></span>
+        </div>
+        <div class="arch-row">
+          <span class="sr-provider codex">◆</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>fix flaky e2e on CI</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span>2 files touched</span><time>1w</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">View</button><button class="ghostbtn primary">⏵ Resume</button></span>
+        </div>
+        <div class="arch-sec" style="color:var(--fg-faint)">In subdirectories<i class="tag" title="①-6 子目录会话：在 ~/git/bullpen/apps/web 里启动的 claude 落在另一个 munged 文件夹 —— 归组按『cwd 是否在项目路径之下』前缀匹配，不是只看根目录">7</i></div>
+        <div class="arch-row">
+          <span class="sr-provider claude">✳</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>调一下 renderer 的 e2e 选择器</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span class="mono">apps/desktop-renderer · 1 file touched</span><time>5d</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">View</button><button class="ghostbtn primary">⏵ Resume</button></span>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- ═══ 屏②：项目会话史（Charter + 外部合并，ADR-0028 项目记忆的新投影）═══ -->
+    <section class="screen" id="screen-history">
+      <div class="tr-head">
+        <button class="tr-back">‹ Sessions</button>
+        <span class="tr-title">bullpen · Session history</span>
+        <span class="tr-sp"></span>
+        <button class="ghostbtn">↻ Rescan</button>
+      </div>
+      <div class="tr-mode"><span>Everything that ever ran in this project — Charter and outside<i class="tag" title="②-1 入口：rail『History』组头，或 Projects 面板项目行。定位为 ADR-0028 项目记忆的一个新投影：同一数据源，多一种切面">8</i></span></div>
+      <div class="arch-scroll"><div class="arch-col">
+        <div class="arch-sec">Today</div>
+        <div class="arch-row">
+          <span class="sr-provider pi">π</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>Fix login redirect loop</b><span class="sr-state">Review</span></span>
+            <span class="sr-session-detail"><span>Charter · 3 files · checks 4/4</span><time>2h</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">Open</button></span>
+        </div>
+        <div class="arch-sec">3 days ago</div>
+        <div class="arch-row">
+          <span class="sr-provider claude">✳</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>给博客加 RSS 输出</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span>ran outside Charter · 4 files · skill: baoyu-format-markdown</span><time>3d</time></span>
+          </span>
+          <span class="acts">
+            <button class="ghostbtn">View<i class="tag" title="②-2 View = 只读回放：external-replay-parser 渲染 jsonl 为会话时间线，不建 task、不动账本 —— 纯考古">9</i></button>
+            <button class="ghostbtn primary">⏵ Resume</button>
+          </span>
+        </div>
+        <div class="arch-row">
+          <span class="sr-provider claude">✳</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>调研 hugo 主题方案</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span>ran outside Charter · no file changes (Q&A)</span><time>3d</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">View</button><button class="ghostbtn primary">⏵ Resume</button></span>
+        </div>
+        <div class="arch-sec">Last week</div>
+        <div class="arch-row">
+          <span class="sr-provider codex">◆</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>fix flaky e2e on CI</b><span class="sr-state found">External</span></span>
+            <span class="sr-session-detail"><span>ran outside Charter · 2 files</span><time>1w</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">View</button><button class="ghostbtn primary">⏵ Resume<i class="tag" title="②-3 Codex 同样可续：codex resume <uuid>；uuid 提取与 isSafeCliSessionId 安全校验已在 cli-session-locator 实现">10</i></button></span>
+        </div>
+        <div class="arch-row tracked">
+          <span class="sr-provider claude">✳</span>
+          <span class="sr-session-copy">
+            <span class="sr-session-title"><b>Refactor payments module (part 1)</b><span class="sr-state neutral">Tracked</span></span>
+            <span class="sr-session-detail"><span>started in Charter — linked to existing session, never listed twice<i class="tag" title="②-4 去重：Charter 终端里跑过的会话，cli-session-locator 已按时间窗匹配到 transcript uuid，考古列表按 uuid 排除">11</i></span><time>1w</time></span>
+          </span>
+          <span class="acts"><button class="ghostbtn">Open</button></span>
+        </div>
+      </div></div>
+    </section>
+
+    <!-- ═══ 屏③：Resume 之后 —— 标准 external session 房间（tr-* / rt-* 全真类）═══ -->
+    <section class="screen" id="screen-adopted">
+      <div class="tr-head">
+        <button class="tr-back">‹ Sessions</button>
+        <span class="tr-title">给博客加 RSS 输出</span>
+        <span class="tr-proj"><span class="pm claude">✳</span> claude <span style="color:var(--fg-faint)">·</span> bullpen</span>
+        <span class="tr-sp"></span>
+        <span class="cmdchip">$ claude --resume 6f3a92c1-…<i class="tag" title="③-2 Resume = 在产品终端注入 externalResumeCommand（现成函数）；uuid 必须过 isSafeCliSessionId 才允许进 PTY">12</i></span>
+        <button class="ghostbtn">Terminal</button>
+      </div>
+      <div class="tr-mode"><span>external · claude</span> <span class="live">agent is restoring context…</span></div>
+
+      <div class="rt-scroll"><div class="rt-col">
+
+        <div class="imported-zone">
+          <span class="imported-label">Imported history · read-only · ran outside Charter</span>
+          <div class="rt-bubble you"><span class="rt-text">给博客加一个 RSS 输出，全文输出，带图片。</span></div>
+          <div class="rt-milestone ok"><span class="rt-ms-ic">✎</span><b>4 files touched</b><span class="rt-ms-meta mono">index.rss.xml · config.toml · _index.md · Makefile</span></div>
+          <div class="rt-bubble agent"><span class="rt-text">RSS 模板已就绪，还差图片绝对路径的处理，下次继续。</span></div>
+          <i class="tag" style="position:absolute;right:10px;top:-8px" title="③-3 历史由 external-replay-parser 只读渲染：灰显、不可审阅、不入账本 —— 它们发生时 Charter 不在场，不冒充记录过">13</i>
+        </div>
+
+        <div class="ledger-seam">⟲ Charter records from here · entry snapshot @ resume<i class="tag" title="③-4 账本诚实线：收编瞬间打 entry snapshot，此后的改动才进结算/审阅/回滚；之前那 4 个文件不计入 diff 基准">14</i></div>
+
+        <div class="rt-bubble you"><span class="rt-text">继续：把图片路径换成绝对 URL，然后跑一遍构建。</span></div>
+        <div class="rt-milestone"><span class="rt-ms-ic"><span class="rt-ms-dot"></span></span><b>Working</b><span class="rt-ms-meta">editing <span class="mono">layouts/index.rss.xml</span>…</span></div>
+
+      </div></div>
+
+      <div class="tr-composer"><div class="tr-ccard">
+        <textarea placeholder="接着三天前的话头继续说…"></textarea>
+        <div class="tr-cfoot"><span>Sends to claude in this session's terminal</span></div>
+      </div></div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('.chrome .tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.chrome .tabs button').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  const s = b.dataset.screen;
+  document.querySelectorAll('.screen').forEach(el => el.classList.toggle('on', el.id === 'screen-' + s));
+  document.getElementById('rail-projects').classList.toggle('on', s === 'discover');
+  document.getElementById('rail-sessions').classList.toggle('on', s !== 'discover');
+  document.getElementById('adopted-row').style.display = s === 'adopted' ? '' : 'none';
+});
+const annoBtn = document.getElementById('annoBtn');
+annoBtn.onclick = () => {
+  document.body.classList.toggle('no-anno');
+  const off = document.body.classList.contains('no-anno');
+  annoBtn.classList.toggle('on', !off);
+  annoBtn.textContent = off ? '标注：关' : '标注：开';
+};
+</script>
+</body>
+</html>

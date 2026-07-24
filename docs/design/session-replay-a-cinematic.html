@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>会话回放 A — 影像化证据台</title>
+    <link rel="stylesheet" href="./session-replay-lab.css" />
+  </head>
+  <body class="replay-page">
+    <main class="mock-window" data-replay data-duration="38" data-autoplay="true">
+      <header class="appbar">
+        <div class="traffic"><i></i><i></i><i></i></div>
+        <a class="brand" href="./session-replay-directions.html">C</a>
+        <div class="title-block">
+          <h1>Q2 市场研究简报</h1>
+          <p>今天 09:14 · Agent 工作了 38 秒 · 只读回放</p>
+        </div>
+        <div class="appbar-spacer"></div>
+        <nav class="direction-nav" aria-label="回放方向">
+          <a class="on" href="./session-replay-a-cinematic.html">A</a
+          ><a href="./session-replay-b-causal-map.html">B</a
+          ><a href="./session-replay-c-spatial.html">C</a
+          ><a href="./session-replay-d-documentary.html">D</a
+          ><a href="./session-replay-e-audit.html">E</a>
+        </nav>
+        <button class="top-action" data-toast="已复制只读回放链接">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path d="M12 16V3m0 0L7 8m5-5 5 5" />
+            <path d="M5 12v7h14v-7" /></svg
+          >分享
+        </button>
+        <button class="icon-button" aria-label="更多" data-toast="回放导出、注释与隐私设置">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
+          </svg>
+        </button>
+      </header>
+
+      <div class="workspace cinema-layout">
+        <section class="cinema-stage" data-phase="before">
+          <div
+            class="capture-limit"
+            data-capture-note
+            data-pi=""
+            data-claude="Claude Terminal 当前只能证明会话起止与最终文件差异；逐帧中间版本需要新增 per-write blob 记录。"
+            data-codex="Codex Terminal 当前只能证明会话起止与最终文件差异；逐帧中间版本需要新增 per-write blob 记录。"
+          ></div>
+          <div class="stage-label">工作台重现 · 文档版本</div>
+          <div class="cinema-note">
+            <span class="js-stage-note">初始状态</span> · 所有内容均来自记录证据
+          </div>
+          <div class="doc-stack">
+            <article class="doc-sheet before">
+              <h2>Q2 Market Landscape</h2>
+              <div class="doc-meta">Research brief · Version 1 · 09:14:00</div>
+              <h3>Outline</h3>
+              <p>• Executive summary</p>
+              <p>• Market size</p>
+              <p>• Key trends</p>
+              <p>• Competitors</p>
+              <p>• Risks</p>
+              <div class="skeleton"></div>
+              <div class="skeleton short"></div>
+              <div class="skeleton"></div>
+            </article>
+            <article class="doc-sheet after">
+              <h2>Q2 Market Landscape</h2>
+              <div class="doc-meta">Research brief · Version 3 · 09:14:38</div>
+              <h3>Executive summary</h3>
+              <p>
+                The market grew <b>18% QoQ</b>, driven by AI adoption and pricing pressure. The top
+                segment is mid-market operations.
+              </p>
+              <div class="doc-highlight">
+                核心判断：增长不是均匀发生。高留存企业集中在已完成工作流整合的团队。
+              </div>
+              <h3>Validated market growth</h3>
+              <div class="mini-chart">
+                <i style="height: 25%; animation-delay: 0.05s"></i
+                ><i style="height: 36%; animation-delay: 0.1s"></i
+                ><i style="height: 31%; animation-delay: 0.15s"></i
+                ><i style="height: 45%; animation-delay: 0.2s"></i
+                ><i style="height: 54%; animation-delay: 0.25s"></i
+                ><i style="height: 61%; animation-delay: 0.3s"></i
+                ><i style="height: 70%; animation-delay: 0.35s"></i
+                ><i style="height: 78%; animation-delay: 0.4s"></i>
+              </div>
+            </article>
+          </div>
+          <svg class="reveal-cursor" viewBox="0 0 16 22" fill="none">
+            <path d="M2 1l12 12-6 .4-3.3 5.4L2 1z" fill="#fff" stroke="#222" />
+          </svg>
+        </section>
+
+        <aside class="evidence-rail">
+          <div class="rail-head">
+            <h3>证据</h3>
+            <span class="rail-count">7 项</span>
+          </div>
+          <div class="evidence-list" data-sequence>
+            <div class="evidence-item" data-at="0">
+              <div class="kind-icon">D</div>
+              <div class="copy">
+                <b>打开研究简报</b><span class="mono">09:14:00 · brief.docx</span>
+              </div>
+            </div>
+            <div class="evidence-item" data-at="5">
+              <div class="kind-icon violet">W</div>
+              <div class="copy"><b>搜索行业报告</b><span>6 个网页 · 23 个引用</span></div>
+            </div>
+            <div class="evidence-item" data-at="10">
+              <div class="kind-icon green">S</div>
+              <div class="copy"><b>读取增长数据</b><span class="mono">growth-q2.xlsx</span></div>
+            </div>
+            <div class="evidence-item" data-at="16">
+              <div class="kind-icon amber">✓</div>
+              <div class="copy"><b>交叉验证口径</b><span>3 个来源一致</span></div>
+            </div>
+            <div class="evidence-item" data-at="22">
+              <div class="kind-icon">✎</div>
+              <div class="copy"><b>撰写执行摘要</b><span>新增 284 字</span></div>
+            </div>
+            <div class="evidence-item" data-at="29">
+              <div class="kind-icon green">↗</div>
+              <div class="copy"><b>生成增长图表</b><span>8 个季度 · 1 张图</span></div>
+            </div>
+            <div class="evidence-item" data-at="35">
+              <div class="kind-icon coral">P</div>
+              <div class="copy"><b>导出并发送</b><span>report.pdf · 邮件草稿</span></div>
+            </div>
+          </div>
+        </aside>
+
+        <section class="filmstrip" data-sequence aria-label="章节缩略图">
+          <div class="frame" data-at="0" data-seek="0">
+            <div class="frame-shot"></div>
+            <b>00:00</b><span>接收任务</span>
+          </div>
+          <div class="frame" data-at="5" data-seek="5">
+            <div class="frame-shot" style="background: #f2f5fb"></div>
+            <b>00:05</b><span>网页研究</span>
+          </div>
+          <div class="frame" data-at="10" data-seek="10">
+            <div class="frame-shot" style="background: #eef7f0"></div>
+            <b>00:10</b><span>数据取证</span>
+          </div>
+          <div class="frame" data-at="16" data-seek="16">
+            <div class="frame-shot" style="background: #fbf4e7"></div>
+            <b>00:16</b><span>交叉验证</span>
+          </div>
+          <div class="frame" data-at="22" data-seek="22">
+            <div class="frame-shot"></div>
+            <b>00:22</b><span>形成判断</span>
+          </div>
+          <div class="frame" data-at="29" data-seek="29">
+            <div class="frame-shot" style="background: #eef7f0"></div>
+            <b>00:29</b><span>制作图表</span>
+          </div>
+          <div class="frame" data-at="35" data-seek="35">
+            <div class="frame-shot" style="background: #f8edeb"></div>
+            <b>00:35</b><span>交付结果</span>
+          </div>
+        </section>
+
+        <section class="replay-transport">
+          <div class="transport-row">
+            <button class="icon-button js-restart" aria-label="重新播放">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M4 4v6h6" />
+                <path d="M5.5 15a7.5 7.5 0 1 0 1-8" />
+              </svg>
+            </button>
+            <button class="play-button js-play" aria-label="播放或暂停">
+              <svg class="play-icon" viewBox="0 0 20 20"><path d="M5 3.5v13l11-6.5z" /></svg
+              ><svg class="pause-icon" viewBox="0 0 20 20">
+                <path d="M4.5 3.5h4v13h-4zm7 0h4v13h-4z" />
+              </svg>
+            </button>
+            <span class="transport-time"
+              ><span class="js-current-time">00:00</span> /
+              <span class="js-duration">00:38</span></span
+            >
+            <div class="scrub-wrap">
+              <div class="scrub-bg"></div>
+              <span
+                class="timeline-marker"
+                style="left: 13%; --marker: var(--violet)"
+                data-at="5"
+                data-seek="5"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 26%; --marker: var(--green)"
+                data-at="10"
+                data-seek="10"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 42%; --marker: var(--amber)"
+                data-at="16"
+                data-seek="16"
+              ></span
+              ><span class="timeline-marker" style="left: 58%" data-at="22" data-seek="22"></span
+              ><span
+                class="timeline-marker"
+                style="left: 76%; --marker: var(--green)"
+                data-at="29"
+                data-seek="29"
+              ></span
+              ><span
+                class="timeline-marker"
+                style="left: 92%; --marker: var(--coral)"
+                data-at="35"
+                data-seek="35"
+              ></span>
+              <div class="scrub-head"></div>
+              <input class="js-scrubber" type="range" aria-label="回放时间轴" />
+            </div>
+            <button class="soft-button speed-button js-speed">1×</button>
+            <button class="icon-button js-fullscreen" aria-label="全屏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                <path d="M8 3H3v5m13-5h5v5M8 21H3v-5m13 5h5v-5" />
+              </svg>
+            </button>
+          </div>
+          <div class="transport-caption">
+            <i class="pulse-dot"></i><b class="js-caption-title">接收任务</b
+            ><span class="js-caption-detail truncate">打开现有简报，保留原始版本作为回放基线</span>
+          </div>
+        </section>
+        <div class="toast"></div>
+        <div
+          hidden
+          data-caption-at="0"
+          data-title="接收任务"
+          data-detail="打开现有简报，保留原始版本作为回放基线"
+        ></div>
+        <div
+          hidden
+          data-caption-at="5"
+          data-title="搜索公开资料"
+          data-detail="浏览 6 个行业来源，记录引用与发布时间"
+        ></div>
+        <div
+          hidden
+          data-caption-at="10"
+          data-title="读取增长数据"
+          data-detail="从工作簿提取八个季度的统一口径"
+        ></div>
+        <div
+          hidden
+          data-caption-at="16"
+          data-title="交叉验证"
+          data-detail="发现两处口径差异，并选择可追溯的保守值"
+        ></div>
+        <div
+          hidden
+          data-caption-at="22"
+          data-title="形成核心判断"
+          data-detail="执行摘要从提纲变成带证据的结论"
+        ></div>
+        <div
+          hidden
+          data-caption-at="29"
+          data-title="把数字变成图表"
+          data-detail="生成增长趋势图，并链接回原始单元格"
+        ></div>
+        <div
+          hidden
+          data-caption-at="35"
+          data-title="交付结果"
+          data-detail="导出 PDF，同时准备一封未发送的邮件草稿"
+        ></div>
+      </div>
+    </main>
+    <script src="./session-replay-lab.js"></script>
+    <script>
+      const replay = document.querySelector('[data-replay]');
+      replay.addEventListener('replaytick', ({ detail }) => {
+        const stage = replay.querySelector('.cinema-stage');
+        const t = detail.current;
+        stage.dataset.phase = t < 5 ? 'before' : t < 22 ? 'research' : t < 35 ? 'draft' : 'final';
+        replay.querySelector('.js-stage-note').textContent =
+          t < 5 ? '初始状态' : t < 22 ? '证据进入工作台' : t < 35 ? '结论逐步成形' : '交付版本';
+      });
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1026 @@
+<!doctype html>
+<!-- Charter — 外部 CLI 会话 · 单输入口改造 mock (docs/design). NOT product code.
+     背景：外部 Room 现有两个输入口（CLI 自己的输入行 + 底部 product composer），
+     用户确认双输入心智模型失败。本 mock 展示：删除底部 composer，终端成为唯一
+     对话面；拖拽文件与右侧代码选区直接落进 CLI 自己的输入行（不自动发送），
+     记账（user.message / 会话命名）随注入路径保留。
+     场景①为现状对照，②–⑥为新设计。选区上下文给出 A/B 两案供选。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — 外部 CLI 会话 · 单输入口改造</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--page);
+        color: var(--text);
+        padding: 30px 26px 90px;
+        --page: #eceae5;
+        --side: #f6f5f1;
+        --main: #fbfaf7;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --text: #201e1a;
+        --text2: #6e6a61;
+        --text3: #a39e94;
+        --chip: #f0eee8;
+        --hover: #e8e5de;
+        --accent: #1b1a16;
+        --accent-text: #fff;
+        --ok: #2f9e63;
+        --ok-bg: #e7f5ec;
+        --run: #3f7bd9;
+        --run-bg: #e9f1fd;
+        --warn: #b06f10;
+        --warn-bg: #faf0dc;
+        --danger: #c4453d;
+        --danger-bg: #fbeceb;
+        --cli: #c25e3f;
+        --sel: #fdf3c9;
+        --code-bg: #fcfbf8;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        transition: background 0.25s;
+      }
+      body.dark {
+        --page: #16140f;
+        --side: #1d1a15;
+        --main: #211e18;
+        --card: #262219;
+        --border: #3a352a;
+        --border-soft: #302b21;
+        --text: #ece8de;
+        --text2: #a49e90;
+        --text3: #746e60;
+        --chip: #2c2820;
+        --hover: #2e2a21;
+        --accent: #ece8de;
+        --accent-text: #1b1a16;
+        --ok: #4cba7d;
+        --ok-bg: #22301f;
+        --run: #6f9fe8;
+        --run-bg: #1e2738;
+        --warn: #d9a04a;
+        --warn-bg: #362b16;
+        --danger: #e06a60;
+        --danger-bg: #382220;
+        --cli: #e28a6a;
+        --sel: #3d3520;
+        --code-bg: #1d1a14;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 14px 40px rgba(0, 0, 0, 0.5);
+      }
+
+      .pagehead {
+        max-width: 1180px;
+        margin: 0 auto 16px;
+      }
+      .pagehead h1 {
+        font-size: 23px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .pagehead p {
+        color: var(--text2);
+        font-size: 13.5px;
+        line-height: 1.75;
+        margin-top: 8px;
+        max-width: 940px;
+      }
+      .pagehead b {
+        color: var(--text);
+      }
+
+      .ctl {
+        position: fixed;
+        top: 12px;
+        right: 18px;
+        z-index: 99;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        background: #fff8dc;
+        border: 1px solid #e6d693;
+        color: #6b5d1f;
+        border-radius: 999px;
+        padding: 6px 12px;
+        font-size: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      }
+      .ctl button {
+        border: none;
+        background: transparent;
+        border-radius: 999px;
+        padding: 3px 10px;
+        font-size: 12px;
+        color: #6b5d1f;
+        cursor: pointer;
+        font-family: inherit;
+      }
+      .ctl button:hover {
+        background: #f3e9bd;
+      }
+
+      /* scene tabs */
+      .tabs {
+        max-width: 1180px;
+        margin: 0 auto 14px;
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .tabs button {
+        font-family: inherit;
+        font-size: 12px;
+        color: var(--text2);
+        background: var(--card);
+        border: 1px solid var(--border-soft);
+        border-radius: 999px;
+        padding: 6px 13px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .tabs button:hover {
+        background: var(--hover);
+      }
+      .tabs button.on {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .tabs button .no {
+        opacity: 0.55;
+        margin-right: 4px;
+      }
+
+      .scene-note {
+        max-width: 1180px;
+        margin: 0 auto 12px;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--text2);
+        background: var(--card);
+        border: 1px solid var(--border-soft);
+        border-left: 3px solid var(--accent);
+        border-radius: 10px;
+        padding: 11px 16px;
+      }
+      .scene-note b {
+        color: var(--text);
+      }
+      .scene-note .del {
+        color: var(--danger);
+        font-weight: 600;
+      }
+      .scene-note .add {
+        color: var(--ok);
+        font-weight: 600;
+      }
+
+      /* ---------- window ---------- */
+      .stagewrap {
+        max-width: 1180px;
+        margin: 0 auto;
+      }
+      .win {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        height: 660px;
+      }
+      .titlebar {
+        height: 38px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--side);
+        gap: 10px;
+      }
+      .dots {
+        display: flex;
+        gap: 6px;
+      }
+      .dots i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        background: #d9d5cc;
+      }
+      body.dark .dots i {
+        background: #3f3a2f;
+      }
+      .titlebar .tname {
+        font-size: 12.5px;
+        color: var(--text2);
+      }
+
+      .roomhead {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .roomhead .back {
+        font-size: 12.5px;
+        color: var(--text2);
+      }
+      .roomhead .ttl {
+        font-size: 15px;
+        font-weight: 700;
+        font-family: var(--mono);
+      }
+      .pill {
+        font-size: 11px;
+        border-radius: 999px;
+        padding: 3px 10px;
+        border: 1px solid var(--border);
+        color: var(--text2);
+        background: var(--card);
+      }
+      .pill.working {
+        color: var(--run);
+        border-color: var(--run);
+        background: var(--run-bg);
+        font-weight: 600;
+      }
+      .pill.ext {
+        color: var(--cli);
+        font-weight: 700;
+      }
+
+      .body {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .centercol {
+        flex: 1.55;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border-soft);
+      }
+
+      /* ext head bar (unchanged from product) */
+      .exthead {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border-soft);
+        font-size: 12px;
+      }
+      .extdot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 0 3px var(--ok-bg);
+      }
+      .extdot.off {
+        background: var(--text3);
+        box-shadow: none;
+      }
+      .extname {
+        font-weight: 700;
+        font-family: var(--mono);
+        font-size: 12.5px;
+      }
+      .extbadge {
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        color: var(--warn);
+        background: var(--warn-bg);
+        border-radius: 5px;
+        padding: 2px 7px;
+        font-family: var(--mono);
+      }
+      .extsnap {
+        font-size: 11px;
+        color: var(--text3);
+        font-family: var(--mono);
+      }
+      .extlive {
+        margin-left: auto;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--run);
+        background: var(--run-bg);
+        border: 1px solid transparent;
+        border-radius: 999px;
+        padding: 3px 11px;
+      }
+      .extended {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text3);
+      }
+
+      /* ---------- terminal ---------- */
+      .termwrap {
+        flex: 1;
+        position: relative;
+        min-height: 0;
+        margin: 10px 14px;
+      }
+      .term {
+        position: absolute;
+        inset: 0;
+        background: var(--code-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.65;
+        padding: 14px 16px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+      }
+      .scene-ended .term {
+        opacity: 0.75;
+      }
+      .t-banner {
+        border: 1px solid var(--cli);
+        border-radius: 6px;
+        color: var(--cli);
+        padding: 8px 12px;
+        margin-bottom: 12px;
+        font-size: 11.5px;
+        line-height: 1.6;
+      }
+      .t-banner .bt {
+        font-weight: 700;
+      }
+      .t-dim {
+        color: var(--text3);
+      }
+      .t-user {
+        background: var(--chip);
+        border-radius: 3px;
+        padding: 1px 6px;
+        display: inline-block;
+        margin: 3px 0;
+      }
+      .t-row {
+        margin: 3px 0;
+      }
+      .t-spacer {
+        flex: 1;
+      }
+
+      /* CLI's own input line — the star of this mock */
+      .t-input {
+        border-top: 1px solid var(--border-soft);
+        padding-top: 9px;
+        margin-top: 9px;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      .t-input .caret-line {
+        flex: 1;
+        min-height: 20px;
+      }
+      .t-prompt {
+        color: var(--text2);
+        font-weight: 700;
+      }
+      .t-caret {
+        display: inline-block;
+        width: 8px;
+        height: 15px;
+        background: var(--text);
+        vertical-align: -2px;
+        animation: blink 1.1s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      .t-atref {
+        color: var(--run);
+        font-weight: 600;
+        background: var(--run-bg);
+        border-radius: 3px;
+        padding: 0 3px;
+      }
+      .t-paste {
+        color: var(--text2);
+        background: var(--chip);
+        border: 1px dashed var(--border);
+        border-radius: 4px;
+        padding: 0 6px;
+      }
+      .t-status {
+        display: flex;
+        gap: 14px;
+        font-size: 11px;
+        color: var(--text3);
+        padding-top: 7px;
+      }
+      .t-status .m {
+        color: var(--cli);
+        font-weight: 700;
+      }
+
+      /* injected flash */
+      .flash {
+        animation: flashin 1.6s ease-out;
+      }
+      @keyframes flashin {
+        0% {
+          background: var(--sel);
+        }
+        100% {
+          background: transparent;
+        }
+      }
+
+      /* drop overlay on terminal */
+      .dropveil {
+        position: absolute;
+        inset: 0;
+        border-radius: 10px;
+        border: 2px dashed var(--run);
+        background: color-mix(in srgb, var(--run-bg) 82%, transparent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 5;
+      }
+      .dropveil .card,
+      .endveil .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        padding: 16px 22px;
+        max-width: 430px;
+        text-align: center;
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .dropveil .card b {
+        font-family: var(--mono);
+        color: var(--run);
+      }
+      .dropveil .sub,
+      .endveil .sub {
+        font-size: 11.5px;
+        color: var(--text3);
+        margin-top: 5px;
+      }
+      .endveil {
+        position: absolute;
+        inset: 0;
+        border-radius: 10px;
+        border: 2px dashed var(--text3);
+        background: color-mix(in srgb, var(--page) 78%, transparent);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 5;
+      }
+      .endveil .resume {
+        margin-top: 10px;
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 600;
+        background: var(--accent);
+        color: var(--accent-text);
+        border-radius: 8px;
+        padding: 6px 16px;
+      }
+
+      /* dragged file ghost */
+      .dragghost {
+        position: absolute;
+        z-index: 6;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        padding: 6px 12px;
+        font-size: 12px;
+        font-family: var(--mono);
+        transform: rotate(-2deg);
+      }
+
+      /* ---------- the removed composer (scene 1 only) ---------- */
+      .composer {
+        flex: none;
+        margin: 0 14px 12px;
+        position: relative;
+      }
+      .composer .box {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 13px;
+        color: var(--text3);
+      }
+      .composer .send {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: var(--chip);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        color: var(--text3);
+        flex: none;
+      }
+      .composer .note {
+        font-size: 10.5px;
+        color: var(--text3);
+        margin-top: 5px;
+        padding-left: 2px;
+      }
+      .composer.condemned .box {
+        border-color: var(--danger);
+        box-shadow: 0 0 0 3px var(--danger-bg);
+      }
+      .condemn-tag {
+        position: absolute;
+        top: -11px;
+        right: 10px;
+        background: var(--danger);
+        color: #fff;
+        font-size: 10.5px;
+        font-weight: 700;
+        border-radius: 5px;
+        padding: 2px 8px;
+        letter-spacing: 0.03em;
+      }
+
+      /* ---------- right rail ---------- */
+      .rail {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--side);
+      }
+      .railhead {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        font-size: 12px;
+        color: var(--text2);
+        border-bottom: 1px solid var(--border-soft);
+      }
+      .railhead .fname {
+        font-family: var(--mono);
+        font-weight: 600;
+        color: var(--text);
+      }
+      .code {
+        flex: 1;
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 11.5px;
+        line-height: 1.75;
+        padding: 10px 0;
+        background: var(--code-bg);
+        position: relative;
+      }
+      .code .ln {
+        display: flex;
+        padding: 0 14px;
+        white-space: pre;
+      }
+      .code .ln .no {
+        width: 34px;
+        flex: none;
+        color: var(--text3);
+        user-select: none;
+      }
+      .code .ln.sel {
+        background: var(--sel);
+      }
+      .selpop {
+        position: absolute;
+        right: 18px;
+        top: 118px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        box-shadow: var(--shadow);
+        font-size: 12px;
+        padding: 5px;
+        display: flex;
+        gap: 2px;
+        flex-direction: column;
+        z-index: 4;
+      }
+      .selpop button {
+        font-family: inherit;
+        font-size: 12px;
+        text-align: left;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        border-radius: 6px;
+        padding: 6px 11px;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .selpop button:hover {
+        background: var(--hover);
+      }
+      .selpop button.hot {
+        background: var(--accent);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+      .selpop .k {
+        opacity: 0.55;
+        font-size: 10.5px;
+        margin-left: 14px;
+      }
+
+      /* files list variant of rail (scenes 2-4, 6) */
+      .filelist {
+        flex: 1;
+        overflow: hidden;
+        padding: 10px 12px;
+        font-size: 12.5px;
+      }
+      .filelist .fi {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: 7px;
+        font-family: var(--mono);
+        color: var(--text2);
+      }
+      .filelist .fi:hover {
+        background: var(--hover);
+      }
+      .filelist .fi.dragging {
+        background: var(--sel);
+        outline: 1px dashed var(--warn);
+      }
+      .filelist .st {
+        margin-left: auto;
+        font-size: 10.5px;
+        font-weight: 700;
+        color: var(--ok);
+      }
+
+      /* annotation callouts */
+      .callout {
+        position: absolute;
+        z-index: 20;
+        max-width: 300px;
+        background: #2c2a24;
+        color: #f5f2ea;
+        font-size: 12px;
+        line-height: 1.65;
+        border-radius: 10px;
+        padding: 10px 14px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      }
+      body.dark .callout {
+        background: #ece8de;
+        color: #201e1a;
+      }
+      .callout .n {
+        display: inline-flex;
+        width: 17px;
+        height: 17px;
+        border-radius: 50%;
+        background: var(--cli);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        align-items: center;
+        justify-content: center;
+        margin-right: 7px;
+        vertical-align: -3px;
+      }
+
+      /* A/B variant switch (scene 5) */
+      .abswitch {
+        max-width: 1180px;
+        margin: 0 auto 12px;
+        display: none;
+        gap: 8px;
+        align-items: center;
+        font-size: 12.5px;
+        color: var(--text2);
+      }
+      body[data-scene='5'] .abswitch {
+        display: flex;
+      }
+      .abswitch button {
+        font-family: inherit;
+        font-size: 12px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--text2);
+        border-radius: 8px;
+        padding: 6px 14px;
+        cursor: pointer;
+      }
+      .abswitch button.on {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--accent-text);
+        font-weight: 600;
+      }
+
+      /* per-scene visibility: JS sets inline display, these only gate variants */
+      body[data-variant='A'] [data-var='B'] {
+        display: none !important;
+      }
+      body[data-variant='B'] [data-var='A'] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body data-scene="1" data-variant="B">
+    <div class="ctl">
+      <span>mock 控制</span>
+      <button onclick="document.body.classList.toggle('dark')">明/暗</button>
+    </div>
+
+    <div class="pagehead">
+      <h1>外部 CLI 会话 · 单输入口改造</h1>
+      <p>
+        <b>改什么：</b>删除外部 Room 底部的 product composer——终端里 CLI 自己的输入行成为唯一对话面。
+        拖拽文件、右侧代码选区"加上下文"，都改为<b>直接写进 CLI 的输入行</b>（bracketed paste、不带回车），
+        你看得见、可编辑、用 CLI 自己的回车发送。<b>不变的：</b>EXT 徽章、入口快照、文件记账、Review 流程；
+        由 Charter 注入的引用照样记入任务台账（会话命名、时间线不受影响）。
+      </p>
+    </div>
+
+    <div class="tabs" id="tabs">
+      <button data-s="1" class="on"><span class="no">①</span>现状对照（要删的）</button>
+      <button data-s="2"><span class="no">②</span>新 · 默认态</button>
+      <button data-s="3"><span class="no">③</span>拖拽悬停</button>
+      <button data-s="4"><span class="no">④</span>落下之后</button>
+      <button data-s="5"><span class="no">⑤</span>选区 → 上下文</button>
+      <button data-s="6"><span class="no">⑥</span>会话已结束</button>
+    </div>
+
+    <div class="scene-note" id="note"></div>
+
+    <div class="abswitch">
+      <span>选区注入方案：</span>
+      <button data-v="A">A · @文件#行号（发送时读活文件）</button>
+      <button data-v="B" class="on">B · 粘贴冻结选区（保留"选中那一刻"的字节）</button>
+      <span style="opacity: 0.7">← 点击切换，右侧终端输入行会跟着变</span>
+    </div>
+
+    <div class="stagewrap">
+      <div class="win">
+        <div class="titlebar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <span class="tname">Charter — fable5</span>
+        </div>
+        <div class="roomhead">
+          <span class="back">‹ All Sessions</span>
+          <span class="ttl">hi</span>
+          <span class="pill working" data-hide-ended>Working</span>
+          <span class="pill" data-only="6">Ended</span>
+          <span class="pill">⌥ fable5</span>
+          <span class="pill">⎇ main</span>
+          <span class="pill ext">external</span>
+        </div>
+
+        <div class="body">
+          <!-- ================= center column ================= -->
+          <div class="centercol">
+            <div class="exthead">
+              <span class="extdot" data-hide-ended></span>
+              <span class="extdot off" data-only="6"></span>
+              <span class="extname">✳ claude</span>
+              <span class="extbadge">EXT · unmanaged</span>
+              <span class="extsnap">snap b2eba7a</span>
+              <span class="extlive" data-hide-ended>LIVE · following</span>
+              <span class="extended" data-only="6">session ended</span>
+            </div>
+
+            <div class="termwrap">
+              <div class="term">
+                <div class="t-banner">
+                  <span class="bt">Claude Code v2.1.215</span> — Welcome back!<br />
+                  <span class="t-dim">Fable 5 with xhigh effort · ~/git/fable5</span>
+                </div>
+                <div class="t-row"><span class="t-user">&gt; hi</span></div>
+                <div class="t-row">
+                  ● 嗨！有什么要做的吗？可以继续 fable5 的工作，或者随时丢个新想法过来。
+                </div>
+                <div class="t-row t-dim">✳ Churned for 7s</div>
+                <div class="t-spacer"></div>
+
+                <!-- ===== CLI 自己的输入行（各场景不同内容） ===== -->
+                <div class="t-input">
+                  <span class="t-prompt">&gt;</span>
+                  <span class="caret-line">
+                    <!-- ①② 空输入行 -->
+                    <span data-only="1 2 3 6"><span class="t-caret"></span></span>
+                    <!-- ④ 拖入文件后：@引用出现在输入行 -->
+                    <span data-only="4" class="flash">
+                      <span class="t-atref">@moon-rotation.html</span>&nbsp;<span
+                        class="t-caret"
+                      ></span>
+                    </span>
+                    <!-- ⑤A：@文件#行号 -->
+                    <span data-only="5" data-var="A" class="flash">
+                      <span class="t-atref">@earth.html#L42-58</span>&nbsp;<span
+                        class="t-caret"
+                      ></span>
+                    </span>
+                    <!-- ⑤B：冻结粘贴 -->
+                    <span data-only="5" data-var="B" class="flash">
+                      <span class="t-paste">[Pasted text #1 · earth.html L42–58 · 17 行]</span
+                      >&nbsp;<span class="t-caret"></span>
+                    </span>
+                  </span>
+                </div>
+                <div class="t-status">
+                  <span class="m">[Fable 5]</span>
+                  <span>⌂ fable5 · ⎇ master · ⚡xhigh</span>
+                  <span>6% (56k/1M) · $0.72</span>
+                </div>
+              </div>
+
+              <!-- ③ 拖拽悬停遮罩 -->
+              <div class="dropveil" data-only="3" data-disp="flex">
+                <div>
+                  <div class="card">
+                    松手 → 把 <b>@moon-rotation.html</b> 插入 claude 的输入行
+                    <div class="sub">不会自动发送 — 你可以继续编辑，用回车自己发</div>
+                  </div>
+                </div>
+              </div>
+              <div class="dragghost" data-only="3" data-disp="flex" style="top: 34%; left: 58%">
+                📄 moon-rotation.html
+              </div>
+
+              <!-- ⑥ 结束态拖拽遮罩 -->
+              <div class="endveil" data-only="6" data-disp="flex">
+                <div>
+                  <div class="card">
+                    这个会话已经结束 — 先恢复它，才能继续投喂上下文
+                    <div class="sub">Resume 会在同一个终端里重启 claude 并接上原对话</div>
+                    <span class="resume">↻ Resume this Session</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ① 现状：被判死刑的底部 composer -->
+            <div class="composer condemned" data-only="1">
+              <span class="condemn-tag">删除 ✕</span>
+              <div class="box">
+                <span style="flex: 1">Reply to claude or add selected code context…</span>
+                <span class="send">↑</span>
+              </div>
+              <div class="note">
+                Sent through the Session's live claude terminal · code selections are frozen
+                snapshots
+              </div>
+            </div>
+          </div>
+
+          <!-- ================= right rail ================= -->
+          <div class="rail">
+            <!-- 文件列表（默认） -->
+            <div data-only="1 2 3 4 6" data-disp="flex" style="flex-direction: column; flex: 1">
+              <div class="railhead">Session files · <span style="opacity: 0.7">3 changed</span></div>
+              <div class="filelist">
+                <div class="fi">📄 earth.html <span class="st">M</span></div>
+                <div class="fi dragging" data-only="3" data-disp="flex">
+                  📄 moon-rotation.html <span class="st">U</span>
+                </div>
+                <div class="fi" data-hide-s3>📄 moon-rotation.html <span class="st">U</span></div>
+                <div class="fi">📄 server.mjs <span class="st">M</span></div>
+              </div>
+            </div>
+
+            <!-- ⑤ peek 打开的文件 + 选区 -->
+            <div data-only="5" data-disp="flex" style="flex-direction: column; flex: 1">
+              <div class="railhead">
+                <span class="fname">earth.html</span>
+                <span style="opacity: 0.7">peek · read-only</span>
+              </div>
+              <div class="code">
+                <div class="ln"><span class="no">40</span>function tilt(axis) {</div>
+                <div class="ln"><span class="no">41</span>  const rad = axis * DEG;</div>
+                <div class="ln sel"><span class="no">42</span>  scene.rotation.x = rad;</div>
+                <div class="ln sel"><span class="no">43</span>  scene.rotation.y = 0;</div>
+                <div class="ln sel"><span class="no">44</span>  requestAnimationFrame(spin);</div>
+                <div class="ln sel"><span class="no">45</span>}</div>
+                <div class="ln"><span class="no">46</span></div>
+                <div class="ln"><span class="no">47</span>function spin(now) {</div>
+                <div class="ln"><span class="no">48</span>  const dt = now - last;</div>
+                <div class="ln"><span class="no">49</span>  mesh.rotation.y += dt * RATE;</div>
+
+                <div class="selpop">
+                  <button class="hot">⤶ 发给 claude 当上下文 <span class="k">⌘⏎</span></button>
+                  <button>复制</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- per-scene callouts -->
+      <div style="position: relative">
+        <div class="callout" data-only="1" style="top: -130px; left: 800px">
+          <span class="n">1</span>这个框整个删除。它的"记账"职责（user.message
+          事件、会话命名）搬到注入路径上，不丢。
+        </div>
+        <div class="callout" data-only="3" style="top: -380px; left: 800px">
+          <span class="n">2</span>从右侧文件列表、左侧项目树或 OS 拖文件到终端上 →
+          蓝色落点提示。松手只插入引用，<b>绝不代发</b>。
+        </div>
+        <div class="callout" data-only="4" style="top: -170px; left: 120px">
+          <span class="n">3</span>@引用出现在 claude 自己的输入行里（黄色闪一下提示"刚插入"）。此刻
+          Charter 同步记一条台账。你继续打字补说明，回车发送。
+        </div>
+        <div class="callout" data-only="5" style="top: -260px; left: 460px">
+          <span class="n">4</span>右侧选中代码 →「发给 claude 当上下文」→
+          直接落到输入行。上方 A/B 两案：A 是活文件引用，B 保留冻结字节（推荐 B，语义与现在一致）。
+        </div>
+        <div class="callout" data-only="6" style="top: -430px; left: 800px">
+          <span class="n">5</span>会话结束后拖拽/发上下文被拦住，引导 Resume——对应现在 composer
+          禁用态的 "Resume this Session to continue…"。
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const NOTES = {
+        1: '<b>① 现状（对照）：</b>界面里有两个输入口——终端里 claude 自己的输入行，和底部红框的 product composer。往底下打字，消息"凭空"出现在终端里；两个框谁该接收输入说不清。<span class="del">红框整体删除。</span>',
+        2: '<b>② 新 · 默认态：</b>composer 没了，终端到底。对话只有一个入口：claude 自己的输入行。EXT 徽章 / 快照 / LIVE follow / 右侧文件记账全部保持不变。',
+        3: '<b>③ 拖拽悬停：</b>把文件拖到终端上（来源可以是右侧 Session files、项目树或 OS 文件），出现落点提示。<span class="add">松手 = 往输入行插入 @引用</span>，不带回车、绝不代发。',
+        4: '<b>④ 落下之后：</b>@moon-rotation.html 已经躺在 claude 的输入行里，黄闪提示刚注入。你接着补一句话，用 claude 自己的回车发送。Charter 在注入时记台账（会话命名 / 时间线照旧）。',
+        5: '<b>⑤ 选区 → 上下文：</b>右侧 peek 里选中代码 →「发给 claude 当上下文」。两个方案：<b>A</b> 注入 @文件#行号（claude 发送时读活文件，改过就是新内容）；<b>B</b> 把选中的原文粘进输入行（保留"选中那一刻"的字节，claude 折叠显示为 [Pasted text]）。<span class="add">推荐 B</span>——与现在冻结快照的语义一致。',
+        6: '<b>⑥ 会话已结束：</b>ended 的会话拖入文件 → 灰色拦截层，引导 Resume。取代现在 composer 的禁用占位文案。',
+      };
+      const note = document.getElementById('note');
+      const tabs = document.getElementById('tabs');
+      function setScene(s) {
+        document.body.dataset.scene = s;
+        note.innerHTML = NOTES[s];
+        for (const b of tabs.querySelectorAll('button')) b.classList.toggle('on', b.dataset.s === s);
+        for (const el of document.querySelectorAll('[data-only]')) {
+          const show = el.dataset.only.split(' ').includes(s);
+          el.style.display = show ? el.dataset.disp || '' : 'none';
+        }
+        // scene 6 hides "working"/"live" bits
+        document.body.classList.toggle('scene-ended', s === '6');
+        for (const el of document.querySelectorAll('[data-hide-ended]'))
+          el.style.display = s === '6' ? 'none' : '';
+        for (const el of document.querySelectorAll('[data-hide-s3]'))
+          el.style.display = s === '3' ? 'none' : '';
+      }
+      tabs.addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (b) setScene(b.dataset.s);
+      });
+      document.querySelector('.abswitch').addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-v]');
+        if (!b) return;
+        document.body.dataset.variant = b.dataset.v;
+        for (const x of document.querySelectorAll('.abswitch button[data-v]'))
+          x.classList.toggle('on', x === b);
+      });
+      setScene('1');
+    </script>
+  </body>
+</html>

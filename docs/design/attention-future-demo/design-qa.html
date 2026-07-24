@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Charter Home, Attention &amp; Recovery Demo — Design QA · r-code</title>
+  <link rel="stylesheet" href="../../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../../agent-core/index.html">Agent Core</a><a href="../../../index.html" aria-current="page">R-Code</a><a href="../../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="charter-home-attention-recovery-demo-design-qa">Charter Home, Attention &amp; Recovery Demo — Design QA</h1>
+<ul><li>Source visual truth:</li></ul>
+<ul><li><code>apps/desktop-renderer/src/views/HomeView.tsx</code> and <code>docs/design/home-v2-mockup.html</code> (shared Home Chat Session entry)</li><li><code>/Users/edy/.codex/generated_images/019f6481-3bd5-7a91-a41d-61eb260c711b/exec-57de3c99-9b92-463b-98ce-fe91b2bbf298.png</code> (Attention Command)</li><li><code>/Users/edy/.codex/generated_images/019f6481-3bd5-7a91-a41d-61eb260c711b/exec-86c8397a-992a-44f3-8a0c-8c078dbadfdd.png</code> (Durable Rooms)</li><li><code>/Users/edy/.codex/generated_images/019f6481-3bd5-7a91-a41d-61eb260c711b/exec-02cdecd1-73c6-4238-bcc0-60a9148a178b.png</code> (Terminal Workbench)</li></ul>
+<ul><li>Implementation: <code>http://127.0.0.1:4173/</code></li><li>Intended comparison viewport: 1440 × 1024, light theme.</li><li>States: five chapters across all three product directions: Home launch, exact session/attention entry, sub-agent work, scoped permission, and semantic terminal completion.</li><li>Implementation screenshot: unavailable.</li></ul>
+<h2 id="evidence-available">Evidence available</h2>
+<ul><li>Production build passes and emits one self-contained <code>dist/index.html</code> (366.67 kB, 101.70 kB gzip).</li><li>Server responds with HTTP 200 at the local URL.</li><li>Four interaction tests pass: shared Home session entry, product switching, timeline seek/restart/next-attention, and scoped approval state.</li></ul>
+<h2 id="blocker">Blocker</h2>
+<p>The Browser plugin was invoked first, but no browser binding is available in this environment. Local Playwright was not used because the user has not explicitly approved that fallback.</p>
+<p>Because the implementation cannot yet be visually captured:</p>
+<ul><li>Full-view comparison evidence: blocked.</li><li>Focused-region comparison evidence: blocked.</li><li>Fonts and typography comparison: blocked.</li><li>Spacing and layout rhythm comparison: blocked.</li><li>Colors and tokens comparison: blocked.</li><li>Image/icon fidelity comparison: blocked.</li><li>Copy comparison: source/code inventory and interaction assertions completed; browser-rendered comparison blocked.</li><li>Responsive and visible interaction-state inspection: blocked.</li></ul>
+<h2 id="findings">Findings</h2>
+<ul><li>[P1] Browser-rendered visual evidence is missing.</li></ul>
+<ul><li>Location: all three product directions and their five playback chapters.</li><li>Evidence: source visuals are available, but no implementation screenshots can be produced through the approved browser surface.</li><li>Impact: layout clipping, typography drift, state-transition overlap, and responsive failures cannot be ruled out.</li><li>Fix: with explicit fallback approval, capture 1440 × 1024 keyframes for Home and A/B/C, compare against the Home source and direction concepts, fix P0/P1/P2 issues, then repeat.</li></ul>
+<h2 id="comparison-history">Comparison history</h2>
+<ul><li>Pass 1: implementation tests and single-file build passed; screenshot comparison remains blocked because no approved browser capture path is available.</li></ul>
+<h2 id="implementation-checklist">Implementation checklist</h2>
+<ul><li>Capture the shared Home composer at 0, 3 and 5.5 seconds.</li><li>Capture A at Attention, permission, and completion chapters.</li><li>Capture B at restored/input, sub-agent, permission, and completion chapters.</li><li>Capture C at exact attention switcher, permission, and completion chapters.</li><li>Compare typography, grid proportions, inspector width, terminal density, state colors, icon family, and copy.</li><li>Verify playback, pause, seek, product switch, resume, next-attention, and approve-once in the rendered page.</li><li>Rebuild the single-file HTML and update this report.</li></ul>
+<p>final result: functional pass; visual comparison blocked</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Agent 舰队指挥室 — mockup（方案 A / B 对比）</title>
+    <style>
+      /* Tokens mirror apps/desktop-renderer/src/styles/theme.css (studio skin, light). */
+      :root[data-theme='light'] {
+        color-scheme: light;
+        --font-ui:
+          -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC',
+          'Microsoft YaHei', sans-serif;
+        --font-display: 'Charter', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+        --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+        --bg-app: #eceae5;
+        --bg-titlebar: #f6f5f1;
+        --bg-sidebar: #f6f5f1;
+        --bg-editor: #fbfaf7;
+        --bg-input: #ffffff;
+        --bg-card: #ffffff;
+        --bg-chip: #edeae3;
+        --bg-hover: #e8e5de;
+        --bg-active: #e2dfd7;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --border-strong: #cfcabf;
+        --fg: #201e1a;
+        --fg-muted: #6e6a61;
+        --fg-faint: #a39e94;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --danger-bg: #fdecea;
+        --warning: #b06f10;
+        --warning-bg: #faf0dc;
+        --success: #2f9e63;
+        --success-bg: #e7f5ec;
+        --info: #3f7bd9;
+        --info-bg: #e9f1fd;
+        --shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --radius-card: 14px;
+        --radius-chip: 9px;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg-app);
+        color: var(--fg);
+        font-family: var(--font-ui);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      /* ---------- mockup 导航条（非产品 UI） ---------- */
+      .mockbar {
+        max-width: 1180px;
+        margin: 26px auto 14px;
+        padding: 0 20px;
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+      .mockbar h1 {
+        font-family: var(--font-display);
+        font-size: 22px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .mockbar .sub { color: var(--fg-muted); font-size: 12.5px; }
+      .variant-switch { margin-left: auto; display: inline-flex; gap: 6px; }
+      .variant-switch button {
+        font: inherit;
+        padding: 5px 12px;
+        border-radius: var(--radius-chip);
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+      .variant-switch button.on {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-fg);
+      }
+
+      /* ---------- 应用画框 ---------- */
+      .frame {
+        max-width: 1180px;
+        margin: 0 auto 30px;
+        padding: 0 20px;
+      }
+      .app {
+        background: var(--bg-editor);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-card);
+        overflow: hidden;
+      }
+
+      /* ---------- 舰队工具条 ---------- */
+      .fleet-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        background: var(--bg-titlebar);
+        border-bottom: 1px solid var(--border);
+      }
+      .fleet-toolbar .crumb {
+        color: var(--fg-muted);
+        font-size: 12.5px;
+      }
+      .fleet-toolbar .crumb b { color: var(--fg); font-weight: 600; }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 9px;
+        border-radius: var(--radius-chip);
+        background: var(--bg-chip);
+        color: var(--fg-muted);
+        font-size: 11.5px;
+        white-space: nowrap;
+      }
+      .chip.warn { background: var(--warning-bg); color: var(--warning); }
+      .chip.ok { background: var(--success-bg); color: var(--success); }
+      .chip.info { background: var(--info-bg); color: var(--info); }
+      .spacer { flex: 1; }
+      .btn {
+        font: inherit;
+        font-size: 12.5px;
+        padding: 5px 12px;
+        border-radius: var(--radius-chip);
+        border: 1px solid var(--border);
+        background: var(--bg-card);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .btn:hover { background: var(--bg-hover); }
+      .btn.holding { background: var(--warning-bg); border-color: var(--warning); color: var(--warning); }
+      .btn.ghost { border: none; background: transparent; color: var(--fg-faint); padding: 3px 7px; }
+      .btn.ghost:hover { color: var(--fg); background: var(--bg-hover); }
+
+      /* ---------- 舰队主体：指挥树 + 瓦片网格 ---------- */
+      .fleet-body {
+        display: grid;
+        grid-template-columns: 212px minmax(0, 1fr);
+        min-height: 470px;
+      }
+      .cmd-rail {
+        background: var(--bg-sidebar);
+        border-right: 1px solid var(--border);
+        padding: 12px 10px;
+      }
+      .cmd-rail h3 {
+        margin: 2px 6px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        color: var(--fg-faint);
+        text-transform: uppercase;
+      }
+      .tree-node {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+        color: var(--fg);
+      }
+      .tree-node:hover { background: var(--bg-hover); }
+      .tree-node.child { margin-left: 16px; position: relative; }
+      .tree-node.child::before {
+        content: '';
+        position: absolute;
+        left: -9px;
+        top: -8px;
+        bottom: 50%;
+        width: 9px;
+        border-left: 1px solid var(--border-strong);
+        border-bottom: 1px solid var(--border-strong);
+        border-bottom-left-radius: 6px;
+      }
+      .tree-node .who { font-size: 12.5px; }
+      .tree-node .role { color: var(--fg-faint); font-size: 11px; margin-left: auto; }
+      .tree-sep { height: 10px; }
+
+      .dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex: none;
+        background: var(--fg-faint);
+      }
+      .dot.busy { background: var(--success); animation: pulse 1.2s ease-in-out infinite; }
+      .dot.hold { background: var(--warning); }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+      .tiles {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        padding: 12px;
+        align-content: start;
+      }
+      .tile {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        min-height: 208px;
+      }
+      .tile.pending { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+      .tile.taken { border-color: var(--info); box-shadow: 0 0 0 1px var(--info); }
+      .tile-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 10px;
+        border-bottom: 1px solid var(--border-soft);
+        background: var(--bg-titlebar);
+      }
+      .tile-head .tname { font-weight: 600; font-size: 12.5px; }
+      .tile-head .chip { font-size: 10.5px; padding: 1px 7px; }
+      .ctl-chip { background: var(--info-bg); color: var(--info); }
+      .tile-term {
+        flex: 1;
+        padding: 8px 12px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        line-height: 1.6;
+        color: var(--fg-muted);
+        white-space: pre-wrap;
+        overflow: hidden;
+        cursor: text;
+        position: relative;
+      }
+      .tile-term .cmd { color: var(--fg); }
+      .tile-term .ok { color: var(--success); }
+      .tile-term .err { color: var(--danger); }
+      .tile-foot {
+        padding: 5px 10px;
+        border-top: 1px solid var(--border-soft);
+        color: var(--fg-faint);
+        font-size: 11px;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .tile-foot .zap { color: var(--info); }
+
+      /* 审批卡：就地出现在目标瓦片上 */
+      .approval {
+        margin: 0 10px 10px;
+        border: 1px solid var(--warning);
+        background: var(--warning-bg);
+        border-radius: 10px;
+        padding: 9px 11px;
+      }
+      .approval .q { font-size: 12px; color: var(--fg); margin-bottom: 3px; }
+      .approval code {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        background: rgba(255, 255, 255, 0.65);
+        padding: 1px 5px;
+        border-radius: 5px;
+      }
+      .approval .acts { display: flex; gap: 6px; margin-top: 8px; }
+      .approval .acts .btn { font-size: 11.5px; padding: 3px 10px; }
+      .approval .acts .allow { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+
+      /* 接管缎带 */
+      .takeover {
+        margin: 0 10px 10px;
+        border: 1px solid var(--info);
+        background: var(--info-bg);
+        color: var(--info);
+        border-radius: 10px;
+        padding: 7px 11px;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .takeover .btn { margin-left: auto; font-size: 11.5px; padding: 3px 10px; }
+
+      /* ---------- 活动流 ---------- */
+      .ticker {
+        border-top: 1px solid var(--border);
+        background: var(--bg-titlebar);
+        padding: 8px 14px;
+        max-height: 118px;
+        overflow-y: auto;
+      }
+      .ticker h4 {
+        margin: 0 0 6px;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        font-weight: 600;
+      }
+      .trow {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 2px 0;
+        font-size: 11.5px;
+        color: var(--fg-muted);
+      }
+      .trow time { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); flex: none; }
+      .trow .risk {
+        flex: none;
+        font-size: 10px;
+        padding: 0 6px;
+        border-radius: 6px;
+        background: var(--bg-chip);
+        color: var(--fg-faint);
+      }
+      .trow .risk.r3 { background: var(--warning-bg); color: var(--warning); }
+      .trow .risk.deny { background: var(--danger-bg); color: var(--danger); }
+      .trow code { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg); }
+
+      /* ---------- 方案 B：单窗 + 指挥侧栏 ---------- */
+      .b-body { display: grid; grid-template-columns: minmax(0, 1fr) 268px; min-height: 470px; }
+      .b-main { display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+      .tabstrip {
+        display: flex;
+        gap: 4px;
+        padding: 7px 10px;
+        background: var(--bg-titlebar);
+        border-bottom: 1px solid var(--border);
+      }
+      .ttab {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 11px;
+        border-radius: 8px;
+        font-size: 12px;
+        color: var(--fg-muted);
+        cursor: pointer;
+        font-family: var(--font-mono);
+      }
+      .ttab.active { background: var(--bg-active); color: var(--fg); }
+      .ttab .ctl-mark { color: var(--info); font-size: 11px; }
+      .b-term {
+        flex: 1;
+        padding: 12px 16px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        line-height: 1.65;
+        color: var(--fg-muted);
+        white-space: pre-wrap;
+      }
+      .b-side { background: var(--bg-sidebar); padding: 12px; overflow-y: auto; }
+      .b-side section { margin-bottom: 16px; }
+      .b-side h3 {
+        margin: 2px 4px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        color: var(--fg-faint);
+        text-transform: uppercase;
+      }
+      .side-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 9px 11px;
+        font-size: 12px;
+      }
+
+      /* ---------- 设计说明 ---------- */
+      .notes {
+        max-width: 1180px;
+        margin: 6px auto 60px;
+        padding: 0 20px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+      }
+      .note-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-card);
+        padding: 16px 18px;
+      }
+      .note-card h2 {
+        font-family: var(--font-display);
+        font-size: 15px;
+        margin: 0 0 8px;
+      }
+      .note-card ul { margin: 0; padding-left: 18px; color: var(--fg-muted); }
+      .note-card li { margin: 4px 0; }
+      .note-card li b { color: var(--fg); font-weight: 600; }
+      .hidden { display: none; }
+    </style>
+  </head>
+  <body>
+    <div class="mockbar">
+      <h1>Agent 舰队指挥室</h1>
+      <span class="sub" style="color: var(--danger)">已作废：独立页面方向被否（造第二中心）。现行方向见 agent-orchestration-v2-mockup.html（长在 rail + 房间里的三个变体）。</span>
+      <div class="variant-switch">
+        <button id="swA" class="on">方案 A · 网格指挥室</button>
+        <button id="swB">方案 B · 单窗 + 指挥侧栏</button>
+      </div>
+    </div>
+
+    <!-- ================= 方案 A ================= -->
+    <div class="frame" id="variantA">
+      <div class="app">
+        <div class="fleet-toolbar">
+          <span class="crumb">终端 › <b>舰队视图</b></span>
+          <span class="chip">4 终端</span>
+          <span class="chip ok">2 忙</span>
+          <span class="chip warn" id="pendingChip">1 待审批</span>
+          <span class="chip">窗口预算 3 / 5</span>
+          <span class="spacer"></span>
+          <button class="btn" id="holdAll">⏸ 暂停全部遥控</button>
+          <button class="btn ghost">▤ 单窗视图</button>
+        </div>
+
+        <div class="fleet-body">
+          <aside class="cmd-rail">
+            <h3>指挥关系</h3>
+            <div class="tree-node"><span class="dot busy"></span><span class="who">t1 · claude</span><span class="role">主指挥</span></div>
+            <div class="tree-node child"><span class="dot busy"></span><span class="who">t3 · codex</span><span class="role">方案评审</span></div>
+            <div class="tree-node child"><span class="dot hold" id="treeT9dot"></span><span class="who">t9 · claude</span><span class="role">跑测试</span></div>
+            <div class="tree-sep"></div>
+            <div class="tree-node"><span class="dot busy"></span><span class="who">t5 · shell</span><span class="role">独立</span></div>
+          </aside>
+
+          <main class="tiles">
+            <!-- t1 主指挥 -->
+            <article class="tile">
+              <header class="tile-head">
+                <span class="dot busy"></span>
+                <span class="tname">t1 · claude</span>
+                <span class="chip">pay-service</span>
+                <span class="chip">〈修支付超时〉</span>
+                <span class="spacer"></span>
+                <button class="btn ghost">聚焦</button>
+              </header>
+              <div class="tile-term"><span class="cmd">✻ 正在协调评审……</span>
+已让 t3（codex）review docs/plan.md，
+同时在 t9 重装依赖后重跑测试。
+<span class="cmd">⏳ wait t3（静默判定） · wait t9（exit 码）</span></div>
+              <footer class="tile-foot">主指挥 · 本轮已发 6 次遥控 · 全部入账</footer>
+            </article>
+
+            <!-- t3 codex，可点击演示接管 -->
+            <article class="tile" id="tileT3">
+              <header class="tile-head">
+                <span class="dot busy"></span>
+                <span class="tname">t3 · codex</span>
+                <span class="chip">pay-service</span>
+                <span class="chip ctl-chip">⌁ 由 t1 指挥</span>
+                <span class="spacer"></span>
+                <button class="btn ghost">聚焦</button>
+              </header>
+              <div class="tile-term" id="termT3" title="点击正文演示「人接管」"><span class="cmd">› review docs/plan.md</span>
+正在阅读方案……
+① 重试策略建议指数退避 ✔
+② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+<span class="cmd">▍（输出中，t1 正等它答完）</span></div>
+              <div class="takeover hidden" id="takeoverT3">
+                ✋ 你已接管 · t1 的注入已暂挂 2 条
+                <button class="btn" id="giveBack">归还控制</button>
+              </div>
+              <footer class="tile-foot"><span class="zap">⌁</span> 最近遥控：t1 注入「请 review docs/plan.md…」 · 3 分钟前</footer>
+            </article>
+
+            <!-- t9 待审批 -->
+            <article class="tile pending" id="tileT9">
+              <header class="tile-head">
+                <span class="dot hold" id="t9dot"></span>
+                <span class="tname">t9 · claude</span>
+                <span class="chip">pay-service</span>
+                <span class="chip ctl-chip">⌁ 由 t1 指挥</span>
+                <span class="chip warn" id="t9state">待审批</span>
+                <span class="spacer"></span>
+                <button class="btn ghost">聚焦</button>
+              </header>
+              <div class="tile-term" id="termT9"><span class="cmd">$ npm test</span>
+<span class="err">✗ 12 passed · 2 failed（依赖损坏）</span></div>
+              <div class="approval" id="approvalT9">
+                <div class="q"><b>t1</b> 请求向本终端注入高危命令（R3）：</div>
+                <code>rm -rf node_modules &amp;&amp; npm ci</code>
+                <div class="acts">
+                  <button class="btn allow" id="allowOnce">允许一次</button>
+                  <button class="btn">本任务内总是允许</button>
+                  <button class="btn" id="denyBtn">拒绝</button>
+                </div>
+              </div>
+              <footer class="tile-foot"><span class="zap">⌁</span> 最近遥控：t1 注入「npm test」 · 6 分钟前</footer>
+            </article>
+
+            <!-- t5 独立窗口 -->
+            <article class="tile">
+              <header class="tile-head">
+                <span class="dot busy"></span>
+                <span class="tname">t5 · shell</span>
+                <span class="chip">pay-service</span>
+                <span class="chip">dev server</span>
+                <span class="spacer"></span>
+                <button class="btn ghost">聚焦</button>
+              </header>
+              <div class="tile-term"><span class="cmd">$ npm run dev</span>
+<span class="ok">✓ ready on http://localhost:5173</span>
+（无 agent 指挥 · 普通窗口照常并存）</div>
+              <footer class="tile-foot">独立窗口 · 未被遥控</footer>
+            </article>
+          </main>
+        </div>
+
+        <div class="ticker">
+          <h4>遥控活动流（与账本同源 · replay 复用）</h4>
+          <div id="tickerRows">
+            <div class="trow"><time>21:04:12</time><span class="risk">R2</span><span>t1 → 开窗 <code>t3</code>（codex）· 自动放行</span></div>
+            <div class="trow"><time>21:04:31</time><span class="risk">R1</span><span>t1 → t3 注入 <code>请 review docs/plan.md…</code> · 自动放行</span></div>
+            <div class="trow"><time>21:06:02</time><span class="risk">R2</span><span>t1 → t9 注入 <code>npm test</code> · 自动放行</span></div>
+            <div class="trow"><time>21:08:44</time><span class="risk">R0</span><span>t9 命令结束 <code>exit 1</code> · wait 唤醒 t1</span></div>
+            <div class="trow"><time>21:09:10</time><span class="risk r3">R3</span><span>t1 → t9 请求注入 <code>rm -rf node_modules &amp;&amp; npm ci</code> · <b>等待审批</b></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 方案 B ================= -->
+    <div class="frame hidden" id="variantB">
+      <div class="app">
+        <div class="fleet-toolbar">
+          <span class="crumb">终端</span>
+          <span class="spacer"></span>
+          <button class="btn ghost">◫ 舰队视图</button>
+        </div>
+        <div class="b-body">
+          <div class="b-main">
+            <div class="tabstrip">
+              <span class="ttab"><span class="dot busy"></span>t1 claude</span>
+              <span class="ttab active"><span class="dot busy"></span>t3 codex<span class="ctl-mark">⌁</span></span>
+              <span class="ttab"><span class="dot hold"></span>t9 claude<span class="ctl-mark">⌁</span></span>
+              <span class="ttab"><span class="dot busy"></span>t5 shell</span>
+            </div>
+            <div class="b-term"><span class="cmd">› review docs/plan.md</span>
+正在阅读方案……
+① 重试策略建议指数退避 ✔
+② 超时阈值 3s 偏激进，建议可配置
+③ 缺少幂等键，重复扣款风险 ⚠
+▍（输出中，t1 正等它答完）</div>
+          </div>
+          <aside class="b-side">
+            <section>
+              <h3>指挥关系</h3>
+              <div class="side-card">
+                <div class="tree-node"><span class="dot busy"></span><span class="who">t1 claude</span><span class="role">主指挥</span></div>
+                <div class="tree-node child"><span class="dot busy"></span><span class="who">t3 codex</span><span class="role">评审</span></div>
+                <div class="tree-node child"><span class="dot hold"></span><span class="who">t9 claude</span><span class="role">测试</span></div>
+              </div>
+            </section>
+            <section>
+              <h3>待审批 · 1</h3>
+              <div class="side-card">
+                <div class="q" style="font-size:12px; margin-bottom:4px;"><b>t1</b> → t9 注入（R3）：</div>
+                <code style="font-family:var(--font-mono); font-size:11px;">rm -rf node_modules && npm ci</code>
+                <div class="acts" style="display:flex; gap:6px; margin-top:8px;">
+                  <button class="btn" style="background:var(--accent); border-color:var(--accent); color:var(--accent-fg); font-size:11.5px;">允许一次</button>
+                  <button class="btn" style="font-size:11.5px;">拒绝</button>
+                </div>
+              </div>
+            </section>
+            <section>
+              <h3>遥控活动流</h3>
+              <div class="side-card" style="font-size:11.5px; color:var(--fg-muted);">
+                21:09 t1→t9 <b>R3 待审批</b><br />
+                21:08 t9 exit 1 · 唤醒 t1<br />
+                21:06 t1→t9 注入 npm test<br />
+                21:04 t1 开窗 t3（codex）
+              </div>
+            </section>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+    <!-- ================= 设计说明 ================= -->
+    <div class="notes">
+      <div class="note-card">
+        <h2>对照：FanBox 怎么做的，这里升级了什么</h2>
+        <ul>
+          <li>FanBox 只有 <b>tab 条 + 状态圆点 + ⚡ 闪 8 秒</b>：审计是瞬时的，闪完无痕；看舰队要挨个点 tab。</li>
+          <li>本稿把 ⚡ 升级为<b>常驻指挥链标记</b>（⌁ 由 t1 指挥）：控制关系存在多久，标记亮多久，并写明<b>是谁</b>（FanBox 只知道"被摸"，不知道"谁摸的"）。</li>
+          <li>tab 圆点语义沿用 FanBox 的忙/闲/退出（绿呼吸/灰/红），成本低、已被验证。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>为什么推荐 A（网格 + 指挥树 + 活动流）</h2>
+        <ul>
+          <li><b>网格</b>答"大家都在干嘛"（用户诉求：一个窗口看全部 agent 工作）；<b>指挥树</b>答"谁指挥谁"；<b>活动流</b>答"刚才发生了什么"。三问三答，各占一块。</li>
+          <li>刻意<b>不做节点连线画布</b>：终端是需要面积的矩形，连线浪费空间且必然交叉；控制关系基数很低（1 指挥 N），树 + ⌁ chip 表达足够。连线图适合 replay 的静态回顾，不适合干活时的常驻界面。</li>
+          <li>方案 B 是保守替代：改动小（现有单窗 + 右侧栏），但"一眼看全"不成立，只推荐在窄窗口时作为 A 的降级形态，而非独立方案。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>审批与接管的交互契约</h2>
+        <ul>
+          <li><b>审批卡长在目标瓦片上</b>（哪个终端要被注入，卡就在哪），而不是全局弹窗——空间即语境；侧栏/角标提供全局计数入口。</li>
+          <li>选项三档：允许一次 / 本任务内总是允许（落成 StandingRule）/ 拒绝。拒绝同样入账。</li>
+          <li><b>点击瓦片正文即接管</b>（试试 t3）：亮蓝色缎带，主指挥的后续注入排队暂挂；「归还控制」后放行。人永远赢过 agent。</li>
+          <li>工具条「⏸ 暂停全部遥控」是总闸：一键让所有指挥链停摆，窗口保持原样。</li>
+        </ul>
+      </div>
+      <div class="note-card">
+        <h2>看点清单（请浏览器里确认）</h2>
+        <ul>
+          <li>瓦片密度：2×2 是否舒服？6+ 终端时接受滚动还是要 3 列？</li>
+          <li>点 t9 的「允许一次」→ 命令注入、状态流转、活动流追加，节奏对不对？</li>
+          <li>点 t3 正文 → 接管缎带；「归还控制」→ 恢复。这个手势自然吗？</li>
+          <li>活动流放底部（本稿）还是并入右侧栏？高度上限 118px 够不够？</li>
+          <li>命名：⌁「由 t1 指挥」、「舰队视图」、「暂停全部遥控」——用词要不要换？（UI 全程无 Pi 字样。）</li>
+        </ul>
+      </div>
+    </div>
+
+    <script>
+      const $ = (s) => document.querySelector(s);
+      // 方案切换
+      $('#swA').onclick = () => { $('#variantA').classList.remove('hidden'); $('#variantB').classList.add('hidden'); $('#swA').classList.add('on'); $('#swB').classList.remove('on'); };
+      $('#swB').onclick = () => { $('#variantB').classList.remove('hidden'); $('#variantA').classList.add('hidden'); $('#swB').classList.add('on'); $('#swA').classList.remove('on'); };
+
+      const ticker = (risk, html, cls = '') => {
+        const row = document.createElement('div');
+        row.className = 'trow';
+        const t = new Date();
+        const hh = String(t.getHours()).padStart(2, '0'), mm = String(t.getMinutes()).padStart(2, '0'), ss = String(t.getSeconds()).padStart(2, '0');
+        row.innerHTML = `<time>${hh}:${mm}:${ss}</time><span class="risk ${cls}">${risk}</span><span>${html}</span>`;
+        $('#tickerRows').appendChild(row);
+        row.scrollIntoView({ block: 'nearest' });
+      };
+
+      // 审批：允许一次
+      $('#allowOnce').onclick = () => {
+        $('#approvalT9').remove();
+        $('#tileT9').classList.remove('pending');
+        $('#t9state').remove();
+        $('#t9dot').className = 'dot busy';
+        $('#treeT9dot').className = 'dot busy';
+        $('#pendingChip').textContent = '0 待审批';
+        $('#pendingChip').className = 'chip';
+        $('#termT9').innerHTML = '<span class="cmd">$ rm -rf node_modules && npm ci</span>\n重装依赖中……\n<span class="cmd">▍</span>';
+        ticker('R3', '用户<b>批准</b> · t1 → t9 已注入 <code>rm -rf node_modules && npm ci</code>', 'r3');
+        setTimeout(() => {
+          $('#termT9').innerHTML = '<span class="cmd">$ npm test</span>\n<span class="ok">✓ 14 passed · exit 0</span>';
+          ticker('R0', 't9 命令结束 <code>exit 0</code> · wait 唤醒 t1');
+        }, 2600);
+      };
+      // 审批：拒绝
+      $('#denyBtn').onclick = () => {
+        $('#approvalT9').remove();
+        $('#tileT9').classList.remove('pending');
+        $('#t9state').textContent = '已拒绝';
+        $('#pendingChip').textContent = '0 待审批';
+        $('#pendingChip').className = 'chip';
+        ticker('R3', '用户<b>拒绝</b> · t1 → t9 的注入被拦下（t1 将收到拒绝回执）', 'deny');
+      };
+
+      // 接管演示：点 t3 正文
+      $('#termT3').onclick = () => {
+        $('#takeoverT3').classList.remove('hidden');
+        $('#tileT3').classList.add('taken');
+      };
+      $('#giveBack').onclick = (e) => {
+        e.stopPropagation();
+        $('#takeoverT3').classList.add('hidden');
+        $('#tileT3').classList.remove('taken');
+        ticker('R0', '用户归还 t3 控制权 · t1 暂挂的 2 条注入已放行');
+      };
+
+      // 暂停全部遥控
+      let holding = false;
+      $('#holdAll').onclick = () => {
+        holding = !holding;
+        $('#holdAll').textContent = holding ? '▶ 恢复遥控' : '⏸ 暂停全部遥控';
+        $('#holdAll').classList.toggle('holding', holding);
+        ticker('R0', holding ? '用户<b>暂停全部遥控</b> · 指挥链停摆，窗口保持原样' : '用户恢复遥控 · 暂挂动作依次放行');
+      };
+    </script>
+  </body>
+</html>

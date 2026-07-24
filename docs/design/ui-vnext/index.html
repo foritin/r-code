@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>UI 大升级 — 五个方向</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #101113;
+    --panel: #16171a;
+    --card: #1a1c20;
+    --border: #26282e;
+    --border-lit: #3a3d46;
+    --fg: #e6e6e3;
+    --fg-muted: #91939b;
+    --fg-faint: #5a5c66;
+    --gold: #e8b45a;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, 'Songti SC', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif;
+    --mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+  body {
+    font-family: var(--sans); background: var(--bg); color: var(--fg);
+    -webkit-font-smoothing: antialiased; font-size: 14px;
+    background-image: radial-gradient(900px 400px at 70% -10%, rgba(80, 110, 150, 0.08), transparent 60%);
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 56px 32px 80px; }
+
+  header { margin-bottom: 14px; }
+  .kicker { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--gold); margin-bottom: 14px; }
+  h1 { font-family: var(--serif); font-size: 38px; font-weight: 500; letter-spacing: 0.01em; margin-bottom: 16px; }
+  .lede { font-size: 14.5px; line-height: 1.75; color: var(--fg-muted); max-width: 74ch; }
+  .lede b { color: var(--fg); font-weight: 600; }
+
+  .premise {
+    margin: 26px 0 38px; padding: 16px 20px;
+    border: 1px solid var(--border); border-left: 3px solid var(--gold);
+    border-radius: 10px; background: var(--panel);
+    font-size: 13px; line-height: 1.8; color: var(--fg-muted);
+  }
+  .premise b { color: var(--fg); }
+
+  .list { display: flex; flex-direction: column; gap: 14px; margin-bottom: 44px; }
+  a.dir {
+    display: grid; grid-template-columns: 74px 1fr 300px; gap: 22px;
+    padding: 22px 24px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    text-decoration: none; color: inherit;
+    transition: transform 0.16s, border-color 0.16s, box-shadow 0.16s;
+    position: relative; overflow: hidden;
+  }
+  a.dir:hover {
+    transform: translateY(-2px);
+    border-color: var(--border-lit);
+    box-shadow: 0 18px 50px rgba(0,0,0,0.4);
+  }
+  a.dir::after {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--hue); opacity: 0.75;
+  }
+  .letter {
+    font-family: var(--serif); font-size: 42px; color: var(--hue);
+    line-height: 1; padding-top: 3px;
+  }
+  .letter small { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: 0.14em; color: var(--fg-faint); margin-top: 9px; text-transform: uppercase; }
+  .dir h2 { font-family: var(--serif); font-size: 20px; font-weight: 500; margin-bottom: 6px; }
+  .dir h2 span { font-size: 13px; color: var(--fg-faint); font-family: var(--sans); margin-left: 8px; }
+  .dir .essence { font-size: 13px; line-height: 1.7; color: var(--fg-muted); max-width: 58ch; }
+  .dir .essence b { color: var(--fg); font-weight: 600; }
+  .meta { display: flex; flex-direction: column; gap: 9px; font-size: 12px; }
+  .meta .q { color: var(--fg-muted); line-height: 1.55; }
+  .meta .q b { color: var(--hue); font-weight: 600; }
+  .meta .cost { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); letter-spacing: 0.05em; }
+  .meta .cost b { color: var(--fg-muted); }
+  .meta .open { margin-top: auto; font-size: 12px; color: var(--hue); display: inline-flex; align-items: center; gap: 6px; }
+  a.dir:hover .open { text-decoration: underline; }
+
+  .combine {
+    padding: 22px 26px; border: 1px solid var(--border); border-radius: 14px;
+    background: linear-gradient(180deg, var(--card), var(--panel));
+  }
+  .combine h3 { font-family: var(--serif); font-size: 18px; font-weight: 500; margin-bottom: 12px; }
+  .combine p { font-size: 13px; line-height: 1.85; color: var(--fg-muted); margin-bottom: 8px; }
+  .combine b { color: var(--fg); }
+  .combine .gold { color: var(--gold); }
+  .foot { margin-top: 34px; font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); line-height: 1.9; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="kicker">Charter · UI vNext · 2026-07-19</div>
+    <h1>让人「卧槽」的五个方向</h1>
+    <p class="lede">
+      产品已经有四套 skin（Studio / Archive / Terminal / Index），所以这次大升级<b>不能只是第五套配色</b>——
+      每个方向都在 <b>结构、材质、活性、叙事</b> 里押注一种「第一眼震撼」。五个 mock 全部使用真实的产品概念
+      （Session Rail、Needs You、三段门、验证、worktree 隔离、回放），数据是同一个虚构工作日，方便横向对比。
+    </p>
+  </header>
+
+  <div class="premise">
+    <b>判断框架：</b>「卧槽」从哪来？A 赌的是 <b>活性</b>（一屋子智能体在干活的画面）；B 赌 <b>反潮流的工艺</b>（全行业深色赛博，我们做精装刊物）；
+    C 赌 <b>材质</b>（最上镜的玻璃与光）；D 赌 <b>独有能力</b>（竞品没有全程记录，做不出可拖动的时间）；E 赌 <b>规模化效率</b>（经营车队的操作系统感）。
+    它们并不互斥——见页尾的组合建议。
+  </div>
+
+  <section class="list" style="margin-bottom:18px">
+    <a class="dir" href="./fusion-obsidian.html" style="--hue:#8b7cf6; border-color:#3a3d46;">
+      <div class="letter">C+<small>Fusion</small></div>
+      <div>
+        <h2>组合方案 · Obsidian 底座<span>三场景二稿 · 2026-07-19</span></h2>
+        <p class="essence">黑曜石玻璃气质 × 三个场景职责分明：<b>Home = 主页就是 Chat 输入</b>（默认打开，保持现状，
+        只加一行可点的态势摘要）；<b>Deck = 纯监控新入口</b>（◎ 第五 tab，无任何输入框，右上 Cards ⇄ Rows 收纳 E 的密度模式）；
+        Room 底部 = D 的胶片缩略版（细带常驻、hover 升起、可拖动回看）。现有四入口零改动。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「主页不动、不塞爆现有 tab 的前提下，把三个卧槽点装进一个壳」</span>
+        <span class="cost">同构对照版 → fusion-atelier（换纸感语言）</span>
+        <span class="open">打开组合 mock →</span>
+      </div>
+    </a>
+    <a class="dir" href="./fusion-atelier.html" style="--hue:#e8a06a; border-color:#3a3d46;">
+      <div class="letter">B+<small>Fusion</small></div>
+      <div>
+        <h2>组合方案 · Atelier 底座<span>与上面完全同构，只换气质 · 2026-07-19 追加</span></h2>
+        <p class="essence">印刷工作室气质的同一套结构：Deck 是「今日版面」（数字栏 + 头条印章 + 专栏），
+        <b>Rows 密度转译为「印刷账本」行情表</b>，Room 底部的胶片转译为「装订线」（红棕缝针播放头）。
+        两个组合版并排看，就是纯粹的 B ⇄ C 气质二选一。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「同一套 IA 结构穿上纸与活字，还成立吗？」</span>
+        <span class="cost">同构对照版 → fusion-obsidian（玻璃语言）</span>
+        <span class="open">打开组合 mock →</span>
+      </div>
+    </a>
+  </section>
+
+  <div class="premise" style="border-left-color:#8fb8e8">
+    <b>组合版的 IA 决策（回应「要不要新增 Tab」+「主页被改了？」）：</b>主页 = Chat 输入，<b>保持现状且是默认页</b>；
+    态势/密度看板是「监控+就地决策」，与 Sessions 导航、与主页发起都是不同节奏——所以<b>新增第五个 activity 入口 Deck</b>
+    专门承载它，Deck 里没有任何输入框（发起回主页），现有四入口与面板零改动；E 的行看板不占 tab，是 Deck 内的密度切换。
+    附带观察：Deck 已含 Needs You 通道 + 徽章，中期可评估 Inbox 入口是否可省（有机会减回四个）。
+  </div>
+
+  <section class="list" style="margin-bottom:18px">
+    <a class="dir" href="./skin-adapt.html" style="--hue:#5fe3a1; border-color:#3a3d46;">
+      <div class="letter">S<small>Skins</small></div>
+      <div>
+        <h2>Skin 适配演示 · 同一套 Deck，七种皮肤<span>「适配还是新增」的答案 · 2026-07-19 追加</span></h2>
+        <p class="essence">同一份 Deck 组件代码（只写一遍，全语义 token + 三个新效果 token），在
+        <b>四个现有 skin</b>（自动获得安静版新结构）与 <b>两个第五-skin 提案</b>（Obsidian / Atelier，点亮玻璃与辉光）
+        之间实时切换。<b>呼吸 / 心跳 / 扫光在每种皮肤下都保留</b>（是动画+语义色，不是材质），只有玻璃模糊与辉光是新 skin 专属。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「新增一个样式，还是在四个样式上适配？」——答案是分层：结构全适配，材质归新 skin。</span>
+        <span class="cost">实施 = 组件 token 化一遍 + theme.css 多一列值，不是五套代码</span>
+        <span class="open">打开演示（点皮肤切换）→</span>
+      </div>
+    </a>
+  </section>
+
+  <section class="list">
+
+    <a class="dir" href="./a-flight-deck.html" style="--hue:#9fd6f2">
+      <div class="letter">A<small>Launcher</small></div>
+      <div>
+        <h2>Flight Deck 舰队指挥台<span>态势大屏</span></h2>
+        <p class="essence">打开产品的第一眼 = <b>指挥中心</b>：五仪表态势带 + 舰队示波器、Needs You 发光通道、
+        活的会话卡（动作行像 tail -f 滚动、三段门序列灯、验证进度条）。发起区沉底为「发射台」——发起只是一瞬，督战才是常态。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「我的智能体们现在都在干什么？」——把 mission control 从列表升维成态势。</span>
+        <span class="cost">实施代价 <b>M</b> — 复用现有事件流，主要是 Launcher 重排 + 动画预算</span>
+        <span class="open">打开 mock →</span>
+      </div>
+    </a>
+
+    <a class="dir" href="./b-atelier.html" style="--hue:#e8a06a">
+      <div class="letter">B<small>Launcher</small></div>
+      <div>
+        <h2>Atelier 印刷工作室<span>light-first 工艺排印</span></h2>
+        <p class="essence">全行业都在做深色赛博玻璃，Charter <b>反着走</b>：晨报 masthead、巨大衬线 composer、
+        决定是「头条 + 铅字印章」、写作中的会话是「专栏 + 羽毛笔」、右栏是今日账本与版权页，按钮有活字凸版的按压手感。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「凭什么截图一眼认出是 Charter？」——与所有竞品在气质上彻底分开。</span>
+        <span class="cost">实施代价 <b>M</b> — 是现有 Studio/Archive 气质的极致化，token 体系可承接</span>
+        <span class="open">打开 mock →</span>
+      </div>
+    </a>
+
+    <a class="dir" href="./c-obsidian.html" style="--hue:#8b7cf6">
+      <div class="letter">C<small>Room</small></div>
+      <div>
+        <h2>Obsidian Glass 黑曜石玻璃<span>dark-first 材质跃升</span></h2>
+        <p class="essence">OLED 纯黑上的三层玻璃（rail / 对话 / 工具画布），界面几乎消失，<b>光只从智能体正在工作的地方发出</b>：
+        每个会话有光谱色、运行中的工具行有流动光带、diff 刚写下的行有 shimmer、画布「live following」跟着 agent 笔尖走。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「哪个方向的演示视频最炸？」——主流高级感的最优解，最上镜。</span>
+        <span class="cost">实施代价 <b>M+</b> — 视觉层全面刷新 + blur 性能预算（Electron 需实测）</span>
+        <span class="open">打开 mock →</span>
+      </div>
+    </a>
+
+    <a class="dir" href="./d-reel.html" style="--hue:#f0a05a">
+      <div class="letter">D<small>Room</small></div>
+      <div>
+        <h2>The Reel 时间胶片<span>可拖动时间的主界面</span></h2>
+        <p class="essence">Room 底部常驻一条时间胶片：章节色带（Plan/Work/Fix/Verify）、事件刻度、里程碑旗标。
+        <b>拖动播放头，对话与画布同步回到那一刻</b>——回放从「功能」升维成主界面的物理规律。mock 可真实拖动（← → 步进，⏎ 回 LIVE）。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「什么是竞品抄不走的？」——没有全程结构化记录的产品做不出这条轴。</span>
+        <span class="cost">实施代价 <b>L</b> — 但 replay v3 原型已在，等于把既有资产提到台前</span>
+        <span class="open">打开 mock →</span>
+      </div>
+    </a>
+
+    <a class="dir" href="./e-conductor.html" style="--hue:#8fb8e8">
+      <div class="letter">E<small>Fleet</small></div>
+      <div>
+        <h2>Conductor 指挥官终端<span>高密度行式 + 全能 ⌘K</span></h2>
+        <p class="essence">给同时经营 10+ 会话的重度用户：<b>一切都是行</b>——状态灯、实时动作列、三段门微条、等宽 diffstat 严格对齐；
+        j/k 航行、行尾单键操作（a approve / g grant / r review）、多选浮出批量决策条、⌘K 直达任何门。</p>
+      </div>
+      <div class="meta">
+        <span class="q"><b>回答：</b>「并行会话涨到 20 个时产品还成立吗？」——Bloomberg 密度 × Linear 秩序。</span>
+        <span class="cost">实施代价 <b>M</b> — 视图层新增「行看板」，引擎与快捷键系统已具备</span>
+        <span class="open">打开 mock →</span>
+      </div>
+    </a>
+  </section>
+
+  <section class="combine">
+    <h3>怎么选：一道正餐，两道配菜</h3>
+    <p><span class="gold">立场组合（推荐思路）：</span>先选 <b>气质立场</b>（B 的纸与活字 vs C 的黑与光——二选一，这是品牌级决定），
+    再叠 <b>结构升级</b>：A 的态势带/发光通道可以直接进 Launcher，D 的时间胶片可以收进 Room 底部（默认折叠、hover 展开），
+    E 的行看板作为 Sessions 面板的「密度模式」给重度用户切换。</p>
+    <p><span class="gold">最小惊艳路径：</span>C（或 B）定材质 → A 的 Needs You 通道 + 会话心跳进 rail → D 的胶片先做只读缩略版。
+    三步每一步都可独立发布，每一步都有一个可传播的「卧槽点」。</p>
+    <p><span class="gold">工程红线（不因视觉升级而破）：</span>动画预算（不聚焦即冷却、reduced-motion 全停）、humane language、
+    无 emoji chrome、审阅门永远显式 —— 五个 mock 都已按这些约束绘制。</p>
+  </section>
+
+  <div class="foot">
+    docs/design/ui-vnext/ · 五个 mock 均为自包含 HTML，双击直接打开；同一虚构工作日的数据便于横向对比。<br/>
+    A/B/C/E 内置轻量实时动效（动作行轮换、秒表、示波器）；D 支持真实拖拽回放。每页右下/右上有可关闭的方案注解。
+  </div>
+</div>
+</body>
+</html>

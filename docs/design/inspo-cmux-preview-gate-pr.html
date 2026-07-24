@@ -1,0 +1,847 @@
+<!doctype html>
+<!-- Charter — 竞品移植研究 · cmux ④「看得见的验收」(docs/design). NOT product code.
+     Discussion artifact: 把 cmux 的「任务内 dev-server 预览」与「一键 PR」移植进 Charter 验收门：
+     验收门新增预览 tab（探测任务 worktree 的本地端口，iframe 沙箱 + 隔离徽章），预览上圈选
+     即回炉（复用 request-fix + 截图批注），接受后生成 PR 草稿（正文来自证据账本 + Replay 回执），
+     推送永远是用户显式动作（GIT-007）。影片可播放：▶ / ⏸ / 章节直达。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 看得见的验收 — cmux 移植研究 ④</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #eceae5; color: #201e1a; padding: 30px 26px 70px;
+        --side: #f6f5f1; --main: #fbfaf7; --card: #ffffff;
+        --border: #e5e1d8; --border-soft: #edeae3;
+        --text: #201e1a; --text2: #6e6a61; --text3: #a39e94;
+        --chip: #f0eee8; --hover: #e8e5de; --active: #e2dfd7;
+        --accent: #1b1a16; --accent-text: #fff;
+        --ok: #2f9e63; --ok-bg: #e7f5ec;
+        --run: #3f7bd9; --run-bg: #e9f1fd;
+        --warn: #b06f10; --warn-bg: #faf0dc;
+        --danger: #c4453d; --danger-bg: #fbeae9;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      .pagehead { max-width: 1260px; margin: 0 auto 8px; }
+      .pagehead h1 { font-size: 19px; letter-spacing: -0.01em; }
+      .pagehead p { color: var(--text2); font-size: 13px; margin-top: 5px; line-height: 1.7; max-width: 1020px; }
+      .pagehead b { color: var(--text); }
+      .meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+      .stage { max-width: 1260px; margin: 14px auto 0; position: relative; }
+      .win {
+        background: var(--main); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22); overflow: hidden;
+        display: flex; flex-direction: column; height: 700px; position: relative;
+      }
+      .titlebar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .traffic { display: flex; gap: 7px; }
+      .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+      .titlebar .brand { font-weight: 650; font-size: 12.5px; margin-left: 4px; }
+      .titlebar .proj { font-size: 11.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 11px; }
+      .titlebar .k { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--card); }
+
+      /* ── Room 底 ─────────────────────────────── */
+      .roombody { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; padding: 16px 0 0; position: relative; }
+      .roomhead { width: 660px; max-width: calc(100% - 60px); display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+      .roomhead .t { font-weight: 650; font-size: 13.5px; }
+      .state-chip { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 650; background: var(--warn-bg); color: var(--warn); }
+      .state-chip.done { background: var(--ok-bg); color: var(--ok); }
+      .spine { width: 660px; max-width: calc(100% - 60px); flex: 1; min-height: 0; overflow: hidden; position: relative; padding-left: 30px; }
+      .spine::before { content: ''; position: absolute; left: 7px; top: 4px; bottom: 0; width: 1px; background: var(--border); }
+      .trow { position: relative; padding-bottom: 13px; }
+      .trow .glyph { position: absolute; left: -30px; top: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--main); border: 1px solid var(--border); color: var(--text3); font-size: 9px; display: flex; align-items: center; justify-content: center; }
+      .trow .who { font-size: 10px; letter-spacing: 0.08em; color: var(--text3); font-weight: 650; margin-bottom: 3px; font-family: var(--mono); }
+      .trow .prose { font-family: 'Songti SC', 'Noto Serif CJK SC', Georgia, serif; font-size: 14px; line-height: 1.8; max-width: 560px; }
+      .worklog { background: var(--side); border: 1px solid var(--border-soft); border-radius: 10px; font-family: var(--mono); font-size: 10.8px; color: var(--text2); padding: 7px 12px; line-height: 1.9; max-width: 560px; }
+      .worklog .clock { color: var(--text3); margin-right: 8px; }
+      .worklog .live { color: var(--run); }
+      .milestone { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; color: var(--ok); font-weight: 700; padding-bottom: 13px; }
+      .milestone::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
+
+      /* review bar + composer */
+      .rvbar {
+        width: 660px; max-width: calc(100% - 60px); flex: none; margin-bottom: 8px;
+        background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--warn);
+        border-radius: 11px; box-shadow: var(--shadow); padding: 9px 13px;
+        display: none; align-items: center; gap: 10px; font-size: 12px;
+      }
+      .rvbar.show { display: flex; animation: barin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.1); }
+      @keyframes barin { from { transform: translateY(8px); opacity: 0; } }
+      .rvbar .ev { color: var(--text2); }
+      .rvbar .ev b { color: var(--text); }
+      .rvbar .pmx .p { color: var(--ok); font-family: var(--mono); }
+      .rvbar .pmx .m { color: var(--danger); font-family: var(--mono); }
+      .rvbar .open { margin-left: auto; background: var(--accent); color: var(--accent-text); border-radius: 8px; padding: 5px 14px; font-size: 12px; font-weight: 650; }
+      .composer { width: 660px; max-width: calc(100% - 60px); flex: none; margin-bottom: 14px; background: var(--card); border: 1px solid var(--border); border-radius: 13px; box-shadow: var(--shadow); padding: 9px 12px; }
+      .composer .input { font-size: 12.5px; color: var(--text3); }
+      .composer .row2 { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
+      .pill { font-size: 10.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 2px 9px; }
+      .send { margin-left: auto; width: 24px; height: 24px; border-radius: 8px; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; font-size: 12px; }
+
+      /* ── 验收门 overlay ───────────────────────── */
+      .gate {
+        position: absolute; inset: 18px 26px; z-index: 30; background: var(--main);
+        border: 1px solid var(--border); border-radius: 16px; box-shadow: 0 40px 110px rgba(30, 26, 18, 0.4);
+        display: none; flex-direction: column; overflow: hidden;
+      }
+      .gate.show { display: flex; animation: ovin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.06); }
+      @keyframes ovin { from { transform: translateY(16px) scale(0.985); opacity: 0; } }
+      .gatehead { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .gatehead .t { font-weight: 700; font-size: 13px; }
+      .gatehead .evc { font-size: 10.5px; color: var(--text2); background: var(--chip); border-radius: 999px; padding: 2px 9px; }
+      .gatehead .x { margin-left: auto; color: var(--text3); }
+      .gatebody { flex: 1; min-height: 0; display: flex; }
+      .files { width: 218px; flex: none; border-right: 1px solid var(--border-soft); background: var(--side); padding: 10px 8px; }
+      .files .fh { font-size: 10px; color: var(--text3); font-weight: 700; letter-spacing: 0.05em; padding: 0 6px 7px; }
+      .frow2 { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10.6px; padding: 5px 7px; border-radius: 7px; color: var(--text2); }
+      .frow2.on { background: var(--active); color: var(--text); }
+      .frow2 .m2 { flex: none; width: 12px; text-align: center; font-weight: 700; }
+      .frow2 .m2.M { color: var(--warn); } .frow2 .m2.A { color: var(--ok); }
+      .frow2 .pm { margin-left: auto; font-size: 9.8px; }
+      .frow2 .p { color: var(--ok); } .frow2 .m { color: var(--danger); }
+      .content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .tabs { display: flex; gap: 2px; padding: 8px 12px 0; border-bottom: 1px solid var(--border-soft); flex: none; }
+      .tab { font-size: 11.8px; padding: 6px 14px 7px; border-radius: 8px 8px 0 0; color: var(--text3); position: relative; }
+      .tab.on { background: var(--main); color: var(--text); border: 1px solid var(--border-soft); border-bottom-color: var(--main); font-weight: 650; }
+      .tab .new { font-size: 8.5px; background: var(--run-bg); color: var(--run); border-radius: 99px; padding: 0 5px; font-weight: 700; vertical-align: 2px; margin-left: 4px; }
+      .pane { flex: 1; min-height: 0; overflow: hidden; display: none; }
+      .pane.on { display: flex; flex-direction: column; }
+      /* diff pane */
+      .diff2 { flex: 1; display: flex; gap: 0; font-family: var(--mono); font-size: 10.6px; line-height: 1.75; }
+      .dhalf { flex: 1; min-width: 0; padding: 10px 14px; overflow: hidden; }
+      .dhalf:first-child { border-right: 1px solid var(--border-soft); }
+      .dhalf .dh { font-size: 9.5px; color: var(--text3); font-weight: 700; margin-bottom: 6px; font-family: -apple-system, 'PingFang SC', sans-serif; }
+      .dl { white-space: pre-wrap; padding: 0 6px; border-radius: 4px; color: var(--text2); }
+      .dl.add { background: var(--ok-bg); color: #1e6b44; }
+      .dl.del { background: var(--danger-bg); color: #96423c; text-decoration: line-through; }
+      /* preview pane */
+      .portchip { display: flex; align-items: center; gap: 8px; margin: 10px 14px 0; font-size: 11.5px; color: var(--text2); background: var(--run-bg); border: 1px solid #cdddf5; border-radius: 9px; padding: 6px 11px; }
+      .portchip b { color: var(--run); font-family: var(--mono); }
+      .browser { flex: 1; min-height: 0; margin: 10px 14px 14px; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; background: #fff; position: relative; }
+      .bhead { display: flex; align-items: center; gap: 8px; padding: 7px 11px; background: var(--side); border-bottom: 1px solid var(--border-soft); flex: none; }
+      .bhead .dots { display: flex; gap: 5px; }
+      .bhead .dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--border); }
+      .bhead .url { flex: 1; font-family: var(--mono); font-size: 10.5px; color: var(--text2); background: var(--card); border: 1px solid var(--border-soft); border-radius: 7px; padding: 3px 10px; }
+      .bhead .iso { font-size: 9px; background: var(--warn-bg); color: var(--warn); border-radius: 99px; padding: 1px 7px; font-weight: 700; flex: none; }
+      .page { flex: 1; min-height: 0; padding: 18px 22px; overflow: hidden; position: relative; }
+      .page h5 { font-size: 15px; margin-bottom: 12px; }
+      .ordbox { border: 1px solid var(--border); border-radius: 10px; padding: 10px 13px; font-size: 12px; color: var(--text2); margin-bottom: 12px; display: flex; justify-content: space-between; }
+      .cprow { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
+      .cpfield { flex: 1; border: 1px solid var(--border); border-radius: 9px; padding: 7px 11px; font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--card); }
+      .cpapply { border: 1px solid var(--border); border-radius: 9px; padding: 7px 14px; font-size: 12px; color: var(--text2); background: var(--chip); flex: none; }
+      .hintline { display: none; font-size: 11.5px; color: var(--warn); background: var(--warn-bg); border: 1px solid #ecd9ae; border-radius: 8px; padding: 6px 10px; margin-bottom: 10px; }
+      .page.bug .hintline { display: block; width: 128px; line-height: 1.45; }
+      .page.fixed .hintline { display: block; width: auto; }
+      .submitbtn { width: 100%; border-radius: 10px; padding: 10px 0; text-align: center; font-size: 13px; font-weight: 650; background: var(--accent); color: var(--accent-text); }
+      .page.fixed .submitbtn { opacity: 0.45; }
+      .page.fixed .submitbtn::after { content: '（优惠券已过期）'; font-size: 11px; font-weight: 400; }
+      .marq { position: absolute; border: 1.5px dashed var(--danger); background: rgba(196, 69, 61, 0.08); border-radius: 6px; display: none; }
+      .marq.show { display: block; }
+      .marqnote {
+        position: absolute; z-index: 5; width: 250px; background: var(--card); border: 1px solid var(--border);
+        border-left: 3px solid var(--danger); border-radius: 10px; box-shadow: 0 18px 44px rgba(30, 26, 18, 0.25);
+        padding: 9px 11px; font-size: 11.5px; display: none;
+      }
+      .marqnote.show { display: block; animation: popin 0.25s; }
+      @keyframes popin { from { transform: translateY(-6px) scale(0.97); opacity: 0; } }
+      .marqnote .nt { color: var(--text); min-height: 30px; line-height: 1.6; }
+      .marqnote .nt .caret { display: inline-block; width: 1px; height: 12px; background: var(--text); animation: blink 1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+      .marqnote .send2 { margin-top: 7px; text-align: center; background: var(--accent); color: var(--accent-text); border-radius: 7px; padding: 5px 0; font-size: 11.5px; font-weight: 650; }
+      /* checks pane */
+      .checks { padding: 14px 18px; }
+      .krow2 { display: flex; align-items: center; gap: 10px; font-size: 12.3px; padding: 8px 4px; border-bottom: 1px solid var(--border-soft); }
+      .krow2 .ic2 { width: 17px; text-align: center; }
+      .krow2 .ok2 { color: var(--ok); font-weight: 700; } .krow2 .bad { color: var(--danger); font-weight: 700; } .krow2 .spin { color: var(--run); }
+      .krow2 .cmd2 { font-family: var(--mono); font-size: 10.5px; color: var(--text3); }
+      .krow2 .dur { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3); }
+      .krow2 .sup { font-size: 9px; color: var(--text3); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; }
+      .gatefoot { flex: none; display: flex; align-items: center; gap: 9px; padding: 10px 16px; border-top: 1px solid var(--border-soft); background: var(--side); }
+      .gatefoot .meta4 { font-size: 11px; color: var(--text2); }
+      .gatefoot .meta4 b { color: var(--text); }
+      .gbtn { border: 1px solid var(--border); background: var(--card); border-radius: 9px; padding: 6px 15px; font-size: 12px; color: var(--text2); font-weight: 600; }
+      .gbtn.primary { margin-left: auto; background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+      /* ── PR 草稿卡 ────────────────────────────── */
+      .prcard {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -46%); z-index: 45;
+        width: 560px; background: var(--card); border: 1px solid var(--border); border-radius: 15px;
+        box-shadow: 0 44px 110px rgba(30, 26, 18, 0.42); padding: 16px 18px 14px; display: none;
+      }
+      .prcard.show { display: block; animation: ovin 0.35s; }
+      .prcard h4 { font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+      .prcard h4 .src2 { font-size: 9px; background: var(--warn-bg); color: var(--warn); border-radius: 99px; padding: 1px 7px; font-weight: 700; }
+      .prcard .sub2 { font-size: 11px; color: var(--text2); margin: 5px 0 10px; line-height: 1.65; }
+      .prbody { background: var(--side); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 13px; font-size: 11.3px; line-height: 1.8; color: var(--text2); font-family: var(--mono); }
+      .prbody .h { color: var(--text); font-weight: 700; }
+      .prbody .okx { color: var(--ok); }
+      .prcard .btns { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+      .prcard .btns .gitnote { font-size: 10px; color: var(--text3); line-height: 1.5; flex: 1; }
+      .prcard .btns .b1 { border: 1px solid var(--border); border-radius: 9px; padding: 6px 13px; font-size: 11.8px; color: var(--text2); font-weight: 600; }
+      .prcard .btns .b2 { background: var(--accent); color: var(--accent-text); border-radius: 9px; padding: 6px 13px; font-size: 11.8px; font-weight: 650; }
+
+      /* ── 影片附件 / 播放器 / 论述（同系列） ────── */
+      .toast { position: absolute; right: 16px; top: 48px; z-index: 50; max-width: 340px; background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 11px; box-shadow: var(--shadow); font-size: 12px; padding: 9px 13px; opacity: 0; transform: translateY(-8px); transition: all 0.3s; pointer-events: none; }
+      .toast.show { opacity: 1; transform: none; }
+      .subs { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 60; max-width: 820px; width: max-content; background: rgba(20, 18, 14, 0.92); color: #f4f2ec; border-radius: 10px; padding: 9px 16px; font-size: 13px; line-height: 1.65; text-align: center; opacity: 0; transition: opacity 0.25s; pointer-events: none; }
+      .subs.show { opacity: 1; }
+      .subs b { color: #ffd89b; }
+      .fakecur { position: absolute; z-index: 70; left: 0; top: 0; transform: translate(620px, 300px); transition: transform 0.65s cubic-bezier(0.3, 0.7, 0.3, 1); pointer-events: none; }
+      .fakecur .ring { position: absolute; left: -7px; top: -7px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(27, 26, 22, 0.55); opacity: 0; }
+      .fakecur.click .ring { animation: ripple 0.32s ease-out; }
+      @keyframes ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1.15); opacity: 0; } }
+      .vbar { max-width: 1260px; margin: 12px auto 0; display: flex; align-items: center; gap: 10px; }
+      .vbtn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+      .vbtn:hover { background: var(--hover); }
+      .vprog { flex: 1; height: 7px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .vfill { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.15s linear; }
+      .vtime { font-family: var(--mono); font-size: 11px; color: var(--text2); min-width: 84px; text-align: right; }
+      .chaps { max-width: 1260px; margin: 8px auto 0; display: flex; gap: 6px; flex-wrap: wrap; }
+      .chap { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 11.5px; cursor: pointer; }
+      .chap:hover { background: var(--hover); }
+      .chap.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .chap.done { color: var(--text3); }
+      .sect { max-width: 1260px; margin: 34px auto 0; }
+      .sect h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+      .sect h2 span { color: var(--text3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); }
+      .card h3 { font-size: 12.8px; margin-bottom: 7px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+      .card p, .card li { font-size: 12px; color: var(--text2); line-height: 1.75; }
+      .card ul { padding-left: 16px; }
+      .card code { font-family: var(--mono); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px; }
+      .tag { font-size: 9.5px; border-radius: 99px; padding: 1px 8px; font-weight: 700; letter-spacing: 0.04em; }
+      .tag.new { background: var(--run-bg); color: var(--run); }
+      .tag.keep { background: var(--ok-bg); color: var(--ok); }
+      .tag.skip { background: var(--danger-bg); color: var(--danger); }
+      .tag.src { background: var(--warn-bg); color: var(--warn); }
+      table.map { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+      table.map th, table.map td { text-align: left; font-size: 12px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; line-height: 1.7; }
+      table.map th { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; background: var(--side); }
+      table.map td:first-child { width: 30%; color: var(--text); font-weight: 600; }
+      table.map td:nth-child(2) { width: 34%; color: var(--text2); }
+      table.map td:last-child { color: var(--text2); }
+      .foot { max-width: 1260px; margin: 30px auto 0; font-size: 11.5px; color: var(--text3); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="pagehead">
+      <h1>看得见的验收 — 把 cmux 的预览与 PR 流移植进 Charter 验收门（研究稿 ④）</h1>
+      <p>
+        cmux→manaflow 给每个任务的隔离工作区配了 <b>Live Web Preview</b>（内嵌浏览器贴着代码实时显示 dev server），
+        审查时<b>直接看到跑起来的应用</b>，选定后 <b>One-Click PR</b>——连 CI 状态都在应用内。
+        这补上了 Charter 验收门今天的盲区：diff 全绿、测试全过，但<b>「页面长什么样」要靠脑补</b>。
+        这份研究稿把预览装进验收门（探测任务 worktree 的本地端口，永不碰主树），预览上<b>圈选即回炉</b>
+        （复用 request-fix 与截图批注），接受后生成 <b>PR 草稿</b>——正文来自证据账本与 Replay 回执，
+        而推送，按 GIT-007，<b>永远是你亲手的显式动作</b>。
+      </p>
+      <div class="meta">讨论稿 · 2026-07-16 · 竞品移植研究（cmux→manaflow：Live Web Preview / One-Click PR / Heatmap Diff · cmux 侧栏端口徽章）· 仅浅色 · 影片约 60s</div>
+    </div>
+
+    <div class="stage">
+      <div class="win" id="app">
+        <div class="titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span class="brand">Charter</span>
+          <span class="proj">checkout-web · wt/t-412</span>
+          <span class="k">预览 = 任务自己的树</span>
+        </div>
+        <div class="roombody">
+          <div class="roomhead">
+            <span class="t">t-412 · 优惠券失效提示</span>
+            <span class="state-chip" id="roomstate">待审查</span>
+          </div>
+          <div class="spine" id="spine">
+            <div class="trow">
+              <span class="glyph">◦</span>
+              <div class="who">YOU</div>
+              <div class="prose">优惠券过期时，结算页给出行内提示并禁用提交，补上单测。</div>
+            </div>
+            <div class="trow">
+              <span class="glyph">⚙</span>
+              <div class="worklog" id="wl1">
+                <div><span class="clock">02:24</span>编辑 CouponField.tsx <span style="color:var(--text3)">+34 −6</span></div>
+                <div><span class="clock">02:31</span>写 CouponField.test.tsx <span style="color:var(--text3)">+58</span></div>
+                <div><span class="clock">03:02</span>验证 vitest — 96 通过 · e2e — 12 通过</div>
+              </div>
+            </div>
+            <div class="milestone" id="ms-done" style="display:none">✓ DONE — 已接受并合回 MAIN</div>
+          </div>
+          <div class="rvbar" id="rvbar">
+            <span class="ev"><b>3 文件</b> <span class="pmx"><span class="p">+94</span> <span class="m">−6</span></span> · 验证 <b id="rvchk">2/3 绿</b></span>
+            <span class="ev" id="rvwarn" style="color:var(--warn)">e2e 待复跑</span>
+            <button class="open" id="opengate">Review changes</button>
+          </div>
+          <div class="composer">
+            <div class="input" id="cinput">回复 agent，或 @ 引用文件…</div>
+            <div class="row2">
+              <span class="pill">受控修改</span><span class="pill">claude-sonnet-4.6 · 中</span><span class="send">↑</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 验收门 -->
+        <div class="gate" id="gate">
+          <div class="gatehead">
+            <span class="t">验收门 · t-412 优惠券失效提示</span>
+            <span class="evc">wt/t-412 → main</span>
+            <span class="evc">±100 · 3 文件</span>
+            <span class="x">✕</span>
+          </div>
+          <div class="gatebody">
+            <div class="files">
+              <div class="fh">改动 · 3 文件</div>
+              <div class="frow2 on"><span class="m2 M">M</span><span>CouponField.tsx</span><span class="pm"><span class="p">+34</span> <span class="m">−6</span></span></div>
+              <div class="frow2"><span class="m2 A">A</span><span>CouponField.test.tsx</span><span class="pm"><span class="p">+58</span></span></div>
+              <div class="frow2"><span class="m2 M">M</span><span>i18n/zh.json</span><span class="pm"><span class="p">+2</span></span></div>
+            </div>
+            <div class="content">
+              <div class="tabs">
+                <span class="tab on" id="tab-diff">改动</span>
+                <span class="tab" id="tab-prev">预览<span class="new">NEW</span></span>
+                <span class="tab" id="tab-chk">检查</span>
+              </div>
+              <!-- diff -->
+              <div class="pane on" id="pane-diff">
+                <div class="diff2">
+                  <div class="dhalf">
+                    <div class="dh">基线（任务快照）</div>
+                    <div class="dl">export function CouponField({ coupon }: Props) {</div>
+                    <div class="dl del">  return &lt;Field value={coupon.code}/&gt;;</div>
+                    <div class="dl">}</div>
+                  </div>
+                  <div class="dhalf">
+                    <div class="dh">当前（wt/t-412）</div>
+                    <div class="dl">export function CouponField({ coupon }: Props) {</div>
+                    <div class="dl add">  const expired = isExpired(coupon);</div>
+                    <div class="dl add">  if (expired) return &lt;InlineHint tone="warn"&gt;{t('coupon.expired')}&lt;/InlineHint&gt;;</div>
+                    <div class="dl add">  return &lt;Field value={coupon.code} disabled={expired}/&gt;;</div>
+                    <div class="dl">}</div>
+                  </div>
+                </div>
+              </div>
+              <!-- preview -->
+              <div class="pane" id="pane-prev">
+                <div class="portchip">
+                  <span>⚭</span>
+                  <span>检测到 dev server：<b>localhost:5173</b>（进程属于 wt/t-412 的验证命令）</span>
+                  <span style="margin-left:auto;font-size:10px;color:var(--text3)">仅本地端口 · 不自动起服务</span>
+                </div>
+                <div class="browser">
+                  <div class="bhead">
+                    <span class="dots"><i></i><i></i><i></i></span>
+                    <span class="url">localhost:5173/checkout</span>
+                    <span class="iso">任务 worktree · 隔离</span>
+                  </div>
+                  <div class="page bug" id="page">
+                    <h5>结算</h5>
+                    <div class="ordbox"><span>商品小计（2 件）</span><b>¥ 468.00</b></div>
+                    <div class="cprow">
+                      <span class="cpfield">SUMMER-20 <span style="color:var(--text3)">（已过期）</span></span>
+                      <span class="cpapply" id="cpapply">应用优惠券</span>
+                    </div>
+                    <div class="hintline" id="hintline">该优惠券已于 6 月 30 日过期，请更换或移除</div>
+                    <div class="submitbtn" id="submitbtn">提交订单</div>
+                    <div class="marq" id="marq"></div>
+                    <div class="marqnote" id="marqnote">
+                      <div class="nt" id="marqtext"><span class="caret"></span></div>
+                      <div class="send2" id="marqsend">↩ 回炉给 agent（带截图与选区）</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <!-- checks -->
+              <div class="pane" id="pane-chk">
+                <div class="checks">
+                  <div class="krow2"><span class="ic2 ok2">✓</span><span>typecheck</span><span class="cmd2">tsc --noEmit</span><span class="dur">8.2s</span></div>
+                  <div class="krow2"><span class="ic2 ok2">✓</span><span>单测</span><span class="cmd2">vitest run</span><span class="dur">21s · 96 通过</span></div>
+                  <div class="krow2" id="k-e2e"><span class="ic2 bad" id="k-e2e-ic">✗</span><span>e2e:checkout</span><span class="cmd2">playwright test checkout</span><span class="sup" id="k-e2e-sup" style="display:none">superseded</span><span class="dur" id="k-e2e-dur">2 失败</span></div>
+                  <div class="krow2" id="k-e2e2" style="display:none"><span class="ic2 ok2">✓</span><span>e2e:checkout（复跑）</span><span class="cmd2">playwright test checkout</span><span class="dur">1m48s · 12 通过</span></div>
+                </div>
+              </div>
+              <div class="gatefoot">
+                <span class="meta4">证据：<b>±100 · 3 文件</b> · 验证 <b id="footchk">2/3</b> · 快照 <b>snap 4c9e2</b></span>
+                <button class="gbtn">回炉修改…</button>
+                <button class="gbtn primary" id="acceptbtn">接受并合回 main</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PR 草稿卡 -->
+        <div class="prcard" id="prcard">
+          <h4>PR 草稿已备好 <span class="src2">正文来自证据账本</span></h4>
+          <div class="sub2">分支 <code style="font-family:var(--mono)">charter/t-412-coupon-expiry</code> → main · 标题与正文由任务的目标、改动清单、验证矩阵与 Replay 回执生成——<b>可编辑，随你改</b>。</div>
+          <div class="prbody">
+            <div class="h">fix(checkout): inline hint + disabled submit for expired coupons</div>
+            <div>&nbsp;</div>
+            <div>· 目标：过期券行内提示 + 禁用提交（验收条件 2/2 满足）</div>
+            <div>· 变更：CouponField.tsx +34−6 · CouponField.test.tsx +58 · zh.json +2</div>
+            <div>· 验证：<span class="okx">✓ typecheck · ✓ vitest 96 · ✓ e2e 12（复跑，首跑 2 失败已修）</span></div>
+            <div>· 证据：Replay 回执 sha256:9f31…c2（HTML+JSON 附件）</div>
+          </div>
+          <div class="btns">
+            <span class="gitnote">GIT-007：agent 工具层没有 push。<br/>推送与创建 PR 由你在下一步显式确认。</span>
+            <button class="b1" id="prcopy">复制正文</button>
+            <button class="b2">用 gh 起草…</button>
+          </div>
+        </div>
+
+        <div class="toast" id="toast"></div>
+        <div class="subs" id="subs"></div>
+        <div class="fakecur" id="fakecur">
+          <span class="ring"></span>
+          <svg width="20" height="21" viewBox="0 0 20 21"><path d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z" fill="#fff" stroke="#1b1a16" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>借了什么、怎么落地 <span>cmux 行为 → Charter 落法（改造点加粗）</span></h2>
+      <table class="map">
+        <tr><th>cmux → manaflow 原样</th><th>用户为什么爱</th><th>Charter 落法</th></tr>
+        <tr>
+          <td>Live Web Preview：内嵌浏览器贴着代码实时显示任务工作区的 dev server；cmux 终端的侧栏也给每个工作区标出<b>监听端口</b></td>
+          <td>「代码对了」≠「页面对了」——看得见的验收把视觉回归挡在合并之前</td>
+          <td>验收门新增<b>预览 tab</b>：只探测<b>任务 worktree 进程树</b>里监听的本地端口（来自任务的 dev/验证命令），iframe 沙箱 + <code>任务 worktree · 隔离</code>徽章。<b>不自动起服务</b>；没有端口就诚实空态（引导配置 dev 验证命令），非 web 项目该 tab 不出现</td>
+        </tr>
+        <tr>
+          <td>Preview comments（manaflow）：在活的部署预览上直接留评论，自动<b>另起一个</b>只修这个问题的 agent run</td>
+          <td>发现问题的瞬间就是表达问题的最佳时机——不用回提示框重新组织语言、不丢失正看着的位置</td>
+          <td><b>圈选即回炉</b>——同一思想，不同边界：<b>不另起新 run</b>，截图 + 选区 + 一句话走同一个任务的 request-fix 回路（复用 PIVOT-020 批注器与 Review v2），agent 带着精确坐标继续修。任务史保持一条线，Replay 不断链</td>
+        </tr>
+        <tr>
+          <td>检查/验证在合并前集中展示</td>
+          <td>合并的信心来自一眼可见的全绿</td>
+          <td><b>检查 tab</b> 集中呈现既有验证机制（VER）：失败复跑后旧记录标 <code>superseded</code> 不覆盖（VER-005）、代码再变标 <code>stale</code>（VER-008）、没跑就大字 <code>Unverified</code>（VER-007）——诚实语义一字不改，只是集中了</td>
+        </tr>
+        <tr>
+          <td>One-Click PR Creation：工作区里直接开 PR / squash 合并，GitHub Actions / CI 状态应用内可见</td>
+          <td>从「本地接受」到「团队可见」零摩擦</td>
+          <td><b>PR 草稿</b>：接受后生成分支名 + 标题 + 正文（目标 / 变更清单 / 验证矩阵 / <b>Replay 回执哈希</b>——我们独有的可核查证据）。<b>推送与创建永远是用户显式动作</b>（GIT-007：agent 工具层没有 push），按钮只是「用 gh 起草」，不是「已发出」。PR 建好后的 CI 状态<b>只读回显</b>到 Room，可作后续增量</td>
+        </tr>
+        <tr>
+          <td>Heatmap Diff Viewer：给「有风险的改动行」做颜色标注，让审查聚焦在要紧的行</td>
+          <td>审查疲劳是真问题——几百行 diff 里值得盯的是少数</td>
+          <td><b>后续候选（本稿未展开）</b>：验收门 diff 加一层「风险热力」——着色依据接工具网关既有的 R 级分类与路径敏感度（可解释、可关），而不是再请一个模型打分</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 预览打的是任务自己的树 <span class="tag new">NEW</span><span class="tag src">源自 cmux</span></h3>
+          <p>
+            端口探测范围 = 任务 worktree 的进程树，绝不把主树的 dev server 当成任务的效果图。
+            预览与 diff、检查共享同一个「wt/t-412 → main」语境——三个 tab 是同一份证据的三种投影。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 视觉问题走同一条回炉道 <span class="tag new">NEW</span></h3>
+          <p>
+            Review v2 里选中 diff 行可以回炉；现在圈选预览像素也走<b>同一个 request-fix 回路</b>——
+            一个反馈机制，两种证据形态。agent 收到的是结构化的选区 + 截图 + 文字，不是「那个提示怪怪的」。
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · PR 是证据的导出，不是新的自动化 <span class="tag new">NEW</span></h3>
+          <p>
+            正文不是让模型再写一遍小作文，而是<b>证据账本的投影</b>：验收条件勾了几条、验证矩阵、Replay 回执哈希。
+            审 PR 的同事拿到的是可核查的记录——这是 cmux 没有的部分。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分（安全语义原样）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>GIT-007 与接受边界 <span class="tag keep">KEEP</span></h3>
+          <p>
+            agent 工具层永不提供 <code>git push</code>；接受 = 合并预检 + 字节校验合回主树 + 可回滚，
+            与今天完全一致。PR 草稿只在 ACCEPTED 之后出现，绝不反过来诱导接受。
+          </p>
+        </div>
+        <div class="card">
+          <h3>验证语义 <span class="tag keep">KEEP</span></h3>
+          <p>
+            superseded / stale / Unverified 三个诚实标注原样保留；未验证仍可接受但要显式确认。
+            检查 tab 是呈现层，不改一条状态机规则。
+          </p>
+        </div>
+        <div class="card">
+          <h3>回炉即对话 <span class="tag keep">KEEP</span></h3>
+          <p>
+            圈选回炉复用 steer 通道：任务回到进行中、Room 时间线多一条你的反馈（带附件）、
+            review bar 待新一轮 REVIEW_READY 再回来——没有第二套「评论系统」。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>刻意不搬的（以及为什么）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>自动 push / 自动合 PR <span class="tag skip">SKIP</span></h3>
+          <p>
+            cmux 可以选完就建 PR；Charter 的边界是「外发动作必须显式」。GIT-007 是硬规则，
+            Full 模式（ADR-0012）的自动接受也只到本地 ACCEPTED 为止，永远不含推送。
+          </p>
+        </div>
+        <div class="card">
+          <h3>云端可分享的预览 URL <span class="tag skip">SKIP · V1</span></h3>
+          <p>
+            manaflow 的云形态能把预览发给同事；Charter V1 是本地优先——预览只对 localhost，
+            对外暴露涉及全新的威胁面（隧道、鉴权、录制），值得做但必须是独立 ADR。
+          </p>
+        </div>
+        <div class="card">
+          <h3>预览里嵌 DevTools <span class="tag skip">SKIP</span></h3>
+          <p>
+            预览负责「看效果、圈问题」；要真调试，一键在系统浏览器打开同一端口。
+            在 IDE 里再造半个浏览器审查器是无底洞。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      研究稿 ④ / ④ · 源：cmux→manaflow Live Web Preview / One-Click PR / Heatmap Diff · cmux 侧栏端口徽章 · 同系列：① inspo-ghostty-quick-console.html ·
+      ② inspo-ghostty-legible-terminal.html · ③ inspo-cmux-parallel-attempts.html · 采纳流程：讨论 → ADR（预览端口探测边界、
+      iframe 沙箱策略、圈选回炉的附件形态、PR 草稿生成器）→ 实现 → E2E（worktree 端口探测不误抓主树、圈选回炉往返、
+      superseded 复跑呈现、接受后 PR 卡出现且从不自动推送、非 web 项目无预览 tab）。
+    </div>
+
+    <script>
+      const rvbar = document.getElementById('rvbar');
+      const gate = document.getElementById('gate');
+      const page = document.getElementById('page');
+      const marq = document.getElementById('marq');
+      const marqnote = document.getElementById('marqnote');
+      const marqtext = document.getElementById('marqtext');
+      const prcard = document.getElementById('prcard');
+      const roomstate = document.getElementById('roomstate');
+      const wl1 = document.getElementById('wl1');
+      const msDone = document.getElementById('ms-done');
+      const toast = document.getElementById('toast');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+      const stage = document.querySelector('.stage');
+      const tabs = { diff: 'pane-diff', prev: 'pane-prev', chk: 'pane-chk' };
+
+      function selTab(key) {
+        for (const k of Object.keys(tabs)) {
+          document.getElementById('tab-' + k).classList.toggle('on', k === key);
+          document.getElementById(tabs[k]).classList.toggle('on', k === key);
+        }
+      }
+      function e2ePass(pass) {
+        document.getElementById('k-e2e-ic').className = 'ic2 ' + (pass ? 'ok2' : 'bad');
+        document.getElementById('k-e2e-sup').style.display = pass ? 'inline' : 'none';
+        document.getElementById('k-e2e2').style.display = pass ? 'flex' : 'none';
+        document.getElementById('footchk').textContent = pass ? '3/3 绿' : '2/3';
+        document.getElementById('rvchk').textContent = pass ? '3/3 绿' : '2/3 绿';
+        document.getElementById('rvwarn').style.display = pass ? 'none' : 'inline';
+        if (pass) document.getElementById('k-e2e-ic').textContent = '✗';
+      }
+
+      // ── 影片引擎 ──────────────────────────────
+      const ABORT = Symbol('abort');
+      let token = 0; let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms; let last = performance.now();
+          const tick = () => {
+            if (my !== token) { reject(ABORT); return; }
+            const n = performance.now();
+            if (!paused) { left -= n - last; clock.inScene += n - last; }
+            last = n;
+            if (left <= 0) resolve(); else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = stage.getBoundingClientRect();
+        cursor.style.transform = `translate(${r.left - box.left + r.width * fx}px, ${r.top - box.top + r.height * fy}px)`;
+        await wait(660);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click');
+        await wait(260);
+      }
+      function say(html) { subs.innerHTML = html; subs.classList.add('show'); }
+      let toastTimer = null;
+      function showToast(msg) {
+        toast.textContent = msg; toast.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3400);
+      }
+
+      // ── 分镜 ──────────────────────────────────
+      const SCENES = [
+        {
+          label: '① REVIEW_READY → 验收门',
+          est: 7800,
+          async play() {
+            say('任务到 <b>REVIEW_READY</b>：review bar 照旧浮上来（既有机制，一字不改）。');
+            rvbar.classList.add('show');
+            await wait(2200);
+            await moveCursorTo(document.getElementById('opengate'));
+            await clickCursor();
+            gate.classList.add('show');
+            say('验收门还是那扇门：改动清单 + 并排 diff（Review v2）。注意 tab 排上多了一个——<b>预览</b>。');
+            await wait(3600);
+          },
+          snap() { rvbar.classList.add('show'); gate.classList.add('show'); selTab('diff'); },
+        },
+        {
+          label: '② 预览：跑起来看',
+          est: 10500,
+          async play() {
+            await moveCursorTo(document.getElementById('tab-prev'));
+            await clickCursor();
+            selTab('prev');
+            say('探测到 <b>wt/t-412 进程树</b>里的 dev server（:5173）——预览打的是任务自己的树，主树与你手上的工作毫不相干。');
+            await wait(3400);
+            say('像用户一样点一遍：应用一张过期券——');
+            await moveCursorTo(document.getElementById('cpapply'));
+            await clickCursor();
+            await wait(900);
+            say('<b>看见问题了</b>：提示文案压成三行，而且提交按钮居然还能点。diff 和测试都没抓住它——眼睛抓住了。');
+            await wait(4200);
+          },
+          snap() { rvbar.classList.add('show'); gate.classList.add('show'); selTab('prev'); },
+        },
+        {
+          label: '③ 圈选即回炉',
+          est: 11500,
+          async play() {
+            say('不用切去聊天窗口打字描述——在预览上<b>直接圈</b>。');
+            const hint = document.getElementById('hintline');
+            const pr = page.getBoundingClientRect();
+            const hr = hint.getBoundingClientRect();
+            const sb = document.getElementById('submitbtn').getBoundingClientRect();
+            marq.style.left = hr.left - pr.left - 8 + 'px';
+            marq.style.top = hr.top - pr.top - 8 + 'px';
+            marq.style.width = '0px'; marq.style.height = '0px';
+            marq.classList.add('show');
+            await moveCursorTo(hint, 0, 0);
+            const w = Math.max(hr.width, sb.width) + 16;
+            const h = sb.bottom - hr.top + 16;
+            for (let i = 1; i <= 8; i++) {
+              marq.style.width = (w * i) / 8 + 'px';
+              marq.style.height = (h * i) / 8 + 'px';
+              await wait(90);
+            }
+            await wait(500);
+            marqnote.style.left = hr.left - pr.left + w + 14 + 'px';
+            marqnote.style.top = hr.top - pr.top + 6 + 'px';
+            marqnote.classList.add('show');
+            const NOTE = '提示压行了；过期时提交按钮应禁用';
+            let typed = '';
+            for (const ch of NOTE) {
+              typed += ch;
+              marqtext.innerHTML = typed + '<span class="caret"></span>';
+              await wait(60);
+            }
+            await wait(500);
+            await moveCursorTo(document.getElementById('marqsend'));
+            await clickCursor();
+            marqnote.classList.remove('show'); marq.classList.remove('show');
+            gate.classList.remove('show');
+            roomstate.textContent = '进行中';
+            roomstate.className = 'state-chip'; roomstate.style.background = 'var(--run-bg)'; roomstate.style.color = 'var(--run)';
+            rvbar.classList.remove('show');
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">05:12</span><span class="live">回炉：截图选区 + 「提示压行了；过期时提交按钮应禁用」 → 修复中…</span>';
+            wl1.appendChild(d);
+            say('<b>圈选 + 一句话 = 回炉</b>：截图与选区坐标随 request-fix 回路发回（复用 PIVOT-020 批注器）。任务回到进行中——同一条对话，没有第二套评论系统。');
+            await wait(4200);
+          },
+          snap() {
+            rvbar.classList.remove('show'); gate.classList.remove('show');
+            roomstate.textContent = '进行中'; roomstate.style.background = 'var(--run-bg)'; roomstate.style.color = 'var(--run)';
+            if (!document.getElementById('wl-fix')) {
+              const d = document.createElement('div');
+              d.id = 'wl-fix';
+              d.innerHTML = '<span class="clock">05:12</span>回炉：截图选区 + 文字反馈 → 修复中…';
+              wl1.appendChild(d);
+            }
+          },
+        },
+        {
+          label: '④ 复跑：检查全绿',
+          est: 9800,
+          async play() {
+            const d = document.createElement('div');
+            d.innerHTML = '<span class="clock">06:48</span>修复 InlineHint 布局 + disabled；e2e 复跑 12 通过';
+            wl1.appendChild(d);
+            roomstate.textContent = '待审查';
+            roomstate.style.background = 'var(--warn-bg)'; roomstate.style.color = 'var(--warn)';
+            e2ePass(true);
+            rvbar.classList.add('show');
+            showToast('t-412 修复完成 — 3/3 检查通过，待审查');
+            say('agent 修完，回到验收门看<b>检查 tab</b>——');
+            await wait(2200);
+            await moveCursorTo(document.getElementById('opengate'));
+            await clickCursor();
+            gate.classList.add('show');
+            await moveCursorTo(document.getElementById('tab-chk'));
+            await clickCursor();
+            selTab('chk');
+            say('e2e 复跑全绿；<b>首跑的失败没有被抹掉</b>——标 superseded 留在原地（VER-005）。预览刷新：提示一行、按钮已禁用。');
+            await wait(2800);
+            page.classList.remove('bug'); page.classList.add('fixed');
+            await moveCursorTo(document.getElementById('tab-prev'));
+            await clickCursor();
+            selTab('prev');
+            await wait(2400);
+          },
+          snap() {
+            SCENES[2].snap();
+            e2ePass(true);
+            roomstate.textContent = '待审查'; roomstate.style.background = 'var(--warn-bg)'; roomstate.style.color = 'var(--warn)';
+            rvbar.classList.add('show'); gate.classList.add('show');
+            page.classList.remove('bug'); page.classList.add('fixed');
+            selTab('prev');
+          },
+        },
+        {
+          label: '⑤ 接受',
+          est: 6200,
+          async play() {
+            say('三种证据都点头了：diff、检查、<b>眼睛</b>。接受——合并预检 → 字节校验合回 main。');
+            await moveCursorTo(document.getElementById('acceptbtn'));
+            await clickCursor();
+            gate.classList.remove('show');
+            rvbar.classList.remove('show');
+            roomstate.textContent = '已接受';
+            roomstate.className = 'state-chip done';
+            msDone.style.display = 'flex';
+            showToast('已接受 · wt/t-412 合回 main（预检无冲突，字节校验通过）');
+            await wait(3800);
+          },
+          snap() {
+            SCENES[3].snap();
+            gate.classList.remove('show'); rvbar.classList.remove('show');
+            roomstate.textContent = '已接受'; roomstate.className = 'state-chip done';
+            msDone.style.display = 'flex';
+          },
+        },
+        {
+          label: '⑥ PR 草稿（你来推）',
+          est: 11000,
+          async play() {
+            await wait(600);
+            prcard.classList.add('show');
+            say('接受之后——不是「PR 已建好」，而是 <b>PR 草稿已备好</b>：标题正文来自证据账本（验收条件、变更、验证矩阵、Replay 回执哈希）。');
+            await wait(4600);
+            say('<b>GIT-007 是硬规则</b>：agent 工具层没有 push。「用 gh 起草」也要你在下一步显式确认推送——外发动作永远在你手里。');
+            await moveCursorTo(document.getElementById('prcopy'));
+            await clickCursor();
+            showToast('PR 正文已复制（含验证矩阵与回执哈希）');
+            await wait(4200);
+          },
+          snap() { SCENES[4].snap(); prcard.classList.add('show'); },
+        },
+        {
+          label: '⑦ 收束',
+          est: 6400,
+          async play() {
+            prcard.classList.remove('show');
+            say('验收门从两种证据变三种：<b>diff · 检查 · 眼睛</b>；出门时多一份可核查的交付物：<b>PR 草稿</b>。cmux→manaflow 给了方向，Charter 给了边界。');
+            await wait(6200);
+          },
+          snap() { SCENES[4].snap(); },
+        },
+      ];
+
+      // ── 播放器 ────────────────────────────────
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+      function resetAll() {
+        rvbar.classList.remove('show'); gate.classList.remove('show'); prcard.classList.remove('show');
+        selTab('diff');
+        e2ePass(false);
+        document.getElementById('k-e2e-ic').textContent = '✗';
+        page.classList.add('bug'); page.classList.remove('fixed');
+        marq.classList.remove('show'); marqnote.classList.remove('show');
+        marqtext.innerHTML = '<span class="caret"></span>';
+        roomstate.textContent = '待审查'; roomstate.className = 'state-chip';
+        roomstate.style.background = ''; roomstate.style.color = '';
+        msDone.style.display = 'none';
+        wl1.innerHTML = '<div><span class="clock">02:24</span>编辑 CouponField.tsx <span style="color:var(--text3)">+34 −6</span></div>'
+          + '<div><span class="clock">02:31</span>写 CouponField.test.tsx <span style="color:var(--text3)">+58</span></div>'
+          + '<div><span class="clock">03:02</span>验证 vitest — 96 通过 · e2e — 2 失败</div>';
+        toast.classList.remove('show'); subs.classList.remove('show');
+        cursor.style.transform = 'translate(620px, 300px)';
+      }
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i; clock.inScene = 0; markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est;
+          await wait(1500);
+          if (my === token) seek(0);
+        } catch (e) { if (e !== ABORT) throw e; }
+      }
+      function seek(n) {
+        token += 1; resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n; clock.inScene = 0; markChap(n);
+        void run(n);
+      }
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap'; b.textContent = s.label; b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+      const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+      playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停'; };
+      document.getElementById('vreplay').onclick = () => { paused = false; playBtn.textContent = '⏸ 暂停'; seek(0); };
+
+      seek(0);
+    </script>
+  </body>
+</html>

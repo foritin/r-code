@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Memory 文件 View/Edit 弹窗</title>
+<style>
+  :root {
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: Menlo, Monaco, 'SF Mono', Consolas, 'Courier New', monospace;
+    --bg-app: #eceae5;
+    --bg-editor: #fbfaf7;
+    --bg-input: #ffffff;
+    --bg-card: #ffffff;
+    --bg-chip: #edeae3;
+    --bg-hover: #e8e5de;
+    --bg-overlay: rgba(32, 30, 26, 0.4);
+    --border: #e5e1d8;
+    --border-soft: #edeae3;
+    --border-strong: #cfcabf;
+    --fg: #201e1a;
+    --fg-muted: #6e6a61;
+    --fg-faint: #a39e94;
+    --accent: #1b1a16;
+    --accent-fg: #ffffff;
+    --danger: #b3402f;
+    --radius-card: 14px;
+    --radius-chip: 9px;
+  }
+  [data-theme='dark'] {
+    --bg-app: #171614;
+    --bg-editor: #1a1917;
+    --bg-input: #24231f;
+    --bg-card: #21201c;
+    --bg-chip: #292823;
+    --bg-hover: #292823;
+    --bg-overlay: rgba(0, 0, 0, 0.55);
+    --border: #33312b;
+    --border-soft: #2a2924;
+    --border-strong: #4a473f;
+    --fg: #e8e6e0;
+    --fg-muted: #a29d92;
+    --fg-faint: #6e6a61;
+    --accent: #e8e6e0;
+    --accent-fg: #1a1917;
+    --danger: #e07a5f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--font-ui);
+    background: var(--bg-editor);
+    color: var(--fg);
+    font-size: 13px;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 26px 22px 60px;
+    display: grid;
+    gap: 14px;
+  }
+  .demo-note {
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-card);
+    padding: 12px 16px;
+    color: var(--fg-muted);
+    font-size: 12.5px;
+    line-height: 1.7;
+    background: var(--bg-card);
+  }
+  .demo-note b { color: var(--fg); }
+  .theme-toggle {
+    position: fixed;
+    top: 14px;
+    right: 16px;
+    z-index: 99;
+  }
+
+  /* ── 卡片（保持现状，只是不再内联展开） ── */
+  .mv-file {
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-card);
+    background: var(--bg-card);
+    padding: 9px 12px;
+  }
+  .mv-file-head { display: flex; gap: 10px; align-items: baseline; }
+  .mv-file-head .label { font-weight: 640; font-size: 13px; font-family: var(--font-mono); }
+  .scope {
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10px;
+    color: var(--fg-faint);
+  }
+  .mv-file-head .when { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); white-space: nowrap; }
+  .mv-file-summary {
+    margin-top: 3px; font-size: 12px; color: var(--fg-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mv-file-path { margin-top: 2px; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); }
+  .mv-file-actions { display: flex; gap: 7px; margin-top: 8px; }
+
+  .mv-btn {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-input);
+    color: var(--fg);
+    border-radius: var(--radius-chip);
+    padding: 4px 11px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .mv-btn:hover { background: var(--bg-hover); }
+  .mv-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .mv-btn.quiet { border-color: var(--border-soft); color: var(--fg-muted); }
+  .mv-btn.danger { color: var(--danger); }
+
+  /* ── 弹窗（复用产品 .modal 规范） ── */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: var(--bg-overlay);
+    display: grid; place-items: center;
+    z-index: 80;
+  }
+  .modal {
+    width: min(760px, 92vw);
+    height: min(640px, 86vh);
+    background: var(--bg-card);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .modal-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .modal-header .title-wrap { min-width: 0; flex: 1; }
+  .modal-header .title {
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    font-weight: 640;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .modal-header .path {
+    margin-top: 2px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    color: var(--fg-faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .seg {
+    display: flex; flex: none;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-chip);
+    overflow: hidden;
+  }
+  .seg button {
+    border: 0; background: var(--bg-input); color: var(--fg-muted);
+    font: 600 12px var(--font-ui); padding: 4px 14px; cursor: pointer;
+  }
+  .seg button + button { border-left: 1px solid var(--border-strong); }
+  .seg button.active { background: var(--accent); color: var(--accent-fg); }
+  .modal-close {
+    background: none; border: none; color: var(--fg-muted);
+    cursor: pointer; font-size: 16px; padding: 4px 8px; border-radius: 4px; flex: none;
+  }
+  .modal-close:hover { background: var(--bg-hover); color: var(--fg); }
+  .modal-body { flex: 1; overflow: auto; min-height: 0; }
+  .modal-foot {
+    display: flex; gap: 8px; align-items: center;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+  }
+  .modal-foot .hint { font-size: 11.5px; color: var(--fg-faint); margin-left: auto; }
+
+  /* View：frontmatter 元信息头 + Markdown 正文 */
+  .fm {
+    display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--bg-editor);
+    font-size: 11px; color: var(--fg-muted);
+  }
+  .fm .chip {
+    border: 1px solid var(--border-soft); border-radius: 999px;
+    background: var(--bg-input);
+    padding: 1px 9px; font-family: var(--font-mono); font-size: 10.5px;
+  }
+  .fm .desc { width: 100%; line-height: 1.55; color: var(--fg-muted); }
+  .md {
+    padding: 16px 22px 26px;
+    font-size: 13.5px;
+    line-height: 1.75;
+    overflow-wrap: break-word;
+  }
+  .md p { margin: 0 0 10px; }
+  .md strong { font-weight: 680; }
+  .md ul { margin: 0 0 10px; padding-left: 22px; }
+  .md li { margin: 3px 0; }
+  .md code {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--bg-chip);
+    border-radius: 5px; padding: 1px 5px;
+  }
+  .md .wikilink {
+    color: var(--fg);
+    background: var(--bg-chip);
+    border: 1px solid var(--border-soft);
+    border-radius: 999px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .md h4 { margin: 16px 0 6px; font-size: 13.5px; }
+
+  /* Edit：原始等宽文本 */
+  .raw-editor {
+    display: block;
+    width: 100%; height: 100%;
+    border: 0; outline: none; resize: none;
+    background: var(--bg-input); color: var(--fg);
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
+    padding: 14px 18px;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<button class="mv-btn theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">☾ 深/浅色</button>
+
+<div class="page">
+  <div class="demo-note">
+    <b>Mockup：Memory 外部文件的 View / Edit 改为弹窗。</b><br />
+    ① 卡片不再内联展开——点 <b>View / Edit</b> 弹出居中对话框（同产品 Settings 弹窗规范），一次只看一个；
+    ② <b>View</b>：frontmatter 解析为顶部元信息条，正文渲染成 Markdown，<code>[[wiki-link]]</code> 显示为胶囊；
+    ③ <b>Edit</b>：完整原始文本（含 frontmatter）等宽编辑，Save / Cancel；
+    ④ 弹窗内右上角可 View ⇄ Edit 互切；正文纵向滚动、长行自动换行，不再有横向裁切；Esc / 点遮罩关闭。<br />
+    ↓ 点下面卡片上的按钮试试。
+  </div>
+
+  <div class="mv-file">
+    <div class="mv-file-head">
+      <span class="label">cdp-hidden-tab-dialog-freeze.md</span>
+      <span class="scope">project</span>
+      <span class="when">2026/7/19 22:41</span>
+    </div>
+    <div class="mv-file-summary">用 [[web-access-cdp-setup]] 的代理开的新标签是后台标签(`document.hidden=true`);Chrome 会冻结遮挡标签…</div>
+    <div class="mv-file-path">~/.claude/projects/-Users-edy-git/memory/cdp-hidden-tab-dialog-freeze.md</div>
+    <div class="mv-file-actions">
+      <button class="mv-btn quiet" onclick="openModal('view')">View</button>
+      <button class="mv-btn quiet" onclick="openModal('edit')">Edit</button>
+      <button class="mv-btn danger">Delete</button>
+    </div>
+  </div>
+
+  <div class="mv-file">
+    <div class="mv-file-head">
+      <span class="label">web-access-cdp-setup.md</span>
+      <span class="scope">project</span>
+      <span class="when">2026/7/18 15:02</span>
+    </div>
+    <div class="mv-file-summary">CDP 代理环境的搭建步骤与端口约定…</div>
+    <div class="mv-file-path">~/.claude/projects/-Users-edy-git/memory/web-access-cdp-setup.md</div>
+    <div class="mv-file-actions">
+      <button class="mv-btn quiet" onclick="openModal('view')">View</button>
+      <button class="mv-btn quiet" onclick="openModal('edit')">Edit</button>
+      <button class="mv-btn danger">Delete</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 弹窗 ── -->
+<div class="modal-backdrop" id="backdrop" hidden onclick="if (event.target === this) closeModal()">
+  <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal-header">
+      <div class="title-wrap">
+        <div class="title">cdp-hidden-tab-dialog-freeze.md <span class="scope">project</span></div>
+        <div class="path">~/.claude/projects/-Users-edy-git/memory/cdp-hidden-tab-dialog-freeze.md</div>
+      </div>
+      <div class="seg">
+        <button id="segView" onclick="setMode('view')">View</button>
+        <button id="segEdit" onclick="setMode('edit')">Edit</button>
+      </div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="modal-body" id="bodyView">
+      <div class="fm">
+        <span class="chip">name: cdp-hidden-tab-dialog-freeze</span>
+        <span class="chip">type: reference</span>
+        <span class="chip">origin: db3bf914…00e8</span>
+        <span class="desc">CDP 后台/遮挡标签页里 Chrome 冻结 rAF 与 CSS 动画，Base UI Dialog 永远关不掉；验证对话框类交互必须用前台标签。</span>
+      </div>
+      <div class="md">
+        <p>用 <span class="wikilink">[[web-access-cdp-setup]]</span> 的代理开的新标签是后台标签（<code>document.hidden=true</code>）；Chrome 会冻结遮挡标签页里的 rAF 与 CSS 动画。<strong>任何页面的对话框在隐藏标签里都无法关闭</strong>（取消/X/Esc/CDP 可信点击/禁动画注入全都无效，popup 弹窗 + pre-change 代码证明与业务代码无关）。</p>
+        <h4>How to apply:</h4>
+        <ul>
+          <li>浏览器验证「对话框关闭/过渡动画类交互」必须用<strong>前台可见标签</strong>（用户在场时用他们正开着的标签）。</li>
+          <li>隐藏标签里只验证：渲染内容、console 错误、网络请求/响应、DB 副作用——这些不受冻结影响；不要在隐藏标签里断言「对话框已关闭」。</li>
+          <li>如果必须自动化对话框交互，先 <code>Page.bringToFront</code> 把标签带到前台再操作。</li>
+        </ul>
+        <p>相关：<span class="wikilink">[[web-access-cdp-setup]]</span></p>
+      </div>
+    </div>
+
+    <div class="modal-body" id="bodyEdit" hidden>
+      <textarea class="raw-editor" spellcheck="false">---
+name: cdp-hidden-tab-dialog-freeze
+description: "CDP 后台/遮挡标签页里 Chrome 冻结 rAF 与 CSS 动画,Base UI Dialog 永远关不掉；验证对话框类交互必须用前台标签"
+metadata:
+  node_type: memory
+  type: reference
+  originSessionId: db3bf914-46fd-4856-898c-afdc0ff800e8
+---
+
+用 [[web-access-cdp-setup]] 的代理开的新标签是后台标签(`document.hidden=true`);Chrome 会冻结遮挡标签页里的 rAF 与 CSS 动画。**任何页面的对话框在隐藏标签里都无法关闭**(取消/X/Esc/CDP 可信点击/禁动画注入全都无效,popup 弹窗+pre-change 代码证明与业务代码无关)。
+
+**How to apply:**
+- 浏览器验证"对话框关闭/过渡动画类交互"必须用**前台可见标签**(用户在场时用他们正开着的标签)。
+- 隐藏标签里只验证:渲染内容、console 错误、网络请求/响应、DB 副作用——这些不受冻结影响;不要在隐藏标签里断言"对话框已关闭"。
+- 如果必须自动化对话框交互,先 Page.bringToFront 把标签带到前台再操作。</textarea>
+    </div>
+
+    <div class="modal-foot" id="footEdit" hidden>
+      <button class="mv-btn primary">Save</button>
+      <button class="mv-btn quiet" onclick="closeModal()">Cancel</button>
+      <span class="hint">编辑的是原始文件全文（含 frontmatter）</span>
+    </div>
+    <div class="modal-foot" id="footView">
+      <button class="mv-btn quiet" onclick="closeModal()">Close</button>
+      <span class="hint">Esc 关闭 · 点 Edit 切换到原文编辑</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  function openModal(mode) {
+    document.getElementById('backdrop').hidden = false;
+    setMode(mode);
+  }
+  function closeModal() {
+    document.getElementById('backdrop').hidden = true;
+  }
+  function setMode(mode) {
+    const view = mode === 'view';
+    document.getElementById('bodyView').hidden = !view;
+    document.getElementById('footView').hidden = !view;
+    document.getElementById('bodyEdit').hidden = view;
+    document.getElementById('footEdit').hidden = view;
+    document.getElementById('segView').classList.toggle('active', view);
+    document.getElementById('segEdit').classList.toggle('active', !view);
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+</script>
+</body>
+</html>

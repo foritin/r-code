@@ -1,0 +1,967 @@
+<!doctype html>
+<!-- Charter — Skills 管理器 + 输入框 "/" 选择器 设计 mockup (docs/design). NOT product code.
+     两个界面:
+       1. Settings → Agent → Skills:可视化管理器 —— 每个 skill 三态(Off / Manual / Auto)、
+          审计视图(装之前先看 SKILL.md + 脚本)、从本地文件夹导入、Remove(两步)。
+       2. 输入框 "/" 选择器:只列出"已启用"的 skill,选中插入 /skill:name;禁用的不出现。
+     三态开关、审计展开、"/" 选择器、主题切换 都是活的。试试点。
+     安全立场:绝不扫描项目目录(AG-014);skill 脚本执行仍走 Permission Engine。 -->
+<html lang="zh">
+  <head>
+    <meta charset="utf-8" />
+    <title>Charter — Skills 管理器 mockup</title>
+    <style>
+      body[data-theme='light'] {
+        --backdrop: #e8e6e2;
+        --side: #f6f5f1;
+        --main: #ffffff;
+        --card: #ffffff;
+        --border: #e5e1d8;
+        --border-soft: #edeae3;
+        --fg: #201e1a;
+        --fg2: #6e6a61;
+        --fg3: #a39e94;
+        --hover: #e8e5de;
+        --active: #e2dfd7;
+        --accent: #1b1a16;
+        --accent-fg: #ffffff;
+        --danger: #c4453d;
+        --warn: #b06f10;
+        --ok: #2f9e63;
+        --info: #3f7bd9;
+        --code: #f4f2ee;
+        --card-shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+        --pop-shadow: 0 12px 40px rgba(30, 26, 18, 0.18);
+      }
+      body[data-theme='dark'] {
+        --backdrop: #141312;
+        --side: #1d1c19;
+        --main: #161513;
+        --card: #21201c;
+        --border: #33312b;
+        --border-soft: #2a2924;
+        --fg: #e8e6e0;
+        --fg2: #a29d92;
+        --fg3: #6e6a61;
+        --hover: #292823;
+        --active: #31302a;
+        --accent: #e8e6e0;
+        --accent-fg: #1a1917;
+        --danger: #e06b62;
+        --warn: #d29a3a;
+        --ok: #46b477;
+        --info: #6ca1e8;
+        --code: #1a1916;
+        --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 40px rgba(0, 0, 0, 0.35);
+        --pop-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: var(--backdrop);
+        color: var(--fg);
+        padding: 60px 24px 100px;
+        min-height: 100vh;
+      }
+      .bar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 50;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        padding: 10px 18px;
+        background: var(--side);
+        border-bottom: 1px solid var(--border);
+      }
+      .bar b {
+        font-size: 13px;
+      }
+      .bar .sp {
+        flex: 1;
+      }
+      .bar button {
+        font: inherit;
+        font-size: 12px;
+        padding: 5px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+      }
+      .wrap {
+        max-width: 820px;
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 34px;
+      }
+      .lead {
+        font-size: 13px;
+        color: var(--fg2);
+        line-height: 1.6;
+      }
+      .sec-h {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        margin: 0 0 12px;
+      }
+      .note {
+        font-size: 12px;
+        color: var(--fg3);
+        margin-top: 10px;
+        line-height: 1.55;
+      }
+
+      /* ---------- Settings panel ---------- */
+      .panel {
+        background: var(--main);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 20px;
+      }
+      .panel-head {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 4px;
+      }
+      .panel-head h2 {
+        font-size: 16px;
+        margin: 0;
+        font-weight: 650;
+      }
+      .panel-head .sp {
+        flex: 1;
+      }
+      .btn {
+        font: inherit;
+        font-size: 12.5px;
+        padding: 7px 13px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card);
+        color: var(--fg);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .btn:hover {
+        background: var(--hover);
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: transparent;
+      }
+      .safe {
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+        font-size: 12px;
+        color: var(--fg2);
+        line-height: 1.5;
+        background: color-mix(in srgb, var(--warn) 9%, transparent);
+        border: 1px solid color-mix(in srgb, var(--warn) 26%, transparent);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin: 14px 0 6px;
+      }
+      .safe svg {
+        flex: none;
+        color: var(--warn);
+        margin-top: 1px;
+      }
+
+      /* ---------- skill row ---------- */
+      .skill {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        margin-top: 10px;
+        background: var(--card);
+      }
+      .skill.off {
+        opacity: 0.62;
+      }
+      .srow {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 14px;
+      }
+      .sicon {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        background: var(--hover);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--fg2);
+        flex: none;
+      }
+      .sinfo {
+        flex: 1;
+        min-width: 0;
+      }
+      .sname {
+        font-size: 13.5px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .sname code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+      }
+      .badge {
+        font-size: 10px;
+        font-weight: 600;
+        padding: 1px 7px;
+        border-radius: 999px;
+        letter-spacing: 0.02em;
+      }
+      .badge.local {
+        color: var(--fg2);
+        background: var(--hover);
+      }
+      .badge.script {
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 14%, transparent);
+      }
+      .badge.manual {
+        color: var(--info);
+        background: color-mix(in srgb, var(--info) 13%, transparent);
+      }
+      .badge.danger {
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 13%, transparent);
+      }
+      .sdesc {
+        font-size: 12px;
+        color: var(--fg3);
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sactions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: none;
+      }
+      /* tri-state segment: Off / Manual / Auto */
+      .tri {
+        display: inline-flex;
+        background: var(--hover);
+        border-radius: 999px;
+        padding: 3px;
+        gap: 2px;
+      }
+      .tri button {
+        font: inherit;
+        font-size: 11.5px;
+        color: var(--fg2);
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .tri button.on {
+        background: var(--card);
+        color: var(--fg);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+      }
+      .tri button.on.warnon {
+        color: var(--warn);
+      }
+      .iconbtn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        background: transparent;
+        color: var(--fg2);
+        cursor: pointer;
+      }
+      .iconbtn:hover {
+        background: var(--hover);
+      }
+      .iconbtn.danger:hover {
+        color: var(--danger);
+      }
+
+      /* ---------- audit panel (expands under a row) ---------- */
+      .audit {
+        border-top: 1px solid var(--border-soft);
+        padding: 14px;
+        display: grid;
+        grid-template-columns: 200px 1fr;
+        gap: 14px;
+      }
+      .audit[hidden] {
+        display: none;
+      }
+      .audit .cap {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        margin: 0 0 8px;
+      }
+      .files {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+      .frow {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--fg2);
+        padding: 4px 6px;
+        border-radius: 6px;
+      }
+      .frow.script {
+        color: var(--warn);
+        background: color-mix(in srgb, var(--warn) 10%, transparent);
+      }
+      .frow svg {
+        flex: none;
+      }
+      .code {
+        background: var(--code);
+        border: 1px solid var(--border-soft);
+        border-radius: 8px;
+        padding: 11px 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: var(--fg2);
+        white-space: pre-wrap;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .code .k {
+        color: var(--info);
+      }
+      .gate {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--ok);
+        display: flex;
+        gap: 7px;
+        align-items: center;
+      }
+      .gate svg {
+        flex: none;
+      }
+      .invoke {
+        font-size: 11.5px;
+        color: var(--fg2);
+        margin-top: 9px;
+        line-height: 1.5;
+      }
+      .invoke code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+      }
+
+      /* ---------- composer with "/" picker ---------- */
+      .composer .card {
+        width: 100%;
+        max-width: 640px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        box-shadow: var(--card-shadow);
+        position: relative;
+      }
+      .chiprow {
+        display: flex;
+        gap: 6px;
+        padding: 10px 12px 0;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg2);
+        font: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 4px 11px;
+      }
+      .ta {
+        display: block;
+        width: 100%;
+        border: none;
+        outline: none;
+        resize: none;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        font-size: 14px;
+        line-height: 1.55;
+        padding: 10px 16px 4px;
+        min-height: 30px;
+      }
+      .ta::placeholder {
+        color: var(--fg3);
+      }
+      .skillchip {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        border: 1px solid color-mix(in srgb, var(--info) 40%, var(--border));
+        background: color-mix(in srgb, var(--info) 10%, transparent);
+        color: var(--fg);
+        border-radius: 999px;
+        padding: 2px 8px;
+        margin: 6px 0 0 16px;
+      }
+      .skillchip svg {
+        color: var(--info);
+      }
+      .btmrow {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 8px 8px 10px;
+      }
+      .btmrow .spacer {
+        flex: 1;
+      }
+      .miconbtn {
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        color: var(--fg2);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .miconbtn:hover {
+        background: var(--hover);
+      }
+      .me-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        border: none;
+        background: transparent;
+        color: var(--fg2);
+        font: inherit;
+        font-size: 12px;
+        border-radius: 999px;
+        padding: 5px 9px;
+      }
+      .send {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: none;
+        background: var(--accent);
+        color: var(--accent-fg);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-left: 4px;
+      }
+      /* the "/" picker popover */
+      .pick {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 12px;
+        width: 380px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: var(--pop-shadow);
+        padding: 5px;
+        z-index: 20;
+      }
+      .pick .pcap {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--fg3);
+        padding: 8px 8px 4px;
+      }
+      .prow {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        width: 100%;
+        border: none;
+        background: transparent;
+        color: var(--fg);
+        font: inherit;
+        text-align: left;
+        padding: 8px;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .prow.active {
+        background: var(--hover);
+      }
+      .prow .pn {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12.5px;
+        font-weight: 600;
+      }
+      .prow .pd {
+        font-size: 11.5px;
+        color: var(--fg3);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .prow .pcol {
+        flex: 1;
+        min-width: 0;
+      }
+      .phint {
+        font-size: 11px;
+        color: var(--fg3);
+        padding: 6px 9px 8px;
+        border-top: 1px solid var(--border-soft);
+        margin-top: 4px;
+      }
+    </style>
+  </head>
+  <body data-theme="light">
+    <div class="bar">
+      <b>Charter — Skills 管理器 + 输入框 “/” 选择器</b>
+      <span class="sp"></span>
+      <button id="themeBtn" onclick="toggleTheme()">◐ Dark</button>
+    </div>
+
+    <div class="wrap">
+      <div class="lead">
+        两个界面都是活的。管理器里点每个 skill 的 <b>Off / Auto</b> 开关、点
+        <b>Audit</b> 看装之前的审计视图;下面 composer 里点 <b>/</b> 会弹出选择器——注意
+        <b>被禁用(Off)的 skill 不会出现在选择器里</b>。声明了
+        <code>disable-model-invocation</code> 的 skill 会带
+        <b>explicit-only</b> 徽章(开着也不会被模型自动触发)。
+      </div>
+
+      <!-- ============ 1. Settings → Agent → Skills ============ -->
+      <section>
+        <div class="sec-h">1 · Settings → Agent → Skills（可视化管理器）</div>
+        <div class="panel">
+          <div class="panel-head">
+            <h2>Skills</h2>
+            <span class="sp"></span>
+            <button class="btn primary">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Import skill folder…
+            </button>
+          </div>
+          <div class="note" style="margin-top: 2px">
+            Import a folder containing a <code>SKILL.md</code>. Charter copies it into a managed
+            store — it never auto-loads skills from your projects.
+          </div>
+
+          <div class="safe">
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"
+              />
+            </svg>
+            <span>
+              Skills can bundle scripts that execute code. Review each one before enabling —
+              <b>every script a skill runs still passes your approval gate (Permission Engine)</b>,
+              so a skill can’t run anything you didn’t allow.
+            </span>
+          </div>
+
+          <div id="skillList"></div>
+        </div>
+        <div class="note">
+          两态开关:<b>Off</b> = 禁用(不进提示、不进 “/” 选择器、不加载,一键可再开)· <b>Auto</b> =
+          启用(模型按 description 需要时自动调用,你也仍能手动 “/”)。少数 skill 作者会在 SKILL.md
+          里声明 <code>disable-model-invocation</code>(部署/提交这类有副作用的),我们尊重它——
+          即使开着也只在你手动 “/” 时跑,并显示 <b>explicit-only</b> 徽章。<b>Audit</b> 展开可见
+          SKILL.md 与打包脚本;<b>Remove</b> 才是从库里删除(两步确认)。
+        </div>
+      </section>
+
+      <!-- ============ 2. Composer "/" picker ============ -->
+      <section>
+        <div class="sec-h">2 · 输入框 “/” 选择器（只列已启用的 skill）</div>
+        <div class="composer">
+          <div class="card">
+            <div class="chiprow">
+              <span class="chip">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path
+                    d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+                  />
+                </svg>
+                pi-agentic-ide
+              </span>
+            </div>
+            <div id="skillChip"></div>
+            <textarea
+              id="ta"
+              class="ta"
+              rows="1"
+              placeholder="输入 / 唤起一个 skill,或直接描述任务…"
+            ></textarea>
+            <div id="pick"></div>
+            <div class="btmrow">
+              <button class="miconbtn" title="Attach files">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 8v8M8 12h8" />
+                </svg>
+              </button>
+              <button class="miconbtn" id="slashBtn" title="Insert a skill (/)">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.2"
+                >
+                  <path d="M9 20 15 4" />
+                </svg>
+              </button>
+              <span class="spacer"></span>
+              <span class="me-btn">✦ Sonnet 4.5 · high</span>
+              <button class="send">
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                >
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="note">
+          打 <code>/</code> 或点左下角的 <b>/</b> 图标弹出选择器,列出所有<b>已启用(Auto)</b>的
+          skill;选中插入一个 <code>/skill:name</code> chip。上面把某个 skill 切到
+          <b>Off</b>,它会立刻 从这个选择器里消失。有副作用 / explicit-only 的 skill 会带标记提示。
+        </div>
+      </section>
+    </div>
+
+    <script>
+      function toggleTheme() {
+        const b = document.body;
+        const next = b.dataset.theme === 'light' ? 'dark' : 'light';
+        b.dataset.theme = next;
+        document.getElementById('themeBtn').textContent = next === 'light' ? '◐ Dark' : '◑ Light';
+      }
+
+      const ICON = {
+        doc: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
+        script:
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 9-3 3 3 3M16 9l3 3-3 3"/></svg>',
+        file: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
+        check:
+          '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6 9 17l-5-5"/></svg>',
+        audit:
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+        trash:
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>',
+        slash:
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 20 15 4"/></svg>',
+      };
+
+      // state: mode = 'off' | 'auto'  ·  explicitOnly = SKILL.md 声明了 disable-model-invocation
+      const SKILLS = [
+        {
+          name: 'pdf-fill',
+          desc: 'Fill and extract fields from PDF forms.',
+          mode: 'auto',
+          danger: false,
+          explicitOnly: false,
+          files: [
+            { p: 'SKILL.md', s: false },
+            { p: 'scripts/fill.py', s: true },
+            { p: 'references/schema.md', s: false },
+          ],
+          md: 'name: pdf-fill\ndescription: Fill and extract fields from PDF forms.\n---\nUse scripts/fill.py to read the form fields, then\nmap the user-provided values and write the output PDF…',
+        },
+        {
+          name: 'commit-helper',
+          desc: 'Write a conventional-commit message from the staged diff.',
+          mode: 'auto',
+          danger: false,
+          explicitOnly: true,
+          files: [{ p: 'SKILL.md', s: false }],
+          md: 'name: commit-helper\ndescription: Write a conventional-commit message from the staged diff.\ndisable-model-invocation: true\n---\nRead the staged diff, group changes by intent, and\nproduce a single conventional-commit subject + body…',
+        },
+        {
+          name: 'deploy-staging',
+          desc: 'Deploy the current branch to the staging environment.',
+          mode: 'auto',
+          danger: true,
+          explicitOnly: true,
+          files: [
+            { p: 'SKILL.md', s: false },
+            { p: 'scripts/deploy.sh', s: true },
+            { p: 'scripts/healthcheck.sh', s: true },
+          ],
+          md: 'name: deploy-staging\ndescription: Deploy the current branch to staging.\ndisable-model-invocation: true   # 作者声明:勿自动触发\n---\nRun scripts/deploy.sh, then scripts/healthcheck.sh…',
+        },
+        {
+          name: 'legacy-billing-notes',
+          desc: 'Background context on the legacy billing module.',
+          mode: 'off',
+          danger: false,
+          explicitOnly: false,
+          files: [{ p: 'SKILL.md', s: false }],
+          md: 'name: legacy-billing-notes\ndescription: Background context on the legacy billing module.\n---\nThe billing module predates the service split…',
+        },
+      ];
+
+      let openAudit = null;
+
+      function renderList() {
+        const host = document.getElementById('skillList');
+        host.innerHTML = SKILLS.map((sk, i) => {
+          const scriptCount = sk.files.filter((f) => f.s).length;
+          const badges =
+            (sk.danger ? '<span class="badge danger">side effects</span>' : '') +
+            (sk.explicitOnly ? '<span class="badge manual">explicit-only</span>' : '') +
+            (scriptCount
+              ? `<span class="badge script">${scriptCount} script${scriptCount > 1 ? 's' : ''}</span>`
+              : '') +
+            '<span class="badge local">local</span>';
+          const tri = ['off', 'auto']
+            .map((m) => {
+              const label = m === 'off' ? 'Off' : 'Auto';
+              return `<button data-i="${i}" data-m="${m}" class="${sk.mode === m ? 'on' : ''}">${label}</button>`;
+            })
+            .join('');
+          const files = sk.files
+            .map(
+              (f) =>
+                `<div class="frow ${f.s ? 'script' : ''}">${f.s ? ICON.script : ICON.file}<span>${f.p}</span></div>`,
+            )
+            .join('');
+          const invoke = sk.explicitOnly
+            ? `Declares <code>disable-model-invocation</code> — the model never auto-fires it; you run it with <code>/skill:${sk.name}</code>.`
+            : `Enabled → the model may auto-trigger it from its description (you can also run <code>/skill:${sk.name}</code>).`;
+          const auditOpen = openAudit === i;
+          return `
+            <div class="skill ${sk.mode === 'off' ? 'off' : ''}">
+              <div class="srow">
+                <div class="sicon">${ICON.doc}</div>
+                <div class="sinfo">
+                  <div class="sname"><code>${sk.name}</code>${badges}</div>
+                  <div class="sdesc">${sk.desc}</div>
+                </div>
+                <div class="sactions">
+                  <div class="tri">${tri}</div>
+                  <button class="iconbtn" title="Audit — inspect files before trusting" data-audit="${i}">${ICON.audit}</button>
+                  <button class="iconbtn danger" title="Remove from the managed store">${ICON.trash}</button>
+                </div>
+              </div>
+              <div class="audit" ${auditOpen ? '' : 'hidden'}>
+                <div>
+                  <div class="cap">Bundled files</div>
+                  <div class="files">${files}</div>
+                </div>
+                <div>
+                  <div class="cap">SKILL.md</div>
+                  <div class="code">${sk.md.replace(/^(name|description|disable-model-invocation):/gm, '<span class="k">$1:</span>')}</div>
+                  <div class="invoke">${invoke}</div>
+                  ${
+                    scriptCount
+                      ? `<div class="gate">${ICON.check}<span>${scriptCount} script${scriptCount > 1 ? 's' : ''} — each run still goes through your Permission Engine.</span></div>`
+                      : `<div class="gate">${ICON.check}<span>Instructions only — no bundled scripts.</span></div>`
+                  }
+                </div>
+              </div>
+            </div>`;
+        }).join('');
+
+        host.querySelectorAll('[data-m]').forEach((b) => {
+          b.onclick = () => {
+            SKILLS[+b.dataset.i].mode = b.dataset.m;
+            renderList();
+            renderPickerIfOpen();
+          };
+        });
+        host.querySelectorAll('[data-audit]').forEach((b) => {
+          b.onclick = () => {
+            const i = +b.dataset.audit;
+            openAudit = openAudit === i ? null : i;
+            renderList();
+          };
+        });
+      }
+
+      // ---------- composer "/" picker ----------
+      let pickOpen = false;
+      let pickIdx = 0;
+      let inserted = null;
+
+      function enabled() {
+        return SKILLS.filter((s) => s.mode !== 'off');
+      }
+      function renderChip() {
+        const host = document.getElementById('skillChip');
+        host.innerHTML = inserted
+          ? `<span class="skillchip">${ICON.slash}/skill:${inserted}</span>`
+          : '';
+      }
+      function renderPickerIfOpen() {
+        if (pickOpen) renderPicker();
+      }
+      function renderPicker() {
+        const host = document.getElementById('pick');
+        const list = enabled();
+        if (pickIdx >= list.length) pickIdx = Math.max(0, list.length - 1);
+        host.innerHTML = `
+          <div class="pick">
+            <div class="pcap">Skills</div>
+            ${list
+              .map(
+                (s, i) => `
+              <button class="prow ${i === pickIdx ? 'active' : ''}" data-pick="${s.name}">
+                ${ICON.slash}
+                <span class="pcol">
+                  <span class="pn">/skill:${s.name}</span>
+                  ${s.danger ? '<span class="badge danger" style="margin-left:6px">side effects</span>' : ''}
+                  ${s.explicitOnly ? '<span class="badge manual" style="margin-left:6px">explicit-only</span>' : ''}
+                  <span class="pd">${s.desc}</span>
+                </span>
+              </button>`,
+              )
+              .join('')}
+            <div class="phint">↑↓ 选择 · ⏎ 插入 · esc 关闭 · 被禁用(Off)的 skill 不在这里</div>
+          </div>`;
+        host.querySelectorAll('[data-pick]').forEach((b) => {
+          b.onclick = () => {
+            inserted = b.dataset.pick;
+            closePicker();
+            renderChip();
+          };
+        });
+      }
+      function openPicker() {
+        pickOpen = true;
+        pickIdx = 0;
+        renderPicker();
+      }
+      function closePicker() {
+        pickOpen = false;
+        document.getElementById('pick').innerHTML = '';
+      }
+
+      const ta = document.getElementById('ta');
+      ta.addEventListener('keydown', (e) => {
+        if (!pickOpen && e.key === '/') {
+          e.preventDefault();
+          openPicker();
+          return;
+        }
+        if (!pickOpen) return;
+        const list = enabled();
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          closePicker();
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          pickIdx = Math.min(pickIdx + 1, list.length - 1);
+          renderPicker();
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          pickIdx = Math.max(pickIdx - 1, 0);
+          renderPicker();
+        } else if (e.key === 'Enter' && list[pickIdx]) {
+          e.preventDefault();
+          inserted = list[pickIdx].name;
+          closePicker();
+          renderChip();
+        }
+      });
+      document.getElementById('slashBtn').onclick = () => {
+        if (pickOpen) closePicker();
+        else {
+          openPicker();
+          ta.focus();
+        }
+      };
+      document.addEventListener('mousedown', (e) => {
+        if (pickOpen && !e.target.closest('.pick') && !e.target.closest('#slashBtn')) closePicker();
+      });
+
+      renderList();
+      renderChip();
+    </script>
+  </body>
+</html>

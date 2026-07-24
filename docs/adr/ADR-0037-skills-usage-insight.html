@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0037: Skills 透视 —— 触发统计 + context 预算 + 独立 Settings 栏目 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0037-skills-透视-触发统计-context-预算-独立-settings-栏目">ADR-0037: Skills 透视 —— 触发统计 + context 预算 + 独立 Settings 栏目</h1>
+<ul><li>Status: Accepted (产品对齐 2026-07-20:对标 FanBox 的两个缺口,帮用户做 skill 断舍离)</li><li>日期: 2026-07-20</li><li>Relates to: ADR-0015 (skills 管理器 + load_skill), ADR-0019 (多源 skill 目录), §9.3 (IPC schema), §11.2 (持久化 schema)</li></ul>
+<h2 id="背景">背景</h2>
+<p>Charter 的 skills 管理器已有健康检查、来源信任、启停,但用户看不到两件事:</p>
+<ol><li><strong>每个 skill 实际被用了几次。</strong> 不知道哪些 skill 从没触发过,断舍离没有依据。</li><li><strong>enabled skills 每轮吃掉多少 context。</strong> 每个 enabled(非 explicit-only)skill<br>的 <code>&lt;skill&gt;</code> 块都进 preamble,每一轮都付费,但成本完全不可见。</li></ol>
+<p>数据其实都在:模型发起的加载走 <code>load_skill</code> 工具,每次调用都落在 <code>tool_calls</code><br>审计表(AG-014 &quot;loading must be auditable&quot; 的既有产物);preamble 块由<br><code>SkillStore.preambleBlock()</code> 生成,长度可估。唯一的缺口是显式 <code>/skill:name</code><br>调用 —— 它经 <code>expandCommand</code> 直接展开进 prompt,不经过 tool gateway,没有任何<br>结构化痕迹,导致 explicit-only skill 一定会被误判为 unused。</p>
+<h2 id="决策">决策</h2>
+<h3 id="1-显式调用补账-skillinvocations-账本-迁移-v8">1. 显式调用补账:<code>skill_invocations</code> 账本(迁移 v8)</h3>
+<p><code>TaskService</code> 在两个 <code>expandCommand</code> 调用点(startRun / reply)改用<br><code>expandCommandDetailed(text): { text, skill }</code>,展开成功即写入<br><code>skill_invocations (skill, kind=&#39;explicit&#39;, task_id, at)</code>。写入失败只告警,<br>绝不影响运行。迁移 v8 同时给 <code>tool_calls(name, created_at)</code> 建索引,<br>让 45 天聚合在长寿数据库上保持廉价。</p>
+<h3 id="2-聚合与成本估算-main-进程">2. 聚合与成本估算(main 进程)</h3>
+<ul><li><strong>调用统计</strong>:<code>TaskService.skillUsage(windowDays)</code> 合并两个来源 ——<br><code>tool_calls</code> 里 <code>state=&#39;SUCCEEDED&#39;</code> 的 <code>load_skill</code>(只计主加载, <code>file</code> 参数的 bundled-reference 追加读属于同一次使用,不重复计数)+ <code>skill_invocations</code> 全部行。纯聚合逻辑在 <code>skill-usage.ts</code> (<code>aggregateSkillUsage</code> / <code>composeSkillUsage</code>),对 (events, now, window) 确定,可单测;产出 per-skill 次数、末次时间、周粒度分桶(spark 用)。</li><li><strong>token 估算</strong>:<code>SkillStore.preambleTokenEstimates()</code> 复用<br><code>preambleBlock()</code> 的同一块构建逻辑,按 ~4 chars/token 估算每个 model-visible skill 的块成本 + 一次性框架开销。explicit-only / 禁用 / invalid 的 skill 不在 preamble,成本为 0(&quot;on demand&quot; / &quot;—&quot;)。 这是预算信号,不是精确 tokenizer;估算恒与真实 preamble 同源,不会漂移。</li><li><strong>新 IPC channel <code>skills.usage</code> (v1)</strong>:请求 <code>{ windowDays? ≤365 }</code><br>(默认 45),响应 catalog 全量 join(未用过的 skill 也有零值行)。 handler 通过回调注入 <code>TaskService</code>(其构造晚于 skills handlers 注册, 就绪前返回空聚合,面板静默降级)。</li></ul>
+<h3 id="3-settings-左侧新栏目-skills-信息架构">3. Settings 左侧新栏目 &quot;Skills&quot;(信息架构)</h3>
+<p>skills 从 Settings → Agent 的卡片提升为独立 section(Agent 与 Models 之间)。<br>理由(第一性原理:显著度 ≈ 访问频率 × 任务相关性):</p>
+<ul><li>调用(高频)入口本来就在 composer &quot;/&quot; picker,不动;</li><li>管理/透视(低频)是全局配置,归 Settings —— <strong>不进主工作区左侧栏</strong>,<br>那里是项目/会话作用域的工作对象导航,放全局配置物会制造作用域错觉;</li><li>透视 UI(预算条 + 排序 + 审查)需要整页空间,Agent 卡片放不下。</li></ul>
+<p>Agent 原位置留一行 &quot;Open Skills&quot; 入口。翻转条件(记录在案):若 skills<br>演化为浏览/安装/分享的内容生态(VS Code Extensions 形态),再评估主栏位。</p>
+<h3 id="4-透视-ui-renderer-skillssettings-tsx">4. 透视 UI(renderer,<code>SkillsSettings.tsx</code>)</h3>
+<ul><li><strong>预算条</strong>:堆叠横条,每段一个 in-preamble skill,hover 联动行高亮;<br>标题行给总量(<code>≈ N tokens · x% of a 200k window · charged every turn</code>)。</li><li><strong>行级两列</strong>:45 天调用次数 + 周 spark + 末次时间;token 占用。<br>enabled 且零调用的行出现 <code>unused 45d</code> 徽章。</li><li><strong>排序</strong>:Catalog(默认,保持原顺序)/ Usage / Tokens / Cost per use<br>(unused 的 in-preamble skill 视为无穷大成本,排最前)。</li><li><strong>Review usage(断舍离)</strong>:候选 = enabled 且 in-preamble 且<br>(零调用 或 每次调用成本 ≥300 tok);零调用预勾选。只建议不自动化: 批量操作就是逐个 <code>skills.setEnabled(false)</code>,可随时开回,不删除、不丢历史。</li><li><strong>composer picker 底部入口</strong>:<code>N enabled · ≈X tok/turn · Manage…</code> →<br><code>openSettings(&#39;skills&#39;)</code> —— 入口放在痛点被感受到的地方。</li></ul>
+<h2 id="后果">后果</h2>
+<ul><li>显式调用统计从 v8 迁移后开始积累;load_skill 历史是既有审计数据,回溯即有。</li><li>usage 按运行时 name join;skill 改名后旧统计不跟随(可接受,账本保真)。</li><li>e2e <code>skills.spec.ts</code> 的 Settings 导航从 Agent 改为 Skills section。</li><li>不新增依赖;renderer 仍只见 DTO,聚合与文件读取全部留在 main(§9.3 边界)。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

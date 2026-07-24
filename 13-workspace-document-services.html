@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Workspace 与文档服务 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="workspace-与文档服务">Workspace 与文档服务</h1>
+<h2 id="1-workspace-服务">1. Workspace 服务</h2>
+<h3 id="1-1-概述">1.1 概述</h3>
+<p>Workspace 服务管理项目打开/关闭、最近项目、信任模型。<br>Workspace 是 Agent 工具执行的根目录边界。</p>
+<h3 id="1-2-当前实现">1.2 当前实现</h3>
+<ul><li>WorkspaceHost + workspaces 表 + trust prompt。</li><li>canonical path、文件树、忽略规则、监听器。</li></ul>
+<h3 id="1-3-信任模型">1.3 信任模型</h3>
+<table><thead><tr><th>信任状态</th><th>说明</th></tr></thead><tbody><tr><td>untrusted</td><td>未信任，工具只能读</td></tr><tr><td>trusted</td><td>已信任，工具可读写</td></tr></tbody></table>
+<h3 id="1-4-文件监听">1.4 文件监听</h3>
+<ul><li>递归 watcher。</li><li>过滤 <code>.git/</code>、ignore globs、产品 artifacts。</li></ul>
+<h3 id="1-5-rust-实现要点">1.5 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">use notify::{Watcher, RecursiveMode, watcher};
+use std::sync::mpsc::channel;
+
+struct WorkspaceHost {
+    workspaces: HashMap&lt;WorkspaceId, WorkspaceHandle&gt;,
+    watcher: RecommendedWatcher,
+}
+
+struct WorkspaceHandle {
+    id: WorkspaceId,
+    path: PathBuf,
+    trust_state: TrustState,
+    file_tree: FileTree,
+}
+
+impl WorkspaceHost {
+    fn open(&amp;mut self, path: &amp;Path) -&gt; Result&lt;WorkspaceId, WorkspaceError&gt; {
+        let canonical = path.canonicalize()?;
+        let id = WorkspaceId::new();
+        let handle = WorkspaceHandle {
+            id: id.clone(),
+            path: canonical,
+            trust_state: TrustState::Untrusted,
+            file_tree: FileTree::new(),
+        };
+        self.workspaces.insert(id.clone(), handle);
+        self.watch(&amp;id)?;
+        Ok(id)
+    }
+    
+    fn set_trust(&amp;mut self, id: &amp;WorkspaceId, trusted: bool) -&gt; Result&lt;(), WorkspaceError&gt; {
+        let handle = self.workspaces.get_mut(id)?;
+        handle.trust_state = if trusted { TrustState::Trusted } else { TrustState::Untrusted };
+        Ok(())
+    }
+    
+    fn watch(&amp;mut self, id: &amp;WorkspaceId) -&gt; Result&lt;(), WorkspaceError&gt; {
+        let path = self.workspaces.get(id)?.path.clone();
+        let tx = self.watcher_tx.clone();
+        self.watcher.watch(&amp;path, RecursiveMode::Recursive)?;
+        // 处理事件
+    }
+}</code></pre></div>
+<h2 id="2-document-服务">2. Document 服务</h2>
+<h3 id="2-1-概述">2.1 概述</h3>
+<p>Document 服务管理编辑器文档的 revision/hash/dirty 模型，<br>支持二进制文件、大文件、EOL 处理。</p>
+<h3 id="2-2-核心概念">2.2 核心概念</h3>
+<ul><li><strong>DocumentStore</strong>：文档存储。</li><li><strong>Revision</strong>：文档版本。</li><li><strong>Dirty</strong>：脏标记（未保存）。</li><li><strong>Conflict</strong>：外部变更冲突。</li></ul>
+<h3 id="2-3-文档模型">2.3 文档模型</h3>
+<div class="code-block"><span class="code-block__lang">sql</span><button class="copy-code" type="button">复制</button><pre><code class="language-sql">CREATE TABLE documents (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+    path TEXT NOT NULL,
+    content_hash TEXT,
+    encoding TEXT NOT NULL DEFAULT &#39;utf8&#39;,
+    eol TEXT NOT NULL DEFAULT &#39;lf&#39;,
+    is_binary INTEGER DEFAULT 0,
+    is_dirty INTEGER DEFAULT 0,
+    last_modified INTEGER,
+    saved_at INTEGER,
+    UNIQUE(workspace_id, path)
+);</code></pre></div>
+<h3 id="2-4-大文件处理">2.4 大文件处理</h3>
+<ul><li>可编辑上限（超过则只读）。</li><li>BOM 处理。</li><li>编码检测。</li></ul>
+<h3 id="2-5-外部变更处理">2.5 外部变更处理</h3>
+<ul><li>Reload（重新加载）</li><li>Compare（比较）</li><li>Keep（保留当前）</li></ul>
+<h3 id="2-6-rust-实现要点">2.6 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">struct DocumentStore {
+    db: Arc&lt;Database&gt;,
+    documents: HashMap&lt;DocumentId, Document&gt;,
+    dirty_docs: HashSet&lt;DocumentId&gt;,
+}
+
+struct Document {
+    id: DocumentId,
+    workspace_id: WorkspaceId,
+    path: PathBuf,
+    content: String,
+    hash: String,
+    encoding: Encoding,
+    eol: Eol,
+    is_binary: bool,
+    is_dirty: bool,
+    revision: u64,
+}
+
+impl DocumentStore {
+    fn open(&amp;mut self, workspace_id: &amp;WorkspaceId, path: &amp;Path) -&gt; Result&lt;DocumentId, DocError&gt; {
+        let content = std::fs::read_to_string(path)?;
+        let hash = blake3::hash(content.as_bytes()).to_hex().to_string();
+        let doc = Document {
+            id: DocumentId::new(),
+            workspace_id: workspace_id.clone(),
+            path: path.to_path_buf(),
+            content,
+            hash,
+            encoding: Encoding::UTF8,
+            eol: Eol::LF,
+            is_binary: false,
+            is_dirty: false,
+            revision: 0,
+        };
+        let id = doc.id.clone();
+        self.documents.insert(id.clone(), doc);
+        Ok(id)
+    }
+    
+    fn save(&amp;mut self, id: &amp;DocumentId) -&gt; Result&lt;(), DocError&gt; {
+        let doc = self.documents.get_mut(id)?;
+        std::fs::write(&amp;doc.path, &amp;doc.content)?;
+        doc.is_dirty = false;
+        doc.hash = blake3::hash(doc.content.as_bytes()).to_hex().to_string();
+        doc.revision += 1;
+        Ok(())
+    }
+    
+    fn detect_conflict(&amp;self, id: &amp;DocumentId) -&gt; bool {
+        // 检测外部变更
+    }
+}</code></pre></div>
+<h2 id="3-verification-服务">3. Verification 服务</h2>
+<h3 id="3-1-概述">3.1 概述</h3>
+<p>验证服务管理验证命令、测试结果、完成报告和&quot;未验证&quot;警示。</p>
+<h3 id="3-2-验证流程">3.2 验证流程</h3>
+<ol><li>Agent 完成任务。</li><li>执行验证命令。</li><li>根据 exit code 判断：</li></ol>
+<ul><li>0 → verified</li><li>非 0 → failed</li><li>未执行 → unverified</li></ul>
+<h3 id="3-3-验证状态">3.3 验证状态</h3>
+<table><thead><tr><th>状态</th><th>说明</th></tr></thead><tbody><tr><td>verified</td><td>验证通过</td></tr><tr><td>failed</td><td>验证失败</td></tr><tr><td>unverified</td><td>未验证</td></tr><tr><td>skipped</td><td>用户跳过</td></tr></tbody></table>
+<h3 id="3-4-rust-实现要点">3.4 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">struct VerificationService {
+    db: Arc&lt;Database&gt;,
+}
+
+struct VerificationCommand {
+    task_id: String,
+    command: String,
+    exit_code: Option&lt;i32&gt;,
+    output: Option&lt;String&gt;,
+    status: VerificationStatus,
+}
+
+enum VerificationStatus {
+    Pending,
+    Running,
+    Verified,
+    Failed,
+    Unverified,
+    Skipped,
+}
+
+impl VerificationService {
+    fn execute(&amp;self, task_id: &amp;str, command: &amp;str) -&gt; Result&lt;VerificationStatus, VerifyError&gt; {
+        let output = Command::new(&quot;sh&quot;)
+            .arg(&quot;-c&quot;)
+            .arg(command)
+            .output()?;
+        
+        let status = if output.status.success() {
+            VerificationStatus::Verified
+        } else {
+            VerificationStatus::Failed
+        };
+        
+        // 记录结果
+        self.record_result(task_id, command, &amp;output)?;
+        
+        Ok(status)
+    }
+}</code></pre></div>
+<h2 id="4-skills-系统">4. Skills 系统</h2>
+<h3 id="4-1-概述">4.1 概述</h3>
+<p>Skills 是可复用的技能文件夹，模型按 description 自动调用，<br>或用户显式 <code>/skill:name</code> 唤起。</p>
+<h3 id="4-2-信任模型">4.2 信任模型</h3>
+<ul><li><strong>Off</strong>：完全不生效。</li><li><strong>Auto</strong>：启用，导入默认。</li><li><strong>Manual</strong>：仅 <code>/skill:name</code> 显式可用。</li></ul>
+<h3 id="4-3-加载机制">4.3 加载机制</h3>
+<ul><li><code>load_skill</code> 网关工具（R0）。</li><li>从托管库读 SKILL.md 或打包引用文件。</li><li>路径穿越拒绝。</li><li>每次加载进 tool audit。</li></ul>
+<h3 id="4-4-安全约束">4.4 安全约束</h3>
+<ul><li>绝不扫描项目目录。</li><li>脚本零特权。</li><li>加载可审计。</li></ul>
+<h3 id="4-5-rust-实现要点">4.5 Rust 实现要点</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">struct SkillStore {
+    db: Arc&lt;Database&gt;,
+    skills_dir: PathBuf,
+}
+
+struct Skill {
+    slug: String,
+    name: String,
+    description: String,
+    state: SkillState,
+    source: SkillSource,
+}
+
+enum SkillState {
+    Off,
+    Auto,
+    Manual,
+}
+
+impl SkillStore {
+    fn load(&amp;self, name: &amp;str) -&gt; Result&lt;String, SkillError&gt; {
+        let path = self.skills_dir.join(name).join(&quot;SKILL.md&quot;);
+        // 路径穿越检查
+        if !path.starts_with(&amp;self.skills_dir) {
+            return Err(SkillError::PathEscape);
+        }
+        Ok(std::fs::read_to_string(path)?)
+    }
+    
+    fn import(&amp;mut self, from: &amp;Path) -&gt; Result&lt;Skill, SkillError&gt; {
+        // 校验：必须含 SKILL.md; &gt;500 文件或 &gt;20MB 拒绝
+    }
+    
+    fn list(&amp;self) -&gt; Vec&lt;Skill&gt; {
+        // 列出所有已导入 skill
+    }
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

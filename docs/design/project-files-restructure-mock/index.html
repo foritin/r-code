@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Charter · Project Files Restructure</title>
+    <link rel="stylesheet" href="./mock.css" />
+  </head>
+  <body>
+    <div class="app projects-open" data-tool="files">
+      <aside class="activity-rail" aria-label="Application navigation">
+        <button class="brand-mark" aria-label="Charter">
+          <i class="ci ci-flag" aria-hidden="true"></i>
+        </button>
+        <button class="activity-button" aria-label="Sessions" title="Sessions">
+          <i class="ci ci-terminal" aria-hidden="true"></i>
+        </button>
+        <button class="activity-button" aria-label="Needs attention" title="Needs attention">
+          <i class="ci ci-inbox" aria-hidden="true"></i>
+        </button>
+        <button
+          class="activity-button active"
+          id="projects-toggle"
+          aria-label="Projects"
+          aria-pressed="true"
+          title="Projects"
+        >
+          <i class="ci ci-folder" aria-hidden="true"></i>
+        </button>
+        <button class="activity-button" aria-label="Search everything" title="Search everything">
+          <i class="ci ci-search" aria-hidden="true"></i>
+        </button>
+        <span class="activity-spacer"></span>
+        <button class="activity-button" aria-label="Settings" title="Settings">
+          <i class="ci ci-settings" aria-hidden="true"></i>
+        </button>
+      </aside>
+
+      <aside class="projects-panel" aria-label="Projects">
+        <header class="projects-header">
+          <div class="panel-heading">
+            <strong>Projects</strong>
+            <span>working context</span>
+          </div>
+          <label class="search-box">
+            <i class="ci ci-search" aria-hidden="true"></i>
+            <input id="project-search" type="search" placeholder="Search projects…" />
+          </label>
+        </header>
+
+        <div class="project-list" id="project-list">
+          <button class="project-card active" data-project="fable5" data-search="fable5 /Users/edy/git/fable5">
+            <i class="ci ci-folder" aria-hidden="true"></i>
+            <span class="project-copy">
+              <strong>fable5</strong>
+              <small>3 sessions</small>
+            </span>
+            <span class="project-actions">
+              <i class="ci ci-check" aria-label="Current project"></i>
+              <i class="ci ci-add" aria-label="New session"></i>
+            </span>
+          </button>
+
+          <button class="project-card" data-project="charter" data-search="charter /Users/edy/git/charter">
+            <i class="ci ci-folder" aria-hidden="true"></i>
+            <span class="project-copy">
+              <strong>charter</strong>
+              <small>0 sessions</small>
+            </span>
+            <span class="project-actions">
+              <i class="ci ci-add" aria-label="New session"></i>
+            </span>
+          </button>
+
+          <div class="project-empty" hidden>No projects match your search.</div>
+        </div>
+
+        <footer class="projects-footer">
+          <button><i class="ci ci-folder-opened" aria-hidden="true"></i>Open folder…</button>
+          <button><i class="ci ci-add" aria-hidden="true"></i>New project…</button>
+        </footer>
+      </aside>
+
+      <main class="workbench">
+        <header class="workbench-header">
+          <div class="project-identity">
+            <button class="sessions-back">
+              <i class="ci ci-chevron-down" aria-hidden="true"></i>Sessions
+            </button>
+            <div>
+              <strong id="project-title">fable5</strong>
+              <span id="project-path">/Users/edy/git/fable5</span>
+            </div>
+          </div>
+
+          <nav class="tool-tabs" role="tablist" aria-label="Project tools">
+            <button class="active" role="tab" aria-selected="true" data-tool="files">
+              <i class="ci ci-files" aria-hidden="true"></i>Files
+            </button>
+            <button role="tab" aria-selected="false" data-tool="search">
+              <i class="ci ci-search" aria-hidden="true"></i>Search
+            </button>
+            <button role="tab" aria-selected="false" data-tool="changes">
+              <i class="ci ci-source-control" aria-hidden="true"></i>Changes
+              <span class="count">2</span>
+            </button>
+            <button id="split-editor">
+              <i class="ci ci-split" aria-hidden="true"></i><span>Split</span>
+            </button>
+            <button id="context-toggle" aria-pressed="true">
+              <i class="ci ci-sidebar-off" aria-hidden="true"></i><span>Hide context</span>
+            </button>
+          </nav>
+        </header>
+
+        <div class="workbench-body">
+          <aside class="context-pane" aria-label="Project context">
+            <section class="context-view active" data-panel="files">
+              <header class="context-header">
+                <strong id="context-title">fable5</strong>
+                <span class="context-actions">
+                  <button title="New file"><i class="ci ci-new-file" aria-hidden="true"></i></button>
+                  <button title="Refresh"><i class="ci ci-refresh" aria-hidden="true"></i></button>
+                  <button title="Show ignored"><i class="ci ci-eye" aria-hidden="true"></i></button>
+                </span>
+              </header>
+
+              <div class="file-tree tree-set active" data-tree-project="fable5" role="tree" aria-label="Files">
+                <button class="tree-row folder" data-folder="claude" aria-expanded="false">
+                  <i class="ci ci-chevron-right caret" aria-hidden="true"></i>
+                  <i class="ci ci-folder" aria-hidden="true"></i><span>.claude</span>
+                </button>
+                <div class="tree-children" data-folder-children="claude" hidden>
+                  <button class="tree-row file" data-file="CLAUDE.md" style="--depth: 1">
+                    <i class="ci ci-file" aria-hidden="true"></i><span>CLAUDE.md</span>
+                  </button>
+                </div>
+                <button class="tree-row folder" data-folder="public" aria-expanded="false">
+                  <i class="ci ci-chevron-right caret" aria-hidden="true"></i>
+                  <i class="ci ci-folder" aria-hidden="true"></i><span>public</span>
+                </button>
+                <div class="tree-children" data-folder-children="public" hidden>
+                  <button class="tree-row file" data-file="public/index.html" style="--depth: 1">
+                    <i class="ci ci-file" aria-hidden="true"></i><span>index.html</span>
+                  </button>
+                </div>
+                <button class="tree-row file" data-file="earth-rotation.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>earth-rotation.html</span>
+                </button>
+                <button class="tree-row file" data-file="earth.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>earth.html</span>
+                </button>
+                <button class="tree-row file added" data-file="example.md">
+                  <i class="ci ci-file" aria-hidden="true"></i><span>example.md</span><em>A</em>
+                </button>
+                <button class="tree-row file active" data-file="OPUS.md">
+                  <i class="ci ci-file" aria-hidden="true"></i><span>OPUS.md</span>
+                </button>
+                <button class="tree-row file" data-file="moon_rotation.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>moon_rotation.html</span>
+                </button>
+                <button class="tree-row file" data-file="moon-autobiography.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>moon-autobiography.html</span>
+                </button>
+                <button class="tree-row file modified" data-file="moon-rotation.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>moon-rotation.html</span><em>M</em>
+                </button>
+                <button class="tree-row file" data-file="package.json">
+                  <i class="ci ci-json" aria-hidden="true"></i><span>package.json</span>
+                </button>
+                <button class="tree-row file" data-file="prompt-templates.md">
+                  <i class="ci ci-file" aria-hidden="true"></i><span>prompt-templates.md</span>
+                </button>
+                <button class="tree-row file" data-file="server.mjs">
+                  <i class="ci ci-file-code" aria-hidden="true"></i><span>server.mjs</span>
+                </button>
+                <button class="tree-row file" data-file="USAGE-GUIDE.md">
+                  <i class="ci ci-file" aria-hidden="true"></i><span>USAGE-GUIDE.md</span>
+                </button>
+              </div>
+
+              <div class="file-tree tree-set" data-tree-project="charter" role="tree" aria-label="Files">
+                <button class="tree-row folder" data-folder="apps" aria-expanded="false">
+                  <i class="ci ci-chevron-right caret" aria-hidden="true"></i>
+                  <i class="ci ci-folder" aria-hidden="true"></i><span>apps</span>
+                </button>
+                <button class="tree-row folder" data-folder="packages" aria-expanded="false">
+                  <i class="ci ci-chevron-right caret" aria-hidden="true"></i>
+                  <i class="ci ci-folder" aria-hidden="true"></i><span>packages</span>
+                </button>
+                <button class="tree-row file active" data-file="README.md">
+                  <i class="ci ci-file" aria-hidden="true"></i><span>README.md</span>
+                </button>
+                <button class="tree-row file" data-file="package.json">
+                  <i class="ci ci-json" aria-hidden="true"></i><span>package.json</span>
+                </button>
+              </div>
+            </section>
+
+            <section class="context-view" data-panel="search">
+              <header class="context-header">
+                <strong>Search</strong><small>12 files</small>
+              </header>
+              <div class="search-controls">
+                <label class="search-box">
+                  <i class="ci ci-search" aria-hidden="true"></i>
+                  <input id="file-search" type="search" value="rotation" aria-label="Search files" />
+                </label>
+                <div class="search-meta">6 results in 4 files</div>
+              </div>
+              <div class="search-results">
+                <button data-file="earth-rotation.html">
+                  <strong>earth-rotation.html</strong><span>rotationSpeed: 0.003</span><small>121</small>
+                </button>
+                <button data-file="moon-rotation.html">
+                  <strong>moon-rotation.html</strong><span>function updateRotation()</span><small>87</small>
+                </button>
+                <button data-file="moon_rotation.html">
+                  <strong>moon_rotation.html</strong><span>const rotationState = …</span><small>46</small>
+                </button>
+                <button data-file="rotating-earth.html">
+                  <strong>rotating-earth.html</strong><span>requestAnimationFrame(rotate)</span><small>203</small>
+                </button>
+              </div>
+            </section>
+
+            <section class="context-view" data-panel="changes">
+              <header class="context-header">
+                <strong>Changes</strong><small>2 files</small>
+              </header>
+              <div class="change-summary">
+                <span>Working tree</span><strong>+48&nbsp;&nbsp;−12</strong>
+              </div>
+              <div class="change-list">
+                <button data-file="moon-rotation.html">
+                  <i class="ci ci-file-code" aria-hidden="true"></i>
+                  <span><strong>moon-rotation.html</strong><small>Modified</small></span><em>M</em>
+                </button>
+                <button data-file="example.md">
+                  <i class="ci ci-file" aria-hidden="true"></i>
+                  <span><strong>example.md</strong><small>Added</small></span><em>A</em>
+                </button>
+              </div>
+            </section>
+          </aside>
+
+          <section class="editor-stage" aria-label="Editor">
+            <div class="editor-pane primary-pane">
+              <div class="editor-tabs" role="tablist" aria-label="Open files">
+                <button class="editor-tab active" data-tab-file="OPUS.md">OPUS.md<i class="ci ci-close"></i></button>
+                <button class="editor-tab" data-tab-file="earth-rotation.html">earth-rotation.html<i class="ci ci-close"></i></button>
+                <button class="editor-tab modified" data-tab-file="moon-rotation.html">moon-rotation.html<em>M</em><i class="ci ci-close"></i></button>
+                <button class="editor-tab" data-tab-file="moon-autobiography.html">moon-autobiography.html<i class="ci ci-close"></i></button>
+              </div>
+              <div class="editor-scroll">
+                <div class="code-sheet" id="primary-code" aria-label="OPUS.md content"></div>
+              </div>
+            </div>
+
+            <div class="editor-pane secondary-pane" aria-hidden="true">
+              <div class="editor-tabs">
+                <button class="editor-tab active">moon-rotation.html<em>M</em><i class="ci ci-close"></i></button>
+              </div>
+              <div class="editor-scroll">
+                <div class="code-sheet" id="secondary-code"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="status-bar">
+          <span><i class="ci ci-source-control" aria-hidden="true"></i>main</span>
+          <span>Project context · <strong id="status-project">fable5</strong></span>
+          <span class="status-spacer"></span>
+          <span>Ln 8, Col 1</span><span>UTF-8</span><span>Markdown</span>
+        </footer>
+      </main>
+    </div>
+
+    <script src="./mock.js"></script>
+  </body>
+</html>

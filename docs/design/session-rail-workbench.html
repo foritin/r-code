@@ -1,0 +1,1905 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · Session Rail Workbench</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #ffffff;
+        --surface: #ffffff;
+        --surface-soft: #f8f9fb;
+        --surface-selected: #f5f8ff;
+        --text: #17191d;
+        --muted: #6f747c;
+        --faint: #9ba1aa;
+        --border: #dfe2e7;
+        --border-soft: #eceef2;
+        --accent: #2e6df6;
+        --accent-soft: #e8f0ff;
+        --pi: #6f51dc;
+        --claude: #d96a1f;
+        --codex: #198b52;
+        --success: #23834d;
+        --success-soft: #eff9f2;
+        --danger: #c84942;
+        --danger-soft: #fff0ef;
+        --warning: #aa6a22;
+        --warning-soft: #fff8ed;
+        --terminal: #151816;
+        --terminal-text: #dce4de;
+        --terminal-muted: #829087;
+        --mono: "SFMono-Regular", "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --radius-sm: 5px;
+        --radius-md: 9px;
+        --shadow-pop: 0 18px 56px rgba(20, 28, 45, 0.16);
+        --rail-width: 300px;
+        --tool-width: 33%;
+        --motion: 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        font-size: 14px;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      [contenteditable="true"]:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+
+      .app {
+        width: 100vw;
+        height: 100vh;
+        display: grid;
+        grid-template-columns: var(--rail-width) minmax(0, 1fr);
+        grid-template-rows: 42px 50px minmax(0, 1fr) 28px;
+        background: var(--surface);
+      }
+
+      .windowbar {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        position: relative;
+        display: grid;
+        place-items: center;
+        border-bottom: 1px solid var(--border);
+        background: #fbfcfd;
+        color: #2d3239;
+        font-size: 11px;
+        font-weight: 660;
+      }
+
+      .titlebar {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        display: grid;
+        grid-template-columns: var(--rail-width) minmax(0, 1fr);
+        align-items: center;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.97);
+      }
+
+      .titlebar-left {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-right: 1px solid var(--border);
+        padding: 0 14px 0 17px;
+      }
+
+      .eyebrow {
+        color: #4f545c;
+        font-size: 10px;
+        font-weight: 760;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .new-session,
+      .top-button,
+      .small-button,
+      .primary-button,
+      .ghost-button {
+        min-height: 28px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: #fff;
+        color: var(--text);
+        padding: 0 10px;
+        cursor: pointer;
+        transition:
+          border-color var(--motion),
+          background var(--motion),
+          color var(--motion),
+          transform var(--motion);
+      }
+
+      .new-session:hover,
+      .top-button:hover,
+      .small-button:hover,
+      .ghost-button:hover {
+        border-color: #bfc5ce;
+        background: var(--surface-soft);
+      }
+
+      .primary-button {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: #fff;
+        font-weight: 660;
+      }
+
+      .primary-button:hover {
+        background: #225fdc;
+      }
+
+      .primary-button:active,
+      .small-button:active,
+      .new-session:active {
+        transform: translateY(1px);
+      }
+
+      .new-session {
+        min-width: 112px;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .session-header {
+        min-width: 0;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 14px 0 16px;
+      }
+
+      .identity {
+        width: 27px;
+        height: 27px;
+        flex: none;
+        display: grid;
+        place-items: center;
+        border-radius: 7px;
+        background: var(--pi);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 780;
+      }
+
+      .identity.claude {
+        background: #201f1d;
+        color: #ffb36f;
+      }
+
+      .identity.codex {
+        background: var(--codex);
+      }
+
+      .header-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 710;
+      }
+
+      .status {
+        flex: none;
+        border: 1px solid transparent;
+        border-radius: 5px;
+        padding: 3px 7px;
+        font-size: 10px;
+        font-weight: 680;
+        white-space: nowrap;
+      }
+
+      .status.ready {
+        border-color: #c8e5d1;
+        background: var(--success-soft);
+        color: var(--success);
+      }
+
+      .status.live {
+        border-color: #cdddfd;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .status.paused {
+        border-color: var(--border);
+        background: var(--surface-soft);
+        color: var(--muted);
+      }
+
+      .header-spacer {
+        flex: 1;
+      }
+
+      .header-meta {
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        color: #3d4249;
+        font-size: 11px;
+        white-space: nowrap;
+      }
+
+      .header-meta strong {
+        font-weight: 690;
+      }
+
+      .top-button {
+        min-height: 26px;
+        border-color: transparent;
+        background: transparent;
+        font-size: 11px;
+      }
+
+      .top-button.active {
+        border-color: #c7d8ff;
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .session-rail {
+        grid-column: 1;
+        grid-row: 3;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        background: #fbfcfd;
+        overflow: hidden;
+      }
+
+      .session-list {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 6px 0;
+      }
+
+      .session-row {
+        position: relative;
+        width: calc(100% - 10px);
+        min-height: 130px;
+        display: grid;
+        grid-template-columns: 27px minmax(0, 1fr) auto;
+        grid-template-rows: auto auto auto;
+        gap: 4px 8px;
+        margin: 0 5px 4px;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        background: transparent;
+        color: var(--text);
+        padding: 12px;
+        text-align: left;
+        cursor: pointer;
+        transition:
+          background var(--motion),
+          border-color var(--motion),
+          box-shadow var(--motion);
+      }
+
+      .session-row:hover {
+        background: #f5f7fa;
+      }
+
+      .session-row.active {
+        border-color: var(--accent);
+        background: var(--surface-selected);
+        box-shadow: inset 0 0 0 1px rgba(46, 109, 246, 0.07);
+      }
+
+      .session-row .identity {
+        grid-row: 1 / 3;
+      }
+
+      .row-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        font-weight: 690;
+      }
+
+      .row-status {
+        align-self: start;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+      }
+
+      .row-status.live {
+        color: var(--accent);
+      }
+
+      .row-status.ready {
+        position: absolute;
+        top: 45px;
+        left: 47px;
+        border: 1px solid #c8e5d1;
+        border-radius: 4px;
+        background: var(--success-soft);
+        color: var(--success);
+        padding: 2px 5px;
+        font-size: 8px;
+      }
+
+      .session-row.ready .row-meta {
+        padding-top: 17px;
+      }
+
+      .row-meta,
+      .row-detail {
+        grid-column: 2 / 4;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1.4;
+      }
+
+      .row-detail {
+        color: #4f5660;
+      }
+
+      .rail-shortcuts {
+        flex: none;
+        border-top: 1px solid var(--border-soft);
+        padding: 10px 13px 12px;
+      }
+
+      .shortcut-row {
+        min-height: 27px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      kbd {
+        min-width: 27px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: #fff;
+        color: #4d535c;
+        padding: 2px 5px;
+        font: 9px var(--mono);
+      }
+
+      .workspace {
+        grid-column: 2;
+        grid-row: 3;
+        min-width: 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      .workspace-main {
+        min-width: 0;
+        min-height: 0;
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }
+
+      .session-surface {
+        position: relative;
+        min-width: 350px;
+        min-height: 0;
+        flex: 1;
+        overflow: hidden;
+        background: #fff;
+      }
+
+      .surface-scroll {
+        position: absolute;
+        inset: 0;
+        overflow: auto;
+        overscroll-behavior: contain;
+        padding: 16px 24px 126px;
+        scroll-behavior: smooth;
+      }
+
+      .timeline {
+        width: min(720px, 100%);
+        margin: 0 auto;
+      }
+
+      .run-kicker {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0 0 14px;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .run-kicker strong {
+        color: var(--pi);
+        font-weight: 740;
+      }
+
+      .tool-call {
+        display: grid;
+        grid-template-columns: 60px 46px minmax(0, 1fr) auto;
+        align-items: center;
+        min-height: 35px;
+        margin: 0 0 7px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        background: #fbfcfd;
+        padding: 0 10px;
+        color: #444b54;
+        font-size: 10px;
+      }
+
+      .tool-call .time {
+        color: var(--faint);
+      }
+
+      .tool-call .verb {
+        color: var(--muted);
+      }
+
+      .tool-call .path {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: #252a31;
+        font: 10px var(--mono);
+      }
+
+      .tool-call .result {
+        font-weight: 700;
+      }
+
+      .tool-call.failed .path,
+      .tool-call.failed .result {
+        color: var(--danger);
+      }
+
+      .tool-call.passed .result {
+        color: var(--success);
+      }
+
+      .thought {
+        display: grid;
+        grid-template-columns: 12px minmax(0, 1fr) auto;
+        gap: 9px;
+        align-items: start;
+        margin: 9px 8px 17px;
+        min-height: 48px;
+        color: #777c84;
+        font-size: 10px;
+        line-height: 1.55;
+      }
+
+      .thought .marker {
+        color: var(--danger);
+        font-weight: 800;
+      }
+
+      .thought em {
+        color: #686e76;
+      }
+
+      .thought .usage,
+      .usage-line {
+        color: #9a8b7d;
+        font: 9px var(--mono);
+        white-space: nowrap;
+      }
+
+      .agent-copy {
+        margin: 18px 0;
+        color: #252a30;
+        font-size: 12px;
+        line-height: 1.66;
+      }
+
+      .agent-copy p {
+        margin: 0 0 13px;
+      }
+
+      .agent-copy ol {
+        margin: 7px 0 8px 20px;
+        padding: 0;
+      }
+
+      .agent-copy li {
+        margin: 5px 0;
+      }
+
+      code {
+        border: 1px solid #d8d3cb;
+        border-radius: 5px;
+        background: #fbfaf8;
+        padding: 1px 5px;
+        font: 10px var(--mono);
+      }
+
+      .phase-line {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 14px 0;
+        color: #555c65;
+        font-size: 10px;
+        font-weight: 740;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .phase-line::after {
+        content: "";
+        height: 1px;
+        flex: 1;
+        background: var(--border);
+      }
+
+      .phase-line strong {
+        color: var(--success);
+        font-size: 12px;
+      }
+
+      .review-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px 12px;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: #fff;
+        padding: 12px 13px;
+        box-shadow: 0 8px 22px rgba(34, 45, 66, 0.05);
+      }
+
+      .review-card strong {
+        font-size: 11px;
+      }
+
+      .review-card .review-meta {
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .review-card .review-warning {
+        grid-column: 1;
+        color: var(--warning);
+        font-size: 10px;
+        line-height: 1.55;
+      }
+
+      .review-card .primary-button {
+        grid-column: 2;
+        grid-row: 1 / 3;
+        min-width: 100px;
+      }
+
+      .composer {
+        position: absolute;
+        z-index: 7;
+        right: 24px;
+        bottom: 12px;
+        left: 24px;
+        max-width: 720px;
+        margin: 0 auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 10px 28px rgba(32, 42, 60, 0.09);
+        padding: 10px 12px;
+      }
+
+      .composer label {
+        display: block;
+        margin-bottom: 6px;
+        color: #445064;
+        font-size: 10px;
+        font-weight: 670;
+      }
+
+      .composer textarea {
+        width: 100%;
+        height: 34px;
+        resize: none;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--text);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .composer-foot {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 9px;
+      }
+
+      .composer-foot .grow {
+        flex: 1;
+      }
+
+      .send-button {
+        width: 28px;
+        height: 28px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+        font-size: 9px;
+        font-weight: 740;
+      }
+
+      .terminal-surface {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--terminal);
+        color: var(--terminal-text);
+      }
+
+      .terminal-head {
+        height: 39px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid #2c312e;
+        padding: 0 13px;
+        color: #e7ede8;
+        font-size: 10px;
+      }
+
+      .terminal-head .origin {
+        color: #ffb16c;
+      }
+
+      .terminal-head .grow {
+        flex: 1;
+      }
+
+      .terminal-body {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 18px;
+        font: 11px/1.7 var(--mono);
+        white-space: pre-wrap;
+      }
+
+      .terminal-body .prompt {
+        color: #73dfa5;
+      }
+
+      .terminal-body .command {
+        color: #ffb16c;
+      }
+
+      .terminal-body .muted {
+        color: var(--terminal-muted);
+      }
+
+      .terminal-input-row {
+        height: 40px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-top: 1px solid #2c312e;
+        padding: 0 13px;
+        font: 11px var(--mono);
+      }
+
+      .terminal-input-row input {
+        min-width: 0;
+        flex: 1;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--terminal-text);
+        font: inherit;
+      }
+
+      .tool-pane {
+        width: var(--tool-width);
+        min-width: 330px;
+        min-height: 0;
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--border);
+        background: #fff;
+        transition:
+          width var(--motion),
+          min-width var(--motion),
+          opacity var(--motion);
+      }
+
+      .tool-pane.hidden {
+        width: 0;
+        min-width: 0;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .tool-tabs {
+        height: 38px;
+        flex: none;
+        display: flex;
+        align-items: end;
+        border-bottom: 1px solid var(--border);
+        background: #fbfcfd;
+        padding-left: 6px;
+      }
+
+      .tool-tab {
+        height: 33px;
+        display: flex;
+        align-items: center;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        padding: 0 11px;
+        cursor: pointer;
+        font-size: 10px;
+      }
+
+      .tool-tab.active {
+        border-color: var(--accent);
+        color: var(--accent);
+        font-weight: 680;
+      }
+
+      .tool-tabs .grow {
+        flex: 1;
+      }
+
+      .tool-tabs .small-button {
+        min-height: 25px;
+        margin: 0 6px 5px 0;
+        font-size: 9px;
+      }
+
+      .background-note {
+        min-height: 42px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid var(--border);
+        padding: 0 10px;
+        color: #5a6069;
+        font-size: 9px;
+      }
+
+      .background-note strong {
+        color: var(--claude);
+      }
+
+      .background-note span:last-child {
+        margin-left: auto;
+        color: var(--success);
+        font-weight: 680;
+      }
+
+      .file-breadcrumb {
+        height: 28px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        border-bottom: 1px solid var(--border-soft);
+        padding: 0 11px;
+        color: var(--muted);
+        font: 9px var(--mono);
+      }
+
+      .file-breadcrumb strong {
+        color: #3a4048;
+        font-weight: 680;
+      }
+
+      .tool-content {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+      }
+
+      .code-editor {
+        min-height: 100%;
+        background: #fff;
+        padding: 12px 0 28px;
+        font: 10px/1.55 var(--mono);
+      }
+
+      .code-line {
+        display: grid;
+        grid-template-columns: 39px minmax(0, 1fr);
+        min-height: 18px;
+        padding-right: 10px;
+        white-space: pre;
+      }
+
+      .code-line .ln {
+        color: #a6abb2;
+        padding-right: 10px;
+        text-align: right;
+        user-select: none;
+      }
+
+      .code-line.add {
+        background: #effaf3;
+      }
+
+      .code-line .selector {
+        color: #a25d2e;
+      }
+
+      .code-line .prop {
+        color: #6c568c;
+      }
+
+      .code-line .value {
+        color: #147955;
+      }
+
+      .markdown-editor {
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .markdown-toolbar {
+        height: 34px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        border-bottom: 1px solid var(--border-soft);
+        padding: 0 12px;
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 680;
+      }
+
+      .markdown-document {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        padding: 22px 26px 40px;
+        color: #252a2f;
+      }
+
+      .markdown-document h2 {
+        margin: 0 0 8px;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+
+      .markdown-document h3 {
+        margin: 22px 0 7px;
+        font-size: 13px;
+      }
+
+      .markdown-document p,
+      .markdown-document li {
+        font-size: 11px;
+        line-height: 1.65;
+      }
+
+      .markdown-document ul {
+        padding-left: 18px;
+      }
+
+      .preview-surface {
+        min-height: 100%;
+        background: #f7f8fb;
+        padding: 24px;
+      }
+
+      .checkout-preview {
+        max-width: 360px;
+        margin: 24px auto;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: #fff;
+        box-shadow: 0 14px 36px rgba(30, 38, 53, 0.09);
+        padding: 18px;
+      }
+
+      .checkout-preview h2 {
+        margin: 0 0 18px;
+        font-size: 18px;
+      }
+
+      .checkout-row {
+        display: flex;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--border-soft);
+        padding: 9px 0;
+        font-size: 11px;
+      }
+
+      .coupon-hint {
+        margin: 14px 0;
+        border-left: 4px solid var(--danger);
+        background: var(--danger-soft);
+        padding: 9px 10px;
+        color: #7b332e;
+        font-size: 10px;
+        line-height: 1.45;
+      }
+
+      .checkout-submit {
+        width: 100%;
+        min-height: 35px;
+        border-radius: 7px;
+        background: var(--success);
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .split-pane {
+        width: 38%;
+        min-width: 360px;
+        display: flex;
+        flex-direction: column;
+        border-left: 2px solid var(--accent);
+        background: var(--terminal);
+        color: var(--terminal-text);
+      }
+
+      .split-head {
+        height: 40px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        border-bottom: 1px solid #2c312e;
+        padding: 0 12px;
+        color: #f0f4f1;
+        font-size: 10px;
+      }
+
+      .split-head .grow {
+        flex: 1;
+      }
+
+      .split-head button {
+        border: 1px solid #414943;
+        border-radius: 5px;
+        background: transparent;
+        color: #d8ded9;
+        padding: 4px 7px;
+        cursor: pointer;
+        font-size: 9px;
+      }
+
+      .bottom-panel {
+        height: 116px;
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        border-top: 1px solid var(--border);
+        background: #fff;
+        transition: height var(--motion);
+      }
+
+      .bottom-panel.tall {
+        height: 220px;
+      }
+
+      .bottom-tabs {
+        height: 30px;
+        flex: none;
+        display: flex;
+        align-items: end;
+        gap: 3px;
+        border-bottom: 1px solid var(--border);
+        padding-left: 9px;
+      }
+
+      .bottom-tab {
+        height: 27px;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--muted);
+        padding: 0 9px;
+        cursor: pointer;
+        font-size: 9px;
+        font-weight: 680;
+      }
+
+      .bottom-tab.active {
+        border-color: var(--accent);
+        color: #272c33;
+      }
+
+      .bottom-content {
+        min-height: 0;
+        flex: 1;
+        overflow: auto;
+        font: 9px/1.55 var(--mono);
+      }
+
+      .diff-view {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        min-height: 100%;
+      }
+
+      .diff-files {
+        border-right: 1px solid var(--border);
+        padding: 9px 12px;
+      }
+
+      .diff-files strong,
+      .diff-files span {
+        display: block;
+      }
+
+      .diff-files span {
+        margin-top: 6px;
+        color: var(--success);
+      }
+
+      .diff-code {
+        padding: 6px 12px;
+        white-space: pre;
+      }
+
+      .diff-code .del {
+        display: block;
+        background: var(--danger-soft);
+        color: #a34640;
+      }
+
+      .diff-code .add {
+        display: block;
+        background: var(--success-soft);
+        color: #23784a;
+      }
+
+      .tests-view,
+      .log-view {
+        padding: 10px 14px;
+      }
+
+      .test-row {
+        display: grid;
+        grid-template-columns: 18px minmax(0, 1fr) auto;
+        padding: 4px 0;
+        color: #41474f;
+      }
+
+      .test-row strong {
+        color: var(--success);
+      }
+
+      .empty-state {
+        height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 32px;
+        text-align: center;
+      }
+
+      .empty-state h1 {
+        margin: 0 0 9px;
+        font-size: 24px;
+        letter-spacing: -0.03em;
+      }
+
+      .empty-state p {
+        max-width: 520px;
+        margin: 0 0 18px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      .statusbar {
+        grid-column: 1 / -1;
+        grid-row: 4;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        border-top: 1px solid var(--border);
+        background: #fbfcfd;
+        padding: 0 13px;
+        color: #5d636c;
+        font-size: 9px;
+      }
+
+      .statusbar .grow {
+        flex: 1;
+      }
+
+      .live-dot {
+        width: 7px;
+        height: 7px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--success);
+      }
+
+      .toast {
+        position: fixed;
+        z-index: 90;
+        top: 57px;
+        right: 16px;
+        max-width: 320px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: var(--shadow-pop);
+        padding: 9px 11px;
+        color: #4d535c;
+        font-size: 10px;
+        transform: translateY(-8px);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity var(--motion),
+          transform var(--motion);
+      }
+
+      .toast.show {
+        transform: translateY(0);
+        opacity: 1;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        z-index: 80;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: rgba(28, 32, 38, 0.22);
+        backdrop-filter: blur(2px);
+      }
+
+      .modal {
+        width: min(620px, calc(100vw - 40px));
+        border: 1px solid #cfd4dc;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: var(--shadow-pop);
+        padding: 18px;
+      }
+
+      .modal h2 {
+        margin: 0 0 4px;
+        font-size: 17px;
+      }
+
+      .modal > p {
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .session-types {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-bottom: 13px;
+      }
+
+      .type-button {
+        min-height: 82px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: #fff;
+        padding: 11px;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .type-button.active {
+        border-color: var(--accent);
+        background: var(--surface-selected);
+      }
+
+      .type-button strong,
+      .type-button span {
+        display: block;
+      }
+
+      .type-button strong {
+        font-size: 12px;
+      }
+
+      .type-button span {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 1.4;
+      }
+
+      .modal-field {
+        display: block;
+        margin: 10px 0;
+        color: #444b54;
+        font-size: 10px;
+        font-weight: 680;
+      }
+
+      .modal-field input,
+      .modal-field textarea {
+        width: 100%;
+        margin-top: 6px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #fff;
+        padding: 9px 10px;
+        color: var(--text);
+        font-size: 11px;
+      }
+
+      .modal-field textarea {
+        height: 64px;
+        resize: none;
+      }
+
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .tour {
+        position: fixed;
+        z-index: 100;
+        right: 18px;
+        bottom: 42px;
+        width: min(560px, calc(100vw - 36px));
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 11px;
+        align-items: center;
+        border: 1px solid rgba(255, 255, 255, 0.11);
+        border-radius: 10px;
+        background: rgba(24, 27, 32, 0.94);
+        color: #fff;
+        box-shadow: 0 14px 44px rgba(12, 16, 24, 0.28);
+        padding: 10px 11px;
+      }
+
+      .tour-index {
+        color: rgba(255, 255, 255, 0.62);
+        font: 9px var(--mono);
+      }
+
+      .tour-copy strong,
+      .tour-copy span {
+        display: block;
+      }
+
+      .tour-copy strong {
+        font-size: 10px;
+      }
+
+      .tour-copy span {
+        margin-top: 2px;
+        color: rgba(255, 255, 255, 0.68);
+        font-size: 9px;
+      }
+
+      .tour-buttons {
+        display: flex;
+        gap: 5px;
+      }
+
+      .tour-buttons button {
+        min-height: 27px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 5px;
+        background: transparent;
+        color: #fff;
+        padding: 0 8px;
+        cursor: pointer;
+        font-size: 9px;
+      }
+
+      .tour-buttons button.play {
+        background: #fff;
+        color: #252a31;
+      }
+
+      .tour-buttons button:disabled {
+        opacity: 0.36;
+        cursor: default;
+      }
+
+      .ghost-cursor {
+        position: fixed;
+        z-index: 95;
+        width: 24px;
+        height: 24px;
+        border: 2px solid rgba(46, 109, 246, 0.58);
+        border-radius: 50%;
+        box-shadow: 0 0 0 5px rgba(46, 109, 246, 0.12);
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.82);
+        transition:
+          left 450ms cubic-bezier(0.2, 0.7, 0.2, 1),
+          top 450ms cubic-bezier(0.2, 0.7, 0.2, 1),
+          opacity 120ms ease,
+          transform 180ms ease;
+      }
+
+      .ghost-cursor.show {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+
+      body.clean .tour,
+      body.clean .ghost-cursor {
+        display: none;
+      }
+
+      @media (max-width: 1180px) {
+        :root {
+          --rail-width: 230px;
+          --tool-width: 38%;
+        }
+
+        .session-row {
+          min-height: 96px;
+        }
+
+        .header-meta > span:nth-child(1),
+        .header-meta > span:nth-child(2),
+        .header-meta > span:nth-child(3) {
+          display: none;
+        }
+
+        .tool-pane {
+          min-width: 310px;
+        }
+
+        .surface-scroll {
+          padding-right: 16px;
+          padding-left: 16px;
+        }
+
+        .tour {
+          right: 12px;
+          bottom: 36px;
+        }
+      }
+
+      @media (max-width: 880px) {
+        :root {
+          --rail-width: 74px;
+          --tool-width: 48%;
+        }
+
+        .titlebar-left {
+          padding: 0 8px;
+        }
+
+        .titlebar-left .eyebrow,
+        .new-session {
+          display: none;
+        }
+
+        .titlebar-left::after {
+          content: "New";
+          width: 100%;
+          text-align: center;
+          color: var(--accent);
+          font-size: 10px;
+          font-weight: 720;
+        }
+
+        .session-row {
+          min-height: 60px;
+          grid-template-columns: 27px;
+          grid-template-rows: auto;
+          place-items: center;
+          padding: 9px;
+        }
+
+        .session-row .identity {
+          grid-row: auto;
+        }
+
+        .row-title,
+        .row-status,
+        .row-meta,
+        .row-detail,
+        .rail-shortcuts {
+          display: none;
+        }
+
+        .header-name {
+          max-width: 180px;
+        }
+
+        .tool-pane {
+          min-width: 300px;
+        }
+
+        .bottom-panel {
+          height: 96px;
+        }
+
+        .diff-view {
+          grid-template-columns: 150px minmax(0, 1fr);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app" id="app"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="ghost-cursor" id="ghost-cursor" aria-hidden="true"></div>
+    <section class="tour" id="tour" aria-label="用户旅程播放控制">
+      <span class="tour-index" id="tour-index">1 / 9</span>
+      <div class="tour-copy"><strong id="tour-title"></strong><span id="tour-text"></span></div>
+      <div class="tour-buttons">
+        <button id="tour-prev" type="button">上一步</button>
+        <button class="play" id="tour-play" type="button">自动播放</button>
+        <button id="tour-next" type="button">下一步</button>
+        <button id="tour-replay" type="button">重播</button>
+      </div>
+    </section>
+
+    <script>
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+
+      const app = $('#app');
+      const toastNode = $('#toast');
+      const ghostCursor = $('#ghost-cursor');
+      const params = new URLSearchParams(location.search);
+
+      const sessions = {
+        pi: {
+          id: 'pi', kind: 'pi', short: 'Pi', name: 'Pi · Checkout polish · Run 3', project: 'fable5', branch: 'main', state: 'Ready to review', detail: 'Ready to review · 2 files'
+        },
+        claude: {
+          id: 'claude', kind: 'claude', short: 'CC', name: 'Claude · Windows probe', project: 'fable5', branch: 'main', state: 'Live', detail: 'claude-shell-ready'
+        },
+        codex: {
+          id: 'codex', kind: 'codex', short: 'CX', name: 'Codex · test review', project: 'fable5', branch: 'main', state: 'Live', detail: 'Running tests (27/27)'
+        },
+        auth: {
+          id: 'auth', kind: 'pi', short: 'Pi', name: 'Pi · auth recovery', project: 'fable5', branch: 'feature/auth-fix', state: 'Paused', detail: 'Paused by user'
+        }
+      };
+
+      const journey = [
+        { title: '从 Session 开始，而不是从页面开始', text: 'New Session 可创建 Pi、Claude 或 Codex；项目与工作现场在这里绑定。', session: null, modal: true, tool: null, lower: 'changes', focus: '[data-action="create-session"]' },
+        { title: 'Pi Session 开始第一轮执行', text: '中央是 Pi 原生的结构化工作流；聊天、工具调用与执行进度属于同一个 Session。', session: 'pi', piStage: 'run1', tool: null, lower: 'log', focus: '.session-surface' },
+        { title: '同一个 Pi Task 继续 Run 2', text: '追问会启动下一轮 Run；打开的文件和光标仍然属于这个 Session。', session: 'pi', piStage: 'run2', tool: 'code', lower: 'changes', focus: '.tool-pane' },
+        { title: '启动 Claude，不打断 Pi', text: 'Claude 获得独立 PTY；Pi 继续后台运行，Session Rail 成为唯一切换入口。', session: 'pi', piStage: 'run2', tool: 'code', lower: 'changes', visible: ['claude'], focus: '[data-session="claude"]' },
+        { title: '再启动 Codex 进行独立检查', text: '三种 Agent 是三个可恢复工作现场，不是同一聊天里的三种消息样式。', session: 'pi', piStage: 'run3', tool: 'code', lower: 'tests', visible: ['claude', 'codex'], focus: '[data-session="codex"]' },
+        { title: '切到 Claude：原生 TUI 成为主入口', text: '主区域切换为真实终端体验；README Markdown 作为该 Session 的工具并排打开。', session: 'claude', tool: 'markdown', lower: 'changes', visible: ['claude', 'codex'], focus: '.terminal-surface' },
+        { title: '需要时临时并排两个 Session', text: 'Claude 保持主焦点，Codex 被 Pin 到右侧；关闭并排不会结束任何 PTY。', session: 'claude', tool: null, lower: 'tests', split: 'codex', visible: ['claude', 'codex'], focus: '.split-pane' },
+        { title: '回到 Pi，工作现场完整恢复', text: 'Run 历史、失败恢复、文件、Changes 和 Review 状态都回到离开前的位置。', session: 'pi', piStage: 'ready', tool: 'code', lower: 'changes', visible: ['claude', 'codex'], focus: '.review-card' },
+        { title: '回复启动 Run 4，外部 Session 继续运行', text: 'Review 不是终点；用户继续 steer Pi，同时 Claude 与 Codex 保持可恢复。', session: 'pi', piStage: 'run4', tool: 'markdown', lower: 'log', visible: ['claude', 'codex'], focus: '.composer' }
+      ];
+
+      const state = {
+        activeSession: 'pi',
+        visibleSessions: new Set(['claude', 'codex']),
+        piStage: 'ready',
+        tool: 'code',
+        toolHidden: false,
+        lower: 'changes',
+        lowerTall: false,
+        split: null,
+        modal: false,
+        modalType: 'pi',
+        playing: false,
+        step: Math.max(0, Math.min(journey.length - 1, Number(params.get('step') ?? 7)))
+      };
+
+      if (params.get('clean') === '1') document.body.classList.add('clean');
+
+      function statusClass(session) {
+        if (session.state === 'Ready to review') return 'ready';
+        if (session.state === 'Live') return 'live';
+        return 'paused';
+      }
+
+      function identity(session) {
+        return `<span class="identity ${session.kind}" aria-hidden="true">${session.short}</span>`;
+      }
+
+      function visibleSessionList() {
+        const list = [];
+        if (state.visibleSessions.has('claude')) list.push(sessions.claude);
+        if (state.visibleSessions.has('codex')) list.push(sessions.codex);
+        list.push(sessions.pi, sessions.auth);
+        return list;
+      }
+
+      function sessionRail() {
+        return `<aside class="session-rail" aria-label="Sessions">
+          <div class="session-list">
+            ${visibleSessionList().map((session) => `
+              <button class="session-row ${statusClass(session)} ${state.activeSession === session.id ? 'active' : ''}" data-session="${session.id}" type="button" aria-pressed="${state.activeSession === session.id}">
+                ${identity(session)}
+                <span class="row-title">${session.name}</span>
+                <span class="row-status ${statusClass(session)}">${session.state}</span>
+                <span class="row-meta">${session.project} · ${session.branch}</span>
+                <span class="row-detail">${session.id === 'pi' && state.piStage === 'run4' ? 'Run 4 · working' : session.detail}</span>
+              </button>`).join('')}
+          </div>
+          <div class="rail-shortcuts">
+            <div class="shortcut-row"><kbd>⌘[</kbd><span>Previous session</span></div>
+            <div class="shortcut-row"><kbd>⌘]</kbd><span>Next session</span></div>
+            <div class="shortcut-row"><kbd>⌥↵</kbd><span>Pin next to current</span></div>
+          </div>
+        </aside>`;
+      }
+
+      function titlebar() {
+        const current = state.activeSession ? sessions[state.activeSession] : null;
+        return `<header class="titlebar">
+          <div class="titlebar-left"><span class="eyebrow">Sessions</span><button class="new-session" data-action="new-session" type="button">New Session</button></div>
+          <div class="session-header">
+            ${current ? `${identity(current)}<span class="header-name">${current.name}</span><span class="status ${statusClass(current)}">${current.id === 'pi' && state.piStage === 'run4' ? 'Working · Run 4' : current.state}</span>` : '<span class="header-name">Choose a working session</span>'}
+            <span class="header-spacer"></span>
+            ${current ? `<div class="header-meta"><span><strong>${current.project}</strong></span><span>${current.branch}</span><span>00:${current.kind === 'pi' ? '03:28' : '18:42'}</span><button class="top-button ${state.split ? 'active' : ''}" data-action="toggle-split" type="button">Split</button><button class="top-button" data-action="pin-session" type="button">Pin session</button><button class="top-button" data-action="toggle-tools" type="button" aria-label="Toggle session tools" title="Session tools">•••</button></div>` : ''}
+          </div>
+        </header>`;
+      }
+
+      function windowbar() {
+        return `<div class="windowbar"><strong>Session Rail Workbench — Pi Native Surface</strong></div>`;
+      }
+
+      function piTimeline() {
+        const stage = state.piStage;
+        const isEarly = stage === 'run1';
+        const isMid = stage === 'run2';
+        const isRun4 = stage === 'run4';
+        return `<div class="surface-scroll" data-tour-focus>
+          <div class="timeline">
+            <div class="run-kicker"><strong>${isRun4 ? 'Pi · Run 4' : isEarly ? 'Pi · Run 1' : isMid ? 'Pi · Run 2' : 'Pi · Run 3'}</strong><span>${isRun4 ? 'Working · same durable Session' : 'Checkout polish · fable5'}</span></div>
+            <div class="tool-call passed"><span class="time">00:32.8</span><span class="verb">Read</span><span class="path">public/index.html</span><span class="result">passed</span></div>
+            ${isEarly ? `<div class="agent-copy"><p>我已经定位到提交按钮和优惠券提示的样式。下一步先调整颜色 token，再验证 hover 与错误提示层级。</p></div>` : `
+              <div class="usage-line" style="text-align:right;margin:-2px 0 12px">2 in · 367 out · $0.0066</div>
+              <div class="tool-call failed"><span class="time">00:38.0</span><span class="verb">Write</span><span class="path">public/index.html</span><span class="result">+2 −2 · failed</span></div>
+              <div class="thought"><span class="marker">!</span><span>Thought for 2s — <em>I’m realizing the hunk header line count might not match the actual content. I’ll re-read the exact range and retry.</em></span><span class="usage">2 in · 759 out</span></div>
+              <div class="tool-call passed"><span class="time">00:45.9</span><span class="verb">Write</span><span class="path">public/index.html</span><span class="result">+2 −2 · passed</span></div>
+              <div class="tool-call passed"><span class="time">00:48.8</span><span class="verb">Read</span><span class="path">public/index.html</span><span class="result">passed</span></div>
+              <div class="agent-copy"><p>Both changes applied successfully. Let me verify the final result.</p><p style="color:var(--muted);font-size:10px">Plan progress: step-1-1 → done, step-1-2 → done</p><p>已完成修改，只改动了 <code>public/index.html</code>：</p><ol><li>提交订单按钮：新增 <code>--success</code> 和 <code>--success-hover</code> 变量，按钮改为绿色。</li><li>优惠券过期提示：为 <code>.coupon-hint</code> 新增红色左边框。</li></ol><p>其余样式和结构未改动。</p></div>`}
+            ${isMid ? `<div class="phase-line"><strong>Working</strong><span>Run 2 · continue same Session</span></div>` : ''}
+            ${!isEarly && !isMid ? `<div class="phase-line"><strong>Passed</strong><span>Done · 1 file +5 −2 · unverified</span></div><div class="phase-line"><strong>Passed</strong><span>Ready to review</span></div>
+              <section class="review-card" data-tour-focus><div><strong>${isRun4 ? 'Run 4 in progress' : 'Ready to review'}</strong><span class="review-meta"> · 1 file <span style="color:var(--success)">+5</span> <span style="color:var(--danger)">−2</span></span></div><div class="review-warning">${isRun4 ? 'Checking the next requested edge case. Claude and Codex remain live.' : 'Unverified — no verification commands were run.<br>Risks: 3 tool call(s) failed'}</div><button class="primary-button" data-action="review" type="button">${isRun4 ? 'View activity' : 'Review changes'}</button></section>` : ''}
+          </div>
+        </div>
+        <form class="composer" data-action="composer"><label>${isRun4 ? 'Steer Run 4' : isEarly ? 'Reply — continues Run 1' : isMid ? 'Reply — starts Run 3' : 'Reply — starts Run 4'}</label><textarea id="composer-input" placeholder="Describe the next step, or ask a question...">${isRun4 ? '再检查一次 Windows CRLF，并把结论补充进 README。' : ''}</textarea><div class="composer-foot"><span>Auto · pause on risk</span><span class="grow"></span><span>Claude Sonnet 5 · medium</span><button class="send-button" type="submit" aria-label="Send">Send</button></div></form>`;
+      }
+
+      function terminalSurface(kind) {
+        const isClaude = kind === 'claude';
+        return `<section class="terminal-surface" data-tour-focus>
+          <div class="terminal-head"><span class="origin">${isClaude ? 'Claude Code' : 'Codex CLI'}</span><span>external · unmanaged · PTY preserved</span><span class="grow"></span><span>${isClaude ? 'Windows probe' : 'test review'}</span></div>
+          <div class="terminal-body"><span class="prompt">~/work/fable5</span> on main
+
+<span class="command">$ ${isClaude ? 'claude' : 'codex'}</span>
+${isClaude ? 'Claude Code session · live' : 'Codex session · live'}
+<span class="muted">cwd, scrollback and process are owned by this Session</span>
+
+${isClaude ? `Checking Windows behavior independently…
+
+<span class="command">PS C:\\work\\fable5> node scripts/probe-eol.mjs</span>
+Wrote: out\\sample.csv (1024 bytes)
+CRLF count: 0
+LF count: 42
+
+The in-memory bytes are stable. I recommend documenting that
+Excel on Windows still displays LF correctly.` : `Reviewing public/index.html and test coverage…
+
+<span class="command">$ npm test -- checkout</span>
+27 passed, 0 failed
+
+Findings:
+  passed  submit uses success token
+  passed  hover has dedicated state
+  passed  expired coupon retains error semantics
+
+No writes made. Waiting for the next instruction.`}
+
+<span class="prompt">● live</span></div>
+          <form class="terminal-input-row" data-terminal="${kind}"><span class="prompt">›</span><input aria-label="Terminal input" placeholder="Type into the preserved PTY…" /><button class="small-button" type="submit">Run</button></form>
+        </section>`;
+      }
+
+      const codeLines = [
+        ['', ''], ['', ''], ['108', ''], ['109', ''], ['110', '<span class="selector">.submit-btn</span> {'], ['111', '  <span class="prop">display</span>: inline-flex;'], ['112', '  <span class="prop">align-items</span>: center;'], ['113', '  <span class="prop">justify-content</span>: center;'], ['114', '  <span class="prop">gap</span>: <span class="value">8px</span>;'], ['115', '  <span class="prop">padding</span>: <span class="value">12px 20px</span>;'], ['116', '  <span class="prop">font-size</span>: <span class="value">16px</span>;'], ['117', '  <span class="prop">font-weight</span>: <span class="value">600</span>;'], ['118', '  <span class="prop">border</span>: none;'], ['119', '  <span class="prop">border-radius</span>: <span class="value">8px</span>;'], ['120', '  <span class="prop">cursor</span>: pointer;'], ['121', '  <span class="prop">transition</span>: background-color 0.2s ease;'], ['122', '  <span class="prop">background-color</span>: <span class="value">var(--success)</span>;'], ['123', '  <span class="prop">color</span>: #fff;'], ['124', '}'], ['125', ''], ['126', '<span class="selector">.submit-btn:hover</span> {'], ['127', '  <span class="prop">background-color</span>: <span class="value">var(--success-hover)</span>;'], ['128', '}'], ['129', ''], ['134', '<span class="selector">.coupon-hint</span> {'], ['135', '  <span class="prop">margin-top</span>: <span class="value">12px</span>;'], ['136', '  <span class="prop">padding</span>: <span class="value">12px 14px</span>;'], ['137', '  <span class="prop">background-color</span>: <span class="value">#fef2f2</span>;'], ['138', '  <span class="prop">border-left</span>: <span class="value">4px solid #dc2626</span>;'], ['139', '  <span class="prop">color</span>: <span class="value">#991b1b</span>;'], ['140', '  <span class="prop">font-size</span>: <span class="value">14px</span>;'], ['141', '}']
+      ];
+
+      function toolPane() {
+        if (state.toolHidden || !state.tool) return `<aside class="tool-pane hidden" aria-hidden="true"></aside>`;
+        const showMarkdownTab = state.tool === 'markdown' || state.activeSession === 'claude';
+        const showBackgroundNote = state.activeSession === 'pi' && state.visibleSessions.has('claude');
+        return `<aside class="tool-pane" data-tour-focus>
+          ${showBackgroundNote ? '<div class="background-note"><strong>Claude</strong><span>Windows probe is still live in the background</span><span>Live</span></div>' : ''}
+          <div class="tool-tabs"><button class="tool-tab ${state.tool === 'code' ? 'active' : ''}" data-tool="code" type="button">public/index.html</button>${showMarkdownTab ? `<button class="tool-tab ${state.tool === 'markdown' ? 'active' : ''}" data-tool="markdown" type="button">README.md</button>` : ''}<button class="tool-tab ${state.tool === 'preview' ? 'active' : ''}" data-tool="preview" type="button">Preview</button><span class="grow"></span><button class="small-button" data-action="hide-tools" type="button">Close</button></div>
+          ${state.tool === 'code' ? '<div class="file-breadcrumb"><span>public</span><span>/</span><strong>index.html</strong></div>' : ''}
+          <div class="tool-content">${state.tool === 'code' ? `<div class="code-editor" contenteditable="true" spellcheck="false" aria-label="Code editor">${codeLines.map(([n, line]) => `<div class="code-line ${n === '122' || n === '127' || n === '138' ? 'add' : ''}"><span class="ln">${n}</span><span>${line}</span></div>`).join('')}</div>` : state.tool === 'markdown' ? `<div class="markdown-editor"><div class="markdown-toolbar"><span>H1</span><span>H2</span><span>Bold</span><span>Italic</span><span>List</span><span>Link</span><span style="margin-left:auto">Rich</span></div><article class="markdown-document" contenteditable="true"><h2>Checkout compatibility</h2><p>The checkout surface should preserve clear success and error semantics across themes and platforms.</p><h3>Visual contract</h3><ul><li>The submit action uses the success token.</li><li>The expired coupon hint keeps a red semantic edge.</li><li>Hover and disabled states remain distinguishable.</li></ul><h3>Session notes</h3><p>Pi owns the implementation. Claude verifies Windows behavior; Codex independently checks test coverage.</p></article></div>` : `<div class="preview-surface"><section class="checkout-preview"><h2>Checkout</h2><div class="checkout-row"><span>Subtotal</span><strong>¥468.00</strong></div><div class="checkout-row"><span>Discount</span><strong>−¥40.00</strong></div><div class="coupon-hint">This coupon expired on Jun 30. Replace it or remove it.</div><button class="checkout-submit" type="button">Submit order</button></section></div>`}</div>
+        </aside>`;
+      }
+
+      function splitPane() {
+        if (!state.split) return '';
+        const session = sessions[state.split];
+        return `<aside class="split-pane" data-tour-focus><div class="split-head">${identity(session)}<strong>${session.name}</strong><span class="grow"></span><button data-action="close-split" type="button">Return to rail</button></div><div class="terminal-body"><span class="prompt">~/work/fable5</span> on main
+
+<span class="command">$ codex</span>
+27 tests passed · watch mode active
+
+Review summary
+  public/index.html  +5 −2
+  no independent writes
+  one unverified product flow
+
+<span class="muted">This is the same preserved Codex PTY, temporarily pinned beside Claude.</span>
+
+<span class="prompt">● waiting</span></div></aside>`;
+      }
+
+      function bottomPanel() {
+        return `<section class="bottom-panel ${state.lowerTall ? 'tall' : ''}"><div class="bottom-tabs"><button class="bottom-tab ${state.lower === 'changes' ? 'active' : ''}" data-lower="changes" type="button">Changes</button><button class="bottom-tab ${state.lower === 'tests' ? 'active' : ''}" data-lower="tests" type="button">Tests</button><button class="bottom-tab ${state.lower === 'log' ? 'active' : ''}" data-lower="log" type="button">Agent log</button><span style="flex:1"></span><button class="bottom-tab" data-action="toggle-lower" type="button">${state.lowerTall ? 'Collapse' : 'Expand'}</button></div><div class="bottom-content">${state.lower === 'changes' ? `<div class="diff-view"><div class="diff-files"><strong>1 file changed</strong><span>public/index.html · +5 −2</span></div><div class="diff-code"><span class="del">- background-color: #1e88e5;</span><span class="add">+ background-color: var(--success);</span><span class="del">- background-color: #1976d2;</span><span class="add">+ background-color: var(--success-hover);</span></div></div>` : state.lower === 'tests' ? `<div class="tests-view"><div class="test-row"><strong>passed</strong><span>submit uses success token</span><span>18ms</span></div><div class="test-row"><strong>passed</strong><span>expired coupon keeps semantic error edge</span><span>11ms</span></div><div class="test-row"><strong>passed</strong><span>Claude and Codex PTYs remain resumable</span><span>42ms</span></div></div>` : `<div class="log-view">${state.activeSession === 'pi' ? 'Pi Run history · Run 1 explored · Run 2 edited · Run 3 ready · Run 4 steerable' : `${sessions[state.activeSession].name} · PTY process alive · cwd / scrollback / focus restored`}</div>`}</div></section>`;
+      }
+
+      function modal() {
+        if (!state.modal) return '';
+        return `<div class="modal-backdrop"><form class="modal" data-action="new-session-form"><h2>Start a working Session</h2><p>Choose the execution surface. Files, layout, history and process state will belong to this Session.</p><div class="session-types"><button class="type-button ${state.modalType === 'pi' ? 'active' : ''}" data-type="pi" type="button"><strong>Pi Session</strong><span>Managed multi-run task with plans, tools, review and steer.</span></button><button class="type-button ${state.modalType === 'claude' ? 'active' : ''}" data-type="claude" type="button"><strong>Claude Code</strong><span>External preserved PTY with its native interactive TUI.</span></button><button class="type-button ${state.modalType === 'codex' ? 'active' : ''}" data-type="codex" type="button"><strong>Codex CLI</strong><span>External preserved PTY for independent implementation or review.</span></button></div><label class="modal-field">Project<input value="fable5" /></label><label class="modal-field">What should this Session do?<textarea>Polish checkout success and expired coupon states.</textarea></label><div class="modal-actions"><button class="ghost-button" data-action="cancel-modal" type="button">Cancel</button><button class="primary-button" data-action="create-session" type="submit">Create ${state.modalType === 'pi' ? 'Pi Session' : state.modalType === 'claude' ? 'Claude Session' : 'Codex Session'}</button></div></form></div>`;
+      }
+
+      function mainWorkspace() {
+        if (!state.activeSession) return `<main class="workspace"><div class="empty-state"><div><h1>Your next working Session starts here</h1><p>Start Pi for a managed multi-run task, or open Claude Code / Codex in a preserved terminal. You can edit files inside every Session.</p><button class="primary-button" data-action="new-session" type="button">New Session</button></div></div></main>`;
+        const active = sessions[state.activeSession];
+        return `<main class="workspace"><div class="workspace-main"><section class="session-surface">${active.kind === 'pi' ? piTimeline() : terminalSurface(active.kind)}</section>${state.split ? splitPane() : toolPane()}</div>${bottomPanel()}</main>`;
+      }
+
+      function statusbar() {
+        const current = state.activeSession ? sessions[state.activeSession] : null;
+        return `<footer class="statusbar"><span class="live-dot"></span><strong>${current ? current.name : 'No active Session'}</strong><span>${current ? current.project : ''}</span><span class="grow"></span><span>${state.visibleSessions.size + 2} Session records</span><span>${state.visibleSessions.size} external PTYs live</span></footer>`;
+      }
+
+      function render() {
+        app.innerHTML = `${windowbar()}${titlebar()}${sessionRail()}${mainWorkspace()}${statusbar()}${modal()}`;
+        bindEvents();
+        syncTour();
+        requestAnimationFrame(moveGhostCursor);
+      }
+
+      function bindEvents() {
+        $$('[data-session]').forEach((node) => node.addEventListener('click', () => selectSession(node.dataset.session)));
+        $$('[data-tool]').forEach((node) => node.addEventListener('click', () => { state.tool = node.dataset.tool; state.toolHidden = false; render(); }));
+        $$('[data-lower]').forEach((node) => node.addEventListener('click', () => { state.lower = node.dataset.lower; render(); }));
+        $$('[data-type]').forEach((node) => node.addEventListener('click', () => { state.modalType = node.dataset.type; render(); }));
+        $$('[data-action="new-session"]').forEach((node) => node.addEventListener('click', () => { state.modal = true; render(); }));
+        $('[data-action="cancel-modal"]')?.addEventListener('click', () => { state.modal = false; render(); });
+        $('[data-action="new-session-form"]')?.addEventListener('submit', (event) => {
+          event.preventDefault();
+          state.modal = false;
+          state.activeSession = state.modalType === 'pi' ? 'pi' : state.modalType;
+          if (state.modalType !== 'pi') state.visibleSessions.add(state.modalType);
+          state.piStage = state.modalType === 'pi' ? 'run1' : state.piStage;
+          state.tool = null;
+          state.toolHidden = false;
+          showToast(`${sessions[state.activeSession].name} created. Its working state is now persistent.`);
+          render();
+        });
+        $('[data-action="toggle-tools"]')?.addEventListener('click', () => { state.toolHidden = !state.toolHidden; if (!state.tool) state.tool = state.activeSession === 'pi' ? 'code' : 'markdown'; render(); });
+        $('[data-action="hide-tools"]')?.addEventListener('click', () => { state.toolHidden = true; render(); });
+        $('[data-action="toggle-lower"]')?.addEventListener('click', () => { state.lowerTall = !state.lowerTall; render(); });
+        $('[data-action="review"]')?.addEventListener('click', () => { state.lower = 'changes'; state.lowerTall = true; showToast('Source review opened inside the current Pi Session.'); render(); });
+        $('[data-action="toggle-split"]')?.addEventListener('click', () => { state.split = state.split ? null : state.activeSession === 'codex' ? 'claude' : 'codex'; state.toolHidden = false; render(); });
+        $('[data-action="close-split"]')?.addEventListener('click', () => { state.split = null; state.tool = state.activeSession === 'pi' ? 'code' : 'markdown'; render(); });
+        $('[data-action="pin-session"]')?.addEventListener('click', () => showToast('Session pinned. Its process and layout remain independent.'));
+        $('[data-action="composer"]')?.addEventListener('submit', (event) => {
+          event.preventDefault();
+          state.piStage = 'run4';
+          sessions.pi.state = 'Live';
+          sessions.pi.detail = 'Run 4 · checking CRLF';
+          showToast('Reply accepted. Run 4 started in the same Pi Session.');
+          render();
+        });
+        $$('[data-terminal]').forEach((form) => form.addEventListener('submit', (event) => {
+          event.preventDefault();
+          const input = $('input', form);
+          if (!input.value.trim()) return;
+          showToast(`Sent to ${sessions[form.dataset.terminal].name}: ${input.value.trim()}`);
+          input.value = '';
+        }));
+      }
+
+      function selectSession(id) {
+        state.activeSession = id;
+        state.split = null;
+        state.toolHidden = false;
+        if (id === 'pi' || id === 'auth') state.tool = 'code';
+        else state.tool = id === 'claude' ? 'markdown' : null;
+        state.lower = id === 'codex' ? 'tests' : 'changes';
+        showToast(`${sessions[id].name} restored: process, files, cursor and layout.`);
+        stopPlayback();
+        render();
+      }
+
+      let toastTimer = null;
+      function showToast(message) {
+        toastNode.textContent = message;
+        toastNode.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => toastNode.classList.remove('show'), 2600);
+      }
+
+      function applyJourneyStep(index) {
+        const step = journey[index];
+        state.step = index;
+        state.activeSession = step.session;
+        state.modal = Boolean(step.modal);
+        state.piStage = step.piStage ?? state.piStage;
+        state.tool = step.tool;
+        state.toolHidden = false;
+        state.lower = step.lower ?? 'changes';
+        state.lowerTall = false;
+        state.split = step.split ?? null;
+        state.visibleSessions = new Set(step.visible ?? []);
+        sessions.pi.state = step.piStage === 'run4' ? 'Live' : step.piStage === 'ready' ? 'Ready to review' : 'Live';
+        render();
+        const next = new URL(location.href);
+        next.searchParams.set('step', String(index));
+        history.replaceState(null, '', next);
+      }
+
+      function syncTour() {
+        const step = journey[state.step];
+        $('#tour-index').textContent = `${state.step + 1} / ${journey.length}`;
+        $('#tour-title').textContent = step.title;
+        $('#tour-text').textContent = step.text;
+        $('#tour-prev').disabled = state.step === 0;
+        $('#tour-next').disabled = state.step === journey.length - 1;
+        $('#tour-play').textContent = state.playing ? '暂停' : '自动播放';
+      }
+
+      function moveGhostCursor() {
+        if (document.body.classList.contains('clean')) return;
+        const selector = journey[state.step].focus;
+        const target = selector ? $(selector) : null;
+        if (!target) {
+          ghostCursor.classList.remove('show');
+          return;
+        }
+        const scrollSurface = target.closest('.surface-scroll');
+        if (scrollSurface) target.scrollIntoView({ block: 'center', behavior: 'auto' });
+        requestAnimationFrame(() => {
+          const rect = target.getBoundingClientRect();
+          ghostCursor.style.left = `${Math.max(18, Math.min(innerWidth - 18, rect.left + rect.width * 0.72))}px`;
+          ghostCursor.style.top = `${Math.max(18, Math.min(innerHeight - 18, rect.top + rect.height * 0.46))}px`;
+          ghostCursor.classList.add('show');
+        });
+      }
+
+      let playTimer = null;
+      function stopPlayback() {
+        state.playing = false;
+        clearTimeout(playTimer);
+        playTimer = null;
+        syncTour();
+      }
+
+      function scheduleNext() {
+        clearTimeout(playTimer);
+        if (!state.playing) return;
+        playTimer = setTimeout(() => {
+          if (state.step >= journey.length - 1) {
+            stopPlayback();
+            return;
+          }
+          applyJourneyStep(state.step + 1);
+          scheduleNext();
+        }, 3100);
+      }
+
+      $('#tour-prev').addEventListener('click', () => { stopPlayback(); applyJourneyStep(Math.max(0, state.step - 1)); });
+      $('#tour-next').addEventListener('click', () => { stopPlayback(); applyJourneyStep(Math.min(journey.length - 1, state.step + 1)); });
+      $('#tour-replay').addEventListener('click', () => { stopPlayback(); applyJourneyStep(0); });
+      $('#tour-play').addEventListener('click', () => {
+        if (state.playing) return stopPlayback();
+        if (state.step >= journey.length - 1) applyJourneyStep(0);
+        state.playing = true;
+        syncTour();
+        scheduleNext();
+      });
+
+      window.addEventListener('keydown', (event) => {
+        if (event.metaKey && event.key === '[') {
+          event.preventDefault();
+          const list = visibleSessionList();
+          const index = Math.max(0, list.findIndex((item) => item.id === state.activeSession));
+          selectSession(list[(index - 1 + list.length) % list.length].id);
+        } else if (event.metaKey && event.key === ']') {
+          event.preventDefault();
+          const list = visibleSessionList();
+          const index = Math.max(0, list.findIndex((item) => item.id === state.activeSession));
+          selectSession(list[(index + 1) % list.length].id);
+        } else if (event.metaKey && /^[1-4]$/.test(event.key)) {
+          event.preventDefault();
+          const list = visibleSessionList();
+          const session = list[Number(event.key) - 1];
+          if (session) selectSession(session.id);
+        }
+      });
+
+      window.addEventListener('resize', moveGhostCursor);
+      applyJourneyStep(state.step);
+      if (params.get('autoplay') === '1') {
+        state.playing = true;
+        syncTour();
+        scheduleNext();
+      }
+    </script>
+  </body>
+</html>

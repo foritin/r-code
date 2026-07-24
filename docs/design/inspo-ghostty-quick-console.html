@@ -1,0 +1,841 @@
+<!doctype html>
+<!-- Charter — 竞品移植研究 · Ghostty ①「速召台」(docs/design). NOT product code.
+     Discussion artifact: 把 Ghostty Quick Terminal（全局热键下拉终端）移植成 Charter 的
+     「速召台」—— 覆在任何表面（Home / Task Room / 编辑器）之上的持久终端，
+     带工作上下文胶囊（聚焦项目 / 最近项目 / 任务 worktree / Scratch），
+     输出块可一键「发给 Room」变成任务上下文。影片可播放：▶ / ⏸ / 章节直达。 -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Charter · 速召台 — Ghostty 移植研究 ①</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        background: #eceae5;
+        color: #201e1a;
+        padding: 30px 26px 70px;
+        --side: #f6f5f1; --main: #fbfaf7; --card: #ffffff;
+        --border: #e5e1d8; --border-soft: #edeae3;
+        --text: #201e1a; --text2: #6e6a61; --text3: #a39e94;
+        --chip: #f0eee8; --hover: #e8e5de; --active: #e2dfd7;
+        --accent: #1b1a16; --accent-text: #fff;
+        --ok: #2f9e63; --ok-bg: #e7f5ec;
+        --run: #3f7bd9; --run-bg: #e9f1fd;
+        --warn: #b06f10; --warn-bg: #faf0dc;
+        --danger: #c4453d; --danger-bg: #fbeae9;
+        --term: #24231f; --term2: #2d2b27; --term-ink: #dcd7cd; --term-dim: #8f8a7f;
+        --mono: 'SF Mono', Menlo, monospace;
+        --shadow: 0 1px 2px rgba(30, 26, 18, 0.05), 0 14px 40px rgba(30, 26, 18, 0.08);
+      }
+      .pagehead { max-width: 1260px; margin: 0 auto 8px; }
+      .pagehead h1 { font-size: 19px; letter-spacing: -0.01em; }
+      .pagehead p { color: var(--text2); font-size: 13px; margin-top: 5px; line-height: 1.7; max-width: 1020px; }
+      .pagehead b { color: var(--text); }
+      .meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+      .stage { max-width: 1260px; margin: 14px auto 0; position: relative; }
+      .win {
+        background: var(--main); border: 1px solid var(--border); border-radius: 16px;
+        box-shadow: 0 30px 90px rgba(30, 26, 18, 0.22); overflow: hidden;
+        display: flex; flex-direction: column; height: 660px; position: relative;
+      }
+      .titlebar {
+        display: flex; align-items: center; gap: 10px; padding: 9px 14px;
+        border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none;
+      }
+      .traffic { display: flex; gap: 7px; }
+      .traffic i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+      .titlebar .brand { font-weight: 650; font-size: 12.5px; margin-left: 4px; }
+      .titlebar .proj {
+        font-size: 11.5px; color: var(--text2); background: var(--chip);
+        border: 1px solid var(--border-soft); border-radius: 999px; padding: 3px 11px;
+      }
+      .titlebar .k {
+        margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text3);
+        border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; background: var(--card);
+      }
+      .cols { flex: 1; min-height: 0; display: flex; }
+
+      /* ── 常驻侧栏 ─────────────────────────────── */
+      .side {
+        width: 218px; flex: none; background: var(--side);
+        border-right: 1px solid var(--border-soft);
+        display: flex; flex-direction: column; padding: 10px 9px; gap: 1px; overflow: hidden;
+      }
+      .sec { font-size: 10.5px; color: var(--text3); padding: 10px 10px 5px; font-weight: 600; letter-spacing: 0.04em; }
+      .nrow { display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 8px; font-size: 12.6px; color: var(--text); }
+      .nrow .ic { width: 15px; text-align: center; color: var(--text3); flex: none; font-size: 12px; }
+      .nrow .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .nrow.sel { background: var(--active); }
+      .nrow .dim2 { color: var(--text3); font-size: 10.5px; font-family: var(--mono); }
+      .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+      .dot.run { background: var(--run); animation: pulse 1.6s infinite; }
+      .dot.ok { background: var(--ok); }
+      .dot.warn { background: var(--warn); }
+      @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(63,123,217,.35); } 50% { box-shadow: 0 0 0 4px transparent; } }
+
+      /* ── Room 表面 ────────────────────────────── */
+      .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; background: var(--main); }
+      .surface { position: absolute; inset: 0; display: none; flex-direction: column; }
+      .win[data-surface='room'] .surface.room { display: flex; }
+      .win[data-surface='editor'] .surface.editor { display: flex; }
+      .roomhead {
+        display: flex; align-items: center; gap: 9px; padding: 10px 18px;
+        border-bottom: 1px solid var(--border-soft); flex: none;
+      }
+      .roomhead .t { font-weight: 650; font-size: 13.5px; }
+      .state-chip { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 650; background: var(--run-bg); color: var(--run); }
+      .roomhead .spacer { flex: 1; }
+      .ghostbtn { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 7px; padding: 3px 10px; font-size: 11.5px; }
+      .roomcol { flex: 1; min-height: 0; overflow: hidden; padding: 18px 0 0; display: flex; flex-direction: column; }
+      .spinewrap { width: 640px; max-width: calc(100% - 60px); margin: 0 auto; flex: 1; min-height: 0; overflow: hidden; position: relative; }
+      .spinewrap::before { content: ''; position: absolute; left: 7px; top: 4px; bottom: 0; width: 1px; background: var(--border); }
+      .trow { position: relative; padding: 0 0 14px 30px; }
+      .trow .glyph {
+        position: absolute; left: 0; top: 2px; width: 15px; height: 15px; border-radius: 50%;
+        background: var(--main); border: 1px solid var(--border); color: var(--text3);
+        font-size: 9px; display: flex; align-items: center; justify-content: center;
+      }
+      .trow .who { font-size: 10px; letter-spacing: 0.08em; color: var(--text3); font-weight: 650; margin-bottom: 3px; font-family: var(--mono); }
+      .trow .prose { font-family: 'Songti SC', 'Noto Serif CJK SC', Georgia, serif; font-size: 14.5px; line-height: 1.85; color: var(--text); max-width: 560px; }
+      .worklog {
+        background: var(--side); border: 1px solid var(--border-soft); border-radius: 10px;
+        font-family: var(--mono); font-size: 11px; color: var(--text2);
+        padding: 8px 12px; line-height: 1.9; max-width: 560px;
+      }
+      .worklog .clock { color: var(--text3); margin-right: 8px; }
+      .worklog .live { color: var(--run); }
+      .composer {
+        width: 640px; max-width: calc(100% - 60px); margin: 10px auto 16px; flex: none;
+        background: var(--card); border: 1px solid var(--border); border-radius: 13px;
+        box-shadow: var(--shadow); padding: 10px 12px 9px; position: relative;
+      }
+      .composer.glow { border-color: #b9b4a6; box-shadow: 0 0 0 3px rgba(27, 26, 22, 0.07), var(--shadow); }
+      .composer .input { font-size: 13px; color: var(--text3); min-height: 20px; }
+      .composer .input .caret { display: inline-block; width: 1px; height: 14px; background: var(--text); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+      .composer .row2 { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+      .pill { font-size: 10.5px; color: var(--text2); background: var(--chip); border: 1px solid var(--border-soft); border-radius: 999px; padding: 2px 9px; }
+      .send { margin-left: auto; width: 24px; height: 24px; border-radius: 8px; background: var(--accent); color: var(--accent-text); display: flex; align-items: center; justify-content: center; font-size: 12px; }
+      .refchip {
+        display: none; align-items: center; gap: 6px; margin: 0 0 8px; font-family: var(--mono); font-size: 10.5px;
+        background: var(--term); color: var(--term-ink); border-radius: 7px; padding: 4px 9px; width: fit-content;
+      }
+      .refchip .x { color: var(--term-dim); }
+      .composer.has-ref .refchip { display: flex; animation: chipin 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+      @keyframes chipin { from { transform: translateY(-6px) scale(0.9); opacity: 0; } }
+
+      /* ── 编辑器表面（cameo） ───────────────────── */
+      .edtabs { display: flex; gap: 2px; padding: 7px 12px 0; border-bottom: 1px solid var(--border-soft); background: var(--side); flex: none; }
+      .edtab { font-size: 11.5px; padding: 5px 13px 6px; border-radius: 8px 8px 0 0; color: var(--text3); }
+      .edtab.on { background: var(--main); color: var(--text); border: 1px solid var(--border-soft); border-bottom-color: var(--main); }
+      .code { flex: 1; min-height: 0; font-family: var(--mono); font-size: 12px; line-height: 1.75; padding: 14px 18px; color: var(--text); overflow: hidden; }
+      .code .ln { white-space: pre; }
+      .code .lno { display: inline-block; width: 26px; color: var(--text3); }
+      .code .kw { color: #8a4fb0; } .code .st { color: #2f7d4f; } .code .fn { color: #2b6cb0; }
+      .dockstrip { flex: none; border-top: 1px solid var(--border-soft); background: var(--side); padding: 6px 12px; display: flex; gap: 8px; font-size: 11px; color: var(--text2); align-items: center; }
+      .dockstrip .dtab { border: 1px solid var(--border); background: var(--card); border-radius: 7px; padding: 2px 9px; font-family: var(--mono); font-size: 10.5px; }
+      .dockstrip .dtab.q { border-style: dashed; }
+
+      /* ── 速召台（quick console） ───────────────── */
+      .qc {
+        position: absolute; left: 50%; top: 37px; transform: translate(-50%, -106%);
+        width: min(860px, calc(100% - 80px)); height: 348px; z-index: 30;
+        background: var(--term); border-radius: 0 0 14px 14px;
+        box-shadow: 0 40px 90px rgba(20, 17, 12, 0.45);
+        display: flex; flex-direction: column; overflow: hidden;
+        transition: transform 0.42s cubic-bezier(0.22, 1.1, 0.32, 1);
+      }
+      .qc.open { transform: translate(-50%, 0); }
+      .qchead { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--term2); color: var(--term-ink); font-size: 11.5px; flex: none; }
+      .qchead .mark { font-family: var(--mono); font-size: 10px; color: var(--term-dim); border: 1px solid #45423b; border-radius: 5px; padding: 1px 6px; }
+      .ctxcap {
+        display: flex; align-items: center; gap: 7px; font-size: 11.5px;
+        background: #3a3833; border: 1px solid #4a473f; border-radius: 999px; padding: 3px 11px; color: var(--term-ink); position: relative;
+      }
+      .ctxcap .cwd { font-family: var(--mono); font-size: 10px; color: var(--term-dim); }
+      .ctxcap .wtbadge { font-family: var(--mono); font-size: 9.5px; color: #e8b96b; border: 1px solid #6b5a35; border-radius: 4px; padding: 0 5px; display: none; }
+      .qc.wt .ctxcap .wtbadge { display: inline; }
+      .qchead .hint { margin-left: auto; font-size: 10.5px; color: var(--term-dim); font-family: var(--mono); }
+      .qcbody { flex: 1; min-height: 0; overflow: hidden; padding: 10px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.75; color: var(--term-ink); position: relative; }
+      .qcbody .dim { color: var(--term-dim); }
+      .qcbody .okx { color: #7fce9e; } .qcbody .errx { color: #e08a80; } .qcbody .warnx { color: #e8b96b; }
+      .blk { border-left: 2px solid transparent; margin-left: -14px; padding-left: 12px; border-radius: 2px; white-space: pre-wrap; }
+      .blk.hover { border-left-color: #6b8fd1; background: rgba(107, 143, 209, 0.09); }
+      .blk.selected { background: rgba(107, 143, 209, 0.18); border-left-color: #8fb0e8; }
+      .cur { display: inline-block; width: 7px; height: 13px; background: var(--term-ink); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+      .ctxmenu {
+        position: absolute; z-index: 5; background: #14130f; border: 1px solid #45423b; border-radius: 9px;
+        padding: 5px; font-size: 11.5px; color: var(--term-ink); width: 190px; display: none;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); font-family: -apple-system, 'PingFang SC', sans-serif;
+      }
+      .ctxmenu.show { display: block; }
+      .ctxmenu .mi { padding: 5px 9px; border-radius: 6px; display: flex; gap: 8px; align-items: center; }
+      .ctxmenu .mi.hot { background: #3f7bd9; color: #fff; }
+      .ctxmenu .mi .ky { margin-left: auto; font-size: 10px; color: var(--term-dim); font-family: var(--mono); }
+      .ctxmenu .mi.hot .ky { color: #cfe0fa; }
+      .qcmenu {
+        position: absolute; top: 34px; left: 96px; z-index: 6; background: #14130f;
+        border: 1px solid #45423b; border-radius: 10px; padding: 6px; width: 300px; display: none;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); font-size: 11.5px; color: var(--term-ink);
+      }
+      .qcmenu.show { display: block; }
+      .qcmenu .gt { font-size: 9.5px; color: var(--term-dim); letter-spacing: 0.06em; padding: 5px 9px 3px; }
+      .qcmenu .mi { padding: 6px 9px; border-radius: 7px; display: flex; gap: 8px; align-items: center; }
+      .qcmenu .mi .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--term-dim); }
+      .qcmenu .mi.hot { background: #2d3b55; }
+      .flychip {
+        position: absolute; z-index: 40; font-family: var(--mono); font-size: 10.5px;
+        background: var(--term); color: var(--term-ink); border: 1px solid #45423b; border-radius: 7px;
+        padding: 4px 9px; pointer-events: none; opacity: 0;
+        transition: transform 0.62s cubic-bezier(0.3, 0.7, 0.3, 1), opacity 0.2s;
+      }
+
+      /* ── 影片附件：HUD / 字幕 / 光标 / toast ───── */
+      .keyhud {
+        position: absolute; top: 14px; right: 18px; z-index: 50; display: flex; gap: 6px;
+        opacity: 0; transition: opacity 0.25s; pointer-events: none;
+      }
+      .keyhud.show { opacity: 1; }
+      .keyhud span {
+        font-family: var(--mono); font-size: 12px; background: #14130f; color: #fff;
+        border-radius: 8px; padding: 5px 10px; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+        border: 1px solid #3c3a33;
+      }
+      .toast {
+        position: absolute; right: 16px; top: 48px; z-index: 45; max-width: 320px;
+        background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+        border-radius: 11px; box-shadow: var(--shadow); font-size: 12px; color: var(--text);
+        padding: 9px 13px; opacity: 0; transform: translateY(-8px); transition: all 0.3s; pointer-events: none;
+      }
+      .toast.show { opacity: 1; transform: none; }
+      .subs {
+        position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 60;
+        max-width: 780px; width: max-content; background: rgba(20, 18, 14, 0.92); color: #f4f2ec;
+        border-radius: 10px; padding: 9px 16px; font-size: 13px; line-height: 1.65; text-align: center;
+        opacity: 0; transition: opacity 0.25s; pointer-events: none;
+      }
+      .subs.show { opacity: 1; }
+      .subs b { color: #ffd89b; font-weight: 650; }
+      .subs .warn2 { color: #f2a69e; }
+      .fakecur { position: absolute; z-index: 70; left: 0; top: 0; transform: translate(620px, 300px); transition: transform 0.65s cubic-bezier(0.3, 0.7, 0.3, 1); pointer-events: none; }
+      .fakecur .ring { position: absolute; left: -7px; top: -7px; width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(27, 26, 22, 0.55); opacity: 0; }
+      .fakecur.click .ring { animation: ripple 0.32s ease-out; }
+      @keyframes ripple { from { transform: scale(0.4); opacity: 0.8; } to { transform: scale(1.15); opacity: 0; } }
+
+      /* ── 播放器 ────────────────────────────────── */
+      .vbar { max-width: 1260px; margin: 12px auto 0; display: flex; align-items: center; gap: 10px; }
+      .vbtn { border: 1px solid var(--border); background: var(--card); color: var(--text); border-radius: 9px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; font-weight: 600; }
+      .vbtn:hover { background: var(--hover); }
+      .vprog { flex: 1; height: 7px; border-radius: 99px; background: var(--border-soft); overflow: hidden; }
+      .vfill { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width 0.15s linear; }
+      .vtime { font-family: var(--mono); font-size: 11px; color: var(--text2); min-width: 84px; text-align: right; }
+      .chaps { max-width: 1260px; margin: 8px auto 0; display: flex; gap: 6px; flex-wrap: wrap; }
+      .chap { border: 1px solid var(--border); background: var(--card); color: var(--text2); border-radius: 999px; padding: 4px 12px; font-size: 11.5px; cursor: pointer; }
+      .chap:hover { background: var(--hover); }
+      .chap.on { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+      .chap.done { color: var(--text3); }
+
+      /* ── 论述区 ────────────────────────────────── */
+      .sect { max-width: 1260px; margin: 34px auto 0; }
+      .sect h2 { font-size: 14.5px; font-weight: 650; margin-bottom: 10px; }
+      .sect h2 span { color: var(--text3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+      .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .grid2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 13px 15px; box-shadow: var(--shadow); }
+      .card h3 { font-size: 12.8px; margin-bottom: 7px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+      .card p, .card li { font-size: 12px; color: var(--text2); line-height: 1.75; }
+      .card ul { padding-left: 16px; }
+      .card code { font-family: var(--mono); font-size: 10.5px; background: var(--chip); border: 1px solid var(--border-soft); border-radius: 5px; padding: 0 5px; }
+      .tag { font-size: 9.5px; border-radius: 99px; padding: 1px 8px; font-weight: 700; letter-spacing: 0.04em; }
+      .tag.new { background: var(--run-bg); color: var(--run); }
+      .tag.keep { background: var(--ok-bg); color: var(--ok); }
+      .tag.skip { background: var(--danger-bg); color: var(--danger); }
+      .tag.src { background: var(--warn-bg); color: var(--warn); }
+      table.map { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+      table.map th, table.map td { text-align: left; font-size: 12px; padding: 9px 13px; border-bottom: 1px solid var(--border-soft); vertical-align: top; line-height: 1.7; }
+      table.map th { font-size: 10.5px; color: var(--text3); letter-spacing: 0.05em; background: var(--side); }
+      table.map td:first-child { width: 30%; color: var(--text); font-weight: 600; }
+      table.map td:nth-child(2) { width: 34%; color: var(--text2); }
+      table.map td:last-child { color: var(--text2); }
+      .foot { max-width: 1260px; margin: 30px auto 0; font-size: 11.5px; color: var(--text3); line-height: 1.8; border-top: 1px solid var(--border); padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="pagehead">
+      <h1>速召台 — 把 Ghostty 的 Quick Terminal 移植进 Charter（研究稿 ①）</h1>
+      <p>
+        Ghostty 用户最高频的赞美之一是 Quick Terminal：<b>一个全局热键，一个从屏幕顶滑下的持久终端，Esc 即走</b>。
+        Charter 的对应痛点真实存在：在 Home / Task Room 里想跑一条命令，今天必须 ⌘E 切去编辑器、找底部坞、跑完再切回来
+        （FIX-HOME-TERMINAL 就是这个摩擦的补丁）。速召台把「跑一条命令」变成<b>不离开当前上下文的动作</b>，
+        并接上我们独有的两件事：<b>工作上下文胶囊</b>（终端可指向任务 worktree）与<b>「发给 Room」</b>（输出块变成任务上下文）。
+      </p>
+      <div class="meta">讨论稿 · 2026-07-16 · 竞品移植研究（Ghostty 1.0–1.3：Quick Terminal / shell integration / undo-close）· 仅浅色 · 影片约 50s，可章节直达</div>
+    </div>
+
+    <div class="stage">
+      <div class="win" id="app" data-surface="room">
+        <div class="titlebar">
+          <div class="traffic"><i></i><i></i><i></i></div>
+          <span class="brand">Charter</span>
+          <span class="proj">checkout-web · main</span>
+          <span class="k">⌥Space 速召台</span>
+        </div>
+        <div class="cols">
+          <div class="side">
+            <div class="sec">需要你</div>
+            <div class="nrow"><span class="dot warn"></span><span class="grow">补齐结算页空态</span><span class="dim2">审查</span></div>
+            <div class="sec">进行中</div>
+            <div class="nrow sel"><span class="dot run"></span><span class="grow">t-412 · 优惠券失效提示</span></div>
+            <div class="nrow"><span class="dot run"></span><span class="grow">t-409 · 迁移 pnpm</span></div>
+            <div class="sec">项目</div>
+            <div class="nrow"><span class="ic">▸</span><span class="grow">checkout-web</span></div>
+            <div class="nrow"><span class="ic">▸</span><span class="grow">pricing-api</span></div>
+          </div>
+
+          <div class="main">
+            <!-- Room 表面 -->
+            <div class="surface room">
+              <div class="roomhead">
+                <span class="t">t-412 · 优惠券失效提示</span>
+                <span class="state-chip">进行中</span>
+                <span class="spacer"></span>
+                <button class="ghostbtn">在编辑器打开</button>
+              </div>
+              <div class="roomcol">
+                <div class="spinewrap">
+                  <div class="trow">
+                    <span class="glyph">◦</span>
+                    <div class="who">YOU</div>
+                    <div class="prose">优惠券过期时，结算页要给出行内提示并禁用提交按钮，补上对应单测。</div>
+                  </div>
+                  <div class="trow">
+                    <span class="glyph">✳</span>
+                    <div class="who">AGENT</div>
+                    <div class="prose">收到。我先看现有的校验链路，然后在 <code style="font-family:var(--mono);font-size:11.5px">CouponField</code> 上加失效分支。</div>
+                  </div>
+                  <div class="trow">
+                    <span class="glyph">⚙</span>
+                    <div class="worklog">
+                      <div><span class="clock">02:11</span>读取 src/checkout/CouponField.tsx</div>
+                      <div><span class="clock">02:24</span>编辑 CouponField.tsx <span class="dim">+31 −4</span></div>
+                      <div id="wl-live"><span class="clock">02:31</span><span class="live">正在写 CouponField.test.tsx …</span></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="composer" id="composer">
+                  <div class="refchip" id="refchip"><span>⤶ lint 输出 · 14 行 · t-412 worktree</span><span class="x">×</span></div>
+                  <div class="input" id="cinput">回复 agent，或 @ 引用文件…<span class="caret" style="display:none"></span></div>
+                  <div class="row2">
+                    <span class="pill">受控修改</span><span class="pill">claude-sonnet-4.6 · 中</span>
+                    <span class="send">↑</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 编辑器表面（第六幕 cameo） -->
+            <div class="surface editor">
+              <div class="edtabs">
+                <span class="edtab on">CouponField.tsx</span>
+                <span class="edtab">CouponField.test.tsx</span>
+              </div>
+              <div class="code">
+                <div class="ln"><span class="lno">40</span><span class="kw">export function</span> <span class="fn">CouponField</span>({ coupon }: Props) {</div>
+                <div class="ln"><span class="lno">41</span>  <span class="kw">const</span> expired = isExpired(coupon);</div>
+                <div class="ln"><span class="lno">42</span>  <span class="kw">if</span> (expired) {</div>
+                <div class="ln"><span class="lno">43</span>    <span class="kw">return</span> &lt;InlineHint tone=<span class="st">"warn"</span>&gt;{t(<span class="st">'coupon.expired'</span>)}&lt;/InlineHint&gt;;</div>
+                <div class="ln"><span class="lno">44</span>  }</div>
+                <div class="ln"><span class="lno">45</span>  <span class="kw">return</span> &lt;Field …/&gt;;</div>
+                <div class="ln"><span class="lno">46</span>}</div>
+              </div>
+              <div class="dockstrip">
+                <span style="color:var(--text3)">底部坞</span>
+                <span class="dtab">zsh</span>
+                <span class="dtab">✳ claude <b style="color:var(--warn)">EXT</b></span>
+                <span class="dtab q" id="qtab">⌥ quick — 速召台会话</span>
+                <span style="margin-left:auto;color:var(--text3);font-size:10.5px">速召台的会话就在这里 — 没有隐藏终端</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 速召台 -->
+        <div class="qc" id="qc">
+          <div class="qchead">
+            <span class="mark">⌥Space</span>
+            <span style="font-weight:650">速召台</span>
+            <span class="ctxcap" id="ctxcap">
+              <span id="ctxname">聚焦项目 · checkout-web</span>
+              <span class="wtbadge">WORKTREE · 隔离</span>
+              <span class="cwd" id="ctxcwd">~/git/checkout-web</span>
+              <span style="color:var(--term-dim)">▾</span>
+            </span>
+            <span class="hint">Esc 收回 · 失焦自动收 ✓ · 会话保持</span>
+          </div>
+          <div class="qcbody" id="qcbody"></div>
+          <!-- 上下文菜单（工作上下文胶囊） -->
+          <div class="qcmenu" id="qcmenu">
+            <div class="gt">工作上下文 — cwd 由主进程解析，不信任渲染器路径</div>
+            <div class="mi" id="mi-focus"><span>聚焦项目 · checkout-web</span><span class="sub">~/git/checkout-web</span></div>
+            <div class="mi"><span>最近项目 · pricing-api</span><span class="sub">~/git/pricing-api</span></div>
+            <div class="mi" id="mi-wt"><span>✳ t-412 的 worktree</span><span class="sub">…/worktrees/t-412</span></div>
+            <div class="mi"><span>Scratch 目录</span><span class="sub">~/charter-scratch</span></div>
+          </div>
+          <!-- 输出块右键菜单 -->
+          <div class="ctxmenu" id="blkmenu">
+            <div class="mi"><span>复制输出</span><span class="ky">⌘C</span></div>
+            <div class="mi hot" id="mi-send"><span>⤴ 发给当前 Room</span></div>
+            <div class="mi"><span>存为附件</span></div>
+            <div class="mi"><span>↻ 重跑</span></div>
+          </div>
+        </div>
+
+        <div class="flychip" id="flychip">⤶ lint 输出 · 14 行</div>
+        <div class="keyhud" id="keyhud"><span>⌥</span><span>Space</span></div>
+        <div class="toast" id="toast"></div>
+        <div class="subs" id="subs"></div>
+        <div class="fakecur" id="fakecur">
+          <span class="ring"></span>
+          <svg width="20" height="21" viewBox="0 0 20 21"><path d="M4.5 1.5v15.3l4-3.9 2.8 6.6 2.8-1.2-2.8-6.5 5.6-.5z" fill="#fff" stroke="#1b1a16" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <div class="vbar">
+      <button class="vbtn" id="vplay">⏸ 暂停</button>
+      <button class="vbtn" id="vreplay">↻ 重播</button>
+      <div class="vprog"><div class="vfill" id="vfill"></div></div>
+      <span class="vtime" id="vtime">0:00 / 0:00</span>
+    </div>
+    <div class="chaps" id="chaps"></div>
+
+    <div class="sect">
+      <h2>借了什么、怎么落地 <span>Ghostty 行为 → Charter 落法（不是像素级照搬）</span></h2>
+      <table class="map">
+        <tr><th>Ghostty 原样</th><th>用户为什么爱</th><th>Charter 落法</th></tr>
+        <tr>
+          <td>Quick Terminal：全局热键从屏幕顶滑下一个持久终端，Esc / 失焦自动收回</td>
+          <td>「跑一条命令」不再需要切窗口/切工作区——上下文零丢失，会话还一直活着</td>
+          <td><b>速召台</b>：⌥Space 覆在 Home / Room / 编辑器任何表面之上；PTY 持久；收回后焦点精确还原到召出前的位置。它不是第三个终端容器——<b>就是坞里的一个 quick 会话</b>，编辑器坞的 tab 列表里始终可见</td>
+        </tr>
+        <tr>
+          <td>新分屏/新 tab 继承当前 shell 的 cwd（shell integration）</td>
+          <td>终端永远开在「我正在干活的地方」，省掉每次 cd</td>
+          <td>升级为<b>工作上下文胶囊</b>：聚焦项目 / 最近项目 / <b>任务 worktree</b> / Scratch 四选一，cwd 由主进程解析校验（对齐 terminal-parallel-vNext：渲染器给身份、主进程给路径）。指向 worktree 时挂 <code>WORKTREE · 隔离</code> 徽章——在隔离树里手工验证，不碰主树</td>
+        </tr>
+        <tr>
+          <td>OSC 133 语义块：命令输出可整块选中、复制</td>
+          <td>不用肉眼在滚动缓冲里数行</td>
+          <td>输出块可整选 + <b>「⤴ 发给当前 Room」</b>：块变成回复里的引用附件（复用 @-ref chips 机制），终端输出第一次成为任务的一等上下文。块模型的完整故事见研究稿 ②</td>
+        </tr>
+        <tr>
+          <td>关闭可撤销（1.2 undo-close）：关闭其实先把终端<b>隐藏保活</b>一段可配置窗口（默认 5s），⌘Z 原样接回——因为进程从没死过；1.3 连快速终端状态都随会话恢复</td>
+          <td>手滑不再毁掉长会话</td>
+          <td>同一机制照搬：速召台/坞终端关闭先隐藏保活（默认 5s，可设），窗口内 <b>⌘Z 原样接回</b>；超时才真正终止进程树并如实清账。含运行中前台进程的关闭确认不变（TERM-004）</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="sect">
+      <h2>三条设计原则</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>1 · 召之即来，挥之不改布局 <span class="tag new">NEW</span><span class="tag src">源自 Ghostty</span></h3>
+          <p>
+            速召台是<b>覆层</b>，不是布局的一部分：召出/收回不移动任何现有面板，Esc 或失焦（可设）即走，
+            焦点精确回到召出前的控件。与「检测只装饰、意图才搬家」（ADR-0017 rev.2）同一条肌理。
+          </p>
+        </div>
+        <div class="card">
+          <h3>2 · 上下文是选出来的，不是猜出来的 <span class="tag new">NEW</span></h3>
+          <p>
+            Ghostty 继承 cwd；我们更进一步：胶囊显式声明这个会话属于哪棵树——聚焦项目、最近项目、
+            <b>任务 worktree</b> 或 Scratch。切换编辑器聚焦不杀速召台会话（终端上下文独立于编辑器聚焦，
+            对齐 vNext 方向稿）。
+          </p>
+        </div>
+        <div class="card">
+          <h3>3 · 没有隐藏终端 <span class="tag keep">KEEP</span></h3>
+          <p>
+            速召台的会话同时出现在编辑器坞的 tab 列表（<code>⌥ quick</code>）——同一 PTY 的两种呈现，
+            永远查得到、关得掉。TERM-001 的坞语义不变。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>不变的部分（安全语义原样）</h2>
+      <div class="grid3">
+        <div class="card">
+          <h3>用户终端安全域 <span class="tag keep">KEEP</span></h3>
+          <p>
+            速召台是<b>用户终端</b>（TERM-005）：手工命令不走 agent 审批，也永不冒充 agent 输出（TERM-006）。
+            「发给 Room」的输出是<b>你提供的上下文</b>，在时间线上署名 YOU。
+          </p>
+        </div>
+        <div class="card">
+          <h3>worktree 记账边界 <span class="tag keep">KEEP</span></h3>
+          <p>
+            指向任务 worktree 的速召台命令改了文件，走的是既有外部改动记账（watcher + 基线），
+            在 Room 的改动清单里如实出现——不会被误记为 agent 的功劳。
+          </p>
+        </div>
+        <div class="card">
+          <h3>TUI 键盘白名单 <span class="tag keep">KEEP</span></h3>
+          <p>
+            速召台里跑全屏 TUI 时（vim / claude），Esc 属于 TUI；收回改用 <code>⌥Space</code> 再按一次。
+            全局快捷键白名单问题沿用已记录的方向稿，不在本轮扩大。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="sect">
+      <h2>刻意不搬的（以及为什么）</h2>
+      <div class="grid2">
+        <div class="card">
+          <h3>系统级全局热键（app 未聚焦也能召） <span class="tag skip">SKIP · V1</span></h3>
+          <p>
+            Ghostty 的 quick terminal 是系统级的。Charter V1 只做<b>应用内</b>速召：跨应用召唤牵涉常驻代理与
+            辅助功能权限，收益/复杂度比不划算，留到桌面常驻形态一起议（需要 ADR）。
+          </p>
+        </div>
+        <div class="card">
+          <h3>把速召台做成第二个 agent 入口 <span class="tag skip">SKIP</span></h3>
+          <p>
+            诱惑存在：「顺手在速召台里问 agent」。不做——Charter 的 agent 入口是 Room 与 composer，
+            速召台保持纯终端。一个覆层两种心智（shell + 对话）会互相污染；想聊，⤴ 发给 Room 一步即达。
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      研究稿 ① / ④ · 源：Ghostty Quick Terminal、shell-integration cwd 继承、OSC 133 语义块、1.2 undo-close ·
+      同系列：② inspo-ghostty-legible-terminal.html（块导航 / 进度 / 通知）· ③ inspo-cmux-parallel-attempts.html ·
+      ④ inspo-cmux-preview-gate-pr.html · 采纳流程：讨论 → ADR（速召台 + 上下文胶囊需增补 ADR）→ 实现 → E2E（召出/收回焦点还原、
+      worktree cwd 解析、发给 Room 的 @-ref 落 composer、undo-close 两态）。
+    </div>
+
+    <script>
+      const app = document.getElementById('app');
+      const qc = document.getElementById('qc');
+      const qcbody = document.getElementById('qcbody');
+      const qcmenu = document.getElementById('qcmenu');
+      const blkmenu = document.getElementById('blkmenu');
+      const ctxname = document.getElementById('ctxname');
+      const ctxcwd = document.getElementById('ctxcwd');
+      const composer = document.getElementById('composer');
+      const cinput = document.getElementById('cinput');
+      const flychip = document.getElementById('flychip');
+      const keyhud = document.getElementById('keyhud');
+      const toast = document.getElementById('toast');
+      const subs = document.getElementById('subs');
+      const cursor = document.getElementById('fakecur');
+      const chapsEl = document.getElementById('chaps');
+      const fillEl = document.getElementById('vfill');
+      const timeEl = document.getElementById('vtime');
+      const playBtn = document.getElementById('vplay');
+
+      // ── 终端素材 ──────────────────────────────
+      const PS1 = '<span class="dim">checkout-web %</span> ';
+      const PS1WT = '<span class="dim">t-412 (worktree) %</span> ';
+      const LINT_OUT = [
+        '<span class="dim">&gt; eslint . --max-warnings 0</span>',
+        '',
+        'src/checkout/CouponField.tsx',
+        '  <span class="warnx">41:9</span>  no-unused-vars   ‘expiredAt’ is assigned a value but never used',
+        '  <span class="warnx">58:1</span>  max-lines        function exceeds 60 lines',
+        '',
+        '<span class="errx">✖ 2 problems (0 errors, 2 warnings)</span>',
+        '<span class="dim">exit 1 · 3.8s</span>',
+      ].join('\n');
+
+      function esc(html) { return html; }
+      let blocks = [];
+      function renderTerm(cursorOn = true) {
+        qcbody.innerHTML =
+          blocks
+            .map(
+              (b, i) =>
+                `<div class="blk${b.cls ? ' ' + b.cls : ''}" id="blk${i}">${b.html}</div>`,
+            )
+            .join('') + (cursorOn ? `<div>${blocks.length && blocks[blocks.length-1].wt ? PS1WT : PS1}<span class="cur"></span></div>` : '');
+        qcbody.scrollTop = 1e6;
+      }
+
+      // ── 影片引擎（与 external-cli-attach-redesign 同款约定） ──
+      const ABORT = Symbol('abort');
+      let token = 0;
+      let paused = false;
+      const clock = { scene: 0, inScene: 0 };
+      function wait(ms) {
+        const my = token;
+        return new Promise((resolve, reject) => {
+          let left = ms; let last = performance.now();
+          const tick = () => {
+            if (my !== token) { reject(ABORT); return; }
+            const n = performance.now();
+            if (!paused) { left -= n - last; clock.inScene += n - last; }
+            last = n;
+            if (left <= 0) resolve(); else setTimeout(tick, 40);
+          };
+          setTimeout(tick, 40);
+        });
+      }
+      async function typeInto(fn, text, base) {
+        for (let i = 1; i <= text.length; i++) { fn(base + text.slice(0, i)); await wait(55 + (i % 3) * 22); }
+      }
+      const stage = document.querySelector('.stage');
+      async function moveCursorTo(el, fx = 0.5, fy = 0.5) {
+        const r = el.getBoundingClientRect();
+        const box = stage.getBoundingClientRect();
+        cursor.style.transform = `translate(${r.left - box.left + r.width * fx}px, ${r.top - box.top + r.height * fy}px)`;
+        await wait(680);
+      }
+      async function clickCursor() {
+        cursor.classList.remove('click'); void cursor.offsetWidth; cursor.classList.add('click');
+        await wait(260);
+      }
+      function say(html) { subs.innerHTML = html; subs.classList.add('show'); }
+      let toastTimer = null;
+      function showToast(msg) {
+        toast.textContent = msg; toast.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => toast.classList.remove('show'), 3200);
+      }
+      async function pressKeys(show) {
+        keyhud.classList.toggle('show', show);
+        if (show) await wait(500);
+      }
+
+      // ── 幕间状态操作 ──────────────────────────
+      function qcOpen(open) { qc.classList.toggle('open', open); }
+      function setCtx(wt) {
+        qc.classList.toggle('wt', wt);
+        ctxname.textContent = wt ? '✳ t-412 的 worktree' : '聚焦项目 · checkout-web';
+        ctxcwd.textContent = wt ? '…/worktrees/t-412' : '~/git/checkout-web';
+      }
+
+      // ── 分镜 ──────────────────────────────────
+      const SCENES = [
+        {
+          label: '① 你在 Room 里',
+          est: 5200,
+          async play() {
+            say('你在 Task Room 里盯着 agent 干活，想顺手跑一遍 <b>lint</b>。旧路径：⌘E 切编辑器 → 找底部坞 → 跑完切回来。');
+            await wait(5000);
+          },
+          snap() {},
+        },
+        {
+          label: '② ⌥Space 速召',
+          est: 6200,
+          async play() {
+            say('新路径：<b>⌥Space</b>。');
+            await pressKeys(true);
+            qcOpen(true);
+            await wait(700);
+            await pressKeys(false);
+            say('速召台从顶滑下，<b>覆在 Room 之上</b>——布局一像素没动，Esc / 失焦即走（Ghostty Quick Terminal 的交互，原样借）。');
+            await wait(4200);
+          },
+          snap() { qcOpen(true); renderTerm(); },
+        },
+        {
+          label: '③ 上下文胶囊',
+          est: 10500,
+          async play() {
+            say('台头是<b>工作上下文胶囊</b>。这次不想跑在主树——点开，指到 <b>t-412 的 worktree</b>。');
+            await moveCursorTo(document.getElementById('ctxcap'));
+            await clickCursor();
+            qcmenu.classList.add('show');
+            await wait(900);
+            const mi = document.getElementById('mi-wt');
+            mi.classList.add('hot');
+            await moveCursorTo(mi);
+            await clickCursor();
+            qcmenu.classList.remove('show');
+            setCtx(true);
+            say('cwd 由主进程解析校验（渲染器只给身份）。<b>WORKTREE · 隔离</b>徽章亮起——接下来的手工验证不碰主树。');
+            await wait(2400);
+            blocks = [];
+            await typeInto((h) => { qcbody.innerHTML = `<div class="blk">${h}<span class="cur"></span></div>`; }, 'npm run lint', PS1WT);
+            await wait(350);
+            blocks.push({ html: PS1WT + 'npm run lint\n' + LINT_OUT, wt: true });
+            renderTerm();
+            await wait(1600);
+          },
+          snap() {
+            qcOpen(true); setCtx(true);
+            blocks = [{ html: PS1WT + 'npm run lint\n' + LINT_OUT, wt: true }];
+            renderTerm();
+          },
+        },
+        {
+          label: '④ 块 → 发给 Room',
+          est: 9800,
+          async play() {
+            say('lint 有两条告警。整段输出是一个<b>语义块</b>（OSC 133）——悬停整块高亮，不用肉眼数行。');
+            const blk = document.getElementById('blk0');
+            await moveCursorTo(blk, 0.4, 0.5);
+            blk.classList.add('hover');
+            await wait(1400);
+            blk.classList.remove('hover'); blk.classList.add('selected');
+            const r = blk.getBoundingClientRect(); const box = qc.getBoundingClientRect();
+            blkmenu.style.left = Math.min(r.left - box.left + 180, 520) + 'px';
+            blkmenu.style.top = r.top - box.top + 30 + 'px';
+            blkmenu.classList.add('show');
+            await wait(1000);
+            await moveCursorTo(document.getElementById('mi-send'));
+            await clickCursor();
+            blkmenu.classList.remove('show');
+            // chip 飞进 composer
+            const sbox = stage.getBoundingClientRect();
+            const br = blk.getBoundingClientRect();
+            flychip.style.transition = 'none';
+            flychip.style.transform = `translate(${br.left - sbox.left + 40}px, ${br.top - sbox.top + 20}px)`;
+            flychip.style.opacity = '1';
+            void flychip.offsetWidth;
+            flychip.style.transition = '';
+            const cr = composer.getBoundingClientRect();
+            flychip.style.transform = `translate(${cr.left - sbox.left + 16}px, ${cr.top - sbox.top + 6}px)`;
+            await wait(680);
+            flychip.style.opacity = '0';
+            composer.classList.add('has-ref');
+            blk.classList.remove('selected');
+            say('<b>⤴ 发给当前 Room</b>：输出块变成回复里的引用附件（复用 @-ref 机制）。它在时间线上署名 <b>YOU</b>——用户终端永不冒充 agent（TERM-006）。');
+            await wait(4400);
+          },
+          snap() {
+            qcOpen(true); setCtx(true);
+            blocks = [{ html: PS1WT + 'npm run lint\n' + LINT_OUT, wt: true }];
+            renderTerm();
+            composer.classList.add('has-ref');
+          },
+        },
+        {
+          label: '⑤ Esc · 会话仍在',
+          est: 8200,
+          async play() {
+            say('<b>Esc</b> 收回。焦点精确回到召出前的地方——composer 的光标原样亮着。');
+            keyhud.innerHTML = '<span>Esc</span>';
+            await pressKeys(true);
+            qcOpen(false);
+            await pressKeys(false);
+            composer.classList.add('glow');
+            cinput.innerHTML = '回复 agent，或 @ 引用文件…<span class="caret"></span>';
+            cinput.querySelector('.caret').style.display = 'inline-block';
+            await wait(2600);
+            say('再按一次 <b>⌥Space</b>——滚动缓冲、cwd、进程全都还在。<b>持久 PTY</b>，不是每次新开的一次性 shell。');
+            keyhud.innerHTML = '<span>⌥</span><span>Space</span>';
+            await pressKeys(true);
+            qcOpen(true);
+            await pressKeys(false);
+            await wait(2400);
+            qcOpen(false);
+          },
+          snap() { composer.classList.add('has-ref', 'glow'); qcOpen(false); },
+        },
+        {
+          label: '⑥ 编辑器里同样',
+          est: 7800,
+          async play() {
+            say('换到编辑器表面——同一个 ⌥Space，同一个会话，覆在 Monaco 之上。');
+            app.dataset.surface = 'editor';
+            await wait(1600);
+            keyhud.innerHTML = '<span>⌥</span><span>Space</span>';
+            await pressKeys(true);
+            qcOpen(true);
+            await pressKeys(false);
+            await wait(1500);
+            say('注意坞的 tab 列表：<b>⌥ quick</b> 就躺在那里。速召台不是隐藏终端，它是坞里一个会话的另一种呈现。');
+            const qtab = document.getElementById('qtab');
+            qtab.style.outline = '2px solid var(--run)';
+            qtab.style.outlineOffset = '2px';
+            await wait(3600);
+            qtab.style.outline = '';
+          },
+          snap() {
+            app.dataset.surface = 'editor';
+            qcOpen(true); setCtx(true);
+            blocks = [{ html: PS1WT + 'npm run lint\n' + LINT_OUT, wt: true }];
+            renderTerm();
+          },
+        },
+        {
+          label: '⑦ 收束',
+          est: 6000,
+          async play() {
+            qcOpen(false);
+            say('速召台 = Ghostty Quick Terminal 的交互 × Charter 的上下文模型：<b>哪里都能召、指哪棵树都行、输出一步进 Room</b>。三处表面，一个会话，零布局位移。');
+            await wait(5800);
+          },
+          snap() { app.dataset.surface = 'editor'; qcOpen(false); },
+        },
+      ];
+
+      // ── 播放器 ────────────────────────────────
+      const TOTAL = SCENES.reduce((a, s) => a + s.est, 0);
+      const baseOf = (n) => SCENES.slice(0, n).reduce((a, s) => a + s.est, 0);
+      function resetAll() {
+        app.dataset.surface = 'room';
+        qcOpen(false); setCtx(false);
+        blocks = []; renderTerm();
+        qcmenu.classList.remove('show'); blkmenu.classList.remove('show');
+        document.getElementById('mi-wt').classList.remove('hot');
+        composer.classList.remove('has-ref', 'glow');
+        cinput.innerHTML = '回复 agent，或 @ 引用文件…<span class="caret" style="display:none"></span>';
+        flychip.style.opacity = '0';
+        keyhud.classList.remove('show');
+        keyhud.innerHTML = '<span>⌥</span><span>Space</span>';
+        toast.classList.remove('show'); subs.classList.remove('show');
+        cursor.style.transform = 'translate(620px, 300px)';
+      }
+      function markChap(i) {
+        [...chapsEl.children].forEach((el, k) => {
+          el.classList.toggle('on', k === i);
+          el.classList.toggle('done', k < i);
+        });
+      }
+      async function run(from) {
+        const my = token;
+        try {
+          for (let i = from; i < SCENES.length; i++) {
+            clock.scene = i; clock.inScene = 0; markChap(i);
+            await SCENES[i].play();
+          }
+          clock.inScene = SCENES[SCENES.length - 1].est;
+          await wait(1500);
+          if (my === token) seek(0);
+        } catch (e) { if (e !== ABORT) throw e; }
+      }
+      function seek(n) {
+        token += 1; resetAll();
+        for (let i = 0; i < n; i++) SCENES[i].snap();
+        clock.scene = n; clock.inScene = 0; markChap(n);
+        void run(n);
+      }
+      SCENES.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.className = 'chap'; b.textContent = s.label; b.onclick = () => seek(i);
+        chapsEl.appendChild(b);
+      });
+      const fmt = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+      setInterval(() => {
+        const sc = SCENES[clock.scene];
+        const done = baseOf(clock.scene) + Math.min(clock.inScene, sc ? sc.est : 0);
+        fillEl.style.width = Math.min(100, (done / TOTAL) * 100) + '%';
+        timeEl.textContent = fmt(done) + ' / ' + fmt(TOTAL);
+      }, 120);
+      playBtn.onclick = () => { paused = !paused; playBtn.textContent = paused ? '▶ 播放' : '⏸ 暂停'; };
+      document.getElementById('vreplay').onclick = () => { paused = false; playBtn.textContent = '⏸ 暂停'; seek(0); };
+
+      seek(0);
+    </script>
+  </body>
+</html>

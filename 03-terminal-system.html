@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>终端系统 · r-code</title>
+  <link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="终端系统">终端系统</h1>
+<h2 id="1-概述">1. 概述</h2>
+<p>终端系统由 PTY 管理、Shell 集成、块模型解析、命令通知和外部 CLI 检测<br>五个子系统组成。</p>
+<h2 id="2-pty-管理">2. PTY 管理</h2>
+<h3 id="2-1-当前实现">2.1 当前实现</h3>
+<ul><li>使用 <code>node-pty</code>（N-API + 预编译二进制）。</li><li>多终端标签、重命名、关闭确认、进程树。</li></ul>
+<h3 id="2-2-rust-替代">2.2 Rust 替代</h3>
+<ul><li>使用 <code>portable-pty</code> crate。</li><li>需要自行处理 IPC 通信。</li></ul>
+<h2 id="3-shell-集成">3. Shell 集成</h2>
+<h3 id="3-1-注入机制">3.1 注入机制</h3>
+<p><code>packages/terminal-service</code> 拥有集成脚本的字符串常量和纯函数<br><code>shellIntegrationSpawn()</code>，映射 <code>(shell, dir, enabled) → {args, env}</code>。</p>
+<ul><li><strong>zsh</strong> — <code>ZDOTDIR</code> shim，记录并恢复用户 <code>ZDOTDIR</code>，<br><code>.zshrc</code> 注册 <code>precmd</code>/<code>preexec</code> hooks 发射 OSC 133 序列。</li><li><strong>bash</strong> — <code>--init-file</code> shim，安装 <code>PROMPT_COMMAND</code> + <code>DEBUG</code> trap。</li><li><strong>fish</strong> — <code>XDG_DATA_DIRS</code> prepend，使用 fish 事件处理器。</li></ul>
+<h3 id="3-2-降级">3.2 降级</h3>
+<ul><li>其他 shell 或 <code>settings.terminal.shellIntegration = false</code> 时，<br>终端降级为纯 scrollback，功能消失，无错误。</li></ul>
+<h2 id="4-块模型">4. 块模型</h2>
+<h3 id="4-1-块类型">4.1 块类型</h3>
+<ul><li><code>command</code> — 一个 shell 命令：prompt → command line → output → exit code。</li><li><code>turn</code> — 外部 Agent 会话边界。</li></ul>
+<h3 id="4-2-解析位置">4.2 解析位置</h3>
+<p>解析在 <strong>Renderer</strong> 进行，通过 xterm 的 <code>registerOscHandler</code>。<br>块位置是 xterm markers，自然存活于滚动。</p>
+<h3 id="4-3-命令文本读取">4.3 命令文本读取</h3>
+<p>从 buffer 的 <code>B</code> marker（记录 cursor column）到 <code>C</code> 时的 cursor 位置。<br>无私有转义序列携带命令文本，兼容任何已有 OSC 133 集成。</p>
+<h2 id="5-进度报告">5. 进度报告</h2>
+<p>优先级：</p>
+<ol><li>OSC 9;4（ConEmu 方言）</li><li>已知格式解析（保守 <code>12/96</code> 式计数器）</li><li>不确定（&quot;running · elapsed&quot;，不显示百分比）</li></ol>
+<p>同一数字供给三个表面：终端行进度环、状态栏进度项、macOS Dock 图标。</p>
+<h2 id="6-命令通知">6. 命令通知</h2>
+<ul><li>命令完成时发送通知。</li><li>未聚焦终端 dim 处理。</li></ul>
+<h2 id="7-外部-cli-检测">7. 外部 CLI 检测</h2>
+<h3 id="7-1-检测机制">7.1 检测机制</h3>
+<p>TerminalManager 轮询 <code>pty.process</code>（PTY 前台进程标题）~700ms。<br>匹配已知 Agent CLI 列表进入 agent 状态。</p>
+<h3 id="7-2-已知-cli">7.2 已知 CLI</h3>
+<ul><li><code>claude</code> — Claude Code</li><li><code>codex</code> — Codex CLI</li><li>可通过环境变量覆盖（测试用）</li></ul>
+<h3 id="7-3-会话开始">7.3 会话开始</h3>
+<ol><li>创建 external session task。</li><li>捕获 entry snapshot（git write-tree 临时索引）。</li><li>非 git 项目降级：无 snapshot，first-seed content 成为 baseline。</li></ol>
+<h3 id="7-4-会话记账">7.4 会话记账</h3>
+<ul><li>watcher 过滤（<code>.git/</code>, ignore globs, 产品 artifacts）。</li><li>每个 touched path 从 snapshot tree blob 建立 ChangeService baseline。</li><li>变化记录 <code>author: &#39;agent&#39;</code>, <code>toolCallId: null</code>。</li></ul>
+<h3 id="7-5-会话结束">7.5 会话结束</h3>
+<ul><li>任务转 REVIEW_READY。</li><li>Pane 返回 dock。</li><li>打印摘要行。</li></ul>
+<h2 id="8-终端编排">8. 终端编排</h2>
+<h3 id="8-1-六个原语">8.1 六个原语</h3>
+<table><thead><tr><th>工具</th><th>说明</th></tr></thead><tbody><tr><td>terminal.list</td><td>列出可见兄弟终端</td></tr><tr><td>terminal.create</td><td>创建 shell/Claude/Codex worker</td></tr><tr><td>terminal.send</td><td>注入文本 + 可选 Enter</td></tr><tr><td>terminal.wait</td><td>等待命令退出/安静/正则</td></tr><tr><td>terminal.read</td><td>读取 ANSI-free 内存 tail</td></tr><tr><td>terminal.kill</td><td>兼容性端点（agent 调用禁止）</td></tr></tbody></table>
+<h3 id="8-2-wait-三种模式">8.2 wait 三种模式</h3>
+<ul><li><strong>command</strong> — OSC 133 <code>D;exit</code>，返回真实 exit code。</li><li><strong>quiet</strong> — 驻留 TUI，settle window。</li><li><strong>until</strong> — 正则匹配，仅评估 wait 开始后的输出。</li></ul>
+<h3 id="8-3-外部控制门">8.3 外部控制门</h3>
+<p>Unix domain socket（<code>&lt;userData&gt;/ctl.sock</code>，mode 0600）上的 HTTP，<br>token 必需。路由镜像六个工具。</p>
+<p>失败语义：</p>
+<ul><li>403 bad/missing token</li><li>404 unknown target</li><li>409 depth/self-control refusal</li><li>429 over budget</li><li>501 orchestration disabled</li></ul>
+<h2 id="9-codex-claude-的-mcp-能力注入">9. Codex/Claude 的 MCP 能力注入</h2>
+<h3 id="9-1-环境变量注入">9.1 环境变量注入</h3>
+<p>每个产品 spawn 的 PTY 终端接收三个环境变量：</p>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">CHARTER_TERM_ID       → 终端唯一 ID
+CHARTER_CTL           → Unix Socket 路径 (如 /tmp/charter-xxx/ctl.sock)
+CHARTER_CTL_TOKEN     → 随机鉴权 token (每次启动重新生成)</code></pre></div>
+<h3 id="9-2-codex-发现-mcp-门">9.2 Codex 发现 MCP 门</h3>
+<p>Codex CLI 运行在 Charter 终端内时：</p>
+<ol><li>读取 <code>CHARTER_CTL</code> 环境变量</li><li>连接 Unix Socket，发送 HTTP 请求（带 Bearer token）</li><li>获得 <code>terminal_list/create/send/wait/read/kill</code> 六个工具</li><li>Codex 可以创建自己的 worker 会话（变成 orchestrator）</li></ol>
+<h3 id="9-3-编排工作循环">9.3 编排工作循环</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">1. terminal.list    → 查看现有 worker，避免重复创建
+2. terminal.create  → 创建 shell/Codex/Claude worker
+3. terminal.send    → 发送指令（bracketed paste）
+4. terminal.wait    → 等待完成（OSC 133 / quiet / regex）
+5. terminal.read    → 读取输出（ANSI-stripped, in-memory tail）</code></pre></div>
+<h3 id="9-4-安全约束">9.4 安全约束</h3>
+<ul><li>深度限制 2 层（worker 不能再创建 worker）</li><li>调用者不能 send/kill 自己的终端</li><li>用户键盘输入 = takeover，队列自动保持</li><li><code>terminal.kill</code> 对 agent 调用禁止（R4）</li></ul>
+<h2 id="10-终端文件链接">10. 终端文件链接</h2>
+<p>⌘+单击 file token：</p>
+<ul><li>html/svg/pdf → 系统浏览器打开。</li><li>其他文件 → 编辑器打开到 <code>:line</code>。</li></ul>
+<p>识别方式：OSC 8 + 正则双轨。</p>
+<h2 id="10-rust-实现要点">10. Rust 实现要点</h2>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// PTY 管理
+struct TerminalManager {
+    ptys: HashMap&lt;TerminalId, PtyHandle&gt;,
+    shell_integration: ShellIntegration,
+}
+
+// Shell 集成
+enum Shell {
+    Zsh,
+    Bash,
+    Fish,
+    Other,
+}
+
+struct ShellIntegration {
+    scripts_dir: PathBuf,
+}
+
+impl ShellIntegration {
+    fn spawn_args(&amp;self, shell: Shell, dir: &amp;Path) -&gt; (Vec&lt;String&gt;, HashMap&lt;String, String&gt;) { ... }
+}
+
+// 块模型
+enum BlockKind {
+    Command,
+    Turn,
+}
+
+struct Block {
+    kind: BlockKind,
+    start_marker: Marker,
+    end_marker: Option&lt;Marker&gt;,
+    exit_code: Option&lt;i32&gt;,
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="assets/site.js"></script>
+</body>
+</html>

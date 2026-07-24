@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0027: M11 hardening implementation — fuses, secret verification, Room windowing, accessibility, privacy · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0027-m11-hardening-implementation-fuses-secret-verification-room-windowing-accessibility-privacy">ADR-0027: M11 hardening implementation — fuses, secret verification, Room windowing, accessibility, privacy</h1>
+<ul><li>状态：Accepted</li><li>日期：2026-07-18</li><li>关联需求：§16.4、§16.5、A11Y-001..005、PRIV-001..003；ADR-0025（M11 重定义）；ADR-0022（预览注入）</li><li>关联 mockup：<code>docs/design/m11-functional-mockups/</code>（用户确认的 UI 缩放 / 无障碍 Diff / 隐私设置三稿）</li></ul>
+<h2 id="背景">背景</h2>
+<p>ADR-0025 把 M11 重定义为对现状代码的差距收口。本 ADR 记录实现阶段的具体技术<br>决策与取舍（对应 backlog M11-01..07 + 报告 M11-06）。基线 <code>e81b72e</code>。</p>
+<h2 id="决策">决策</h2>
+<h3 id="m11-01-electron-硬化">M11-01 Electron 硬化</h3>
+<ul><li><strong>Fuses 在 <code>afterPack</code> 翻转</strong>，plan 抽成 <code>scripts/fuse-plan.cjs</code>（CJS，供打包<br>钩子与安全单测共享同一对象）。<code>resetAdHocDarwinSignature: true</code> 因翻转会使 arm64 ad-hoc 签名失效；发布签名（M12-02）在其上重签。</li><li><strong>纯策略抽取</strong>：<code>security-policy.ts</code>（导航/外链）与 <code>preview-security.ts</code><br>（iframe sandbox / pick 源）从 electron 依赖中剥离，使安全套件可直接钉死。</li><li><strong><code>test:security</code> 双入口恢复</strong>：<code>vitest.security.config.ts</code> 显式聚合散落于普通<br>套件的遍历/符号链接/风险级用例 + 仅本套件的策略钉死；playwright 半场跑真实 Electron 的 CSP/导航矩阵。既有用例归拢而非重写。</li><li>E2E 教训：被 <code>will-navigate</code> 拦截的顶帧导航会让 Playwright 卡在<br>navigation-pending；改为主进程 spy 断言拦截 + <code>page.goto</code> 重同步。</li></ul>
+<h3 id="m11-02-秘密不可检出">M11-02 秘密不可检出</h3>
+<ul><li><strong>四路验证走真实路径</strong>：经 provider IPC 存哨兵 key → reload → CDP<br><code>HeapProfiler.takeHeapSnapshot</code> 扫 renderer 堆 + web storage + 磁盘日志 + 支持 包。reload 是关键：证明「已配置的 key 不会再水合进 renderer」。</li><li><strong>扫描器与 redact 同源</strong>：<code>findSecrets()</code> 复用 redact 的 pattern；<code>.mjs</code> 扫描器<br>因无法 import TS 源，副本由单测钉死标签一致，并对 <code>sk-</code> 加前置非字母边界避免 匹配 <code>task-*</code> kebab id（redact 保持宽松——过度脱敏是安全方向）。</li><li>repo 扫描进 <code>test:security</code> 作为 CI 闸。</li></ul>
+<h3 id="m11-03-性能基建">M11-03 性能基建</h3>
+<ul><li><code>vitest.perf.config.ts</code> 单线程无隔离（避免 worker 争用扭曲计时）。</li><li>双档 fixture：默认档秒级可跑抓算法回归，<code>PI_IDE_PERF_FULL=1</code> 放大到 §16.5<br>参考负载（50k 文件 / 1GiB 文本）。1GiB 文本流式写入，内存恒定。</li><li>大文件超过 SearchService 4MiB/文件上限被跳过——诚实边界断言（大输出不冻结）。</li></ul>
+<h3 id="m11-04-room-窗口化-最大改动对象换位">M11-04 Room 窗口化（最大改动对象换位）</h3>
+<ul><li><strong>渐进窗口而非绝对定位虚拟滚动</strong>：Room 有可变高 worklog 分组、milestone、<br>卡片、置底跟随、滚动记忆——绝对定位虚拟化会与这些冲突。改为「只渲染尾部 N=400 + load-earlier 分块」，<code>computeWindow</code>/<code>growWindow</code> 纯函数单测。</li><li>汇总统计（token/cost/action 数）仍遍历全 timeline（廉价数值循环），只有<br>「建 React 节点」这一昂贵步骤限于窗口。与 repo-clean <code>7421d2e</code> 的分界：memo 化 只消除逐 token 重建，不是窗口化。</li><li>load-earlier 用 <code>useLayoutEffect</code> 锚定滚动，避免前插节点跳视口。</li><li><strong>大输出冻结门</strong>：流式 buffer 在 store 侧封顶 256KB（完成事件另带全文，截断<br>无损）；渲染侧超 16KB 走 plain-text 尾巴而非每 token 重解析 markdown。</li><li>测试缝：<code>initialWindow()</code> 读 <code>globalThis.__PI_IDE_TIMELINE_WINDOW</code>，e2e 设小窗<br>用既有多事件场景越过阈值，免于播种万级事件。</li></ul>
+<h3 id="m11-05-可访问性">M11-05 可访问性</h3>
+<ul><li><strong>UI 缩放用真窗口缩放</strong>：<code>general.uiScale</code>（schema 已存在但此前仅 rem hack，<br>不缩放 Monaco/终端）改由主进程 <code>webContents.setZoomFactor</code> 应用——Monaco 与 xterm 一并缩放，满足 A11Y-003；rem hack 移除以免叠加。缩放梯 80–200% 抽成 <code>ui-zoom.ts</code> 纯模块，菜单 ⌘±/⌘0 + Settings 段共享。<code>setVisualZoomLevelLimits(1,1)</code> 关掉捏合缩放，使缩放只来自显式设置。</li><li><strong>无障碍 Diff 文本模式</strong>：既有 inline diff 加「Inline ⇄ Text mode」切换；文本模式<br>把变更行 run 线性化为可聚焦卡片，F7/⇧F7 文档级监听（容器不可聚焦，故不用 onKeyDown）。分组/播报文案抽成 <code>accessible-diff.ts</code> 纯模块单测。</li><li><strong>A11Y-004 live region</strong>：Room 活动条设 <code>role=status aria-live=polite</code>——标签本就<br>按 action 粒度变（非逐 token），天然「适度」。</li></ul>
+<h3 id="m11-07-隐私-诚实降级是核心决策">M11-07 隐私（诚实降级是核心决策）</h3>
+<ul><li>本 build <strong>无任何遥测/崩溃上报传输</strong>。按 CLAUDE.md 规则 9，不能呈现暗示「正在<br>发送」的假开关：整卡显式声明「nothing is ever sent；开关只记录偏好」。</li><li><strong>崩溃预览是真的</strong>：<code>crashPreview</code> 从真实 app 状态 + 真实日志尾 经真实<br><code>redactText</code> 生成——证明脱敏，而非示意文案。</li><li><strong>PRIV-003 删除是真的</strong>：<code>clearHistory</code> 在一个事务里按子表优先顺序删除任务历史<br>（FK 无 CASCADE）+ blobs + app_errors，再删附件目录与日志文件；保留 settings / provider keys / workspace 注册 / UI 布局。两步确认。</li></ul>
+<h2 id="替代方案">替代方案</h2>
+<ul><li>Room 绝对定位虚拟滚动——与可变高分组/置底跟随冲突，否决（见 M11-04）。</li><li>缩放沿用 rem hack——不缩放 Monaco/终端，不满足 A11Y-003，否决。</li><li>隐私假开关照搬 mock 上半——违反规则 9，改为 mock 自带的诚实降级分支。</li></ul>
+<h2 id="安全与数据影响">安全与数据影响</h2>
+<p>安全面只增不减（fuses、四路验证、预览注入审计、repo 扫描闸）。新增一处真实<br>破坏性操作 <code>privacy.clearHistory</code>——两步确认 + 保留 settings/keys，删除范围含已<br>归档任务（ADR-0025 待确认点，按「包含」实现）。DOMPurify 中危经 monaco 传递，<br>CSP + 无 setConfig 调用已缓解，挂 M12。</p>
+<h2 id="迁移-回滚">迁移/回滚</h2>
+<p>无 schema 迁移。新增 IPC 通道 <code>privacy.dataSummary</code>/<code>crashPreview</code>/<code>clearHistory</code><br>（versioned strict）。回滚 = revert 本批改动；fuses 仅在打包生效，dev 不受影响。</p>
+<h2 id="验证证据">验证证据</h2>
+<p>见 <a href="../reference/M11_SECURITY_PERFORMANCE_REPORT.html"><code>docs/M11_SECURITY_PERFORMANCE_REPORT.html</code></a>。摘要：<code>test:security</code> 137 vitest + 2<br>e2e 全绿；<code>test:perf</code> 6 全绿（50k FULL 验证）；524 单测；<code>npm run check</code> clean；<br>四张真机截图（无障碍 Diff、隐私面板、崩溃预览）在<br><code>docs/design/m11-functional-mockups/impl-shots/</code>。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

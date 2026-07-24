@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>方向 05 · 指挥舱 + 聚焦下钻</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">Charter · 编队 UI</a>
+        <a class="nav-link" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link active" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">切换 worker，再点“聚焦查看”</span>
+      </div>
+    </header>
+
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">Direction 05 / Recommended synthesis</p>
+        <h1>指挥舱，按需下钻</h1>
+      </div>
+      <p>
+        保留方向 01 清楚、稳定的三栏工作面；右侧不再堆原始日志，而是采用方向 04 的事件语义。需要读清细节或人工介入时，再进入方向 03 的单路聚焦剧场。
+      </p>
+    </section>
+
+    <main class="canvas-wrap">
+      <div class="prototype hybrid-prototype">
+        <div class="window-bar">
+          <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+          <span class="window-title">Charter — pay-service / 编队指挥舱</span>
+        </div>
+
+        <section class="hybrid-app">
+          <aside class="app-rail hybrid-app-rail">
+            <div class="brandmark">C</div>
+            <button class="icon-button" title="Sessions">▤</button>
+            <button class="icon-button active" title="Fleet">⌁</button>
+            <button class="icon-button" title="Files">⌘</button>
+            <button class="icon-button" title="Memory">◇</button>
+            <span class="spacer"></span>
+            <button class="icon-button" title="Settings">⚙</button>
+          </aside>
+
+          <section class="hybrid-main">
+            <header class="hybrid-head">
+              <div class="hybrid-heading">
+                <small>支付超时排查 / 编队</small>
+                <h2>运行指挥台</h2>
+              </div>
+              <span class="pill"><span class="live-dot live"></span>2 运行中</span>
+              <span class="pill attention-pill">1 待处理</span>
+              <span class="spacer"></span>
+              <button class="btn">暂停全部</button>
+              <button class="btn">返回主会话 ↗</button>
+            </header>
+
+            <div class="hybrid-grid">
+              <aside class="hybrid-roster">
+                <div class="roster-overview">
+                  <span>Workers</span>
+                  <strong>3</strong>
+                  <small>2 active · 1 completed</small>
+                </div>
+
+                <button class="worker-row active" data-hybrid-worker="codex-review">
+                  <span class="live-dot live"></span>
+                  <span><strong>Codex · 方案评审</strong><small>检查接管边界 · 01:48</small></span>
+                  <span class="status live">输出中</span>
+                </button>
+                <button class="worker-row" data-hybrid-worker="claude-test">
+                  <span class="live-dot wait"></span>
+                  <span><strong>Claude · 跑测试</strong><small>等待安装依赖 · 02:14</small></span>
+                  <span class="status wait">决策</span>
+                </button>
+                <button class="worker-row" data-hybrid-worker="claude-docs">
+                  <span class="live-dot"></span>
+                  <span><strong>Claude · 文档同步</strong><small>完成，保持打开 · 00:36</small></span>
+                  <span class="status done">完成</span>
+                </button>
+
+                <div class="roster-divider"></div>
+                <p class="section-label">Commander</p>
+                <div class="worker-row commander-row">
+                  <span class="live-dot live"></span>
+                  <span><strong>Claude · 主会话</strong><small>正在汇总 worker 结果</small></span>
+                </div>
+
+                <button class="new-worker-button">＋ 新建 worker</button>
+              </aside>
+
+              <section class="hybrid-stage">
+                <header class="hybrid-stage-head">
+                  <span class="live-dot live" id="hybridStageDot"></span>
+                  <div>
+                    <strong id="hybridStageTitle">Codex · 方案评审</strong>
+                    <small id="hybridStagePurpose">审查 terminal takeover 与 worker 生命周期</small>
+                  </div>
+                  <span class="status live" id="hybridStageStatus">输出中</span>
+                  <span class="spacer"></span>
+                  <span class="observe-badge">◉ 只读观察</span>
+                  <button class="btn primary" id="openFocus">聚焦查看 ↗</button>
+                </header>
+
+                <div class="stage-context-line" id="stageContext">
+                  <span>当前画面</span>
+                  <strong>实时终端 · 未接管</strong>
+                  <small>点击 worker 只切换观察对象</small>
+                </div>
+
+                <pre class="terminal hybrid-terminal" data-hybrid-view="codex-review"><span class="dim">╭─ Codex · review ─────────────────────────────────────────────╮</span>
+
+正在审查 terminal-control-service.ts 与 renderer input provenance。
+
+<span class="ok">✓</span> worker 完成任务后保持 resident
+<span class="ok">✓</span> xterm protocol reply 不触发 takeover
+<span class="accent">→</span> 检查 Full 模式下 terminal.kill 是否仍可能自动执行
+
+<span class="accent">Finding 1 · medium confidence</span>
+旧的编排手册把 <span class="warn">read → kill</span> 写成默认流程，
+这会让 commander 在读取结果后主动销毁 worker。
+
+建议把 worker 生命周期与任务生命周期分开。
+
+<span class="dim">Analyzed 14 files · 8,401 weighted tokens · streaming</span></pre>
+
+                <pre class="terminal hybrid-terminal" data-hybrid-view="claude-test" hidden><span class="dim">╭─ Claude Code · test runner ──────────────────────────────────╮</span>
+
+全量 Vitest 已完成：<span class="ok">831 passed</span>
+TypeScript 与 boundary checks：<span class="ok">passed</span>
+
+Electron E2E 需要安装浏览器依赖：
+  npm install @playwright/test@latest
+
+<span class="warn">等待你的决定 · R3</span>
+该操作会修改 package-lock.json 与 node_modules。
+
+<span class="dim">Worker 保持打开，等待 commander 或用户继续指挥。</span></pre>
+
+                <pre class="terminal hybrid-terminal" data-hybrid-view="claude-docs" hidden><span class="dim">╭─ Claude Code · docs ─────────────────────────────────────────╮</span>
+
+<span class="ok">文档同步完成。</span>
+
+Modified
+  README.md
+  README.zh-CN.md
+  docs/IMPLEMENTATION_STATUS.html
+  docs/IMPLEMENTATION_BACKLOG.html
+
+No commit created, as requested.
+
+<span class="dim">任务已完成 · Worker 仍保持打开，可继续追问。</span></pre>
+
+                <footer class="hybrid-command-line">
+                  <div class="target-token">
+                    <span>发送给</span>
+                    <strong id="mainCommandTarget">Codex · 方案评审</strong>
+                  </div>
+                  <div class="hybrid-command-box">
+                    <span class="command-arrow">↳</span>
+                    <input id="mainCommandInput" value="继续验证这个问题，并给出最小修复建议" aria-label="发送给当前 worker" />
+                    <button class="btn primary send-feedback">发送</button>
+                  </div>
+                </footer>
+              </section>
+
+              <aside class="hybrid-signals">
+                <header class="signals-head">
+                  <div>
+                    <span>Activity intelligence</span>
+                    <h3>需要你关注</h3>
+                  </div>
+                  <button class="quiet-icon" title="更多筛选">⌁</button>
+                </header>
+
+                <div class="signal-tabs">
+                  <button class="active">重点 3</button>
+                  <button>全部 6</button>
+                  <button>变化 4</button>
+                </div>
+
+                <div class="signals-feed">
+                  <article class="signal-card signal-needs" id="dependencyDecision">
+                    <div class="signal-kicker"><span>需要决定</span><time>现在</time></div>
+                    <h4>Claude 请求安装测试依赖</h4>
+                    <p><code>npm install</code> 将修改 lockfile，风险 R3。</p>
+                    <div class="signal-actions">
+                      <button class="btn primary" id="allowDependency">允许一次</button>
+                      <button class="btn">拒绝</button>
+                      <button class="text-action" data-peek-worker="claude-test">看上下文</button>
+                    </div>
+                  </article>
+
+                  <article class="signal-card signal-finding">
+                    <div class="signal-kicker"><span>关键发现</span><time>1 分钟前</time></div>
+                    <h4>Codex 找到 worker 自动退出的来源</h4>
+                    <p>编排手册把关闭 worker 写成了正常收尾步骤，置信度高。</p>
+                    <div class="signal-actions">
+                      <button class="btn" data-peek-worker="codex-review">在中间查看</button>
+                      <button class="text-action" data-open-focus="codex-review" data-entry="关键发现 · worker 生命周期">聚焦查看 ↗</button>
+                    </div>
+                  </article>
+
+                  <article class="signal-card signal-done">
+                    <div class="signal-kicker"><span>已完成</span><time>2 分钟前</time></div>
+                    <h4>文档同步完成，worker 仍在线</h4>
+                    <p>修改 4 个文件，没有提交；可以继续给它发送指令。</p>
+                    <div class="signal-actions">
+                      <button class="btn" data-peek-worker="claude-docs">查看结果</button>
+                    </div>
+                  </article>
+                </div>
+
+                <footer class="signals-footer">
+                  <span><b>0</b> failures</span>
+                  <span><b>4</b> files changed</span>
+                  <button>打开完整事件流 →</button>
+                </footer>
+              </aside>
+            </div>
+          </section>
+
+          <section class="hybrid-focus" id="hybridFocus" hidden aria-hidden="true">
+            <header class="focus-head">
+              <button class="btn" id="closeFocus">‹ 返回指挥舱</button>
+              <div>
+                <small>Worker focus</small>
+                <h2>聚焦剧场</h2>
+              </div>
+              <span class="focus-entry" id="focusEntry">从指挥舱进入 · 当前实时画面</span>
+              <span class="spacer"></span>
+              <span class="observe-badge" id="focusMode">◉ 只读观察</span>
+              <button class="btn warning" id="focusTakeover">接管这路</button>
+            </header>
+
+            <div class="focus-filmstrip" role="tablist" aria-label="Workers">
+              <button class="film-worker active" data-focus-worker="codex-review">
+                <span class="live-dot live"></span>
+                <span><strong>Codex · 方案评审</strong><small>输出中 · 当前画面</small></span>
+              </button>
+              <button class="film-worker" data-focus-worker="claude-test">
+                <span class="live-dot wait"></span>
+                <span><strong>Claude · 跑测试</strong><small>1 个决定等待处理</small></span>
+              </button>
+              <button class="film-worker" data-focus-worker="claude-docs">
+                <span class="live-dot"></span>
+                <span><strong>Claude · 文档同步</strong><small>已完成 · 保持打开</small></span>
+              </button>
+            </div>
+
+            <div class="focus-location">
+              <span class="location-mark">⌖</span>
+              <span id="focusLocation">已定位到关键发现：默认 read → kill 生命周期</span>
+              <button id="jumpLive">跳到实时输出</button>
+            </div>
+
+            <div class="hybrid-focus-stage">
+              <section class="theater-screen">
+                <header class="screen-head">
+                  <span class="live-dot live" id="focusDot"></span>
+                  <strong id="focusTitle">Codex · 方案评审</strong>
+                  <span class="pill" id="focusStatus">输出中</span>
+                  <span class="spacer"></span>
+                  <span class="focus-term-id">term_4c1a</span>
+                </header>
+
+                <pre class="terminal theater-terminal" data-focus-view="codex-review"><span class="dim">╭─ Codex · focused evidence ─────────────────────────────────────────╮</span>
+
+I traced the worker exit back through the orchestration audit.
+
+<span class="ok">23:01:18.169</span>  orchestration.workerKilled  term_65d99
+<span class="ok">23:01:18.187</span>  orchestration.workerExited  exitCode=0
+
+The process did not decide to exit. The commander issued terminal.kill
+after terminal.read because the injected manual prescribed this loop:
+
+  list → create/send → wait → read → <span class="warn">kill</span>
+
+<span class="accent">Finding · high confidence</span>
+Task completion and worker lifetime are incorrectly coupled.
+The worker should remain resident until an explicit user close action.
+
+<span class="dim">Now checking the R4 gateway boundary…</span></pre>
+
+                <pre class="terminal theater-terminal" data-focus-view="claude-test" hidden><span class="dim">╭─ Claude Code · focused test runner ─────────────────────────────────╮</span>
+
+Test Files  <span class="ok">103 passed (103)</span>
+Tests       <span class="ok">831 passed (831)</span>
+Build       <span class="ok">passed</span>
+
+Pending action
+  npm install @playwright/test@latest
+
+Risk: R3 · modifies lockfile and node_modules
+
+<span class="warn">Waiting for decision. No input will be injected until approved.</span>
+
+<span class="dim">The worker remains resident while waiting.</span></pre>
+
+                <pre class="terminal theater-terminal" data-focus-view="claude-docs" hidden><span class="dim">╭─ Claude Code · focused result ──────────────────────────────────────╮</span>
+
+Documentation synchronization complete.
+
+<span class="ok">✓</span> README.md
+<span class="ok">✓</span> README.zh-CN.md
+<span class="ok">✓</span> docs/IMPLEMENTATION_STATUS.html
+<span class="ok">✓</span> docs/IMPLEMENTATION_BACKLOG.html
+
+No commit created.
+
+<span class="accent">Ready for follow-up.</span>
+The terminal and conversation remain available to the commander and user.</pre>
+              </section>
+
+              <aside class="theater-inspector">
+                <h3>当前 worker</h3>
+                <div class="inspector-row"><span>Purpose</span><strong id="focusPurpose">审查 takeover 与 worker 生命周期</strong></div>
+                <div class="inspector-row"><span>Provider</span><strong id="focusProvider">Codex · gpt-5.4</strong></div>
+                <div class="inspector-row"><span>Control</span><strong id="focusControl">Commander 持有控制权</strong></div>
+                <div class="inspector-row"><span>Changes</span><strong id="focusChanges">0 files · 只读评审</strong></div>
+                <div class="inspector-row"><span>Lifetime</span><strong>完成后保持打开</strong></div>
+                <button class="focus-record-button">打开完整会话记录</button>
+              </aside>
+            </div>
+
+            <footer class="focus-command">
+              <div class="target-token dark-target">
+                <span>发送给</span>
+                <strong id="focusCommandTarget">Codex · 方案评审</strong>
+              </div>
+              <div class="focus-command-box">
+                <span class="command-arrow">↳</span>
+                <input value="继续，给出最小补丁并验证 worker 保持在线" aria-label="聚焦模式发送指令" />
+                <button class="btn primary send-feedback">发送</button>
+              </div>
+              <small>Esc 返回 · ⌘1–3 切换</small>
+            </footer>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <section class="mock-caption">
+      <article class="caption-card"><strong>默认工作面</strong><span>方向 01 的稳定三栏：worker、当前真实画面、需要关注的结构化事件同时可见。</span></article>
+      <article class="caption-card"><strong>下钻规则</strong><span>切换或查看 worker 不等于接管；只有进入聚焦剧场后再次点击“接管这路”才改变控制权。</span></article>
+      <article class="caption-card"><strong>信息分工</strong><span>中间提供事实，右侧提供意义；只有阅读长输出、定位证据和人工介入时才进入方向 03。</span></article>
+    </section>
+
+    <script>
+      const workerMeta = {
+        'codex-review': {
+          title: 'Codex · 方案评审',
+          purpose: '审查 terminal takeover 与 worker 生命周期',
+          status: '输出中',
+          tone: 'live',
+          provider: 'Codex · gpt-5.4',
+          control: 'Commander 持有控制权',
+          changes: '0 files · 只读评审',
+          location: '已定位到关键发现：默认 read → kill 生命周期',
+          term: 'term_4c1a',
+        },
+        'claude-test': {
+          title: 'Claude · 跑测试',
+          purpose: '运行全量测试与 Electron E2E',
+          status: '等待决策',
+          tone: 'wait',
+          provider: 'Claude Code · Sonnet',
+          control: '等待 Commander 审批',
+          changes: '1 lockfile · 尚未执行',
+          location: '已定位到审批请求：安装 Playwright 依赖',
+          term: 'term_a912f',
+        },
+        'claude-docs': {
+          title: 'Claude · 文档同步',
+          purpose: '同步 M13 使用与验收文档',
+          status: '已完成',
+          tone: 'done',
+          provider: 'Claude Code · Sonnet',
+          control: '空闲，仍可继续指挥',
+          changes: '4 files · 未提交',
+          location: '已定位到完成结果：4 个文档文件已更新',
+          term: 'term_c7d20',
+        },
+      };
+
+      let selectedWorker = 'codex-review';
+      const focusView = document.getElementById('hybridFocus');
+
+      function selectWorker(id) {
+        selectedWorker = id;
+        const meta = workerMeta[id];
+        document.querySelectorAll('[data-hybrid-worker]').forEach((item) => item.classList.toggle('active', item.dataset.hybridWorker === id));
+        document.querySelectorAll('[data-focus-worker]').forEach((item) => item.classList.toggle('active', item.dataset.focusWorker === id));
+        document.querySelectorAll('[data-hybrid-view]').forEach((view) => (view.hidden = view.dataset.hybridView !== id));
+        document.querySelectorAll('[data-focus-view]').forEach((view) => (view.hidden = view.dataset.focusView !== id));
+
+        document.getElementById('hybridStageTitle').textContent = meta.title;
+        document.getElementById('hybridStagePurpose').textContent = meta.purpose;
+        document.getElementById('hybridStageStatus').textContent = meta.status;
+        document.getElementById('hybridStageStatus').className = `status ${meta.tone}`;
+        document.getElementById('hybridStageDot').className = `live-dot ${meta.tone}`;
+        document.getElementById('mainCommandTarget').textContent = meta.title;
+
+        document.getElementById('focusTitle').textContent = meta.title;
+        document.getElementById('focusStatus').textContent = meta.status;
+        document.getElementById('focusDot').className = `live-dot ${meta.tone}`;
+        document.getElementById('focusPurpose').textContent = meta.purpose;
+        document.getElementById('focusProvider').textContent = meta.provider;
+        document.getElementById('focusControl').textContent = meta.control;
+        document.getElementById('focusChanges').textContent = meta.changes;
+        document.getElementById('focusLocation').textContent = meta.location;
+        document.getElementById('focusCommandTarget').textContent = meta.title;
+        document.querySelector('.focus-term-id').textContent = meta.term;
+      }
+
+      function openFocus(entry = '从指挥舱进入 · 当前实时画面') {
+        document.getElementById('focusEntry').textContent = entry;
+        focusView.hidden = false;
+        focusView.setAttribute('aria-hidden', 'false');
+      }
+
+      function closeFocus() {
+        focusView.hidden = true;
+        focusView.setAttribute('aria-hidden', 'true');
+      }
+
+      document.querySelectorAll('[data-hybrid-worker]').forEach((button) => {
+        button.addEventListener('click', () => selectWorker(button.dataset.hybridWorker));
+      });
+      document.querySelectorAll('[data-focus-worker]').forEach((button) => {
+        button.addEventListener('click', () => selectWorker(button.dataset.focusWorker));
+      });
+      document.querySelectorAll('[data-peek-worker]').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectWorker(button.dataset.peekWorker);
+          document.getElementById('stageContext').classList.add('context-flash');
+          setTimeout(() => document.getElementById('stageContext').classList.remove('context-flash'), 900);
+        });
+      });
+      document.querySelectorAll('[data-open-focus]').forEach((button) => {
+        button.addEventListener('click', () => {
+          selectWorker(button.dataset.openFocus);
+          openFocus(`从事件进入 · ${button.dataset.entry}`);
+        });
+      });
+
+      document.getElementById('openFocus').addEventListener('click', () => openFocus());
+      document.getElementById('closeFocus').addEventListener('click', closeFocus);
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !focusView.hidden) closeFocus();
+      });
+
+      document.getElementById('focusTakeover').addEventListener('click', (event) => {
+        const active = event.currentTarget.classList.toggle('is-active');
+        event.currentTarget.textContent = active ? '✋ 已接管 · 交还' : '接管这路';
+        document.getElementById('focusMode').textContent = active ? '手动控制' : '◉ 只读观察';
+      });
+      document.getElementById('allowDependency').addEventListener('click', () => {
+        document.getElementById('dependencyDecision').innerHTML = '<div class="signal-kicker"><span>已处理</span><time>刚刚</time></div><h4>已允许一次，Claude 继续测试</h4><p>审批同步到 worker；完成后会生成新的结果事件。</p><div class="signal-actions"><span class="status live">进行中</span></div>';
+      });
+      document.getElementById('jumpLive').addEventListener('click', (event) => {
+        document.getElementById('focusLocation').textContent = '实时输出 · worker 保持打开';
+        event.currentTarget.textContent = '已在实时位置';
+      });
+      document.querySelectorAll('.send-feedback').forEach((button) => {
+        button.addEventListener('click', () => {
+          button.textContent = '已发送 ✓';
+          setTimeout(() => (button.textContent = '发送'), 1200);
+        });
+      });
+    </script>
+  </body>
+</html>

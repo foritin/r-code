@@ -1,0 +1,1161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>组合方案 · Obsidian 底座 — Deck 新入口 + 密度切换 + 胶片缩略</title>
+<style>
+  /* ============================================================
+     组合方案 1 — Obsidian Glass 底座
+     IA 决策：左侧 activity 列【新增第五个入口 Deck】，
+     现有 Sessions / Inbox / Projects / Search 四个入口零改动。
+     - Deck 视图 = A 的态势带 + Needs You 通道 + 舰队区，
+       右上 Cards ⇄ Rows 切换（E 的密度模式收进 Deck，不占 tab）
+     - Room 视图 = C 的玻璃房间 + 底部 D 的胶片缩略版
+       （默认一条细带，hover 升起，可拖动；完整版见 d-reel）
+     试试：点 rail 第一行进 Room；点最上方 ◎ 图标回 Deck；
+     Deck 右上切 Rows；Room 底部细带上 hover 后拖动播放头。
+     ============================================================ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --void: #020204;
+    --glass-1: rgba(255, 255, 255, 0.028);
+    --glass-2: rgba(255, 255, 255, 0.05);
+    --glass-3: rgba(255, 255, 255, 0.08);
+    --edge: rgba(255, 255, 255, 0.075);
+    --edge-lit: rgba(255, 255, 255, 0.16);
+    --fg: #ecedf2;
+    --fg-muted: #8b8f9c;
+    --fg-faint: #4d515e;
+    --aura-a: #6ee7f2;
+    --aura-b: #8b7cf6;
+    --amber: #eebf6d;
+    --green: #5fe3a1;
+    --red: #f0716a;
+    --serif: 'Charter', 'Iowan Old Style', Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
+    --mono: 'Berkeley Mono', 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans); background: var(--void); color: var(--fg);
+    overflow: hidden; font-size: 13px; -webkit-font-smoothing: antialiased;
+  }
+
+  .aurora { position: fixed; inset: 0; z-index: 0; overflow: hidden; }
+  .aurora i { position: absolute; border-radius: 50%; filter: blur(110px); opacity: 0.15; animation: drift 26s ease-in-out infinite alternate; }
+  .aurora i:nth-child(1) { width: 720px; height: 520px; left: 30%; top: -18%; background: radial-gradient(closest-side, #1d4a5e, transparent); }
+  .aurora i:nth-child(2) { width: 640px; height: 560px; right: -12%; bottom: -22%; background: radial-gradient(closest-side, #2c2360, transparent); animation-delay: -9s; }
+  @keyframes drift { from { transform: none; } to { transform: translate3d(60px, 36px, 0) scale(1.1); } }
+
+  .app {
+    position: relative; z-index: 1;
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    grid-template-columns: 52px 236px 1fr;
+    grid-template-areas: "titlebar titlebar titlebar" "activity rail main";
+    height: 100vh; gap: 9px; padding: 9px;
+  }
+  .pane {
+    background: var(--glass-1); border: 1px solid var(--edge);
+    border-radius: 15px; backdrop-filter: blur(22px);
+    position: relative; overflow: hidden;
+  }
+  .pane::before {
+    content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent);
+    pointer-events: none;
+  }
+
+  /* ---------- Titlebar ---------- */
+  .titlebar { grid-area: titlebar; display: flex; align-items: center; gap: 13px; padding: 0 14px; }
+  .traffic { display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.1); }
+  .tb-brand { font-family: var(--serif); font-size: 15px; }
+  .tb-ctx { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-muted); }
+  .tb-ctx .sep { color: var(--fg-faint); }
+  .tb-ctx b { color: var(--fg); font-weight: 500; }
+  .tb-ctx .k { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+  .state-chip {
+    display: none; align-items: center; gap: 7px; padding: 4px 12px; border-radius: 20px;
+    background: var(--glass-2); border: 1px solid var(--edge-lit); font-size: 11px;
+  }
+  .state-chip .pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--aura-a); box-shadow: 0 0 12px var(--aura-a); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+  body[data-scene='room'] .state-chip { display: inline-flex; }
+  .tb-right { margin-left: auto; display: flex; gap: 9px; }
+  .gbtn {
+    padding: 5px 13px; border-radius: 9px; cursor: pointer;
+    background: var(--glass-2); border: 1px solid var(--edge); color: var(--fg); font-size: 12px;
+  }
+  .gbtn:hover { background: var(--glass-3); border-color: var(--edge-lit); }
+  .gbtn.lit {
+    background: linear-gradient(135deg, rgba(110,231,242,0.16), rgba(139,124,246,0.16));
+    border-color: rgba(110, 231, 242, 0.4);
+  }
+  .room-only { display: none !important; }
+  body[data-scene='room'] .room-only { display: inline-flex !important; }
+  .deck-only { display: none !important; }
+  body[data-scene='deck'] .deck-only { display: inline-flex !important; }
+
+  /* ---------- Activity 列（新增 Deck 入口） ---------- */
+  .activity {
+    grid-area: activity;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 11px 0;
+  }
+  .act-brand { margin-bottom: 7px; color: var(--fg); opacity: 0.9; }
+  .act-item {
+    position: relative;
+    width: 36px; height: 36px; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--fg-faint); cursor: pointer; border: 1px solid transparent;
+    transition: color 0.15s, background 0.15s;
+  }
+  .act-item:hover { color: var(--fg-muted); background: var(--glass-2); }
+  .act-item.active {
+    color: var(--aura-a);
+    background: var(--glass-2); border-color: var(--edge-lit);
+    box-shadow: 0 0 22px rgba(110, 231, 242, 0.12), inset 0 0 14px rgba(110, 231, 242, 0.05);
+  }
+  .act-item .badge {
+    position: absolute; top: 3px; right: 3px;
+    min-width: 14px; height: 14px; border-radius: 8px;
+    background: var(--amber); color: #171207;
+    font-family: var(--mono); font-size: 8.5px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  }
+  .act-item.is-new { margin-bottom: 7px; }
+  .act-item.is-new::after {
+    content: "NEW"; position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
+    font-family: var(--mono); font-size: 6.5px; letter-spacing: 0.12em; color: var(--aura-b);
+  }
+  .act-spacer { flex: 1; }
+
+  /* ---------- Rail 面板（保持现有密度，零新增） ---------- */
+  .rail { grid-area: rail; display: flex; flex-direction: column; }
+  .rail-head { padding: 12px 13px 8px; display: flex; align-items: center; gap: 8px; }
+  .rail-tab { padding: 4px 11px; border-radius: 8px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer; }
+  .rail-tab.on { background: var(--glass-3); color: var(--fg); border: 1px solid var(--edge); }
+  .rail-head .k { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+  .needs {
+    margin: 2px 11px 8px; padding: 7px 11px; border-radius: 10px;
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    background: linear-gradient(90deg, rgba(238,191,109,0.12), rgba(238,191,109,0.03));
+    border: 1px solid rgba(238, 191, 109, 0.32);
+  }
+  .needs i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 12px var(--amber); }
+  .needs b { font-size: 12px; color: var(--amber); font-weight: 600; }
+  .needs span { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--amber); }
+  .rail-scroll { flex: 1; overflow-y: auto; padding: 0 7px 8px; }
+  .rail-scroll::-webkit-scrollbar { width: 7px; }
+  .rail-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+  .rg-head { display: flex; align-items: center; padding: 8px 9px 4px; font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-faint); }
+  .rg-head .cnt { margin-left: auto; font-family: var(--mono); }
+  .srow {
+    position: relative; padding: 7px 9px 7px 15px; border-radius: 10px; cursor: pointer;
+    border: 1px solid transparent; margin-bottom: 1px;
+  }
+  .srow:hover { background: var(--glass-2); }
+  .srow::before {
+    content: ""; position: absolute; left: 5px; top: 24%; bottom: 24%;
+    width: 2.5px; border-radius: 2px; background: var(--hue, var(--fg-faint)); opacity: 0.4;
+  }
+  .srow.live::before { opacity: 1; box-shadow: 0 0 10px var(--hue); animation: pulse 2.2s infinite; }
+  .srow.sel { background: var(--glass-2); border-color: var(--edge-lit); }
+  .srow .name { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .srow .sub { font-size: 10px; color: var(--fg-faint); font-family: var(--mono); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rail-foot { padding: 10px 14px; border-top: 1px solid var(--edge); font-size: 11px; color: var(--fg-muted); }
+  .rail-foot b { color: var(--fg); }
+
+  /* ---------- 主区 ---------- */
+  .main { grid-area: main; position: relative; min-width: 0; }
+  .scene { position: absolute; inset: 0; display: none; }
+  body[data-scene='home'] .scene-home { display: flex; }
+  body[data-scene='deck'] .scene-deck { display: flex; flex-direction: column; }
+  body[data-scene='room'] .scene-room { display: grid; }
+
+  /* ===== Home 场景（主页 = Chat 输入，保持现状不动） ===== */
+  .scene-home {
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 30px; padding: 0 60px 60px;
+  }
+  .home-title {
+    font-family: var(--serif); font-size: 40px; font-weight: 450;
+    letter-spacing: 0.005em; text-align: center; color: var(--fg);
+  }
+  .home-box {
+    width: min(680px, 92%);
+    background: var(--glass-2); border: 1px solid var(--edge-lit); border-radius: 16px;
+    padding: 16px 16px 12px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.4);
+    transition: border-color 0.25s, box-shadow 0.25s;
+  }
+  .home-box:focus-within {
+    border-color: rgba(110, 231, 242, 0.45);
+    box-shadow: 0 0 0 1px rgba(110,231,242,0.2), 0 0 60px rgba(110, 231, 242, 0.09), 0 24px 80px rgba(0,0,0,0.4);
+  }
+  .home-box input {
+    width: 100%; background: transparent; border: none; outline: none;
+    font-family: var(--serif); font-size: 16.5px; color: var(--fg); padding: 2px 2px 14px;
+  }
+  .home-box input::placeholder { color: var(--fg-faint); }
+  .home-meta { display: flex; align-items: center; gap: 7px; }
+  .home-meta .spacer { flex: 1; }
+  .home-launch {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 16px; border-radius: 9px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, var(--aura-a), var(--aura-b));
+    color: #060911; font-weight: 650; font-size: 12.5px;
+    box-shadow: 0 4px 22px rgba(110, 231, 242, 0.22);
+  }
+  /* 谦逊的一行态势摘要——督战去 Deck，主页保持安静 */
+  .home-glance {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 7px 15px; border-radius: 20px; cursor: pointer;
+    background: var(--glass-1); border: 1px solid var(--edge);
+    font-size: 12px; color: var(--fg-muted);
+  }
+  .home-glance:hover { border-color: var(--edge-lit); background: var(--glass-2); }
+  .home-glance .lamp-g { width: 6px; height: 6px; border-radius: 50%; }
+  .home-glance .lamp-g.run { background: var(--green); box-shadow: 0 0 7px rgba(95,227,161,0.6); animation: pulse 2.4s infinite; }
+  .home-glance .lamp-g.attn { background: var(--amber); box-shadow: 0 0 8px rgba(238,191,109,0.7); animation: pulse 1.7s infinite; }
+  .home-glance .go { color: var(--aura-a); margin-left: 3px; }
+  .home-hint { font-size: 10.5px; color: var(--fg-faint); letter-spacing: 0.02em; }
+  .home-hint kbd { font-family: var(--mono); border: 1px solid var(--edge); padding: 0 4px; border-radius: 3px; font-size: 9.5px; }
+
+  /* ===== Deck 场景 ===== */
+  .scene-deck { flex-direction: column; }
+  .deck-scroll { flex: 1; overflow-y: auto; padding: 20px 26px 12px; }
+  .deck-scroll::-webkit-scrollbar { width: 9px; }
+  .deck-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+
+  .situation { display: grid; grid-template-columns: repeat(5, 1fr) 1.5fr; gap: 9px; margin-bottom: 18px; }
+  .gauge {
+    padding: 12px 14px 11px; border-radius: 13px;
+    background: var(--glass-2); border: 1px solid var(--edge);
+    position: relative; overflow: hidden;
+  }
+  .gauge::after { content: ""; position: absolute; inset: 0 0 auto; height: 1px; background: linear-gradient(90deg, transparent, rgba(159,214,242,0.3), transparent); }
+  .gauge .k { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--fg-faint); margin-bottom: 6px; }
+  .gauge .v { font-family: var(--mono); font-size: 24px; color: var(--fg); font-variant-numeric: tabular-nums; line-height: 1; }
+  .gauge .v em { font-style: normal; font-size: 11px; color: var(--fg-faint); margin-left: 4px; }
+  .gauge.hot .v { color: var(--amber); text-shadow: 0 0 20px rgba(238,191,109,0.4); }
+  .gauge.live .v { color: var(--aura-a); text-shadow: 0 0 20px rgba(110,231,242,0.35); }
+  .gauge.good .v { color: var(--green); text-shadow: 0 0 18px rgba(95,227,161,0.3); }
+  .oscillo { padding: 11px 14px 9px; border-radius: 13px; background: var(--glass-2); border: 1px solid var(--edge); display: flex; flex-direction: column; }
+  .oscillo .k { font-size: 9px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--fg-faint); display: flex; justify-content: space-between; }
+  .oscillo .k b { color: var(--aura-a); opacity: 0.7; font-family: var(--mono); font-weight: 500; letter-spacing: 0.04em; }
+  .wave { flex: 1; display: flex; align-items: flex-end; gap: 2px; margin-top: 7px; }
+  .wave i { flex: 1; border-radius: 1px 1px 0 0; min-height: 2px; background: linear-gradient(180deg, rgba(110,231,242,0.7), rgba(139,124,246,0.15)); animation: waveB 2.6s ease-in-out infinite; }
+  @keyframes waveB { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+
+  .zone-head { display: flex; align-items: center; gap: 12px; margin: 2px 2px 11px; }
+  .zone-head h2 { font-family: var(--serif); font-size: 16px; font-weight: 500; }
+  .zone-head .rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--edge), transparent); }
+  .zone-head .meta { font-family: var(--mono); font-size: 9px; color: var(--fg-faint); letter-spacing: 0.08em; }
+
+  /* 密度切换 */
+  .density {
+    display: inline-flex; padding: 2px; border-radius: 9px;
+    background: var(--glass-1); border: 1px solid var(--edge);
+  }
+  .density button {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3.5px 12px; border-radius: 7px; border: none; cursor: pointer;
+    background: transparent; color: var(--fg-faint); font-size: 10.5px; font-family: var(--sans);
+  }
+  .density button.on { background: var(--glass-3); color: var(--aura-a); box-shadow: inset 0 0 0 1px var(--edge-lit); }
+
+  .needs-lane { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-bottom: 20px; }
+  .ncard {
+    position: relative; padding: 14px 16px 13px; border-radius: 14px; overflow: hidden;
+    background: linear-gradient(180deg, rgba(238,191,109,0.07), var(--glass-1));
+    border: 1px solid rgba(238, 191, 109, 0.38);
+    animation: needsPulse 3.2s ease-in-out infinite;
+  }
+  @keyframes needsPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(238,191,109,0); } 50% { box-shadow: 0 0 24px 0 rgba(238,191,109,0.1); } }
+  .ncard .tag { display: inline-flex; align-items: center; gap: 7px; font-size: 9.5px; letter-spacing: 0.13em; text-transform: uppercase; color: var(--amber); margin-bottom: 8px; }
+  .ncard .tag i { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 10px var(--amber); }
+  .ncard h3 { font-family: var(--serif); font-size: 15.5px; font-weight: 500; margin-bottom: 3px; }
+  .ncard .proj { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-bottom: 9px; }
+  .ncard .body { font-size: 12px; color: var(--fg-muted); line-height: 1.55; }
+  .ncard .steps { margin-top: 7px; display: flex; flex-direction: column; gap: 4px; }
+  .ncard .steps li { list-style: none; display: flex; gap: 8px; font-size: 11.5px; color: var(--fg-muted); }
+  .ncard .steps b {
+    font-family: var(--mono); font-size: 9px; color: var(--amber);
+    border: 1px solid rgba(238,191,109,0.4); border-radius: 50%;
+    width: 15px; height: 15px; display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0; margin-top: 1px; font-weight: 400;
+  }
+  .diffstat { font-family: var(--mono); font-size: 11px; margin: 6px 0 2px; }
+  .add { color: var(--green); } .del { color: var(--red); }
+  .checkrow { display: flex; gap: 12px; margin-top: 6px; font-family: var(--mono); font-size: 10px; color: var(--fg-muted); }
+  .checkrow .ok::before { content: "✓ "; color: var(--green); }
+  .acts { display: flex; gap: 7px; margin-top: 11px; }
+  .btn { padding: 5.5px 13px; border-radius: 8px; font-size: 11.5px; cursor: pointer; border: 1px solid var(--edge-lit); background: var(--glass-2); color: var(--fg); }
+  .btn:hover { border-color: var(--fg-faint); }
+  .btn.primary { background: var(--amber); border-color: var(--amber); color: #171106; font-weight: 600; box-shadow: 0 4px 18px rgba(238,191,109,0.22); }
+  .btn.ghost { background: transparent; }
+
+  /* Fleet cards 模式 */
+  .fleet-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 11px; margin-bottom: 18px; }
+  .fcard {
+    padding: 13px 15px 12px; border-radius: 14px; position: relative; overflow: hidden;
+    background: var(--glass-2); border: 1px solid rgba(95, 227, 161, 0.22);
+  }
+  .fcard::after { content: ""; position: absolute; inset: 0; border-radius: 14px; pointer-events: none; box-shadow: inset 0 0 30px rgba(95, 227, 161, 0.04); animation: pulse 3.6s infinite; }
+  .fcard .top { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; }
+  .chip { font-family: var(--mono); font-size: 9px; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 6px; background: var(--glass-1); border: 1px solid var(--edge); color: var(--fg-muted); }
+  .chip.wt { color: var(--aura-b); border-color: rgba(139,124,246,0.35); }
+  .fcard .elapsed { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); }
+  .fcard h3 { font-family: var(--serif); font-size: 14.5px; font-weight: 500; margin-bottom: 9px; line-height: 1.3; }
+  .action-line {
+    display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px;
+    background: rgba(0,0,0,0.35); border: 1px solid var(--edge);
+    font-family: var(--mono); font-size: 10px; color: var(--aura-a);
+    white-space: nowrap; overflow: hidden;
+  }
+  .action-line .verb { color: var(--fg-faint); flex-shrink: 0; }
+  .action-line .t { overflow: hidden; text-overflow: ellipsis; }
+  .caret { display: inline-block; width: 5px; height: 11px; background: var(--aura-a); animation: blink 1.1s steps(1) infinite; flex-shrink: 0; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .gates { display: flex; align-items: center; margin-top: 10px; }
+  .gate { display: flex; align-items: center; gap: 5px; font-size: 9.5px; color: var(--fg-faint); }
+  .gate i { width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid var(--fg-faint); }
+  .gate.done { color: var(--fg-muted); }
+  .gate.done i { border-color: var(--green); background: var(--green); box-shadow: 0 0 6px rgba(95,227,161,0.5); }
+  .gate.active { color: var(--aura-a); }
+  .gate.active i { border-color: var(--aura-a); animation: pulse 1.6s infinite; }
+  .gate-link { width: 18px; height: 1px; background: var(--edge-lit); margin: 0 6px; }
+  .verify { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 9.5px; color: var(--fg-muted); }
+  .vbar { flex: 1; height: 3px; border-radius: 2px; background: rgba(0,0,0,0.4); overflow: hidden; position: relative; }
+  .vbar i { position: absolute; inset: 0; width: 40%; border-radius: 2px; background: linear-gradient(90deg, transparent, var(--green), transparent); animation: sweep 1.8s ease-in-out infinite; }
+  @keyframes sweep { 0% { left: -40%; } 100% { left: 100%; } }
+  .vbar.det i { animation: none; left: 0; background: var(--green); }
+
+  .settled-strip { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 11px; }
+  .settled-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 13px; border-radius: 11px;
+    background: var(--glass-1); border: 1px solid var(--edge); opacity: 0.75; cursor: pointer;
+  }
+  .settled-item:hover { opacity: 1; }
+  .s-lamp { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); flex-shrink: 0; }
+  .s-lamp.ok { background: var(--green); box-shadow: 0 0 6px rgba(95,227,161,0.4); }
+  .s-lamp.bad { background: var(--red); }
+  .s-copy { flex: 1; min-width: 0; }
+  .s-copy b { display: block; font-size: 11.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .s-copy span { font-family: var(--mono); font-size: 9px; color: var(--fg-faint); }
+  .s-diff { font-family: var(--mono); font-size: 10px; flex-shrink: 0; }
+  .s-diff.none { color: var(--fg-faint); }
+
+  /* Fleet rows 模式（E 的密度看板收进 Deck） */
+  .fleet-rows { display: none; margin-bottom: 18px; }
+  .deck-scroll[data-density='rows'] .fleet-rows { display: block; }
+  .deck-scroll[data-density='rows'] .fleet-cards,
+  .deck-scroll[data-density='rows'] .needs-lane,
+  .deck-scroll[data-density='rows'] .nh-needs,
+  .deck-scroll[data-density='rows'] .settled-wrap { display: none; }
+  .rows-box { border: 1px solid var(--edge); border-radius: 13px; overflow: hidden; background: var(--glass-1); }
+  .rhead {
+    display: flex; align-items: center; gap: 9px; padding: 7px 14px 5px;
+    font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.15em; text-transform: uppercase; color: var(--fg-faint);
+  }
+  .rhead.attn { color: var(--amber); }
+  .rhead .line { flex: 1; height: 1px; background: var(--edge); }
+  .rrow {
+    display: grid;
+    grid-template-columns: 24px minmax(200px, 1.1fr) 92px 118px minmax(170px, 1fr) 62px 84px 46px 128px;
+    gap: 9px; align-items: center;
+    padding: 0 14px; height: 31px; font-size: 11.5px;
+    border-left: 2px solid transparent; cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .rrow:hover { background: var(--glass-2); }
+  .rrow.kb { background: var(--glass-2); border-left-color: var(--aura-a); }
+  .rrow.checked { background: rgba(110, 231, 242, 0.06); }
+  .rrow.settled { opacity: 0.5; }
+  .cbox { width: 12px; height: 12px; border-radius: 3.5px; border: 1px solid var(--edge-lit); display: inline-flex; align-items: center; justify-content: center; font-size: 8px; color: transparent; }
+  .rrow.checked .cbox { background: var(--aura-a); border-color: var(--aura-a); color: #08131a; }
+  .r-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .lamp { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .lamp.run { background: var(--green); box-shadow: 0 0 7px rgba(95,227,161,0.6); animation: pulse 2.4s infinite; }
+  .lamp.attn { background: var(--amber); box-shadow: 0 0 8px rgba(238,191,109,0.7); animation: pulse 1.7s infinite; }
+  .lamp.done { background: var(--fg-faint); }
+  .lamp.fail { background: var(--red); }
+  .r-title .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r-proj, .r-branch { font-family: var(--mono); font-size: 9.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r-branch { color: var(--fg-faint); } .r-branch.wt { color: var(--aura-b); }
+  .r-act { font-family: var(--mono); font-size: 9.5px; color: var(--aura-a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r-act .v { color: var(--fg-faint); }
+  .r-act.attn { color: var(--amber); }
+  .r-act.idle { color: var(--fg-faint); }
+  .r-gates { display: flex; gap: 3px; }
+  .gseg { width: 14px; height: 4px; border-radius: 2px; background: var(--edge-lit); }
+  .gseg.done { background: var(--green); opacity: 0.8; }
+  .gseg.now { background: var(--aura-a); animation: pulse 1.6s infinite; }
+  .gseg.wait { background: var(--amber); animation: pulse 1.2s infinite; }
+  .gseg.fail { background: var(--red); }
+  .r-diff { font-family: var(--mono); font-size: 9.5px; text-align: right; white-space: nowrap; }
+  .r-diff.none { color: var(--fg-faint); }
+  .r-time { font-family: var(--mono); font-size: 9.5px; color: var(--fg-faint); text-align: right; }
+  .r-keys { display: flex; gap: 4px; justify-content: flex-end; }
+  .kact { font-family: var(--mono); font-size: 8.5px; color: var(--fg-faint); border: 1px solid var(--edge); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+  .kact.hot { color: var(--amber); border-color: rgba(238,191,109,0.4); }
+  .rows-bulk {
+    display: flex; align-items: center; gap: 9px;
+    padding: 8px 14px; border-top: 1px solid var(--edge);
+    background: rgba(110, 231, 242, 0.04);
+  }
+  .rows-bulk .n { font-family: var(--mono); font-size: 10px; color: var(--aura-a); }
+  .rows-bulk .bbtn { padding: 4px 11px; border-radius: 7px; font-size: 11px; cursor: pointer; border: 1px solid var(--edge-lit); background: var(--glass-2); color: var(--fg); }
+  .rows-bulk .bbtn.primary { background: var(--amber); border-color: var(--amber); color: #171106; font-weight: 600; }
+  .rows-bulk .hint { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--fg-faint); }
+
+  /* 发射台 */
+  .launchpad { padding: 11px 26px 13px; border-top: 1px solid var(--edge); backdrop-filter: blur(10px); }
+  .pad-box {
+    display: flex; flex-direction: column; gap: 9px;
+    background: var(--glass-2); border: 1px solid var(--edge-lit); border-radius: 13px; padding: 11px 13px 10px;
+  }
+  .pad-box:focus-within { border-color: rgba(110,231,242,0.45); box-shadow: 0 0 0 1px rgba(110,231,242,0.18), 0 0 40px rgba(110,231,242,0.07); }
+  .pad-box input { flex: 1; background: transparent; border: none; outline: none; font-family: var(--serif); font-size: 14.5px; color: var(--fg); }
+  .pad-box input::placeholder { color: var(--fg-faint); }
+  .pad-meta { display: flex; align-items: center; gap: 7px; }
+  .pad-meta .spacer { flex: 1; }
+  .launch {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5.5px 15px; border-radius: 8px; border: none; cursor: pointer;
+    background: linear-gradient(135deg, var(--aura-a), var(--aura-b)); color: #060911; font-weight: 650; font-size: 12px;
+    box-shadow: 0 4px 20px rgba(110,231,242,0.22);
+  }
+
+  /* ===== Room 场景 ===== */
+  .scene-room {
+    grid-template-rows: 1fr auto;
+    grid-template-columns: minmax(440px, 47%) 1fr;
+    grid-template-areas: "convo canvas" "reel reel";
+    gap: 9px;
+  }
+  .convo { grid-area: convo; display: flex; flex-direction: column; min-height: 0; }
+  .timeline { flex: 1; overflow-y: auto; padding: 18px 20px 8px; }
+  .timeline::-webkit-scrollbar { width: 7px; }
+  .timeline::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+  .timeline [data-t].dimmed { opacity: 0.22; filter: saturate(0.4); }
+  .ms { display: flex; align-items: center; gap: 10px; margin: 12px 0 10px; color: var(--fg-faint); font-size: 10.5px; }
+  .ms::before, .ms::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--edge), transparent); }
+  .ms .ok { color: var(--green); } .ms .bad { color: var(--red); }
+  .you {
+    margin: 8px 0 12px auto; width: fit-content; max-width: 82%;
+    padding: 10px 13px; border-radius: 13px 13px 4px 13px;
+    background: var(--glass-3); border: 1px solid var(--edge-lit); font-size: 12.5px; line-height: 1.55;
+  }
+  .you .who { font-size: 9px; letter-spacing: 0.14em; color: var(--fg-faint); margin-bottom: 3px; }
+  .agent { margin: 4px 0 10px; max-width: 94%; font-size: 12.5px; line-height: 1.6; }
+  .agent .who {
+    font-size: 9px; letter-spacing: 0.14em; margin-bottom: 4px; font-weight: 600;
+    background: linear-gradient(90deg, var(--aura-a), var(--aura-b));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .agent .dim { color: var(--fg-muted); }
+  .plan-card { margin: 4px 0 12px; padding: 11px 14px; max-width: 94%; background: var(--glass-1); border: 1px solid var(--edge); border-radius: 12px; }
+  .plan-card .head { display: flex; gap: 9px; align-items: center; margin-bottom: 7px; font-family: var(--serif); font-size: 13px; }
+  .plan-card .head .ok { margin-left: auto; font-size: 10px; color: var(--green); }
+  .plan-card ol { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .plan-card li { display: flex; gap: 9px; font-size: 11.5px; color: var(--fg-muted); }
+  .plan-card li b { width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--edge-lit); font-family: var(--mono); font-size: 8.5px; font-weight: 400; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+  .plan-card li.done b { border-color: var(--green); color: var(--green); }
+  .plan-card li.now { color: var(--fg); }
+  .plan-card li.now b { border-color: var(--aura-a); color: var(--aura-a); }
+  .trow {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin: 2px 0; max-width: 94%;
+    border-radius: 9px; font-family: var(--mono); font-size: 10.5px; color: var(--fg-muted); border: 1px solid transparent;
+  }
+  .trow:hover { background: var(--glass-1); border-color: var(--edge); }
+  .trow .verb { color: var(--fg-faint); width: 38px; flex-shrink: 0; }
+  .trow .target { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .trow .ok { color: var(--green); } .trow .fail { color: var(--red); }
+  .trow.active { background: var(--glass-1); border-color: rgba(110, 231, 242, 0.28); color: var(--fg); position: relative; overflow: hidden; }
+  .trow.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1.5px; background: linear-gradient(90deg, transparent, var(--aura-a), transparent); animation: beam 1.7s ease-in-out infinite; }
+  @keyframes beam { 0% { transform: translateX(-55%); } 100% { transform: translateX(55%); } }
+  .spin { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid rgba(110,231,242,0.25); border-top-color: var(--aura-a); animation: rot 1s linear infinite; flex-shrink: 0; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .composer { padding: 10px 14px 12px; }
+  .comp-box { background: var(--glass-2); border: 1px solid var(--edge-lit); border-radius: 13px; padding: 10px 12px 8px; }
+  .comp-box:focus-within { border-color: rgba(110, 231, 242, 0.45); }
+  .comp-box input { width: 100%; background: transparent; border: none; outline: none; color: var(--fg); font-size: 12.5px; }
+  .comp-box input::placeholder { color: var(--fg-faint); }
+  .comp-meta { display: flex; align-items: center; gap: 7px; margin-top: 8px; }
+  .ref-chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 9.5px; padding: 2.5px 8px; border-radius: 7px; background: var(--glass-1); border: 1px solid var(--edge); color: var(--fg-muted); }
+  .comp-meta .spacer { flex: 1; }
+  .send { width: 27px; height: 27px; border-radius: 8px; border: none; cursor: pointer; background: linear-gradient(135deg, var(--aura-a), var(--aura-b)); color: #06070c; display: inline-flex; align-items: center; justify-content: center; }
+
+  .canvas { grid-area: canvas; display: flex; flex-direction: column; min-height: 0; }
+  .canvas-tabs { display: flex; gap: 4px; padding: 9px 11px 0; }
+  .ctab { padding: 5px 12px; border-radius: 8px 8px 0 0; font-size: 11px; color: var(--fg-muted); cursor: pointer; border: 1px solid transparent; border-bottom: none; }
+  .ctab.on { background: var(--glass-2); color: var(--fg); border-color: var(--edge); }
+  .ctab .n { font-family: var(--mono); font-size: 9px; color: var(--aura-a); margin-left: 4px; }
+  .canvas-head {
+    margin: 0 11px; padding: 8px 11px; display: flex; align-items: center; gap: 9px;
+    background: var(--glass-2); border: 1px solid var(--edge); border-bottom: none; border-top-right-radius: 11px;
+  }
+  .canvas-head .path { font-family: var(--mono); font-size: 10px; color: var(--fg); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .canvas-head .stat { font-family: var(--mono); font-size: 10px; }
+  .following { display: inline-flex; align-items: center; gap: 5px; font-size: 9px; color: var(--aura-a); padding: 2px 8px; border-radius: 11px; border: 1px solid rgba(110,231,242,0.3); background: rgba(110,231,242,0.06); }
+  .following i { width: 5px; height: 5px; border-radius: 50%; background: var(--aura-a); box-shadow: 0 0 7px var(--aura-a); animation: pulse 1.4s infinite; }
+  .diff-body {
+    flex: 1; margin: 0 11px 11px; overflow-y: auto;
+    background: rgba(0, 0, 0, 0.42); border: 1px solid var(--edge); border-top: none;
+    border-radius: 0 0 11px 11px;
+    font-family: var(--mono); font-size: 11px; line-height: 1.75; padding: 8px 0;
+  }
+  .diff-body::-webkit-scrollbar { width: 7px; }
+  .diff-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.09); border-radius: 4px; }
+  .dl { display: flex; white-space: pre; }
+  .dl .no { width: 42px; flex-shrink: 0; text-align: right; padding-right: 11px; color: var(--fg-faint); font-size: 9.5px; line-height: 2; user-select: none; }
+  .dl .code { flex: 1; color: #c6cad6; }
+  .dl.ctx .code { color: #7d8290; }
+  .dl.add { background: rgba(95, 227, 161, 0.08); } .dl.add .code { color: #b9edd2; }
+  .dl.del { background: rgba(240, 113, 106, 0.07); } .dl.del .code { color: #edb0ac; }
+  .dl.hunk { color: var(--aura-a); padding: 5px 13px 3px; font-size: 9.5px; opacity: 0.75; }
+  .dl.fresh { position: relative; }
+  .dl.fresh::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(110,231,242,0.11), transparent); animation: freshSweep 2.4s ease-out infinite; }
+  @keyframes freshSweep { 0% { transform: translateX(-100%); } 60%,100% { transform: translateX(100%); } }
+
+  /* ---- mini reel（D 的缩略版：细带 → hover 升起 → 可拖动） ---- */
+  .reel {
+    grid-area: reel;
+    background: var(--glass-1); border: 1px solid var(--edge); border-radius: 13px;
+    backdrop-filter: blur(18px);
+    padding: 7px 14px 8px;
+    transition: padding 0.22s ease;
+    user-select: none; position: relative;
+  }
+  .reel .meta {
+    display: flex; align-items: center; gap: 12px;
+    font-family: var(--mono); font-size: 9px; color: var(--fg-faint);
+    margin-bottom: 6px;
+  }
+  .reel .meta .rec { display: inline-flex; align-items: center; gap: 5px; color: var(--fg-muted); }
+  .reel .meta .rec i { width: 5px; height: 5px; border-radius: 50%; background: var(--red); animation: pulse 1.4s infinite; }
+  .reel .meta .cursor-t { color: var(--amber); min-width: 108px; }
+  .reel .meta .cursor-t.live { color: var(--green); }
+  .reel .meta .expand { margin-left: auto; letter-spacing: 0.05em; }
+  .reel .meta .expand b { color: var(--fg-muted); font-weight: 500; }
+  .rtrack { position: relative; height: 12px; cursor: crosshair; transition: height 0.22s ease; }
+  .reel:hover .rtrack { height: 44px; }
+  .rchapters { position: absolute; inset: 0 0 auto; height: 100%; display: flex; border-radius: 4px; overflow: hidden; transition: height 0.22s ease; }
+  .reel:hover .rchapters { height: 12px; }
+  .rchapter { height: 100%; opacity: 0.4; }
+  .rchapter.plan { background: var(--amber); }
+  .rchapter.work { background: var(--aura-a); }
+  .rchapter.crisis { background: var(--red); }
+  .rchapter.verify { background: var(--green); }
+  .rticks { position: absolute; left: 0; right: 0; top: 17px; height: 16px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .reel:hover .rticks { opacity: 1; }
+  .rtick { position: absolute; bottom: 0; width: 2px; border-radius: 1px; background: var(--fg-faint); }
+  .rtick.edit { background: var(--aura-a); } .rtick.run { background: var(--green); }
+  .rtick.fail { background: var(--red); } .rtick.gate { background: var(--amber); width: 3px; }
+  .rflags { position: absolute; left: 0; right: 0; top: 35px; height: 10px; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  .reel:hover .rflags { opacity: 1; }
+  .rflag { position: absolute; transform: translateX(-50%); font-family: var(--mono); font-size: 7.5px; color: var(--fg-faint); white-space: nowrap; }
+  .rflag.g { color: var(--green); } .rflag.r { color: var(--red); } .rflag.a { color: var(--amber); }
+  .rplayhead {
+    position: absolute; top: -3px; bottom: -1px; width: 2px;
+    background: var(--amber); border-radius: 1px;
+    box-shadow: 0 0 12px rgba(238, 191, 109, 0.55); pointer-events: none; z-index: 3;
+  }
+  .rplayhead::before { content: ""; position: absolute; top: -4px; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: var(--amber); }
+  .rlive-end { position: absolute; right: 0; top: -1px; bottom: 0; width: 3px; background: var(--green); opacity: 0.6; border-radius: 2px; }
+  .jump-live {
+    display: none; position: absolute; right: 12px; top: -34px;
+    padding: 4px 11px; border-radius: 7px; border: none; cursor: pointer;
+    background: var(--amber); color: #1a1206; font-weight: 650; font-size: 10.5px;
+    box-shadow: 0 3px 16px rgba(238, 191, 109, 0.3); z-index: 5;
+  }
+  .jump-live.show { display: block; }
+
+  /* ---------- 注解（默认收起为胶囊，点击展开） ---------- */
+  .annot-pill {
+    position: fixed; right: 17px; top: 56px; z-index: 91;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 13px; border-radius: 20px; cursor: pointer;
+    background: rgba(10, 12, 18, 0.9); border: 1px solid var(--edge-lit);
+    backdrop-filter: blur(14px);
+    font-size: 10.5px; color: var(--aura-a);
+    box-shadow: 0 10px 34px rgba(0,0,0,0.5);
+  }
+  .annot-pill:hover { border-color: rgba(110, 231, 242, 0.4); }
+  .annot {
+    display: none;
+    position: fixed; right: 17px; top: 92px; z-index: 90;
+    max-width: 372px; padding: 11px 14px;
+    background: rgba(10, 12, 18, 0.94); border: 1px solid var(--edge-lit);
+    border-radius: 12px; backdrop-filter: blur(16px);
+    font-size: 11.5px; line-height: 1.62; color: var(--fg-muted);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .annot.open { display: block; }
+  .annot b { background: linear-gradient(90deg, var(--aura-a), var(--aura-b)); -webkit-background-clip: text; background-clip: text; color: transparent; font-weight: 600; }
+  .annot .x { position: absolute; top: 6px; right: 9px; cursor: pointer; color: var(--fg-faint); font-size: 13px; background: none; border: none; }
+  .annot .x:hover { color: var(--fg); }
+  .annot .hl { color: var(--amber); }
+</style>
+</head>
+<body data-scene="home">
+<div class="aurora"><i></i><i></i></div>
+
+<div class="app">
+  <!-- Titlebar -->
+  <header class="titlebar">
+    <div class="traffic"><i></i><i></i><i></i></div>
+    <span class="tb-brand">Charter</span>
+    <div class="tb-ctx" id="tb-ctx-home">
+      <b>Home</b>
+    </div>
+    <div class="tb-ctx" id="tb-ctx-deck" style="display:none">
+      <b>Deck</b><span class="sep">—</span><span>all projects · 3 running · 2 need you</span>
+    </div>
+    <div class="tb-ctx" id="tb-ctx-room" style="display:none">
+      <span>desktop-app</span><span class="sep">/</span><b>Migrate settings storage to SQLite</b>
+      <span class="k">⎇ ws/settings-sqlite</span>
+    </div>
+    <span class="state-chip"><span class="pulse"></span>Verifying — npm run check</span>
+    <div class="tb-right">
+      <button class="gbtn deck-only" id="new-session">＋ New session</button>
+      <button class="gbtn room-only">Peek changes</button>
+      <button class="gbtn lit room-only">Open review</button>
+      <button class="gbtn">⌘E</button>
+    </div>
+  </header>
+
+  <!-- Activity 列：Home（主页=Chat 输入）与新增 Deck 并列，其余四个入口原样 -->
+  <nav class="activity pane">
+    <div class="act-brand" id="act-brand">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 21V4l7 4 9-5v13l-9 5-7-4Z"/></svg>
+    </div>
+    <div class="act-item active" id="act-home" title="Home — start a session">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m3 11 9-8 9 8"/><path d="M5 9v11h14V9"/></svg>
+    </div>
+    <div class="act-item is-new" id="act-deck" title="Deck — fleet situation (new)">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 12 17 7"/><path d="M12 3v2M21 12h-2M12 21v-2M3 12h2"/></svg>
+    </div>
+    <div class="act-item" id="act-sessions" title="Sessions">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m5 7 5 5-5 5M12 19h7"/></svg>
+    </div>
+    <div class="act-item" title="Needs attention">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5 6h14l2 7v6H3v-6l2-7Z"/></svg>
+      <span class="badge">2</span>
+    </div>
+    <div class="act-item" title="Projects">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+    </div>
+    <div class="act-item" title="Search everything · ⌘K">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    </div>
+    <span class="act-spacer"></span>
+    <div class="act-item" title="Editor · ⌘E">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M3 9h6"/></svg>
+    </div>
+    <div class="act-item" title="Settings">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 8h10M18 8h2M4 16h2M10 16h10"/><circle cx="15" cy="8" r="2"/><circle cx="7" cy="16" r="2"/></svg>
+    </div>
+  </nav>
+
+  <!-- Rail：现有 Sessions 面板，密度零新增 -->
+  <aside class="rail pane">
+    <div class="rail-head">
+      <span class="rail-tab on">Sessions</span>
+      <span class="rail-tab">Files</span>
+      <span class="k">⌘K</span>
+    </div>
+    <div class="needs"><i></i><b>Needs you</b><span>2</span></div>
+    <div class="rail-scroll">
+      <div class="rg-head">desktop-app<span class="cnt">4</span></div>
+      <div class="srow live" data-open-room style="--hue:#6ee7f2">
+        <div class="name">Migrate settings storage to SQLite</div>
+        <div class="sub">verify · npm run check</div>
+      </div>
+      <div class="srow" style="--hue:#eebf6d">
+        <div class="name">Rework onboarding trust prompt copy</div>
+        <div class="sub">plan awaits approval · 21s</div>
+      </div>
+      <div class="srow live" style="--hue:#8b7cf6">
+        <div class="name">Chase flaky external-cli e2e retry</div>
+        <div class="sub">e2e · 9/24 passed</div>
+      </div>
+      <div class="srow" style="--hue:#5fe3a1">
+        <div class="name">Terminal env fallback for zsh users</div>
+        <div class="sub">answered · no changes</div>
+      </div>
+      <div class="rg-head">charter-site<span class="cnt">2</span></div>
+      <div class="srow" style="--hue:#eebf6d">
+        <div class="name">Bundle terminal env fallback fix</div>
+        <div class="sub">review ready · +214 −89</div>
+      </div>
+      <div class="srow live" style="--hue:#f2a3d8">
+        <div class="name">Ship pricing page with annual toggle</div>
+        <div class="sub">write · pricing.astro</div>
+      </div>
+      <div class="rg-head">History<span class="cnt">31</span></div>
+      <div class="srow" style="--hue:#4d515e">
+        <div class="name">Harden IPC schema for task events</div>
+        <div class="sub">accepted · 2h ago</div>
+      </div>
+    </div>
+    <div class="rail-foot">Working in <b>desktop-app</b></div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main">
+
+    <!-- ===== Home 场景：主页就是 Chat 输入，保持现状 ===== -->
+    <section class="scene scene-home pane">
+      <h1 class="home-title">What should we build?</h1>
+      <div class="home-box">
+        <input placeholder="Describe the change — Charter plans, works, verifies, then asks you to review." />
+        <div class="home-meta">
+          <span class="chip">desktop-app · main</span>
+          <span class="chip">Approve changes</span>
+          <span class="chip">claude-fable-5</span>
+          <span class="chip">Advanced ⌄</span>
+          <span class="spacer"></span>
+          <button class="home-launch">Launch</button>
+        </div>
+      </div>
+      <div class="home-glance" data-goto-deck title="Open Deck">
+        <span class="lamp-g run"></span>3 running
+        <span class="lamp-g attn"></span>2 need you
+        <span class="go">Open Deck →</span>
+      </div>
+      <div class="home-hint">主页保持安静 — 督战在 Deck，回看在 Room · <kbd>⌘K</kbd> anywhere</div>
+    </section>
+
+    <!-- ===== Deck 场景（纯监控，无输入框） ===== -->
+    <section class="scene scene-deck pane">
+      <div class="deck-scroll" id="deck-scroll" data-density="cards">
+
+        <div class="situation">
+          <div class="gauge live"><div class="k">Running</div><div class="v">3</div></div>
+          <div class="gauge hot"><div class="k">Needs you</div><div class="v">2</div></div>
+          <div class="gauge good"><div class="k">Verified today</div><div class="v">14</div></div>
+          <div class="gauge"><div class="k">Files in flight</div><div class="v" id="g-files">27</div></div>
+          <div class="gauge"><div class="k">Accepted / wk</div><div class="v">31<em>/ 33</em></div></div>
+          <div class="oscillo">
+            <div class="k">Fleet activity <b>events / min</b></div>
+            <div class="wave" id="wave"></div>
+          </div>
+        </div>
+
+        <div class="zone-head nh-needs">
+          <h2>Needs you</h2><span class="rule"></span>
+          <span class="meta">DECISIONS BLOCK THE FLEET</span>
+        </div>
+        <section class="needs-lane">
+          <article class="ncard">
+            <div class="tag"><i></i>Plan awaiting approval · 21s</div>
+            <h3>Rework onboarding trust prompt copy</h3>
+            <div class="proj">desktop-app · main</div>
+            <ul class="steps">
+              <li><b>1</b>Inventory every trust-prompt string in first-run flows</li>
+              <li><b>2</b>Rewrite to the humane-language dictionary</li>
+              <li><b>3</b>Update e2e assertions and copy snapshots</li>
+            </ul>
+            <div class="acts">
+              <button class="btn primary">Approve plan</button>
+              <button class="btn">Edit plan</button>
+              <button class="btn ghost">Cancel</button>
+            </div>
+          </article>
+          <article class="ncard">
+            <div class="tag"><i></i>Review ready · all checks passed</div>
+            <h3>Bundle terminal env fallback fix</h3>
+            <div class="proj">charter-site · worktree ws/env-fallback</div>
+            <div class="diffstat"><span class="add">+214</span> <span class="del">−89</span> · 12 files</div>
+            <div class="checkrow"><span class="ok">check</span><span class="ok">test</span><span class="ok">e2e external-cli</span></div>
+            <div class="acts">
+              <button class="btn primary">Open review</button>
+              <button class="btn">Peek changes</button>
+              <button class="btn ghost">Rollback</button>
+            </div>
+          </article>
+        </section>
+
+        <div class="zone-head">
+          <h2>Fleet</h2><span class="rule"></span>
+          <div class="density" id="density">
+            <button class="on" data-mode="cards">▦ Cards</button>
+            <button data-mode="rows">☰ Rows</button>
+          </div>
+        </div>
+
+        <!-- Cards 密度 -->
+        <section class="fleet-cards">
+          <article class="fcard">
+            <div class="top"><span class="chip">desktop-app</span><span class="chip wt">⎇ ws/settings-sqlite</span><span class="elapsed">12m 34s</span></div>
+            <h3>Migrate settings storage to SQLite</h3>
+            <div class="action-line"><span class="verb">edit</span><span class="t" id="act-1">apps/desktop-main/src/services/settings-store.ts</span><span class="caret"></span></div>
+            <div class="gates"><span class="gate done"><i></i>Plan</span><span class="gate-link"></span><span class="gate done"><i></i>Perms · 2</span><span class="gate-link"></span><span class="gate active"><i></i>Verify</span></div>
+            <div class="verify"><span>npm run check</span><div class="vbar"><i></i></div><span>running</span></div>
+          </article>
+          <article class="fcard">
+            <div class="top"><span class="chip">charter-site</span><span class="elapsed">4m 03s</span></div>
+            <h3>Ship pricing page with annual toggle</h3>
+            <div class="action-line"><span class="verb">write</span><span class="t" id="act-2">src/pages/pricing.astro</span><span class="caret"></span></div>
+            <div class="gates"><span class="gate done"><i></i>Plan</span><span class="gate-link"></span><span class="gate active"><i></i>Working</span><span class="gate-link"></span><span class="gate"><i></i>Verify</span></div>
+            <div class="verify"><span>verification armed</span><div class="vbar det"><i style="width:0"></i></div><span>—</span></div>
+          </article>
+          <article class="fcard">
+            <div class="top"><span class="chip">desktop-app</span><span class="elapsed">18m 42s</span></div>
+            <h3>Chase flaky external-cli e2e retry</h3>
+            <div class="action-line"><span class="verb">run</span><span class="t" id="act-3">npm run test:e2e — external-cli.spec.ts</span><span class="caret"></span></div>
+            <div class="gates"><span class="gate done"><i></i>Plan</span><span class="gate-link"></span><span class="gate done"><i></i>Perms · 1</span><span class="gate-link"></span><span class="gate active"><i></i>Verify</span></div>
+            <div class="verify"><span>test:e2e</span><div class="vbar det"><i style="width:38%"></i></div><span>9/24</span></div>
+          </article>
+        </section>
+
+        <div class="settled-wrap">
+          <div class="zone-head">
+            <h2>Settled today</h2><span class="rule"></span>
+            <span class="meta">EVERY LANDING VERIFIED</span>
+          </div>
+          <section class="settled-strip">
+            <div class="settled-item"><span class="s-lamp ok"></span><div class="s-copy"><b>Harden IPC schema for task events</b><span>desktop-app · accepted 14:22</span></div><span class="s-diff"><span class="add">+96</span> <span class="del">−31</span></span></div>
+            <div class="settled-item"><span class="s-lamp ok"></span><div class="s-copy"><b>Dedupe review comment threads</b><span>charter-site · accepted 09:47</span></div><span class="s-diff"><span class="add">+42</span> <span class="del">−58</span></span></div>
+            <div class="settled-item"><span class="s-lamp"></span><div class="s-copy"><b>Answer: why zsh drops PATH</b><span>desktop-app · answered 09:12</span></div><span class="s-diff none">no changes</span></div>
+            <div class="settled-item"><span class="s-lamp bad"></span><div class="s-copy"><b>Probe: Electron 33 upgrade</b><span>rolled back · main untouched</span></div><span class="s-diff none">discarded</span></div>
+          </section>
+        </div>
+
+        <!-- Rows 密度（E 收进 Deck） -->
+        <section class="fleet-rows">
+          <div class="rows-box">
+            <div class="rhead attn"><span>Needs you</span><span class="line"></span><span>3</span></div>
+            <div class="rrow checked">
+              <span><span class="cbox">✓</span></span>
+              <span class="r-title"><span class="lamp attn"></span><span class="t">Rework onboarding trust prompt copy</span></span>
+              <span class="r-proj">desktop-app</span><span class="r-branch">main</span>
+              <span class="r-act attn">plan awaits approval — 3 steps · 21s</span>
+              <span class="r-gates"><span class="gseg wait"></span><span class="gseg"></span><span class="gseg"></span></span>
+              <span class="r-diff none">—</span><span class="r-time">0:21</span>
+              <span class="r-keys"><span class="kact hot">a approve</span><span class="kact">e edit</span></span>
+            </div>
+            <div class="rrow checked kb">
+              <span><span class="cbox">✓</span></span>
+              <span class="r-title"><span class="lamp attn"></span><span class="t">Grant: npm run db:migrate on staging</span></span>
+              <span class="r-proj">api-gateway</span><span class="r-branch wt">⎇ ws/db-migrate</span>
+              <span class="r-act attn">permission requested — outside sandbox</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg wait"></span><span class="gseg"></span></span>
+              <span class="r-diff"><span class="add">+38</span> <span class="del">−4</span></span><span class="r-time">2:04</span>
+              <span class="r-keys"><span class="kact hot">g grant</span><span class="kact">d deny</span></span>
+            </div>
+            <div class="rrow">
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp attn"></span><span class="t">Bundle terminal env fallback fix</span></span>
+              <span class="r-proj">charter-site</span><span class="r-branch wt">⎇ ws/env-fallback</span>
+              <span class="r-act attn">review ready — all checks passed</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg wait"></span></span>
+              <span class="r-diff"><span class="add">+214</span> <span class="del">−89</span></span><span class="r-time">31:40</span>
+              <span class="r-keys"><span class="kact hot">r review</span><span class="kact">p peek</span></span>
+            </div>
+            <div class="rhead"><span>Running</span><span class="line"></span><span>3</span></div>
+            <div class="rrow" data-open-room>
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp run"></span><span class="t">Migrate settings storage to SQLite</span></span>
+              <span class="r-proj">desktop-app</span><span class="r-branch wt">⎇ ws/settings-sqlite</span>
+              <span class="r-act"><span class="v">verify</span> npm run check · 41s</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+              <span class="r-diff"><span class="add">+96</span> <span class="del">−12</span></span><span class="r-time">12:34</span>
+              <span class="r-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="rrow">
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp run"></span><span class="t">Ship pricing page with annual toggle</span></span>
+              <span class="r-proj">charter-site</span><span class="r-branch">main</span>
+              <span class="r-act"><span class="v">write</span> src/pages/pricing.astro</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg now"></span><span class="gseg"></span></span>
+              <span class="r-diff"><span class="add">+152</span> <span class="del">−9</span></span><span class="r-time">4:03</span>
+              <span class="r-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="rrow">
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp run"></span><span class="t">Chase flaky external-cli e2e retry</span></span>
+              <span class="r-proj">desktop-app</span><span class="r-branch">main</span>
+              <span class="r-act"><span class="v">run</span> test:e2e · 9/24 passed</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg now"></span></span>
+              <span class="r-diff"><span class="add">+31</span> <span class="del">−17</span></span><span class="r-time">18:42</span>
+              <span class="r-keys"><span class="kact">⏎ open</span><span class="kact">s steer</span></span>
+            </div>
+            <div class="rhead"><span>Settled</span><span class="line"></span><span>4 today</span></div>
+            <div class="rrow settled">
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp done"></span><span class="t">Harden IPC schema for task events</span></span>
+              <span class="r-proj">desktop-app</span><span class="r-branch">main</span>
+              <span class="r-act idle">accepted · merged clean</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg done"></span></span>
+              <span class="r-diff"><span class="add">+96</span> <span class="del">−31</span></span><span class="r-time">2h</span>
+              <span class="r-keys"><span class="kact">⏎ replay</span></span>
+            </div>
+            <div class="rrow settled">
+              <span><span class="cbox"></span></span>
+              <span class="r-title"><span class="lamp fail"></span><span class="t">Probe: Electron 33 upgrade (rolled back)</span></span>
+              <span class="r-proj">desktop-app</span><span class="r-branch wt">⎇ ws/electron-33</span>
+              <span class="r-act idle">rolled back · main untouched</span>
+              <span class="r-gates"><span class="gseg done"></span><span class="gseg done"></span><span class="gseg fail"></span></span>
+              <span class="r-diff none">—</span><span class="r-time">1d</span>
+              <span class="r-keys"><span class="kact">⏎ replay</span></span>
+            </div>
+            <div class="rows-bulk">
+              <span class="n">2 selected</span>
+              <button class="bbtn primary">Resolve both ⏎</button>
+              <button class="bbtn">Approve plan · a</button>
+              <button class="bbtn">Grant once · g</button>
+              <span class="hint">j/k navigate · x select · esc clear</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Deck 是纯监控页：发起会话回 Home（titlebar ＋ New session），这里没有输入框 -->
+    </section>
+
+    <!-- ===== Room 场景 ===== -->
+    <section class="scene scene-room">
+      <div class="convo pane">
+        <div class="timeline" id="timeline">
+          <div class="ms" data-t="0"><span class="ok">✓</span> Plan approved · 14:02</div>
+          <div class="you" data-t="0">
+            <div class="who">YOU</div>
+            Move settings persistence off scattered JSON files onto SQLite. Keep migration transparent.
+          </div>
+          <div class="plan-card" data-t="18">
+            <div class="head">Plan — 4 steps <span class="ok">✓ approved</span></div>
+            <ol>
+              <li class="done"><b>✓</b>settings-store.ts with versioned SQLite schema, WAL mode</li>
+              <li class="done"><b>✓</b>One-shot migration from legacy JSON + snapshot</li>
+              <li class="now"><b>3</b>Swap readers/writers behind the IPC contract</li>
+              <li><b>4</b>Verification — check, unit suite, settings e2e</li>
+            </ol>
+          </div>
+          <div class="trow" data-t="150"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+58</span> <span class="del">−0</span></span></div>
+          <div class="trow" data-t="230"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-migration.ts</span><span><span class="add">+64</span> <span class="del">−0</span></span></div>
+          <div class="agent" data-t="290">
+            <div class="who">CHARTER</div>
+            Legacy files already carry a <span class="dim">schemaVersion</span> field — keying the migration off it, snapshot beside the database.
+          </div>
+          <div class="trow" data-t="572"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="fail">✗ 2 failed</span></div>
+          <div class="ms" data-t="574"><span class="bad">✗</span> Tests failed — journal table · 14:11</div>
+          <div class="trow" data-t="640"><span class="verb">edit</span><span class="target">apps/desktop-main/src/services/settings-store.ts</span><span><span class="add">+9</span> <span class="del">−4</span></span></div>
+          <div class="trow" data-t="700"><span class="verb">run</span><span class="target">npm run test — settings-store.test.ts</span><span class="ok">✓ 18 passed</span></div>
+          <div class="ms" data-t="702"><span class="ok">✓</span> Steps 1–3 landed · +182 −54 · 6 files</div>
+          <div class="agent" data-t="720">
+            <div class="who">CHARTER</div>
+            Readers and writers are swapped. Starting full verification now.
+          </div>
+          <div class="trow active" data-t="740"><span class="spin"></span><span class="verb">run</span><span class="target">npm run check</span><span id="check-s">41s</span></div>
+        </div>
+        <div class="composer">
+          <div class="comp-box">
+            <input placeholder="Reply — steer, ask, or add context…" />
+            <div class="comp-meta">
+              <span class="ref-chip">⌘ settings-store.ts ✕</span>
+              <span class="ref-chip">@ attach</span>
+              <span class="spacer"></span>
+              <button class="send"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="canvas pane">
+        <div class="canvas-tabs">
+          <span class="ctab">Summary</span>
+          <span class="ctab on">Changes <span class="n">6</span></span>
+          <span class="ctab">Preview</span>
+          <span class="ctab">Terminal</span>
+          <span class="ctab">Review</span>
+        </div>
+        <div class="canvas-head">
+          <span class="path">apps/desktop-main/src/services/settings-store.ts</span>
+          <span class="stat"><span class="add">+96</span> <span class="del">−12</span></span>
+          <span class="following" id="follow-badge"><i></i>live following</span>
+        </div>
+        <div class="diff-body">
+          <div class="dl hunk">@@ -1,9 +1,14 @@ bootstrap precedes prepare()</div>
+          <div class="dl ctx"><span class="no">5</span><span class="code">const DB_FILE = 'charter-settings.db'</span></div>
+          <div class="dl add"><span class="no">6</span><span class="code">const db = new Database(join(app.getPath('userData'), DB_FILE))</span></div>
+          <div class="dl add"><span class="no">7</span><span class="code">db.pragma('journal_mode = WAL')</span></div>
+          <div class="dl add"><span class="no">8</span><span class="code">bootstrapSchema(db) // tables exist before any prepare()</span></div>
+          <div class="dl add"><span class="no">9</span><span class="code">const readStmt = db.prepare('SELECT payload FROM settings WHERE scope = ?')</span></div>
+          <div class="dl ctx"><span class="no">10</span><span class="code"></span></div>
+          <div class="dl hunk">@@ -18,11 +23,19 @@ read path</div>
+          <div class="dl ctx"><span class="no">23</span><span class="code">export function readSettings(scope: SettingsScope): SettingsShape {</span></div>
+          <div class="dl del"><span class="no">24</span><span class="code">  const raw = await fs.readFile(settingsPath, 'utf8')</span></div>
+          <div class="dl del"><span class="no">25</span><span class="code">  return JSON.parse(raw) as SettingsShape</span></div>
+          <div class="dl add"><span class="no">24</span><span class="code">  const row = readStmt.get(scope)</span></div>
+          <div class="dl add"><span class="no">25</span><span class="code">  if (!row) return defaultsFor(scope)</span></div>
+          <div class="dl add"><span class="no">26</span><span class="code">  return migrate(JSON.parse(row.payload), CURRENT_SCHEMA_VERSION)</span></div>
+          <div class="dl ctx"><span class="no">27</span><span class="code">}</span></div>
+          <div class="dl hunk">@@ -41,6 +52,21 @@ write path — agent is typing here</div>
+          <div class="dl ctx"><span class="no">52</span><span class="code">export function writeSettings(scope: SettingsScope, next: SettingsShape) {</span></div>
+          <div class="dl add fresh"><span class="no">53</span><span class="code">  const tx = db.transaction(() => {</span></div>
+          <div class="dl add fresh"><span class="no">54</span><span class="code">    writeStmt.run(scope, JSON.stringify(next), Date.now())</span></div>
+          <div class="dl add fresh"><span class="no">55</span><span class="code">    journalStmt.run(scope, revisionOf(next))</span></div>
+          <div class="dl add fresh"><span class="no">56</span><span class="code">  })</span></div>
+          <div class="dl add fresh"><span class="no">57</span><span class="code">  tx()</span></div>
+          <div class="dl ctx"><span class="no">58</span><span class="code">}</span></div>
+        </div>
+      </div>
+
+      <!-- mini reel（D 缩略版）：细带常驻，hover 升起，可拖动 -->
+      <footer class="reel" id="reel">
+        <button class="jump-live" id="jump-live">Jump to live ⏎</button>
+        <div class="meta">
+          <span class="rec"><i></i>recording</span>
+          <span class="cursor-t live" id="cursor-t">T+12:34 · now</span>
+          <span>24 events · 4 gates · 1 failure recovered</span>
+          <span class="expand">hover 展开 · <b>拖动播放头回看</b> · 完整体验见 d-reel</span>
+        </div>
+        <div class="rtrack" id="rtrack">
+          <div class="rchapters">
+            <div class="rchapter plan" style="width:9%"></div>
+            <div class="rchapter work" style="width:52%"></div>
+            <div class="rchapter crisis" style="width:17%"></div>
+            <div class="rchapter verify" style="width:22%"></div>
+          </div>
+          <div class="rticks" id="rticks"></div>
+          <div class="rflags">
+            <div class="rflag a" style="left:5.4%">◆ approved</div>
+            <div class="rflag a" style="left:30%">◆ permission</div>
+            <div class="rflag r" style="left:75.5%">✗ tests</div>
+            <div class="rflag g" style="left:92.5%">✓ tests</div>
+          </div>
+          <div class="rlive-end"></div>
+          <div class="rplayhead" id="rplayhead" style="left:100%"></div>
+        </div>
+      </footer>
+    </section>
+  </main>
+</div>
+
+<!-- 注解 -->
+<button class="annot-pill" onclick="document.getElementById('annot').classList.toggle('open')">ⓘ 方案说明</button>
+<aside class="annot" id="annot">
+  <button class="x" onclick="document.getElementById('annot').classList.remove('open')">✕</button>
+  <b>组合方案 · Obsidian 底座</b>（2026-07-19 二稿：按反馈拆分主页）<br/>
+  三个场景职责分明：<span class="hl">Home = 主页就是 Chat 输入</span>（默认打开，保持现状，
+  只加一行可点的态势摘要）；<span class="hl">Deck = 纯监控新入口</span>（◎ 标 NEW，无任何输入框，
+  发起会话回 Home）；Room = 会话页（底部胶片细带可拖动回看）。
+  现有 Sessions / Inbox / Projects / Search 四入口零改动；E 的密度看板是 Deck 内 Cards ⇄ Rows 切换。<br/>
+  试试：Home 摘要行 → Deck → 切 Rows → rail 首行进 Room → ⌂ 回 Home。
+</aside>
+
+<script>
+(function () {
+  // ---- 场景切换：Home（默认，Chat 输入）⇄ Deck（纯监控）⇄ Room ----
+  const body = document.body;
+  const ctxHome = document.getElementById('tb-ctx-home');
+  const ctxDeck = document.getElementById('tb-ctx-deck');
+  const ctxRoom = document.getElementById('tb-ctx-room');
+  const actHome = document.getElementById('act-home');
+  const actDeck = document.getElementById('act-deck');
+  const actSessions = document.getElementById('act-sessions');
+  function show (scene) {
+    body.dataset.scene = scene;
+    ctxHome.style.display = scene === 'home' ? 'flex' : 'none';
+    ctxDeck.style.display = scene === 'deck' ? 'flex' : 'none';
+    ctxRoom.style.display = scene === 'room' ? 'flex' : 'none';
+    actHome.classList.toggle('active', scene === 'home');
+    actDeck.classList.toggle('active', scene === 'deck');
+    document.querySelectorAll('.srow').forEach(r => r.classList.toggle('sel', scene === 'room' && r.hasAttribute('data-open-room')));
+  }
+  actHome.addEventListener('click', () => show('home'));
+  document.getElementById('act-brand').addEventListener('click', () => show('home'));
+  actDeck.addEventListener('click', () => show('deck'));
+  actSessions.addEventListener('click', () => show('home'));
+  document.getElementById('new-session').addEventListener('click', () => show('home'));
+  document.querySelectorAll('[data-goto-deck]').forEach(el => el.addEventListener('click', () => show('deck')));
+  document.querySelectorAll('[data-open-room]').forEach(el => el.addEventListener('click', () => show('room')));
+
+  // ---- Deck：密度切换 ----
+  const deckScroll = document.getElementById('deck-scroll');
+  document.querySelectorAll('#density button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#density button').forEach(b => b.classList.remove('on'));
+      btn.classList.add('on');
+      deckScroll.dataset.density = btn.dataset.mode;
+    });
+  });
+
+  // ---- Deck：示波器 + 动作行 ----
+  const wave = document.getElementById('wave');
+  for (let i = 0; i < 40; i++) {
+    const bar = document.createElement('i');
+    bar.style.height = (8 + Math.random() * 82) + '%';
+    bar.style.animationDelay = (Math.random() * 2.4) + 's';
+    wave.appendChild(bar);
+  }
+  setInterval(() => {
+    const bars = wave.children;
+    bars[Math.floor(Math.random() * bars.length)].style.height = (8 + Math.random() * 88) + '%';
+  }, 170);
+  const feeds = {
+    'act-1': ['apps/desktop-main/src/services/settings-store.ts', 'apps/desktop-main/src/services/settings-migration.ts', 'packages/ipc-contracts/src/channels.ts'],
+    'act-2': ['src/pages/pricing.astro', 'src/components/PlanToggle.tsx'],
+    'act-3': ['npm run test:e2e — external-cli.spec.ts', 'reading tests/e2e/external-cli.spec.ts:214']
+  };
+  Object.keys(feeds).forEach((id, k) => {
+    let i = 0;
+    setInterval(() => {
+      i = (i + 1) % feeds[id].length;
+      const el = document.getElementById(id);
+      if (el) { el.style.opacity = 0; setTimeout(() => { el.textContent = feeds[id][i]; el.style.opacity = 1; }, 180); }
+    }, 2700 + k * 700);
+  });
+
+  // ---- Room：mini reel 拖动回看（缩略版：调暗未来元素） ----
+  const TOTAL = 754;
+  const rtrack = document.getElementById('rtrack');
+  const rplayhead = document.getElementById('rplayhead');
+  const cursorT = document.getElementById('cursor-t');
+  const jumpLive = document.getElementById('jump-live');
+  const followBadge = document.getElementById('follow-badge');
+  const timed = Array.from(document.querySelectorAll('#timeline [data-t]'));
+  const rticks = document.getElementById('rticks');
+  [[2,'gate'],[5.4,'gate'],[10,'edit'],[16,'run'],[22,'edit'],[30,'gate'],[36,'edit'],[44,'edit'],[52,'edit'],[60,'run'],[68,'edit'],[75.5,'fail'],[82,'edit'],[92.5,'run'],[97,'run']].forEach(([pct, cls]) => {
+    const t = document.createElement('i');
+    t.className = 'rtick ' + cls;
+    t.style.left = pct + '%';
+    t.style.height = (cls === 'gate' ? 15 : 7 + Math.random() * 8) + 'px';
+    rticks.appendChild(t);
+  });
+  function fmt (s) {
+    const m = Math.floor(s / 60), r = Math.floor(s % 60).toString().padStart(2, '0');
+    return 'T+' + String(m).padStart(2, '0') + ':' + r;
+  }
+  let cur = TOTAL;
+  function setTime (sec) {
+    cur = Math.max(0, Math.min(TOTAL, sec));
+    rplayhead.style.left = (cur / TOTAL * 100) + '%';
+    const live = cur >= TOTAL - 0.5;
+    cursorT.textContent = live ? fmt(TOTAL) + ' · now' : fmt(cur) + ' · replay';
+    cursorT.classList.toggle('live', live);
+    jumpLive.classList.toggle('show', !live);
+    followBadge.style.opacity = live ? 1 : 0.3;
+    timed.forEach(el => el.classList.toggle('dimmed', parseFloat(el.dataset.t) > cur));
+  }
+  let dragging = false;
+  function posToSec (x) { const r = rtrack.getBoundingClientRect(); return (x - r.left) / r.width * TOTAL; }
+  rtrack.addEventListener('mousedown', e => { dragging = true; setTime(posToSec(e.clientX)); });
+  window.addEventListener('mousemove', e => { if (dragging) setTime(posToSec(e.clientX)); });
+  window.addEventListener('mouseup', () => { dragging = false; });
+  jumpLive.addEventListener('click', () => setTime(TOTAL));
+
+  // 秒表
+  const checkS = document.getElementById('check-s');
+  let s = 41;
+  setInterval(() => { if (cur >= TOTAL - 0.5) { s += 1; checkS.textContent = s + 's'; } }, 1000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — Memory 图标候选</title>
+<style>
+  :root {
+    --bg: #1a1917; --rail: #1d1c19; --card: #21201c; --hover: #292823;
+    --border: #2a2924; --fg: #e8e6e0; --muted: #a29d92; --faint: #6e6a61;
+    --active-bg: #31302a;
+  }
+  [data-theme='light'] {
+    --bg: #fbfaf7; --rail: #f6f5f1; --card: #ffffff; --hover: #e8e5de;
+    --border: #edeae3; --fg: #201e1a; --muted: #6e6a61; --faint: #a39e94;
+    --active-bg: #e2dfd7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 30px 34px 60px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg); color: var(--fg); font-size: 13px;
+  }
+  .theme-toggle {
+    position: fixed; top: 14px; right: 16px;
+    border: 1px solid var(--border); background: var(--card); color: var(--fg);
+    border-radius: 9px; padding: 4px 11px; font: 600 12px inherit; cursor: pointer;
+  }
+  h1 { font-size: 16px; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin-bottom: 26px; line-height: 1.7; max-width: 640px; }
+  .grid { display: flex; gap: 22px; flex-wrap: wrap; }
+  .option {
+    display: grid; gap: 10px; justify-items: center;
+    padding: 18px 22px 14px;
+    border: 1px solid var(--border); border-radius: 14px; background: var(--card);
+  }
+  .option.reco { border-color: var(--fg); }
+  .option .name { font-weight: 650; font-size: 12.5px; }
+  .option .desc { color: var(--faint); font-size: 11px; max-width: 130px; text-align: center; line-height: 1.55; }
+  .option .tag {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+    border: 1px solid var(--fg); border-radius: 999px; padding: 1px 8px;
+  }
+  /* 迷你活动栏，还原真实上下文 */
+  .mini-rail {
+    width: 46px; padding: 8px 0; display: grid; gap: 4px; justify-items: center;
+    background: var(--rail); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .mini-rail .it {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    border-radius: 9px; color: var(--muted);
+  }
+  .mini-rail .it.dim { opacity: .55; }
+  .mini-rail .it.memory { background: var(--active-bg); color: var(--fg); }
+  svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+<button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? '' : 'light'">☀ 深/浅色</button>
+<h1>Memory 图标候选（第五个槽位，高亮处）</h1>
+<div class="sub">现在用的是「归档箱」图标（最左），和右下角会话行的归档按钮撞车，也不表意。四个候选都按产品图标笔触（1.9 描边、圆角端点）画在真实活动栏上下文里。</div>
+
+<div class="grid" id="grid"></div>
+
+<script>
+  const ICONS = {
+    current: `<rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>`,
+    brain: `<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M12 5v13"/>`,
+    bookOpen: `<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>`,
+    sparkles: `<path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/>`,
+    database: `<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>`,
+  };
+  const OPTIONS = [
+    { key: 'current', name: '现状：归档箱', desc: '与会话行的归档按钮同款，易混淆', tag: null },
+    { key: 'brain', name: 'A · 大脑', desc: '「记忆」最直白的隐喻，一眼即懂', tag: '推荐' },
+    { key: 'bookOpen', name: 'B · 打开的书', desc: '知识库/笔记感，偏「查阅」', tag: null },
+    { key: 'sparkles', name: 'C · 星芒', desc: '呼应 Claude ✳ 与「智能沉淀」，但含义泛', tag: null },
+    { key: 'database', name: 'D · 数据库', desc: '「存储」感强，偏技术、少了点记忆味', tag: null },
+  ];
+  const railIcons = [
+    `<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22v-7"/>`,
+    `<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>`,
+    `<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>`,
+    `<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>`,
+  ];
+  document.getElementById('grid').innerHTML = OPTIONS.map((opt) => `
+    <div class="option ${opt.tag ? 'reco' : ''}">
+      ${opt.tag ? `<span class="tag">${opt.tag}</span>` : '<span style="height:18px"></span>'}
+      <div class="mini-rail">
+        ${railIcons.map((d) => `<span class="it dim"><svg viewBox="0 0 24 24">${d}</svg></span>`).join('')}
+        <span class="it memory"><svg viewBox="0 0 24 24">${ICONS[opt.key]}</svg></span>
+        <span class="it dim"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg></span>
+      </div>
+      <span class="name">${opt.name}</span>
+      <span class="desc">${opt.desc}</span>
+    </div>`).join('');
+</script>
+</body>
+</html>
