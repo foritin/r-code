@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>产品范围、端到端流程与验收合同 · r-code</title>
-  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="产品范围-端到端流程与验收合同">产品范围、端到端流程与验收合同</h1>
 <h2 id="1-重构目标不是-把-electron-翻译成-rust">1. 重构目标不是“把 Electron 翻译成 Rust”</h2>
 <p>Charter 的重构目标是交付一个 local-first 的 Agentic IDE：用户可以在一个可恢复、可审查、<br>可回滚的工作单元中，让内置 Agent、Claude Code 与 Codex 在真实仓库工作，并且始终看见<br>权限、终端、文件、证据与最终决策。技术迁移（Electron/Node → Tauri/Rust）只是实现手段。</p>
@@ -36,6 +36,6 @@
 <ul><li>有用户可见的空态、加载态、失败态和恢复入口。</li><li>有 domain 层单元测试、主进程/IPC 集成测试和桌面 E2E 证据；渲染变化须在目标与窄视口检查。</li><li>有权限、数据归属与隐私评审；涉及写入时有回滚或清晰的不可逆提示。</li><li>有可观测日志、错误 code 与支持包字段；日志不能携带秘密或完整敏感内容。</li><li>有文档链接到对应的设计、合同、测试与发布条件。</li></ul>
 <p>本页是全站的产品入口；实现者随后按 <code>19-reconstruction-runbook</code> 的顺序执行，而不是按源码目录<br>随机迁移。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
   <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
-  <script src="assets/site.js"></script>
+  <script src="../assets/site.js"></script>
 </body>
 </html>

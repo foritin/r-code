@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>架构总览 · r-code</title>
-  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="架构总览">架构总览</h1>
 <h2 id="1-系统定位">1. 系统定位</h2>
 <p>一款本地优先、任务原生、可观察、可审查、可回滚的桌面 Agentic IDE。<br>支持传统 IDE 操作（编辑、搜索、终端、 Git）与 Agent 工程链路<br>（任务定义、权限审批、代码修改、验证、审查、回滚）。</p>
@@ -99,10 +99,10 @@ Codex ────(MCP 门)────────────→ 创建 shell 
 <h3 id="7-3-证据级别">7.3 证据级别</h3>
 <table><thead><tr><th>级别</th><th>说明</th></tr></thead><tbody><tr><td>Verified</td><td>已验证</td></tr><tr><td>Recorded</td><td>结构化记录</td></tr><tr><td>Observed</td><td>观察（普通 TUI）</td></tr><tr><td>Inferred</td><td>推断</td></tr><tr><td>Missing</td><td>缺失</td></tr></tbody></table>
 <h3 id="7-4-相关文档">7.4 相关文档</h3>
-<ul><li>产品决策：<a href="docs/design/session-replay-unified-experience-v3.html">docs/design/session-replay-unified-experience-v3.html</a></li><li>实现交接：<a href="docs/design/session-replay-v3-implementation-handoff.html">docs/design/session-replay-v3-implementation-handoff.html</a></li><li>交互原型：<a href="docs/design/session-replay-v3-prototype/index.html">docs/design/session-replay-v3-prototype/</a></li></ul>
+<ul><li>产品决策：<a href="design/session-replay-unified-experience-v3.html">docs/design/session-replay-unified-experience-v3.html</a></li><li>实现交接：<a href="design/session-replay-v3-implementation-handoff.html">docs/design/session-replay-v3-implementation-handoff.html</a></li><li>交互原型：<a href="design/session-replay-v3-prototype/index.html">docs/design/session-replay-v3-prototype/</a></li></ul>
 <h2 id="8-技术栈映射">8. 技术栈映射</h2>
 <table><thead><tr><th>功能</th><th>当前实现</th><th>Rust 替代</th></tr></thead><tbody><tr><td>桌面框架</td><td>Electron</td><td>Tauri v2</td></tr><tr><td>后端运行时</td><td>Node.js</td><td>Rust + Tokio</td></tr><tr><td>SQLite</td><td>node:sqlite</td><td>rusqlite / sqlx</td></tr><tr><td>PTY</td><td>node-pty</td><td>portable-pty</td></tr><tr><td>Git</td><td>Node git 库</td><td>git2 (libgit2)</td></tr><tr><td>文件监听</td><td>chokidar</td><td>notify</td></tr><tr><td>HTTP</td><td>Node fetch</td><td>reqwest</td></tr><tr><td>配置</td><td>JSON 文件</td><td>serde + toml</td></tr><tr><td>搜索</td><td>ripgrep 二进制</td><td>直接调用 rg</td></tr><tr><td>构建</td><td>esbuild + Vite</td><td>保留 Vite (renderer)</td></tr><tr><td>测试</td><td>vitest + Playwright</td><td>cargo test + Playwright</td></tr></tbody></table></article><aside class="toc" aria-label="本页目录"></aside></main>
   <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
-  <script src="assets/site.js"></script>
+  <script src="../assets/site.js"></script>
 </body>
 </html>

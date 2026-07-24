@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>构建、发布、运维与恢复手册 · r-code</title>
-  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="构建-发布-运维与恢复手册">构建、发布、运维与恢复手册</h1>
 <h2 id="1-交付物边界">1. 交付物边界</h2>
 <p>重构后的 Charter 是一个签名/可验证的桌面产品，而不是只在开发机能运行的 Rust 二进制。每个<br>发布版本至少产出：</p>
@@ -42,6 +42,6 @@ release-notes.html</code></pre></div>
 <ul><li><input class="task-checkbox" type="checkbox" disabled>版本、commit、公共合同 pin 和 SBOM 已对齐。</li><li><input class="task-checkbox" type="checkbox" disabled>安装/升级/回滚/卸载 smoke 已在每个目标平台执行。</li><li><input class="task-checkbox" type="checkbox" disabled>数据迁移、worker 中断、权限待决、外部 CLI 断开、回滚冲突均有演练记录。</li><li><input class="task-checkbox" type="checkbox" disabled>关键 E2E、security、性能和视觉证据可追溯到候选包。</li><li><input class="task-checkbox" type="checkbox" disabled>证书/发布 secret 未出现在日志、产物或支持包。</li><li><input class="task-checkbox" type="checkbox" disabled>Beta 的未签名/未公证状态（若存在）在下载页和应用内明确披露。</li></ul>
 <p>这是一份重构目标的发布规范；具体 Rust crate 与 UI 实现见前序章节，当前 Electron 工程的<br>脚本名称不是此规范的外部依赖。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
   <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
-  <script src="assets/site.js"></script>
+  <script src="../assets/site.js"></script>
 </body>
 </html>

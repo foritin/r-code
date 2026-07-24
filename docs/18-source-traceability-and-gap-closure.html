@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>当前 Charter 覆盖矩阵与查漏补缺记录 · r-code</title>
-  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="当前-charter-覆盖矩阵与查漏补缺记录">当前 Charter 覆盖矩阵与查漏补缺记录</h1>
 <h2 id="1-审计边界">1. 审计边界</h2>
 <p>本重构指南以当前 Charter 仓库为事实输入，<strong>显式排除</strong> <code>small-rust-hermes/</code>；后者由<br><code>../tiny-hermes/index.html</code> 单独覆盖。下表记录原有 TypeScript/Electron 包如何被<br>重构架构吸收。路径只用来说明来源，不要求未来实现仓库保留同名目录。</p>
@@ -28,6 +28,6 @@
 <ol><li>先写用户可观察的行为和失败态，再找到对应 Task / Tool / Event / Evidence DTO。</li><li>将实现归入一条现有章节；若无归属，先新增规范页而不是把逻辑塞进 <code>charter-main</code>。</li><li>记录安全边界、数据归属、迁移和 E2E 场景。</li><li>更新本页矩阵、产品验收编号和运行手册的 gate。</li><li>对照 <code>15-testing-strategy</code> 与 <code>17-delivery-release-and-operations</code> 追加证据。</li></ol>
 <p>因此本页不是一次性的“来源注释”，而是防止重构在长期演进中再次漏功能的维护入口。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
   <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
-  <script src="assets/site.js"></script>
+  <script src="../assets/site.js"></script>
 </body>
 </html>

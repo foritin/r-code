@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
   <title>Agent 运行时 · r-code</title>
-  <link rel="stylesheet" href="assets/site.css">
+  <link rel="stylesheet" href="../assets/site.css">
 </head>
 <body>
-  <header class="site-header"><div class="site-header__inner"><a class="brand" href="index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
   <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="agent-运行时">Agent 运行时</h1>
 <h2 id="1-概述">1. 概述</h2>
 <p>Agent 运行时是模型回路的承载者，运行在独立 Worker 进程内。<br>它通过 IPC 与 Main 进程通信，所有工具调用回到 Main 的 Tool Gateway 执行。</p>
@@ -133,6 +133,6 @@ enum AgentEvent {
 <h3 id="路径-c-mcp-解耦">路径 C：MCP 解耦</h3>
 <ul><li>Agent 作为独立二进制，通过 MCP 与宿主通信。</li><li>任何语言的 Agent 实现都能接入。</li><li>最优雅，但依赖生态支持。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
   <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
-  <script src="assets/site.js"></script>
+  <script src="../assets/site.js"></script>
 </body>
 </html>

@@ -1,0 +1,7 @@
+[submodule "vendor/agent-core"]
+	path = vendor/agent-core
+	url = https://github.com/foritin/agent-core.git
+[submodule ".agents"]
+	path = .agents
+	url = https://github.com/foritin/kimi.git
+	branch = main
