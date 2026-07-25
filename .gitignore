@@ -1,0 +1,21 @@
+# Build artifacts
+/target/
+
+# Tauri build
+/dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/settings.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+*.log

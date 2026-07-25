@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <title>R-Code</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" data-zoom="100">
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar" role="navigation" aria-label="主导航">
+      <div class="sidebar-header">
+        <span class="logo" aria-label="R-Code">⚡ R-Code</span>
+      </div>
+      <button class="nav-item active" data-view="home" role="button" tabindex="0" aria-label="主页">
+        <span class="nav-icon" aria-hidden="true">🏠</span>
+        <span class="nav-label">Home</span>
+      </button>
+      <button class="nav-item" data-view="room" role="button" tabindex="0" aria-label="任务房间">
+        <span class="nav-icon" aria-hidden="true">📋</span>
+        <span class="nav-label">Task Room</span>
+      </button>
+      <button class="nav-item" data-view="editor" role="button" tabindex="0" aria-label="编辑器">
+        <span class="nav-icon" aria-hidden="true">📝</span>
+        <span class="nav-label">Editor</span>
+      </button>
+      <button class="nav-item" data-view="settings" role="button" tabindex="0" aria-label="设置">
+        <span class="nav-icon" aria-hidden="true">⚙️</span>
+        <span class="nav-label">Settings</span>
+      </button>
+      <div class="sidebar-footer">
+        <button class="nav-item nav-zoom-in" role="button" tabindex="0" aria-label="放大窗口" title="放大 (Cmd/Ctrl +)">
+          <span class="nav-icon" aria-hidden="true">🔍+</span>
+        </button>
+        <button class="nav-item nav-zoom-out" role="button" tabindex="0" aria-label="缩小窗口" title="缩小 (Cmd/Ctrl -)">
+          <span class="nav-icon" aria-hidden="true">🔍−</span>
+        </button>
+        <button class="nav-item nav-zoom-reset" role="button" tabindex="0" aria-label="重置缩放" title="重置缩放 (Cmd/Ctrl 0)">
+          <span class="nav-icon" aria-hidden="true">100%</span>
+        </button>
+      </div>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="content" role="main">
+      <!-- Home View -->
+      <div id="view-home" class="view active" role="region" aria-label="主页">
+        <section class="home-launcher" aria-label="任务启动器">
+          <h1>R-Code</h1>
+          <p class="subtitle">AI 驱动的代码任务执行环境</p>
+          <div class="project-selector">
+            <label for="project-path" class="sr-only">项目路径</label>
+            <input type="text" id="project-path" placeholder="选择或输入项目路径..." aria-label="项目路径" />
+            <button id="browse-project" class="btn btn-secondary" role="button" tabindex="0">浏览...</button>
+          </div>
+          <div class="quick-actions" role="group" aria-label="快速操作">
+            <button class="btn btn-primary" data-action="new-task" role="button" tabindex="0">新建任务</button>
+            <button class="btn btn-secondary" data-action="open-workspace" role="button" tabindex="0">打开工作区</button>
+          </div>
+        </section>
+        <section class="mission-control" aria-label="任务控制台">
+          <h2>近期任务</h2>
+          <div id="recent-tasks" class="task-list" role="list" aria-live="polite">
+            <p class="placeholder">暂无任务</p>
+          </div>
+        </section>
+        <section class="recovery-section" id="recovery-section" hidden aria-label="崩溃恢复">
+          <h2>⚠️ 检测到中断的任务</h2>
+          <div id="recovery-list" role="list" aria-live="assertive"></div>
+        </section>
+      </div>
+
+      <!-- Task Room View -->
+      <div id="view-room" class="view" role="region" aria-label="任务房间">
+        <header class="room-header">
+          <h2 id="room-title">Task Room</h2>
+          <div class="room-actions">
+            <button class="btn btn-secondary" data-action="back-to-home" role="button" tabindex="0">← 返回</button>
+          </div>
+        </header>
+        <div class="room-layout">
+          <!-- Timeline Panel -->
+          <section class="panel timeline-panel" aria-label="时间线">
+            <h3>时间线</h3>
+            <div class="replay-controls" role="group" aria-label="回放深度">
+              <button class="btn btn-toggle active" data-depth="recap" role="button" tabindex="0" aria-pressed="true">Recap</button>
+              <button class="btn btn-toggle" data-depth="explore" role="button" tabindex="0" aria-pressed="false">Explore</button>
+              <button class="btn btn-toggle" data-depth="verify" role="button" tabindex="0" aria-pressed="false">Verify</button>
+            </div>
+            <div id="timeline" class="timeline" role="log" aria-live="polite" aria-label="任务事件时间线">
+              <p class="placeholder">选择任务以查看时间线</p>
+            </div>
+            <button id="load-earlier" class="btn btn-link" role="button" tabindex="0" hidden>加载更早的事件</button>
+          </section>
+
+          <!-- Approval Panel -->
+          <section class="panel approval-panel" id="approval-panel" aria-label="审批面板">
+            <h3>审批请求</h3>
+            <div id="approval-list" class="approval-list" role="list" aria-live="assertive">
+              <p class="placeholder">无待审批请求</p>
+            </div>
+          </section>
+
+          <!-- Changes Panel -->
+          <section class="panel changes-panel" aria-label="变更面板">
+            <h3>文件变更</h3>
+            <div id="changes-list" class="changes-list" role="list">
+              <p class="placeholder">无变更</p>
+            </div>
+            <div class="changes-actions" role="group" aria-label="变更操作">
+              <button class="btn btn-danger" data-action="rollback-task" role="button" tabindex="0">全部回滚</button>
+              <button class="btn btn-primary" data-action="accept-task" role="button" tabindex="0">接受变更</button>
+            </div>
+          </section>
+
+          <!-- Verification Panel -->
+          <section class="panel verification-panel" aria-label="验证面板">
+            <h3>验证</h3>
+            <div id="verification-list" class="verification-list" role="list">
+              <p class="placeholder">无验证记录</p>
+            </div>
+            <div class="verification-actions" role="group" aria-label="验证操作">
+              <input type="text" id="verification-command" placeholder="验证命令 (如 npm test)" aria-label="验证命令" />
+              <button class="btn btn-primary" data-action="run-verification" role="button" tabindex="0">运行</button>
+            </div>
+          </section>
+
+          <!-- Decision Panel -->
+          <section class="panel decision-panel" aria-label="决策面板">
+            <h3>决策</h3>
+            <div class="decision-actions" role="group" aria-label="任务决策">
+              <button class="btn btn-primary" data-action="accept" role="button" tabindex="0">✓ 接受任务</button>
+              <button class="btn btn-danger" data-action="rollback" role="button" tabindex="0">↩ 回滚任务</button>
+              <button class="btn btn-secondary" data-action="abort" role="button" tabindex="0">⏹ 中止</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- Context Injection -->
+        <section class="context-injection" aria-label="上下文投喂">
+          <h3>上下文投喂</h3>
+          <div class="context-input-area">
+            <textarea id="message-input" placeholder="输入消息... 使用 @path 引用文件，拖拽文件注入引用" aria-label="消息输入" rows="3"></textarea>
+            <div class="context-actions" role="group" aria-label="上下文操作">
+              <button class="btn btn-secondary" data-action="inject-file-ref" role="button" tabindex="0">📄 @文件引用</button>
+              <button class="btn btn-secondary" data-action="inject-selection-ref" role="button" tabindex="0">📐 选区引用</button>
+              <button class="btn btn-secondary" data-action="inject-external-session" role="button" tabindex="0">📋 外部会话注入</button>
+            </div>
+            <button class="btn btn-primary" data-action="send-message" role="button" tabindex="0">发送 →</button>
+          </div>
+          <div id="context-preview" class="context-preview" role="region" aria-label="上下文预览" aria-live="polite"></div>
+        </section>
+      </div>
+
+      <!-- Editor View -->
+      <div id="view-editor" class="view" role="region" aria-label="编辑器">
+        <div class="editor-layout">
+          <section class="file-tree-panel" aria-label="文件树">
+            <h3>文件</h3>
+            <div id="file-tree" class="file-tree" role="tree" aria-label="项目文件树">
+              <p class="placeholder">无打开的文件</p>
+            </div>
+          </section>
+          <section class="code-view-panel" aria-label="代码视图">
+            <div class="code-view-header">
+              <span id="active-file" class="active-file">无打开的文件</span>
+              <div class="code-view-actions" role="group" aria-label="代码视图操作">
+                <button class="btn btn-secondary btn-sm" data-action="quick-open" role="button" tabindex="0">快速打开</button>
+                <button class="btn btn-secondary btn-sm" data-action="global-search" role="button" tabindex="0">搜索</button>
+                <button class="btn btn-secondary btn-sm" data-action="toggle-diff-mode" role="button" tabindex="0" aria-pressed="false" title="切换无障碍 Diff 文本模式 (F7)">Diff 文本模式</button>
+              </div>
+            </div>
+            <div id="code-view" class="code-view" role="region" aria-label="代码内容">
+              <p class="placeholder">选择文件以查看内容</p>
+            </div>
+            <div id="diff-text-mode" class="diff-text-mode" role="status" aria-live="assertive" aria-label="无障碍 Diff 文本模式输出" hidden></div>
+          </section>
+          <section class="terminal-panel" aria-label="终端">
+            <div class="terminal-header">
+              <h3>终端</h3>
+              <div class="terminal-actions" role="group" aria-label="终端操作">
+                <button class="btn btn-secondary btn-sm" data-action="terminal-create" role="button" tabindex="0">新建</button>
+                <button class="btn btn-danger btn-sm" data-action="terminal-kill" role="button" tabindex="0">终止</button>
+              </div>
+            </div>
+            <div id="terminal-list" class="terminal-list" role="list" aria-label="终端列表">
+              <p class="placeholder">无终端</p>
+            </div>
+            <div id="terminal-output" class="terminal-output" role="log" aria-live="polite" aria-label="终端输出" tabindex="0"></div>
+            <div class="terminal-input-area">
+              <input type="text" id="terminal-input" placeholder="输入命令..." aria-label="终端输入" />
+              <button class="btn btn-primary btn-sm" data-action="terminal-send" role="button" tabindex="0">发送</button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Settings View -->
+      <div id="view-settings" class="view" role="region" aria-label="设置">
+        <h2>设置</h2>
+        <section class="settings-section" aria-label="窗口缩放设置">
+          <h3>窗口缩放</h3>
+          <div class="zoom-control" role="group" aria-label="缩放控制">
+            <button class="btn btn-secondary" data-action="zoom-out" role="button" tabindex="0">−</button>
+            <input type="range" id="zoom-slider" min="80" max="200" value="100" step="10" aria-label="缩放百分比" />
+            <button class="btn btn-secondary" data-action="zoom-in" role="button" tabindex="0">+</button>
+            <span id="zoom-value" class="zoom-value">100%</span>
+            <button class="btn btn-link" data-action="zoom-reset" role="button" tabindex="0">重置</button>
+          </div>
+          <p class="hint">快捷键：Cmd/Ctrl + 放大，Cmd/Ctrl - 缩小，Cmd/Ctrl 0 重置</p>
+        </section>
+        <section class="settings-section" aria-label="无障碍设置">
+          <h3>无障碍</h3>
+          <div class="setting-row">
+            <label for="accessible-diff-toggle">
+              <input type="checkbox" id="accessible-diff-toggle" />
+              无障碍 Diff 文本模式 (F7/Shift+F7)
+            </label>
+            <p class="hint">启用后，Diff 将以纯文本形式通过 aria-live 区域朗读。</p>
+          </div>
+          <div class="setting-row">
+            <label for="keyboard-nav-toggle">
+              <input type="checkbox" id="keyboard-nav-toggle" checked />
+              键盘导航全流程可达
+            </label>
+            <p class="hint">所有交互元素均可通过 Tab/Shift+Tab/Enter/Esc 操作。</p>
+          </div>
+        </section>
+        <section class="settings-section" aria-label="配置">
+          <h3>应用配置</h3>
+          <div id="settings-json" class="settings-json" role="region" aria-label="配置 JSON">
+            <p class="placeholder">加载中...</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Accessible live region for announcements -->
+  <div id="aria-announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 5 章：Agent 运行时 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links">
+      <a href="index.html">首页</a>
+      <span style="color:var(--text-dim)">·</span>
+      <span>第 5 章</span>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar__group">
+      <div class="sidebar__title">本章目录</div>
+      <a href="#what-is-agent" class="sidebar__item">什么是 Agent？</a>
+      <a href="#worker-lifecycle" class="sidebar__item">Worker 进程生命周期</a>
+      <a href="#agent-runtime-trait" class="sidebar__item">AgentRuntime trait</a>
+      <a href="#agent-loop" class="sidebar__item">Agent Loop 单次迭代</a>
+      <a href="#llm-abstraction" class="sidebar__item">LLM 抽象层</a>
+      <a href="#stream-events" class="sidebar__item">事件流与 StreamEvent</a>
+      <a href="#tool-host" class="sidebar__item">工具调用回路</a>
+      <a href="#crash-recovery" class="sidebar__item">崩溃恢复</a>
+      <a href="#mock-runtime" class="sidebar__item">MockAgentRuntime</a>
+      <a href="#agent-events" class="sidebar__item">Agent 事件类型</a>
+      <a href="#summary" class="sidebar__item">本章小结</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta">
+      <span class="meta__item"><span class="status status-intermediate">进阶</span></span>
+      <span class="meta__item">📖 阅读约 20 分钟</span>
+      <span class="meta__item">📅 2026-07-25</span>
+    </div>
+
+    <h1>第 5 章：Agent 运行时</h1>
+    <p class="lede">Agent 运行时是 R-Code 的「大脑」——它负责与 AI 模型对话、调用工具、处理结果，并把整个过程变成前端可见的事件流。本章带你从 trait 定义到单次迭代、从崩溃恢复到测试替身，完整理解这个核心子系统。</p>
+
+    <!-- ============================================================ -->
+    <h2 id="what-is-agent">5.1 什么是 Agent？</h2>
+    <p>如果你刚接触「Agent」这个词，最容易的理解方式是这样的：</p>
+
+    <div class="box info">
+      <div class="box-title">🧠 类比：AI 助手 = 一位新入职的实习生</div>
+      <p>想象你有一个很聪明的实习生（Agent）。你给他一个任务（比如「帮我把这个 bug 修了」），他会：</p>
+      <ul>
+        <li><strong>读文件</strong> —— 搞清楚代码现状</li>
+        <li><strong>思考</strong> —— 决定怎么改</li>
+        <li><strong>改文件</strong> —— 动手写代码</li>
+        <li><strong>跑命令</strong> —— 验证改动是否正确</li>
+        <li><strong>汇报</strong> —— 告诉你他做了什么</li>
+      </ul>
+      <p>R-Code 的 Agent 运行时，就是管理这位实习生的「工位 + 工具箱 + 沟通系统」。</p>
+    </div>
+
+    <p>在代码层面，Agent 不是一个类或一个函数，而是一整套<strong>循环</strong>：</p>
+
+    <div class="diagram">
+┌─────────────────────────────────────────────────────┐
+│                  Agent 循环                          │
+│                                                     │
+│   用户输入 ──→ 模型 ──→ 工具调用 ──→ 结果 ──→ 模型  │
+│               ↑                            │        │
+│               └────────────────────────────┘        │
+└─────────────────────────────────────────────────────┘
+    </div>
+
+    <p>这个循环会一直运行，直到模型认为任务完成（输出 <code>StopReason::EndTurn</code>），或者用户手动中止。每次「模型 → 工具 → 结果 → 模型」的往返，叫做一次<strong>迭代（iteration）</strong>。</p>
+
+    <!-- ============================================================ -->
+    <h2 id="worker-lifecycle">5.2 Worker 进程的生命周期</h2>
+    <p>R-Code 把 Agent 运行时放在一个<strong>独立进程</strong>（Worker）里。为什么要单独一个进程？</p>
+
+    <div class="box warn">
+      <div class="box-title">⚠️ 为什么 Agent 不能跑在 UI 进程里？</div>
+      <ol>
+        <li><strong>隔离崩溃</strong> —— Agent 循环可能因为模型 bug 或工具死循环而卡住；单独进程崩溃不会拖垮整个 IDE。</li>
+        <li><strong>资源隔离</strong> —— 模型推理和工具执行可能消耗大量 CPU/内存；独立进程方便操作系统调度。</li>
+        <li><strong>安全边界</strong> —— Worker 没有直接访问文件系统的能力，所有文件操作必须通过 Tool Gateway 审批。</li>
+      </ol>
+    </div>
+
+    <p>Worker 进程从启动到退出的完整生命周期：</p>
+
+    <div class="layer">
+      <div class="layer-item" style="background:rgba(88,166,255,.08)">① 启动 —— Electron Main 进程 fork/exec 启动 Worker</div>
+      <div class="layer-item" style="background:rgba(88,166,255,.08)">② 连接 —— Worker 与 Main 建立 IPC 通道（Unix Socket / Named Pipe）</div>
+      <div class="layer-item" style="background:rgba(63,185,80,.08)">③ 就绪 —— Worker 加载模型 provider，等待任务</div>
+      <div class="layer-item" style="background:rgba(63,185,80,.08)">④ 运行 —— 接收 session + goal，进入 agent 循环</div>
+      <div class="layer-item" style="background:rgba(210,153,34,.08)">⑤ 事件 —— 每次迭代产出事件，经 IPC 推送到 Main → Renderer</div>
+      <div class="layer-item" style="background:rgba(248,81,73,.08)">⑥ 结束 —— 任务完成或用户中止，Worker 退出或等待下一个任务</div>
+    </div>
+
+    <p>在第 3 章（IPC）里我们已经学到，Worker 和 Main 之间通过 JSON-RPC 2.0 通信。Agent 运行时在 Worker 内部运行，但<strong>对外暴露的接口</strong>就是 <code>AgentRuntime</code> trait。</p>
+
+    <!-- ============================================================ -->
+    <h2 id="agent-runtime-trait">5.3 AgentRuntime trait</h2>
+    <p><code>AgentRuntime</code> 是 R-Code 私有高层抽象，定义在 <code>crates/r-code-agent-worker/src/runtime.rs</code>。它把「与模型对话」和「调用工具」封装成一个统一的会话接口：</p>
+
+    <pre><code>/// Agent Runtime -- R-Code 私有高层 trait。
+#[async_trait]
+pub trait AgentRuntime: Send + Sync {
+    /// 创建新会话。
+    async fn create_session(&mut self, input: CreateSessionInput) -> Result&lt;Session, ProductError&gt;;
+
+    /// 启动一次 run -- 开始 agent 循环。返回 run id。
+    async fn start_run(&mut self, session_id: &amp;str, goal: &amp;str) -> Result&lt;String, ProductError&gt;;
+
+    /// Steer -- 在 run 中途注入用户消息。
+    async fn steer(&mut self, session_id: &amp;str, message: &amp;str) -> Result&lt;(), ProductError&gt;;
+
+    /// 中止当前 run。
+    async fn abort(&mut self, session_id: &amp;str) -> Result&lt;(), ProductError&gt;;
+
+    /// 获取当前 run 的事件（drain 语义：取出后清空）。
+    async fn poll_events(&mut self) -> Result&lt;Vec&lt;AgentEvent&gt;, ProductError&gt;;
+}</code></pre>
+
+    <h3>五个方法各管一件事</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>方法</th><th>作用</th><th>类比</th></tr></thead>
+      <tbody>
+        <tr><td><code>create_session</code></td><td>创建一个新的对话上下文</td><td>开一张新工单</td></tr>
+        <tr><td><code>start_run</code></td><td>给 session 一个目标，开始干活</td><td>给实习生布置任务</td></tr>
+        <tr><td><code>steer</code></td><td>中途补充指令</td><td>实习生干活时你补充说「顺便把这个也改了」</td></tr>
+        <tr><td><code>abort</code></td><td>紧急停止</td><td>喊「停！先别干了」</td></tr>
+        <tr><td><code>poll_events</code></td><td>拉取最新进展（drain 语义）</td><td>问实习生「进展如何？」然后清空待办</td></tr>
+      </tbody>
+    </table></div>
+
+    <div class="box success">
+      <div class="box-title">💡 为什么用 drain 语义？</div>
+      <p><code>poll_events</code> 取出事件后会清空内部缓冲区。这保证了每个事件只被消费一次，避免了「前端拉取同一批事件两次」的问题。前端只需要定期（比如每 50ms）调用一次 <code>poll_events</code>，就能拿到 Agent 的最新产出。</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="agent-loop">5.4 Agent Loop 单次迭代详解</h2>
+    <p>Agent 循环的核心实现在 <code>crates/r-code-agent-worker/src/agent_loop.rs</code>。函数签名如下：</p>
+
+    <pre><code>pub async fn run_agent_loop_iteration(
+    provider: &amp;dyn LlmProvider,
+    tool_host: &amp;dyn ToolHost,
+    mut request: CompletionRequest,
+    messages: &amp;mut Vec&lt;Message&gt;,
+    tools: &amp;[ToolSpec],
+) -> Result&lt;Vec&lt;AgentEvent&gt;, ProductError&gt;</code></pre>
+
+    <p>一次迭代做的事情，可以用六步来概括：</p>
+
+    <div class="diagram">
+  ┌──────────────────────────────────────────────────────────────┐
+  │                    Agent Loop 单次迭代                        │
+  │                                                              │
+  │  ① provider.stream(request)                                  │
+  │         │                                                    │
+  │         ▼                                                    │
+  │  ② TextDelta ──→ 累积文本 + emit Message 事件                │
+  │         │                                                    │
+  │         ▼                                                    │
+  │  ③ ToolUseStart/Delta ──→ 跟踪工具调用 + 累积 input JSON     │
+  │         │                                                    │
+  │         ▼                                                    │
+  │  ④ ToolUseComplete ──→ tool_host.call() + emit ToolCall      │
+  │         │              + emit ToolResult                     │
+  │         ▼                                                    │
+  │  ⑤ Stop ──→ 结束本次迭代                                    │
+  │         │                                                    │
+  │         ▼                                                    │
+  │  ⑥ 追加 assistant 消息 + 可选 user 消息（tool_result）        │
+  └──────────────────────────────────────────────────────────────┘
+    </div>
+
+    <h3>步骤 ①：调用模型获取事件流</h3>
+    <pre><code>request.messages = messages.clone();
+request.tools = tools.to_vec();
+
+let mut stream = provider.stream(request).await.map_err(map_hermes_err)?;</code></pre>
+    <p>把当前对话历史（<code>messages</code>）和可用工具列表（<code>tools</code>）塞进请求，然后调用模型的流式接口。<code>provider.stream()</code> 返回一个异步流（Stream），模型会源源不断地往里面塞事件。</p>
+
+    <h3>步骤 ②：处理 TextDelta</h3>
+    <pre><code>StreamEvent::TextDelta { text } =&gt; {
+    current_text.push_str(&amp;text);
+    events.push(AgentEvent::Message { text, delta: true });
+}</code></pre>
+    <p>模型一边生成文本，一边以 <code>TextDelta</code> 的形式流式输出。Agent 循环做两件事：</p>
+    <ol>
+      <li>把文本片段拼接到 <code>current_text</code>（最终会成为 assistant 消息的正文）。</li>
+      <li>把每个 delta 包装成 <code>AgentEvent::Message</code> 推送给前端——这就是你在 UI 上看到「模型正在打字」的效果。</li>
+    </ol>
+
+    <h3>步骤 ③④：跟踪工具调用</h3>
+    <p>当模型决定调用一个工具时，会先发 <code>ToolUseStart</code>（告诉你「我要用工具 X 了」），然后发一串 <code>ToolUseDelta</code>（工具的输入 JSON 片段），最后发 <code>ToolUseComplete</code>（输入完整了）。</p>
+
+    <pre><code>StreamEvent::ToolUseStart { id, name } =&gt; {
+    flush_text(&amp;mut current_text, &amp;mut assistant_blocks);
+    pending_tools.insert(id, (name, String::new()));
+}
+StreamEvent::ToolUseDelta { id, input_json } =&gt; {
+    if let Some((_, acc)) = pending_tools.get_mut(&amp;id) {
+        acc.push_str(&amp;input_json);
+    }
+}</code></pre>
+
+    <p>当 <code>ToolUseComplete</code> 到来时，真正执行工具：</p>
+    <pre><code>StreamEvent::ToolUseComplete { id, input } =&gt; {
+    flush_text(&amp;mut current_text, &amp;mut assistant_blocks);
+    let name = pending_tools.remove(&amp;id).map(|(n, _)| n).unwrap_or_default();
+    // 追加 ToolUse 块到 assistant 消息
+    assistant_blocks.push(ContentBlock::ToolUse { id, name: name.clone(), input: input.clone() });
+    // emit ToolCall 事件
+    events.push(AgentEvent::ToolCall { name, input, call_id: id.clone() });
+    // 调用工具主机
+    let outcome = tool_host.call(&amp;name, input).await.map_err(map_hermes_err)?;
+    // emit ToolResult 事件
+    events.push(AgentEvent::ToolResult { call_id: id, output, is_error });
+}</code></pre>
+
+    <div class="box purple">
+      <div class="box-title">🔧 flush_text 是什么？</div>
+      <p>当工具调用开始时，之前累积的 <code>current_text</code> 需要被「冲刷」成一个 <code>ContentBlock::Text</code> 放进 <code>assistant_blocks</code>。这保证了 assistant 消息的正文在工具调用之前结束，不会混在一起。</p>
+    </div>
+
+    <h3>步骤 ⑤⑥：结束迭代 & 组装消息</h3>
+    <pre><code>// 追加 assistant 消息（含 Text + ToolUse 块）
+if !assistant_blocks.is_empty() {
+    messages.push(Message {
+        role: Role::Assistant,
+        content: std::mem::take(&amp;mut assistant_blocks),
+        ..Default::default()
+    });
+}
+
+// 如果因工具调用停止，追加 user 消息（含 ToolResult 块）
+if stop_reason == StopReason::ToolUse &amp;&amp; !tool_results.is_empty() {
+    messages.push(Message {
+        role: Role::User,
+        content: std::mem::take(&amp;mut tool_results),
+        ..Default::default()
+    });
+}</code></pre>
+
+    <p>注意 <code>StopReason::ToolUse</code> 的处理：当模型因为调用工具而停止时，工具结果会被包装成 user 消息追加到对话历史。这样下一次迭代时，模型就能看到工具的返回结果，决定下一步动作。</p>
+
+    <!-- ============================================================ -->
+    <h2 id="llm-abstraction">5.5 LLM 抽象层</h2>
+    <p>R-Code 使用 <code>hermes-llm</code> 提供的 <code>LlmProvider</code> trait 作为模型抽象层。这个 trait 定义了Agent 与 LLM 交互的标准接口，R-Code 的 Agent Worker 代码<strong>只依赖这个抽象 trait</strong>，不直接依赖任何具体的模型 SDK。</p>
+
+    <div class="flow">
+      <span class="flow-box">Agent Loop</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-accent">LlmProvider trait</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-green">具体实现</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">模型 API</span>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">📐 为什么使用抽象 trait？</div>
+      <p><code>LlmProvider</code> 是 hermes-llm 定义的接口（类似于「插座标准」），具体的模型后端（如 Anthropic、OpenAI 等）提供各自的实现。这种设计让我们可以：</p>
+      <ul>
+        <li>随时切换到另一个模型提供商（只需换一个 LlmProvider 实现）</li>
+        <li>在测试时注入 <code>MockAgentRuntime</code>（不需要真实模型）</li>
+        <li>让 Agent 循环不依赖具体的模型 SDK，只依赖抽象 trait</li>
+      </ul>
+    </div>
+
+    <div class="box warn">
+      <div class="box-title">⚠️ 路径 B：不使用 Pi SDK</div>
+      <p>R-Code <strong>不依赖 Pi SDK</strong>。<code>deny.toml</code> 中明确禁止 <code>pi-sdk</code>、<code>pi-sdk-core</code>、<code>pi-sdk-agent</code>、<code>pi-agent</code> 相关依赖。R-Code 直接基于 <code>hermes-llm</code> 的 <code>LlmProvider</code> trait 实现 agent 循环（称为「路径 B」），而非使用 Pi SDK 提供的现成 Agent 运行时。</p>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="stream-events">5.6 事件流与 StreamEvent 类型</h2>
+    <p>Agent 循环消费的是 <code>StreamEvent</code>（来自 hermes-llm），产出的是 <code>AgentEvent</code>（R-Code 自有 DTO）。两者是<strong>一对一映射</strong>关系：</p>
+
+    <div class="table-wrap"><table>
+      <thead><tr><th>StreamEvent（输入）</th><th>→</th><th>AgentEvent（输出）</th></tr></thead>
+      <tbody>
+        <tr><td><code>TextDelta</code></td><td>→</td><td><code>AgentEvent::Message { delta: true }</code></td></tr>
+        <tr><td><code>ToolUseStart + Delta + Complete</code></td><td>→</td><td><code>AgentEvent::ToolCall</code> + <code>AgentEvent::ToolResult</code></td></tr>
+        <tr><td><code>Stop</code></td><td>→</td><td>结束本次迭代（无事件）</td></tr>
+        <tr><td><code>Usage</code></td><td>→</td><td>累加 token 用量（内部统计）</td></tr>
+      </tbody>
+    </table></div>
+
+    <p>这种映射让 Agent 循环成了一个「黑盒」：外部只看到 <code>AgentEvent</code> 流，不需要关心模型内部是怎么流式输出的。</p>
+
+    <!-- ============================================================ -->
+    <h2 id="tool-host">5.7 工具调用回路（ToolHost trait）</h2>
+    <p><code>ToolHost</code> 是 hermes-llm 定义的工具执行接口。R-Code 的 <code>ToolGateway</code> 实现了这个 trait，把工具调用接入权限检查、审计记账等安全机制（详见第 7 章）。</p>
+
+    <pre><code>// ToolHost trait（hermes-llm 定义）
+#[async_trait]
+pub trait ToolHost: Send + Sync {
+    async fn call(&amp;self, name: &amp;str, input: serde_json::Value) -&gt; Result&lt;ToolCallOutcome, Error&gt;;
+    async fn list_tools(&amp;self) -&gt; Result&lt;Vec&lt;ToolSpec&gt;, Error&gt;;
+}
+
+// ToolGateway 实现 ToolHost（r-code-gateway）
+#[async_trait]
+impl ToolHost for ToolGateway {
+    async fn call(&amp;self, name: &amp;str, input: serde_json::Value) -&gt; Result&lt;ToolCallOutcome, Error&gt; {
+        // 权限检查 + 执行 + 记账
+        self.execute_call(task_id, run_id, name, input, caller).await
+            .map_err(|e| Error::ToolHost(e.to_string()))
+    }
+}</code></pre>
+
+    <p>工具调用的完整回路：</p>
+    <div class="diagram">
+  模型 ──ToolUseComplete──→ agent_loop ──tool_host.call()──→ ToolGateway
+                                                              │
+                                              ┌───────────────┤
+                                              ▼               ▼
+                                         权限检查          工具注册表
+                                              │               │
+                                              ▼               ▼
+                                         审批/拒绝        执行工具.execute()
+                                                              │
+                                                              ▼
+                                         ToolResult ←── ToolCallOutcome
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="crash-recovery">5.8 崩溃恢复：scan_orphaned_runs</h2>
+    <p>Worker 进程可能因为各种原因崩溃（OOM、段错误、被系统杀掉）。崩溃时，可能有一些 run 还在执行中，数据库里留下 <code>ended_at IS NULL</code> 的记录——这些就是<strong>孤儿 run</strong>。</p>
+
+    <pre><code>//! 崩溃恢复 -- 扫描中断的 agent run。
+//!
+//! Worker 崩溃后，可能留下 `ended_at IS NULL` 的 agent run 记录。
+//! 本模块负责扫描这些孤儿 run，供上层决定恢复 / 标记失败 / 重新调度。
+
+pub struct RecoveryState {
+    pub task_id: String,
+    pub session_id: String,
+    pub last_state: TaskState,
+    pub interrupted: bool,
+}
+
+pub fn scan_orphaned_runs() -&gt; Vec&lt;RecoveryState&gt; {
+    // 当前为桩实现，存储层接入后补全
+    Vec::new()
+}</code></pre>
+
+    <div class="box warn">
+      <div class="box-title">⚠️ 当前状态：桩实现</div>
+      <p><code>scan_orphaned_runs</code> 目前返回空列表。完整的实现需要查询数据库中 <code>ended_at IS NULL</code> 的 agent run 记录，然后根据 <code>last_state</code> 决定是恢复执行还是标记为失败。这是 R4 阶段的待办事项。</p>
+    </div>
+
+    <h3>恢复策略的三种可能</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>场景</th><th>恢复策略</th></tr></thead>
+      <tbody>
+        <tr><td>run 在「探索阶段」崩溃</td><td>可以安全重跑（没有副作用）</td></tr>
+        <tr><td>run 在「执行阶段」崩溃（已修改文件）</td><td>需要回滚到上一个 checkpoint，再决定</td></tr>
+        <tr><td>run 在「审批等待」崩溃</td><td>清除 pending 请求，通知用户</td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============================================================ -->
+    <h2 id="mock-runtime">5.9 MockAgentRuntime（测试用）</h2>
+    <p>在集成测试中，我们不想真的调用 AI 模型。<code>MockAgentRuntime</code> 就是为此设计的<strong>测试替身</strong>：</p>
+
+    <pre><code>// MockAgentRuntime 允许测试注入预设的「模型响应」
+let mut runtime = MockAgentRuntime::new();
+runtime.push_text_turn("Let me check that", Usage::new(3, 4));
+provider.push_turn(RecordedTurn::ok(vec![
+    StreamEvent::TextDelta { text: "Let me check ".to_string() },
+    StreamEvent::TextDelta { text: "that".to_string() },
+    StreamEvent::Usage(Usage::new(5, 5)),
+    StreamEvent::Stop { reason: StopReason::EndTurn },
+]));</code></pre>
+
+    <p>Mock 的核心思想：</p>
+    <ul>
+      <li><strong>预设响应</strong>：测试可以提前压入（push）一系列「模型会返回什么」。</li>
+      <li><strong>确定性</strong>：同样的输入永远得到同样的输出，方便断言。</li>
+      <li><strong>无需网络</strong>：不调用真实的模型 API，测试可以在 CI 中快速运行。</li>
+    </ul>
+
+    <div class="box success">
+      <div class="box-title">✅ 测试示例</div>
+      <pre><code>#[tokio::test]
+async fn tool_use_delta_accumulates_input() {
+    let provider = MockProvider::new("mock");
+    provider.push_turn(RecordedTurn::ok(vec![
+        StreamEvent::ToolUseStart { id: "t1".to_string(), name: "echo".to_string() },
+        StreamEvent::ToolUseDelta { id: "t1".to_string(), input_json: "{\"a\":".to_string() },
+        StreamEvent::ToolUseDelta { id: "t1".to_string(), input_json: "1}".to_string() },
+        StreamEvent::ToolUseComplete { id: "t1".to_string(), input: serde_json::json!({"a": 1}) },
+        StreamEvent::Stop { reason: StopReason::ToolUse },
+    ]));
+    // 断言 ToolCall 携带完整 input
+    let call = events.iter().find_map(|e| match e {
+        AgentEvent::ToolCall { input, .. } =&gt; Some(input.clone()),
+        _ =&gt; None,
+    });
+    assert_eq!(call, Some(serde_json::json!({"a": 1})));
+}</code></pre>
+    </div>
+
+    <!-- ============================================================ -->
+    <h2 id="agent-events">5.10 Agent 事件类型</h2>
+    <p>Agent 运行时对外暴露的事件类型是 <code>AgentEvent</code>，定义在 <code>r-code-core/src/dto.rs</code>：</p>
+
+    <pre><code>pub enum AgentEvent {
+    /// 文本消息（增量 delta 或完整）
+    Message {
+        text: String,
+        delta: bool,          // true = 增量片段，false = 完整消息
+    },
+    /// 工具调用
+    ToolCall {
+        name: String,         // 工具名称
+        input: serde_json::Value, // 输入参数
+        call_id: String,      // 调用 ID（用于关联 ToolResult）
+    },
+    /// 工具结果
+    ToolResult {
+        call_id: String,      // 对应的 ToolCall ID
+        output: serde_json::Value, // 输出结果
+        is_error: bool,       // 是否执行出错
+    },
+    /// Agent 计划
+    Plan {
+        steps: Vec&lt;PlanStep&gt;,
+    },
+}</code></pre>
+
+    <p>前端通过消费这些事件来更新 UI：</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>事件</th><th>前端行为</th></tr></thead>
+      <tbody>
+        <tr><td><code>AgentEvent::Message { delta: true }</code></td><td>在对话流中追加文本片段（打字机效果）</td></tr>
+        <tr><td><code>AgentEvent::ToolCall</code></td><td>显示「正在调用工具 X」的进度卡片</td></tr>
+        <tr><td><code>AgentEvent::ToolResult</code></td><td>展示工具输出；如果是错误则高亮红色</td></tr>
+        <tr><td><code>AgentEvent::Plan</code></td><td>渲染 Agent 的计划步骤列表</td></tr>
+      </tbody>
+    </table></div>
+
+    <!-- ============================================================ -->
+    <h2 id="summary">5.11 本章小结</h2>
+    <p>本章我们从「什么是 Agent」出发，一步步拆解了 Agent 运行时的核心机制：</p>
+
+    <div class="diagram">
+  ┌─────────────────────────────────────────────────────────────┐
+  │                  Agent 运行时全景图                          │
+  │                                                             │
+  │  ┌──────────┐    ┌──────────┐    ┌──────────┐              │
+  │  │ 前端 UI  │◄───│ IPC 通道 │◄───│  Main    │              │
+  │  └──────────┘    └──────────┘    └────┬─────┘              │
+  │                                       │ fork                │
+  │                                       ▼                     │
+  │                               ┌──────────────┐              │
+  │                               │   Worker     │              │
+  │                               │              │              │
+  │                               │ AgentRuntime │              │
+  │                               │  trait  impl │              │
+  │                               │      │       │              │
+  │                               │      ▼       │              │
+  │                               │ Agent Loop   │              │
+  │                               │      │       │              │
+  │                               │  ┌───┴───┐   │              │
+  │                               │  ▼       ▼   │              │
+  │                               │Model   ToolHost│             │
+  │                               │Adapter   │     │             │
+  │                               │  │       ▼     │             │
+  │                               │  │  ToolGateway│             │
+  │                               │  │  (权限+审计) │             │
+  │                               └──────────────┘              │
+  └─────────────────────────────────────────────────────────────┘
+    </div>
+
+    <ul>
+      <li><strong>Agent</strong> 是一个循环：模型 → 工具 → 结果 → 模型，直到任务完成。</li>
+      <li><strong>AgentRuntime trait</strong> 提供了 <code>create_session</code> / <code>start_run</code> / <code>steer</code> / <code>abort</code> / <code>poll_events</code> 五个方法。</li>
+      <li><strong>Agent Loop</strong> 每次迭代：获取流式事件 → 累积文本 → 跟踪工具调用 → 执行工具 → 组装消息。</li>
+      <li><strong>ToolHost</strong> 是工具执行的抽象接口，<code>ToolGateway</code> 提供带权限检查的实现。</li>
+      <li><strong>崩溃恢复</strong> 通过 <code>scan_orphaned_runs</code> 扫描孤儿 run（当前是桩实现）。</li>
+      <li><strong>MockAgentRuntime</strong> 让测试可以在不调用真实模型的情况下运行。</li>
+    </ul>
+
+    <p>下一章，我们来学习 R-Code 如何用 PTY 构建<strong>产品级终端系统</strong>——Agent 执行命令时，那些输出是怎么被捕获、解析并展示给用户的。</p>
+
+    <div class="pagenav">
+      <a href="04-pty-deep-dive.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 4 章：PTY 伪终端</div></a>
+      <a href="06-terminal-system.html" class="pagenav__link right"><div class="pagenav__label">下一页 →</div><div class="pagenav__title">第 6 章：终端系统</div></a>
+    </div>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

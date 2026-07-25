@@ -1,0 +1,46 @@
+[package]
+name = "r-code-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code 核心产品类型：DTO、状态机、错误类型"
+
+[features]
+default = []
+testing = ["dep:tempfile"]
+
+[dependencies]
+# 公共合同
+hermes-core = { workspace = true }
+hermes-error = { workspace = true }
+
+# 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# 工具
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# 安全：OS keychain 集成与日志脱敏 [doc-07 §5, §6]
+keyring = { workspace = true }
+regex = "1"
+
+# 可选：测试工具
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+hermes-llm = { workspace = true }
+hermes-store = { workspace = true }
+hermes-config = { workspace = true }
+hermes-compaction = { workspace = true }
+hermes-mcp = { workspace = true }

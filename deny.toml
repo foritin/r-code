@@ -1,0 +1,55 @@
+# cargo-deny 配置 -- 依赖边界 lint
+#
+# ✅ 决策：路径 B - 不使用 Pi SDK，直接基于 hermes-llm 的 LlmProvider trait 实现 agent loop
+# 整个 workspace 不依赖任何 Pi SDK 包。
+# [doc-07 §7.2] [doc-18]
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+# CI 中 cargo audit 单独运行，这里做 deny 层补充
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+version = 2
+# 禁止 Pi SDK 依赖 -- 路径 B 决策
+deny = [
+    # 任何 Pi SDK 相关的包名前缀
+    { name = "pi-sdk" },
+    { name = "pi-sdk-core" },
+    { name = "pi-sdk-agent" },
+    { name = "pi-agent" },
+]
+# 允许重复依赖（workspace 中不同 crate 可能依赖不同版本）
+multiple-versions = "warn"
+# 允许通配符依赖
+wildcards = "allow"
+
+[sources]
+version = 2
+# 只允许 crates.io
+unknown-registry = "deny"
+unknown-git = "allow"  # 允许 git 依赖（agent-core submodule）
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

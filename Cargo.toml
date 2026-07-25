@@ -1,0 +1,103 @@
+[workspace]
+resolver = "2"
+members = [
+    # agent-core 公共合同子模块（固定 commit）
+    "vendor/agent-core/crates/hermes-error",
+    "vendor/agent-core/crates/hermes-core",
+    "vendor/agent-core/crates/hermes-llm",
+    "vendor/agent-core/crates/hermes-mcp",
+    "vendor/agent-core/crates/hermes-store",
+    "vendor/agent-core/crates/hermes-config",
+    "vendor/agent-core/crates/hermes-compaction",
+    "vendor/agent-core/crates/hermes-ipc",
+    "vendor/agent-core/crates/hermes-tauri",
+    # R-Code 产品私有 crate
+    "crates/r-code-core",
+    "crates/r-code-store",
+    "crates/r-code-gateway",
+    "crates/r-code-terminal",
+    "crates/r-code-agent-worker",
+    "crates/r-code-host",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+repository = "https://github.com/charter/r-code"
+authors = ["R-Code Team"]
+
+[workspace.dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+futures = "0.3"
+async-trait = "0.1"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# 错误与日志
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# 通用工具
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+bytes = "1"
+dirs = "5"
+
+# HTTP
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+
+# SQLite（产品私有存储层）
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# 安全
+blake3 = "1"
+keyring = "3"
+
+# 文件监听
+notify = "6"
+
+# Git
+git2 = { version = "0.19", features = ["ssh"] }
+
+# PTY
+portable-pty = "0.8"
+
+# 内部公共 crate（agent-core 公共合同）
+hermes-error = { path = "vendor/agent-core/crates/hermes-error" }
+hermes-core = { path = "vendor/agent-core/crates/hermes-core" }
+hermes-llm = { path = "vendor/agent-core/crates/hermes-llm" }
+hermes-mcp = { path = "vendor/agent-core/crates/hermes-mcp" }
+hermes-store = { path = "vendor/agent-core/crates/hermes-store" }
+hermes-config = { path = "vendor/agent-core/crates/hermes-config" }
+hermes-compaction = { path = "vendor/agent-core/crates/hermes-compaction" }
+hermes-ipc = { path = "vendor/agent-core/crates/hermes-ipc" }
+hermes-tauri = { path = "vendor/agent-core/crates/hermes-tauri" }
+
+# 内部产品私有 crate
+r-code-core = { path = "crates/r-code-core" }
+r-code-store = { path = "crates/r-code-store" }
+r-code-gateway = { path = "crates/r-code-gateway" }
+r-code-terminal = { path = "crates/r-code-terminal" }
+r-code-agent-worker = { path = "crates/r-code-agent-worker" }
+r-code-host = { path = "crates/r-code-host" }
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

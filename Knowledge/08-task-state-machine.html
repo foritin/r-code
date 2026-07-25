@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 8 章：任务状态机 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links">
+      <a href="index.html">首页</a>
+      <span style="color:var(--text-dim)">·</span>
+      <span>第 8 章</span>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar__group">
+      <div class="sidebar__title">本章目录</div>
+      <a href="#task-entity" class="sidebar__item">Task 核心实体</a>
+      <a href="#task-fields" class="sidebar__item">Task DTO 完整字段</a>
+      <a href="#task-mode" class="sidebar__item">TaskMode 交互模式</a>
+      <a href="#task-state" class="sidebar__item">TaskState 状态机</a>
+      <a href="#validate-transition" class="sidebar__item">validate_transition 逻辑</a>
+      <a href="#review-state" class="sidebar__item">ReviewState 审查状态</a>
+      <a href="#invariants" class="sidebar__item">硬性不变量</a>
+      <a href="#agent-run" class="sidebar__item">AgentRun 生命周期</a>
+      <a href="#file-baseline" class="sidebar__item">文件基线与变更追踪</a>
+      <a href="#rollback" class="sidebar__item">按轮回滚</a>
+      <a href="#archive" class="sidebar__item">归档与恢复</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta">
+      <span class="meta__item"><span class="status status-intermediate">进阶</span></span>
+      <span class="meta__item">📖 阅读约 20 分钟</span>
+      <span class="meta__item">📅 2026-07-25</span>
+    </div>
+
+    <h1>第 8 章：任务状态机</h1>
+    <p class="lede">R-Code 的核心是"任务"（Task）。本章带你深入理解 Task 的状态模型、合法转换规则、审查机制以及字节级回滚原理。</p>
+
+    <h2 id="task-entity">8.1 什么是 Task</h2>
+    <p>在 R-Code 中，<strong>Task</strong> 代表用户给 Agent 的一个目标。你可以把它想象成一张"工单"：用户填写标题和目标描述，指定交互模式，Agent 领取工单后开始工作。</p>
+    <p>每个 Task 拥有唯一 ID、归属项目、完整的时间戳记录，以及当前所处状态。Task 是 R-Code 调度、审查、回滚的最小原子单元。</p>
+
+    <div class="box info">
+      <div class="box-title">类比：工单系统</div>
+      <p>把 Task 想象成工单系统里的一张工单：创建时状态为"待处理"（Idle），开始处理后变为"处理中"（InProgress），完成后进入"待审查"（ReviewReady），审查通过后回到"已完成"（Idle）。</p>
+    </div>
+
+    <h2 id="task-fields">8.2 Task DTO 完整字段</h2>
+    <p>Task DTO 定义在 <code>crates/r-code-core/src/dto.rs</code>，是冻结的产品数据结构。</p>
+
+    <pre><code>pub struct Task {
+    pub id: String,              // UUID v4
+    pub project_id: String,      // 归属项目的 canonical path
+    pub title: String,           // 用户可见标题
+    pub goal: String,            // 目标描述（给 Agent 的指令）
+    pub mode: TaskMode,          // 交互模式（ask / edit / auto）
+    pub state: TaskState,        // 当前状态
+    pub worktree_path: Option&lt;String&gt;, // Git worktree 路径
+    pub created_at: DateTime&lt;Utc&gt;,
+    pub updated_at: DateTime&lt;Utc&gt;,
+}</code></pre>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td>String</td><td>UUID v4，全局唯一</td></tr>
+        <tr><td><code>project_id</code></td><td>String</td><td>项目路径（worktree 的 canonical 形式）</td></tr>
+        <tr><td><code>title</code></td><td>String</td><td>用户填写的简短标题</td></tr>
+        <tr><td><code>goal</code></td><td>String</td><td>详细的目标描述，是 Agent 执行的核心指令</td></tr>
+        <tr><td><code>mode</code></td><td>TaskMode</td><td>决定 Agent 是否需要审批才能执行操作</td></tr>
+        <tr><td><code>state</code></td><td>TaskState</td><td>当前所处生命周期状态</td></tr>
+        <tr><td><code>worktree_path</code></td><td>Option&lt;String&gt;</td><td>Git worktree 路径，隔离工作区</td></tr>
+        <tr><td><code>created_at</code></td><td>DateTime&lt;Utc&gt;</td><td>创建时间，RFC 3339 格式存储</td></tr>
+        <tr><td><code>updated_at</code></td><td>DateTime&lt;Utc&gt;</td><td>最后更新时间</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="task-mode">8.3 TaskMode 交互模式</h2>
+    <p>TaskMode 决定 Agent 在执行工具调用时是否需要用户审批：</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>模式</th><th>值</th><th>行为</th></tr></thead>
+      <tbody>
+        <tr><td><code>Ask</code></td><td><code>"ask"</code></td><td>只读问答模式，Agent 不会修改任何文件</td></tr>
+        <tr><td><code>Edit</code></td><td><code>"edit"</code></td><td>受控写入模式，高风险工具调用需要用户审批</td></tr>
+        <tr><td><code>Auto</code></td><td><code>"auto"</code></td><td>全自动模式，验证通过后自动接受</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <div class="box warn">
+      <div class="box-title">注意</div>
+      <p>TaskMode 在创建 Task 时指定，一般不建议运行时切换。因为模式变化会影响整个审查流程的语义。</p>
+    </div>
+
+    <h2 id="task-state">8.4 TaskState 状态机详解</h2>
+    <p>TaskState 是任务生命周期的核心。状态转换路径如下：</p>
+
+    <pre><code>Idle ──► Exploring ──► InProgress ──► ReviewReady ──► Idle
+  │           │              │                  │
+  │           └──────────────┴──────────────────┘
+  │           (取消 / 回退路径，回到 Idle)
+  │
+  └──► Archived (任意非终态都可以归档)</code></pre>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>值</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><code>Idle</code></td><td><code>"idle"</code></td><td>空闲：未开始或已完成上一轮</td></tr>
+        <tr><td><code>Exploring</code></td><td><code>"exploring"</code></td><td>探索中：Agent 正在读取文件、理解上下文</td></tr>
+        <tr><td><code>InProgress</code></td><td><code>"in_progress"</code></td><td>进行中：Agent 正在执行工具调用</td></tr>
+        <tr><td><code>ReviewReady</code></td><td><code>"review_ready"</code></td><td>待审查：Agent 完成一轮，等待用户决定</td></tr>
+        <tr><td><code>Archived</code></td><td><code>"archived"</code></td><td>已归档：终态，不可再操作</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h3>合法转换 vs 非法转换</h3>
+    <p>不是任意两个状态之间都可以跳转。R-Code 通过 <code>validate_transition</code> 函数严格控制。</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>转换</th><th>合法性</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>Idle → Exploring</td><td style="color:var(--green)">✓ 合法</td><td>开始探索</td></tr>
+        <tr><td>Exploring → InProgress</td><td style="color:var(--green)">✓ 合法</td><td>开始执行</td></tr>
+        <tr><td>InProgress → ReviewReady</td><td style="color:var(--green)">✓ 合法</td><td>完成一轮，等待审查</td></tr>
+        <tr><td>ReviewReady → Idle</td><td style="color:var(--green)">✓ 合法</td><td>审查完成（接受/回滚）后回到空闲</td></tr>
+        <tr><td>Exploring → Idle</td><td style="color:var(--green)">✓ 合法</td><td>取消探索</td></tr>
+        <tr><td>InProgress → Idle</td><td style="color:var(--green)">✓ 合法</td><td>取消执行</td></tr>
+        <tr><td>任意非终态 → Archived</td><td style="color:var(--green)">✓ 合法</td><td>归档</td></tr>
+        <tr><td>Idle → InProgress</td><td style="color:var(--red)">✗ 非法</td><td>不能跳过 Exploring</td></tr>
+        <tr><td>ReviewReady → InProgress</td><td style="color:var(--red)">✗ 非法</td><td>不能直接重新执行</td></tr>
+        <tr><td>Archived → 任意</td><td style="color:var(--red)">✗ 非法</td><td>Archived 是终态，不可逆</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="validate-transition">8.5 validate_transition 函数逻辑</h2>
+    <p><code>validate_transition</code> 定义在 <code>crates/r-code-core/src/state.rs</code>，是整个状态机的守门人。</p>
+
+    <pre><code>pub fn validate_transition(
+    from: TaskState,
+    to: TaskState
+) -> Result&lt;(), StateTransitionError&gt; {
+    // 1. Archived 是终态，直接拒绝
+    if from == TaskState::Archived {
+        return Err(StateTransitionError::Archived);
+    }
+
+    // 2. 模式匹配所有合法转换
+    let valid = match (from, to) {
+        (Idle, Idle)              => true,  // 同状态不算转换
+        (Idle, Exploring)         => true,  // 正常流程
+        (Exploring, InProgress)   => true,
+        (InProgress, ReviewReady) => true,
+        (ReviewReady, Idle)       => true,
+        (Exploring, Idle)         => true,  // 取消
+        (InProgress, Idle)        => true,  // 取消
+        (_, Archived)             => true,  // 归档
+        _ => false,  // 其他全部非法
+    };
+
+    if valid { Ok(()) }
+    else { Err(StateTransitionError::IllegalTransition { from, to }) }
+}</code></pre>
+
+    <div class="box info">
+      <div class="box-title">设计哲学</div>
+      <p>状态机采用"白名单"模式：只有明确列出的转换才合法，其余全部拒绝。这防止了因遗漏而意外开放危险路径。</p>
+    </div>
+
+    <h3>错误类型</h3>
+    <pre><code>pub enum StateTransitionError {
+    IllegalTransition { from: TaskState, to: TaskState },
+    Archived,
+    ActiveRunExists,
+    PendingToolCalls,
+}</code></pre>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>错误</th><th>触发条件</th></tr></thead>
+      <tbody>
+        <tr><td><code>IllegalTransition</code></td><td>尝试非法状态转换</td></tr>
+        <tr><td><code>Archived</code></td><td>Task 已归档，任何操作都被拒绝</td></tr>
+        <tr><td><code>ActiveRunExists</code></td><td>已存在活跃 Run，不能开始新的</td></tr>
+        <tr><td><code>PendingToolCalls</code></td><td>存在未完成的高风险调用，不能进入 ReviewReady</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="review-state">8.6 ReviewState 审查状态</h2>
+    <p>当 Task 进入 <code>ReviewReady</code> 后，用户需要做出决定。ReviewState 记录这个审查结果：</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>审查状态</th><th>值</th><th>含义</th><th>终态</th></tr></thead>
+      <tbody>
+        <tr><td><code>Pending</code></td><td><code>"pending"</code></td><td>等待用户决定</td><td>否</td></tr>
+        <tr><td><code>Accepted</code></td><td><code>"accepted"</code></td><td>用户接受变更</td><td>是</td></tr>
+        <tr><td><code>AutoAccepted</code></td><td><code>"auto_accepted"</code></td><td>验证通过，自动接受</td><td>是</td></tr>
+        <tr><td><code>RolledBack</code></td><td><code>"rolled_back"</code></td><td>用户回滚变更</td><td>是</td></tr>
+        <tr><td><code>Answered</code></td><td><code>"answered"</code></td><td>Ask 模式零变化自动结算</td><td>是</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <pre><code>pub fn validate_review_transition(
+    from: ReviewState,
+    to: ReviewState
+) -> Result&lt;(), StateTransitionError&gt;
+// 合法转换：
+//   Pending → Accepted
+//   Pending → AutoAccepted
+//   Pending → RolledBack
+//   Pending → Answered
+// 终态不可转换</code></pre>
+
+    <div class="box success">
+      <div class="box-title">最佳实践</div>
+      <p>在 Edit 模式下，用户应逐文件审查 diff 后再接受。Auto 模式下系统会自动运行验证命令，通过则 AutoAccepted。</p>
+    </div>
+
+    <h2 id="invariants">8.7 硬性不变量</h2>
+    <p>R-Code 的状态机遵循三条硬性不变量（invariant），违反任何一条都会导致系统拒绝操作：</p>
+
+    <div class="box danger">
+      <div class="box-title">不变量 1：一个 Task 最多一个活跃 Run</div>
+      <p>同一时刻，一个 Task 只能有一个正在运行的 AgentRun。这是为了防止并发执行导致状态混乱。</p>
+    </div>
+
+    <div class="box danger">
+      <div class="box-title">不变量 2：未完成高风险调用不能进入审查</div>
+      <p>如果存在未完成（Running）的 R2/R3/R4 级别工具调用，Task 不能进入 ReviewReady 状态。</p>
+    </div>
+
+    <div class="box danger">
+      <div class="box-title">不变量 3：Archived 是终态</div>
+      <p>一旦 Task 被归档，任何状态转换都会被拒绝。这是为了防止误操作激活已废弃的任务。</p>
+    </div>
+
+    <h2 id="agent-run">8.8 AgentRun 生命周期</h2>
+    <p><strong>AgentRun</strong> 记录一次 Agent 执行的全过程。当 Task 从 Idle 开始执行时，系统创建一个 AgentRun：</p>
+
+    <pre><code>pub struct AgentRun {
+    pub id: String,                // UUID v4
+    pub task_id: String,           // 所属 Task
+    pub model: String,             // 使用的模型名称
+    pub review_state: ReviewState, // 审查状态（默认 Pending）
+    pub started_at: DateTime&lt;Utc&gt;,
+    pub ended_at: Option&lt;DateTime&lt;Utc&gt;&gt;, // None = 仍在运行
+    pub usage_json: Option&lt;String&gt;,       // Token 用量统计
+}</code></pre>
+
+    <div class="flow">
+      <span class="flow-box">创建</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">Running</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-green">Pending 审查</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-accent">Accepted / AutoAccepted / RolledBack / Answered</span>
+    </div>
+
+    <h2 id="file-baseline">8.9 文件基线与变更追踪</h2>
+    <p>为了实现可靠的回滚，R-Code 在每次 Agent 执行前会捕获<strong>文件基线（File Baseline）</strong>：</p>
+
+    <div class="layer">
+      <div class="layer-item" style="background:var(--surface-2)">文件基线（FileBaseline）</div>
+      <div class="layer-item">记录每个文件的 content_hash + blob_key</div>
+      <div class="layer-item">创建时机：Agent 开始修改文件之前</div>
+      <div class="layer-item">存储位置：SQLite file_baselines 表 + blob 文件</div>
+    </div>
+
+    <p>Agent 执行过程中，每次文件修改都会记录到 <code>file_changes</code> 表：</p>
+
+    <pre><code>pub struct FileChange {
+    pub id: String,
+    pub task_id: String,
+    pub tool_call_id: Option&lt;String&gt;,  // 哪个工具调用产生的
+    pub path: String,                    // 文件路径
+    pub change_type: String,             // modify / create / delete / rename
+    pub before_hash: Option&lt;String&gt;,    // 变更前内容哈希
+    pub after_hash: Option&lt;String&gt;,     // 变更后内容哈希
+    pub old_path: Option&lt;String&gt;,       // 重命名时的旧路径
+    pub created_at: DateTime&lt;Utc&gt;,
+}</code></pre>
+
+    <h2 id="rollback">8.10 按轮回滚（byte-exact rollback）</h2>
+    <p>R-Code 的回滚是<strong>字节级精确</strong>的：不是简单地在 Git 层面 revert，而是把每个文件恢复到基线时刻的原始内容。</p>
+
+    <div class="box info">
+      <div class="box-title">类比：时间机器</div>
+      <p>想象你在修改一份重要文档前，先完整复制了一份（基线）。无论后来改了多少次，只要点击"回滚"，系统就用那份精确复制件覆盖回去——字节不差。</p>
+    </div>
+
+    <p>回滚流程：</p>
+    <ol>
+      <li>用户点击"回滚"按钮</li>
+      <li>系统查询该 Run 关联的所有 FileBaseline 记录</li>
+      <li>从 blob 存储中读取原始文件内容</li>
+      <li>逐文件覆盖当前磁盘文件</li>
+      <li>更新 AgentRun.review_state = RolledBack</li>
+      <li>Task 状态从 ReviewReady 回到 Idle</li>
+    </ol>
+
+    <div class="box success">
+      <div class="box-title">为什么用字节级回滚而非 Git revert</div>
+      <p>Agent 可能在 Git 工作区中产生了未 commit 的改动、临时文件、.gitignore 排除文件。Git revert 无法覆盖这些场景，但字节级回滚可以精确还原一切。</p>
+    </div>
+
+    <h2 id="archive">8.11 归档与恢复</h2>
+    <p><strong>归档（Archived）</strong>是 Task 的终态。归档后的 Task：</p>
+    <ul>
+      <li>不能再开始新的 AgentRun</li>
+      <li>不能再进行任何状态转换</li>
+      <li>仍然保留在数据库中，用于历史查询</li>
+      <li>关联的 file_baselines、file_changes 等数据保留</li>
+    </ul>
+
+    <div class="box warn">
+      <div class="box-title">注意：Archived 不可逆</div>
+      <p>目前 R-Code 不提供"反归档"操作。如果需要重新激活一个已归档的 Task，技术上需要手动操作数据库（将 state 从 archived 改回 idle）。</p>
+    </div>
+
+    <p>归档的常见场景：</p>
+    <ul>
+      <li>任务已完成且用户不再需要查看</li>
+      <li>任务已废弃（用户改变了需求方向）</li>
+      <li>清理工作区，保持活跃任务列表整洁</li>
+    </ul>
+
+    <hr>
+    <p style="color:var(--text-dim);font-size:13px">本章带你深入理解了 R-Code 任务状态机的核心设计。第 9 章将介绍这些状态数据是如何持久化存储的。</p>
+
+    <div class="pagenav">
+      <a href="07-security-model.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 7 章：安全模型</div></a>
+      <a href="09-storage-persistence.html" class="pagenav__link right"><div class="pagenav__label">下一页 →</div><div class="pagenav__title">第 9 章：存储与持久化</div></a>
+    </div>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

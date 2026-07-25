@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 9 章：存储与持久化 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links">
+      <a href="index.html">首页</a>
+      <span style="color:var(--text-dim)">·</span>
+      <span>第 9 章</span>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar__group">
+      <div class="sidebar__title">本章目录</div>
+      <a href="#dual-storage" class="sidebar__item">双存储架构</a>
+      <a href="#data-flow" class="sidebar__item">数据流：事件先行</a>
+      <a href="#sqlite-tables" class="sidebar__item">SQLite 表结构</a>
+      <a href="#database-struct" class="sidebar__item">Database 结构体</a>
+      <a href="#wal-mode" class="sidebar__item">WAL 模式与 PRAGMA</a>
+      <a href="#migrations" class="sidebar__item">Schema 迁移系统</a>
+      <a href="#backup-manager" class="sidebar__item">BackupManager</a>
+      <a href="#crash-recovery" class="sidebar__item">崩溃恢复流程</a>
+      <a href="#document-store" class="sidebar__item">Document Store</a>
+      <a href="#repository-pattern" class="sidebar__item">Repository 模式</a>
+      <a href="#session-truncation" class="sidebar__item">会话截断修复</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta">
+      <span class="meta__item"><span class="status status-intermediate">进阶</span></span>
+      <span class="meta__item">📖 阅读约 20 分钟</span>
+      <span class="meta__item">📅 2026-07-25</span>
+    </div>
+
+    <h1>第 9 章：存储与持久化</h1>
+    <p class="lede">R-Code 采用"双存储"架构：JSONL 作为不可变的事件真相源，SQLite 作为可查询的产品状态视图。本章带你理解数据如何安全落地。</p>
+
+    <h2 id="dual-storage">9.1 双存储架构</h2>
+    <p>R-Code 使用两套存储系统，各司其职：</p>
+
+    <div class="layer">
+      <div class="layer-item" style="background:var(--surface-2)">hermes-store（JSONL）</div>
+      <div class="layer-item">不可变事件日志，Source of Truth</div>
+      <div class="layer-item">crash-safe：追加写入，不怕断电</div>
+      <div class="layer-item">用于审计、回放、崩溃恢复</div>
+    </div>
+
+    <div class="layer">
+      <div class="layer-item" style="background:var(--surface-2)">r-code-store（SQLite）</div>
+      <div class="layer-item">产品状态视图，可查询</div>
+      <div class="layer-item">支持复杂查询、索引、事务</div>
+      <div class="layer-item">UI 直接读取的数据源</div>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">类比：会计账簿</div>
+      <p>JSONL 就像"流水账"——每一笔交易按时间顺序记录，永不修改。SQLite 就像"总账簿"——按科目分类汇总，方便查询。如果总账丢了，可以从流水账重新汇总。</p>
+    </div>
+
+    <h2 id="data-flow">9.2 数据流：事件先行</h2>
+    <p>每次状态变化时，系统遵循"先写 JSONL，再投影到 SQLite"的顺序：</p>
+
+    <div class="flow">
+      <span class="flow-box">SessionEvent 发生</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-green">追加写入 JSONL</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-accent">投影到 SQLite</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">UI 更新</span>
+    </div>
+
+    <div class="box success">
+      <div class="box-title">为什么先写 JSONL</div>
+      <p>JSONL 是追加写入，即使系统在"投影到 SQLite"之前崩溃，事件也不会丢失。重启后系统可以从 JSONL 重放（replay）所有事件，重建 SQLite 状态。</p>
+    </div>
+
+    <h2 id="sqlite-tables">9.3 SQLite 表结构</h2>
+    <p>SQLite 数据库包含以下核心表（定义在 <code>crates/r-code-store/src/migrations.rs</code>）：</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>表名</th><th>用途</th><th>关键字段</th></tr></thead>
+      <tbody>
+        <tr><td><code>tasks</code></td><td>任务主表</td><td>id, project_id, title, goal, mode, state</td></tr>
+        <tr><td><code>agent_runs</code></td><td>Agent 执行记录</td><td>id, task_id, model, review_state, ended_at</td></tr>
+        <tr><td><code>tool_calls</code></td><td>工具调用记录</td><td>id, run_id, task_id, tool_name, risk_level, status</td></tr>
+        <tr><td><code>file_changes</code></td><td>文件变更记录</td><td>id, task_id, path, change_type, before_hash, after_hash</td></tr>
+        <tr><td><code>file_baselines</code></td><td>文件基线快照</td><td>id, task_id, path, content_hash, blob_key</td></tr>
+        <tr><td><code>blobs</code></td><td>内容寻址存储</td><td>hash, ref_count</td></tr>
+        <tr><td><code>permission_requests</code></td><td>权限请求</td><td>id, task_id, tool_call_id, risk_level, decision</td></tr>
+        <tr><td><code>workspaces</code></td><td>工作区</td><td>canonical_path, display_name, trust_state</td></tr>
+        <tr><td><code>task_events</code></td><td>任务事件（JSONL 投影）</td><td>id, task_id, event_type, created_at</td></tr>
+        <tr><td><code>verifications</code></td><td>验证运行记录</td><td>id, task_id, run_id, command, status, exit_code</td></tr>
+        <tr><td><code>schema_version</code></td><td>迁移版本追踪</td><td>version, applied_at</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="database-struct">9.4 Database 结构体</h2>
+    <p><code>Database</code> 定义在 <code>crates/r-code-store/src/database.rs</code>，封装了 rusqlite + r2d2 连接池：</p>
+
+    <pre><code>pub struct Database {
+    pool: Pool&lt;SqliteConnectionManager&gt;,
+}
+
+impl Database {
+    /// 打开文件数据库（WAL 模式 + foreign_keys ON）
+    pub fn open(path: impl AsRef&lt;Path&gt;) -&lt; Result&lt;Self, ProductError&gt; { ... }
+
+    /// 打开内存数据库（用于测试）
+    pub fn open_in_memory() -&lt; Result&lt;Self, ProductError&gt; { ... }
+
+    /// 获取连接（用于 repository 操作）
+    pub fn conn() -&lt; Result&lt;PooledConnection, ProductError&gt; { ... }
+}</code></pre>
+
+    <div class="box info">
+      <div class="box-title">连接池大小</div>
+      <p>文件模式使用 <code>max_size(8)</code> 连接池，内存测试模式使用 <code>max_size(1)</code>。桌面应用低并发，WAL 模式支持多读单写。</p>
+    </div>
+
+    <h2 id="wal-mode">9.5 WAL 模式与 PRAGMA</h2>
+    <p>数据库打开时自动执行以下 PRAGMA 配置：</p>
+
+    <pre><code>PRAGMA journal_mode=WAL;          -- 写前日志，支持并发读写
+PRAGMA foreign_keys=ON;            -- 启用外键约束
+PRAGMA synchronous=NORMAL;         -- 同步模式（性能与安全平衡）
+PRAGMA busy_timeout=5000;          -- 锁等待超时 5 秒</code></pre>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>PRAGMA</th><th>值</th><th>作用</th></tr></thead>
+      <tbody>
+        <tr><td><code>journal_mode</code></td><td>WAL</td><td>Write-Ahead Logging，读写不互相阻塞</td></tr>
+        <tr><td><code>foreign_keys</code></td><td>ON</td><td>保证引用完整性，防止孤儿记录</td></tr>
+        <tr><td><code>synchronous</code></td><td>NORMAL</td><td>WAL 模式下足够安全，性能更好</td></tr>
+        <tr><td><code>busy_timeout</code></td><td>5000ms</td><td>等待锁释放，避免立即报错</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2 id="migrations">9.6 Schema 迁移系统</h2>
+    <p>R-Code 使用版本化迁移系统（定义在 <code>crates/r-code-store/src/migrations.rs</code>）：</p>
+
+    <pre><code>pub fn run_migrations(conn: &Connection) -> Result&lt;(), ProductError&gt; {
+    // 1. 创建 schema_version 表（如果不存在）
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );"
+    )?;
+
+    // 2. 获取当前版本
+    let current: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version", ...
+    )?;
+
+    // 3. 按序执行未应用的迁移
+    let migrations: &[(i64, &str)] = &[(1, MIGRATION_001)];
+    for (version, sql) in migrations {
+        if *version > current {
+            conn.execute_batch(sql)?;
+            conn.execute("INSERT INTO schema_version (version) VALUES (?1)", ...)?;
+        }
+    }
+}</code></pre>
+
+    <div class="box success">
+      <div class="box-title">幂等性保证</div>
+      <p>迁移可以安全地重复执行。已应用的迁移会被记录在 <code>schema_version</code> 表中，下次运行时会自动跳过。</p>
+    </div>
+
+    <h2 id="backup-manager">9.7 BackupManager</h2>
+    <p><code>BackupManager</code> 定义在 <code>crates/r-code-store/src/backup.rs</code>，提供数据库备份与恢复功能：</p>
+
+    <pre><code>pub struct BackupManager {
+    backup_dir: PathBuf,
+}
+
+impl BackupManager {
+    pub fn backup(&self, db_path: &Path) -> Result&lt;PathBuf, ProductError&gt;;
+    pub fn restore(&self, backup_path: &Path, db_path: &Path) -> Result&lt;(), ProductError&gt;;
+    pub fn list_backups(&self) -> Result&lt;Vec&lt;PathBuf&gt;, ProductError&gt;;
+    pub fn verify(&self, backup_path: &Path) -> Result&lt;bool, ProductError&gt;;
+}</code></pre>
+
+    <h3>备份命名规则</h3>
+    <pre><code>{db_stem}-{timestamp}.db
+例如：r-code-20260725T143022.db</code></pre>
+
+    <h3>恢复流程</h3>
+    <ol>
+      <li>检查备份文件是否存在</li>
+      <li>清除目标位置的 <code>-wal</code> 和 <code>-shm</code> 边车文件</li>
+      <li>用备份文件覆盖目标数据库</li>
+      <li>下次打开时 SQLite 自动检查完整性</li>
+    </ol>
+
+    <div class="box warn">
+      <div class="box-title">注意：WAL checkpoint</div>
+      <p>备份前应确保数据库连接已关闭或已 checkpoint。WAL 模式下，最后一个连接关闭时 SQLite 自动 checkpoint，主 .db 文件即为一致状态。</p>
+    </div>
+
+    <h2 id="crash-recovery">9.8 崩溃恢复流程</h2>
+    <p>当 R-Code 异常退出后重启，系统执行以下恢复流程：</p>
+
+    <div class="flow">
+      <span class="flow-box">应用启动</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-accent">打开 SQLite（WAL checkpoint）</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box">检查活跃 Run</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-yellow">标记中断的 Run</span>
+      <span class="flow-arrow">→</span>
+      <span class="flow-box diagram-green">恢复完成</span>
+    </div>
+
+    <p>具体步骤：</p>
+    <ol>
+      <li>SQLite WAL 文件自动合并到主数据库（崩溃一致性由 WAL 保证）</li>
+      <li>查询 <code>agent_runs</code> 表中 <code>ended_at IS NULL</code> 的记录</li>
+      <li>将这些 Run 标记为异常终止（ended_at = 当前时间）</li>
+      <li>关联的 Task 状态根据情况回退到 Idle 或保持原状态</li>
+      <li>用户可以在 UI 中看到"上次会话被中断"的提示</li>
+    </ol>
+
+    <h2 id="document-store">9.9 Document Store</h2>
+    <p>除了结构化数据，R-Code 还管理文档内容（如文件快照、验证输出等）。这些内容存储在 <strong>blob 存储</strong>中：</p>
+
+    <div class="layer">
+      <div class="layer-item" style="background:var(--surface-2)">Blob 存储</div>
+      <div class="layer-item">内容寻址：以 SHA-256 哈希作为 key</div>
+      <div class="layer-item">引用计数：ref_count 跟踪使用方数量</div>
+      <div class="layer-item">自动清理：ref_count 归零时删除文件</div>
+    </div>
+
+    <p>Document Store 还维护 BOM（Bill of Materials）和 ConflictStatus：</p>
+    <ul>
+      <li><strong>BOM</strong>：记录一个 Task 涉及的所有文件及其哈希，用于完整性校验</li>
+      <li><strong>ConflictStatus</strong>：标记文件是否存在合并冲突</li>
+    </ul>
+
+    <h2 id="repository-pattern">9.10 Repository 模式</h2>
+    <p>R-Code 使用 Repository 模式封装数据访问（定义在 <code>crates/r-code-store/src/repositories.rs</code>）：</p>
+
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Repository</th><th>职责</th><th>主要方法</th></tr></thead>
+      <tbody>
+        <tr><td><code>TaskRepository</code></td><td>Task CRUD</td><td>create, get, update_state, list, archive</td></tr>
+        <tr><td><code>AgentRunRepository</code></td><td>AgentRun CRUD</td><td>create, finish, get_active, list_by_task</td></tr>
+        <tr><td><code>WorkspaceRepository</code></td><td>Workspace 管理</td><td>upsert, get, list_recent, update_trust, touch</td></tr>
+        <tr><td><code>BlobStore</code></td><td>Blob 存储</td><td>put, get, increment_ref, decrement_ref</td></tr>
+        <tr><td><code>TaskEventStore</code></td><td>事件记录</td><td>record, list_by_task</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <pre><code>// 示例：TaskRepository 的使用
+let repo = TaskRepository::new(&db);
+let task = Task::new("/my/project", "Fix bug", "修复登录问题", TaskMode::Edit);
+repo.create(&task)?;
+repo.update_state(&task.id, TaskState::InProgress)?;</code></pre>
+
+    <h2 id="session-truncation">9.11 会话截断修复</h2>
+    <p>当会话历史过长时，系统会执行<strong>截断（truncation）</strong>以控制上下文大小。截断策略：</p>
+    <ul>
+      <li>保留任务目标、验收条件、计划状态</li>
+      <li>保留未解决的权限请求和冲突</li>
+      <li>保留当前变更摘要</li>
+      <li>丢弃旧的详细工具调用日志</li>
+    </ul>
+
+    <div class="box info">
+      <div class="box-title">为什么需要截断</div>
+      <p>LLM 有上下文窗口限制。无限增长的会话会导致 token 溢出或成本飙升。截断确保只保留"决策相关信息"。</p>
+    </div>
+
+    <hr>
+    <p style="color:var(--text-dim);font-size:13px">本章介绍了 R-Code 的存储架构。第 10 章将介绍 CI 流水线如何保证代码质量。</p>
+
+    <div class="pagenav">
+      <a href="08-task-state-machine.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 8 章：任务状态机</div></a>
+      <a href="10-ci-pipeline.html" class="pagenav__link right"><div class="pagenav__label">下一页 →</div><div class="pagenav__title">第 10 章：CI 流水线</div></a>
+    </div>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

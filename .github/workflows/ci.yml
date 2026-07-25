@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace --all-features
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+      - name: cargo audit
+        run: cargo audit
+
+  deny:
+    name: Dependency Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        run: cargo install cargo-deny
+      - name: cargo deny check
+        run: cargo deny check
+
+  submodule-pin:
+    name: Submodule Pin Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify agent-core submodule pin
+        run: |
+          EXPECTED=$(grep -oP '"commit":\s*"([a-f0-9]+)"' vendor/agent-core/contract-lock.json | grep -oP '[a-f0-9]{40}' || true)
+          ACTUAL=$(cd vendor/agent-core && git rev-parse HEAD)
+          echo "Expected (from contract-lock.json): $EXPECTED"
+          echo "Actual (submodule HEAD): $ACTUAL"
+          if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "ERROR: agent-core submodule commit mismatch!"
+            echo "Expected: $EXPECTED"
+            echo "Actual:   $ACTUAL"
+            exit 1
+          fi
+          echo "✅ Submodule pin verified"

@@ -1,0 +1,40 @@
+[package]
+name = "r-code-terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code 终端系统：PTY 管理、Shell 集成、命令块"
+
+[dependencies]
+# 公共合同
+hermes-core = { workspace = true }
+hermes-error = { workspace = true }
+
+# 产品私有
+r-code-core = { workspace = true }
+
+# PTY
+portable-pty = { workspace = true }
+
+# 异步
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# 工具
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+r-code-gateway = { workspace = true }

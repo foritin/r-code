@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PTY 伪终端深度指南 · R-Code</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --green: #3fb950;
+  --green-dim: #238636;
+  --yellow: #d29922;
+  --orange: #db6d28;
+  --red: #f85149;
+  --purple: #bc8cff;
+  --radius: 8px;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --surface-2: #eaeef2;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --accent-dim: #0550ae;
+    --green: #1a7f37;
+    --green-dim: #0c7d4d;
+    --yellow: #9a6700;
+    --orange: #bc4c00;
+    --red: #cf222e;
+    --purple: #8250df;
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 15px;
+}
+.container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 22px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 18px; margin: 28px 0 12px; color: var(--accent); }
+h4 { font-size: 15px; margin: 20px 0 8px; color: var(--text-dim); }
+p { margin: 12px 0; }
+.subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 32px; }
+
+.toc { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; margin-bottom: 40px; }
+.toc h3 { margin: 0 0 12px; font-size: 14px; color: var(--text-dim); }
+.toc ul { list-style: none; padding-left: 0; }
+.toc li { margin: 6px 0; }
+.toc a { color: var(--accent); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.toc .indent { padding-left: 16px; }
+
+.info-box, .warn-box, .success-box, .danger-box {
+  border-radius: var(--radius); padding: 14px 18px; margin: 16px 0; font-size: 13px;
+}
+.info-box { background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.3); color: var(--accent); }
+.warn-box { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.3); color: var(--yellow); }
+.success-box { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.3); color: var(--green); }
+.danger-box { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.3); color: var(--red); }
+
+pre {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 20px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; margin: 12px 0;
+}
+code { font-family: var(--mono); font-size: 12.5px; }
+:not(pre) > code { background: var(--surface-2); padding: 2px 6px; border-radius: 4px; color: var(--accent); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 16px 0; }
+th, td { border: 1px solid var(--border); padding: 10px 14px; text-align: left; }
+th { background: var(--surface-2); font-weight: 600; }
+
+.diagram {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 24px; margin: 20px 0; font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  overflow-x: auto; white-space: pre; color: var(--text-dim);
+}
+
+.flow { display: flex; align-items: center; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.flow-box { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 14px; font-size: 12px; font-weight: 600; }
+.flow-arrow { color: var(--text-dim); font-size: 16px; }
+
+.layer { display: flex; flex-direction: column; gap: 0; margin: 20px 0; }
+.layer-item { padding: 14px 20px; border: 1px solid var(--border); text-align: center; font-weight: 600; }
+.layer-item + .layer-item { border-top: none; }
+
+.platform { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: var(--mono); }
+.platform-macos { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+.platform-win { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+
+ul, ol { padding-left: 24px; margin: 12px 0; }
+li { margin: 6px 0; }
+.highlight { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🖥️ PTY 伪终端深度指南</h1>
+<p class="subtitle">面向 R-Code 开发者的完整解析 · 仅覆盖 Windows + macOS 双平台</p>
+
+<nav class="toc">
+<h3>📑 目录</h3>
+<ul>
+<li><a href="#what">一、什么是 PTY？—— 先从「终端」说起</a></li>
+<li class="indent">→ 物理终端 → 伪终端</li>
+<li><a href="#analogy">二、生活比喻 —— 给秘书配了一个「假前台」</a></li>
+<li><a href="#history">三、PTY 的「宽度」—— 前世今生与两种实现</a></li>
+<li><a href="#deep">四、PTY 的「深度」—— Master / Slave 工作原理</a></li>
+<li class="indent">→ 数据流、Line Discipline、信号、窗口大小</li>
+<li><a href="#why">五、为什么需要 PTY？—— 不用 PTY 会怎样？</a></li>
+<li><a href="#rcode">六、R-Code 怎么用 PTY？</a></li>
+<li class="indent">→ portable-pty crate、多终端管理、Shell 集成</li>
+<li><a href="#blockmodel">七、块模型与 OSC 133 —— 从终端输出中挖结构化数据</a></li>
+<li><a href="#platform">八、Windows ConPTY vs macOS Unix PTY</a></li>
+<li><a href="#summary">九、一图总结 + 关键概念速查</a></li>
+</ul>
+</nav>
+
+<!-- 第一章 -->
+<h2 id="what">一、什么是 PTY？—— 先从「终端」说起</h2>
+
+<h3>1.1 远古时代：真正的物理终端</h3>
+<p>上世纪 70 年代，计算机是一台昂贵的大铁柜。用户要跟它交互，得用一种叫 <strong>终端（Terminal）</strong> 的物理设备——一个屏幕 + 键盘，用一根串口线连到主机。经典的 VT100、DECWriter 都是这类东西。</p>
+
+<div class="diagram">
+┌──────────────┐     串口线     ┌──────────────────┐
+│   物理终端     │ ◄──────────► │     大型主机       │
+│  (VT100)      │              │  (运行程序)       │
+│  屏幕+键盘     │              │                  │
+└──────────────┘              └──────────────────┘</div>
+
+<p>终端负责：接收键盘输入 → 发给主机 → 接收主机输出 → 显示在屏幕上。</p>
+
+<h3>1.2 问题来了：软件怎么假装自己是终端？</h3>
+<p>后来图形界面（macOS、Windows）普及了，物理终端消失了。但有一个问题：<strong>大量软件（shell、vim、htop、ssh）默认自己只认「终端」</strong>——它们会调 <code>isatty()</code> 检查「我是不是连在一个终端上」，如果不是，就拒绝交互、拒绝彩色输出。</p>
+
+<p>比如 <code>ls</code> 在管道里就不输出彩色：</p>
+<pre><code>$ ls --color=auto          <span style="color:var(--text-dim)"># 直接运行 → 有颜色（因为 stdout 是终端）</span>
+$ ls --color=auto | cat    <span style="color:var(--text-dim)"># 管道 → 没颜色（因为 stdout 是管道，不是终端）</span></code></pre>
+
+<p><strong>能不能「假装」给程序连了一个终端，实际上是我的 UI 在背后控制？</strong></p>
+
+<p>这就是 <strong>PTY（Pseudo-Terminal，伪终端）</strong>。</p>
+
+<h3>1.3 一句话定义</h3>
+<div class="info-box">
+<strong>PTY = 伪终端</strong>：操作系统内核提供的一对「假的」终端设备。你（IDE/终端模拟器）拿着一端假装成「屏幕+键盘」，另一端连着程序（shell）。程序以为自己在跟真正的终端对话，实际上完全在你的掌控之中。</div>
+
+<!-- 第二章 -->
+<h2 id="analogy">二、生活比喻 —— 给秘书配了一个「假前台」</h2>
+
+<p>想象一家大公司：</p>
+<ul>
+<li><strong>秘书（Shell）</strong>：只能跟「前台」打交道。你直接走进去找她，她不理你。</li>
+<li><strong>前台（PTY Slave）</strong>：秘书只认前台。有访客来，前台接待；有电话来，前台接听。</li>
+<li><strong>经理（你的 IDE）</strong>：坐在里间控制一切。经理面前有一个<strong>对讲机（PTY Master）</strong>，能听到前台听到的一切，也能通过对讲机对前台说话。</li>
+</ul>
+
+<div class="diagram">
+┌────────────────────────────────────────────┐
+│  经理的办公室 (IDE)                         │
+│  ┌──────────────┐                          │
+│  │ 对讲机 (Master)│ ◄── 经理通过对讲机      │
+│  └──────┬───────┘    听到/对前台说话       │
+│         │ 内线                            │
+│  ┌──────┴───────┐                          │
+│  │ 前台 (Slave)  │ ◄── 秘书只认前台        │
+│  └──────┬───────┘                          │
+│         │ 面对面                           │
+│  ┌──────┴───────┐                          │
+│  │ 秘书 (Shell)  │ ◄── 普通程序            │
+│  └──────────────┘                          │
+└────────────────────────────────────────────┘</div>
+
+<p>秘书以为自己在正常上班，实际上前台的一举一动都被经理通过对讲机监听了。经理可以：</p>
+<ul>
+<li>录下前台和秘书的<strong>所有对话</strong>（捕获输出）</li>
+<li>通过对讲机<strong>替访客传话</strong>（发送键盘输入）</li>
+<li>告诉前台「窗户尺寸变了」（发送 SIGWINCH 信号调整窗口大小）</li>
+<li>随时<strong>切断通话</strong>（kill 子进程）</li>
+</ul>
+
+<!-- 第三章 -->
+<h2 id="history">三、PTY 的「宽度」—— 前世今生与两种实现</h2>
+
+<h3>3.1 历史演进</h3>
+<table>
+<tr><th>年代</th><th>名称</th><th>特点</th></tr>
+<tr><td>1980s</td><td>Unix BSD PTY</td><td><code>/dev/ptyXX</code> + <code>/dev/ttyXX</code>，需要预先分配固定数量</td></tr>
+<tr><td>1990s</td><td>Unix Unix98 PTY</td><td>一次 API 分配，不再需要预分配，/dev/ptmx</td></tr>
+<tr><td>2000s</td><td>Unix devpts</td><td>内核自动管理 pts 设备，fork+exec 即用</td></tr>
+<tr><td>2018</td><td>Windows ConPTY</td><td>Windows 10 1809 引入，终于有了「真正的」PTY 支持</td></tr>
+</table>
+
+<h3>3.2 两种主流实现</h3>
+
+<h4>Unix/macOS：Master-Slave 对</h4>
+<pre><code><span style="color:var(--text-dim)">// 打开一对 PTY</span>
+master_fd = open("/dev/ptmx", O_RDWR);  <span style="color:var(--text-dim)">// Master：控制端</span>
+grantpt(master_fd);                      <span style="color:var(--text-dim)">// 授权</span>
+unlockpt(master_fd);                     <span style="color:var(--text-dim)">// 解锁</span>
+slave_name = ptsname(master_fd);         <span style="color:var(--text-dim)">// 获取 Slave 路径</span>
+
+<span style="color:var(--text-dim)">// fork 子进程，子进程连上 Slave</span>
+<span style="color:var(--accent)">if</span> (fork() == 0) {
+    close(master_fd);
+    fd = open(slave_name, O_RDWR);       <span style="color:var(--text-dim)">// Slave：被控制端</span>
+    dup2(fd, 0); dup2(fd, 1); dup2(fd, 2);  <span style="color:var(--text-dim)">// stdin/stdout/stderr</span>
+    execvp("bash", ...);                 <span style="color:var(--text-dim)">// Shell 连上了伪终端！</span>
+}</code></pre>
+
+<h4>Windows：ConPTY（Console Pseudoterminal）</h4>
+<pre><code><span style="color:var(--text-dim)">// Windows ConPTY API（简化）</span>
+CreatePseudoConsole(size, hPipeIn, hPipeOut, 0, &amp;hPC);
+<span style="color:var(--text-dim)">// hPipeIn/hPipeOut 是 Windows Pipe，连接 Master 端</span>
+<span style="color:var(--text-dim)">// 子进程用 hPC 作为 Console 启动</span></code></pre>
+
+<div class="warn-box">
+<strong>历史趣闻</strong>：Windows 在 2018 年之前没有 PTY 概念！所有终端程序（ssh、vim）在 Windows 上要么靠 Cygwin/MSYS2 模拟，要么靠 winpty 等 hack 方案。这也是为什么 Windows Terminal 和 VS Code 终端过去那么折腾。ConPTY 的引入（Windows 10 1809）彻底改变了这一状况。
+</div>
+
+<h3>3.3 PTY 与相关概念对比</h3>
+<table>
+<tr><th>概念</th><th>区别</th><th>能否跑交互式程序</th></tr>
+<tr><td><strong>管道 (Pipe)</strong></td><td>单向字节流，无终端语义</td><td>❌ 程序检测到非终端就拒绝交互</td></tr>
+<tr><td><strong>PTY</strong></td><td>双向 + 终端语义 + 信号</td><td>✅ 程序完全无感知</td></tr>
+<tr><td><strong>TTY</strong></td><td>Teletypewriter，终端的统称</td><td>是 PTY 的父概念</td></tr>
+<tr><td><strong>Shell</strong></td><td>命令解释器，不是终端</td><td>需要跑在 PTY/TTY 之上</td></tr>
+<tr><td><strong>Console</strong></td><td>Windows 的终端系统</td><td>Windows 等价物</td></tr>
+</table>
+
+<!-- 第四章 -->
+<h2 id="deep">四、PTY 的「深度」—— Master / Slave 工作原理</h2>
+
+<h3>4.1 完整架构图</h3>
+<div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  你的程序 (IDE / 终端模拟器)                                           │
+│                                                                      │
+│  ┌─────────────┐  读写  ┌──────────────────────────────────────┐    │
+│  │  应用逻辑     │◄─────►│  Master 端 (/dev/ptmx 或 ConPTY)     │    │
+│  │  - 渲染屏幕   │       │  - 发送键盘输入                      │    │
+│  │  - 捕获输出   │       │  - 接收程序输出                      │    │
+│  │  - 调整大小   │       │  - 发送窗口大小变化 (SIGWINCH)       │    │
+│  └─────────────┘       └───────────────┬──────────────────────┘    │
+│                                         │                           │
+│                    ┌────────────────────┼────────────────────┐      │
+│                    │      内核 (Line Discipline + PTY 驱动)  │      │
+│                    │      - 处理回显、行编辑、Ctrl+C          │      │
+│                    │      - 转换 \n ↔ \r\n                    │      │
+│                    └────────────────────┼────────────────────┘      │
+│                                         │                           │
+│  ┌─────────────┐  读写  ┌───────────────┴──────────────────────┐    │
+│  │  Shell/程序  │◄─────►│  Slave 端 (/dev/pts/N 或 ConPTY)     │    │
+│  │  (bash/zsh)  │       │  - 程序的 stdin/stdout/stderr         │    │
+│  │  以为这是    │       │  - 程序 isatty() → true               │    │
+│  │  真终端！    │       │  - 可以跑 vim、htop、ssh 等            │    │
+│  └─────────────┘       └──────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>4.2 数据流向</h3>
+<table>
+<tr><th>方向</th><th>数据</th><th>路径</th></tr>
+<tr><td><strong>键盘 → Shell</strong></td><td>按键字节</td><td>IDE 写入 Master → 内核 Line Discipline → Slave → Shell stdin</td></tr>
+<tr><td><strong>Shell → 屏幕</strong></td><td>输出字节（含 ANSI 转义序列）</td><td>Shell stdout → Slave → 内核 Line Discipline → Master → IDE 读取</td></tr>
+<tr><td><strong>窗口大小变化</strong></td><td>SIGWINCH 信号</td><td>IDE 调用 resize() → 内核更新 winsize → 发 SIGWINCH 给 Shell</td></tr>
+<tr><td><strong>Ctrl+C</strong></td><td>SIGINT 信号</td><td>IDE 写入 0x03 字节 → 内核 Line Discipline 拦截 → 发 SIGINT 给 Shell</td></tr>
+</table>
+
+<h3>4.3 Line Discipline（线路规程）—— PTY 的灵魂</h3>
+<p>Master 和 Slave 之间不是直连的，中间有一个 <strong>Line Discipline（线路规程）</strong>——内核里的一个「中间人」，负责：</p>
+
+<ul>
+<li><strong>回显（Echo）</strong>：你按的字符是否显示在屏幕上（密码输入时要关掉）</li>
+<li><strong>行编辑（Line Editing）</strong>：Backspace 删除、Ctrl+U 清空行</li>
+<li><strong>字符转换</strong>：输出时 <code>\n</code> → <code>\r\n</code>；输入时 <code>\r</code> → <code>\n</code></li>
+<li><strong>信号生成</strong>：收到 <code>Ctrl+C</code> → 转换为 <code>SIGINT</code> 发给子进程</li>
+<li><strong>EOF</strong>：收到 <code>Ctrl+D</code> → 子进程读到 EOF</li>
+</ul>
+
+<div class="info-box">
+没有 Line Discipline，Master 和 Slave 之间就是原始的字节流。Line Discipline 的存在，使得 Slave 端连上的程序「以为」自己连了真正的终端。
+</div>
+
+<h3>4.4 窗口大小（Winsize）与 SIGWINCH</h3>
+<pre><code><span style="color:var(--text-dim)">// 告诉内核：终端窗口大小变了</span>
+ioctl(master_fd, TIOCSWINSZ, &amp;winsize);
+<span style="color:var(--text-dim)">// 内核随即向子进程发送 SIGWINCH 信号</span>
+<span style="color:var(--text-dim)">// Shell 收到后调用 ioctl(TIOCGWINSZ) 读取新尺寸，更新 $LINES/$COLUMNS</span></code></pre>
+
+<p>这就是为什么你拖拽终端窗口大小时，<code>vim</code>、<code>htop</code> 能立刻知道新尺寸——PTY 机制自动完成了这一切。</p>
+
+<h3>4.5 一对 PTY 能连几个 Slave？</h3>
+<p><strong>一个 Master 只能连一个 Slave</strong>。每个 PTY 对应一个独立的终端会话。这就是为什么 IDE 开多个终端标签需要创建多个 PTY 实例。</p>
+
+<!-- 第五章 -->
+<h2 id="why">五、为什么需要 PTY？—— 不用 PTY 会怎样？</h2>
+
+<h3>5.1 对比表</h3>
+<table>
+<tr><th>场景</th><th>用 Pipe</th><th>用 PTY</th></tr>
+<tr><td><code>ls | grep foo</code></td><td>✅ 够用</td><td>✅ 也可以</td></tr>
+<tr><td>跑 <code>vim</code></td><td>❌ vim 拒绝启动（"Output is not a terminal"）</td><td>✅ vim 正常启动</td></tr>
+<tr><td>跑 <code>ssh</code></td><td>❌ ssh 无法处理密码输入（关掉回显）</td><td>✅ 正常交互</td></tr>
+<tr><td>Shell 提示符着色</td><td>❌ ls 不输出彩色</td><td>✅ 完整彩色输出</td></tr>
+<tr><td>调整窗口大小</td><td>❌ 程序不知道窗口大小</td><td>✅ SIGWINCH 自动通知</td></tr>
+<tr><td>Ctrl+C 中断</td><td>❌ 需要自行处理</td><td>✅ 内核自动发 SIGINT</td></tr>
+</table>
+
+<h3>5.2 核心原因</h3>
+<p>大量命令行程序<strong>默认自己是跟「人」直接打交道的</strong>。它们会调用 <code>isatty(fd)</code> 检查 stdin/stdout 是否是 TTY 设备：</p>
+<ul>
+<li>如果是 TTY → 彩色输出、逐行缓冲、支持交互式编辑</li>
+<li>如果不是 TTY → 无颜色、全缓冲、拒绝交互</li>
+</ul>
+
+<div class="warn-box">
+<strong>不用 PTY 的后果</strong>：你的 IDE 终端里跑不了 vim、htop、ssh、top、less 等任何交互式程序。Shell 的提示符也不会有颜色。这就是为什么终端模拟器（iTerm2、Windows Terminal、VS Code 终端）底层都必须用 PTY。
+</div>
+
+<!-- 第六章 -->
+<h2 id="rcode">六、R-Code 怎么用 PTY？</h2>
+
+<h3>6.1 整体架构</h3>
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────┐
+│  R-Code IDE (WebView / Renderer)                            │
+│  - xterm.js 渲染终端界面                                     │
+│  - 用户键盘输入 → 发送给 Main                                │
+└────────────────────────┬────────────────────────────────────┘
+                         │ IPC (Unix Socket / Named Pipe)
+┌────────────────────────┴────────────────────────────────────┐
+│  Main 进程 (Tauri Rust)                                     │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  TerminalManager                                      │  │
+│  │  - 管理多个 PTY 实例                                   │  │
+│  │  - 每个终端 = 一个 PTY + 一个 Shell 子进程              │  │
+│  │  - 捕获输出 → 通过 IPC → Renderer 显示                 │  │
+│  │  - 接收输入 ← 通过 IPC ← Renderer 转发                 │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘</div>
+
+<h3>6.2 portable-pty crate</h3>
+<p>R-Code 使用 <code>portable-pty</code> 这个 Rust crate 来跨平台管理 PTY。它的核心 API：</p>
+
+<pre><code><span style="color:var(--accent)">use</span> portable_pty::{
+    native_pty_system, Child, CommandBuilder, MasterPty, PtyPair, PtySize, PtySystem,
+};
+
+<span style="color:var(--text-dim)">// 1. 获取当前系统的 PTY 实现</span>
+<span style="color:var(--accent)">let</span> pty_system = native_pty_system();
+
+<span style="color:var(--text-dim)">// 2. 打开一对 PTY（返回 Master + Slave）</span>
+<span style="color:var(--accent)">let</span> pair = pty_system.openpty(PtySize {
+    rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
+})?;
+
+<span style="color:var(--text-dim)">// 3. 在 Slave 端启动 Shell</span>
+<span style="color:var(--accent)">let</span> cmd = CommandBuilder::new(<span style="color:var(--green)">"/bin/zsh"</span>);
+<span style="color:var(--accent)">let</span> child = pair.slave.spawn_command(cmd)?;
+
+<span style="color:var(--text-dim)">// 4. 从 Master 读取 Shell 输出</span>
+<span style="color:var(--accent)">let</span> mut reader = pair.master.try_clone_reader()?;
+
+<span style="color:var(--text-dim)">// 5. 向 Master 写入键盘输入（Shell 会收到）</span>
+<span style="color:var(--accent)">let</span> mut writer = pair.master.take_writer()?;
+writer.write_all(<span style="color:var(--green)">"ls -l\r\n"</span>.as_bytes())?;</code></pre>
+
+<h3>6.3 R-Code 的 TerminalHandle 结构</h3>
+<pre><code><span style="color:var(--accent)">pub struct</span> TerminalHandle {
+    pub id: TerminalId,
+    pub state: TerminalState,       <span style="color:var(--text-dim)">// Idle / Busy / Agent / Exited</span>
+    pub shell: String,              <span style="color:var(--text-dim)">// "zsh" / "bash" / "fish"</span>
+    pub working_dir: PathBuf,
+    pub scrollback: Vec&lt;u8&gt;,        <span style="color:var(--text-dim)">// 输出缓冲（约 200KB）</span>
+    child: Box&lt;dyn Child&gt;,         <span style="color:var(--text-dim)">// PTY 子进程</span>
+    writer: Box&lt;dyn Write&gt;,        <span style="color:var(--text-dim)">// PTY stdin 写入器</span>
+    master: Box&lt;dyn MasterPty&gt;,    <span style="color:var(--text-dim)">// PTY master（resize + reader）</span>
+    output_rx: mpsc::UnboundedReceiver&lt;Vec&lt;u8&gt;&gt;,  <span style="color:var(--text-dim)">// 后台读取线程</span>
+    killed: bool,                   <span style="color:var(--text-dim)">// 防止重复 kill</span>
+}</code></pre>
+
+<h3>6.4 多终端管理</h3>
+<p>R-Code 的 <code>TerminalManager</code> 管理多个终端实例：</p>
+<pre><code><span style="color:var(--accent)">pub struct</span> TerminalManager {
+    pty_system: Box&lt;dyn PtySystem&gt;,
+    terminals: Arc&lt;Mutex&lt;HashMap&lt;TerminalId, TerminalHandle&gt;&gt;&gt;,
+    <span style="color:var(--text-dim)">// 每个终端 = 一个独立的 PTY + Shell 子进程</span>
+}</code></pre>
+
+<p>每个终端标签对应一个 <code>TerminalHandle</code>，拥有独立的：</p>
+<ul>
+<li>PTY Master-Slave 对</li>
+<li>Shell 子进程（zsh/bash/fish）</li>
+<li>Scrollback 缓冲区（约 200KB 上限）</li>
+<li>后台读取线程（持续从 Master 读输出）</li>
+</ul>
+
+<h3>6.5 数据流完整路径</h3>
+<div class="flow">
+<div class="flow-box">用户按键</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">xterm.js</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">IPC → Main</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Master 写入</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Line Discipline</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Slave → Shell</div>
+</div>
+<div class="flow" style="margin-top: 16px;">
+<div class="flow-box">Shell 输出</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Slave</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Line Discipline</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">Master 读取</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">IPC → Renderer</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">xterm.js 渲染</div>
+</div>
+
+<!-- 第七章 -->
+<h2 id="blockmodel">七、块模型与 OSC 133 —— 从终端输出中挖结构化数据</h2>
+
+<h3>7.1 问题：终端输出是「一锅粥」</h3>
+<p>终端输出是连续的字节流，混合了：</p>
+<ul>
+<li>Shell 提示符</li>
+<li>命令文本</li>
+<li>程序输出（含 ANSI 颜色代码）</li>
+<li>退出码信息</li>
+</ul>
+
+<p>IDE 怎么知道「哪段输出属于哪条命令」？</p>
+
+<h3>7.2 解决方案：OSC 133 Shell Integration</h3>
+<p>Shell（zsh/bash/fish）在<strong>每条命令执行前后</strong>注入特殊的 <strong>OSC 133 转义序列</strong>，像「书签」一样标记命令边界：</p>
+
+<div class="diagram">
+命令开始 (prompt)     命令文本        命令结束 (输出)      退出码
+    │                  │                 │                  │
+    ▼                  ▼                 ▼                  ▼
+  OSC 133 A         OSC 133 B        OSC 133 C          OSC 133 D
+  (标记开始)        (命令开始)       (输出开始)          (退出码=N)</div>
+
+<table>
+<tr><th>OSC 序列</th><th>含义</th><th>时机</th></tr>
+<tr><td><code>OSC 133 A ST</code></td><td>命令开始（prompt 结束）</td><td>Shell 显示提示符后</td></tr>
+<tr><td><code>OSC 133 B ST</code></td><td>命令文本开始</td><td>用户按下 Enter 后</td></tr>
+<tr><td><code>OSC 133 C ST</code></td><td>输出开始</td><td>命令开始执行</td></tr>
+<tr><td><code>OSC 133 D;exit ST</code></td><td>命令结束（含退出码）</td><td>命令执行完毕</td></tr>
+</table>
+
+<h3>7.3 块类型</h3>
+<p>R-Code 解析 OSC 133 序列，将终端输出切分为两种「块」：</p>
+<table>
+<tr><th>块类型</th><th>含义</th><th>包含内容</th></tr>
+<tr><td><code>Command</code></td><td>一条 shell 命令</td><td>prompt → command line → output → exit code</td></tr>
+<tr><td><code>Turn</code></td><td>外部 Agent 会话边界</td><td>claude/codex 的一次完整交互</td></tr>
+</table>
+
+<h3>7.4 块位置用 xterm Marker 存储</h3>
+<p>块的起止位置用 xterm.js 的 <code>Marker</strong> 标记，自然存活于滚动缓冲区。即使输出被滚走，Marker 仍然记得「第 42 行到第 100 行是某条命令的输出」。</p>
+
+<h3>7.5 命令文本读取</h3>
+<p>从 buffer 的 <code>B</code> marker（记录 cursor column）到 <code>C</code> 时的 cursor 位置，就是用户输入的命令文本。<strong>不需要私有转义序列</strong>，兼容任何已有 OSC 133 集成。</p>
+
+<!-- 第八章 -->
+<h2 id="platform">八、Windows ConPTY vs macOS Unix PTY</h2>
+
+<table>
+<tr><th>维度</th><th><span class="platform platform-macos">macOS (Unix PTY)</span></th><th><span class="platform platform-win">Windows (ConPTY)</span></th></tr>
+<tr><td><strong>内核机制</strong></td><td>/dev/ptmx + /dev/pts/N</td><td>ConPTY API (CreatePseudoConsole)</td></tr>
+<tr><td><strong>Master 端</strong></td><td>fd（文件描述符）</td><td>Pipe 句柄</td></tr>
+<tr><td><strong>Slave 端</strong></td><td>/dev/pts/N 设备</td><td>ConPTY 句柄</td></tr>
+<tr><td><strong>窗口大小</strong></td><td>ioctl(TIOCSWINSZ) + SIGWINCH</td><td>SetConsoleWindowInfo + 自动通知</td></tr>
+<tr><td><strong>信号</strong></td><td>SIGINT/SIGQUIT/SIGWINCH 等</td><td>有限支持（Ctrl+C 等）</td></tr>
+<tr><td><strong>Line Discipline</strong></td><td>内核内置，可配置 termios</td><td>ConPTY 内部处理</td></tr>
+<tr><td><strong>历史</strong></td><td>1980s 至今，成熟稳定</td><td>2018 年引入，较新</td></tr>
+<tr><td><strong>兼容性</strong></td><td>所有 Unix 程序原生支持</td><td>部分旧程序可能不兼容</td></tr>
+<tr><td><strong>portable-pty</strong></td><td><code>#[cfg(unix)]</code> 分支</td><td><code>#[cfg(windows)]</code> 分支</td></tr>
+</table>
+
+<div class="info-box">
+<strong>好消息</strong>：<code>portable-pty</code> crate 已经帮你抹平了这些差异。R-Code 的业务代码只需要跟 <code>MasterPty</code> / <code>Child</code> / <code>PtySystem</code> 这些 trait 打交道，不需要关心底层是 Unix PTY 还是 ConPTY。
+</div>
+
+<!-- 第九章 -->
+<h2 id="summary">九、一图总结 + 关键概念速查</h2>
+
+<h3>9.1 全貌图</h3>
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────────────────┐
+│  R-Code IDE (WebView)                                                   │
+│  - xterm.js 渲染终端界面                                                 │
+│  - 用户键盘输入 → 发送给 Main                                            │
+└───────────────────────────┬─────────────────────────────────────────────┘
+                            │ IPC
+┌───────────────────────────┴─────────────────────────────────────────────┐
+│  Main 进程 (Tauri Rust)                                                 │
+│  ┌───────────────────────────────────────────────────────────────────┐  │
+│  │  TerminalManager                                                  │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │  │
+│  │  │ Terminal 1  │  │ Terminal 2  │  │ Terminal 3  │  ...          │  │
+│  │  │ PTY + zsh  │  │ PTY + bash  │  │ PTY + fish  │               │  │
+│  │  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘                 │  │
+│  │        │               │               │                         │  │
+│  │        └───────────────┴───────────────┘                         │  │
+│  │                        │                                         │  │
+│  │              每个 PTY = Master + Slave                           │  │
+│  └───────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+数据流：
+  键盘 → xterm.js → IPC → Master → Line Discipline → Slave → Shell
+  Shell → Slave → Line Discipline → Master → IPC → xterm.js → 屏幕</div>
+
+<h3>9.2 关键概念速查</h3>
+<table>
+<tr><th>概念</th><th>含义</th></tr>
+<tr><td><strong>PTY (Pseudo-Terminal)</strong></td><td>伪终端，内核提供的一对「假的」终端设备</td></tr>
+<tr><td><strong>Master</strong></td><td>控制端，IDE/终端模拟器持有，读写数据</td></tr>
+<tr><td><strong>Slave</strong></td><td>被控制端，Shell/程序持有，以为是真终端</td></tr>
+<tr><td><strong>Line Discipline</strong></td><td>内核中间人，处理回显、行编辑、字符转换、信号生成</td></tr>
+<tr><td><strong>SIGWINCH</strong></td><td>窗口大小变化信号，PTY resize 时内核自动发送给子进程</td></tr>
+<tr><td><strong>OSC 133</strong></td><td>Shell 注入的转义序列，标记命令边界（prompt/output/exit）</td></tr>
+<tr><td><strong>ConPTY</strong></td><td>Windows 10 1809 引入的 PTY 实现</td></tr>
+<tr><td><strong>/dev/ptmx</strong></td><td>Unix Master 端设备，open 后自动分配一对 PTY</td></tr>
+<tr><td><strong>/dev/pts/N</strong></td><td>Unix Slave 端设备，程序连上它就像连了终端</td></tr>
+<tr><td><strong>termios</strong></td><td>Unix 终端接口，配置波特率、回显、行编辑等</td></tr>
+<tr><td><strong>isatty()</strong></td><td>程序调用它检查 fd 是否是 TTY 设备</td></tr>
+<tr><td><strong>portable-pty</strong></td><td>Rust crate，跨平台 PTY API（R-Code 使用）</td></tr>
+<tr><td><strong>Scrollback</strong></td><td>终端输出缓冲区，用户能回看历史输出</td></tr>
+<tr><td><strong>Block (Command/Turn)</strong></td><td>R-Code 从终端输出中切分出的结构化单元</td></tr>
+</table>
+
+<h3>9.3 与 IPC 的关系</h3>
+<p>PTY 和 IPC 是 R-Code 中<strong>不同层面</strong>的通信机制：</p>
+<table>
+<tr><th>机制</th><th>连接什么</th><th>传输什么</th></tr>
+<tr><td><strong>PTY</strong></td><td>Main ↔ Shell/外部程序</td><td>终端字节流（键盘输入 + 程序输出）</td></tr>
+<tr><td><strong>IPC</strong></td><td>Main ↔ Agent Worker / Renderer</td><td>结构化 JSON-RPC 消息</td></tr>
+</table>
+<div class="success-box">
+<strong>一句话</strong>：PTY 让 Main 能「控制」Shell（像人用终端一样），IPC 让 Main 能「指挥」其他进程（像老板发邮件一样）。两者配合，R-Code 既能跑交互式命令行，又能让 Agent 通过结构化消息编排一切。
+</div>
+
+<p style="margin-top: 40px; text-align: center; color: var(--text-dim); font-size: 12px;">
+— 本文档由 R-Code 团队整理 · 基于 docs/03-terminal-system.html 与 portable-pty crate 源码 —
+</p>
+
+</div>
+</body>
+</html>

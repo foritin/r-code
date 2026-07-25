@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>附录 A：术语表 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links">
+      <a href="index.html">首页</a>
+      <span style="color:var(--text-dim)">·</span>
+      <span>附录 A</span>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar__group">
+      <div class="sidebar__title">术语分类</div>
+      <a href="#glossary-core" class="sidebar__item">核心实体</a>
+      <a href="#glossary-state" class="sidebar__item">状态与转换</a>
+      <a href="#glossary-storage" class="sidebar__item">存储与持久化</a>
+      <a href="#glossary-security" class="sidebar__item">安全与权限</a>
+      <a href="#glossary-renderer" class="sidebar__item">渲染层</a>
+      <a href="#glossary-ci" class="sidebar__item">CI 与发布</a>
+      <a href="#glossary-misc" class="sidebar__item">其他术语</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta">
+      <span class="meta__item"><span class="status status-beginner">入门</span></span>
+      <span class="meta__item">📖 阅读约 15 分钟</span>
+      <span class="meta__item">📅 2026-07-25</span>
+    </div>
+
+    <h1>附录 A：术语表</h1>
+    <p class="lede">本术语表按字母排序，覆盖 R-Code 系统中使用的核心术语。每个术语包含一句话定义、详细说明和相关章节链接。</p>
+
+    <h2 id="glossary-core">核心实体</h2>
+
+    <h3 id="term-agent">Agent</h3>
+    <p><strong>一句话定义</strong>：执行用户任务的 AI 实体，通过调用工具完成软件工程工作。</p>
+    <p><strong>详细说明</strong>：Agent 是 R-Code 的核心执行者。它接收用户定义的 Task，通过 AgentRuntime 驱动模型循环，调用工具修改代码、运行命令、读取文件。Agent 本身不直接拥有文件系统或 shell 工具，所有操作通过 Tool Gateway 代理。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#agent-run">第 8 章 §8.8</a></p>
+
+    <h3 id="term-agentruntime">AgentRuntime</h3>
+    <p><strong>一句话定义</strong>：驱动 Agent 执行模型循环的运行时环境。</p>
+    <p><strong>详细说明</strong>：AgentRuntime 负责管理 LLM 调用、事件流、工具调用的完整生命周期。R-Code 使用 Pi Coding Agent SDK 作为默认 Runtime，通过 LlmProvider trait 抽象模型接口。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#ipc-pattern">第 12 章 §12.7</a></p>
+
+    <h3 id="term-agentrun">AgentRun</h3>
+    <p><strong>一句话定义</strong>：一次 Agent 执行的生命周期记录。</p>
+    <p><strong>详细说明</strong>：当 Task 开始执行时创建 AgentRun，记录使用的模型、开始/结束时间、Token 用量和审查状态。一个 Task 同一时刻最多有一个活跃的 AgentRun。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#agent-run">第 8 章 §8.8</a></p>
+
+    <h3 id="term-dto">DTO（Data Transfer Object）</h3>
+    <p><strong>一句话定义</strong>：在不同层之间传输数据的冻结数据结构。</p>
+    <p><strong>详细说明</strong>：R-Code 的产品 DTO（如 Task、AgentRun、ToolCall）在 P0 阶段冻结，后续不得破坏性修改。所有 DTO 实现 Serialize/Deserialize，用于 SQLite 存储和 IPC 传输。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#task-fields">第 8 章 §8.2</a></p>
+
+    <h3 id="term-task">Task</h3>
+    <p><strong>一句话定义</strong>：用户给 Agent 的一个目标，R-Code 的核心实体。</p>
+    <p><strong>详细说明</strong>：Task 代表一张"工单"，包含标题、目标描述、交互模式和当前状态。它是调度、审查、回滚的最小原子单元。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <h3 id="term-tool">Tool</h3>
+    <p><strong>一句话定义</strong>：Agent 可以调用的原子操作，如读取文件、执行命令、搜索代码。</p>
+    <p><strong>详细说明</strong>：每个 Tool 调用都有风险等级（R0-R4）、输入/输出 JSON、状态（Running/Ok/Failed）。Tool 调用通过 Tool Gateway 代理执行。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-toolgateway">ToolGateway</h3>
+    <p><strong>一句话定义</strong>：代理所有工具调用的安全网关，负责风险分类、路径边界和权限处理。</p>
+    <p><strong>详细说明</strong>：Tool Gateway 是 R-Code 最重要的安全边界。它决定工具调用是否需要审批、是否在路径边界内、是否执行、是否脱敏输出。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h2 id="glossary-state">状态与转换</h2>
+
+    <h3 id="term-taskstate">TaskState（任务状态）</h3>
+    <p><strong>一句话定义</strong>：Task 在其生命周期中所处的阶段。</p>
+    <p><strong>详细说明</strong>：包含 Idle、Exploring、InProgress、ReviewReady、Archived 五个状态。状态转换由 validate_transition 函数严格控制。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#task-state">第 8 章 §8.4</a></p>
+
+    <h3 id="term-taskmode">TaskMode（交互模式）</h3>
+    <p><strong>一句话定义</strong>：决定 Agent 执行工具调用时是否需要用户审批的模式。</p>
+    <p><strong>详细说明</strong>：三种模式：Ask（只读问答）、Edit（受控写入，需审批）、Auto（全自动，验证通过自动接受）。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#task-mode">第 8 章 §8.3</a></p>
+
+    <h3 id="term-transition">Transition（状态转换）</h3>
+    <p><strong>一句话定义</strong>：Task 从一个状态切换到另一个状态的过程。</p>
+    <p><strong>详细说明</strong>：只有白名单中的转换才被允许。非法转换会被 validate_transition 拒绝并返回错误。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#validate-transition">第 8 章 §8.5</a></p>
+
+    <h3 id="term-reviewstate">ReviewState（审查状态）</h3>
+    <p><strong>一句话定义</strong>：AgentRun 在审查阶段的状态。</p>
+    <p><strong>详细说明</strong>：包含 Pending、Accepted、AutoAccepted、RolledBack、Answered。Pending 是唯一非终态。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#review-state">第 8 章 §8.6</a></p>
+
+    <h3 id="term-rollback">Rollback（回滚）</h3>
+    <p><strong>一句话定义</strong>：将文件恢复到变更前的精确状态。</p>
+    <p><strong>详细说明</strong>：R-Code 的回滚是字节级精确的，通过 File Baseline 实现。不是 Git revert，而是用原始文件内容覆盖当前文件。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#rollback">第 8 章 §8.10</a></p>
+
+    <h3 id="term-state-machine">State Machine（状态机）</h3>
+    <p><strong>一句话定义</strong>：定义 Task 状态及其合法转换规则的有限状态自动机。</p>
+    <p><strong>详细说明</strong>：R-Code 的状态机遵循"白名单"模式，只有明确列出的转换才合法。三条硬性不变量保证系统安全。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <h2 id="glossary-storage">存储与持久化</h2>
+
+    <h3 id="term-jsonl">JSONL</h3>
+    <p><strong>一句话定义</strong>：每行一个 JSON 对象的文本格式，R-Code 的事件日志格式。</p>
+    <p><strong>详细说明</strong>：hermes-store 使用 JSONL 存储不可变事件流。追加写入，crash-safe，是 Source of Truth。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#dual-storage">第 9 章 §9.1</a></p>
+
+    <h3 id="term-sqlite">SQLite</h3>
+    <p><strong>一句话定义</strong>：R-Code 的产品状态数据库，支持复杂查询和事务。</p>
+    <p><strong>详细说明</strong>：r-code-store 使用 SQLite 存储可查询的产品状态。采用 WAL 模式、外键约束、版本化迁移。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html">第 9 章</a></p>
+
+    <h3 id="term-wal">WAL（Write-Ahead Logging）</h3>
+    <p><strong>一句话定义</strong>：SQLite 的写前日志模式，支持并发读写。</p>
+    <p><strong>详细说明</strong>：WAL 模式下，写入先记录到 -wal 文件，读取可以并发进行。崩溃恢复时自动 checkpoint。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#wal-mode">第 9 章 §9.5</a></p>
+
+    <h3 id="term-migration">Migration（迁移）</h3>
+    <p><strong>一句话定义</strong>：更新数据库 schema 的版本化脚本。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 schema_version 表追踪已应用的迁移。迁移按编号顺序执行，支持幂等重复运行。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#migrations">第 9 章 §9.6</a></p>
+
+    <h3 id="term-repository">Repository（仓储模式）</h3>
+    <p><strong>一句话定义</strong>：封装数据访问逻辑的设计模式。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 TaskRepository、AgentRunRepository、WorkspaceRepository 等封装 SQLite 操作，提供类型安全的 CRUD 接口。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#repository-pattern">第 9 章 §9.10</a></p>
+
+    <h3 id="term-blob">Blob</h3>
+    <p><strong>一句话定义</strong>：内容寻址的二进制数据块。</p>
+    <p><strong>详细说明</strong>：Blob 以 SHA-256 哈希作为 key 存储，支持引用计数。用于存储文件快照、验证输出等大体积数据。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#document-store">第 9 章 §9.9</a></p>
+
+    <h3 id="term-baseline">File Baseline（文件基线）</h3>
+    <p><strong>一句话定义</strong>：Agent 执行前捕获的文件快照。</p>
+    <p><strong>详细说明</strong>：记录每个文件的 content_hash 和 blob_key，用于字节级回滚。存储在 file_baselines 表和 blob 存储中。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#file-baseline">第 8 章 §8.9</a></p>
+
+    <h2 id="glossary-security">安全与权限</h2>
+
+    <h3 id="term-permission">Permission（权限）</h3>
+    <p><strong>一句话定义</strong>：用户授予 Agent 执行特定操作的授权。</p>
+    <p><strong>详细说明</strong>：高风险工具调用（R2-R4）需要用户审批。权限可以持久化（Standing Rule）或单次有效。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-risk-level">Risk Level（风险等级）</h3>
+    <p><strong>一句话定义</strong>：工具调用的危险程度分级。</p>
+    <p><strong>详细说明</strong>：R0（只读安全）→ R4（极高风险如 sudo、git push）。R2 及以上需要用户确认。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-pathguard">PathGuard（路径守卫）</h3>
+    <p><strong>一句话定义</strong>：确保工具调用不超出项目边界的安全机制。</p>
+    <p><strong>详细说明</strong>：PathGuard 检查所有文件操作路径是否在 Workspace 允许范围内，防止 Agent 读写系统敏感文件。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-boundary">Boundary（边界）</h3>
+    <p><strong>一句话定义</strong>：系统安全隔离的界限。</p>
+    <p><strong>详细说明</strong>：R-Code 有多个安全边界：Renderer 隔离、Tool Gateway、路径边界、Workspace 信任。最核心的是 Tool Gateway。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-standing-rule">Standing Rule（持久规则）</h3>
+    <p><strong>一句话定义</strong>：用户设置的持久化权限规则。</p>
+    <p><strong>详细说明</strong>：R0-R2 级别的权限可以持久化（"始终允许此操作"），R3-R4 不能持久化，每次都需要确认。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h3 id="term-secretstore">SecretStore</h3>
+    <p><strong>一句话定义</strong>：安全存储敏感信息（如 API 密钥）的机制。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 Electron safeStorage 或操作系统密钥链存储 Provider 凭据。Renderer 端看到的凭据是脱敏的。</p>
+    <p>📖 相关章节：<a href="07-security-model.html">第 7 章</a></p>
+
+    <h2 id="glossary-renderer">渲染层</h2>
+
+    <h3 id="term-renderer">Renderer（渲染进程）</h3>
+    <p><strong>一句话定义</strong>：运行 React 应用的 WebView 进程。</p>
+    <p><strong>详细说明</strong>：Renderer 负责展示所有 UI。它无 Node 集成、使用 context isolation、通过 Preload 桥与 Main 进程通信。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html">第 12 章</a></p>
+
+    <h3 id="term-preload">Preload（预加载脚本）</h3>
+    <p><strong>一句话定义</strong>：运行在独立上下文中、暴露安全 API 给 Renderer 的脚本。</p>
+    <p><strong>详细说明</strong>：Preload 桥是 Renderer 与 Main 进程的唯一通信通道。所有调用经过版本化、schema 验证。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#preload-bridge">第 12 章 §12.4</a></p>
+
+    <h3 id="term-ipc">IPC（Inter-Process Communication）</h3>
+    <p><strong>一句话定义</strong>：进程间通信机制。</p>
+    <p><strong>详细说明</strong>：R-Code 中 Renderer 通过 IPC 调用 Main 进程的能力。IPC 消息有固定的 channel 和 schema。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#ipc-pattern">第 12 章 §12.7</a></p>
+
+    <h3 id="term-monaco">Monaco Editor</h3>
+    <p><strong>一句话定义</strong>：VS Code 的核心编辑器组件，R-Code 的代码编辑基础。</p>
+    <p><strong>详细说明</strong>：支持语法高亮、自动补存、多光标、Diff 视图、LSP 集成。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#monaco-xterm">第 12 章 §12.5</a></p>
+
+    <h3 id="term-xterm">xterm.js</h3>
+    <p><strong>一句话定义</strong>：Web 端的终端模拟器。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 xterm.js 渲染终端界面，通过 PTY 连接真实 shell。支持 alternate-screen 程序和 OSC 133 序列。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#monaco-xterm">第 12 章 §12.5</a></p>
+
+    <h3 id="term-osc133">OSC 133</h3>
+    <p><strong>一句话定义</strong>：终端控制序列，用于标记提示边界。</p>
+    <p><strong>详细说明</strong>：OSC 133 序列帮助 R-Code 识别 shell 提示符的位置，从而正确处理命令输入和输出。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#monaco-xterm">第 12 章 §12.5</a></p>
+
+    <h3 id="term-pty">PTY（Pseudo-Terminal）</h3>
+    <p><strong>一句话定义</strong>：伪终端，连接终端 UI 和真实 shell 的桥梁。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 node-pty 或等价方案创建 PTY，使 xterm.js 能与 bash/zsh 等真实 shell 交互。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#monaco-xterm">第 12 章 §12.5</a></p>
+
+    <h3 id="term-conpty">ConPTY</h3>
+    <p><strong>一句话定义</strong>：Windows 的伪终端 API。</p>
+    <p><strong>详细说明</strong>：Windows 10+ 提供的原生伪终端接口，R-Code 在 Windows 平台使用 ConPTY 实现终端功能。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html">第 12 章</a></p>
+
+    <h3 id="term-csp">CSP（Content Security Policy）</h3>
+    <p><strong>一句话定义</strong>：内容安全策略，限制浏览器可以加载的资源。</p>
+    <p><strong>详细说明</strong>：R-Code 的 CSP 限制脚本来源、禁止内联脚本、限制 iframe 沙箱，防止 XSS 攻击。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#security-csp">第 12 章 §12.12</a></p>
+
+    <h2 id="glossary-ci">CI 与发布</h2>
+
+    <h3 id="term-cargo">Cargo</h3>
+    <p><strong>一句话定义</strong>：Rust 的包管理器和构建系统。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 Cargo 管理 Rust 依赖、编译、测试。主要命令：cargo build、cargo test、cargo clippy、cargo fmt。</p>
+    <p>📖 相关章节：<a href="10-ci-pipeline.html">第 10 章</a></p>
+
+    <h3 id="term-clippy">Clippy</h3>
+    <p><strong>一句话定义</strong>：Rust 的代码 linter，检查常见错误和低效模式。</p>
+    <p><strong>详细说明</strong>：R-Code 将 clippy 警告视为错误（-D warnings），确保代码质量。</p>
+    <p>📖 相关章节：<a href="10-ci-pipeline.html#job-clippy">第 10 章 §10.4</a></p>
+
+    <h3 id="term-fmt">fmt（rustfmt）</h3>
+    <p><strong>一句话定义</strong>：Rust 代码格式化工具。</p>
+    <p><strong>详细说明</strong>：确保所有代码符合统一格式。CI 中运行 <code>cargo fmt --check</code>，本地修复用 <code>cargo fmt --all</code>。</p>
+    <p>📖 相关章节：<a href="10-ci-pipeline.html#job-fmt">第 10 章 §10.3</a></p>
+
+    <h3 id="term-deny">cargo-deny</h3>
+    <p><strong>一句话定义</strong>：Rust 依赖合规性检查工具。</p>
+    <p><strong>详细说明</strong>：检查依赖的许可证、来源、是否被禁止。R-Code 用它禁止 Pi SDK 依赖（路径 B 决策）。</p>
+    <p>📖 相关章节：<a href="10-ci-pipeline.html#job-deny">第 10 章 §10.7</a></p>
+
+    <h3 id="term-semver">SemVer（Semantic Versioning）</h3>
+    <p><strong>一句话定义</strong>：语义化版本规范。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 MAJOR.MINOR.PATCH 格式，Beta 版本加 -beta.N 后缀。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html#semver">第 11 章 §11.2</a></p>
+
+    <h3 id="term-sbom">SBOM（Software Bill of Materials）</h3>
+    <p><strong>一句话定义</strong>：软件物料清单，列出所有依赖及其版本。</p>
+    <p><strong>详细说明</strong>：R-Code 每次 Release 生成 SPDX 格式的 SBOM，用于合规和供应链安全。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html#artifacts">第 11 章 §11.7</a></p>
+
+    <h3 id="term-notarize">Notarization（公证）</h3>
+    <p><strong>一句话定义</strong>：Apple 对 macOS 应用的安全审核流程。</p>
+    <p><strong>详细说明</strong>：通过 @electron/notarize 提交应用到 Apple，审核通过后装订（stapler）公证凭证。Stable 发布必需。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html#macos-packaging">第 11 章 §11.4</a></p>
+
+    <h3 id="term-nsis">NSIS</h3>
+    <p><strong>一句话定义</strong>：Windows 安装程序制作工具。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 NSIS 生成 Windows .exe 安装程序，支持安装/卸载流程。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html#windows-packaging">第 11 章 §11.5</a></p>
+
+    <h3 id="term-authenticode">Authenticode</h3>
+    <p><strong>一句话定义</strong>：Windows 代码签名标准。</p>
+    <p><strong>详细说明</strong>：使用 Authenticode 证书对 Windows 可执行文件签名，证明发布者身份。SmartScreen 信任的前提。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html#windows-packaging">第 11 章 §11.5</a></p>
+
+    <h2 id="glossary-misc">其他术语</h2>
+
+    <h3 id="term-tauri">Tauri</h3>
+    <p><strong>一句话定义</strong>：R-Code 的桌面应用框架，使用 Rust + WebView。</p>
+    <p><strong>详细说明</strong>：Tauri 提供跨平台窗口管理、系统 API 访问、IPC 机制。相比 Electron 更轻量，安全性更好。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html">第 12 章</a></p>
+
+    <h3 id="term-electron">Electron</h3>
+    <p><strong>一句话定义</strong>：另一种桌面应用框架（R-Code 早期使用，现迁移到 Tauri）。</p>
+    <p><strong>详细说明</strong>：部分文档和配置仍引用 Electron 概念（如 electron-builder、safeStorage）。新代码使用 Tauri。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html">第 12 章</a></p>
+
+    <h3 id="term-hermes">hermes-store</h3>
+    <p><strong>一句话定义</strong>：R-Code 的 JSONL 事件存储，Source of Truth。</p>
+    <p><strong>详细说明</strong>：不可变事件日志，crash-safe。所有状态变更先写入 hermes-store，再投影到 SQLite。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#dual-storage">第 9 章 §9.1</a></p>
+
+    <h3 id="term-rusqlite">rusqlite</h3>
+    <p><strong>一句话定义</strong>：Rust 的 SQLite 绑定库。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 rusqlite 操作 SQLite 数据库，配合 r2d2 连接池管理并发访问。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#database-struct">第 9 章 §9.4</a></p>
+
+    <h3 id="term-r2d2">r2d2</h3>
+    <p><strong>一句话定义</strong>：Rust 的通用连接池库。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 r2d2_sqlite 管理 SQLite 连接池，max_size=8。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#database-struct">第 9 章 §9.4</a></p>
+
+    <h3 id="term-session">Session</h3>
+    <p><strong>一句话定义</strong>：一次完整的用户-Agent 交互过程。</p>
+    <p><strong>详细说明</strong>：Session 包含对话历史、计划、Agent 工作、文件活动、验证、审查、回滚等。一个 Task 可以有多个 Session。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <h3 id="term-submodule">Submodule（子模块）</h3>
+    <p><strong>一句话定义</strong>：Git 中嵌入另一个仓库的机制。</p>
+    <p><strong>详细说明</strong>：R-Code 通过 Git submodule 引入 agent-core 代码，使用 contract-lock.json 锁定 commit。</p>
+    <p>📖 相关章节：<a href="10-ci-pipeline.html#job-submodule">第 10 章 §10.8</a></p>
+
+    <h3 id="term-diff">Diff</h3>
+    <p><strong>一句话定义</strong>：文件变更的差异表示。</p>
+    <p><strong>详细说明</strong>：R-Code 在审查阶段展示 Diff，让用户查看 Agent 对文件的具体修改。使用 Monaco Editor 的 Diff 视图。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html#review-state">第 8 章 §8.6</a></p>
+
+    <h3 id="term-milestone">Milestone（里程碑）</h3>
+    <p><strong>一句话定义</strong>：产品开发的关键阶段节点。</p>
+    <p><strong>详细说明</strong>：R-Code 的 PRODUCT_ENGINEERING_SPEC 定义了 M1-M12 共 12 个里程碑，每个有明确的交付物和验收标准。</p>
+    <p>📖 相关章节：<a href="11-packaging-release.html">第 11 章</a></p>
+
+    <h3 id="term-workspace">Workspace（工作区）</h3>
+    <p><strong>一句话定义</strong>：用户打开的项目目录。</p>
+    <p><strong>详细说明</strong>：Workspace 有 canonical_path、display_name、trust_state。信任状态决定 Agent 的操作权限范围。</p>
+    <p>📖 相关章节：<a href="09-storage-persistence.html#repository-pattern">第 9 章 §9.10</a></p>
+
+    <h3 id="term-worker">Worker（工作进程）</h3>
+    <p><strong>一句话定义</strong>：运行 Agent Runtime 的独立进程。</p>
+    <p><strong>详细说明</strong>：Worker 进程隔离 Agent 执行，避免阻塞 Main 进程的 UI 响应。通过 IPC 与 Main 进程通信。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#ipc-pattern">第 12 章 §12.7</a></p>
+
+    <h3 id="term-zustand">Zustand</h3>
+    <p><strong>一句话定义</strong>：R-Code 使用的前端状态管理库。</p>
+    <p><strong>详细说明</strong>：轻量级全局状态管理，比 Redux 更简单。管理 UI 状态、会话状态、编辑状态。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#state-management">第 12 章 §12.8</a></p>
+
+    <h3 id="term-zod">Zod</h3>
+    <p><strong>一句话定义</strong>：TypeScript 的运行时 schema 验证库。</p>
+    <p><strong>详细说明</strong>：R-Code 使用 Zod 验证 IPC 消息、工具输入/输出、配置文件的类型安全。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html#preload-bridge">第 12 章 §12.4</a></p>
+
+    <h3 id="term-json-rpc">JSON-RPC</h3>
+    <p><strong>一句话定义</strong>：基于 JSON 的远程过程调用协议。</p>
+    <p><strong>详细说明</strong>：R-Code 内部部分通信使用 JSON-RPC 格式，用于 LSP 等场景。</p>
+    <p>📖 相关章节：<a href="12-renderer-ui.html">第 12 章</a></p>
+
+    <h3 id="term-llm">LLM（Large Language Model）</h3>
+    <p><strong>一句话定义</strong>：大语言模型，Agent 的"大脑"。</p>
+    <p><strong>详细说明</strong>：R-Code 通过 LlmProvider trait 抽象 LLM 接口，支持多种模型提供商。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <h3 id="term-git">Git</h3>
+    <p><strong>一句话定义</strong>：分布式版本控制系统。</p>
+    <p><strong>详细说明</strong>：R-Code 深度集成 Git，支持 worktree 隔离、变更追踪、分支管理。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <h3 id="term-worktree">Worktree</h3>
+    <p><strong>一句话定义</strong>：Git 的工作树，允许同时检出多个分支。</p>
+    <p><strong>详细说明</strong>：R-Code 为每个 Task 创建独立的 worktree，隔离 Agent 的工作区，避免影响用户的主工作区。</p>
+    <p>📖 相关章节：<a href="08-task-state-machine.html">第 8 章</a></p>
+
+    <hr>
+    <p style="color:var(--text-dim);font-size:13px">术语表覆盖 R-Code 核心术语。如需深入了解某个术语，请点击相关章节链接。</p>
+
+    <div class="pagenav">
+      <a href="12-renderer-ui.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 12 章：渲染层</div></a>
+      <a href="index.html" class="pagenav__link right"><div class="pagenav__label">返回首页 →</div><div class="pagenav__title">R-Code 知识库</div></a>
+    </div>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

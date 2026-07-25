@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IPC 进程间通信深度指南 · R-Code</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --green: #3fb950;
+  --green-dim: #238636;
+  --yellow: #d29922;
+  --orange: #db6d28;
+  --red: #f85149;
+  --purple: #bc8cff;
+  --radius: 8px;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f8fa;
+    --surface-2: #eaeef2;
+    --border: #d0d7de;
+    --text: #1f2328;
+    --text-dim: #656d76;
+    --accent: #0969da;
+    --accent-dim: #0550ae;
+    --green: #1a7f37;
+    --green-dim: #0c7d4d;
+    --yellow: #9a6700;
+    --orange: #bc4c00;
+    --red: #cf222e;
+    --purple: #8250df;
+  }
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.7;
+  font-size: 15px;
+}
+.container { max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+h2 { font-size: 22px; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+h3 { font-size: 18px; margin: 28px 0 12px; color: var(--accent); }
+h4 { font-size: 15px; margin: 20px 0 8px; color: var(--text-dim); }
+p { margin: 12px 0; }
+.subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 32px; }
+
+/* TOC */
+.toc {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 40px;
+}
+.toc h3 { margin: 0 0 12px; font-size: 14px; color: var(--text-dim); }
+.toc ul { list-style: none; padding-left: 0; }
+.toc li { margin: 6px 0; }
+.toc a { color: var(--accent); text-decoration: none; }
+.toc a:hover { text-decoration: underline; }
+.toc .indent { padding-left: 16px; }
+
+/* Boxes */
+.info-box, .warn-box, .success-box, .danger-box {
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin: 16px 0;
+  font-size: 13px;
+}
+.info-box { background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.3); color: var(--accent); }
+.warn-box { background: rgba(210,153,34,0.08); border: 1px solid rgba(210,153,34,0.3); color: var(--yellow); }
+.success-box { background: rgba(63,185,80,0.08); border: 1px solid rgba(63,185,80,0.3); color: var(--green); }
+.danger-box { background: rgba(248,81,73,0.08); border: 1px solid rgba(248,81,73,0.3); color: var(--red); }
+
+/* Code blocks */
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 12px 0;
+}
+code { font-family: var(--mono); font-size: 12.5px; }
+:not(pre) > code {
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--accent);
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 16px 0;
+}
+th, td {
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  text-align: left;
+}
+th { background: var(--surface-2); font-weight: 600; }
+td { color: var(--text); }
+
+/* Diagram */
+.diagram {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin: 20px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--text-dim);
+}
+
+/* Layer diagram */
+.layer {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 20px 0;
+}
+.layer-item {
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  text-align: center;
+  font-weight: 600;
+}
+.layer-item + .layer-item { border-top: none; }
+.layer-4 { background: rgba(88,166,255,0.1); border-color: rgba(88,166,255,0.3); }
+.layer-3 { background: rgba(188,140,255,0.1); border-color: rgba(188,140,255,0.3); }
+.layer-2 { background: rgba(63,185,80,0.1); border-color: rgba(63,185,80,0.3); }
+.layer-1 { background: rgba(210,153,34,0.1); border-color: rgba(210,153,34,0.3); }
+.layer-arrow { text-align: center; color: var(--text-dim); font-size: 12px; padding: 4px; }
+
+/* Analogy table */
+.analogy { margin: 20px 0; }
+.analogy td:first-child { width: 200px; font-weight: 600; }
+
+/* Flow */
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  flex-wrap: wrap;
+}
+.flow-box {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.flow-arrow { color: var(--text-dim); font-size: 16px; }
+
+/* Platform badges */
+.platform {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+.platform-macos { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.3); }
+.platform-win { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+.platform-both { background: rgba(188,140,255,0.15); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+
+ul, ol { padding-left: 24px; margin: 12px 0; }
+li { margin: 6px 0; }
+
+.highlight { color: var(--accent); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🔌 IPC 进程间通信深度指南</h1>
+<p class="subtitle">面向 R-Code 开发者的完整解析 · 仅覆盖 Windows + macOS 双平台</p>
+
+<nav class="toc">
+<h3>📑 目录</h3>
+<ul>
+<li><a href="#what">一、什么是 IPC？</a></li>
+<li class="indent">→ 为什么需要 IPC？生活比喻</li>
+<li><a href="#why">二、为什么 R-Code 需要 IPC？</a></li>
+<li class="indent">→ 三进程架构设计</li>
+<li><a href="#types">三、IPC 的「宽度」—— 所有通信方式一览</a></li>
+<li><a href="#layers">四、R-Code IPC 的「深度」—— 四层协议栈</a></li>
+<li class="indent">→ 第 1 层：传输层（Unix Socket / Named Pipe）</li>
+<li class="indent">→ 第 2 层：序列化帧（Length-Prefixed Framing）</li>
+<li class="indent">→ 第 3 层：JSON-RPC 2.0 协议</li>
+<li class="indent">→ 第 4 层：应用语义</li>
+<li><a href="#server">五、服务端架构 —— Main 怎么处理请求？</a></li>
+<li><a href="#security">六、安全层 —— 谁能连？能做什么？</a></li>
+<li><a href="#flow">七、完整通信流程 —— 一次任务创建的生命周期</a></li>
+<li><a href="#platform">八、Windows vs macOS 差异对比</a></li>
+<li><a href="#summary">九、一图总结 + 关键概念速查</a></li>
+</ul>
+</nav>
+
+<!-- ==================== 第一章 ==================== -->
+<h2 id="what">一、什么是 IPC？</h2>
+
+<h3>1.1 核心定义</h3>
+<p><strong>IPC = Inter-Process Communication（进程间通信）</strong></p>
+<p>操作系统里，每个运行中的程序是一个<strong>进程</strong>。进程 A 和进程 B 默认是完全隔离的——A 看不到 B 的内存，B 也碰不到 A 的文件。但复杂软件经常需要多个进程配合工作，<strong>让两个独立进程互相传数据、互相调用</strong>，这就是 IPC。</p>
+
+<h3>1.2 生活比喻</h3>
+<table class="analogy">
+<tr><th>现实场景</th><th>IPC 对应</th></tr>
+<tr><td>两个人在同一个房间说话</td><td>共享内存（直接读写同一块数据）</td></tr>
+<tr><td>两个人在不同城市打电话</td><td>Socket（网络或本地 socket）</td></tr>
+<tr><td>一个人给另一个人寄信</td><td>管道（Pipe）/ 消息队列</td></tr>
+<tr><td>公司里发邮件（写明收件人 + 附件）</td><td>JSON-RPC over IPC（<span class="highlight">R-Code 的方案</span>）</td></tr>
+</table>
+
+<div class="info-box">
+R-Code 选的是「寄邮件」的方式：<strong>进程之间用结构化的消息互相调用</strong>。每一封"邮件"都有明确的收件人（method）、内容（params）、编号（id），对方收到后回一封"回信"（response）。
+</div>
+
+<!-- ==================== 第二章 ==================== -->
+<h2 id="why">二、为什么 R-Code 需要 IPC？</h2>
+
+<h3>2.1 三进程架构</h3>
+<p>R-Code 有 <strong>三个进程</strong>，各司其职：</p>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────┐
+│  Main 进程 (Tauri Rust 后端)                                 │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  宿主服务层（管家）                                    │  │
+│  │  - Secret Store     - Task Engine                    │  │
+│  │  - Tool Gateway     - Permission Engine              │  │
+│  │  - Change Service   - Workspace Service              │  │
+│  │  - Document Service - Git Service                    │  │
+│  │  - Search Service   - Terminal Service               │  │
+│  │  - Verification Service                              │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                          ▲                                  │
+│                    IPC (Unix Socket / Named Pipe)           │
+│                          ▼                                  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Agent Worker 进程（独立进程 · 打工人）                 │  │
+│  │  - Agent Runtime (Pi Adapter / Mock)                  │  │
+│  │  - 无文件/命令执行器                                  │  │
+│  │  - 无密钥存储                                         │  │
+│  └──────────────────────────────────────────────────────┘  │
+│                                                             │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  Renderer 进程（WebView · 前台小姐姐）                  │  │
+│  │  - React + TypeScript UI                              │  │
+│  │  - Monaco Editor                                      │  │
+│  │  - xterm.js 终端                                      │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘</div>
+
+<h3>2.2 为什么拆开三个进程？</h3>
+<table>
+<tr><th>设计目标</th><th>解释</th></tr>
+<tr><td><strong>安全</strong></td><td>Agent Worker 直接面对 AI 模型（不可信输入），让它越权访问文件系统就炸了。单独一个进程，手里没有文件和命令执行器，只能「发消息请求 Main 帮忙执行」</td></tr>
+<tr><td><strong>隔离</strong></td><td>Renderer（WebView）崩了不能把整个 IDE 拖死</td></tr>
+<tr><td><strong>独立生命周期</strong></td><td>Worker 可以崩溃重启，不影响 UI 响应</td></tr>
+</table>
+
+<div class="warn-box">
+拆开了之后，<strong>它们之间怎么对话？</strong>答案就是 IPC。没有 IPC，三进程就是三个孤岛，无法协作。
+</div>
+
+<!-- ==================== 第三章 ==================== -->
+<h2 id="types">三、IPC 的「宽度」—— 所有通信方式一览</h2>
+
+<p>操作系统提供了多种 IPC 机制，各有适用场景：</p>
+
+<table>
+<tr><th>方式</th><th>原理</th><th>典型用途</th><th>R-Code 用吗？</th></tr>
+<tr><td><strong>管道 (Pipe)</strong></td><td>一根单向数据流，A 写 B 读</td><td>终端 <code>ls | grep foo</code></td><td>❌</td></tr>
+<tr><td><strong>命名管道 (Named Pipe / FIFO)</strong></td><td>有名字的管道，不相关的进程也能用</td><td>Windows 跨进程通信</td><td>✅ <span class="platform platform-win">Windows</span></td></tr>
+<tr><td><strong>Unix Socket</strong></td><td>本机 socket，用文件路径当地址</td><td>macOS/Linux 本机进程通信</td><td>✅ <span class="platform platform-macos">macOS</span></td></tr>
+<tr><td><strong>网络 Socket (TCP/UDP)</strong></td><td>走网络协议，可跨机器</td><td>浏览器 ↔ 服务器</td><td>❌</td></tr>
+<tr><td><strong>共享内存</strong></td><td>多进程映射同一块物理内存</td><td>高频视频/图像处理（最快但最复杂）</td><td>❌</td></tr>
+<tr><td><strong>消息队列</strong></td><td>内核维护的消息链表</td><td>分布式系统削峰</td><td>❌</td></tr>
+<tr><td><strong>D-Bus</strong></td><td>Linux 桌面总线，桌面组件互相发现</td><td>GNOME/KDE 桌面服务</td><td>❌</td></tr>
+<tr><td><strong>COM / DCOM</strong></td><td>Windows 组件对象模型</td><td>Office 插件、Windows 服务</td><td>❌</td></tr>
+</table>
+
+<div class="info-box">
+<strong>R-Code 的选择</strong>：Unix Socket（macOS） + Named Pipe（Windows）。<br>
+为什么？因为这两者都是<strong>本机 socket 的变体</strong>——可以像网络编程一样收发消息，但数据不走网卡，本机内环回，<strong>既高性能又支持结构化协议</strong>。
+</div>
+
+<!-- ==================== 第四章 ==================== -->
+<h2 id="layers">四、R-Code IPC 的「深度」—— 四层协议栈</h2>
+
+<p>R-Code 的 IPC 不是简单传字符串，而是严格的四层结构：</p>
+
+<div class="layer">
+<div class="layer-item layer-4">第 4 层：应用语义 &nbsp;→&nbsp; task.create / tool.execute / agent.event</div>
+<div class="layer-arrow">↕</div>
+<div class="layer-item layer-3">第 3 层：RPC 协议 &nbsp;→&nbsp; JSON-RPC 2.0（请求/响应/事件）</div>
+<div class="layer-arrow">↕</div>
+<div class="layer-item layer-2">第 2 层：序列化帧 &nbsp;→&nbsp; [4 字节长度][JSON 载荷]</div>
+<div class="layer-arrow">↕</div>
+<div class="layer-item layer-1">第 1 层：传输层 &nbsp;→&nbsp; Unix Socket / Named Pipe</div>
+</div>
+
+<p>每一层只关心自己的事，这就是分层设计的魅力。下面逐层拆解。</p>
+
+<!-- 第 1 层 -->
+<h3>第 1 层：传输层 —— 数据怎么流动？</h3>
+
+<h4>macOS 方案：Unix Socket</h4>
+<pre><code><span style="color:var(--text-dim)">// Main 进程：在 /tmp/charter.sock 这个路径上"挂牌营业"</span>
+<span style="color:var(--accent)">use</span> tokio::net::UnixListener;
+
+<span style="color:var(--accent)">let</span> listener = UnixListener::bind(<span style="color:var(--green)">"/tmp/charter.sock"</span>)?;
+<span style="color:var(--text-dim)">// Worker 进程：连上这个路径，Main 接受连接</span>
+<span style="color:var(--accent)">let</span> (stream, _addr) = listener.accept().await?;</code></pre>
+
+<div class="info-box">
+你可以把 Unix Socket 想象成<strong>有一个固定门牌号的信箱</strong>。Main 进程把信箱放在 <code>/tmp/charter.sock</code>，Worker 和 Renderer 都知道这个地址，往里塞信、取信。
+</div>
+
+<h4>Windows 方案：Named Pipe</h4>
+<pre><code><span style="color:var(--text-dim)">// 名字是 \\.\pipe\charter，Windows 内核管理</span>
+<span style="color:var(--accent)">use</span> tokio::net::windows::named_pipe::ServerOptions;
+
+<span style="color:var(--accent)">let</span> pipe = ServerOptions::new().create(<span style="color:var(--green)">r"\\.\pipe\charter"</span>)?;</code></pre>
+
+<div class="info-box">
+Windows 没有 Unix 那种「一切皆文件」的传统，所以用专门的「命名管道」——本质一样：一个内核维护的字节流通道，两端各拿一个句柄读写。
+</div>
+
+<h4>关键细节：启动时清理旧 socket</h4>
+<pre><code><span style="color:var(--accent)">if</span> socket_path.exists() {
+    std::fs::remove_file(&socket_path)?;  <span style="color:var(--text-dim)">// 上次崩溃留下的信箱得先拆掉</span>
+}</code></pre>
+
+<!-- 第 2 层 -->
+<h3>第 2 层：序列化帧 —— 怎么区分两条消息？</h3>
+
+<p>Socket 是<strong>字节流</strong>——水一样源源不断。你写了 3 个字节、再写 5 个字节，对面收到的是一摊 8 个字节的混合物。怎么知道「第一条消息在哪里结束」？</p>
+
+<p>R-Code 的方案叫 <strong>length-prefixed framing</strong>：</p>
+
+<div class="diagram">
+[4 字节长度，大端 u32][N 字节 JSON 载荷]
+
+发送 "hello"：
+  [0x00 0x00 0x00 0x05]  [h e l l o]
+  ← 4 字节表示长度是 5 →   ← 5 字节数据 →</div>
+
+<p>接收方先读 4 字节 → 知道后面还有 5 字节 → 再读 5 字节 → 拼出一条完整消息。这是网络编程里最经典的拆包方式。</p>
+
+<!-- 第 3 层 -->
+<h3>第 3 层：JSON-RPC 2.0 —— 消息长什么样？</h3>
+
+<p>数据拆出来了，接下来要知道它是什么意思。R-Code 用的是 <strong>JSON-RPC 2.0</strong> 协议——一种非常成熟的远程调用规范。</p>
+
+<h4>三种消息类型</h4>
+
+<p><strong>(a) 请求（Request）</strong>：我要你帮我做件事，并且要结果</p>
+<pre><code>{
+  <span style="color:var(--green)">"jsonrpc"</span>: <span style="color:var(--green)">"2.0"</span>,
+  <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-1"</span>,               <span style="color:var(--text-dim)">// ← 唯一编号，用来匹配响应</span>
+  <span style="color:var(--green)">"method"</span>: <span style="color:var(--green)">"task.create"</span>,     <span style="color:var(--text-dim)">// ← 要调用的方法名</span>
+  <span style="color:var(--green)">"params"</span>: {                  <span style="color:var(--text-dim)">// ← 参数</span>
+    <span style="color:var(--green)">"goal"</span>: <span style="color:var(--green)">"Fix the bug"</span>
+  }
+}</code></pre>
+
+<p><strong>(b) 响应（Response）</strong>：你要的结果 / 失败原因</p>
+<pre><code>{
+  <span style="color:var(--green)">"jsonrpc"</span>: <span style="color:var(--green)">"2.0"</span>,
+  <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-1"</span>,                       <span style="color:var(--text-dim)">// ← 对应请求的 id</span>
+  <span style="color:var(--green)">"result"</span>: { <span style="color:var(--green)">"taskId"</span>: <span style="color:var(--green)">"task-123"</span> }   <span style="color:var(--text-dim)">// ← 成功时返回结果</span>
+}</code></pre>
+
+<p>或失败时：</p>
+<pre><code>{
+  <span style="color:var(--green)">"jsonrpc"</span>: <span style="color:var(--green)">"2.0"</span>,
+  <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-1"</span>,
+  <span style="color:var(--green)">"error"</span>: { <span style="color:var(--green)">"code"</span>: -32603, <span style="color:var(--green)">"message"</span>: <span style="color:var(--green)">"tool not found"</span> }
+}</code></pre>
+
+<p><strong>(c) 事件（Notification）</strong>：单向通知，不要回复</p>
+<pre><code>{
+  <span style="color:var(--green)">"jsonrpc"</span>: <span style="color:var(--green)">"2.0"</span>,
+  <span style="color:var(--green)">"method"</span>: <span style="color:var(--green)">"agent.event"</span>,             <span style="color:var(--text-dim)">// ← 没有 id</span>
+  <span style="color:var(--green)">"params"</span>: { <span style="color:var(--green)">"type"</span>: <span style="color:var(--green)">"message"</span>, <span style="color:var(--green)">"text"</span>: <span style="color:var(--green)">"Hello"</span> }
+}</code></pre>
+
+<div class="info-box">
+这就像三种沟通方式：<br>
+• 请求 = 寄信等回信<br>
+• 响应 = 回信<br>
+• 事件 = 群发公告（不需要回复）
+</div>
+
+<h4>为什么用 JSON-RPC 而不是自己造协议？</h4>
+<ul>
+<li><strong>标准化</strong>：错误码、id 匹配、批量调用都有现成规范</li>
+<li><strong>可读性</strong>：JSON 人能直接看懂，调试方便</li>
+<li><strong>工具生态</strong>：可以自动生成 client/server 代码</li>
+</ul>
+
+<!-- 第 4 层 -->
+<h3>第 4 层：应用语义 —— 具体在聊什么？</h3>
+
+<p>R-Code 的三对通信通道各有各的「业务」：</p>
+
+<table>
+<tr><th>通道</th><th>谁和谁</th><th>传什么</th></tr>
+<tr><td><strong>Main ↔ Agent Worker</strong></td><td>管家 ↔ 打工人</td><td>任务创建/恢复/中止、工具调用/结果、事件流</td></tr>
+<tr><td><strong>Main ↔ Renderer</strong></td><td>管家 ↔ 前台</td><td>状态同步、UI 事件、投影数据</td></tr>
+<tr><td><strong>外部 CLI ↔ Main</strong></td><td>第三方 AI ↔ 管家</td><td>终端控制（通过 Unix Socket + HTTP）</td></tr>
+</table>
+
+<div class="warn-box">
+<strong>关键安全设计</strong>：Agent Worker 没有直接读文件的能力。它只能通过 IPC 跟 Main 说「帮我把这个文件读出来」，Main 读完再通过 IPC 把结果传回来。<strong>Worker 的一切 I/O 都要经过 Main 的权限检查</strong>。
+</div>
+
+<!-- ==================== 第五章 ==================== -->
+<h2 id="server">五、服务端架构 —— Main 怎么处理请求？</h2>
+
+<pre><code><span style="color:var(--accent)">struct</span> IpcServer {
+    listener: UnixListener,                           <span style="color:var(--text-dim)">// 监听 socket</span>
+    handlers: HashMap&lt;String, Box&lt;dyn IpcHandler&gt;&gt;,   <span style="color:var(--text-dim)">// method → 处理函数</span>
+}
+
+<span style="color:var(--accent)">impl</span> IpcServer {
+    <span style="color:var(--text-dim)">// 每进来一个连接，开一个异步任务去处理（多并发不阻塞）</span>
+    <span style="color:var(--accent)">pub async fn</span> serve(&<span style="color:var(--accent)">self</span>) -> Result&lt;()> {
+        <span style="color:var(--accent)">loop</span> {
+            <span style="color:var(--accent)">let</span> (mut stream, _addr) = self.listener.accept().await?;
+            <span style="color:var(--accent)">let</span> handlers = self.handlers.clone();
+            tokio::spawn(<span style="color:var(--accent)">async move</span> {
+                <span style="color:var(--accent)">if let</span> Err(e) = Self::handle_connection(stream, handlers).await {
+                    tracing::error!(<span style="color:var(--green)">"IPC connection error: {}"</span>, e);
+                }
+            });
+        }
+    }
+}</code></pre>
+
+<p>这是一个标准的 <strong>请求-分发-响应</strong> 模型：</p>
+
+<div class="flow">
+<div class="flow-box">连接进来</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">读取帧</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">解析 JSON</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">看 method</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">查 handlers 表</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">调用处理函数</div>
+<div class="flow-arrow">→</div>
+<div class="flow-box">写回响应</div>
+</div>
+
+<ul>
+<li>每个 method（<code>task.create</code>、<code>tool.execute</code>、<code>agent.event</code>）注册一个 handler</li>
+<li>每进来一个连接，<code>tokio::spawn</code> 开一个异步任务去处理（多并发不阻塞）</li>
+<li>处理完一个连接上的所有请求后，该任务自动结束</li>
+</ul>
+
+<!-- ==================== 第六章 ==================== -->
+<h2 id="security">六、安全层 —— 谁能连？能做什么？</h2>
+
+<table>
+<tr><th>维度</th><th>机制</th></tr>
+<tr><td><strong>认证</strong></td><td>外部 CLI 用 per-terminal token；Renderer 用 session cookie</td></tr>
+<tr><td><strong>授权</strong></td><td>每个 IPC 调用检查权限，高风险操作需要审批</td></tr>
+<tr><td><strong>传输层安全</strong></td><td>Unix Socket 权限 <code>0o600</code>（仅 owner 可读写），别的用户进程连不上</td></tr>
+<tr><td><strong>数据校验</strong></td><td>JSON Schema 校验请求/响应，无效请求返回 ParseError</td></tr>
+</table>
+
+<div class="danger-box">
+即使 Agent Worker 被模型输出操控了，它也只能发 IPC 请求。Main 收到后先检查权限——高风险操作弹出审批弹窗，用户不同意就拒绝执行。<strong>这就是 IPC 作为安全边界的价值</strong>。
+</div>
+
+<!-- ==================== 第七章 ==================== -->
+<h2 id="flow">七、完整通信流程 —— 一次任务创建的生命周期</h2>
+
+<div class="flow">
+<div class="flow-box">用户点击"创建任务"</div>
+<div class="flow-arrow">▼</div>
+</div>
+
+<pre><code><span style="color:var(--text-dim)">// 1. Renderer 发 IPC 请求给 Main</span>
+{
+  <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-1"</span>,
+  <span style="color:var(--green)">"method"</span>: <span style="color:var(--green)">"task.create"</span>,
+  <span style="color:var(--green)">"params"</span>: { <span style="color:var(--green)">"goal"</span>: <span style="color:var(--green)">"修复登录bug"</span> }
+}</code></pre>
+
+<div class="flow">
+<div class="flow-arrow">▼</div>
+<div class="flow-box">Main 收到 → 写数据库 → 启动 Agent Worker</div>
+<div class="flow-arrow">▼</div>
+</div>
+
+<pre><code><span style="color:var(--text-dim)">// 2. Main 返回响应给 Renderer</span>
+{
+  <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-1"</span>,
+  <span style="color:var(--green)">"result"</span>: { <span style="color:var(--green)">"taskId"</span>: <span style="color:var(--green)">"task-123"</span> }
+}</code></pre>
+
+<div class="flow">
+<div class="flow-arrow">▼</div>
+<div class="flow-box">Renderer 更新 UI 显示"任务已创建"</div>
+<div class="flow-arrow">▼</div>
+</div>
+
+<pre><code><span style="color:var(--text-dim)">// 3. Agent Worker 开始跑，通过 IPC 调用工具</span>
+<span style="color:var(--text-dim)">// Worker → Main：</span>
+{ <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-2"</span>, <span style="color:var(--green)">"method"</span>: <span style="color:var(--green)">"tool.execute"</span>, <span style="color:var(--green)">"params"</span>: { <span style="color:var(--green)">"name"</span>: <span style="color:var(--green)">"read_file"</span>, <span style="color:var(--green)">"path"</span>: <span style="color:var(--green)">"src/login.rs"</span> } }
+
+<span style="color:var(--text-dim)">// Main → Worker：</span>
+{ <span style="color:var(--green)">"id"</span>: <span style="color:var(--green)">"req-2"</span>, <span style="color:var(--green)">"result"</span>: { <span style="color:var(--green)">"content"</span>: <span style="color:var(--green)">"fn login() { ... }"</span> } }</code></pre>
+
+<!-- ==================== 第八章 ==================== -->
+<h2 id="platform">八、Windows vs macOS 差异对比</h2>
+
+<table>
+<tr><th>维度</th><th><span class="platform platform-macos">macOS</span></th><th><span class="platform platform-win">Windows</span></th></tr>
+<tr><td><strong>传输机制</strong></td><td>Unix Socket</td><td>Named Pipe</td></tr>
+<tr><td><strong>地址形式</strong></td><td>文件路径 <code>/tmp/charter.sock</code></td><td>名字 <code>\\.\pipe\charter</code></td></tr>
+<tr><td><strong>权限控制</strong></td><td>文件权限 <code>0o600</code>（仅 owner）</td><td>Windows ACL（访问控制列表）</td></tr>
+<tr><td><strong>代码标记</strong></td><td><code>#[cfg(unix)]</code></td><td><code>#[cfg(windows)]</code></td></tr>
+<tr><td><strong>生命周期</strong></td><td>需手动清理残留 sock 文件</td><td>Windows 内核自动清理</td></tr>
+<tr><td><strong>性能</strong></td><td>字节流，内核缓冲</td><td>字节流，内核缓冲</td></tr>
+<tr><td><strong>协议层</strong></td><td colspan="2" style="text-align:center;"><span class="platform platform-both">完全相同</span>（JSON-RPC 2.0 + 序列化帧）</td></tr>
+<tr><td><strong>应用语义</strong></td><td colspan="2" style="text-align:center;"><span class="platform platform-both">完全相同</span>（task.create / tool.execute / agent.event）</td></tr>
+</table>
+
+<div class="success-box">
+<strong>关键洞察</strong>：传输层之上，<strong>协议层和应用层完全一致</strong>。这意味着业务代码不需要为两个平台各写一份——只有最底层的「连接建立」和「数据读写」需要条件编译。
+</div>
+
+<!-- ==================== 第九章 ==================== -->
+<h2 id="summary">九、一图总结 + 关键概念速查</h2>
+
+<h3>9.1 全貌图</h3>
+<div class="diagram">
+   Agent Worker                     Main (Tauri Rust)                  Renderer
+   (独立进程)                       ┌─────────────────┐               (WebView)
+        │                           │   IPC Server     │                    │
+        │  ┌────────────────────┐   │  ┌────────────┐ │   ┌────────────────┐ │
+        │  │  IpcClient         │◄──►│  │ UnixSocket │ │◄──►│   JS Bridge    │ │
+        │  │  pending: {id→tx}  │   │  │ / NamedPipe│ │   │  invoke()/listen│ │
+        │  └────────────────────┘   │  └────────────┘ │   └────────────────┘ │
+        │        │                  │        │         │          │           │
+        │   1. 构造请求             │   2. accept 连接 │    1. 构造请求      │
+        │   {id,method,params}     │   3. 读 4 字节长度│    {id,method,params}│
+        │   ──────────────────────►│   4. 读 N 字节 JSON│   ─────────────────►│
+        │        │                  │   5. 解析 JSON    │          │           │
+        │        │                  │   6. 查 handlers  │          │           │
+        │        │                  │   7. 权限检查     │          │           │
+        │        │                  │   8. 执行业务逻辑 │          │           │
+        │   9. 返回响应             │   9. 构造响应     │   2. 返回响应      │
+        │   {id,result/error}  ◄────│   ─────────────►│   {id,result/error}◄│
+        │   10. 按 id 匹配 pending   │                  │   10. Promise resolve│
+        │   11. 返回调用方           │                  │                      │</div>
+
+<h3>9.2 关键概念速查</h3>
+<table>
+<tr><th>概念</th><th>含义</th></tr>
+<tr><td><strong>进程</strong></td><td>运行中的程序实例，拥有独立的内存空间</td></tr>
+<tr><td><strong>Socket</strong></td><td>通信端点，像「网络插口」</td></tr>
+<tr><td><strong>Unix Socket</strong></td><td>本机 socket，用文件系统路径当地址，不走网卡</td></tr>
+<tr><td><strong>Named Pipe</strong></td><td>Windows 上的等价物，用名字标识</td></tr>
+<tr><td><strong>JSON-RPC 2.0</strong></td><td>远程方法调用协议：请求带 id+method+params，响应带 id+result/error</td></tr>
+<tr><td><strong>length-prefixed frame</strong></td><td><code>[4 字节长度][载荷]</code>，解决 TCP/流拆包问题</td></tr>
+<tr><td><strong>tokio::spawn</strong></td><td>开一个异步轻量任务，类似 goroutine</td></tr>
+<tr><td><strong>oneshot channel</strong></td><td>单次发送通道，请求方拿着 <code>rx</code> 等结果，响应方通过 <code>tx</code> 发一次</td></tr>
+<tr><td><strong>#[cfg(unix)]</strong></td><td>条件编译：仅在 Unix 系统（macOS）编译此代码</td></tr>
+<tr><td><strong>#[cfg(windows)]</strong></td><td>条件编译：仅在 Windows 编译此代码</td></tr>
+</table>
+
+<h3>9.3 错误码速查</h3>
+<table>
+<tr><th>码</th><th>含义</th><th>何时出现</th></tr>
+<tr><td>-32700</td><td>Parse error</td><td>JSON 格式非法</td></tr>
+<tr><td>-32600</td><td>Invalid request</td><td>不符合 JSON-RPC 2.0 规范</td></tr>
+<tr><td>-32601</td><td>Method not found</td><td>调用的方法未注册</td></tr>
+<tr><td>-32602</td><td>Invalid params</td><td>参数不符合 schema</td></tr>
+<tr><td>-32603</td><td>Internal error</td><td>服务器内部错误</td></tr>
+<tr><td>1001</td><td>Task not found</td><td>应用级错误：任务不存在</td></tr>
+</table>
+
+<p style="margin-top: 40px; text-align: center; color: var(--text-dim); font-size: 12px;">
+— 本文档由 R-Code 团队整理 · 基于 docs/08-ipc-and-process.html 与 vendor/agent-core/docs/09-ipc-transport.html —
+</p>
+
+</div>
+</body>
+</html>

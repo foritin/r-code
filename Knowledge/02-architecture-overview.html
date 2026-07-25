@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 2 章：架构总览 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links"><a href="index.html">首页</a><span style="color:var(--text-dim)">·</span><span>第 2 章</span></div>
+  </div>
+</nav>
+
+<div class="shell">
+<aside class="sidebar">
+<div class="sidebar__group">
+<div class="sidebar__title">本章目录</div>
+<a href="#three-process" class="sidebar__item">三进程模型</a>
+<a href="#why-split" class="sidebar__item">为什么拆分进程</a>
+<a href="#process-duties" class="sidebar__item">各进程职责边界</a>
+<a href="#agent-core" class="sidebar__item">agent-core 公共合同</a>
+<a href="#crate-map" class="sidebar__item">Crate 全景图</a>
+<a href="#dep-rules" class="sidebar__item">依赖方向规则</a>
+<a href="#data-flow" class="sidebar__item">数据流总览</a>
+<a href="#ipc-deep-dive" class="sidebar__item">IPC 通信详解</a>
+      <a href="#lifecycle" class="sidebar__item">任务生命周期</a>
+      <a href="#security-boundaries" class="sidebar__item">安全边界</a>
+      <a href="#crash-recovery" class="sidebar__item">崩溃恢复机制</a>
+      <a href="#build-system" class="sidebar__item">构建系统</a>
+      <a href="#environment" class="sidebar__item">运行环境</a>
+      <a href="#summary" class="sidebar__item">本章总结</a>
+</div>
+</aside>
+
+<main class="content">
+<div class="meta">
+<span class="meta__item"><span class="status status-beginner">入门</span></span>
+<span class="meta__item">📖 阅读约 20 分钟</span>
+<span class="meta__item">📅 2026-07-25</span>
+</div>
+
+<h1>第 2 章：架构总览</h1>
+<p class="lede">R-Code 采用三进程模型，将 UI 渲染、宿主编排和 Agent 执行隔离在独立进程中。这一章带你鸟瞰全局。</p>
+
+<h2 id="three-process">2.1 三进程模型</h2>
+
+<p>R-Code 运行时由三个独立的进程组成。这种设计借鉴了 Electron/Tauri 的经典架构，但针对 Agent 工作负载做了专门优化：</p>
+
+<div class="layer">
+<div class="layer-item" style="background:rgba(88,166,255,.08);border-left:4px solid var(--accent)">Renderer（渲染进程）<div style="font-weight:400;font-size:12px;color:var(--text-dim);margin-top:4px">Tauri WebView · React + TypeScript · Monaco · xterm.js</div></div>
+<div class="layer-item" style="background:rgba(63,185,80,.08);border-left:4px solid var(--green)">Main / Host 进程<div style="font-weight:400;font-size:12px;color:var(--text-dim);margin-top:4px">r-code-host · IPC Server · Secret Store · 进程监督</div></div>
+<div class="layer-item" style="background:rgba(210,153,34,.08);border-left:4px solid var(--yellow)">Agent Worker<div style="font-weight:400;font-size:12px;color:var(--text-dim);margin-top:4px">r-code-agent-worker · LlmProvider · Tool Gateway · 状态机 · SQLite</div></div>
+</div>
+
+<div class="box info">
+<div class="box-title">💡 类比理解</div>
+可以把 R-Code 想象成一家餐厅：<strong>Renderer</strong> 是菜单和餐桌（你看到和点击的地方），<strong>Host</strong> 是前台服务员（接收订单、管理资源），<strong>Worker</strong> 后厨（真正干活的 Agent 和工具）。三者分工明确，互不干扰。
+</div>
+
+<h2 id="why-split">2.2 为什么拆分进程</h2>
+
+<p>很多人会问：为什么不把全部逻辑放在一个进程里？三个核心原因：</p>
+
+<div class="table-wrap">
+<table>
+<tr><th>原因</th><th>解释</th><th>后果（如果不拆分）</th></tr>
+<tr><td><b>隔离</b></td><td>Renderer 运行不受信任的 Web 代码（Markdown 预览、外部内容）</td><td>恶意脚本可直接读写文件系统</td></tr>
+<tr><td><b>性能</b></td><td>Agent 工具调用可能耗时数秒甚至数分钟（编译、测试）</td><td>UI 卡顿、无法响应用户输入</td></tr>
+<tr><td><b>安全</b></td><td>Tool Gateway 必须在宿主进程内做权限检查</td><td>Agent 可绕过权限直接执行危险命令</td></tr>
+</table>
+</div>
+
+<h2 id="process-duties">2.3 各进程职责边界</h2>
+
+<h3>Renderer（渲染进程）</h3>
+<ul>
+<li><b>纯呈现</b>：渲染 React 组件、Monaco 编辑器模型、xterm.js 终端</li>
+<li><b>短期 UI 状态</b>：滚动位置、选中范围、输入框内容</li>
+<li><b>无 Node 集成</b>：不直接访问 fs / process / child_process</li>
+<li><b>Context Isolation</b>：渲染代码与preload 桥隔离</li>
+<li><b>Preload 桥</b>：仅暴露少量 <code>window.product.*</code> API，每个调用都经 schema 校验</li>
+</ul>
+
+<h3>Main / Host 进程（r-code-host）</h3>
+<ul>
+<li><b>窗口管理</b>：创建 / 销毁 / 排列窗口</li>
+<li><b>IPC Server</b>：基于 hermes-ipc 的 JSON-RPC 2.0 服务端</li>
+<li><b>Secret Store</b>：通过 keyring / safeStorage 管理 API Key</li>
+<li><b>进程监督</b>：启动 / 监控 / 重启 Agent Worker</li>
+<li><b>协议 &amp; 外部链接</b>：注册自定义 URL scheme</li>
+<li><b>系统对话框</b>：文件选择、目录选择、消息框</li>
+<li><b>更新</b>：检查下载 / 应用更新</li>
+</ul>
+
+<h3>Agent Worker（r-code-agent-worker）</h3>
+<ul>
+<li><b>任务状态机</b>：Task 生命周期管理（第 8 章详述）</li>
+<li><b>Pi Adapter</b>：实现 <code>LlmProvider</code> trait，对接 Pi SDK</li>
+<li><b>Agent Loop</b>：model → tool → feedback → model 循环（第 5 章详述）</li>
+<li><b>Tool Gateway</b>：工具注册、权限检查、审计记账（第 7 章详述）</li>
+<li><b>SQLite 投影</b>：把 SessionEvent 投影到产品状态（第 9 章详述）</li>
+<li><b>文件 / Git / 验证服务</b>：WorkspaceService、GitService、VerificationService</li>
+</ul>
+
+<h2 id="agent-core">2.4 agent-core 公共合同 vs 产品私有</h2>
+
+<p>R-Code 的代码分为两大阵营：</p>
+
+<div class="flow">
+<span class="flow-box diagram-green">vendor/agent-core/</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box">公共合同（hermes-* crate）</span>
+<span class="flow-arrow">=</span>
+<span class="flow-box diagram-accent">多产品复用</span>
+</div>
+<div class="flow">
+<span class="flow-box diagram-yellow">crates/</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box">产品私有（r-code-* crate）</span>
+<span class="flow-arrow">=</span>
+<span class="flow-box diagram-accent">仅 R-Code 使用</span>
+</div>
+
+<p>agent-core 是一个 <b>Git 子模块</b>，通过 <code>contract-lock.json</code> 锁定特定 commit。CI 中的 <code>submodule-pin</code> job 会校验当前子模块 HEAD 与锁定 commit 是否一致。</p>
+
+<h3>hermes-* 公共 Crate</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Crate</th><th>职责</th><th>关键 Trait / 类型</th></tr>
+<tr><td><code>hermes-error</b></td><td>统一错误类型</td><td><code>Error</code> / <code>Result</code> / <code>ResultExt</code></td></tr>
+<tr><td><code>hermes-core</code></td><td>核心领域类型</td><td><code>ContentBlock</code> / <code>Message</code> / <code>Role</code> / <code>Session</code> / <code>ToolHost</code> / <code>ToolSpec</code></td></tr>
+<tr><td><code>hermes-llm</code></td><td>LLM 抽象层</td><td><code>LlmProvider</code> / <code>CompletionRequest</code> / <code>StreamEvent</code> / <code>StopReason</code></td></tr>
+<tr><td><code>hermes-ipc</code></td><td>IPC 协议栈</td><td><code>IpcServer</code> / <code>IpcClient</code> / <code>IpcHandler</code> / <code>JsonRpcRequest</code></td></tr>
+<tr><td><code>hermes-store</code></td><td>会话 JSONL 存储</td><td><code>SessionStore</code> / <code>SessionEvent</code></td></tr>
+<tr><td><code>hermes-config</code></td><td>配置管理</td><td><code>Config</code> / <code>ConfigBuilder</code></td></tr>
+<tr><td><code>hermes-compaction</code></td><td>会话压缩</td><td>当上下文超长时的摘要压缩逻辑</td></tr>
+<tr><td><code>hermes-mcp</code></td><td>MCP 协议</td><td>Model Context Protocol 支持</td></tr>
+<tr><td><code>hermes-tauri</code></td><td>Tauri 集成基</td><td><code>AppState</code> / Tauri commands 基础</td></tr>
+</table>
+</div>
+
+<h3>r-code-* 产品私有 Crate</h3>
+<div class="table-wrap">
+<table>
+<tr><th>Crate</th><th>职责</th><th>关键类型</th></tr>
+<tr><td><code>r-code-core</code></td><td>产品 DTO &amp; 状态机</td><td><code>Task</code> / <code>TaskMode</code> / <code>TaskState</code> / <code>AgentEvent</code> / <code>ProductError</code> / <code>PathGuard</code> / <code>SecretStore</code></td></tr>
+<tr><td><code>r-code-store</code></td><td>SQLite 持久化</td><td><code>Database</code> / <code>BackupManager</code> / <code>TaskRepository</code> / <code>AgentRunRepository</code></td></tr>
+<tr><td><code>r-code-gateway</code></td><td>工具网关 &amp; 权限</td><td><code>ToolGateway</code> / <code>Tool</code> / <code>PermissionEngine</code> / <code>CommandClassifier</code></td></tr>
+<tr><td><code>r-code-terminal</code></td><td>PTY 终端系统</td><td><code>TerminalManager</code> / <code>TerminalHandle</code> / <code>BlockParser</code> / <code>shell_integration_spawn</code></td></tr>
+<tr><td><code>r-code-agent-worker</code></td><td>Agent 运行时</td><td><code>AgentRuntime</code> / <code>run_agent_loop_iteration</code> / <code>scan_orphaned_runs</code></td></tr>
+<tr><td><code>r-code-host</code></td><td>主进程 &amp; IPC 路由</td><td>R-Code 专属 method handler / error code mapping</td></tr>
+</table>
+</div>
+
+<h2 id="crate-map">2.5 工作空间依赖关系</h2>
+
+<p>所有 crate 在 <code>Cargo.toml</code> 的 <code>[workspace]</code> 中声明。依赖方向严格遵守以下规则：</p>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────┐
+│                    依赖方向（从上到下）                     │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│   apps/desktop-renderer  ──→  ui, domain-contracts only  │
+│   apps/desktop-main      ──→  ipc-contracts, services    │
+│   apps/agent-worker      ──→  domain-services, adapter   │
+│   packages/agent-runtime-pi ──→  Pi SDK only             │
+│   packages/domain-*      ──→  no Electron, no Pi, no React│
+│   packages/ipc-contracts ──→  no impl dependencies       │
+│                                                          │
+└─────────────────────────────────────────────────────────┘</div>
+
+<div class="box warn">
+<div class="box-title">⚠️ 依赖违规 = 构建失败</div>
+项目通过 <code>cargo-deny</code> 和边界测试（boundary lint）阻止违反依赖方向的代码。如果你看到 <code>boundary</code> 测试失败，说明某个 crate 引用了不该引用的依赖。
+</div>
+
+<h2 id="dep-rules">2.6 依赖方向规则</h2>
+
+<p>依赖规则的核心原则是 <b>单向流动</b>：上层可以依赖下层，下层不能依赖上层。</p>
+
+<div class="layer">
+<div class="layer-item" style="background:rgba(88,166,255,.06)">产品应用层（apps/desktop-renderer, apps/desktop-main, apps/agent-worker）</div>
+<div class="layer-item" style="background:rgba(63,185,80,.06)">领域服务层（packages/domain-*）</div>
+<div class="layer-item" style="background:rgba(210,153,34,.06)">运行时适配层（packages/agent-runtime-pi）</div>
+<div class="layer-item" style="background:rgba(219,109,40,.06)">合同层（packages/ipc-contracts, packages/ui, packages/domain-contracts）</div>
+</div>
+
+<p>这条规则保证：</p>
+<ul>
+<li>领域逻辑不依赖 Electron / React / Pi SDK（可独立测试）</li>
+<li>Pi SDK 替换为其他 LLM 提供方时，只需替换 <code>agent-runtime-pi</code> 一个包</li>
+<li>UI 层业务逻辑可被单元测试覆盖</li>
+</ul>
+
+<h2 id="data-flow">2.7 数据流总览</h2>
+
+<p>一次完整的"创建任务 → Agent 执行 → 用户审批"数据流如下：</p>
+
+<div class="diagram">
+用户输入 goal
+    │
+    ▼
+┌─────────────┐     IPC (JSON-RPC 2.0)     ┌─────────────┐
+│  Renderer   │ ──────────────────────────→ │  Host/Main  │
+│  (React UI) │   task.create {projectId,    │  (IPC Srv)  │
+│             │              goal, mode}     │             │
+└─────────────┘                              └──────┬──────┘
+                                                    │
+                                          ┌─────────▼─────────┐
+                                          │  TaskCreateHandler │
+                                          │  校验参数 / 建 Task │
+                                          └─────────┬─────────┘
+                                                    │
+                         ┌──────────────────────────┘
+                         ▼
+              ┌─────────────────────┐
+              │  AgentRuntime::     │
+              │  start_run(session) │
+              └─────────┬───────────┘
+                        │
+       ┌────────────────┼────────────────┐
+       ▼                ▼                ▼
+  ┌─────────┐    ┌──────────┐    ┌──────────────┐
+  │ LLM     │    │ Tool     │    │  Session     │
+  │ Provider│    │ Gateway  │    │  Store       │
+  │ (stream)│    │ (权限+审计)│    │  (JSONL+SQLite)│
+  └─────────┘    └──────────┘    └──────────────┘
+                        │
+                        ▼
+              用户审批 / 回滚 / 继续
+</div>
+
+<h3>事件回流路径</h3>
+<div class="flow">
+<span class="flow-box">Worker 产生 SessionEvent</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box">写 JSONL (crash-safe)</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box">投影元数据到 SQLite</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box">IPC 推送 AgentEvent</span>
+<span class="flow-arrow">→</span>
+<span class="flow-box diagram-accent">Renderer 更新 UI</span>
+</div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="ipc-deep-dive">IPC 通信详解</h2>
+    <p>三进程模型的核心是 IPC——进程之间如何「说话」。R-Code 使用 JSON-RPC 2.0 协议，这是业界成熟的标准（VS Code、Language Server Protocol 都用类似方案）。</p>
+
+    <h3>传输层</h3>
+    <p>JSON-RPC 是协议层，传输层则根据操作系统选择：</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>操作系统</th><th>传输层</th><th>原因</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="tag tag-mac">macOS</span></td><td>Unix Domain Socket</td><td>macOS 沙箱对 Socket 支持最好</td></tr>
+          <tr><td><span class="tag tag-linux">Linux</span></td><td>Unix Domain Socket</td><td>标准 POSIX 机制</td></tr>
+          <tr><td><span class="tag tag-win">Windows</span></td><td>Named Pipe</td><td>Windows 没有 Unix Socket</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>请求-响应 vs 通知 vs 流</h3>
+    <p>JSON-RPC 2.0 支持三种消息模式，R-Code 都用上了：</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>模式</th><th>方向</th><th>示例</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>请求-响应</strong></td>
+            <td>Renderer → Host → Worker → Host → Renderer</td>
+            <td><code>task.create</code>, <code>task.get</code></td>
+          </tr>
+          <tr>
+            <td><strong>通知（单向）</strong></td>
+            <td>任意方向，不期待回复</td>
+            <td><code>abort.run</code>, <code>steer.message</code></td>
+          </tr>
+          <tr>
+            <td><strong>服务器推送</strong></td>
+            <td>Worker → Host → Renderer</td>
+            <td>AgentEvent 流（ToolCall, Message, ToolResult）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">JSON-RPC 2.0 消息示例</div>
+      <p>请求（Renderer 发给 Host）：</p>
+      <pre><code>{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "method": "task.create",
+  "params": {
+    "projectId": "/Users/alice/projects/my-app",
+    "goal": "给登录页加记住我复选框",
+    "mode": "edit"
+  }
+}</code></pre>
+      <p>响应（Host 回传给 Renderer）：</p>
+      <pre><code>{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "result": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "projectId": "/Users/alice/projects/my-app",
+    "title": "给登录页加记住我复选框",
+    "goal": "给登录页加记住我复选框",
+    "mode": "edit",
+    "state": "idle",
+    "createdAt": "2026-07-25T10:30:00Z",
+    "updatedAt": "2026-07-25T10:30:00Z"
+  }
+}</code></pre>
+    </div>
+
+    <h3>方法处理器模式</h3>
+    <p>R-Code Host 使用 trait-based 方法处理器。每个 JSON-RPC 方法对应一个实现了 <code>IpcHandler</code> trait 的结构体：</p>
+    <pre><code>// hermes-ipc 定义的 trait
+#[async_trait]
+pub trait IpcHandler: Send + Sync {
+    async fn handle(&self, params: Value) -> Result&lt;Value, Error&gt;;
+}
+
+// R-Code 实现的具体 handler
+pub struct TaskCreateHandler;
+
+#[async_trait]
+impl IpcHandler for TaskCreateHandler {
+    async fn handle(&self, params: Value) -> Result&lt;Value, Error&gt; {
+        let project_id = params
+            .get("projectId")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::Ipc("missing projectId".into()))?;
+        // ... 构造 Task
+        Ok(serde_json::to_value(task)?)
+    }
+}</code></pre>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="lifecycle">任务生命周期</h2>
+    <p>理解 R-Code 架构的关键是理解 Task 的生命周期——从创建到完成，它经历了哪些状态？</p>
+
+    <h3>状态机</h3>
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Task 状态机                                        │
+│                                                                            │
+│   ┌──────┐    start_run     ┌───────────┐   需要审批   ┌──────────────┐  │
+│   │ Idle │ ───────────────→ │ Running   │ ──────────→ │ Awaiting     │  │
+│   └──────┘                  └───────────┘             │ Confirm      │  │
+│       ↑                        │    ▲                 └──────────────┘  │
+│       │                        │    │                        │             │
+│       │ abort                 │    │ 工具执行完             │ 用户接受    │
+│       │                        │    └────────────────────────┤             │
+│       │                        ▼                             │ 用户拒绝    │
+│   ┌──────┐   全部完成      ┌───────────┐                   ▼             │
+│   │Abort │ ←────────────── │ Verifying │ ←─────────────┘             │
+│   └──────┘                  └───────────┘                                │
+│       ↑                        │                                          │
+│       │                        │ 验证通过                                  │
+│       │                        ▼                                          │
+│       │                    ┌───────────┐                                  │
+│       └─────────────────── │ Completed │                                  │
+│          回滚到 Idle       └───────────┘                                  │
+└──────────────────────────────────────────────────────────────────────────────┘
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>状态</th><th>含义</th><th>UI 表现</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Idle</code></td><td>任务已创建，Agent 未启动</td><td>任务卡片显示「开始」按钮</td></tr>
+          <tr><td><code>Running</code></td><td>Agent 正在工作（调用 LLM / 执行工具）</td><td>任务卡片显示进度动画 + 实时日志</td></tr>
+          <tr><td><code>AwaitingConfirm</code></td><td>Agent 提出修改，等待用户审批</td><td>弹出 Diff 对比视图 + 接受/拒绝按钮</td></tr>
+          <tr><td><code>Verifying</code></td><td>用户接受后，Agent 正在验证（跑测试/编译）</td><td>任务卡片显示「验证中」状态</td></tr>
+          <tr><td><code>Completed</code></td><td>任务完成，修改已入库</td><td>任务卡片变为绿色，可回滚</td></tr>
+          <tr><td><code>Aborted</code></td><td>用户中止或系统错误</td><td>任务卡片变灰，可重新启动</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Run：Task 的执行实例</h3>
+    <p>一个 Task 可以被执行多次，每次执行称为一个 <strong>Run</strong>。Run 是 Agent 的一次完整工作会话：</p>
+    <ul>
+      <li>一个 Task 任意时刻最多一个 <strong>活跃 Run</strong>（硬性不变量）</li>
+      <li>Run 包含完整的对话历史（Message 序列）</li>
+      <li>Run 产生一系列 AgentEvent（消息、工具调用、工具结果）</li>
+      <li>Run 结束时，用户可以选择「接受」或「回滚」</li>
+    </ul>
+
+    <div class="box success">
+      <div class="box-title">为什么区分 Task 和 Run</div>
+      <p>想象你要重写一个函数。第一次 Run 改得不对，你回滚；第二次 Run 改得更好，但不完美；第三次 Run 终于满意。三次 Run 都属于同一个 Task，但各自独立。这种设计让你可以「反复试错」而不丢失任务上下文。</p>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="security-boundaries">安全边界</h2>
+    <p>R-Code 的安全模型建立在多层边界之上。每一层都假设外层可能被突破，独立提供保护。</p>
+
+    <div class="layer">
+      <div class="layer-item" style="background:rgba(63,185,80,.08);color:var(--green)">
+        <strong>第 1 层：渲染沙箱</strong> · WebView 沙箱 + CSP · 防止 XSS 和不受信任的 Web 代码
+      </div>
+      <div class="layer-item" style="background:rgba(88,166,255,.08);color:var(--accent)">
+        <strong>第 2 层：IPC 校验</strong> · Host 校验所有 JSON-RPC 请求 · 方法白名单 + 参数校验
+      </div>
+      <div class="layer-item" style="background:rgba(210,153,34,.08);color:var(--yellow)">
+        <strong>第 3 层：权限引擎</strong> · Tool Gateway 的 PermissionEngine · R0–R4 风险分级
+      </div>
+      <div class="layer-item" style="background:rgba(219,109,40,.08);color:var(--orange)">
+        <strong>第 4 层：密钥隔离</strong> · API Key 存在系统密钥链，不在 WebView 中暴露
+      </div>
+      <div class="layer-item" style="background:rgba(248,81,73,.08);color:var(--red)">
+        <strong>第 5 层：审计日志</strong> · 所有工具调用记录在案 · 可追溯、可回放
+      </div>
+    </div>
+
+    <h3>权限分级（R0–R4）</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>等级</th><th>风险</th><th>示例</th><th>默认行为</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="tag tag-r0">R0</span></td><td>无风险</td><td>ReadFile, ListFiles, Search, GitStatus</td><td>自动执行，无需审批</td></tr>
+          <tr><td><span class="tag tag-r1">R1</span></td><td>低风险</td><td>GitDiff, GitLog, SearchContent</td><td>自动执行，记录日志</td></tr>
+          <tr><td><span class="tag tag-r2">R2</span></td><td>中风险</td><td>WriteFile, CreateFile, DeleteFile</td><td>需用户确认</td></tr>
+          <tr><td><span class="tag tag-r3">R3</span></td><td>高风险</td><td>RunCommand, InstallPackage, GitPush</td><td>需用户确认 + 显示命令</td></tr>
+          <tr><td><span class="tag tag-r4">R4</span></td><td>极高风险</td><td>ForcePush, DropDatabase, ShellScript</td><td>默认禁止，需显式启用</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="crash-recovery">崩溃恢复机制</h2>
+    <p>R-Code 的 Worker 可能因为各种原因崩溃：OOM、Rust panic、LLM 提供商网络中断。系统设计了多层恢复机制。</p>
+
+    <h3>双存储的恢复力</h3>
+    <div class="diagram">
+┌────────────────────────────────────────────────────────────────┐
+│  崩溃场景：Worker 在写入 SQLite 之前崩溃                        │
+│                                                                │
+│  JSONL 里已经有了完整的 SessionEvent 记录                       │
+│       │                                                        │
+│       ▼                                                        │
+│  恢复时：扫描 JSONL，重新投影到 SQLite                          │
+│       │                                                        │
+│       ▼                                                        │
+│  SQLite 恢复一致状态                                            │
+│                                                                │
+│  ─── 关键：JSONL 是 crash-safe 的 append-only 格式 ───        │
+└────────────────────────────────────────────────────────────────┘
+    </div>
+
+    <h3>孤立 Run 扫描</h3>
+    <p>Worker 崩溃时，可能有一些 Run 处于「运行中」但实际已无 Worker 处理它们。<code>recovery.rs</code> 模块的 <code>scan_orphaned_runs()</code> 会：</p>
+    <ol>
+      <li>扫描 SQLite 中状态为 <code>Running</code> 的 Run</li>
+      <li>检查对应的 Worker 进程是否还存活</li>
+      <li>如果 Worker 已死，将 Run 标记为 <code>Aborted</code></li>
+      <li>通知 Renderer 更新 UI</li>
+    </ol>
+
+    <div class="box info">
+      <div class="box-title">恢复流程时间线</div>
+      <p><code>Worker 崩溃</code> → <code>Host 检测到 SIGCHLD</code> → <code>scan_orphaned_runs()</code> → <code>从 JSONL 重建会话</code> → <code>重启 Worker</code> → <code>通知 Renderer「已恢复」</code></p>
+      <p>整个过程通常在 1–3 秒内完成，用户感知到的只是 UI 上闪过「重新连接」提示。</p>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="build-system">构建系统</h2>
+    <p>R-Code 是一个 Rust workspace 包含 15 个 crate（9 个 hermes-* + 6 个 r-code-*）。构建系统需要正确处理依赖顺序。</p>
+
+    <h3>构建命令</h3>
+    <pre><code># 开发构建（全 workspace）
+cargo build --workspace
+
+# 发布构建（带 LTO 优化）
+cargo build --release --workspace
+
+# 仅构建 R-Code 产品层
+cargo build --workspace --exclude agent-core
+
+# 运行测试
+cargo test --workspace
+
+# 代码规范检查
+cargo clippy --workspace --all-targets -- -D warnings
+
+# 格式化检查
+cargo fmt --all -- --check</code></pre>
+
+    <h3>构建产物</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>目标</th><th>产物</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>r-code-host</code></td><td>可执行二进制文件</td><td>Tauri 后端 + 主入口</td></tr>
+          <tr><td><code>r-code-agent-worker</code></td><td>可执行二进制文件</td><td>Agent 运行时（被 Host 启动）</td></tr>
+          <tr><td>其他 r-code-*</td><td>静态库（.rlib）</td><td>被 host 和 worker 链接</td></tr>
+          <tr><td>hermes-*</td><td>静态库（.rlib）</td><td>被 r-code-* 链接</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="box warn">
+      <div class="box-title">构建注意事项</div>
+      <ul>
+        <li><code>rusqlite</code> 使用 <code>bundled</code> 特性，会自动编译 SQLite 源码，首次构建较慢（约 2–3 分钟）</li>
+        <li><code>git2</code> 依赖系统 libgit2，macOS 上需要 <code>brew install libgit2</code></li>
+        <li>Release 构建开启 LTO（Link-Time Optimization），单次构建可能需要 5–10 分钟</li>
+      </ul>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════ -->
+    <h2 id="environment">运行环境</h2>
+    <p>R-Code 支持三大桌面平台，每个平台有不同的系统要求。</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>平台</th><th>最低版本</th><th>架构</th><th>WebView</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="tag tag-mac">macOS</span></td><td>13 Ventura+</td><td>Apple Silicon / Intel</td><td>WKWebView</td></tr>
+          <tr><td><span class="tag tag-win">Windows</span></td><td>10 1809+</td><td>x64 / ARM64</td><td>WebView2</td></tr>
+          <tr><td><span class="tag tag-linux">Linux</span></td><td>Ubuntu 22.04+</td><td>x64</td><td>WebKitGTK</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>开发环境搭建</h3>
+    <pre><code># 1. 安装 Rust (通过 rustup)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default stable
+rustup target add aarch64-apple-darwin  # macOS 通用二进制
+
+# 2. 安装 Tauri CLI
+cargo install tauri-cli --version "^2.0.0"
+
+# 3. 安装依赖（macOS）
+brew install libgit2  # git2 crate 需要
+
+# 4. 克隆仓库
+git clone https://github.com/charter/r-code.git
+cd r-code
+git submodule update --init --recursive  # 拉取 agent-core
+
+# 5. 启动开发模式
+cargo tauri dev</code></pre>
+
+
+<h2 id="summary">2.8 本章总结</h2>
+
+<div class="box success">
+<div class="box-title">✅ 关键概念回顾</div>
+<ul>
+<li><b>Renderer</b>：UI 层，运行 React + Monaco + xterm.js，无 Node 权限</li>
+<li><b>Host (Main)</b>：前台，IPC Server + Secret Store + 进程监督</li>
+<li><b>Worker</b>：后厨，Agent 运行时 + Tool Gateway + 状态机 + SQLite</li>
+<li><b>hermes-*</b>：agent-core 提供的公共 trait 和类型</li>
+<li><b>r-code-*</b>：R-Code 私有的 DTO、存储、网关、终端、运行时实现</li>
+<li><b>依赖方向</b>：上层 → 下层，单向流动</li>
+</ul>
+</div>
+
+<p>下一章我们深入最关键的通信机制 —— IPC 进程间通信。你将学到 Renderer 和 Worker 如何跨越进程边界协作。</p>
+
+<div class="pagenav">
+<a href="01-what-is-rcode.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 1 章：R-Code 是什么？</div></a>
+<a href="03-ipc-deep-dive.html" class="pagenav__link right"><div class="pagenav__label">下一页 →</div><div class="pagenav__title">第 3 章：IPC 进程间通信</div></a>
+</div>
+
+</main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

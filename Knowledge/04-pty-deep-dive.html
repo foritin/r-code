@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>第 4 章：PTY 伪终端 · R-Code 知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__inner">
+    <a href="index.html" class="topnav__brand">← R-Code 知识库</a>
+    <div class="topnav__links">
+      <a href="index.html">首页</a>
+      <span style="color:var(--text-dim)">·</span>
+      <span>第 4 章</span>
+    </div>
+  </div>
+</nav>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar__group">
+      <div class="sidebar__title">本章目录</div>
+      <a href="#what-is-terminal" class="sidebar__item">什么是终端？</a>
+      <a href="#what-is-pty" class="sidebar__item">什么是 PTY？</a>
+      <a href="#why-pty" class="sidebar__item">为什么需要 PTY</a>
+      <a href="#master-slave" class="sidebar__item">Master-Slave 工作原理</a>
+      <a href="#rcode-arch" class="sidebar__item">R-Code 终端架构</a>
+      <a href="#platform-diff" class="sidebar__item">ConPTY vs Unix PTY</a>
+      <a href="#osc133" class="sidebar__item">OSC 133 Shell Integration</a>
+      <a href="#block-parser" class="sidebar__item">Block 解析器</a>
+      <a href="#scrollback" class="sidebar__item">滚动缓冲与进程跟踪</a>
+      <a href="#orchestration" class="sidebar__item">终端编排原语</a>
+      <a href="#troubleshoot" class="sidebar__item">常见问题排查</a>
+      <a href="#summary" class="sidebar__item">本章小结</a>
+    </div>
+  </aside>
+
+  <main class="content">
+    <div class="meta">
+      <span class="meta__item"><span class="status status-intermediate">进阶</span></span>
+      <span class="meta__item">📖 阅读约 20 分钟</span>
+      <span class="meta__item">📅 2026-07-25</span>
+    </div>
+
+    <h1>第 4 章：PTY 伪终端</h1>
+    <p class="lede">IDE 里的终端窗口是怎么"骗过" Shell 让它以为自己在跟真人交互？这一章我们拆解 PTY（Pseudo-Terminal，伪终端）的完整机制——从电传打字机的历史到 R-Code 如何管理多个终端实例。</p>
+
+    <!-- ===== 1. 什么是终端？ ===== -->
+    <h2 id="what-is-terminal">一、什么是终端？—— 从电传打字机说起</h2>
+
+    <p>要理解 PTY，得先理解"终端"是什么。让我们回到 1960 年代：</p>
+
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  1960 年代的大型机时代                                                │
+│                                                                      │
+│  ┌─────────────┐                              ┌──────────────────┐  │
+│  │  电传打字机   │ ◄────── 串行线缆 ──────►   │  大型计算机        │  │
+│  │  (TTY)      │                              │  (Mainframe)      │  │
+│  │  - 键盘     │                              │                  │  │
+│  │  - 打印机   │                              │                  │  │
+│  └─────────────┘                              └──────────────────┘  │
+│                                                                      │
+│  用户敲键盘 → 字符通过线缆传到大型机 → 大型机处理 → 结果传回打字机打印  │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <p>那时候的"终端"是一个<strong>真实的物理设备</strong>——一台电传打字机（Teletypewriter，缩写 TTY）。它通过串行线缆连接到大型计算机，负责输入和输出。</p>
+
+    <h3>终端的演进</h3>
+    <div class="table-wrap">
+    <table>
+      <tr><th>年代</th><th>设备</th><th>特点</th></tr>
+      <tr><td>1960s</td><td>电传打字机（TTY）</td><td>物理设备，键盘 + 打印机</td></tr>
+      <tr><td>1970s</td><td>CRT 终端（VT100）</td><td>屏幕代替打印机，支持光标移动</td></tr>
+      <tr><td>1990s</td><td>终端模拟器（xterm）</td><td>软件模拟终端，跑在图形界面里</td></tr>
+      <tr><td>现在</td><td>IDE 内置终端</td><td>VS Code、R-Code 等 IDE 内置的终端面板</td></tr>
+    </table>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">💡 核心概念</div>
+      <strong>终端</strong>（Terminal）本质上是人机交互的入口——你通过它输入命令，它显示结果。现代终端是<strong>软件模拟</strong>的，但程序（比如 Shell）仍然以为自己在跟"真正的终端"对话。这就是 PTY 存在的意义。
+    </div>
+
+    <!-- ===== 2. 什么是 PTY？ ===== -->
+    <h2 id="what-is-pty">二、什么是 PTY？—— 分机电话</h2>
+
+    <p><strong>PTY</strong> = Pseudo-Terminal（伪终端）。所谓"伪"，就是"假的"——它不是真正的物理终端，而是内核提供的一对<strong>假的终端设备</strong>。</p>
+
+    <h3>类比：分机电话</h3>
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  类比：公司里的分机电话                                                │
+│                                                                      │
+│  ┌─────────────┐         ┌─────────────┐         ┌─────────────┐  │
+│  │  前台总机    │ ◄────► │  电话交换机   │ ◄────► │  员工分机    │  │
+│  │  (Master)   │         │  (内核)      │         │  (Slave)    │  │
+│  │             │         │              │         │             │  │
+│  │  IDE 持有   │         │  转发声音    │         │  Shell 持有  │  │
+│  │  负责拨号   │         │  处理信号    │         │  以为是真的   │  │
+│  └─────────────┘         └─────────────┘         └─────────────┘  │
+│                                                                      │
+│  前台拨分机 → 交换机转发 → 员工接听（以为直接跟前台通话）                │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <p>PTY 由一对设备组成：</p>
+    <div class="table-wrap">
+    <table>
+      <tr><th>端</th><th>谁持有</th><th>职责</th><th>类比</th></tr>
+      <tr><td><strong>Master</strong></td><td>IDE / 终端模拟器</td><td>读写数据、控制终端</td><td>前台总机</td></tr>
+      <tr><td><strong>Slave</strong></td><td>Shell / 子程序</td><td>程序的 stdin/stdout/stderr</td><td>员工分机</td></tr>
+    </table>
+    </div>
+
+    <div class="box success">
+      <div class="box-title">✅ 关键洞察</div>
+      Slave 端的程序（比如 bash、vim、ssh）<strong>完全不知道自己连的是"假的"终端</strong>。它调用 <code>isatty()</code> 检查会返回 <code>true</code>，一切行为都和连了真终端一样。这就是 PTY 的魔力。
+    </div>
+
+    <!-- ===== 3. 为什么需要 PTY ===== -->
+    <h2 id="why-pty">三、为什么需要 PTY？—— 不用 PTY 会怎样？</h2>
+
+    <p>你可能会想：我直接用管道（Pipe）把程序的输入输出连到 IDE 不就行了？</p>
+
+    <p>答案是：<strong>大量命令行程序默认自己是跟"人"直接打交道的</strong>。它们会调用 <code>isatty(fd)</code> 检查 stdin/stdout 是否是 TTY 设备：</p>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>场景</th><th>用 Pipe</th><th>用 PTY</th></tr>
+      <tr><td><code>ls | grep foo</code></td><td>✅ 够用</td><td>✅ 也可以</td></tr>
+      <tr><td>跑 <code>vim</code></td><td>❌ vim 拒绝启动（"Output is not a terminal"）</td><td>✅ vim 正常启动</td></tr>
+      <tr><td>跑 <code>ssh</code></td><td>❌ ssh 无法处理密码输入</td><td>✅ 正常交互</td></tr>
+      <tr><td>Shell 提示符着色</td><td>❌ ls 不输出彩色</td><td>✅ 完整彩色输出</td></tr>
+      <tr><td>调整窗口大小</td><td>❌ 程序不知道窗口大小</td><td>✅ SIGWINCH 自动通知</td></tr>
+      <tr><td>Ctrl+C 中断</td><td>❌ 需要自行处理</td><td>✅ 内核自动发 SIGINT</td></tr>
+    </table>
+    </div>
+
+    <div class="box warn">
+      <div class="box-title">⚠️ 不用 PTY 的后果</div>
+      你的 IDE 终端里跑不了 vim、htop、ssh、top、less 等任何交互式程序。Shell 的提示符也不会有颜色。这就是为什么终端模拟器（iTerm2、Windows Terminal、VS Code 终端）底层都必须用 PTY。
+    </div>
+
+    <!-- ===== 4. Master-Slave 工作原理 ===== -->
+    <h2 id="master-slave">四、Master-Slave 工作原理</h2>
+
+    <h3>4.1 完整架构图</h3>
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  你的程序 (IDE / 终端模拟器)                                           │
+│                                                                      │
+│  ┌─────────────┐  读写  ┌──────────────────────────────────────┐    │
+│  │  应用逻辑     │◄─────►│  Master 端 (/dev/ptmx 或 ConPTY)     │    │
+│  │  - 渲染屏幕   │       │  - 发送键盘输入                      │    │
+│  │  - 捕获输出   │       │  - 接收程序输出                      │    │
+│  │  - 调整大小   │       │  - 发送窗口大小变化 (SIGWINCH)       │    │
+│  └─────────────┘       └───────────────┬──────────────────────┘    │
+│                                         │                           │
+│                    ┌────────────────────┼────────────────────┐      │
+│                    │      内核 (Line Discipline + PTY 驱动)  │      │
+│                    │      - 处理回显、行编辑、Ctrl+C          │      │
+│                    │      - 转换 \n ↔ \r\n                    │      │
+│                    └────────────────────┼────────────────────┘      │
+│                                         │                           │
+│  ┌─────────────┐  读写  ┌───────────────┴──────────────────────┐    │
+│  │  Shell/程序  │◄─────►│  Slave 端 (/dev/pts/N 或 ConPTY)     │    │
+│  │  (bash/zsh)  │       │  - 程序的 stdin/stdout/stderr         │    │
+│  │  以为这是    │       │  - 程序 isatty() → true               │    │
+│  │  真终端！    │       │  - 可以跑 vim、htop、ssh 等            │    │
+│  └─────────────┘       └──────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <h3>4.2 数据流向</h3>
+    <div class="table-wrap">
+    <table>
+      <tr><th>方向</th><th>数据</th><th>路径</th></tr>
+      <tr><td><strong>键盘 → Shell</strong></td><td>按键字节</td><td>IDE 写入 Master → 内核 Line Discipline → Slave → Shell stdin</td></tr>
+      <tr><td><strong>Shell → 屏幕</strong></td><td>输出字节（含 ANSI 转义序列）</td><td>Shell stdout → Slave → 内核 Line Discipline → Master → IDE 读取</td></tr>
+      <tr><td><strong>窗口大小变化</strong></td><td>SIGWINCH 信号</td><td>IDE 调用 resize() → 内核更新 winsize → 发 SIGWINCH 给 Shell</td></tr>
+      <tr><td><strong>Ctrl+C</strong></td><td>SIGINT 信号</td><td>IDE 写入 0x03 字节 → 内核 Line Discipline 拦截 → 发 SIGINT 给 Shell</td></tr>
+    </table>
+    </div>
+
+    <h3>4.3 Line Discipline —— PTY 的灵魂</h3>
+    <p>Master 和 Slave 之间不是直连的，中间有一个 <strong>Line Discipline（线路规程）</strong>——内核里的一个"中间人"，负责：</p>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>功能</th><th>说明</th><th>类比</th></tr>
+      <tr><td><strong>回显（Echo）</strong></td><td>你按的字符是否显示在屏幕上（密码输入时要关掉）</td><td>打电话时听到自己的声音</td></tr>
+      <tr><td><strong>行编辑（Line Editing）</strong></td><td>Backspace 删除、Ctrl+U 清空行</td><td>打字机上的退格键</td></tr>
+      <tr><td><strong>字符转换</strong></td><td>输出时 <code>\n</code> → <code>\r\n</code>；输入时 <code>\r</code> → <code>\n</code></td><td>翻译官</td></tr>
+      <tr><td><strong>信号生成</strong></td><td>收到 <code>Ctrl+C</code> → 转换为 <code>SIGINT</code> 发给子进程</td><td>秘书听到"挂断"就挂电话</td></tr>
+      <tr><td><strong>EOF</strong></td><td>收到 <code>Ctrl+D</code> → 子进程读到 EOF</td><td>对方说"再见"</td></tr>
+    </table>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">💡 小贴士</div>
+      没有 Line Discipline，Master 和 Slave 之间就是原始的字节流。Line Discipline 的存在，使得 Slave 端连上的程序"以为"自己连了真正的终端。
+    </div>
+
+    <h3>4.4 窗口大小（Winsize）与 SIGWINCH</h3>
+    <pre><code><span style="color:var(--text-dim)">// 告诉内核：终端窗口大小变了</span>
+ioctl(master_fd, TIOCSWINSZ, &amp;winsize);
+<span style="color:var(--text-dim)">// 内核随即向子进程发送 SIGWINCH 信号</span>
+<span style="color:var(--text-dim)">// Shell 收到后调用 ioctl(TIOCGWINSZ) 读取新尺寸，更新 $LINES/$COLUMNS</span></code></pre>
+
+    <p>这就是为什么你拖拽终端窗口大小时，<code>vim</code>、<code>htop</code> 能立刻知道新尺寸——PTY 机制自动完成了这一切。</p>
+
+    <!-- ===== 5. R-Code 终端架构 ===== -->
+    <h2 id="rcode-arch">五、R-Code 的终端系统架构</h2>
+
+    <h3>5.1 整体架构</h3>
+    <div class="diagram">
+┌─────────────────────────────────────────────────────────────┐
+│  R-Code IDE (WebView / Renderer)                            │
+│  - xterm.js 渲染终端界面                                     │
+│  - 用户键盘输入 → 发送给 Main                                │
+└────────────────────────┬────────────────────────────────────┘
+                         │ IPC (Unix Socket / Named Pipe)
+┌────────────────────────┴────────────────────────────────────┐
+│  Main 进程 (Tauri Rust)                                     │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │  TerminalManager                                      │  │
+│  │  - 管理多个 PTY 实例                                   │  │
+│  │  - 每个终端 = 一个 PTY + 一个 Shell 子进程              │  │
+│  │  - 捕获输出 → 通过 IPC → Renderer 显示                 │  │
+│  │  - 接收输入 ← 通过 IPC ← Renderer 转发                 │  │
+│  └──────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘</div>
+
+    <h3>5.2 portable-pty crate</h3>
+    <p>R-Code 使用 <code>portable-pty</code> 这个 Rust crate 来跨平台管理 PTY。它的核心 API：</p>
+
+    <pre><code><span style="color:var(--accent)">use</span> portable_pty::{
+    native_pty_system, Child, CommandBuilder, MasterPty, PtyPair, PtySize, PtySystem,
+};
+
+<span style="color:var(--text-dim)">// 1. 获取当前系统的 PTY 实现</span>
+<span style="color:var(--accent)">let</span> pty_system = native_pty_system();
+
+<span style="color:var(--text-dim)">// 2. 打开一对 PTY（返回 Master + Slave）</span>
+<span style="color:var(--accent)">let</span> pair = pty_system.openpty(PtySize {
+    rows: 24, cols: 80, pixel_width: 0, pixel_height: 0,
+})?;
+
+<span style="color:var(--text-dim)">// 3. 用 Slave 端启动 Shell 子进程</span>
+<span style="color:var(--accent)">let</span> cmd = CommandBuilder::new(<span style="color:var(--green)">"/bin/zsh"</span>);
+<span style="color:var(--accent)">let</span> child = pair.slave.spawn_command(cmd)?;</code></pre>
+
+    <h3>5.3 TerminalManager 与 TerminalHandle</h3>
+    <div class="table-wrap">
+    <table>
+      <tr><th>组件</th><th>职责</th><th>类比</th></tr>
+      <tr><td><strong>TerminalManager</strong></td><td>管理所有 PTY 实例，创建/销毁/查找</td><td>总机管理员</td></tr>
+      <tr><td><strong>TerminalHandle</strong></td><td>单个终端的完整状态（PTY + Shell + 缓冲）</td><td>一个分机</td></tr>
+      <tr><td><strong>portable-pty</strong></td><td>跨平台 PTY 抽象层</td><td>电话交换机</td></tr>
+    </table>
+    </div>
+
+    <!-- ===== 6. ConPTY vs Unix PTY ===== -->
+    <h2 id="platform-diff">六、ConPTY vs Unix PTY —— 平台差异</h2>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>维度</th><th>Unix PTY (macOS/Linux)</th><th>ConPTY (Windows)</th></tr>
+      <tr><td><strong>Master 设备</strong></td><td><code>/dev/ptmx</code>（open 后自动分配一对）</td><td>ConPTY API（Windows 10 1809+）</td></tr>
+      <tr><td><strong>Slave 设备</strong></td><td><code>/dev/pts/N</code>（动态分配）</td><td>伪句柄（由 ConPTY 管理）</td></tr>
+      <tr><td><strong>创建方式</strong></td><td><code>open("/dev/ptmx")</code> + <code>grantpt()</code> + <code>unlockpt()</code></td><td><code>CreatePseudoConsole()</code></td></tr>
+      <tr><td><strong>调整大小</strong></td><td><code>ioctl(TIOCSWINSZ)</code></td><td><code>ResizePseudoConsole()</code></td></tr>
+      <tr><td><strong>历史</strong></td><td>自 1980 年代 Unix 就有</td><td>Windows 10 1809（2018）才引入</td></tr>
+    </table>
+    </div>
+
+    <div class="box info">
+      <div class="box-title">💡 为什么 Windows 的 PTY 这么晚才出现？</div>
+      Windows 之前有自己的"控制台"（Console）系统，跟 Unix PTY 完全不同。ConPTY 是微软为了让 Windows Terminal、VS Code 等现代终端模拟器能正常工作而推出的。在此之前，Windows 上的终端模拟器（比如 Git Bash 的 mintty）只能用 hack 方式实现。
+    </div>
+
+    <!-- ===== 7. OSC 133 Shell Integration ===== -->
+    <h2 id="osc133">七、OSC 133 Shell Integration —— 让 IDE 知道命令边界</h2>
+
+    <p>终端输出是一大片连续的字符流。IDE 怎么知道"哪段是命令、哪段是输出、命令什么时候结束"？答案就是 <strong>OSC 133</strong>。</p>
+
+    <h3>7.1 什么是 OSC 133？</h3>
+    <p>OSC 133 是一组特殊的 <strong>ANSI 转义序列</strong>，由 Shell 在特定时刻注入到输出流中，用来标记命令的边界：</p>
+
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  终端输出流（带 OSC 133 标记）                                        │
+│                                                                      │
+│  [OSC 133 A] ← "命令开始"                                            │
+│  ┌──────────────────────────────────────┐                           │
+│  │  $ npm install      ← 命令本身        │                           │
+│  │  added 42 packages  ← 命令输出        │                           │
+│  │  ...                                 │                           │
+│  └──────────────────────────────────────┘                           │
+│  [OSC 133 B] ← "命令结束（带退出码）"                                 │
+│                                                                      │
+│  [OSC 133 A] ← "下一条命令开始"                                      │
+│  ┌──────────────────────────────────────┐                           │
+│  │  $ git status       ← 命令本身        │                           │
+│  │  On branch main     ← 命令输出        │                           │
+│  └──────────────────────────────────────┘                           │
+│  [OSC 133 B] ← "命令结束"                                            │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <h3>7.2 各 Shell 的注入方式</h3>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Shell</th><th>注入方式</th><th>配置位置</th></tr>
+      <tr><td><strong>zsh</strong></td><td><code>precmd</code> / <code>preexec</code> 钩子</td><td><code>.zshrc</code></td></tr>
+      <tr><td><strong>bash</strong></td><td><code>PROMPT_COMMAND</code> + <code>DEBUG</code> trap</td><td><code>.bashrc</code></td></tr>
+      <tr><td><strong>fish</strong></td><td><code>fish_prompt</code> / <code>fish_preexec</code> 事件</td><td><code>config.fish</code></td></tr>
+      <tr><td><strong>PowerShell</strong></td><td><code>prompt</code> 函数 + <code>Set-PSReadLineOption</code></td><td><code>$PROFILE</code></td></tr>
+    </table>
+    </div>
+
+    <div class="box warn">
+      <div class="box-title">⚠️ 常见坑</div>
+      如果用户的 Shell 没有配置 OSC 133 注入，IDE 就无法识别命令边界。R-Code 会在创建终端时自动注入配置，但如果用户覆盖了 Shell 配置文件，可能会丢失这些设置。
+    </div>
+
+    <!-- ===== 8. Block 解析器 ===== -->
+    <h2 id="block-parser">八、Block 解析器 —— 从字符流到结构化数据</h2>
+
+    <p>有了 OSC 133 标记后，R-Code 的 Block 解析器就能把连续的字符流切分成一个个<strong>结构化块</strong>：</p>
+
+    <h3>8.1 两种 Block 类型</h3>
+    <div class="table-wrap">
+    <table>
+      <tr><th>类型</th><th>含义</th><th>内容</th></tr>
+      <tr><td><strong>Command Block</strong></td><td>一条完整的命令</td><td>命令本身 + 输出 + 退出码</td></tr>
+      <tr><td><strong>Turn Block</strong></td><td>Agent 的一次交互</td><td>Agent 输入 + Agent 输出</td></tr>
+    </table>
+    </div>
+
+    <h3>8.2 状态机</h3>
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  Block 解析器状态机                                                   │
+│                                                                      │
+│  ┌──────┐    收到命令开始     ┌──────┐    收到命令结束     ┌──────┐ │
+│  │ IDLE │ ─────────────────► │ BUSY │ ─────────────────► │EXITED│ │
+│  └──────┘                    └──────┘                    └──────┘ │
+│      ▲                           │                          │      │
+│      │                           │ 收到 Agent 开始          │      │
+│      │                           ▼                          │      │
+│      │                      ┌──────┐                        │      │
+│      │                      │AGENT │ ──────────────────────┘      │
+│      │                      └──────┘   收到 Agent 结束             │
+│      │                                                            │
+│      └────────────────────────────────────────────────────────────│
+│                          回到 IDLE                                 │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>状态</th><th>含义</th><th>触发转换的事件</th></tr>
+      <tr><td><strong>IDLE</strong></td><td>等待新命令</td><td>收到 OSC 133 A → 进入 BUSY</td></tr>
+      <tr><td><strong>BUSY</strong></td><td>命令执行中</td><td>收到 OSC 133 B → 进入 EXITED</td></tr>
+      <tr><td><strong>AGENT</strong></td><td>Agent 交互中</td><td>收到 Agent 结束标记 → 进入 EXITED</td></tr>
+      <tr><td><strong>EXITED</strong></td><td>命令已完成</td><td>自动归档 → 回到 IDLE</td></tr>
+    </table>
+    </div>
+
+    <!-- ===== 9. 滚动缓冲与进程跟踪 ===== -->
+    <h2 id="scrollback">九、滚动缓冲与前台进程跟踪</h2>
+
+    <h3>9.1 滚动缓冲（Scrollback）</h3>
+    <p>终端输出会不断累积。R-Code 维护一个 <strong>200KB 上限</strong> 的滚动缓冲区，用户可以回看历史输出：</p>
+
+    <div class="diagram">
+┌──────────────────────────────────────────────────────────────────────┐
+│  终端滚动缓冲区（200KB 上限）                                          │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │ $ npm install                                                 │   │
+│  │ added 42 packages in 3s                                       │   │
+│  │ $ git status                                                  │   │
+│  │ On branch main                                                │   │
+│  │ Your branch is up to date with 'origin/main'.                 │   │
+│  │ ...                                                           │   │
+│  │ （最旧的内容被截掉）                              ← 200KB →    │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+│  ▲                                                                   │
+│  │ 新内容追加到底部，超出 200KB 时从顶部截断                            │
+└──────────────────────────────────────────────────────────────────────┘</div>
+
+    <div class="box info">
+      <div class="box-title">💡 为什么是 200KB？</div>
+      200KB 大约能存 1-2 万行终端输出，足够覆盖大多数开发场景。再大的缓冲区会消耗过多内存，而且用户很少需要回看那么远的历史。
+    </div>
+
+    <h3>9.2 前台进程跟踪</h3>
+    <p>R-Code 需要知道终端里当前在跑什么进程（用于显示状态、发送信号等）。它通过<strong>进程树</strong>来跟踪：</p>
+
+    <pre><code><span style="color:var(--text-dim)">// 进程树示例</span>
+zsh (PID 1000)           ← Shell 进程
+  └─ npm install (PID 1001) ← 前台子进程
+      └─ node (PID 1002)    ← npm 启动的 node 进程</code></pre>
+
+    <p>当用户按下 Ctrl+C 时，R-Code 需要把 SIGINT 发送给前台进程（PID 1001），而不是 Shell 本身。</p>
+
+    <!-- ===== 10. 终端编排原语 ===== -->
+    <h2 id="orchestration">十、终端编排原语 —— IDE 如何"指挥"终端</h2>
+
+    <p>R-Code 的 Agent 需要能自动操作终端（比如运行命令、读取输出）。为此定义了六个<strong>终端编排原语</strong>：</p>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>原语</th><th>作用</th><th>类比</th></tr>
+      <tr><td><strong>terminal.send</strong></td><td>发送按键到终端</td><td>帮用户按键盘</td></tr>
+      <tr><td><strong>terminal.write</strong></td><td>写入字符串到终端</td><td>帮用户打字</td></tr>
+      <tr><td><strong>terminal.command</strong></td><td>执行一条完整命令（写入 + 回车）</td><td>帮用户输入命令并回车</td></tr>
+      <tr><td><strong>terminal.list</strong></td><td>列出所有终端</td><td>查看所有分机</td></tr>
+      <tr><td><strong>terminal.create</strong></td><td>创建新终端</td><td>新开一个分机</td></tr>
+      <tr><td><strong>terminal.kill</strong></td><td>终止终端</td><td>挂断分机</td></tr>
+    </table>
+    </div>
+
+    <h3>背压与流控制</h3>
+    <p>当终端输出速度很快时（比如 <code>npm install</code> 打印大量日志），如果 IDE 来不及处理，数据就会堆积。R-Code 通过<strong>背压（Backpressure）</strong>机制控制流速：</p>
+
+    <div class="diagram">
+┌──────────────┐     快速产出      ┌──────────────┐     慢速消费      ┌──────────────┐
+│   Shell       │ ──────────────► │  缓冲区       │ ──────────────► │   IDE 渲染    │
+│  (每秒 1MB)   │                 │  (有上限)     │                 │  (每秒 100KB) │
+└──────────────┘                 └──────────────┘                 └──────────────┘
+                                      │
+                                      │ 缓冲区满时
+                                      ▼
+                                 暂停读取 Master
+                                 （背压传导到 Shell）</div>
+
+    <!-- ===== 11. 常见问题排查 ===== -->
+    <h2 id="troubleshoot">十一、常见问题排查</h2>
+
+    <h3>11.1 终端没有输出</h3>
+    <div class="box warn">
+      <div class="box-title">⚠️ 排查清单</div>
+      <ul style="margin:8px 0;padding-left:20px">
+        <li>检查 PTY 是否成功创建：查看 Main 日志是否有 <code>pty open</code> 相关错误</li>
+        <li>检查 Shell 是否启动成功：Shell 路径是否正确（<code>/bin/zsh</code>、<code>/bin/bash</code>）</li>
+        <li>检查 IPC 连接是否正常：Master 读取的数据是否能通过 IPC 传到 Renderer</li>
+      </ul>
+    </div>
+
+    <h3>11.2 中文显示乱码</h3>
+    <p>通常是编码问题。R-Code 终端默认使用 UTF-8。如果 Shell 的 <code>LANG</code> 环境变量设置不正确，可能导致乱码：</p>
+    <pre><code><span style="color:var(--text-dim)">// 检查编码设置</span>
+echo $LANG
+<span style="color:var(--text-dim)">// 应该输出类似 en_US.UTF-8 或 zh_CN.UTF-8</span></code></pre>
+
+    <h3>11.3 窗口大小不同步</h3>
+    <p>如果调整终端面板大小后，<code>vim</code>、<code>htop</code> 没有更新尺寸，可能是 resize 事件没有正确传递：</p>
+    <pre><code><span style="color:var(--text-dim)">// 手动检查窗口大小</span>
+echo $LINES $COLUMNS
+<span style="color:var(--text-dim)">// 应该反映当前终端的实际尺寸</span></code></pre>
+
+    <h3>11.4 外部 CLI Agent 检测</h3>
+    <p>R-Code 需要检测终端里是否在运行外部 CLI Agent（比如 <code>claude</code>、<code>codex</code>）。它通过扫描进程树来实现：</p>
+    <pre><code><span style="color:var(--text-dim)">// 检测逻辑（伪代码）</span>
+<span style="color:var(--accent)">fn</span> detect_external_agent(process_tree: &amp;ProcessTree) -&gt; Option&lt;AgentType&gt; {
+    <span style="color:var(--accent)">for</span> proc <span style="color:var(--accent)">in</span> process_tree.foreground() {
+        <span style="color:var(--accent)">match</span> proc.name() {
+            <span style="color:var(--green)">"claude"</span> =&gt; <span style="color:var(--accent)">return</span> Some(AgentType::Claude),
+            <span style="color:var(--green)">"codex"</span> =&gt; <span style="color:var(--accent)">return</span> Some(AgentType::Codex),
+            _ =&gt; {}
+        }
+    }
+    None
+}</code></pre>
+
+    <!-- ===== 12. 本章小结 ===== -->
+    <h2 id="summary">十二、本章小结</h2>
+
+    <div class="diagram">
+┌────────────────────────────────────────────────────────────────────┐
+│                    R-Code 终端系统全景                               │
+│                                                                    │
+│  Renderer (xterm.js)                                               │
+│      │                                                             │
+│      │ IPC (键盘输入 / 输出数据)                                     │
+│      ▼                                                             │
+│  Main 进程                                                         │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ TerminalManager                                              │ │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐                  │ │
+│  │  │ Terminal 1│  │ Terminal 2│  │ Terminal 3│  ...           │ │
+│  │  │ Master   │  │ Master   │  │ Master   │                  │ │
+│  │  │   │      │  │   │      │  │   │      │                  │ │
+│  │  │   ▼      │  │   ▼      │  │   ▼      │                  │ │
+│  │  │ Slave    │  │ Slave    │  │ Slave    │                  │ │
+│  │  │   │      │  │   │      │  │   │      │                  │ │
+│  │  │   ▼      │  │   ▼      │  │   ▼      │                  │ │
+│  │  │ Shell    │  │ Shell    │  │ Shell    │                  │ │
+│  │  └──────────┘  └──────────┘  └──────────┘                  │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  关键技术：                                                         │
+│  - PTY = Master + Slave（内核提供的"假终端"）                        │
+│  - Line Discipline：回显、行编辑、字符转换、信号生成                   │
+│  - OSC 133：Shell 注入的标记，标识命令边界                            │
+│  - Block 解析器：IDLE → BUSY → EXITED 状态机                        │
+│  - 滚动缓冲：200KB 上限                                              │
+│  - 背压控制：防止输出过快导致内存溢出                                  │
+│                                                                    │
+│  PTY vs IPC：                                                      │
+│  - PTY：Main ↔ Shell（终端字节流）                                   │
+│  - IPC：Main ↔ Worker/Renderer（结构化 JSON-RPC）                   │
+└────────────────────────────────────────────────────────────────────┘</div>
+
+    <div class="box success">
+      <div class="box-title">✅ 关键要点</div>
+      <ul style="margin:8px 0;padding-left:20px">
+        <li>PTY 是内核提供的"假终端"，让程序以为自己在跟真人交互</li>
+        <li>Master 端由 IDE 持有，Slave 端由 Shell 持有</li>
+        <li>Line Discipline 处理回显、行编辑、字符转换、信号生成</li>
+        <li>OSC 133 让 IDE 能识别命令边界</li>
+        <li>Block 解析器把字符流切分成结构化块（Command Block / Turn Block）</li>
+        <li>PTY 和 IPC 是不同层面的机制：PTY 控制 Shell，IPC 连接进程</li>
+      </ul>
+    </div>
+
+    <div class="pagenav">
+      <a href="03-ipc-deep-dive.html" class="pagenav__link"><div class="pagenav__label">← 上一页</div><div class="pagenav__title">第 3 章：IPC 进程间通信</div></a>
+      <a href="05-agent-runtime.html" class="pagenav__link right"><div class="pagenav__label">下一页 →</div><div class="pagenav__title">第 5 章：Agent 运行时</div></a>
+    </div>
+  </main>
+</div>
+
+<script>
+document.querySelectorAll('pre').forEach(pre => {
+  if (pre.querySelector('button.copy-btn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = '复制';
+  btn.onclick = () => {
+    navigator.clipboard.writeText(pre.textContent.replace('复制','').trim()).then(() => {
+      btn.textContent = '✓'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('copied'); }, 1500);
+    });
+  };
+  pre.style.position = 'relative';
+  pre.appendChild(btn);
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') { const l = document.querySelector('.pagenav__link:not(.right)'); if(l) location.href=l.href; }
+  else if (e.key === 'ArrowRight') { const l = document.querySelector('.pagenav__link.right'); if(l) location.href=l.href; }
+});
+</script>
+</body>
+</html>

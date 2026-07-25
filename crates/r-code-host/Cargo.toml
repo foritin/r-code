@@ -1,0 +1,54 @@
+[package]
+name = "r-code-host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code Host：主进程、IPC Server、进程编排"
+
+[[bin]]
+name = "r-code-host"
+path = "src/main.rs"
+
+[dependencies]
+# 公共合同
+hermes-core = { workspace = true }
+hermes-error = { workspace = true }
+hermes-ipc = { workspace = true }
+hermes-config = { workspace = true }
+hermes-tauri = { workspace = true }
+hermes-store = { workspace = true }
+
+# 产品私有
+r-code-core = { workspace = true }
+r-code-store = { workspace = true }
+r-code-gateway = { workspace = true }
+r-code-terminal = { workspace = true }
+r-code-agent-worker = { workspace = true }
+
+# SQLite（启动期恢复 / 支持包直接访问，不走连接池）
+rusqlite = { workspace = true }
+
+# 异步
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# 工具
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+dirs = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

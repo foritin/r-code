@@ -1,0 +1,40 @@
+[package]
+name = "r-code-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code SQLite 持久化层：产品状态源"
+
+[dependencies]
+# 公共合同
+hermes-core = { workspace = true }
+hermes-error = { workspace = true }
+
+# 产品私有
+r-code-core = { workspace = true }
+
+# SQLite
+rusqlite = { workspace = true }
+r2d2 = { workspace = true }
+r2d2_sqlite = { workspace = true }
+
+# 序列化
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# 安全
+blake3 = { workspace = true }
+
+# 工具
+chrono = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+tempfile = "3"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
