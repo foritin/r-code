@@ -7,6 +7,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn default_branch_id() -> String {
+    "main".to_string()
+}
+
 // ============================================================================
 // Task DTO  [doc-06 §3.1] [doc-04 §6.1]
 // ============================================================================
@@ -19,8 +23,12 @@ use uuid::Uuid;
 pub struct Task {
     /// UUID v4
     pub id: String,
-    /// 所属项目（workspace）的 canonical path
-    pub project_id: String,
+    /// 附加工作区的 canonical path。为空时这是一个纯聊天会话，不提供本地工具。
+    #[serde(default, alias = "project_id")]
+    pub workspace_path: Option<String>,
+    /// 本会话绑定的模型服务配置名。为空时兼容旧会话，运行时回退到全局默认服务。
+    #[serde(default)]
+    pub provider_name: Option<String>,
     /// 用户可见标题
     pub title: String,
     /// 用户输入的目标描述
@@ -40,7 +48,7 @@ pub struct Task {
 impl Task {
     /// 创建新任务（状态默认 `Idle`）
     pub fn new(
-        project_id: impl Into<String>,
+        workspace_path: Option<String>,
         title: impl Into<String>,
         goal: impl Into<String>,
         mode: TaskMode,
@@ -48,7 +56,8 @@ impl Task {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
-            project_id: project_id.into(),
+            workspace_path,
+            provider_name: None,
             title: title.into(),
             goal: goal.into(),
             mode,
@@ -85,7 +94,8 @@ impl std::fmt::Display for TaskMode {
 
 /// 任务状态。
 ///
-/// 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`
+/// 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`；
+/// 用户可将运行转为 `Interrupted`，后续可直接分发排队消息。
 /// 任意状态可以 `-> Archived`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -97,6 +107,8 @@ pub enum TaskState {
     Exploring,
     /// 进行中（Agent 正在执行工具调用）
     InProgress,
+    /// 已由用户中止，保留中止原因与运行审计记录
+    Interrupted,
     /// 待审查（Agent 完成一轮，等待用户接受/回滚）
     ReviewReady,
     /// 已归档（不可再操作）
@@ -109,6 +121,7 @@ impl std::fmt::Display for TaskState {
             Self::Idle => write!(f, "idle"),
             Self::Exploring => write!(f, "exploring"),
             Self::InProgress => write!(f, "in_progress"),
+            Self::Interrupted => write!(f, "interrupted"),
             Self::ReviewReady => write!(f, "review_ready"),
             Self::Archived => write!(f, "archived"),
         }
@@ -122,6 +135,7 @@ impl TaskState {
             "idle" => Some(Self::Idle),
             "exploring" => Some(Self::Exploring),
             "in_progress" => Some(Self::InProgress),
+            "interrupted" => Some(Self::Interrupted),
             "review_ready" => Some(Self::ReviewReady),
             "archived" => Some(Self::Archived),
             _ => None,
@@ -133,6 +147,40 @@ impl TaskState {
 // Agent Run DTO  [doc-06 §3.2]
 // ============================================================================
 
+/// Agent Run 的角色。
+///
+/// 主运行直接服务于任务；子代理运行必须关联到发起它的主或子运行，
+/// 以便完整重建委派树。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentKind {
+    /// 任务的主 Agent 运行。
+    #[default]
+    Main,
+    /// 由另一个 Agent 委派的子代理运行。
+    Subagent,
+}
+
+impl std::fmt::Display for AgentKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Main => write!(f, "main"),
+            Self::Subagent => write!(f, "subagent"),
+        }
+    }
+}
+
+impl AgentKind {
+    /// 尝试从持久化字符串解析。
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "main" => Some(Self::Main),
+            "subagent" => Some(Self::Subagent),
+            _ => None,
+        }
+    }
+}
+
 /// Agent Run DTO —— 一次 Agent 执行的生命周期记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
@@ -140,6 +188,24 @@ pub struct AgentRun {
     pub id: String,
     /// 所属 Task ID
     pub task_id: String,
+    /// 所属会话分支；历史数据库迁移后缺省为 main
+    #[serde(default = "default_branch_id")]
+    pub branch_id: String,
+    /// 父运行 ID；主运行没有父运行。
+    #[serde(default)]
+    pub parent_run_id: Option<String>,
+    /// 运行角色；旧 JSON 缺省为主运行。
+    #[serde(default)]
+    pub agent_kind: AgentKind,
+    /// 子代理的人类可读标签。
+    #[serde(default)]
+    pub agent_label: Option<String>,
+    /// 子代理完成后的受限结果摘要；绝不保存或展示模型私有推理。
+    #[serde(default)]
+    pub summary: Option<String>,
+    /// 触发这次委派的工具调用 ID。
+    #[serde(default)]
+    pub delegated_by_tool_call_id: Option<String>,
     /// 使用的模型名称
     pub model: String,
     /// 审查状态
@@ -155,15 +221,65 @@ pub struct AgentRun {
 impl AgentRun {
     /// 创建新的 Agent Run（审查状态默认 `Pending`）
     pub fn new(task_id: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::new_for_branch(task_id, "main", model)
+    }
+
+    /// 在指定会话分支中创建新的 Agent Run。
+    pub fn new_for_branch(
+        task_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             task_id: task_id.into(),
+            branch_id: branch_id.into(),
+            parent_run_id: None,
+            agent_kind: AgentKind::Main,
+            agent_label: None,
+            summary: None,
+            delegated_by_tool_call_id: None,
             model: model.into(),
             review_state: ReviewState::Pending,
             started_at: Utc::now(),
             ended_at: None,
             usage_json: None,
         }
+    }
+
+    /// 在主分支创建子代理运行。
+    pub fn new_subagent(
+        task_id: impl Into<String>,
+        parent_run_id: impl Into<String>,
+        model: impl Into<String>,
+        agent_label: Option<String>,
+        delegated_by_tool_call_id: Option<String>,
+    ) -> Self {
+        Self::new_subagent_for_branch(
+            task_id,
+            "main",
+            parent_run_id,
+            model,
+            agent_label,
+            delegated_by_tool_call_id,
+        )
+    }
+
+    /// 在指定会话分支创建子代理运行。
+    pub fn new_subagent_for_branch(
+        task_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        parent_run_id: impl Into<String>,
+        model: impl Into<String>,
+        agent_label: Option<String>,
+        delegated_by_tool_call_id: Option<String>,
+    ) -> Self {
+        let mut run = Self::new_for_branch(task_id, branch_id, model);
+        run.parent_run_id = Some(parent_run_id.into());
+        run.agent_kind = AgentKind::Subagent;
+        run.agent_label = agent_label;
+        run.delegated_by_tool_call_id = delegated_by_tool_call_id;
+        run
     }
 
     /// 标记结束
@@ -191,8 +307,12 @@ pub enum ReviewState {
     AutoAccepted,
     /// 用户已回滚
     RolledBack,
+    /// 用户主动中止，未把它误记为文件回滚
+    Aborted,
     /// Ask 模式零变化轮次自动结算
     Answered,
+    /// 子代理或 provider 在运行期间失败；与用户主动中止区分。
+    Failed,
 }
 
 impl std::fmt::Display for ReviewState {
@@ -202,7 +322,9 @@ impl std::fmt::Display for ReviewState {
             Self::Accepted => write!(f, "accepted"),
             Self::AutoAccepted => write!(f, "auto_accepted"),
             Self::RolledBack => write!(f, "rolled_back"),
+            Self::Aborted => write!(f, "aborted"),
             Self::Answered => write!(f, "answered"),
+            Self::Failed => write!(f, "failed"),
         }
     }
 }
@@ -215,7 +337,9 @@ impl ReviewState {
             "accepted" => Some(Self::Accepted),
             "auto_accepted" => Some(Self::AutoAccepted),
             "rolled_back" => Some(Self::RolledBack),
+            "aborted" => Some(Self::Aborted),
             "answered" => Some(Self::Answered),
+            "failed" => Some(Self::Failed),
             _ => None,
         }
     }
@@ -224,7 +348,12 @@ impl ReviewState {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            Self::Accepted | Self::AutoAccepted | Self::RolledBack | Self::Answered
+            Self::Accepted
+                | Self::AutoAccepted
+                | Self::RolledBack
+                | Self::Aborted
+                | Self::Answered
+                | Self::Failed
         )
     }
 }
@@ -410,6 +539,12 @@ pub struct PermissionRequest {
     pub task_id: String,
     /// 关联的 Tool Call ID
     pub tool_call_id: String,
+    /// 发起请求的 Agent Run ID；旧记录可能缺失。
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// 调用者身份（例如 `agent` 或 `subagent:<id>`）；旧记录可能缺失。
+    #[serde(default)]
+    pub caller: Option<String>,
     /// 工具名称
     pub tool_name: String,
     /// 风险等级
@@ -437,6 +572,8 @@ impl PermissionRequest {
             id: Uuid::new_v4().to_string(),
             task_id: task_id.into(),
             tool_call_id: tool_call_id.into(),
+            run_id: None,
+            caller: None,
             tool_name: tool_name.into(),
             risk_level,
             input_summary: input_summary.into(),
@@ -444,6 +581,17 @@ impl PermissionRequest {
             created_at: Utc::now(),
             decided_at: None,
         }
+    }
+
+    /// 补充运行归属，用于审批界面解释请求来源。
+    pub fn with_origin(
+        mut self,
+        run_id: Option<impl Into<String>>,
+        caller: Option<impl Into<String>>,
+    ) -> Self {
+        self.run_id = run_id.map(Into::into);
+        self.caller = caller.map(Into::into);
+        self
     }
 
     /// 是否已决定
@@ -591,15 +739,19 @@ pub struct BlobRef {
 // Workspace DTO  [doc-06 §3.8]
 // ============================================================================
 
-/// Workspace 信任状态。
+/// 项目级 Agent 权限模式。
+///
+/// 所有模式都只允许访问已附加工作区；差异仅在 Agent 调用本地工具时如何审批。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum TrustState {
-    /// 未信任
+pub enum ProjectAccessMode {
+    /// 每次可能泄露信息、修改文件或执行命令时都请求批准。
     #[default]
-    Untrusted,
-    /// 已信任
-    Trusted,
+    RequestApproval,
+    /// 仅在风险分级判断为中高风险时请求批准。
+    RiskBased,
+    /// 自动批准 R0-R3；R4 和显式拒绝规则仍然生效。
+    FullAccess,
 }
 
 /// Workspace 记录。
@@ -609,8 +761,8 @@ pub struct Workspace {
     pub canonical_path: String,
     /// 显示名称
     pub display_name: String,
-    /// 信任状态
-    pub trust_state: TrustState,
+    /// 项目级 Agent 权限模式
+    pub access_mode: ProjectAccessMode,
     /// 最后打开时间
     pub last_opened_at: DateTime<Utc>,
 }
@@ -621,7 +773,7 @@ impl Workspace {
         Self {
             canonical_path: canonical_path.into(),
             display_name: display_name.into(),
-            trust_state: TrustState::Untrusted,
+            access_mode: ProjectAccessMode::RequestApproval,
             last_opened_at: Utc::now(),
         }
     }
@@ -643,6 +795,20 @@ pub enum TaskEventType {
     RunStarted,
     /// Agent Run 结束
     RunEnded,
+    /// 运行中的补充指令已注入当前会话
+    UserSteered,
+    /// 用户消息已持久化到待发送队列
+    UserMessageQueued,
+    /// 队列消息开始分发为新的运行
+    QueueDispatched,
+    /// 用户主动中止了一次运行
+    RunAborted,
+    /// 用户消息编辑后创建了新的会话分支
+    SessionBranched,
+    /// 受委派子代理已创建或开始排队。
+    SubagentStarted,
+    /// 受委派子代理进入终态。
+    SubagentFinished,
     /// 工具调用
     ToolCall,
     /// 工具结果
@@ -666,6 +832,13 @@ impl std::fmt::Display for TaskEventType {
             Self::StateChanged => write!(f, "state_changed"),
             Self::RunStarted => write!(f, "run_started"),
             Self::RunEnded => write!(f, "run_ended"),
+            Self::UserSteered => write!(f, "user_steered"),
+            Self::UserMessageQueued => write!(f, "user_message_queued"),
+            Self::QueueDispatched => write!(f, "queue_dispatched"),
+            Self::RunAborted => write!(f, "run_aborted"),
+            Self::SessionBranched => write!(f, "session_branched"),
+            Self::SubagentStarted => write!(f, "subagent_started"),
+            Self::SubagentFinished => write!(f, "subagent_finished"),
             Self::ToolCall => write!(f, "tool_call"),
             Self::ToolResult => write!(f, "tool_result"),
             Self::PermissionRequested => write!(f, "permission_requested"),
@@ -684,10 +857,175 @@ pub struct TaskEvent {
     pub id: i64,
     /// 所属 Task ID
     pub task_id: String,
+    /// 所属会话分支；旧审计事件缺省归入 main
+    #[serde(default = "default_branch_id")]
+    pub branch_id: String,
     /// 事件类型
     pub event_type: TaskEventType,
     /// 事件时间
     pub created_at: DateTime<Utc>,
+}
+
+// ============================================================================
+// 会话分支与运行控制
+// ============================================================================
+
+/// 用户发消息时选择的显式动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSendMode {
+    /// 由服务端根据当前任务和运行状态选择安全默认行为。
+    #[default]
+    Auto,
+    /// 注入当前运行，在下一次 agent 迭代前生效，不新建 AgentRun。
+    Steer,
+    /// 追加到当前任务的持久化待发送队列。
+    Queue,
+    /// 安全中止当前运行后，优先分发这条消息。
+    SendNow,
+}
+
+impl AgentSendMode {
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "steer" => Some(Self::Steer),
+            "queue" => Some(Self::Queue),
+            "send_now" => Some(Self::SendNow),
+            _ => None,
+        }
+    }
+}
+
+/// 会话分支元数据。每个任务恰有一个活跃分支，历史分支与其 JSONL 日志保持只读。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionBranch {
+    /// 分支 ID；主分支固定为 main，编辑分支为 UUID。
+    pub id: String,
+    /// 所属任务。
+    pub task_id: String,
+    /// 父分支；主分支没有父分支。
+    pub parent_branch_id: Option<String>,
+    /// 分叉前最后保留的用户消息 ID（JSONL 行稳定标识）。
+    pub forked_from_message_id: Option<String>,
+    /// JSONL 会话文件的存储 ID，不等同于运行时 session ID。
+    pub storage_id: String,
+    /// 是否为用户当前正在查看和继续的分支。
+    pub is_active: bool,
+    /// 创建时间。
+    pub created_at: DateTime<Utc>,
+}
+
+impl SessionBranch {
+    /// 为既有或新建任务创建主分支。
+    pub fn main(task_id: impl Into<String>) -> Self {
+        let task_id = task_id.into();
+        Self {
+            id: "main".to_string(),
+            storage_id: task_id.clone(),
+            task_id,
+            parent_branch_id: None,
+            forked_from_message_id: None,
+            is_active: true,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// 从现有消息创建新的活跃分支。
+    pub fn fork(
+        task_id: impl Into<String>,
+        parent_branch_id: impl Into<String>,
+        forked_from_message_id: impl Into<String>,
+    ) -> Self {
+        let task_id = task_id.into();
+        let id = Uuid::new_v4().to_string();
+        Self {
+            storage_id: format!("{task_id}--{id}"),
+            id,
+            task_id,
+            parent_branch_id: Some(parent_branch_id.into()),
+            forked_from_message_id: Some(forked_from_message_id.into()),
+            is_active: true,
+            created_at: Utc::now(),
+        }
+    }
+}
+
+/// 待发送消息的持久化状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedMessageState {
+    /// 等待当前运行结束或运行调度器空闲。
+    #[default]
+    Queued,
+    /// 正在从队列转交给 runtime。
+    Dispatching,
+    /// 已交给新的 AgentRun。
+    Sent,
+    /// 用户明确移除或中止时取消。
+    Cancelled,
+    /// runtime 无法启动，保留可解释的失败记录。
+    Failed,
+}
+
+impl std::fmt::Display for QueuedMessageState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Dispatching => write!(f, "dispatching"),
+            Self::Sent => write!(f, "sent"),
+            Self::Cancelled => write!(f, "cancelled"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl QueuedMessageState {
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "dispatching" => Some(Self::Dispatching),
+            "sent" => Some(Self::Sent),
+            "cancelled" => Some(Self::Cancelled),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// 任务级待发送消息。排队时尚未写入会话 JSONL，真正分发时才成为用户消息。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct QueuedMessage {
+    pub id: String,
+    pub task_id: String,
+    pub branch_id: String,
+    pub message: String,
+    pub state: QueuedMessageState,
+    /// 数字越大越优先；“立即发送”使用更高优先级。
+    pub priority: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl QueuedMessage {
+    pub fn new(
+        task_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        message: impl Into<String>,
+        priority: i64,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: Uuid::new_v4().to_string(),
+            task_id: task_id.into(),
+            branch_id: branch_id.into(),
+            message: message.into(),
+            state: QueuedMessageState::Queued,
+            priority,
+            created_at: now,
+            updated_at: now,
+        }
+    }
 }
 
 // ============================================================================
@@ -775,6 +1113,96 @@ pub enum AgentEvent {
         /// 新状态
         state: TaskState,
     },
+    /// 面向用户的运行活动阶段。
+    ///
+    /// 仅表达请求、生成、工具和引导等可观察状态；绝不承载模型私有推理文本。
+    Activity {
+        /// 当前活动阶段
+        phase: AgentActivityPhase,
+        /// 可选的安全摘要（例如工具目标）；缺省时由前端按阶段本地化展示。
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+    /// 由子代理产生的带运行作用域事件。主代理继续使用既有顶层载荷，因此旧 IPC
+    /// 客户端仍可读取；新客户端可按 scope 将子代理活动折叠到 Working 列表。
+    Scoped {
+        scope: AgentEventScope,
+        event: Box<AgentEvent>,
+    },
+    /// 子代理的结构化生命周期变化。只包含可观察状态和受限摘要，不承载思维链。
+    SubagentLifecycle {
+        state: SubagentState,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
+}
+
+/// 嵌套 Agent 事件的运行树作用域。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentEventScope {
+    /// 此运行的稳定 ID（与 `AgentRun.id` 对齐）。
+    pub run_id: String,
+    /// Agent 实例 ID；当前实现与 run ID 相同，保留独立字段以兼容未来复用。
+    pub agent_id: String,
+    /// 父运行 ID；主运行没有父级。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    /// Agent 角色。
+    #[serde(default)]
+    pub agent_kind: AgentKind,
+    /// 用户可见的子代理标签。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_label: Option<String>,
+    /// 触发此委派的父代理工具调用 ID。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delegated_by_tool_call_id: Option<String>,
+}
+
+/// 子代理的可观察生命周期状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentState {
+    Queued,
+    Running,
+    WaitingPermission,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl std::fmt::Display for SubagentState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Queued => write!(f, "queued"),
+            Self::Running => write!(f, "running"),
+            Self::WaitingPermission => write!(f, "waiting_permission"),
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+            Self::Cancelled => write!(f, "cancelled"),
+        }
+    }
+}
+
+/// Agent 运行中的可观察活动阶段。
+///
+/// 与任务状态不同：该枚举用于实时交互提示，不写入任务状态机或审计事件表。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActivityPhase {
+    /// 正在准备或发送下一次模型请求。
+    Requesting,
+    /// 已开始向用户流式生成可见文本。
+    Streaming,
+    /// 正在执行已对用户可见的工具调用。
+    Tool,
+    /// 工具调用正等待用户批准。
+    WaitingPermission,
+    /// 已接纳引导，等待当前安全点。
+    SteerAccepted,
+    /// 已将引导合并到下一次模型请求。
+    SteerApplied,
+    /// 正在结束本次运行并持久化已可见输出。
+    Finalizing,
 }
 
 /// 计划步骤。
@@ -793,8 +1221,15 @@ pub struct PlanStep {
 /// 创建会话输入。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateSessionInput {
-    /// 项目 ID
-    pub project_id: String,
+    /// 可选工作区根目录。未附加时 Agent 只能进行纯对话。
+    #[serde(default, alias = "project_id")]
+    pub workspace_path: Option<String>,
+    /// 工作区的项目级 Agent 权限模式。未附加工作区时此字段不会授予本地能力。
+    #[serde(default)]
+    pub workspace_access_mode: ProjectAccessMode,
+    /// 所属任务 ID（权限门/审计上下文；旧数据缺省为空串）
+    #[serde(default)]
+    pub task_id: String,
     /// 目标
     pub goal: String,
     /// 交互模式
@@ -808,7 +1243,9 @@ pub struct CreateSessionInput {
 impl Default for CreateSessionInput {
     fn default() -> Self {
         Self {
-            project_id: String::new(),
+            workspace_path: None,
+            workspace_access_mode: ProjectAccessMode::RequestApproval,
+            task_id: String::new(),
             goal: String::new(),
             mode: TaskMode::Ask,
             model: None,
@@ -924,7 +1361,8 @@ mod tests {
 
     #[test]
     fn task_new_defaults() {
-        let task = Task::new("/proj", "Test", "Do something", TaskMode::Ask);
+        let task = Task::new(Some("/proj".into()), "Test", "Do something", TaskMode::Ask);
+        assert_eq!(task.workspace_path.as_deref(), Some("/proj"));
         assert_eq!(task.state, TaskState::Idle);
         assert_eq!(task.mode, TaskMode::Ask);
         assert!(task.worktree_path.is_none());
@@ -936,6 +1374,7 @@ mod tests {
             TaskState::Idle,
             TaskState::Exploring,
             TaskState::InProgress,
+            TaskState::Interrupted,
             TaskState::ReviewReady,
             TaskState::Archived,
         ] {
@@ -950,6 +1389,7 @@ mod tests {
         assert!(ReviewState::Accepted.is_terminal());
         assert!(ReviewState::AutoAccepted.is_terminal());
         assert!(ReviewState::RolledBack.is_terminal());
+        assert!(ReviewState::Aborted.is_terminal());
         assert!(ReviewState::Answered.is_terminal());
     }
 
@@ -982,13 +1422,111 @@ mod tests {
     }
 
     #[test]
+    fn permission_request_origin_is_backward_compatible() {
+        let legacy: PermissionRequest = serde_json::from_str(
+            r#"{
+                "id": "permission-1",
+                "task_id": "task-1",
+                "tool_call_id": "call-1",
+                "tool_name": "write_file",
+                "risk_level": "R2",
+                "input_summary": "write src/lib.rs",
+                "decision": "pending",
+                "created_at": "2025-01-01T00:00:00Z",
+                "decided_at": null
+            }"#,
+        )
+        .unwrap();
+        assert!(legacy.run_id.is_none());
+        assert!(legacy.caller.is_none());
+
+        let request = PermissionRequest::new(
+            "task-1",
+            "call-1",
+            "write_file",
+            RiskLevel::R2,
+            "write src/lib.rs",
+        )
+        .with_origin(Some("run-1"), Some("subagent:child-1"));
+        assert_eq!(request.run_id.as_deref(), Some("run-1"));
+        assert_eq!(request.caller.as_deref(), Some("subagent:child-1"));
+    }
+
+    #[test]
     fn agent_run_lifecycle() {
         let mut run = AgentRun::new("task1", "claude-3-5-sonnet");
         assert!(run.is_active());
+        assert_eq!(run.branch_id, "main");
+        assert_eq!(run.agent_kind, AgentKind::Main);
+        assert!(run.parent_run_id.is_none());
+        assert!(run.agent_label.is_none());
+        assert!(run.delegated_by_tool_call_id.is_none());
         assert_eq!(run.review_state, ReviewState::Pending);
         run.finish(ReviewState::Accepted);
         assert!(!run.is_active());
         assert_eq!(run.review_state, ReviewState::Accepted);
+    }
+
+    #[test]
+    fn agent_run_legacy_json_and_subagent_constructor_are_compatible() {
+        let legacy: AgentRun = serde_json::from_str(
+            r#"{
+                "id": "legacy-run",
+                "task_id": "task-1",
+                "model": "legacy-model",
+                "review_state": "pending",
+                "started_at": "2025-01-01T00:00:00Z",
+                "ended_at": null,
+                "usage_json": null
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.branch_id, "main");
+        assert_eq!(legacy.agent_kind, AgentKind::Main);
+        assert!(legacy.parent_run_id.is_none());
+        assert!(legacy.agent_label.is_none());
+        assert!(legacy.delegated_by_tool_call_id.is_none());
+
+        let child = AgentRun::new_subagent_for_branch(
+            "task-1",
+            "branch-1",
+            "parent-run",
+            "child-model",
+            Some("检索代理".to_string()),
+            Some("tool-call-1".to_string()),
+        );
+        assert_eq!(child.branch_id, "branch-1");
+        assert_eq!(child.agent_kind, AgentKind::Subagent);
+        assert_eq!(child.parent_run_id.as_deref(), Some("parent-run"));
+        assert_eq!(child.agent_label.as_deref(), Some("检索代理"));
+        assert_eq!(
+            child.delegated_by_tool_call_id.as_deref(),
+            Some("tool-call-1")
+        );
+
+        let main_child = AgentRun::new_subagent("task-1", "parent-run", "child-model", None, None);
+        assert_eq!(main_child.branch_id, "main");
+        assert_eq!(main_child.agent_kind, AgentKind::Subagent);
+        assert_eq!(main_child.parent_run_id.as_deref(), Some("parent-run"));
+    }
+
+    #[test]
+    fn session_branch_and_queue_control_have_stable_defaults() {
+        let main = SessionBranch::main("task-1");
+        assert_eq!(main.id, "main");
+        assert_eq!(main.storage_id, "task-1");
+        let branch = SessionBranch::fork("task-1", &main.id, "task-1:3");
+        assert_ne!(branch.id, "main");
+        assert_eq!(branch.parent_branch_id.as_deref(), Some("main"));
+
+        assert_eq!(
+            AgentSendMode::try_from_str("send_now"),
+            Some(AgentSendMode::SendNow)
+        );
+        assert_eq!(
+            QueuedMessageState::try_from_str("dispatching"),
+            Some(QueuedMessageState::Dispatching)
+        );
     }
 
     #[test]

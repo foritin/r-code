@@ -18,6 +18,7 @@ hermes-compaction = { workspace = true }
 
 # 产品私有
 r-code-core = { workspace = true }
+r-code-gateway = { workspace = true }
 
 # 异步
 tokio = { workspace = true }

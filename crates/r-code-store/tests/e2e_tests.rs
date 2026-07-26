@@ -12,6 +12,28 @@ use r_code_store::{
     VerificationService,
 };
 
+fn successful_command() -> &'static str {
+    #[cfg(windows)]
+    {
+        "exit /B 0"
+    }
+    #[cfg(not(windows))]
+    {
+        "true"
+    }
+}
+
+fn failing_command() -> &'static str {
+    #[cfg(windows)]
+    {
+        "exit /B 7"
+    }
+    #[cfg(not(windows))]
+    {
+        "false"
+    }
+}
+
 /// R6-t6：E2E 验证失败 -> 修复 -> 通过，两条记录均保留，旧的被取代。
 #[tokio::test]
 async fn e2e_verification_fail_then_pass() {
@@ -21,7 +43,7 @@ async fn e2e_verification_fail_then_pass() {
     std::fs::create_dir_all(&blobs_dir).unwrap();
 
     // 创建 task 与 run
-    let task = r_code_core::dto::Task::new("/test", "Test", "Fix bug", TaskMode::Auto);
+    let task = r_code_core::dto::Task::new(Some("/test".into()), "Test", "Fix bug", TaskMode::Auto);
     let run = r_code_core::dto::AgentRun::new(&task.id, "test-model");
 
     let task_repo = TaskRepository::new(&db);
@@ -32,7 +54,7 @@ async fn e2e_verification_fail_then_pass() {
     // 第一次验证：FAIL
     let vs = VerificationService::new(&db, blobs_dir.clone());
     let config = VerificationConfig {
-        command: "false".to_string(),
+        command: failing_command().to_string(),
         timeout_secs: 5,
     };
     let result1 = vs
@@ -43,7 +65,7 @@ async fn e2e_verification_fail_then_pass() {
 
     // 第二次验证：PASS
     let config2 = VerificationConfig {
-        command: "true".to_string(),
+        command: successful_command().to_string(),
         timeout_secs: 5,
     };
     let result2 = vs
@@ -70,7 +92,12 @@ async fn e2e_cross_file_task() {
     std::fs::create_dir_all(&blobs_dir).unwrap();
 
     // 创建 task 与 run
-    let task = r_code_core::dto::Task::new("/test", "Test", "Create 3 files", TaskMode::Edit);
+    let task = r_code_core::dto::Task::new(
+        Some("/test".into()),
+        "Test",
+        "Create 3 files",
+        TaskMode::Edit,
+    );
     let run = r_code_core::dto::AgentRun::new(&task.id, "test-model");
 
     let task_repo = TaskRepository::new(&db);
@@ -108,7 +135,7 @@ async fn e2e_cross_file_task() {
     // 验证并接受
     let vs = VerificationService::new(&db, blobs_dir.clone());
     let config = VerificationConfig {
-        command: "true".to_string(),
+        command: successful_command().to_string(),
         timeout_secs: 5,
     };
     let result = vs

@@ -1,7 +1,7 @@
 //! 版本化 migration 系统。
 //!
 //! 使用 `schema_version` 表 + 编号迁移文件。
-//! Migration 001 覆盖全部核心表。
+//! Migration 001 覆盖全部核心表；后续迁移保持旧数据可读。
 //! [doc-06 §3, §5]
 
 use r_code_core::error::ProductError;
@@ -28,7 +28,15 @@ pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
         .map_err(|e| ProductError::MigrationError(format!("read schema_version: {e}")))?;
 
     // 按序执行 migration
-    let migrations: &[(i64, &str)] = &[(1, MIGRATION_001)];
+    let migrations: &[(i64, &str)] = &[
+        (1, MIGRATION_001),
+        (2, MIGRATION_002),
+        (3, MIGRATION_003),
+        (4, MIGRATION_004),
+        (5, MIGRATION_005),
+        (6, MIGRATION_006),
+        (7, MIGRATION_007),
+    ];
 
     for (version, sql) in migrations {
         if *version > current {
@@ -197,6 +205,124 @@ CREATE TABLE IF NOT EXISTS verifications (
 CREATE INDEX IF NOT EXISTS idx_verifications_task ON verifications(task_id);
 "#;
 
+/// Migration 002: `project_id` 改为可选的 `workspace_path`。
+///
+/// 纯聊天会话没有本地工作区；SQLite 不能直接移除 NOT NULL 约束，因此以表重建
+/// 完成列改名与可空化。历史任务的 project_id 原样迁移为 workspace_path。
+const MIGRATION_002: &str = r#"
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE tasks_v2 (
+    id TEXT PRIMARY KEY,
+    workspace_path TEXT,
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'ask',
+    state TEXT NOT NULL DEFAULT 'idle',
+    worktree_path TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+INSERT INTO tasks_v2 (id, workspace_path, title, goal, mode, state, worktree_path, created_at, updated_at)
+SELECT id, NULLIF(project_id, ''), title, goal, mode, state, worktree_path, created_at, updated_at
+FROM tasks;
+
+DROP TABLE tasks;
+ALTER TABLE tasks_v2 RENAME TO tasks;
+
+CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_path);
+CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
+
+PRAGMA foreign_keys = ON;
+"#;
+
+/// Migration 003: 会话分支与任务级待发送队列。
+///
+/// 已有运行和事件默认归入 `main`，不重写旧 JSONL；编辑后的会话在新文件中形成
+/// 分支快照，因此旧审计记录始终可读。
+const MIGRATION_003: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main';
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task_branch ON agent_runs(task_id, branch_id, started_at);
+
+ALTER TABLE task_events ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main';
+CREATE INDEX IF NOT EXISTS idx_task_events_task_branch ON task_events(task_id, branch_id, created_at);
+
+CREATE TABLE IF NOT EXISTS session_branches (
+    id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    parent_branch_id TEXT,
+    forked_from_message_id TEXT,
+    storage_id TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 0 CHECK (is_active IN (0, 1)),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_session_branches_task ON session_branches(task_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_session_branches_one_active
+    ON session_branches(task_id) WHERE is_active = 1;
+
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    branch_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_queued_messages_pending
+    ON queued_messages(state, priority DESC, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_queued_messages_task_branch
+    ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
+"#;
+
+/// Migration 004: Agent Run 委派树。
+///
+/// 旧运行保持主运行语义；新列均可由默认值或 NULL 表示，以便已有数据库原地升级。
+const MIGRATION_004: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN parent_run_id TEXT
+    REFERENCES agent_runs(id) ON DELETE SET NULL;
+ALTER TABLE agent_runs ADD COLUMN agent_kind TEXT NOT NULL DEFAULT 'main';
+ALTER TABLE agent_runs ADD COLUMN agent_label TEXT;
+ALTER TABLE agent_runs ADD COLUMN delegated_by_tool_call_id TEXT
+    REFERENCES tool_calls(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_parent
+    ON agent_runs(parent_run_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_delegated_by_tool_call
+    ON agent_runs(delegated_by_tool_call_id);
+"#;
+
+/// Migration 005: 子代理完成摘要。
+const MIGRATION_005: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN summary TEXT;
+"#;
+
+/// Migration 006: 会话级模型服务绑定。
+///
+/// 旧会话保留 NULL，并在首次运行时回退到全局默认服务；新会话和显式切换会写入
+/// 已选择的配置名，避免全局默认变更意外改变既有会话。
+const MIGRATION_006: &str = r#"
+ALTER TABLE tasks ADD COLUMN provider_name TEXT;
+CREATE INDEX IF NOT EXISTS idx_tasks_provider_name ON tasks(provider_name);
+"#;
+
+/// Migration 007: 项目级 Agent 权限模式。
+///
+/// 保留旧 `trust_state` 仅为向后兼容已有数据库；运行时和新代码统一以
+/// `access_mode` 为准。旧的未授信项目以最保守的“请求批准”迁移，
+/// 已授信项目则保持原有风险分级体验。
+const MIGRATION_007: &str = r#"
+ALTER TABLE workspaces ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'request_approval';
+UPDATE workspaces
+SET access_mode = CASE trust_state
+    WHEN 'trusted' THEN 'risk_based'
+    ELSE 'request_approval'
+END;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +351,8 @@ mod tests {
             "workspaces",
             "task_events",
             "verifications",
+            "session_branches",
+            "queued_messages",
             "schema_version",
         ] {
             assert!(
@@ -251,7 +379,48 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 7);
+    }
+
+    #[test]
+    fn migration_v7_maps_legacy_workspace_trust_to_access_mode() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO schema_version (version) VALUES (6);
+            CREATE TABLE workspaces (
+                canonical_path TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                trust_state TEXT NOT NULL DEFAULT 'untrusted',
+                last_opened_at TEXT NOT NULL
+            );
+            INSERT INTO workspaces (canonical_path, display_name, trust_state, last_opened_at)
+            VALUES
+                ('/legacy-untrusted', 'Legacy Untrusted', 'untrusted', '2025-01-01T00:00:00Z'),
+                ('/legacy-trusted', 'Legacy Trusted', 'trusted', '2025-01-01T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let untrusted: String = conn
+            .query_row(
+                "SELECT access_mode FROM workspaces WHERE canonical_path = '/legacy-untrusted'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let trusted: String = conn
+            .query_row(
+                "SELECT access_mode FROM workspaces WHERE canonical_path = '/legacy-trusted'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(untrusted, "request_approval");
+        assert_eq!(trusted, "risk_based");
     }
 
     #[test]
@@ -265,5 +434,196 @@ mod tests {
             [],
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn migration_v2_preserves_legacy_project_and_allows_pure_chat() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO schema_version (version) VALUES (1);
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ask',
+                state TEXT NOT NULL DEFAULT 'idle',
+                worktree_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE workspaces (
+                canonical_path TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                trust_state TEXT NOT NULL DEFAULT 'untrusted',
+                last_opened_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                review_state TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                usage_json TEXT
+            );
+            CREATE TABLE task_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                event_type TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO tasks (id, project_id, title, goal, mode, state, created_at, updated_at)
+            VALUES ('legacy', '/legacy/workspace', 'Legacy', 'Goal', 'ask', 'idle', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let migrated: Option<String> = conn
+            .query_row(
+                "SELECT workspace_path FROM tasks WHERE id = 'legacy'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(migrated.as_deref(), Some("/legacy/workspace"));
+
+        conn.execute(
+            "INSERT INTO tasks (id, workspace_path, title, goal, mode, state, created_at, updated_at) \
+             VALUES ('chat', NULL, 'Chat', 'No workspace', 'ask', 'idle', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        let empty_scope: Option<String> = conn
+            .query_row(
+                "SELECT workspace_path FROM tasks WHERE id = 'chat'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(empty_scope.is_none());
+    }
+
+    #[test]
+    fn migration_v4_preserves_legacy_runs_and_adds_tree_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+            INSERT INTO schema_version (version) VALUES (3);
+            CREATE TABLE tasks (
+                id TEXT PRIMARY KEY,
+                workspace_path TEXT,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ask',
+                state TEXT NOT NULL DEFAULT 'idle',
+                worktree_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE workspaces (
+                canonical_path TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                trust_state TEXT NOT NULL DEFAULT 'untrusted',
+                last_opened_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                model TEXT NOT NULL,
+                review_state TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                usage_json TEXT,
+                branch_id TEXT NOT NULL DEFAULT 'main'
+            );
+            CREATE TABLE tool_calls (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL,
+                output_json TEXT,
+                risk_level TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                caller TEXT,
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
+            INSERT INTO tasks (id, workspace_path, title, goal, mode, state, created_at, updated_at)
+            VALUES ('task-1', '/legacy', 'Legacy', 'Goal', 'ask', 'idle', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');
+            INSERT INTO agent_runs (id, task_id, model, review_state, started_at, branch_id)
+            VALUES ('run-1', 'task-1', 'legacy-model', 'pending', '2025-01-01T00:00:00Z', 'main');
+            "#,
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let legacy_values: (
+            String,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id \
+                 FROM agent_runs WHERE id = 'run-1'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(legacy_values.0, "main");
+        assert!(legacy_values.1.is_none());
+        assert_eq!(legacy_values.2, "main");
+        assert!(legacy_values.3.is_none());
+        assert!(legacy_values.4.is_none());
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(agent_runs)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .filter_map(|row| row.ok())
+            .collect();
+        for expected in [
+            "parent_run_id",
+            "agent_kind",
+            "agent_label",
+            "summary",
+            "delegated_by_tool_call_id",
+        ] {
+            assert!(
+                columns.contains(&expected.to_string()),
+                "missing agent_runs column: {expected}"
+            );
+        }
+
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agent_runs'",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .filter_map(|row| row.ok())
+            .collect();
+        assert!(indexes.contains(&"idx_agent_runs_parent".to_string()));
+        assert!(indexes.contains(&"idx_agent_runs_delegated_by_tool_call".to_string()));
     }
 }

@@ -14,11 +14,13 @@
 #![allow(clippy::doc_nested_refdefs)]
 
 pub mod agent_loop;
+pub mod llm_runtime;
 pub mod mock_runtime;
 pub mod recovery;
 pub mod runtime;
 
 pub use agent_loop::run_agent_loop_iteration;
+pub use llm_runtime::LlmAgentRuntime;
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};
-pub use runtime::AgentRuntime;
+pub use runtime::{AgentRuntime, SteerResult};

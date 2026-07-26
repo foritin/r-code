@@ -7,7 +7,7 @@
 //! 1. 调用 `provider.stream(request)` 获取事件流。
 //! 2. `TextDelta` -> 累积文本，emit `AgentEvent::Message { delta: true }`。
 //! 3. `ToolUseStart` / `ToolUseDelta` -> 跟踪工具调用与输入 JSON 累积。
-//! 4. `ToolUseComplete` -> 调用 `tool_host.call()`，emit `AgentEvent::ToolCall` +
+//! 4. `ToolUseComplete` -> 调用带 ID 的 `tool_host.call_with_id()`，emit `AgentEvent::ToolCall` +
 //!    `AgentEvent::ToolResult`，并将 `ToolResult` 块收集起来。
 //! 5. `Stop` -> 结束本次迭代。
 //! 6. 追加 assistant 消息（含 Text + ToolUse 块）；若因工具调用停止，
@@ -16,14 +16,25 @@
 //! [doc-04 §10 路径 B]
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use futures::StreamExt;
 use hermes_core::{
-    CompletionRequest, ContentBlock, LlmProvider, Message, Role, StopReason, StreamEvent, ToolHost,
-    ToolSpec, Usage,
+    CompletionRequest, ContentBlock, LlmProvider, Message, Role, StreamEvent, ToolHost, ToolSpec,
+    Usage,
 };
 use r_code_core::dto::AgentEvent;
 use r_code_core::error::ProductError;
+
+/// 单轮 agent 循环的控制结果。
+///
+/// 可见事件经回调在产生时交付；调用方只需要根据此结果决定是否进入下一次模型请求。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentLoopOutcome {
+    /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
+    pub had_tool_call: bool,
+}
 
 /// 运行一次 agent 循环迭代。
 ///
@@ -32,33 +43,132 @@ use r_code_core::error::ProductError;
 /// `tools` 是可用工具规格。函数内部会将 `messages` 与 `tools` 同步进 request。
 ///
 /// 返回本次迭代产生的 `AgentEvent` 列表。
+///
+/// 这是面向既有调用方与单元测试的聚合包装。真实 runtime 应使用
+/// [`run_agent_loop_iteration_streaming_with_abort`]，以在事件产生时立即交付。
 pub async fn run_agent_loop_iteration(
+    provider: &dyn LlmProvider,
+    tool_host: &dyn ToolHost,
+    request: CompletionRequest,
+    messages: &mut Vec<Message>,
+    tools: &[ToolSpec],
+) -> Result<Vec<AgentEvent>, ProductError> {
+    run_agent_loop_iteration_with_abort(provider, tool_host, request, messages, tools, None).await
+}
+
+/// 运行一次可中止的 agent 循环迭代。
+///
+/// `abort` 会在等待下一条流式事件及执行工具前被检查。取消时立即停止继续消费
+/// HTTP 流并让调用方收尾；底层连接由 provider 流的 drop 释放。
+pub async fn run_agent_loop_iteration_with_abort(
+    provider: &dyn LlmProvider,
+    tool_host: &dyn ToolHost,
+    request: CompletionRequest,
+    messages: &mut Vec<Message>,
+    tools: &[ToolSpec],
+    abort: Option<&AtomicBool>,
+) -> Result<Vec<AgentEvent>, ProductError> {
+    let mut events = Vec::new();
+    run_agent_loop_iteration_with_abort_and_emit(
+        provider,
+        tool_host,
+        request,
+        messages,
+        tools,
+        abort,
+        false,
+        |event| events.push(event),
+    )
+    .await?;
+    Ok(events)
+}
+
+/// 运行一次可中止的 agent 循环迭代，并在每个用户可见事件产生时立即发送。
+///
+/// `event_tx` 的接收端由 runtime 的 `poll_events()` 排空。发送失败只代表 runtime
+/// 已被销毁，不应让已开始的 provider 请求因此崩溃。
+pub async fn run_agent_loop_iteration_streaming_with_abort(
+    provider: &dyn LlmProvider,
+    tool_host: &dyn ToolHost,
+    request: CompletionRequest,
+    messages: &mut Vec<Message>,
+    tools: &[ToolSpec],
+    abort: Option<&AtomicBool>,
+    event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+) -> Result<AgentLoopOutcome, ProductError> {
+    run_agent_loop_iteration_with_abort_and_emit(
+        provider,
+        tool_host,
+        request,
+        messages,
+        tools,
+        abort,
+        true,
+        move |event| {
+            let _ = event_tx.send(event);
+        },
+    )
+    .await
+}
+
+/// 运行一次可中止迭代，并在事件产生时调用 `emit`。
+///
+/// 相比基于 channel 的包装，此入口让嵌套运行可为每个事件附加运行作用域，
+/// 同时复用同一套文本、工具和中止语义。
+pub async fn run_agent_loop_iteration_with_abort_and_emit<F>(
     provider: &dyn LlmProvider,
     tool_host: &dyn ToolHost,
     mut request: CompletionRequest,
     messages: &mut Vec<Message>,
     tools: &[ToolSpec],
-) -> Result<Vec<AgentEvent>, ProductError> {
+    abort: Option<&AtomicBool>,
+    emit_activity: bool,
+    mut emit: F,
+) -> Result<AgentLoopOutcome, ProductError>
+where
+    F: FnMut(AgentEvent),
+{
     // 将工作集同步进 request（messages 是单一事实源）
     request.messages = messages.clone();
     request.tools = tools.to_vec();
 
     let mut stream = provider.stream(request).await.map_err(map_hermes_err)?;
 
-    let mut events: Vec<AgentEvent> = Vec::new();
     let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
     let mut current_text = String::new();
-    let mut stop_reason = StopReason::EndTurn;
     // id -> (name, 累积的 input_json 片段)
     let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
     let mut tool_results: Vec<ContentBlock> = Vec::new();
     let mut total_usage = Usage::default();
+    let mut streaming_started = false;
+    let mut had_tool_call = false;
 
-    while let Some(ev) = stream.next().await {
+    loop {
+        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            break;
+        }
+        let next = if abort.is_some() {
+            tokio::select! {
+                event = stream.next() => event,
+                _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
+            }
+        } else {
+            stream.next().await
+        };
+        let Some(ev) = next else {
+            break;
+        };
         match ev {
             StreamEvent::TextDelta { text } => {
                 current_text.push_str(&text);
-                events.push(AgentEvent::Message { text, delta: true });
+                if emit_activity && !streaming_started {
+                    emit(AgentEvent::Activity {
+                        phase: r_code_core::dto::AgentActivityPhase::Streaming,
+                        detail: None,
+                    });
+                    streaming_started = true;
+                }
+                emit(AgentEvent::Message { text, delta: true });
             }
             StreamEvent::ToolUseStart { id, name } => {
                 tracing::debug!(tool_id = %id, tool_name = %name, "tool use start");
@@ -71,6 +181,9 @@ pub async fn run_agent_loop_iteration(
                 }
             }
             StreamEvent::ToolUseComplete { id, input } => {
+                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    break;
+                }
                 flush_text(&mut current_text, &mut assistant_blocks);
                 let name = pending_tools
                     .remove(&id)
@@ -83,16 +196,31 @@ pub async fn run_agent_loop_iteration(
                     input: input.clone(),
                 });
                 // emit ToolCall 事件
-                events.push(AgentEvent::ToolCall {
+                had_tool_call = true;
+                if emit_activity {
+                    emit(AgentEvent::Activity {
+                        phase: r_code_core::dto::AgentActivityPhase::Tool,
+                        // 工具名是安全的可观察信息；参数由独立 ToolCall 事件按需展示，
+                        // 避免将潜在敏感路径或命令重复写入活动栏。
+                        detail: Some(name.clone()),
+                    });
+                }
+                emit(AgentEvent::ToolCall {
                     name: name.clone(),
                     input: input.clone(),
                     call_id: id.clone(),
                 });
                 // 调用工具主机
-                let outcome = tool_host.call(&name, input).await.map_err(map_hermes_err)?;
+                let outcome = tool_host
+                    .call_with_id(&id, &name, input)
+                    .await
+                    .map_err(map_hermes_err)?;
+                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    break;
+                }
                 let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
                     .unwrap_or(serde_json::Value::String(outcome.content.clone()));
-                events.push(AgentEvent::ToolResult {
+                emit(AgentEvent::ToolResult {
                     call_id: id.clone(),
                     output: output_val,
                     is_error: outcome.is_error,
@@ -103,8 +231,7 @@ pub async fn run_agent_loop_iteration(
                     is_error: outcome.is_error,
                 });
             }
-            StreamEvent::Stop { reason } => {
-                stop_reason = reason;
+            StreamEvent::Stop { .. } => {
                 break;
             }
             StreamEvent::Usage(u) => {
@@ -123,8 +250,10 @@ pub async fn run_agent_loop_iteration(
         });
     }
 
-    // 若因工具调用停止，追加 user 消息（含 ToolResult 块），供下一轮迭代
-    if stop_reason == StopReason::ToolUse && !tool_results.is_empty() {
+    // 只要工具实际完成，就必须回填 ToolResult 供下一轮迭代使用。部分 OpenAI
+    // 兼容流会在 ToolUseComplete 后直接关闭，不再额外发送 Stop(ToolUse)；
+    // 不能因此丢掉工具结果并构造出不合法的 assistant.tool_calls 历史。
+    if !tool_results.is_empty() {
         messages.push(Message {
             role: Role::User,
             content: tool_results,
@@ -134,11 +263,11 @@ pub async fn run_agent_loop_iteration(
     tracing::debug!(
         input_tokens = total_usage.input_tokens,
         output_tokens = total_usage.output_tokens,
-        events = events.len(),
+        had_tool_call,
         "agent loop iteration complete"
     );
 
-    Ok(events)
+    Ok(AgentLoopOutcome { had_tool_call })
 }
 
 /// 将累积的文本刷出为 `Text` 内容块。
@@ -179,8 +308,12 @@ mod tests {
     use hermes_error::{Error, Result};
     use hermes_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::AgentEvent;
+    use std::sync::atomic::AtomicBool;
 
-    use super::run_agent_loop_iteration;
+    use super::{
+        run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
+        run_agent_loop_iteration_with_abort_and_emit,
+    };
 
     /// 简单的回放 ToolHost：注册一个工具，调用时返回 `{ "echo": args }`。
     struct EchoToolHost {
@@ -258,6 +391,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn callback_streaming_emits_activity_before_first_text_delta() {
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("hello", Usage::default());
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &[],
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        assert!(matches!(
+            events.first(),
+            Some(AgentEvent::Activity {
+                phase: r_code_core::dto::AgentActivityPhase::Streaming,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events.get(1),
+            Some(AgentEvent::Message { text, delta: true }) if text == "hello"
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_iteration_does_not_consume_provider_stream() {
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("must not be emitted", Usage::new(10, 5));
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+        let abort = AtomicBool::new(true);
+
+        let events = run_agent_loop_iteration_with_abort(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &[],
+            Some(&abort),
+        )
+        .await
+        .unwrap();
+
+        assert!(events.is_empty());
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
     async fn tool_use_produces_call_and_result_events() {
         let provider = MockProvider::new("mock");
         provider.push_turn(RecordedTurn::ok(vec![
@@ -302,6 +493,44 @@ mod tests {
         assert!(messages[1].content.iter().any(|b| b.is_tool_use()));
         assert_eq!(messages[2].role, Role::User);
         assert!(messages[2].content.iter().any(|b| b.is_tool_result()));
+    }
+
+    #[tokio::test]
+    async fn tool_result_is_preserved_when_stream_omits_tool_use_stop() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "t1".to_string(),
+                name: "echo".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "t1".to_string(),
+                input: serde_json::json!({"x": 1}),
+            },
+            // 部分 OpenAI 兼容流在这里直接 EOF，不发送 Stop(ToolUse)。
+        ]));
+        let tool_host = EchoToolHost::new("echo");
+        let mut messages = vec![Message::user_text("hi")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &tools)
+                .await
+                .unwrap();
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult {
+                is_error: false,
+                ..
+            }
+        )));
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[2].role, Role::User);
+        assert!(messages[2]
+            .content
+            .iter()
+            .any(|block| block.is_tool_result()));
     }
 
     #[tokio::test]

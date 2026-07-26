@@ -8,7 +8,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{
-    AgentRun, ReviewState, Task, TaskEvent, TaskEventType, TaskMode, TaskState, TrustState,
+    AgentKind, AgentRun, ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState,
+    SessionBranch, Task, TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall, ToolCallStatus,
     Workspace,
 };
 use r_code_core::error::ProductError;
@@ -44,6 +45,12 @@ fn parse_task_mode(s: &str) -> Result<TaskMode, ProductError> {
     }
 }
 
+/// 解析 Agent Run 角色字符串。
+fn parse_agent_kind(s: &str) -> Result<AgentKind, ProductError> {
+    AgentKind::try_from_str(s)
+        .ok_or_else(|| ProductError::DatabaseError(format!("invalid agent kind: {s}")))
+}
+
 /// 解析 `TaskEventType` 字符串。
 fn parse_task_event_type(s: &str) -> Result<TaskEventType, ProductError> {
     match s {
@@ -51,6 +58,13 @@ fn parse_task_event_type(s: &str) -> Result<TaskEventType, ProductError> {
         "state_changed" => Ok(TaskEventType::StateChanged),
         "run_started" => Ok(TaskEventType::RunStarted),
         "run_ended" => Ok(TaskEventType::RunEnded),
+        "user_steered" => Ok(TaskEventType::UserSteered),
+        "user_message_queued" => Ok(TaskEventType::UserMessageQueued),
+        "queue_dispatched" => Ok(TaskEventType::QueueDispatched),
+        "run_aborted" => Ok(TaskEventType::RunAborted),
+        "session_branched" => Ok(TaskEventType::SessionBranched),
+        "subagent_started" => Ok(TaskEventType::SubagentStarted),
+        "subagent_finished" => Ok(TaskEventType::SubagentFinished),
         "tool_call" => Ok(TaskEventType::ToolCall),
         "tool_result" => Ok(TaskEventType::ToolResult),
         "permission_requested" => Ok(TaskEventType::PermissionRequested),
@@ -64,47 +78,56 @@ fn parse_task_event_type(s: &str) -> Result<TaskEventType, ProductError> {
     }
 }
 
-/// 将 `TrustState` 转换为存储字符串。
-fn trust_state_str(t: TrustState) -> &'static str {
-    match t {
-        TrustState::Untrusted => "untrusted",
-        TrustState::Trusted => "trusted",
+/// 解析待发送消息状态字符串。
+fn parse_queued_message_state(s: &str) -> Result<QueuedMessageState, ProductError> {
+    QueuedMessageState::try_from_str(s)
+        .ok_or_else(|| ProductError::DatabaseError(format!("invalid queued message state: {s}")))
+}
+
+/// 将 `ProjectAccessMode` 转换为存储字符串。
+fn access_mode_str(mode: ProjectAccessMode) -> &'static str {
+    match mode {
+        ProjectAccessMode::RequestApproval => "request_approval",
+        ProjectAccessMode::RiskBased => "risk_based",
+        ProjectAccessMode::FullAccess => "full_access",
     }
 }
 
-/// 解析 `TrustState` 字符串。
-fn parse_trust_state(s: &str) -> Result<TrustState, ProductError> {
+/// 解析 `ProjectAccessMode` 字符串。
+fn parse_access_mode(s: &str) -> Result<ProjectAccessMode, ProductError> {
     match s {
-        "untrusted" => Ok(TrustState::Untrusted),
-        "trusted" => Ok(TrustState::Trusted),
+        "request_approval" => Ok(ProjectAccessMode::RequestApproval),
+        "risk_based" => Ok(ProjectAccessMode::RiskBased),
+        "full_access" => Ok(ProjectAccessMode::FullAccess),
         _ => Err(ProductError::DatabaseError(format!(
-            "invalid trust state: {s}"
+            "invalid project access mode: {s}"
         ))),
     }
 }
 
 /// 将数据库行映射为 `Task`。
 ///
-/// 列顺序：id, project_id, title, goal, mode, state, worktree_path, created_at, updated_at
+/// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at
 fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
-    let mode_str: String = row.get(4).map_err(db_err)?;
+    let mode_str: String = row.get(5).map_err(db_err)?;
     let mode = parse_task_mode(&mode_str)?;
-    let state_str: String = row.get(5).map_err(db_err)?;
+    let state_str: String = row.get(6).map_err(db_err)?;
     let state = TaskState::try_from_str(&state_str)
         .ok_or_else(|| ProductError::DatabaseError(format!("invalid task state: {state_str}")))?;
-    let created_str: String = row.get(7).map_err(db_err)?;
+    let created_str: String = row.get(8).map_err(db_err)?;
     let created_at = parse_ts(&created_str)?;
-    let updated_str: String = row.get(8).map_err(db_err)?;
+    let updated_str: String = row.get(9).map_err(db_err)?;
     let updated_at = parse_ts(&updated_str)?;
 
     Ok(Task {
         id: row.get(0).map_err(db_err)?,
-        project_id: row.get(1).map_err(db_err)?,
-        title: row.get(2).map_err(db_err)?,
-        goal: row.get(3).map_err(db_err)?,
+        workspace_path: row.get(1).map_err(db_err)?,
+        provider_name: row.get(2).map_err(db_err)?,
+        title: row.get(3).map_err(db_err)?,
+        goal: row.get(4).map_err(db_err)?,
         mode,
         state,
-        worktree_path: row.get(6).map_err(db_err)?,
+        worktree_path: row.get(7).map_err(db_err)?,
         created_at,
         updated_at,
     })
@@ -112,15 +135,18 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
 
 /// 将数据库行映射为 `AgentRun`。
 ///
-/// 列顺序：id, task_id, model, review_state, started_at, ended_at, usage_json
+/// 列顺序：id, task_id, branch_id, parent_run_id, agent_kind, agent_label,
+/// delegated_by_tool_call_id, model, review_state, started_at, ended_at, usage_json, summary
 fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
-    let review_state_str: String = row.get(3).map_err(db_err)?;
+    let agent_kind_str: String = row.get(4).map_err(db_err)?;
+    let agent_kind = parse_agent_kind(&agent_kind_str)?;
+    let review_state_str: String = row.get(8).map_err(db_err)?;
     let review_state = ReviewState::try_from_str(&review_state_str).ok_or_else(|| {
         ProductError::DatabaseError(format!("invalid review state: {review_state_str}"))
     })?;
-    let started_str: String = row.get(4).map_err(db_err)?;
+    let started_str: String = row.get(9).map_err(db_err)?;
     let started_at = parse_ts(&started_str)?;
-    let ended_str: Option<String> = row.get(5).map_err(db_err)?;
+    let ended_str: Option<String> = row.get(10).map_err(db_err)?;
     let ended_at = match ended_str {
         Some(s) => Some(parse_ts(&s)?),
         None => None,
@@ -129,27 +155,64 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
     Ok(AgentRun {
         id: row.get(0).map_err(db_err)?,
         task_id: row.get(1).map_err(db_err)?,
-        model: row.get(2).map_err(db_err)?,
+        branch_id: row.get(2).map_err(db_err)?,
+        parent_run_id: row.get(3).map_err(db_err)?,
+        agent_kind,
+        agent_label: row.get(5).map_err(db_err)?,
+        delegated_by_tool_call_id: row.get(6).map_err(db_err)?,
+        model: row.get(7).map_err(db_err)?,
         review_state,
         started_at,
         ended_at,
-        usage_json: row.get(6).map_err(db_err)?,
+        usage_json: row.get(11).map_err(db_err)?,
+        summary: row.get(12).map_err(db_err)?,
+    })
+}
+
+/// 列顺序：id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at
+fn row_to_session_branch(row: &rusqlite::Row<'_>) -> Result<SessionBranch, ProductError> {
+    let created_at: String = row.get(6).map_err(db_err)?;
+    Ok(SessionBranch {
+        id: row.get(0).map_err(db_err)?,
+        task_id: row.get(1).map_err(db_err)?,
+        parent_branch_id: row.get(2).map_err(db_err)?,
+        forked_from_message_id: row.get(3).map_err(db_err)?,
+        storage_id: row.get(4).map_err(db_err)?,
+        is_active: row.get::<_, i64>(5).map_err(db_err)? != 0,
+        created_at: parse_ts(&created_at)?,
+    })
+}
+
+/// 列顺序：id, task_id, branch_id, message, state, priority, created_at, updated_at
+fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, ProductError> {
+    let state: String = row.get(4).map_err(db_err)?;
+    let created_at: String = row.get(6).map_err(db_err)?;
+    let updated_at: String = row.get(7).map_err(db_err)?;
+    Ok(QueuedMessage {
+        id: row.get(0).map_err(db_err)?,
+        task_id: row.get(1).map_err(db_err)?,
+        branch_id: row.get(2).map_err(db_err)?,
+        message: row.get(3).map_err(db_err)?,
+        state: parse_queued_message_state(&state)?,
+        priority: row.get(5).map_err(db_err)?,
+        created_at: parse_ts(&created_at)?,
+        updated_at: parse_ts(&updated_at)?,
     })
 }
 
 /// 将数据库行映射为 `Workspace`。
 ///
-/// 列顺序：canonical_path, display_name, trust_state, last_opened_at
+/// 列顺序：canonical_path, display_name, access_mode, last_opened_at
 fn row_to_workspace(row: &rusqlite::Row<'_>) -> Result<Workspace, ProductError> {
-    let trust_str: String = row.get(2).map_err(db_err)?;
-    let trust_state = parse_trust_state(&trust_str)?;
+    let access_mode_str: String = row.get(2).map_err(db_err)?;
+    let access_mode = parse_access_mode(&access_mode_str)?;
     let last_opened_str: String = row.get(3).map_err(db_err)?;
     let last_opened_at = parse_ts(&last_opened_str)?;
 
     Ok(Workspace {
         canonical_path: row.get(0).map_err(db_err)?,
         display_name: row.get(1).map_err(db_err)?,
-        trust_state,
+        access_mode,
         last_opened_at,
     })
 }
@@ -172,11 +235,12 @@ impl<'a> TaskRepository<'a> {
     pub fn create(&self, task: &Task) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO tasks (id, project_id, title, goal, mode, state, worktree_path, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 task.id,
-                task.project_id,
+                task.workspace_path,
+                task.provider_name,
                 task.title,
                 task.goal,
                 task.mode.to_string(),
@@ -195,7 +259,7 @@ impl<'a> TaskRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_id, title, goal, mode, state, worktree_path, created_at, updated_at \
+                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at \
                  FROM tasks WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -206,23 +270,23 @@ impl<'a> TaskRepository<'a> {
         }
     }
 
-    /// 列出任务，支持按项目/状态过滤。
+    /// 列出任务，支持按工作区/状态过滤。
     pub fn list(
         &self,
-        project_id: Option<&str>,
+        workspace_path: Option<&str>,
         state: Option<TaskState>,
         include_archived: bool,
     ) -> Result<Vec<Task>, ProductError> {
         let conn = self.db.conn()?;
         let mut sql = String::from(
-            "SELECT id, project_id, title, goal, mode, state, worktree_path, created_at, updated_at \
+            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at \
              FROM tasks WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-        if let Some(pid) = project_id {
-            sql.push_str(" AND project_id = ?");
-            param_values.push(Box::new(pid.to_string()));
+        if let Some(path) = workspace_path {
+            sql.push_str(" AND workspace_path = ?");
+            param_values.push(Box::new(path.to_string()));
         }
         if let Some(st) = state {
             sql.push_str(" AND state = ?");
@@ -250,6 +314,36 @@ impl<'a> TaskRepository<'a> {
         conn.execute(
             "UPDATE tasks SET state = ?1, updated_at = ?2 WHERE id = ?3",
             params![new_state.to_string(), Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 更新任务的可选工作区绑定（`None` 表示纯聊天会话）。
+    pub fn set_workspace_path(
+        &self,
+        id: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![workspace_path, Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 绑定会话在后续运行中使用的模型服务。`None` 仅用于兼容旧会话回退全局默认。
+    pub fn set_provider_name(
+        &self,
+        id: &str,
+        provider_name: Option<&str>,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET provider_name = ?1, updated_at = ?2 WHERE id = ?3",
+            params![provider_name, Utc::now().to_rfc3339(), id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -314,11 +408,19 @@ impl<'a> AgentRunRepository<'a> {
     pub fn create(&self, run: &AgentRun) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO agent_runs (id, task_id, model, review_state, started_at, ended_at, usage_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO agent_runs \
+             (id, task_id, branch_id, parent_run_id, agent_kind, agent_label, summary, delegated_by_tool_call_id, \
+              model, review_state, started_at, ended_at, usage_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 run.id,
                 run.task_id,
+                run.branch_id,
+                run.parent_run_id,
+                run.agent_kind.to_string(),
+                run.agent_label,
+                run.summary,
+                run.delegated_by_tool_call_id,
                 run.model,
                 run.review_state.to_string(),
                 run.started_at.to_rfc3339(),
@@ -335,7 +437,8 @@ impl<'a> AgentRunRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, model, review_state, started_at, ended_at, usage_json \
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -351,7 +454,8 @@ impl<'a> AgentRunRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, model, review_state, started_at, ended_at, usage_json \
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -363,17 +467,84 @@ impl<'a> AgentRunRepository<'a> {
         Ok(runs)
     }
 
-    /// 获取 Task 的活跃 Run（`ended_at IS NULL`）。
+    /// 列出某次运行直接委派的子代理（按开始时间升序）。
+    pub fn list_by_parent_run_id(
+        &self,
+        parent_run_id: &str,
+    ) -> Result<Vec<AgentRun>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![parent_run_id]).map_err(db_err)?;
+        let mut runs = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            runs.push(row_to_agent_run(row)?);
+        }
+        Ok(runs)
+    }
+
+    /// 列出某个会话分支的运行记录（按开始时间降序）。
+    pub fn list_by_task_branch(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<Vec<AgentRun>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 ORDER BY started_at DESC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id, branch_id]).map_err(db_err)?;
+        let mut runs = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            runs.push(row_to_agent_run(row)?);
+        }
+        Ok(runs)
+    }
+
+    /// 获取 Task 的活跃主 Run（`ended_at IS NULL`）。
     pub fn get_active_run(&self, task_id: &str) -> Result<Option<AgentRun>, ProductError> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, model, review_state, started_at, ended_at, usage_json \
-                 FROM agent_runs WHERE task_id = ?1 AND ended_at IS NULL \
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => Ok(Some(row_to_agent_run(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 获取一个分支的活跃主运行。
+    pub fn get_active_run_for_branch(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<Option<AgentRun>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 \
+                   AND agent_kind = 'main' AND ended_at IS NULL \
+                 ORDER BY started_at DESC LIMIT 1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id, branch_id]).map_err(db_err)?;
         match rows.next().map_err(db_err)? {
             Some(row) => Ok(Some(row_to_agent_run(row)?)),
             None => Ok(None),
@@ -405,6 +576,85 @@ impl<'a> AgentRunRepository<'a> {
         .map_err(db_err)?;
         Ok(())
     }
+
+    /// 保存子代理的受限完成摘要。
+    pub fn set_summary(&self, id: &str, summary: Option<&str>) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE agent_runs SET summary = ?1 WHERE id = ?2",
+            params![summary, id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+}
+
+// ============================================================================
+// ToolCallRepository
+// ============================================================================
+
+/// 工具调用审计仓储。AgentEvent 的 `call_id` 是运行树和权限记录的关联锚点，
+/// 因而按调用 ID 幂等写入，而不是另行生成数据库 ID。
+pub struct ToolCallRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> ToolCallRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// 在工具调用开始时建立审计记录；重复事件不会覆盖先前结果。
+    pub fn create_if_absent(&self, call: &ToolCall) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO tool_calls \
+             (id, run_id, task_id, tool_name, input_json, output_json, risk_level, status, \
+              caller, started_at, ended_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                call.id,
+                call.run_id,
+                call.task_id,
+                call.tool_name,
+                call.input_json,
+                call.output_json,
+                call.risk_level.to_string(),
+                call.status.to_string(),
+                call.caller,
+                call.started_at.to_rfc3339(),
+                call.ended_at.map(|dt| dt.to_rfc3339()),
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 将对应调用标记为完成；未知调用保持幂等，兼容旧的事件流。
+    pub fn finish(
+        &self,
+        id: &str,
+        output: &serde_json::Value,
+        is_error: bool,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        let status = if is_error {
+            ToolCallStatus::Error
+        } else {
+            ToolCallStatus::Ok
+        };
+        conn.execute(
+            "UPDATE tool_calls SET output_json = ?1, status = ?2, ended_at = ?3 WHERE id = ?4",
+            params![
+                output.to_string(),
+                status.to_string(),
+                Utc::now().to_rfc3339(),
+                id,
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 // ============================================================================
@@ -423,10 +673,25 @@ impl<'a> TaskEventStore<'a> {
 
     /// 追加事件，返回自增 ID。
     pub fn append(&self, task_id: &str, event_type: TaskEventType) -> Result<i64, ProductError> {
+        self.append_for_branch(task_id, "main", event_type)
+    }
+
+    /// 追加指定会话分支的事件，返回自增 ID。
+    pub fn append_for_branch(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+        event_type: TaskEventType,
+    ) -> Result<i64, ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO task_events (task_id, event_type, created_at) VALUES (?1, ?2, ?3)",
-            params![task_id, event_type.to_string(), Utc::now().to_rfc3339()],
+            "INSERT INTO task_events (task_id, branch_id, event_type, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                task_id,
+                branch_id,
+                event_type.to_string(),
+                Utc::now().to_rfc3339()
+            ],
         )
         .map_err(db_err)?;
         Ok(conn.last_insert_rowid())
@@ -444,7 +709,7 @@ impl<'a> TaskEventStore<'a> {
         let offset_val = offset.unwrap_or(0) as i64;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, event_type, created_at FROM task_events \
+                "SELECT id, task_id, branch_id, event_type, created_at FROM task_events \
                  WHERE task_id = ?1 ORDER BY created_at ASC, id ASC LIMIT ?2 OFFSET ?3",
             )
             .map_err(db_err)?;
@@ -453,18 +718,296 @@ impl<'a> TaskEventStore<'a> {
             .map_err(db_err)?;
         let mut events = Vec::new();
         while let Some(row) = rows.next().map_err(db_err)? {
-            let event_type_str: String = row.get(2).map_err(db_err)?;
+            let event_type_str: String = row.get(3).map_err(db_err)?;
             let event_type = parse_task_event_type(&event_type_str)?;
-            let created_str: String = row.get(3).map_err(db_err)?;
+            let created_str: String = row.get(4).map_err(db_err)?;
             let created_at = parse_ts(&created_str)?;
             events.push(TaskEvent {
                 id: row.get(0).map_err(db_err)?,
                 task_id: row.get(1).map_err(db_err)?,
+                branch_id: row.get(2).map_err(db_err)?,
                 event_type,
                 created_at,
             });
         }
         Ok(events)
+    }
+
+    /// 列出某个会话分支的事件。
+    pub fn list_by_task_branch(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<TaskEvent>, ProductError> {
+        let conn = self.db.conn()?;
+        let limit_val = limit.unwrap_or(100) as i64;
+        let offset_val = offset.unwrap_or(0) as i64;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, event_type, created_at FROM task_events \
+                 WHERE task_id = ?1 AND branch_id = ?2 \
+                 ORDER BY created_at ASC, id ASC LIMIT ?3 OFFSET ?4",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt
+            .query(params![task_id, branch_id, limit_val, offset_val])
+            .map_err(db_err)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let event_type_str: String = row.get(3).map_err(db_err)?;
+            events.push(TaskEvent {
+                id: row.get(0).map_err(db_err)?,
+                task_id: row.get(1).map_err(db_err)?,
+                branch_id: row.get(2).map_err(db_err)?,
+                event_type: parse_task_event_type(&event_type_str)?,
+                created_at: parse_ts(&row.get::<_, String>(4).map_err(db_err)?)?,
+            });
+        }
+        Ok(events)
+    }
+}
+
+// ============================================================================
+// SessionBranchRepository
+// ============================================================================
+
+/// 会话分支元数据仓库。JSONL 内容仍由 `SessionStore` 管理，本仓库只记录分支关系与活跃视图。
+pub struct SessionBranchRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> SessionBranchRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// 返回当前活跃分支；旧任务首次访问时惰性建立主分支。
+    pub fn ensure_active(&self, task_id: &str) -> Result<SessionBranch, ProductError> {
+        if let Some(branch) = self.active(task_id)? {
+            return Ok(branch);
+        }
+        let branch = SessionBranch::main(task_id);
+        let conn = self.db.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO session_branches \
+             (id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+            params![
+                branch.id,
+                branch.task_id,
+                branch.parent_branch_id,
+                branch.forked_from_message_id,
+                branch.storage_id,
+                branch.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        drop(conn);
+        self.active(task_id)?.ok_or_else(|| {
+            ProductError::DatabaseError(format!(
+                "failed to create active branch for task: {task_id}"
+            ))
+        })
+    }
+
+    /// 查询任务当前活跃分支。
+    pub fn active(&self, task_id: &str) -> Result<Option<SessionBranch>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at \
+                 FROM session_branches WHERE task_id = ?1 AND is_active = 1 LIMIT 1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => Ok(Some(row_to_session_branch(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 列出全部分支（用于审计与回放，不影响当前 UI）。
+    pub fn list_by_task(&self, task_id: &str) -> Result<Vec<SessionBranch>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at \
+                 FROM session_branches WHERE task_id = ?1 ORDER BY created_at DESC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
+        let mut branches = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            branches.push(row_to_session_branch(row)?);
+        }
+        Ok(branches)
+    }
+
+    /// 原子地将新分支设为活跃分支，旧分支元数据和 JSONL 都不改写。
+    pub fn create_fork(&self, branch: &SessionBranch) -> Result<(), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn.transaction().map_err(db_err)?;
+        tx.execute(
+            "UPDATE session_branches SET is_active = 0 WHERE task_id = ?1 AND is_active = 1",
+            params![branch.task_id],
+        )
+        .map_err(db_err)?;
+        tx.execute(
+            "INSERT INTO session_branches \
+             (id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                branch.id,
+                branch.task_id,
+                branch.parent_branch_id,
+                branch.forked_from_message_id,
+                branch.storage_id,
+                if branch.is_active { 1_i64 } else { 0_i64 },
+                branch.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        tx.commit().map_err(db_err)
+    }
+}
+
+// ============================================================================
+// QueuedMessageRepository
+// ============================================================================
+
+/// 任务级待发送队列。消息在真正分发到运行时前不会写入会话 JSONL。
+pub struct QueuedMessageRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> QueuedMessageRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    pub fn enqueue(&self, message: &QueuedMessage) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "INSERT INTO queued_messages \
+             (id, task_id, branch_id, message, state, priority, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                message.id,
+                message.task_id,
+                message.branch_id,
+                message.message,
+                message.state.to_string(),
+                message.priority,
+                message.created_at.to_rfc3339(),
+                message.updated_at.to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 只列出当前用户仍可操作或需要看到的排队项目。
+    pub fn list_pending(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<Vec<QueuedMessage>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
+                 FROM queued_messages \
+                 WHERE task_id = ?1 AND branch_id = ?2 \
+                   AND state IN ('queued', 'dispatching', 'failed') \
+                 ORDER BY priority DESC, created_at ASC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id, branch_id]).map_err(db_err)?;
+        let mut messages = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            messages.push(row_to_queued_message(row)?);
+        }
+        Ok(messages)
+    }
+
+    /// 取得全局调度器下一条消息，并把它原子地标记为 dispatching。
+    pub fn take_next(&self) -> Result<Option<QueuedMessage>, ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn.transaction().map_err(db_err)?;
+        let candidate = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
+                     FROM queued_messages WHERE state = 'queued' \
+                     ORDER BY priority DESC, created_at ASC LIMIT 1",
+                )
+                .map_err(db_err)?;
+            let mut rows = stmt.query([]).map_err(db_err)?;
+            match rows.next().map_err(db_err)? {
+                Some(row) => Some(row_to_queued_message(row)?),
+                None => None,
+            }
+        };
+        let Some(mut message) = candidate else {
+            tx.commit().map_err(db_err)?;
+            return Ok(None);
+        };
+        let changed = tx
+            .execute(
+                "UPDATE queued_messages SET state = 'dispatching', updated_at = ?1 \
+                 WHERE id = ?2 AND state = 'queued'",
+                params![Utc::now().to_rfc3339(), message.id],
+            )
+            .map_err(db_err)?;
+        if changed == 0 {
+            tx.commit().map_err(db_err)?;
+            return Ok(None);
+        }
+        tx.commit().map_err(db_err)?;
+        message.state = QueuedMessageState::Dispatching;
+        message.updated_at = Utc::now();
+        Ok(Some(message))
+    }
+
+    pub fn set_state(&self, id: &str, state: QueuedMessageState) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE queued_messages SET state = ?1, updated_at = ?2 WHERE id = ?3",
+            params![state.to_string(), Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn cancel(&self, id: &str) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE queued_messages SET state = 'cancelled', updated_at = ?1 \
+             WHERE id = ?2 AND state IN ('queued', 'dispatching', 'failed')",
+            params![Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 仅允许取消当前任务和分支可见的队列项，避免跨会话误操作。
+    pub fn cancel_for_task_branch(
+        &self,
+        id: &str,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE queued_messages SET state = 'cancelled', updated_at = ?1 \
+             WHERE id = ?2 AND task_id = ?3 AND branch_id = ?4 \
+               AND state IN ('queued', 'dispatching', 'failed')",
+            params![Utc::now().to_rfc3339(), id, task_id, branch_id],
+        )
+        .map_err(db_err)?;
+        Ok(())
     }
 }
 
@@ -571,12 +1114,12 @@ impl<'a> WorkspaceRepository<'a> {
     pub fn upsert(&self, ws: &Workspace) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT OR REPLACE INTO workspaces (canonical_path, display_name, trust_state, last_opened_at) \
+            "INSERT OR REPLACE INTO workspaces (canonical_path, display_name, access_mode, last_opened_at) \
              VALUES (?1, ?2, ?3, ?4)",
             params![
                 ws.canonical_path,
                 ws.display_name,
-                trust_state_str(ws.trust_state),
+                access_mode_str(ws.access_mode),
                 ws.last_opened_at.to_rfc3339(),
             ],
         )
@@ -589,7 +1132,7 @@ impl<'a> WorkspaceRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT canonical_path, display_name, trust_state, last_opened_at \
+                "SELECT canonical_path, display_name, access_mode, last_opened_at \
                  FROM workspaces WHERE canonical_path = ?1",
             )
             .map_err(db_err)?;
@@ -605,7 +1148,7 @@ impl<'a> WorkspaceRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT canonical_path, display_name, trust_state, last_opened_at \
+                "SELECT canonical_path, display_name, access_mode, last_opened_at \
                  FROM workspaces ORDER BY last_opened_at DESC LIMIT ?1",
             )
             .map_err(db_err)?;
@@ -617,16 +1160,16 @@ impl<'a> WorkspaceRepository<'a> {
         Ok(workspaces)
     }
 
-    /// 更新信任状态。
-    pub fn update_trust(
+    /// 更新项目级 Agent 权限模式。
+    pub fn update_access_mode(
         &self,
         canonical_path: &str,
-        trust: TrustState,
+        access_mode: ProjectAccessMode,
     ) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "UPDATE workspaces SET trust_state = ?1 WHERE canonical_path = ?2",
-            params![trust_state_str(trust), canonical_path],
+            "UPDATE workspaces SET access_mode = ?1 WHERE canonical_path = ?2",
+            params![access_mode_str(access_mode), canonical_path],
         )
         .map_err(db_err)?;
         Ok(())
@@ -651,7 +1194,7 @@ impl<'a> WorkspaceRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::{ReviewState, TaskEventType, TaskMode, TaskState, TrustState};
+    use r_code_core::dto::{ProjectAccessMode, ReviewState, TaskEventType, TaskMode, TaskState};
     use tempfile::TempDir;
 
     /// 创建内存数据库用于测试。
@@ -660,9 +1203,14 @@ mod tests {
     }
 
     /// 创建测试任务并持久化。
-    fn create_test_task(db: &Database, project_id: &str, title: &str) -> Task {
+    fn create_test_task(db: &Database, workspace_path: &str, title: &str) -> Task {
         let repo = TaskRepository::new(db);
-        let task = Task::new(project_id, title, "test goal", TaskMode::Edit);
+        let task = Task::new(
+            Some(workspace_path.to_string()),
+            title,
+            "test goal",
+            TaskMode::Edit,
+        );
         repo.create(&task).unwrap();
         task
     }
@@ -675,12 +1223,12 @@ mod tests {
     fn test_task_create_and_get() {
         let db = setup_db();
         let repo = TaskRepository::new(&db);
-        let task = Task::new("/proj", "My Task", "Do stuff", TaskMode::Auto);
+        let task = Task::new(Some("/proj".into()), "My Task", "Do stuff", TaskMode::Auto);
         repo.create(&task).unwrap();
 
         let fetched = repo.get(&task.id).unwrap().unwrap();
         assert_eq!(fetched.id, task.id);
-        assert_eq!(fetched.project_id, "/proj");
+        assert_eq!(fetched.workspace_path.as_deref(), Some("/proj"));
         assert_eq!(fetched.title, "My Task");
         assert_eq!(fetched.goal, "Do stuff");
         assert_eq!(fetched.mode, TaskMode::Auto);
@@ -708,7 +1256,9 @@ mod tests {
 
         let proj_a = repo.list(Some("/proj-a"), None, true).unwrap();
         assert_eq!(proj_a.len(), 2);
-        assert!(proj_a.iter().all(|t| t.project_id == "/proj-a"));
+        assert!(proj_a
+            .iter()
+            .all(|t| t.workspace_path.as_deref() == Some("/proj-a")));
 
         let proj_b = repo.list(Some("/proj-b"), None, true).unwrap();
         assert_eq!(proj_b.len(), 1);
@@ -823,6 +1373,11 @@ mod tests {
         let fetched = repo.get(&run.id).unwrap().unwrap();
         assert_eq!(fetched.id, run.id);
         assert_eq!(fetched.task_id, task.id);
+        assert_eq!(fetched.branch_id, "main");
+        assert_eq!(fetched.agent_kind, AgentKind::Main);
+        assert!(fetched.parent_run_id.is_none());
+        assert!(fetched.agent_label.is_none());
+        assert!(fetched.delegated_by_tool_call_id.is_none());
         assert_eq!(fetched.model, "gpt-4");
         assert_eq!(fetched.review_state, ReviewState::Pending);
         assert!(fetched.ended_at.is_none());
@@ -859,6 +1414,62 @@ mod tests {
         let repo = AgentRunRepository::new(&db);
         let runs = repo.list_by_task(&task.id).unwrap();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn test_subagent_run_roundtrip_and_list_by_parent() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "Delegation Tree");
+        let repo = AgentRunRepository::new(&db);
+        let parent = AgentRun::new(&task.id, "parent-model");
+        repo.create(&parent).unwrap();
+
+        let delegated_by_tool_call_id = "delegate-call";
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "INSERT INTO tool_calls \
+             (id, run_id, task_id, tool_name, input_json, risk_level, started_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                delegated_by_tool_call_id,
+                parent.id,
+                task.id,
+                "delegate",
+                "{}",
+                "R0",
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let child = AgentRun::new_subagent_for_branch(
+            &task.id,
+            "branch-1",
+            &parent.id,
+            "child-model",
+            Some("检索代理".to_string()),
+            Some(delegated_by_tool_call_id.to_string()),
+        );
+        repo.create(&child).unwrap();
+
+        let fetched = repo.get(&child.id).unwrap().unwrap();
+        assert_eq!(fetched, child);
+
+        let children = repo.list_by_parent_run_id(&parent.id).unwrap();
+        assert_eq!(children, vec![child]);
+        assert!(repo
+            .list_by_parent_run_id("unknown-parent")
+            .unwrap()
+            .is_empty());
+
+        let active = repo.get_active_run(&task.id).unwrap().unwrap();
+        assert_eq!(active.id, parent.id);
+        let active_main_branch = repo
+            .get_active_run_for_branch(&task.id, "main")
+            .unwrap()
+            .unwrap();
+        assert_eq!(active_main_branch.id, parent.id);
     }
 
     #[test]
@@ -989,6 +1600,13 @@ mod tests {
             TaskEventType::StateChanged,
             TaskEventType::RunStarted,
             TaskEventType::RunEnded,
+            TaskEventType::UserSteered,
+            TaskEventType::UserMessageQueued,
+            TaskEventType::QueueDispatched,
+            TaskEventType::RunAborted,
+            TaskEventType::SessionBranched,
+            TaskEventType::SubagentStarted,
+            TaskEventType::SubagentFinished,
             TaskEventType::ToolCall,
             TaskEventType::ToolResult,
             TaskEventType::PermissionRequested,
@@ -1142,6 +1760,52 @@ mod tests {
     }
 
     // --------------------------------------------------------------------------
+    // SessionBranchRepository / QueuedMessageRepository 测试
+    // --------------------------------------------------------------------------
+
+    #[test]
+    fn session_branch_fork_switches_active_branch_without_deleting_main() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "branch");
+        let repo = SessionBranchRepository::new(&db);
+        let main = repo.ensure_active(&task.id).unwrap();
+        assert_eq!(main.id, "main");
+
+        let fork = SessionBranch::fork(&task.id, &main.id, "task:2");
+        repo.create_fork(&fork).unwrap();
+
+        let active = repo.ensure_active(&task.id).unwrap();
+        assert_eq!(active.id, fork.id);
+        let branches = repo.list_by_task(&task.id).unwrap();
+        assert_eq!(branches.len(), 2);
+        assert!(branches.iter().any(|branch| branch.id == "main"));
+        assert_eq!(branches.iter().filter(|branch| branch.is_active).count(), 1);
+    }
+
+    #[test]
+    fn queued_messages_dispatch_in_priority_then_creation_order() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "queue");
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let repo = QueuedMessageRepository::new(&db);
+        let normal = QueuedMessage::new(&task.id, &branch.id, "normal", 0);
+        let urgent = QueuedMessage::new(&task.id, &branch.id, "urgent", 100);
+        repo.enqueue(&normal).unwrap();
+        repo.enqueue(&urgent).unwrap();
+
+        let next = repo.take_next().unwrap().unwrap();
+        assert_eq!(next.id, urgent.id);
+        assert_eq!(next.state, QueuedMessageState::Dispatching);
+        repo.set_state(&next.id, QueuedMessageState::Sent).unwrap();
+
+        let pending = repo.list_pending(&task.id, &branch.id).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].id, normal.id);
+    }
+
+    // --------------------------------------------------------------------------
     // WorkspaceRepository 测试
     // --------------------------------------------------------------------------
 
@@ -1156,7 +1820,7 @@ mod tests {
         let fetched = repo.get("/home/user/project").unwrap().unwrap();
         assert_eq!(fetched.canonical_path, "/home/user/project");
         assert_eq!(fetched.display_name, "My Project");
-        assert_eq!(fetched.trust_state, TrustState::Untrusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::RequestApproval);
         assert_eq!(fetched.last_opened_at, ws.last_opened_at);
     }
 
@@ -1171,14 +1835,14 @@ mod tests {
         let updated = Workspace {
             canonical_path: "/proj".to_string(),
             display_name: "Updated Name".to_string(),
-            trust_state: TrustState::Trusted,
+            access_mode: ProjectAccessMode::FullAccess,
             last_opened_at: Utc::now(),
         };
         repo.upsert(&updated).unwrap();
 
         let fetched = repo.get("/proj").unwrap().unwrap();
         assert_eq!(fetched.display_name, "Updated Name");
-        assert_eq!(fetched.trust_state, TrustState::Trusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::FullAccess);
     }
 
     #[test]
@@ -1219,16 +1883,17 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_update_trust() {
+    fn test_workspace_update_access_mode() {
         let db = setup_db();
         let repo = WorkspaceRepository::new(&db);
 
-        let ws = Workspace::new("/proj", "Trust Test");
+        let ws = Workspace::new("/proj", "Access Test");
         repo.upsert(&ws).unwrap();
 
-        repo.update_trust("/proj", TrustState::Trusted).unwrap();
+        repo.update_access_mode("/proj", ProjectAccessMode::RiskBased)
+            .unwrap();
         let fetched = repo.get("/proj").unwrap().unwrap();
-        assert_eq!(fetched.trust_state, TrustState::Trusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::RiskBased);
     }
 
     #[test]

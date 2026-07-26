@@ -1,20 +1,20 @@
-//! Workspace 服务层：管理 workspace 的打开/关闭/最近列表/信任状态。
+//! Workspace 服务层：管理 workspace 的打开/关闭/最近列表/权限模式。
 //!
 //! 封装 [`WorkspaceRepository`]，提供更高层的工作流语义：
-//! - `open`：upsert + touch，并保留既有信任状态
+//! - `open`：upsert + touch，并保留既有项目权限模式
 //! - `close`：仅 touch `last_opened_at`
-//! - `list_recent` / `set_trust` / `get`
+//! - `list_recent` / `set_access_mode` / `get`
 //!
 //! [doc-06 §3.8] [doc-13]
 
 use chrono::Utc;
-use r_code_core::dto::{TrustState, Workspace};
+use r_code_core::dto::{ProjectAccessMode, Workspace};
 use r_code_core::error::ProductError;
 
 use crate::repositories::WorkspaceRepository;
 use crate::Database;
 
-/// Workspace 服务 -- 管理 workspace open/close/recent/trust。
+/// Workspace 服务 -- 管理 workspace open/close/recent/access mode。
 pub struct WorkspaceService<'a> {
     repo: WorkspaceRepository<'a>,
 }
@@ -28,22 +28,22 @@ impl<'a> WorkspaceService<'a> {
 
     /// 打开 workspace（upsert + touch）。
     ///
-    /// 若 workspace 已存在，保留其既有信任状态；否则默认 `Untrusted`。
+    /// 若 workspace 已存在，保留其既有项目权限模式；否则默认 `RequestApproval`。
     /// `display_name` 以本次传入为准。`last_opened_at` 更新为当前时间。
     pub fn open(
         &self,
         canonical_path: &str,
         display_name: &str,
     ) -> Result<Workspace, ProductError> {
-        let trust = self
+        let access_mode = self
             .repo
             .get(canonical_path)?
-            .map(|w| w.trust_state)
+            .map(|w| w.access_mode)
             .unwrap_or_default();
         let ws = Workspace {
             canonical_path: canonical_path.to_string(),
             display_name: display_name.to_string(),
-            trust_state: trust,
+            access_mode,
             last_opened_at: Utc::now(),
         };
         self.repo.upsert(&ws)?;
@@ -62,9 +62,13 @@ impl<'a> WorkspaceService<'a> {
         self.repo.list_recent(limit)
     }
 
-    /// 设置信任状态。
-    pub fn set_trust(&self, canonical_path: &str, trust: TrustState) -> Result<(), ProductError> {
-        self.repo.update_trust(canonical_path, trust)
+    /// 设置项目级 Agent 权限模式。
+    pub fn set_access_mode(
+        &self,
+        canonical_path: &str,
+        access_mode: ProjectAccessMode,
+    ) -> Result<(), ProductError> {
+        self.repo.update_access_mode(canonical_path, access_mode)
     }
 
     /// 按 canonical path 获取 workspace。
@@ -80,7 +84,7 @@ impl<'a> WorkspaceService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::TrustState;
+    use r_code_core::dto::ProjectAccessMode;
     use tempfile::TempDir;
 
     fn setup() -> Database {
@@ -95,29 +99,30 @@ mod tests {
         let ws = svc.open("/home/user/proj", "My Project").unwrap();
         assert_eq!(ws.canonical_path, "/home/user/proj");
         assert_eq!(ws.display_name, "My Project");
-        assert_eq!(ws.trust_state, TrustState::Untrusted);
+        assert_eq!(ws.access_mode, ProjectAccessMode::RequestApproval);
 
         // 已持久化
         let fetched = svc.get("/home/user/proj").unwrap().unwrap();
         assert_eq!(fetched.canonical_path, "/home/user/proj");
         assert_eq!(fetched.display_name, "My Project");
-        assert_eq!(fetched.trust_state, TrustState::Untrusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::RequestApproval);
     }
 
     #[test]
-    fn test_open_preserves_trust_state() {
+    fn test_open_preserves_access_mode() {
         let db = setup();
         let svc = WorkspaceService::new(&db);
 
         svc.open("/proj", "P").unwrap();
-        svc.set_trust("/proj", TrustState::Trusted).unwrap();
+        svc.set_access_mode("/proj", ProjectAccessMode::FullAccess)
+            .unwrap();
 
-        // 重新打开 -> 信任状态应保留
+        // 重新打开 -> 项目权限模式应保留
         let ws = svc.open("/proj", "P").unwrap();
-        assert_eq!(ws.trust_state, TrustState::Trusted);
+        assert_eq!(ws.access_mode, ProjectAccessMode::FullAccess);
 
         let fetched = svc.get("/proj").unwrap().unwrap();
-        assert_eq!(fetched.trust_state, TrustState::Trusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::FullAccess);
     }
 
     #[test]
@@ -174,26 +179,28 @@ mod tests {
     }
 
     #[test]
-    fn test_set_trust() {
+    fn test_set_access_mode() {
         let db = setup();
         let svc = WorkspaceService::new(&db);
 
         svc.open("/proj", "P").unwrap();
         assert_eq!(
-            svc.get("/proj").unwrap().unwrap().trust_state,
-            TrustState::Untrusted
+            svc.get("/proj").unwrap().unwrap().access_mode,
+            ProjectAccessMode::RequestApproval
         );
 
-        svc.set_trust("/proj", TrustState::Trusted).unwrap();
+        svc.set_access_mode("/proj", ProjectAccessMode::RiskBased)
+            .unwrap();
         assert_eq!(
-            svc.get("/proj").unwrap().unwrap().trust_state,
-            TrustState::Trusted
+            svc.get("/proj").unwrap().unwrap().access_mode,
+            ProjectAccessMode::RiskBased
         );
 
-        svc.set_trust("/proj", TrustState::Untrusted).unwrap();
+        svc.set_access_mode("/proj", ProjectAccessMode::FullAccess)
+            .unwrap();
         assert_eq!(
-            svc.get("/proj").unwrap().unwrap().trust_state,
-            TrustState::Untrusted
+            svc.get("/proj").unwrap().unwrap().access_mode,
+            ProjectAccessMode::FullAccess
         );
     }
 
@@ -255,9 +262,10 @@ mod tests {
         let ws = svc.open(&canonical, "Tmp Workspace").unwrap();
         assert_eq!(ws.canonical_path, canonical);
 
-        svc.set_trust(&canonical, TrustState::Trusted).unwrap();
+        svc.set_access_mode(&canonical, ProjectAccessMode::RiskBased)
+            .unwrap();
         let fetched = svc.get(&canonical).unwrap().unwrap();
-        assert_eq!(fetched.trust_state, TrustState::Trusted);
+        assert_eq!(fetched.access_mode, ProjectAccessMode::RiskBased);
         assert_eq!(fetched.display_name, "Tmp Workspace");
     }
 }

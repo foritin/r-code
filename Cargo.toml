@@ -17,7 +17,7 @@ members = [
     "crates/r-code-gateway",
     "crates/r-code-terminal",
     "crates/r-code-agent-worker",
-    "crates/r-code-host",
+    "src-tauri",
 ]
 
 [workspace.package]
@@ -63,7 +63,9 @@ r2d2_sqlite = "0.25"
 
 # 安全
 blake3 = "1"
-keyring = "3"
+# windows-native：启用 Windows Credential Manager 后端（否则 keyring 3 在该平台
+# 回落到进程内 mock store，set/get 无法跨 Entry 往返）；target-gated，其他平台无影响
+keyring = { version = "3", features = ["windows-native"] }
 
 # 文件监听
 notify = "6"
@@ -73,6 +75,12 @@ git2 = { version = "0.19", features = ["ssh"] }
 
 # PTY
 portable-pty = "0.8"
+
+# Tauri 桌面应用壳
+tauri = "2"
+tauri-build = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-dialog = "2"
 
 # 内部公共 crate（agent-core 公共合同）
 hermes-error = { path = "vendor/agent-core/crates/hermes-error" }
@@ -91,7 +99,7 @@ r-code-store = { path = "crates/r-code-store" }
 r-code-gateway = { path = "crates/r-code-gateway" }
 r-code-terminal = { path = "crates/r-code-terminal" }
 r-code-agent-worker = { path = "crates/r-code-agent-worker" }
-r-code-host = { path = "crates/r-code-host" }
+r-code-host = { path = "src-tauri" }
 
 [profile.dev]
 opt-level = 0
@@ -101,3 +109,5 @@ debug = true
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+strip = true
+panic = "abort"

@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 use r_code_core::dto::{VerificationRecord, VerificationStatus};
 use r_code_core::error::ProductError;
 use rusqlite::params;
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::repositories::BlobStore;
@@ -269,14 +270,14 @@ impl<'a> VerificationService<'a> {
 
 /// 执行验证命令，返回 `(退出码, 状态, 合并输出)`。
 ///
-/// 命令按空白拆分为程序名 + 参数。stdout 与 stderr 合并存储。
+/// 命令由当前平台的系统 shell 执行，因而能处理带引号、重定向与组合命令；
+/// 该入口只用于用户显式发起的、已在受信任工作区内的验证。stdout 与 stderr 合并存储。
 /// 超时后子进程被 `kill` 并返回 `Timeout` 状态。
 async fn execute_command(
     config: &VerificationConfig,
     working_dir: &Path,
 ) -> (Option<i32>, VerificationStatus, String) {
-    let parts: Vec<&str> = config.command.split_whitespace().collect();
-    if parts.is_empty() {
+    if config.command.trim().is_empty() {
         return (
             None,
             VerificationStatus::Failed,
@@ -284,14 +285,24 @@ async fn execute_command(
         );
     }
 
-    let mut cmd = Command::new(parts[0]);
-    cmd.args(&parts[1..]);
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut command = Command::new("cmd.exe");
+        command.arg("/C").arg(&config.command);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-lc").arg(&config.command);
+        command
+    };
     cmd.current_dir(working_dir);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
     cmd.kill_on_drop(true);
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             return (
@@ -302,36 +313,78 @@ async fn execute_command(
         }
     };
 
+    // 不使用 `wait_with_output()`：超时场景下必须保留 Child 句柄，Windows 才能
+    // 用 taskkill 结束 cmd.exe 拉起的整棵进程树，而不留下 ping / node 等后代。
+    let stdout_task = child.stdout.take().map(|mut pipe| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes).await;
+            bytes
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut pipe| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes).await;
+            bytes
+        })
+    });
+    let pid = child.id();
     let timeout_dur = std::time::Duration::from_secs(config.timeout_secs);
-    match tokio::time::timeout(timeout_dur, child.wait_with_output()).await {
-        Ok(Ok(output)) => {
-            let mut combined = String::from_utf8_lossy(&output.stdout).to_string();
-            if !output.stderr.is_empty() {
-                combined.push_str("\n--- stderr ---\n");
-                combined.push_str(&String::from_utf8_lossy(&output.stderr));
-            }
-            let status = if output.status.success() {
-                VerificationStatus::Passed
-            } else {
-                VerificationStatus::Failed
-            };
-            (output.status.code(), status, combined)
-        }
-        Ok(Err(e)) => (
-            None,
-            VerificationStatus::Failed,
-            format!("command wait failed: {e}"),
-        ),
-        Err(_) => {
-            // 超时：`wait_with_output` future 被 drop，`Child` 随之 drop，
-            // `kill_on_drop(true)` 确保子进程被 SIGKILL。
-            (
+    let (exit_code, status, timeout_message) =
+        match tokio::time::timeout(timeout_dur, child.wait()).await {
+            Ok(Ok(exit_status)) => (
+                exit_status.code(),
+                if exit_status.success() {
+                    VerificationStatus::Passed
+                } else {
+                    VerificationStatus::Failed
+                },
                 None,
-                VerificationStatus::Timeout,
-                "verification timed out".to_string(),
-            )
+            ),
+            Ok(Err(e)) => (
+                None,
+                VerificationStatus::Failed,
+                Some(format!("command wait failed: {e}")),
+            ),
+            Err(_) => {
+                #[cfg(windows)]
+                if let Some(pid) = pid {
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", &pid.to_string(), "/T", "/F"])
+                        .output()
+                        .await;
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = child.kill().await;
+                }
+                let _ = child.wait().await;
+                (
+                    None,
+                    VerificationStatus::Timeout,
+                    Some("verification timed out".to_string()),
+                )
+            }
+        };
+
+    let stdout = match stdout_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let stderr = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let mut combined =
+        timeout_message.unwrap_or_else(|| String::from_utf8_lossy(&stdout).to_string());
+    if !stderr.is_empty() {
+        if !combined.is_empty() {
+            combined.push_str("\n--- stderr ---\n");
         }
+        combined.push_str(&String::from_utf8_lossy(&stderr));
     }
+    (exit_code, status, combined)
 }
 
 // ============================================================================
@@ -424,7 +477,7 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let blobs_dir = tmp.path().join("blobs");
             std::fs::create_dir_all(&blobs_dir).unwrap();
-            let task = Task::new("/proj", "Test", "test goal", TaskMode::Auto);
+            let task = Task::new(Some("/proj".into()), "Test", "test goal", TaskMode::Auto);
             TaskRepository::new(&db).create(&task).unwrap();
             let run = AgentRun::new(&task.id, "test-model");
             AgentRunRepository::new(&db).create(&run).unwrap();
@@ -475,6 +528,39 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    fn successful_command() -> &'static str {
+        #[cfg(windows)]
+        {
+            "exit /B 0"
+        }
+        #[cfg(not(windows))]
+        {
+            "true"
+        }
+    }
+
+    fn failing_command() -> &'static str {
+        #[cfg(windows)]
+        {
+            "exit /B 7"
+        }
+        #[cfg(not(windows))]
+        {
+            "false"
+        }
+    }
+
+    fn sleeping_command() -> &'static str {
+        #[cfg(windows)]
+        {
+            "ping -n 11 127.0.0.1 > NUL"
+        }
+        #[cfg(not(windows))]
+        {
+            "sleep 10"
+        }
     }
 
     // ── detect_config ──────────────────────────────────────────────
@@ -546,7 +632,7 @@ mod tests {
         let fx = Fixture::new();
         let dir = TempDir::new().unwrap();
         let config = VerificationConfig {
-            command: "true".into(),
+            command: successful_command().into(),
             timeout_secs: 5,
         };
         let record = fx
@@ -566,7 +652,7 @@ mod tests {
         let fx = Fixture::new();
         let dir = TempDir::new().unwrap();
         let config = VerificationConfig {
-            command: "false".into(),
+            command: failing_command().into(),
             timeout_secs: 5,
         };
         let record = fx
@@ -586,7 +672,7 @@ mod tests {
         let fx = Fixture::new();
         let dir = TempDir::new().unwrap();
         let config = VerificationConfig {
-            command: "sleep 10".into(),
+            command: sleeping_command().into(),
             timeout_secs: 1,
         };
         let record = fx
@@ -596,7 +682,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(record.status, VStatus::Timeout);
-        assert_eq!(record.exit_code, None);
+        assert!(record.exit_code.is_none());
         assert!(record.ended_at.is_some());
     }
 
@@ -615,7 +701,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(record.status, VStatus::Failed);
-        assert_eq!(record.exit_code, None);
+        // Shell 会为「找不到命令」返回非零退出码；直接 spawn 失败时则没有退出码。
+        assert!(record.exit_code.map(|code| code != 0).unwrap_or(true));
     }
 
     // ── supersede 行为 ─────────────────────────────────────────────
@@ -632,7 +719,7 @@ mod tests {
 
         // 运行新验证
         let config = VerificationConfig {
-            command: "true".into(),
+            command: successful_command().into(),
             timeout_secs: 5,
         };
         let record = fx

@@ -33,7 +33,8 @@ pub use document_store::{BomKind, ConflictStatus, DocumentEntry, DocumentStore};
 pub use git_service::{GitDiffResult, GitFileStatus, GitService, GitStatusKind};
 pub use patch_engine::{apply_patch, hash_content, PatchError};
 pub use repositories::{
-    AgentRunRepository, BlobStore, TaskEventStore, TaskRepository, WorkspaceRepository,
+    AgentRunRepository, BlobStore, QueuedMessageRepository, SessionBranchRepository,
+    TaskEventStore, TaskRepository, ToolCallRepository, WorkspaceRepository,
 };
 pub use review::{
     AcceptReadiness, ReviewAction, ReviewActionResult, ReviewReadiness, ReviewService,

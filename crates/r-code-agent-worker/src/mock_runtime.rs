@@ -11,7 +11,7 @@ use r_code_core::dto::{AgentEvent, CreateSessionInput, TaskState};
 use r_code_core::error::ProductError;
 use uuid::Uuid;
 
-use crate::AgentRuntime;
+use crate::{AgentRuntime, SteerResult};
 
 /// Mock Agent Runtime -- 确定性后端，用于测试 / 开发。
 ///
@@ -118,19 +118,26 @@ impl AgentRuntime for MockAgentRuntime {
         Ok(Uuid::new_v4().to_string())
     }
 
-    async fn steer(&mut self, _session_id: &str, message: &str) -> Result<(), ProductError> {
+    async fn steer(
+        &mut self,
+        _session_id: &str,
+        message: &str,
+    ) -> Result<SteerResult, ProductError> {
+        if !self.is_running {
+            return Ok(SteerResult::RunFinished);
+        }
         self.pending_events.push(AgentEvent::Message {
             text: message.to_string(),
             delta: false,
         });
-        Ok(())
+        Ok(SteerResult::Accepted)
     }
 
     async fn abort(&mut self, _session_id: &str) -> Result<(), ProductError> {
         self.aborted = true;
         self.is_running = false;
         self.pending_events.push(AgentEvent::State {
-            state: TaskState::Idle,
+            state: TaskState::Interrupted,
         });
         Ok(())
     }
@@ -143,14 +150,18 @@ impl AgentRuntime for MockAgentRuntime {
 #[cfg(test)]
 mod tests {
     use crate::AgentRuntime;
-    use r_code_core::dto::{AgentEvent, CreateSessionInput, TaskMode, TaskState};
+    use r_code_core::dto::{
+        AgentEvent, CreateSessionInput, ProjectAccessMode, TaskMode, TaskState,
+    };
     use r_code_core::error::ProductError;
 
     use super::MockAgentRuntime;
 
     fn input(model: Option<&str>) -> CreateSessionInput {
         CreateSessionInput {
-            project_id: "proj".to_string(),
+            workspace_path: None,
+            workspace_access_mode: ProjectAccessMode::RequestApproval,
+            task_id: "task-1".to_string(),
             goal: "do thing".to_string(),
             mode: TaskMode::Ask,
             model: model.map(|s| s.to_string()),
@@ -240,7 +251,7 @@ mod tests {
         assert!(matches!(
             events[1],
             AgentEvent::State {
-                state: TaskState::Idle
+                state: TaskState::Interrupted
             }
         ));
     }

@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use r_code_core::dto::{PermissionDecision, PermissionRequest, RiskLevel};
+use r_code_core::dto::{PermissionDecision, PermissionRequest, ProjectAccessMode, RiskLevel};
 use r_code_core::error::ProductError;
 use tokio::sync::RwLock;
 
@@ -30,7 +30,13 @@ pub struct PermissionEngine {
     standing_rules: Arc<RwLock<HashMap<StandingRuleKey, PermissionDecision>>>,
     /// 等待审批的权限请求。
     pending_requests: Arc<RwLock<HashMap<String, PermissionRequest>>>,
+    /// 最近的审批决策（request_id → 决策与时间），供 `wait_decision` 挂起等待。
+    /// 超过 `DECISION_RETENTION` 的条目在等待时被惰性清理。
+    decisions: Arc<RwLock<HashMap<String, (PermissionDecision, std::time::Instant)>>>,
 }
+
+/// 决策暂存的保留时长（超时未查询的决策会被清理）。
+const DECISION_RETENTION: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Standing rule 的键 -- (task_id, tool_name, target terminal)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,6 +66,46 @@ impl PermissionEngine {
         Self {
             standing_rules: Arc::new(RwLock::new(HashMap::new())),
             pending_requests: Arc::new(RwLock::new(HashMap::new())),
+            decisions: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    fn requires_approval(access_mode: ProjectAccessMode, risk_level: RiskLevel) -> bool {
+        match access_mode {
+            // R1 覆盖低风险外发/命令；R0 保持纯只读检索的无打扰体验。
+            ProjectAccessMode::RequestApproval => {
+                matches!(risk_level, RiskLevel::R1 | RiskLevel::R2 | RiskLevel::R3)
+            }
+            ProjectAccessMode::RiskBased => matches!(risk_level, RiskLevel::R2 | RiskLevel::R3),
+            ProjectAccessMode::FullAccess => false,
+        }
+    }
+
+    /// 返回已有规则可直接得出的结果。严格模式只执行显式拒绝规则，避免
+    /// “总是允许”绕过“请求批准”的产品承诺。
+    async fn standing_result(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        target: Option<&str>,
+        honor_allow_rule: bool,
+    ) -> Option<PermissionCheckResult> {
+        let key = StandingRuleKey {
+            task_id: task_id.to_string(),
+            tool_name: tool_name.to_string(),
+            target: target.map(ToOwned::to_owned),
+        };
+        let rules = self.standing_rules.read().await;
+        match rules.get(&key) {
+            Some(PermissionDecision::Deny) => Some(PermissionCheckResult::Denied(
+                "denied by standing rule".to_string(),
+            )),
+            Some(PermissionDecision::AllowAlways | PermissionDecision::Allow)
+                if honor_allow_rule =>
+            {
+                Some(PermissionCheckResult::Allowed)
+            }
+            _ => None,
         }
     }
 
@@ -77,47 +123,54 @@ impl PermissionEngine {
         risk_level: RiskLevel,
         target: Option<&str>,
     ) -> PermissionCheckResult {
-        match risk_level {
-            RiskLevel::R0 | RiskLevel::R1 => PermissionCheckResult::Allowed,
-            RiskLevel::R4 => {
-                PermissionCheckResult::Denied("risk level R4: pre-rejected by policy".to_string())
-            }
-            RiskLevel::R2 | RiskLevel::R3 => {
-                // 先查 standing rule
-                let key = StandingRuleKey {
-                    task_id: task_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    target: target.map(|s| s.to_string()),
-                };
-                let rules = self.standing_rules.read().await;
-                if let Some(decision) = rules.get(&key) {
-                    match decision {
-                        PermissionDecision::AllowAlways | PermissionDecision::Allow => {
-                            return PermissionCheckResult::Allowed;
-                        }
-                        PermissionDecision::Deny => {
-                            return PermissionCheckResult::Denied(
-                                "denied by standing rule".to_string(),
-                            );
-                        }
-                        PermissionDecision::Pending => {}
-                    }
-                }
-                drop(rules);
+        self.check_with_access_mode(
+            task_id,
+            tool_name,
+            risk_level,
+            target,
+            ProjectAccessMode::RiskBased,
+        )
+        .await
+    }
 
-                // 无 standing rule -> 创建待审批请求并存储
-                let request = PermissionRequest::new(
-                    task_id,
-                    "", // tool_call_id -- check 阶段未知，由调用方后续补充
-                    tool_name, risk_level, "", // input_summary -- check 阶段未知
-                );
-                self.pending_requests
-                    .write()
-                    .await
-                    .insert(request.id.clone(), request.clone());
-                PermissionCheckResult::NeedsApproval(request)
-            }
+    /// 按项目级权限模式检查工具调用。
+    pub async fn check_with_access_mode(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        risk_level: RiskLevel,
+        target: Option<&str>,
+        access_mode: ProjectAccessMode,
+    ) -> PermissionCheckResult {
+        if risk_level == RiskLevel::R4 {
+            return PermissionCheckResult::Denied(
+                "risk level R4: pre-rejected by policy".to_string(),
+            );
         }
+        if let Some(result) = self
+            .standing_result(
+                task_id,
+                tool_name,
+                target,
+                access_mode != ProjectAccessMode::RequestApproval,
+            )
+            .await
+        {
+            return result;
+        }
+        if !Self::requires_approval(access_mode, risk_level) {
+            return PermissionCheckResult::Allowed;
+        }
+
+        let request = PermissionRequest::new(
+            task_id, "", // tool_call_id -- check 阶段未知，由调用方后续补充
+            tool_name, risk_level, "", // input_summary -- check 阶段未知
+        );
+        self.pending_requests
+            .write()
+            .await
+            .insert(request.id.clone(), request.clone());
+        PermissionCheckResult::NeedsApproval(request)
     }
 
     /// 创建一个带完整信息的权限请求并存入 pending 队列。
@@ -177,13 +230,127 @@ impl PermissionEngine {
             .await?;
         }
 
-        // 更新请求状态并从 pending 移除
+        // 更新请求状态并从 pending 移除；决策写入暂存（供 wait_decision 查询）
         let mut requests = self.pending_requests.write().await;
         if let Some(mut req) = requests.remove(request_id) {
             req.decision = decision;
             req.decided_at = Some(Utc::now());
+            drop(requests);
+            self.decisions.write().await.insert(
+                request_id.to_string(),
+                (decision, std::time::Instant::now()),
+            );
         }
         Ok(())
+    }
+
+    /// 检查工具调用是否需要权限审批（完整信息版）。
+    ///
+    /// 与 `check` 逻辑一致，但创建的 `PermissionRequest` 携带真实的
+    /// `tool_call_id`、`input_summary` 和调用归属（供审批 UI 展示）。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn check_detailed(
+        &self,
+        task_id: &str,
+        tool_call_id: &str,
+        run_id: Option<&str>,
+        caller: Option<&str>,
+        tool_name: &str,
+        risk_level: RiskLevel,
+        input_summary: &str,
+        target: Option<&str>,
+    ) -> PermissionCheckResult {
+        self.check_detailed_with_access_mode(
+            task_id,
+            tool_call_id,
+            run_id,
+            caller,
+            tool_name,
+            risk_level,
+            input_summary,
+            target,
+            ProjectAccessMode::RiskBased,
+        )
+        .await
+    }
+
+    /// 完整信息版的项目权限模式检查。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn check_detailed_with_access_mode(
+        &self,
+        task_id: &str,
+        tool_call_id: &str,
+        run_id: Option<&str>,
+        caller: Option<&str>,
+        tool_name: &str,
+        risk_level: RiskLevel,
+        input_summary: &str,
+        target: Option<&str>,
+        access_mode: ProjectAccessMode,
+    ) -> PermissionCheckResult {
+        if risk_level == RiskLevel::R4 {
+            return PermissionCheckResult::Denied(
+                "risk level R4: pre-rejected by policy".to_string(),
+            );
+        }
+        if let Some(result) = self
+            .standing_result(
+                task_id,
+                tool_name,
+                target,
+                access_mode != ProjectAccessMode::RequestApproval,
+            )
+            .await
+        {
+            return result;
+        }
+        if !Self::requires_approval(access_mode, risk_level) {
+            return PermissionCheckResult::Allowed;
+        }
+
+        let request =
+            PermissionRequest::new(task_id, tool_call_id, tool_name, risk_level, input_summary)
+                .with_origin(run_id, caller);
+        self.pending_requests
+            .write()
+            .await
+            .insert(request.id.clone(), request.clone());
+        PermissionCheckResult::NeedsApproval(request)
+    }
+
+    /// 单次查询某个权限请求的审批决策（不等待）。
+    ///
+    /// 返回 `Some(decision)` 若已批复；未批复/未知请求返回 `None`。
+    /// 顺带惰性清理超过 `DECISION_RETENTION` 的旧决策。
+    pub async fn try_decision(&self, request_id: &str) -> Option<PermissionDecision> {
+        let mut decisions = self.decisions.write().await;
+        decisions.retain(|_, (_, at)| at.elapsed() < DECISION_RETENTION);
+        decisions.get(request_id).map(|(d, _)| *d)
+    }
+
+    /// 挂起等待某个权限请求的审批决策（150ms 轮询）。
+    ///
+    /// 返回 `Some(decision)`（Allow / AllowAlways / Deny）；超时返回 `None`。
+    /// 顺带惰性清理超过 `DECISION_RETENTION` 的旧决策。
+    pub async fn wait_decision(
+        &self,
+        request_id: &str,
+        timeout: std::time::Duration,
+    ) -> Option<PermissionDecision> {
+        let start = std::time::Instant::now();
+        loop {
+            {
+                let mut decisions = self.decisions.write().await;
+                decisions.retain(|_, (_, at)| at.elapsed() < DECISION_RETENTION);
+                if let Some((decision, _)) = decisions.get(request_id) {
+                    return Some(*decision);
+                }
+            }
+            if start.elapsed() >= timeout {
+                return None;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
     }
 
     /// 添加 standing rule（本任务内 always allow）。
@@ -273,6 +440,95 @@ mod tests {
     async fn r4_denied() {
         let engine = PermissionEngine::new();
         let result = engine.check("t1", "forbidden", RiskLevel::R4, None).await;
+        assert!(matches!(result, PermissionCheckResult::Denied(_)));
+    }
+
+    #[tokio::test]
+    async fn request_approval_prompts_for_r1_and_r2() {
+        let engine = PermissionEngine::new();
+        let r0 = engine
+            .check_with_access_mode(
+                "t1",
+                "list_files",
+                RiskLevel::R0,
+                None,
+                ProjectAccessMode::RequestApproval,
+            )
+            .await;
+        assert_eq!(r0, PermissionCheckResult::Allowed);
+
+        let r1 = engine
+            .check_with_access_mode(
+                "t1",
+                "network_lookup",
+                RiskLevel::R1,
+                None,
+                ProjectAccessMode::RequestApproval,
+            )
+            .await;
+        assert!(matches!(r1, PermissionCheckResult::NeedsApproval(_)));
+
+        let r2 = engine
+            .check_with_access_mode(
+                "t1",
+                "write_file",
+                RiskLevel::R2,
+                None,
+                ProjectAccessMode::RequestApproval,
+            )
+            .await;
+        assert!(matches!(r2, PermissionCheckResult::NeedsApproval(_)));
+    }
+
+    #[tokio::test]
+    async fn full_access_allows_r2_r3_but_never_r4() {
+        let engine = PermissionEngine::new();
+        for risk_level in [RiskLevel::R2, RiskLevel::R3] {
+            let result = engine
+                .check_with_access_mode(
+                    "t1",
+                    "write_file",
+                    risk_level,
+                    None,
+                    ProjectAccessMode::FullAccess,
+                )
+                .await;
+            assert_eq!(result, PermissionCheckResult::Allowed);
+        }
+        let denied = engine
+            .check_with_access_mode(
+                "t1",
+                "forbidden",
+                RiskLevel::R4,
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await;
+        assert!(matches!(denied, PermissionCheckResult::Denied(_)));
+    }
+
+    #[tokio::test]
+    async fn full_access_keeps_explicit_deny_rule() {
+        let engine = PermissionEngine::new();
+        engine
+            .add_standing_rule(
+                "t1",
+                "write_file",
+                None,
+                RiskLevel::R2,
+                PermissionDecision::Deny,
+            )
+            .await
+            .unwrap();
+        let result = engine
+            .check_with_access_mode(
+                "t1",
+                "write_file",
+                RiskLevel::R2,
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await;
         assert!(matches!(result, PermissionCheckResult::Denied(_)));
     }
 
@@ -502,6 +758,31 @@ mod tests {
         let pending = engine.pending_for_task("t1").await;
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, req.id);
+    }
+
+    #[tokio::test]
+    async fn detailed_request_keeps_run_and_caller_origin() {
+        let engine = PermissionEngine::new();
+        let result = engine
+            .check_detailed(
+                "t1",
+                "call-1",
+                Some("child-run"),
+                Some("subagent:child-run"),
+                "write_file",
+                RiskLevel::R2,
+                "write src/lib.rs",
+                None,
+            )
+            .await;
+
+        let PermissionCheckResult::NeedsApproval(request) = result else {
+            panic!("R2 调用应创建待审批请求");
+        };
+        assert_eq!(request.run_id.as_deref(), Some("child-run"));
+        assert_eq!(request.caller.as_deref(), Some("subagent:child-run"));
+        let pending = engine.pending_for_task("t1").await;
+        assert_eq!(pending[0].run_id.as_deref(), Some("child-run"));
     }
 
     #[tokio::test]

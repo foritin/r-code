@@ -105,6 +105,7 @@ impl TerminalManager {
         env: Vec<(String, String)>,
     ) -> Result<TerminalId, ProductError> {
         let id = uuid::Uuid::new_v4().to_string();
+        let shell = resolve_shell(shell)?;
 
         let pair = {
             let pty_system = self.pty_system.lock().expect("pty_system mutex poisoned");
@@ -113,7 +114,7 @@ impl TerminalManager {
                 .map_err(|e| ProductError::TerminalError(format!("openpty failed: {e}")))?
         };
 
-        let mut cmd = CommandBuilder::new(shell);
+        let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(working_dir);
         for (k, v) in &env {
             cmd.env(k, v);
@@ -159,7 +160,7 @@ impl TerminalManager {
         let handle = TerminalHandle {
             id: id.clone(),
             state: TerminalState::Idle,
-            shell: shell.to_string(),
+            shell,
             working_dir: working_dir.to_path_buf(),
             scrollback: Vec::new(),
             child,
@@ -205,6 +206,25 @@ impl TerminalManager {
             .get_mut(id)
             .ok_or_else(|| ProductError::TerminalError(format!("terminal not found: {id}")))?;
 
+        Self::drain_output(handle)
+    }
+
+    /// 获取终端的完整可见输出快照。
+    ///
+    /// 此接口会先排空尚未读取的 PTY 输出，再返回受大小上限保护的 scrollback。它
+    /// 专供 UI 重新挂载、切换终端及与 agent 共用终端时恢复画面；`read` 仍维持
+    /// 增量读取语义，避免破坏工具调用方。
+    pub async fn snapshot(&self, id: &str) -> Result<Vec<u8>, ProductError> {
+        let mut terminals = self.terminals.lock().await;
+        let handle = terminals
+            .get_mut(id)
+            .ok_or_else(|| ProductError::TerminalError(format!("terminal not found: {id}")))?;
+
+        Self::drain_output(handle)?;
+        Ok(handle.scrollback.clone())
+    }
+
+    fn drain_output(handle: &mut TerminalHandle) -> Result<Vec<u8>, ProductError> {
         // 排空通道中所有可用数据
         let mut raw_data = Vec::new();
         loop {
@@ -347,6 +367,52 @@ impl Default for TerminalManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 解析 UI 请求的 shell。
+///
+/// Windows 机器不一定装有 PowerShell 7；前端传入 `auto` 时优先使用 pwsh，再回退
+/// 到系统自带的 powershell.exe，避免终端创建成功但子进程无法启动的空白体验。
+fn resolve_shell(shell: &str) -> Result<String, ProductError> {
+    let requested = shell.trim();
+    if !requested.eq_ignore_ascii_case("auto") {
+        if requested.is_empty() {
+            return Err(ProductError::TerminalError(
+                "shell must not be empty".to_string(),
+            ));
+        }
+        return Ok(requested.to_string());
+    }
+
+    #[cfg(windows)]
+    let candidates: &[&str] = &["pwsh.exe", "powershell.exe"];
+    #[cfg(target_os = "macos")]
+    let candidates: &[&str] = &["zsh", "bash", "sh"];
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let candidates: &[&str] = &["bash", "sh"];
+    #[cfg(not(any(windows, unix)))]
+    let candidates: &[&str] = &[];
+
+    candidates
+        .iter()
+        .copied()
+        .find(|candidate| executable_on_path(candidate))
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProductError::TerminalError(
+                "未找到可用 shell，请检查系统 shell 是否已安装并加入 PATH。".to_string(),
+            )
+        })
+}
+
+fn executable_on_path(command: &str) -> bool {
+    let direct = Path::new(command);
+    if direct.components().count() > 1 {
+        return direct.is_file();
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| directory.join(command).is_file())
+    })
 }
 
 /// 去除 ANSI 转义序列（CSI、OSC、DCS/SOS/PM/APC、字符集指定等）。
@@ -631,6 +697,14 @@ mod tests {
                 "scrollback should contain 'hello_world': got {sb:?}"
             );
         }
+
+        // UI 快照在增量 read 已消费输出后仍可恢复完整内容。
+        let snapshot = manager.snapshot(&id).await.unwrap();
+        assert!(
+            String::from_utf8_lossy(&snapshot).contains("hello_world"),
+            "snapshot should retain prior output: {:?}",
+            String::from_utf8_lossy(&snapshot)
+        );
 
         let _ = manager.kill(&id).await;
     }

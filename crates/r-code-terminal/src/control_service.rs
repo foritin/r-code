@@ -99,6 +99,15 @@ impl TerminalControlService {
         Ok(String::from_utf8_lossy(&data).to_string())
     }
 
+    /// terminal.snapshot - 为 UI 读取完整保留 scrollback。
+    ///
+    /// 与 `read` 不同，此接口刻意返回此前输出，使新挂载的终端面板也能呈现已被
+    /// agent 或其他工具调用方消费的内容。
+    pub async fn snapshot(&self, terminal_id: &str) -> Result<String, ProductError> {
+        let data = self.manager.snapshot(terminal_id).await?;
+        Ok(String::from_utf8_lossy(&data).to_string())
+    }
+
     /// terminal.send - Inject text + optional Enter.
     /// Dynamic risk: bare shell -> R2, TUI/Agent -> R0, control chars -> R2.
     /// Uses \r for Enter, bracketed paste for multi-line.
@@ -235,6 +244,7 @@ impl TerminalControlService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::path::Path;
 
     /// Unix: /bin/cat（回显 stdin）；Windows: cmd.exe。
@@ -533,6 +543,7 @@ mod tests {
         let _ = manager.kill(&id).await;
     }
 
+    #[cfg(unix)] // 依赖 cat 的纯回显语义；Windows 下 cat_path() 返回 cmd.exe（无等价回显）
     #[tokio::test]
     async fn wait_exit_code_detects_osc133() {
         // 通过 cat 回显 OSC 133 序列来模拟 shell 集成发送的退出码标记

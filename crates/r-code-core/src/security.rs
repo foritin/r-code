@@ -153,7 +153,26 @@ impl PathGuard {
     /// **非权威**：仅做快速前缀判断，不解析符号链接或 `..`。任何安全决策
     /// 必须使用 [`resolve`](Self::resolve)。
     pub fn contains(&self, path: &Path) -> bool {
-        path.starts_with(&self.root)
+        if path.starts_with(&self.root) {
+            return true;
+        }
+        // Windows：root 经 canonicalize 带 `\\?\` verbatim 前缀，而未 canonical
+        // 的探测路径没有该前缀，词法比较会假阴性。去前缀后再比一次。
+        #[cfg(windows)]
+        {
+            fn strip_verbatim(p: &Path) -> PathBuf {
+                let s = p.as_os_str().to_string_lossy();
+                match s.strip_prefix(r"\\?\") {
+                    Some(rest) => PathBuf::from(rest),
+                    None => p.to_path_buf(),
+                }
+            }
+            strip_verbatim(path).starts_with(strip_verbatim(&self.root))
+        }
+        #[cfg(not(windows))]
+        {
+            false
+        }
     }
 
     /// 返回 root 路径（已 canonical 化）。

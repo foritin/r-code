@@ -489,7 +489,8 @@ mod v_cfg {
         // 2) 配置文件覆盖默认值
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg_path = dir.path().join("config.toml");
-        let base_str = dir.path().join("data").to_string_lossy().into_owned();
+        // Windows 路径含反斜杠，写入 TOML basic string 会触发 \U 转义错误 → 统一为正斜杠
+        let base_str = dir.path().join("data").to_string_lossy().replace('\\', "/");
         let toml = format!(
             r#"default_provider = "anthropic"
 log_level = "debug"

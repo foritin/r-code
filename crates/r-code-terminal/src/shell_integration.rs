@@ -450,6 +450,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)] // fish 是 Unix shell；XDG_DATA_DIRS 语义在 Windows 不存在
     #[test]
     fn fish_sets_xdg_data_dirs_and_creates_script() {
         let original = std::env::var("XDG_DATA_DIRS").ok();
@@ -509,6 +510,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)] // fish 是 Unix shell；XDG_DATA_DIRS 语义在 Windows 不存在
     #[test]
     fn fish_preserves_existing_xdg_data_dirs() {
         let original = std::env::var("XDG_DATA_DIRS").ok();

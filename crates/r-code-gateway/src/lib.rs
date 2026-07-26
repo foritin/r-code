@@ -14,7 +14,7 @@ pub mod permission;
 pub mod tools;
 
 pub use classifier::{classify_command, has_control_chars, is_agent_process};
-pub use gateway::{Tool, ToolGateway};
+pub use gateway::{subagent_read_only_tool_allowed, Tool, ToolGateway};
 pub use permission::{PermissionCheckResult, PermissionEngine, StandingRuleKey};
 pub use tools::{
     ApplyPatchTool, CreateFileTool, DeleteFileTool, GitStatusTool, ListFilesTool, LoadSkillTool,

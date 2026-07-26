@@ -493,6 +493,9 @@ mod tests {
         git_run(repo_path, &["config", "user.email", "test@r-code.dev"]);
         git_run(repo_path, &["config", "user.name", "Test User"]);
         git_run(repo_path, &["config", "commit.gpgsign", "false"]);
+        // 关闭 CRLF 转换：Windows 上全局 core.autocrlf=true 会把检出的 \n 转成 \r\n，
+        // 测试断言按 \n 写的内容必须原样读回
+        git_run(repo_path, &["config", "core.autocrlf", "false"]);
 
         tmp
     }
@@ -547,7 +550,12 @@ mod tests {
         let tmp = create_test_repo();
         let svc = GitService::new(tmp.path().to_path_buf());
         let root = svc.repo_root().unwrap();
-        assert_eq!(root, tmp.path().canonicalize().unwrap());
+        // Windows 上 git 输出 mingw 风格路径（C:/...），canonicalize 后与 tempdir 的
+        // verbatim 前缀（\\?\C:\...）对齐再比较
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
     }
 
     #[test]

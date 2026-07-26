@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
-use r_code_core::dto::{RiskLevel, ToolCall};
+use r_code_core::dto::{PermissionDecision, ProjectAccessMode, RiskLevel, ToolCall};
 use r_code_core::error::ProductError;
 use tokio::sync::RwLock;
 
@@ -32,6 +32,17 @@ pub trait Tool: Send + Sync {
     fn input_schema(&self) -> serde_json::Value;
     /// 执行工具，返回输出文本。
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError>;
+}
+
+/// 子代理只能经由 Gateway 使用这组可证明无副作用的工作区工具。
+///
+/// 运行时与 Gateway 都复用此规则，避免未来新增调用路径时绕过只读边界。
+pub fn subagent_read_only_tool_allowed(name: &str) -> bool {
+    matches!(name, "read_file" | "list_files" | "search" | "git_status")
+}
+
+fn is_subagent_caller(caller: Option<&str>) -> bool {
+    caller.is_some_and(|value| value.starts_with("subagent:"))
 }
 
 /// Tool Gateway -- 管理工具注册、权限检查与审计账本。
@@ -78,7 +89,7 @@ impl ToolGateway {
     /// 流程 [doc-02 §1]：
     /// 1. 查找工具（未找到 -> 错误）
     /// 2. 获取风险等级
-    /// 3. 权限检查（`PermissionEngine::check`）
+    /// 3. 权限检查（附带运行与调用者归属）
     /// 4. 若 `NeedsApproval` -> 记账（Denied）并返回权限错误
     /// 5. 若 `Denied` -> 记账（Denied）并返回权限错误
     /// 6. 若 `Allowed` -> 执行工具
@@ -91,6 +102,27 @@ impl ToolGateway {
         input: serde_json::Value,
         caller: Option<&str>,
     ) -> Result<ToolCallOutcome, ProductError> {
+        self.execute_call_with_access_mode(
+            task_id,
+            run_id,
+            tool_name,
+            input,
+            caller,
+            ProjectAccessMode::RiskBased,
+        )
+        .await
+    }
+
+    /// 以项目权限模式执行工具调用（含权限检查与审计记账）。
+    pub async fn execute_call_with_access_mode(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        access_mode: ProjectAccessMode,
+    ) -> Result<ToolCallOutcome, ProductError> {
         // 1. 查找工具
         let tool = self
             .tools
@@ -99,19 +131,38 @@ impl ToolGateway {
 
         // 2. 获取风险等级
         let risk_level = tool.risk_level();
+        if is_subagent_caller(caller) && !subagent_read_only_tool_allowed(tool_name) {
+            let reason = format!("subagent caller may not execute tool: {tool_name}");
+            let mut audit =
+                ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
+            audit.caller = caller.map(ToOwned::to_owned);
+            audit.deny(&reason);
+            self.ledger.write().await.push(audit);
+            return Err(ProductError::PermissionError(reason));
+        }
 
         // 3. 从 input 中提取 target（终端工具用）
         let target = input.get("target").and_then(|v| v.as_str());
 
-        // 4. 权限检查
-        let check_result = self
-            .permission_engine
-            .check(task_id, tool_name, risk_level, target)
-            .await;
-
-        // 5. 创建审计记录
+        // 4. 先创建审计记录，使待审批请求可关联稳定的 tool_call_id。
         let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
         audit.caller = caller.map(|s| s.to_string());
+
+        // 5. 权限检查
+        let check_result = self
+            .permission_engine
+            .check_detailed_with_access_mode(
+                task_id,
+                &audit.id,
+                Some(run_id),
+                caller,
+                tool_name,
+                risk_level,
+                &input.to_string(),
+                target,
+                access_mode,
+            )
+            .await;
 
         // 6. 根据检查结果处理
         match check_result {
@@ -147,6 +198,153 @@ impl ToolGateway {
                 audit.deny(&msg);
                 self.ledger.write().await.push(audit);
                 Err(ProductError::PermissionError(msg))
+            }
+        }
+    }
+
+    /// 执行工具调用；`NeedsApproval` 时挂起等待用户批复（而非立即失败）。
+    ///
+    /// 与 `execute_call` 的差异：
+    /// - 权限请求用 `check_detailed` 创建（带真实 tool_call_id 与 input_summary）
+    /// - 审批中挂起等待（最长 10 分钟），`abort_flag` 置位时提前返回取消错误
+    /// - 批复 Allow / AllowAlways 后执行；Deny / 超时返回权限错误
+    pub async fn execute_with_wait(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        call_id: Option<&str>,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        input_summary: &str,
+        abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<ToolCallOutcome, ProductError> {
+        self.execute_with_wait_with_access_mode(
+            task_id,
+            run_id,
+            call_id,
+            tool_name,
+            input,
+            caller,
+            input_summary,
+            abort_flag,
+            ProjectAccessMode::RiskBased,
+        )
+        .await
+    }
+
+    /// 使用项目权限模式执行工具调用；待批时挂起等待用户决策。
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_with_wait_with_access_mode(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        call_id: Option<&str>,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        input_summary: &str,
+        abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        access_mode: ProjectAccessMode,
+    ) -> Result<ToolCallOutcome, ProductError> {
+        let tool = self
+            .tools
+            .get(tool_name)
+            .ok_or_else(|| ProductError::PermissionError(format!("tool not found: {tool_name}")))?;
+
+        let risk_level = tool.risk_level();
+        let target = input.get("target").and_then(|v| v.as_str());
+
+        let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
+        if let Some(call_id) = call_id {
+            audit.id = call_id.to_string();
+        }
+        audit.caller = caller.map(|s| s.to_string());
+        if is_subagent_caller(caller) && !subagent_read_only_tool_allowed(tool_name) {
+            let reason = format!("subagent caller may not execute tool: {tool_name}");
+            audit.deny(&reason);
+            self.ledger.write().await.push(audit);
+            return Err(ProductError::PermissionError(reason));
+        }
+
+        let check_result = self
+            .permission_engine
+            .check_detailed_with_access_mode(
+                task_id,
+                &audit.id,
+                Some(run_id),
+                caller,
+                tool_name,
+                risk_level,
+                input_summary,
+                target,
+                access_mode,
+            )
+            .await;
+
+        let approved = match check_result {
+            PermissionCheckResult::Allowed => true,
+            PermissionCheckResult::Denied(reason) => {
+                audit.deny(&reason);
+                self.ledger.write().await.push(audit);
+                return Err(ProductError::PermissionError(reason));
+            }
+            PermissionCheckResult::NeedsApproval(req) => {
+                // 挂起等待批复；abort 时提前返回
+                let timeout = std::time::Duration::from_secs(600);
+                let poll = std::time::Duration::from_millis(150);
+                let start = std::time::Instant::now();
+                loop {
+                    if abort_flag
+                        .as_ref()
+                        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        let msg = format!("tool {tool_name} cancelled while awaiting approval");
+                        audit.fail(&msg);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(msg));
+                    }
+                    if let Some(decision) = self.permission_engine.try_decision(&req.id).await {
+                        match decision {
+                            PermissionDecision::Allow | PermissionDecision::AllowAlways => {
+                                break true;
+                            }
+                            PermissionDecision::Deny => {
+                                let msg = format!("tool {tool_name} denied by user");
+                                audit.deny(&msg);
+                                self.ledger.write().await.push(audit);
+                                return Err(ProductError::PermissionError(msg));
+                            }
+                            PermissionDecision::Pending => {}
+                        }
+                    }
+                    if start.elapsed() >= timeout {
+                        let msg = format!("tool {tool_name} approval timed out");
+                        audit.fail(&msg);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(msg));
+                    }
+                    tokio::time::sleep(poll).await;
+                }
+            }
+        };
+        debug_assert!(approved);
+
+        // 已获许可：执行并记账
+        match tool.execute(input).await {
+            Ok(content) => {
+                audit.succeed(&content);
+                self.ledger.write().await.push(audit);
+                Ok(ToolCallOutcome {
+                    content,
+                    is_error: false,
+                    metadata: None,
+                })
+            }
+            Err(err) => {
+                audit.fail(err.to_string());
+                self.ledger.write().await.push(audit);
+                Err(err)
             }
         }
     }
@@ -350,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_r2_needs_approval() {
-        let (_, mut gw) = make_gateway();
+        let (engine, mut gw) = make_gateway();
         gw.register(Box::new(WriteTool));
 
         let result = gw
@@ -359,7 +557,7 @@ mod tests {
                 "r1",
                 "write_file",
                 serde_json::json!({ "path": "foo.txt", "content": "bar" }),
-                None,
+                Some("agent"),
             )
             .await;
 
@@ -368,9 +566,17 @@ mod tests {
         assert!(matches!(err, ProductError::PermissionError(_)));
 
         // 审计账本应记录一次拒绝（待审批）
-        let ledger = gw.ledger().await;
-        assert_eq!(ledger.len(), 1);
-        assert_eq!(ledger[0].status, ToolCallStatus::Denied);
+        let audit_id = {
+            let ledger = gw.ledger().await;
+            assert_eq!(ledger.len(), 1);
+            assert_eq!(ledger[0].status, ToolCallStatus::Denied);
+            ledger[0].id.clone()
+        };
+        let pending = engine.pending_for_task("t1").await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].run_id.as_deref(), Some("r1"));
+        assert_eq!(pending[0].caller.as_deref(), Some("agent"));
+        assert_eq!(pending[0].tool_call_id, audit_id);
     }
 
     #[tokio::test]
@@ -407,6 +613,59 @@ mod tests {
         let ledger = gw.ledger().await;
         assert_eq!(ledger.len(), 1);
         assert_eq!(ledger[0].status, ToolCallStatus::Ok);
+    }
+
+    #[tokio::test]
+    async fn subagent_cannot_bypass_read_only_policy_even_with_standing_rule() {
+        let (engine, mut gw) = make_gateway();
+        gw.register(Box::new(WriteTool));
+        engine
+            .add_standing_rule(
+                "t1",
+                "write_file",
+                None,
+                RiskLevel::R2,
+                PermissionDecision::AllowAlways,
+            )
+            .await
+            .unwrap();
+
+        assert!(subagent_read_only_tool_allowed("read_file"));
+        assert!(!subagent_read_only_tool_allowed("write_file"));
+
+        let direct = gw
+            .execute_call(
+                "t1",
+                "child-1",
+                "write_file",
+                serde_json::json!({ "path": "foo.txt", "content": "bar" }),
+                Some("subagent:child-1"),
+            )
+            .await;
+        assert!(matches!(direct, Err(ProductError::PermissionError(_))));
+
+        let waiting = gw
+            .execute_with_wait(
+                "t1",
+                "child-1",
+                Some("child-write"),
+                "write_file",
+                serde_json::json!({ "path": "foo.txt", "content": "bar" }),
+                Some("subagent:child-1"),
+                "write_file foo.txt",
+                None,
+            )
+            .await;
+        assert!(matches!(waiting, Err(ProductError::PermissionError(_))));
+
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 2);
+        assert!(ledger
+            .iter()
+            .all(|entry| entry.status == ToolCallStatus::Denied));
+        assert!(ledger
+            .iter()
+            .all(|entry| entry.caller.as_deref() == Some("subagent:child-1")));
     }
 
     #[tokio::test]

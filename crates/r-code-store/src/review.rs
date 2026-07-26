@@ -360,7 +360,7 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let blobs_dir = tmp.path().join("blobs");
             std::fs::create_dir_all(&blobs_dir).unwrap();
-            let task = Task::new("/proj", "Test", "test goal", TaskMode::Edit);
+            let task = Task::new(Some("/proj".into()), "Test", "test goal", TaskMode::Edit);
             TaskRepository::new(&db).create(&task).unwrap();
             let run = AgentRun::new(&task.id, "test-model");
             AgentRunRepository::new(&db).create(&run).unwrap();

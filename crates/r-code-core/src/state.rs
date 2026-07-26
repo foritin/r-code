@@ -1,10 +1,11 @@
 //! 任务状态机与转换合法性校验。
 //!
-//! 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`
+//! 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`，
+//! 运行可从探索或执行阶段进入 `Interrupted`，之后可空闲或直接启动排队消息。
 //! 任意状态可以 `-> Archived`。
 //!
 //! 硬性不变量：
-//! - 一个 Task 任意时刻最多一个活跃 Agent Run
+//! - 一个 Task 任意时刻最多一个活跃主 Agent Run；其只读子 Agent 可作为该运行的受控子节点并行执行
 //! - 未完成高风险 Tool Call 不能进入 ReviewReady 或 Accepted
 //! - Archived 是终态，不可逆
 
@@ -38,6 +39,8 @@ pub enum StateTransitionError {
 /// - `Idle -> Exploring` (开始探索)
 /// - `Exploring -> InProgress` (开始执行)
 /// - `InProgress -> ReviewReady` (完成一轮，待审查)
+/// - `Exploring/InProgress -> Interrupted` (用户中止)
+/// - `Interrupted -> Idle/InProgress` (中止后收尾或分发排队消息)
 /// - `ReviewReady -> Idle` (接受/回滚后回到空闲)
 /// - `Idle/Exploring/InProgress/ReviewReady -> Archived` (归档)
 /// - `Archived -> ` (终态，不可转换)
@@ -54,6 +57,11 @@ pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), StateTr
         (TaskState::Exploring, TaskState::InProgress) => true,
         (TaskState::InProgress, TaskState::ReviewReady) => true,
         (TaskState::ReviewReady, TaskState::Idle) => true,
+        (TaskState::Exploring, TaskState::Interrupted)
+        | (TaskState::InProgress, TaskState::Interrupted)
+        | (TaskState::Interrupted, TaskState::Idle)
+        | (TaskState::Interrupted, TaskState::InProgress)
+        | (TaskState::Idle, TaskState::Interrupted) => true,
         // 回退（取消）
         (TaskState::Exploring, TaskState::Idle) => true,
         (TaskState::InProgress, TaskState::Idle) => true,
@@ -82,7 +90,9 @@ pub fn transition(from: TaskState, to: TaskState) -> Result<TaskState, StateTran
 /// - `Pending -> Accepted` (用户接受)
 /// - `Pending -> AutoAccepted` (验证通过自动接受)
 /// - `Pending -> RolledBack` (用户回滚)
+/// - `Pending -> Aborted` (用户中止)
 /// - `Pending -> Answered` (Ask 模式零变化自动结算)
+/// - `Pending -> Failed` (运行失败)
 /// - 终态不可转换
 pub fn validate_review_transition(
     from: ReviewState,
@@ -100,7 +110,9 @@ pub fn validate_review_transition(
         (ReviewState::Pending, ReviewState::Accepted)
             | (ReviewState::Pending, ReviewState::AutoAccepted)
             | (ReviewState::Pending, ReviewState::RolledBack)
+            | (ReviewState::Pending, ReviewState::Aborted)
             | (ReviewState::Pending, ReviewState::Answered)
+            | (ReviewState::Pending, ReviewState::Failed)
     );
 
     if valid {
@@ -129,6 +141,8 @@ mod tests {
     fn test_cancel_transitions() {
         assert!(validate_transition(TaskState::Exploring, TaskState::Idle).is_ok());
         assert!(validate_transition(TaskState::InProgress, TaskState::Idle).is_ok());
+        assert!(validate_transition(TaskState::InProgress, TaskState::Interrupted).is_ok());
+        assert!(validate_transition(TaskState::Interrupted, TaskState::InProgress).is_ok());
     }
 
     #[test]
@@ -168,6 +182,7 @@ mod tests {
             validate_review_transition(ReviewState::Pending, ReviewState::AutoAccepted).is_ok()
         );
         assert!(validate_review_transition(ReviewState::Pending, ReviewState::RolledBack).is_ok());
+        assert!(validate_review_transition(ReviewState::Pending, ReviewState::Aborted).is_ok());
         assert!(validate_review_transition(ReviewState::Pending, ReviewState::Answered).is_ok());
     }
 

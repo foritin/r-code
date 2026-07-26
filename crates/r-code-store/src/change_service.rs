@@ -251,7 +251,22 @@ impl<'a> ChangeService<'a> {
         task_id: &str,
         path: &Path,
     ) -> Result<RollbackResult, ProductError> {
-        let path_str = path.to_string_lossy().to_string();
+        let path_key = path.to_string_lossy().to_string();
+        self.rollback_file_at(task_id, &path_key, path).await
+    }
+
+    /// 使用持久化路径键回滚一个文件。
+    ///
+    /// `path_key` 用于关联历史 baseline / change 记录，`physical_path` 才是实际
+    /// IO 目标。调用方在完成路径边界校验后可借此兼容 Windows canonical 路径的
+    /// verbatim 前缀，以及历史记录中保留的等价路径写法。
+    pub async fn rollback_file_at(
+        &self,
+        task_id: &str,
+        path_key: &str,
+        physical_path: &Path,
+    ) -> Result<RollbackResult, ProductError> {
+        let path_str = path_key.to_string();
 
         // 1. 获取基线
         let baseline = match self.get_baseline(task_id, &path_str).await? {
@@ -278,8 +293,8 @@ impl<'a> ChangeService<'a> {
         };
 
         // 4. 读取实际磁盘状态
-        let actual_hash: Option<String> = if path.exists() {
-            let content = std::fs::read(path)?;
+        let actual_hash: Option<String> = if physical_path.exists() {
+            let content = std::fs::read(physical_path)?;
             Some(hash_content(&content))
         } else {
             None
@@ -293,13 +308,13 @@ impl<'a> ChangeService<'a> {
                     Ok(RollbackResult::AlreadyClean { path: path_str })
                 } else {
                     // 写回基线内容
-                    std::fs::write(path, &baseline_content)?;
+                    std::fs::write(physical_path, &baseline_content)?;
                     Ok(RollbackResult::Restored { path: path_str })
                 }
             }
             (None, None) => {
                 // 文件被我们删除且磁盘上确实不存在 -> 恢复基线
-                std::fs::write(path, &baseline_content)?;
+                std::fs::write(physical_path, &baseline_content)?;
                 Ok(RollbackResult::Restored { path: path_str })
             }
             (Some(exp), None) => {
@@ -595,7 +610,12 @@ mod tests {
             let tmp = TempDir::new().unwrap();
             let blobs_dir = tmp.path().join("blobs");
             std::fs::create_dir_all(&blobs_dir).unwrap();
-            let task = Task::new("/proj", "Test Task", "test goal", TaskMode::Edit);
+            let task = Task::new(
+                Some("/proj".into()),
+                "Test Task",
+                "test goal",
+                TaskMode::Edit,
+            );
             TaskRepository::new(&db).create(&task).unwrap();
             Self {
                 db,
