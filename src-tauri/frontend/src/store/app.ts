@@ -21,8 +21,6 @@ export type ThemeMode = "light" | "dark" | "system";
 /** 实际生效的 data-theme（由 mode + 系统偏好解析，App.tsx 统一写入）。 */
 export type ResolvedTheme = "studio-light" | "obsidian";
 
-export type RailTab = "sessions" | "files";
-
 /** Room 画布页签（titlebar 按钮可远程切换）。 */
 export type CanvasTab = "summary" | "changes" | "files" | "terminal" | "review";
 
@@ -36,8 +34,8 @@ interface AppState {
   searchOpen: boolean;
   /** Editor 当前浏览的文件（Ctrl K 搜索写入，Editor 场景消费） */
   editorFile: string | null;
-  /** Rail 面板页签 */
-  railTab: RailTab;
+  /** 侧栏是否折叠（Ctrl+B） */
+  railCollapsed: boolean;
   /** Deck 密度模式 */
   deckDensity: "cards" | "rows";
   /** 外观模式（亮/暗/跟随系统） */
@@ -55,7 +53,7 @@ interface AppState {
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
   setEditorFile: (path: string | null) => void;
-  setRailTab: (tab: RailTab) => void;
+  toggleRail: () => void;
   setDeckDensity: (d: "cards" | "rows") => void;
   setThemeMode: (mode: ThemeMode) => void;
   setZoom: (level: number) => void;
@@ -65,13 +63,23 @@ interface AppState {
   toggleDiffMode: () => void;
 }
 
+const RAIL_KEY = "r-code.rail.collapsed";
+
+function readCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(RAIL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export const useAppStore = create<AppState>((set) => ({
   scene: "home",
   currentTaskId: null,
   canvasTab: "summary",
   searchOpen: false,
   editorFile: null,
-  railTab: "sessions",
+  railCollapsed: readCollapsed(),
   deckDensity: "cards",
   themeMode: "dark",
   zoomLevel: 100,
@@ -85,7 +93,16 @@ export const useAppStore = create<AppState>((set) => ({
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setEditorFile: (editorFile) => set({ editorFile }),
-  setRailTab: (railTab) => set({ railTab }),
+  toggleRail: () =>
+    set((s) => {
+      const railCollapsed = !s.railCollapsed;
+      try {
+        window.localStorage.setItem(RAIL_KEY, railCollapsed ? "1" : "0");
+      } catch {
+        // 受限环境下不持久化，不影响本次使用
+      }
+      return { railCollapsed };
+    }),
   setDeckDensity: (deckDensity) => set({ deckDensity }),
   setThemeMode: (themeMode) => set({ themeMode }),
   setZoom: (level) => set({ zoomLevel: Math.max(80, Math.min(200, level)) }),

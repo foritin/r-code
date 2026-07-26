@@ -8,12 +8,12 @@ import { usePoll } from "../../lib/poll";
 import {
   agentAbort,
   agentAbortSubagent,
-  settingsGet,
-  taskSetProvider,
   taskSetWorkspace,
   workspaceChoose,
   workspaceSetAccessMode,
 } from "../../lib/ipc";
+import { useProviders } from "../../lib/provider";
+import { StatusBar } from "../ui/StatusBar";
 import type { AgentEvent, AgentSendMode, ProjectAccessMode } from "../../lib/types";
 import { Timeline, type TimelineHandle } from "../room/Timeline";
 import { Composer } from "../room/Composer";
@@ -23,10 +23,7 @@ import { ActivityStrip } from "../room/ActivityStrip";
 import { SubagentPanel } from "../room/SubagentPanel";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects } from "../icons";
-import {
-  ProjectAccessSelector,
-  projectAccessModeLabel,
-} from "../ProjectAccessSelector";
+import { projectAccessModeLabel } from "../ProjectAccessSelector";
 
 const ROOM_SPLIT_STORAGE_KEY = "r-code.room.split-pct";
 const DEFAULT_ROOM_SPLIT_PCT = 55;
@@ -82,6 +79,10 @@ export function RoomScene() {
 
   const [scopeBusy, setScopeBusy] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
+  const boundProvider = useTasksStore((s) =>
+    currentTaskId ? s.details[currentTaskId]?.task.provider_name ?? null : null
+  );
+  const providers = useProviders([currentTaskId, boundProvider]);
   const [activity, dispatchActivity] = useReducer(activityTraceReducer, createActivityTraceState());
   const tlRef = useRef<TimelineHandle>(null);
   const roomRef = useRef<HTMLElement>(null);
@@ -291,12 +292,6 @@ export function RoomScene() {
                   编辑分支
                 </span>
               )}
-              <ProjectAccessSelector
-                value={workspaceAccessMode}
-                workspaceName={workspace?.display_name ?? "当前工作区"}
-                disabled={scopeBusy || running || !workspaceAttached}
-                onChange={setWorkspaceAccessMode}
-              />
             </>
           ) : (
             <>
@@ -309,15 +304,12 @@ export function RoomScene() {
               </button>
             </>
           )}
-          <span className="room-scope-divider" aria-hidden="true" />
-          <ProviderSwitcher
-            taskId={currentTaskId}
-            providerName={task?.provider_name ?? null}
-            running={running}
-            onChanged={() => void refreshDetail(currentTaskId)}
-          />
         </div>
-        {scopeError && <div className="comp-error">工作区操作失败：{scopeError}</div>}
+        {scopeError && (
+          <StatusBar kind="error" compact onDismiss={() => setScopeError(null)}>
+            工作区操作失败：{scopeError}
+          </StatusBar>
+        )}
         <Timeline
           ref={tlRef}
           taskId={currentTaskId}
@@ -335,6 +327,15 @@ export function RoomScene() {
           taskId={currentTaskId}
           workspacePath={workspacePath}
           workspaceAttached={workspaceAttached}
+          workspaceName={workspace?.display_name ?? null}
+          workspaceAccessMode={workspaceAccessMode}
+          onAccessModeChange={setWorkspaceAccessMode}
+          scopeBusy={scopeBusy}
+          providerName={task?.provider_name ?? null}
+          model={task?.model ?? null}
+          providerChoices={providers.choices}
+          providerFallback={providers.fallback}
+          onProviderChanged={() => void refreshDetail(currentTaskId)}
           running={running}
           queuedMessages={queuedMessages}
           onAbort={abortRun}
@@ -370,140 +371,5 @@ export function RoomScene() {
         workspaceAttached={workspaceAttached}
       />
     </section>
-  );
-}
-
-interface ProviderChoice {
-  name: string;
-  model: string;
-  ready: boolean;
-}
-
-function providerLabel(name: string) {
-  return (
-    {
-      anthropic: "Anthropic",
-      openai: "OpenAI",
-      deepseek: "DeepSeek",
-      openrouter: "OpenRouter",
-    } as Record<string, string>
-  )[name] ?? name;
-}
-
-function ProviderSwitcher({
-  taskId,
-  providerName,
-  running,
-  onChanged,
-}: {
-  taskId: string;
-  providerName: string | null;
-  running: boolean;
-  onChanged: () => void;
-}) {
-  const [choices, setChoices] = useState<ProviderChoice[]>([]);
-  const [fallback, setFallback] = useState("");
-  const [open, setOpen] = useState(false);
-  const [pending, setPending] = useState<ProviderChoice | null>(null);
-  const [switching, setSwitching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let dead = false;
-    void settingsGet()
-      .then((response) => {
-        if (dead) return;
-        const next = Object.entries(response.config.providers ?? {}).map(([name, config]) => ({
-          name,
-          model: config.model || name,
-          ready: Boolean(response.provider_status?.[name]?.ready),
-        }));
-        setChoices(next);
-        setFallback(response.config.default_provider ?? "");
-      })
-      .catch((cause) => {
-        if (!dead) setError(`读取模型服务失败：${String(cause)}`);
-      });
-    return () => {
-      dead = true;
-    };
-  }, [taskId, providerName]);
-
-  const activeName = providerName ?? fallback;
-  const active = choices.find((choice) => choice.name === activeName);
-  const requestSwitch = (choice: ProviderChoice) => {
-    if (running || !choice.ready || choice.name === activeName) {
-      setOpen(false);
-      return;
-    }
-    setPending(choice);
-    setOpen(false);
-    setError(null);
-  };
-  const confirmSwitch = async () => {
-    if (!pending || switching) return;
-    setSwitching(true);
-    setError(null);
-    try {
-      await taskSetProvider(taskId, pending.name);
-      setPending(null);
-      onChanged();
-    } catch (cause) {
-      setError(`切换模型服务失败：${String(cause)}`);
-    } finally {
-      setSwitching(false);
-    }
-  };
-
-  return (
-    <div className="room-provider">
-      <button
-        type="button"
-        className="room-provider-trigger"
-        disabled={running || switching}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        title={
-          running
-            ? "当前运行结束后可切换模型服务"
-            : `本会话使用：${providerLabel(activeName || "未选择")} / ${active?.model ?? "未配置"}`
-        }
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span>模型</span>
-        <b>{providerLabel(activeName || "未选择")}</b>
-        {active?.model && <small>{active.model}</small>}
-      </button>
-      {open && !running && (
-        <div className="room-provider-menu" role="menu">
-          {choices.length === 0 && <span className="room-provider-empty">没有可用模型服务</span>}
-          {choices.map((choice) => (
-            <button
-              key={choice.name}
-              type="button"
-              role="menuitem"
-              disabled={!choice.ready}
-              className={choice.name === activeName ? "selected" : ""}
-              onClick={() => requestSwitch(choice)}
-            >
-              <span>{providerLabel(choice.name)}</span>
-              <small>{choice.ready ? choice.model : "尚未完成配置"}</small>
-            </button>
-          ))}
-        </div>
-      )}
-      {pending && (
-        <div className="room-provider-confirm" role="status">
-          <span>下次运行将使用 {providerLabel(pending.name)} / {pending.model}</span>
-          <button type="button" className="quiet-link" disabled={switching} onClick={() => setPending(null)}>
-            取消
-          </button>
-          <button type="button" className="btn accent sm" disabled={switching} onClick={() => void confirmSwitch()}>
-            {switching ? "切换中…" : "确认切换"}
-          </button>
-        </div>
-      )}
-      {error && <span className="room-provider-error" role="alert">{error}</span>}
-    </div>
   );
 }

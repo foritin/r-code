@@ -538,6 +538,7 @@ memories_dir = "{base}/m"
             model: "claude-sonnet-4".into(),
             max_tokens: Some(4096),
             temperature: Some(0.7),
+            protocol: None,
         };
         let debug = format!("{pc:?}");
         assert!(debug.contains("***"), "api_key masked as ***");

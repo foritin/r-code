@@ -13,7 +13,6 @@ import type {
 } from "../../lib/types";
 
 export type ActivityPhase = AgentActivityPhase | "idle";
-export type ActivityKind = "tool" | "guide" | "permission" | "queue";
 export type SubagentStatus =
   | "queued"
   | "running"
@@ -21,13 +20,6 @@ export type SubagentStatus =
   | "completed"
   | "failed"
   | "cancelled";
-
-export interface ActivityTraceItem {
-  id: number;
-  at: number;
-  kind: ActivityKind;
-  label: string;
-}
 
 export interface ActivityQueueSummary {
   queued: number;
@@ -53,8 +45,6 @@ export interface ActivityTraceState {
   label: string;
   /** 当前运行的本地开始时间戳（毫秒）。 */
   startedAt: number | null;
-  /** 最近的工具、引导、权限和队列活动。 */
-  recentActivities: ActivityTraceItem[];
   /** 最近一条 AgentEvent 的本地接收时间戳（毫秒）。 */
   lastEventAt: number | null;
   /** 来自 AgentRun 快照的运行状态。 */
@@ -65,7 +55,6 @@ export interface ActivityTraceState {
   pendingPermissions: number;
   /** 当前/最近的子代理工作项，刷新后由 AgentRun 运行树恢复。 */
   subagents: ActivitySubagent[];
-  nextActivityId: number;
 }
 
 export type ActivityTraceAction =
@@ -86,13 +75,11 @@ export function createActivityTraceState(): ActivityTraceState {
     phase: "idle",
     label: "空闲",
     startedAt: null,
-    recentActivities: [],
     lastEventAt: null,
     running: false,
     queue: { queued: 0, dispatching: 0, failed: 0 },
     pendingPermissions: 0,
     subagents: [],
-    nextActivityId: 1,
   };
 }
 
@@ -120,33 +107,23 @@ function applySend(state: ActivityTraceState, mode: AgentSendMode, at: number): 
   const startedAt = state.startedAt ?? at;
   switch (mode) {
     case "steer":
-      return appendActivity(
-        {
-          ...state,
-          running: true,
-          phase: "steer_accepted",
-          label: "已接纳，等待当前步骤完成",
-          startedAt,
-        },
-        "guide",
-        "引导已接纳",
-        at
-      );
+      return {
+        ...state,
+        running: true,
+        phase: "steer_accepted",
+        label: "已接纳，等待当前步骤完成",
+        startedAt,
+      };
     case "queue":
-      return appendActivity(state, "queue", "消息已加入队列", at);
+      return state;
     case "send_now":
-      return appendActivity(
-        {
-          ...state,
-          running: true,
-          phase: "requesting",
-          label: "正在切换到新请求",
-          startedAt,
-        },
-        "queue",
-        "已请求立即发送",
-        at
-      );
+      return {
+        ...state,
+        running: true,
+        phase: "requesting",
+        label: "正在切换到新请求",
+        startedAt,
+      };
     case "auto":
       return {
         ...state,
@@ -170,25 +147,19 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
     case "scoped":
       return applyScopedEvent(state, event.scope, event.event, at);
     case "activity":
-      return applyActivityEvent(base, event.phase, event.detail, at);
+      return applyActivityEvent(base, event.phase, event.detail);
     case "message":
       return { ...base, phase: "streaming", label: "正在生成回复" };
     case "tool_call": {
       const tool = observableToolName(event.name);
-      return appendActivity(
-        { ...base, phase: "tool", label: `正在使用工具：${tool}` },
-        "tool",
-        `调用工具：${tool}`,
-        at
-      );
+      return { ...base, phase: "tool", label: `正在使用工具：${tool}` };
     }
     case "tool_result":
-      return appendActivity(
-        { ...base, phase: "tool", label: event.is_error ? "工具执行失败" : "工具已完成" },
-        "tool",
-        event.is_error ? "工具执行失败" : "工具已完成",
-        at
-      );
+      return {
+        ...base,
+        phase: "tool",
+        label: event.is_error ? "工具执行失败" : "工具已完成",
+      };
     case "plan":
       return { ...base, phase: "finalizing", label: "正在更新可见计划" };
     case "subagent_lifecycle":
@@ -307,22 +278,9 @@ function safeChildDetail(value: string | undefined): string | null {
 function applyActivityEvent(
   state: ActivityTraceState,
   phase: AgentActivityPhase,
-  detail: string | undefined,
-  at: number
+  detail: string | undefined
 ): ActivityTraceState {
-  const next = { ...state, phase, label: activityLabel(phase, detail) };
-  switch (phase) {
-    case "tool":
-      return appendActivity(next, "tool", detail ? `使用工具：${observableToolDetail(detail)}` : "正在使用工具", at);
-    case "waiting_permission":
-      return appendActivity(next, "permission", "等待权限批准", at);
-    case "steer_accepted":
-      return appendActivity(next, "guide", "引导已接纳", at);
-    case "steer_applied":
-      return appendActivity(next, "guide", "引导已纳入下一次请求", at);
-    default:
-      return next;
-  }
+  return { ...state, phase, label: activityLabel(phase, detail) };
 }
 
 function applySnapshot(
@@ -423,25 +381,6 @@ function activityLabel(phase: AgentActivityPhase, detail?: string): string {
     case "finalizing":
       return "正在整理结果";
   }
-}
-
-function appendActivity(
-  state: ActivityTraceState,
-  kind: ActivityKind,
-  label: string,
-  at: number
-): ActivityTraceState {
-  const previous = state.recentActivities[state.recentActivities.length - 1];
-  if (previous?.kind === kind && previous.label === label) return state;
-
-  return {
-    ...state,
-    recentActivities: [
-      ...state.recentActivities,
-      { id: state.nextActivityId, at, kind, label },
-    ].slice(-4),
-    nextActivityId: state.nextActivityId + 1,
-  };
 }
 
 function summarizeQueue(messages: readonly QueuedMessage[]): ActivityQueueSummary {

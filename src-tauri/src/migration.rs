@@ -16,7 +16,7 @@ use r_code_core::error::ProductError;
 use rusqlite::Connection;
 
 /// 目标 schema 版本（与 r-code-store::migrations 保持同步）。
-const TARGET_VERSION: u32 = 7;
+const TARGET_VERSION: u32 = 9;
 
 /// Migration strategy for upgrading from previous versions.
 /// [doc-19 §6]
@@ -288,6 +288,20 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 7,
+            to_version: 8,
+            description: "Session-bound concrete model override".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 8,
+            to_version: 9,
+            description: "Close legacy verification placeholder runs".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -413,7 +427,7 @@ mod tests {
         assert!(!result.steps_applied.is_empty());
 
         // After: latest version, no migration needed
-        assert_eq!(mgr.current_version().unwrap(), 7);
+        assert_eq!(mgr.current_version().unwrap(), 9);
         assert!(!mgr.needs_migration().unwrap());
     }
 

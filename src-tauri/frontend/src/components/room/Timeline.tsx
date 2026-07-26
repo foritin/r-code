@@ -14,8 +14,9 @@ import {
 import { agentResend, onAgentEvent as listenAgentEvent, sessionMessages } from "../../lib/ipc";
 import type { AgentEvent, AgentSendMode } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
-import { toolVerb } from "../../lib/format";
 import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
+import { Markdown } from "./Markdown";
+import { ToolCard } from "./ToolCard";
 
 export interface TimelineHandle {
   /** 发送失败（消息可能已落盘）→ 以持久化历史重建。 */
@@ -402,8 +403,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             return (
               <div className={"agent" + dim(it.t)} data-t={it.t} key={it.id}>
                 <div className="who">R-CODE</div>
-                {it.text}
-                {it.streaming && <span className="caret" />}
+                <Markdown text={it.text} streaming={it.streaming} />
               </div>
             );
           case "plan": {
@@ -448,18 +448,17 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             );
           case "tool":
             return (
-              <div
-                className={"trow" + (it.state === "active" ? " active" : "") + dim(it.t)}
-                data-t={it.t}
+              <ToolCard
                 key={it.id}
-                title={it.summary || undefined}
-              >
-                {it.state === "active" && <span className="spin" />}
-                <span className="verb">{toolVerb(it.name)}</span>
-                <span className="target">{it.target || it.name}</span>
-                {it.state === "ok" && <span className="ok">✓ {it.summary}</span>}
-                {it.state === "fail" && <span className="fail">✗ {it.summary}</span>}
-              </div>
+                t={it.t}
+                dim={dim(it.t)}
+                name={it.name}
+                target={it.target}
+                state={it.state}
+                summary={it.summary}
+                inputJson={it.inputJson}
+                outputJson={it.outputJson}
+              />
             );
         }
       })}

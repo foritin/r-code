@@ -27,7 +27,9 @@ use r_code_core::dto::{
 };
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
-use r_code_gateway::{subagent_read_only_tool_allowed, ToolGateway};
+use r_code_gateway::{
+    classify_shell_command, subagent_read_only_tool_allowed, PathArity, PathBinding, ToolGateway,
+};
 use tokio::sync::{watch, Mutex, Semaphore};
 use uuid::Uuid;
 
@@ -56,7 +58,18 @@ Keep replies concise and concrete.";
 const WORKSPACE_SYSTEM_PROMPT: &str = "You are R-Code, a coding agent working inside a user-approved workspace.\n\
 Work on the user's goal directly with the provided workspace tools. Keep replies concise and concrete.\n\
 All file paths are relative to the attached workspace; read before you write.\n\
-When the goal is fully addressed, stop calling tools and summarize what you did.";
+When the goal is fully addressed, stop calling tools and summarize what you did.\n\
+\n\
+Tool selection matters:\n\
+- To find code, use `search` (content regex) and `glob` (file names). Never shell out to \
+grep, rg, find, ls or dir — the built-in tools respect .gitignore, skip binaries, and behave \
+identically on Windows, macOS and Linux, while shell commands differ per platform and need approval.\n\
+- To read files use `read_file` (page long files with offset/limit), not cat or type.\n\
+- To change a file use `edit` with an exact literal snippet. Prefer it over `apply_patch`: \
+rewriting a whole file wastes tokens and silently discards concurrent changes.\n\
+- Reserve `bash` for builds, tests, linters, git and package managers. Every command needs user \
+approval, and some (privilege escalation, `git push`, publishing) are refused outright — \
+if you need one of those, ask the user to run it themselves.";
 
 /// 构建每轮请求的系统提示。客户端本地时间是纯聊天回答“今天/星期几”的可信来源，
 /// 不需要为此开放终端、文件系统或外部插件。
@@ -676,7 +689,12 @@ impl SessionToolHost {
                 "tool '{name}' is not available in a workspace-scoped conversation"
             )));
         }
-        bind_workspace_path(name, input, &scope.guard)
+        // 路径键由工具自己声明；未注册的工具沿用历史的单 `path` 语义。
+        let bindings = self
+            .gateway
+            .path_bindings(name)
+            .unwrap_or_else(|| fallback_bindings(name));
+        bind_workspace_paths(name, bindings, input, &scope.guard)
     }
 
     async fn call_inner(
@@ -761,17 +779,38 @@ fn workspace_tool_allowed(name: &str) -> bool {
         "read_file"
             | "list_files"
             | "search"
+            | "glob"
             | "git_status"
+            | "edit"
             | "apply_patch"
             | "create_file"
             | "delete_file"
+            | "bash"
     )
 }
 
-/// 将模型输入中的 path 绑定到当前会话工作区。即使模型传入绝对路径也要经
+/// 工具未在 Gateway 注册时的兜底绑定：单个必填 `path`（历史语义）。
+const FALLBACK_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("path")];
+/// `git_status` 的历史豁免：path 缺省时回落到工作区根。
+const GIT_STATUS_PATH_BINDINGS: &[PathBinding] = &[PathBinding::default_root("path")];
+
+fn fallback_bindings(tool_name: &str) -> &'static [PathBinding] {
+    if tool_name == "git_status" {
+        GIT_STATUS_PATH_BINDINGS
+    } else {
+        FALLBACK_PATH_BINDINGS
+    }
+}
+
+/// 将模型输入中的路径参数绑定到当前会话工作区。即使模型传入绝对路径也要经
 /// PathGuard 重新解析，以抵御 `..`、符号链接和 CWD 逃逸。
-fn bind_workspace_path(
+///
+/// 哪些键是路径由工具自己通过 [`Tool::path_bindings`] 声明——过去这里硬编码
+/// `"path"`，导致 `glob`（`pattern` + `path`）和 `bash`（`command` + `cwd`）
+/// 这类多参数工具无法接入。
+fn bind_workspace_paths(
     tool_name: &str,
+    bindings: &[PathBinding],
     mut input: serde_json::Value,
     guard: &PathGuard,
 ) -> Result<serde_json::Value, ProductError> {
@@ -779,30 +818,37 @@ fn bind_workspace_path(
         ProductError::Other(format!("tool '{tool_name}' expects an object input"))
     })?;
 
-    let raw_path = object
-        .get("path")
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            if tool_name == "git_status" {
-                Some(guard.root().display().to_string())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| ProductError::Other(format!("tool '{tool_name}' is missing a path")))?;
+    for binding in bindings {
+        let provided = object
+            .get(binding.key)
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned);
 
-    let requested = PathBuf::from(raw_path);
-    let candidate = if requested.is_absolute() {
-        requested
-    } else {
-        guard.root().join(requested)
-    };
-    let resolved = guard.resolve(&candidate)?;
-    object.insert(
-        "path".to_string(),
-        serde_json::Value::String(resolved.display().to_string()),
-    );
+        let raw_path = match (provided, binding.arity) {
+            (Some(value), _) => value,
+            (None, PathArity::DefaultRoot) => guard.root().display().to_string(),
+            // 缺失即拒绝：绝不静默回落到进程 CWD（那是工作区之外）。
+            (None, PathArity::Required) => {
+                return Err(ProductError::Other(format!(
+                    "tool '{tool_name}' is missing required path parameter '{}'",
+                    binding.key
+                )))
+            }
+            (None, PathArity::Optional) => continue,
+        };
+
+        let requested = PathBuf::from(raw_path);
+        let candidate = if requested.is_absolute() {
+            requested
+        } else {
+            guard.root().join(requested)
+        };
+        let resolved = guard.resolve(&candidate)?;
+        object.insert(
+            binding.key.to_string(),
+            serde_json::Value::String(resolved.display().to_string()),
+        );
+    }
     Ok(input)
 }
 
@@ -877,7 +923,21 @@ Use optional ids to collect a subset; omit ids to collect all."
 }
 
 /// 生成工具输入的人类可读摘要（审批卡展示用）。
+///
+/// 命令类工具额外附上分级原因：用户被打断时应当立刻看懂"为什么要问我"，
+/// 而不是只看到一条命令字符串。
 fn summarize_input(name: &str, args: &serde_json::Value) -> String {
+    if name == "bash" {
+        if let Some(command) = args.get("command").and_then(|v| v.as_str()) {
+            let classification = classify_shell_command(command);
+            let command = truncate_summary(command);
+            return if classification.reasons.is_empty() {
+                format!("bash {command}")
+            } else {
+                format!("bash {command} — {}", classification.reasons.join("；"))
+            };
+        }
+    }
     for key in [
         "path",
         "file_path",
@@ -888,11 +948,23 @@ fn summarize_input(name: &str, args: &serde_json::Value) -> String {
         "pattern",
     ] {
         if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
-            let v = if v.len() > 120 { &v[..120] } else { v };
-            return format!("{name} {v}");
+            return format!("{name} {}", truncate_summary(v));
         }
     }
     name.to_string()
+}
+
+/// 摘要截断到 120 个**字符**。
+///
+/// 原实现按字节切 (`&v[..120]`)：路径或命令里有中文时，第 120 字节大概率落在
+/// 多字节序列中间，`str` 索引会直接 panic。审批摘要不该有能崩溃的路径。
+fn truncate_summary(text: &str) -> String {
+    const MAX: usize = 120;
+    if text.chars().count() <= MAX {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(MAX).collect();
+    format!("{head}…")
 }
 
 /// 父运行内的受限子代理监督器。它只负责并发、隔离、取消和事件转发；主 Agent
@@ -1835,12 +1907,113 @@ mod tests {
     }
 
     #[test]
+    fn summarize_bash_explains_the_escalation() {
+        // 低风险命令：只显示命令本身 + 一条"已识别"说明
+        let s = summarize_input("bash", &serde_json::json!({"command": "cargo test"}));
+        assert!(s.starts_with("bash cargo test"), "summary was: {s}");
+
+        // 被拒命令：用户必须看到原因
+        let s = summarize_input("bash", &serde_json::json!({"command": "sudo rm -rf /"}));
+        assert!(s.contains("提权"), "summary was: {s}");
+    }
+
+    #[test]
+    fn summarize_does_not_panic_on_multibyte_boundaries() {
+        // 旧实现按字节切片，中文路径超过 120 字节时会 panic。
+        let long = "中".repeat(200);
+        let s = summarize_input("read_file", &serde_json::json!({"path": long}));
+        assert!(s.ends_with('…'));
+    }
+
+    #[test]
     fn read_only_policy_never_exposes_workspace_write_tools() {
         assert!(subagent_read_only_tool_allowed("read_file"));
         assert!(subagent_read_only_tool_allowed("search"));
+        // glob 只读遍历，子代理可用
+        assert!(subagent_read_only_tool_allowed("glob"));
         assert!(!subagent_read_only_tool_allowed("apply_patch"));
         assert!(!subagent_read_only_tool_allowed("create_file"));
         assert!(!subagent_read_only_tool_allowed("delete_file"));
+        // 有副作用的新工具绝不给子代理
+        assert!(!subagent_read_only_tool_allowed("edit"));
+        assert!(!subagent_read_only_tool_allowed("bash"));
+    }
+
+    #[test]
+    fn workspace_policy_exposes_the_new_tools() {
+        for name in ["search", "glob", "edit", "bash", "read_file"] {
+            assert!(workspace_tool_allowed(name), "{name} should be allowed");
+        }
+        assert!(!workspace_tool_allowed("load_skill"));
+        assert!(!workspace_tool_allowed("nonexistent_tool"));
+    }
+
+    #[test]
+    fn bind_paths_resolves_every_declared_key() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let guard = PathGuard::new(dir.path().to_path_buf()).unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        // bash：cwd 缺省回落到工作区根，command 不受影响
+        let bound = bind_workspace_paths(
+            "bash",
+            &[PathBinding::default_root("cwd")],
+            serde_json::json!({"command": "cargo test"}),
+            &guard,
+        )
+        .unwrap();
+        assert_eq!(bound["command"], "cargo test");
+        assert!(bound["cwd"].as_str().unwrap().len() > 1);
+
+        // 相对路径被拼到工作区根下
+        let bound = bind_workspace_paths(
+            "bash",
+            &[PathBinding::default_root("cwd")],
+            serde_json::json!({"command": "ls", "cwd": "sub"}),
+            &guard,
+        )
+        .unwrap();
+        assert!(bound["cwd"].as_str().unwrap().ends_with("sub"));
+
+        // 必填键缺失 -> 报错，绝不回落到进程 CWD
+        assert!(bind_workspace_paths(
+            "glob",
+            &[PathBinding::required("path")],
+            serde_json::json!({"pattern": "**/*.rs"}),
+            &guard,
+        )
+        .is_err());
+
+        // 逃逸尝试被 PathGuard 拒绝
+        assert!(bind_workspace_paths(
+            "bash",
+            &[PathBinding::default_root("cwd")],
+            serde_json::json!({"command": "ls", "cwd": "../../etc"}),
+            &guard,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn git_status_falls_back_to_the_workspace_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let guard = PathGuard::new(dir.path().to_path_buf()).unwrap();
+        let bound = bind_workspace_paths(
+            "git_status",
+            fallback_bindings("git_status"),
+            serde_json::json!({}),
+            &guard,
+        )
+        .unwrap();
+        assert!(bound["path"].as_str().is_some());
+        // 其他工具没有这个豁免
+        assert!(bind_workspace_paths(
+            "read_file",
+            fallback_bindings("read_file"),
+            serde_json::json!({}),
+            &guard,
+        )
+        .is_err());
     }
 
     #[test]

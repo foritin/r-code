@@ -4,13 +4,32 @@
 
 ## 文件清单
 
-| 文件 | 用途 | 来源（资源包） |
+| 文件 | 用途 | 来源 |
 | --- | --- | --- |
-| `32x32.png` | Linux / 通用小尺寸 | `windows/png/r-code-32.png` |
-| `128x128.png` | Linux / 通用中尺寸 | `windows/png/r-code-128.png` |
-| `128x128@2x.png` | 高 DPI（256×256） | `windows/png/r-code-256.png` |
-| `icon.ico` | Windows 安装包与可执行文件 | `windows/r-code-app.ico` |
-| `icon.icns` | macOS 应用与 DMG | `macos/r-code-app.icns` |
+| `32x32.png` | Linux / 通用小尺寸 | 由图层重制（见「满铺重制」） |
+| `128x128.png` | Linux / 通用中尺寸 | 由图层重制 |
+| `128x128@2x.png` | 高 DPI（256×256） | 由图层重制 |
+| `512x512.png` | Linux hicolor 512 档 / 高 DPI 缩略图 | 由满铺母版 LANCZOS 降采样 |
+| `icon.png` | 1024×1024 最大档（AppImage/hicolor 1024、通用源图） | 满铺母版原样 |
+| `icon.ico` | Windows 安装包与可执行文件 | 由图层重制（16/20/24/32/40/48/64/96/128/256 十档 PNG） |
+| `icon.icns` | macOS 应用与 DMG | `macos/r-code-app.icns`（未改，见下） |
+
+## 满铺重制
+
+原始资源包里，圆角底板只占画布 84%（四周各留约 8% 透明边），前景标记又只占底板
+66%、占整张画布 55%。Windows 与 Linux 不会像 macOS 那样自动套系统遮罩，图标是按原
+样绘制的，两层留白叠加后主体 R 在任务栏尺寸下过小。
+
+现在 Windows / Linux 的四个文件改为从 `source/layers/` 重新合成：
+
+- 底板：满铺画布，圆角半径取画布的 20%
+- 前景 `foreground-mark-1024.png`：按 bbox 居中缩放到画布的 76%
+- 小尺寸先按 4× 超采样再降采样，保证 16–32px 的边缘干净
+- 合成后的 1024 母版存为 `source/master/r-code-icon-master-1024-fullbleed.png`
+
+`icon.icns` 保持原样：macOS 会自行套圆角遮罩并按自己的网格排版，需要保留内缩留白，
+不适用满铺规则。macOS 侧若要重制，走 `source/layers/background-fullbleed-1024.png`
++ `foreground-mark-1024.png` 的 Icon Composer 图层流程，不要拿这里的满铺 PNG 去转。
 
 ## 源素材（`source/`）
 

@@ -39,6 +39,7 @@ use r_code_core::dto::{
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
 use r_code_gateway::permission::PermissionEngine;
+use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
     AgentRunRepository, BlobStore, ChangeService, Database, QueuedMessageRepository, ReviewService,
@@ -49,6 +50,7 @@ use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
 use serde::{Deserialize, Serialize};
 
 use crate::project_memory::ProjectMemory;
+use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::recovery::RecoveryManager;
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
@@ -160,14 +162,20 @@ impl CommandState {
     ) -> Self {
         let permission_engine = Arc::new(PermissionEngine::new());
         let mut gateway = r_code_gateway::ToolGateway::new(permission_engine.clone());
+        // 只读（R0/R1）
         gateway.register(Box::new(r_code_gateway::ReadFileTool));
         gateway.register(Box::new(r_code_gateway::ListFilesTool));
         gateway.register(Box::new(r_code_gateway::SearchTool));
+        gateway.register(Box::new(r_code_gateway::GlobTool));
         gateway.register(Box::new(r_code_gateway::GitStatusTool));
         gateway.register(Box::new(r_code_gateway::LoadSkillTool));
+        // 写入（R2）
+        gateway.register(Box::new(r_code_gateway::EditTool));
         gateway.register(Box::new(r_code_gateway::ApplyPatchTool));
         gateway.register(Box::new(r_code_gateway::CreateFileTool));
         gateway.register(Box::new(r_code_gateway::DeleteFileTool));
+        // 命令执行（静态 R3；实际等级由 classify_shell_command 按命令内容判定）
+        gateway.register(Box::new(r_code_gateway::BashTool));
         Self {
             db,
             blobs_dir,
@@ -662,12 +670,53 @@ pub async fn task_set_provider(
     }
     repo.set_provider_name(task_id, Some(&provider_name))
         .map_err(err_str)?;
+    // 模型名隶属于具体服务，换服务后旧的覆盖值必然无效，一并清除。
+    repo.set_model(task_id, None).map_err(err_str)?;
     bridge.sessions.remove(task_id);
     drop(bridge);
 
     repo.get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found after provider update: {task_id}"))
+}
+
+/// 为一个空闲会话切换具体模型（仍属于当前绑定的模型服务）。
+///
+/// 与 `task_set_provider` 同样的约束：运行中不允许切换，且必须清掉内存里的
+/// runtime session —— 已建立的 SessionState 会把旧模型一直用到会话结束。
+/// 传入空字符串表示清除覆盖，回退到该服务在设置里配置的默认模型。
+pub async fn task_set_model(
+    state: &CommandState,
+    task_id: &str,
+    model: Option<&str>,
+) -> Result<Task, String> {
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    if let Some(value) = model {
+        if value.len() > 200 {
+            return Err("模型名过长".to_string());
+        }
+    }
+
+    let repo = TaskRepository::new(&state.db);
+    let task = repo
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能再切换模型".to_string());
+    }
+
+    let mut bridge = state.agent.lock().await;
+    if bridge.active.is_some() {
+        return Err("当前运行尚未结束，不能在执行期间切换模型".to_string());
+    }
+    repo.set_model(task_id, model).map_err(err_str)?;
+    bridge.sessions.remove(task_id);
+    drop(bridge);
+
+    repo.get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found after model update: {task_id}"))
 }
 
 pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDetail, String> {
@@ -841,8 +890,8 @@ impl AgentBridge {
 /// 确保 bridge 持有与指定会话服务配置一致的真实 runtime。
 ///
 /// 配置缺失/无效时直接报错（指引去 Settings），不做任何降级。
-/// provider 名称映射：anthropic → Anthropic，deepseek → DeepSeek，
-/// 其余一律按 OpenAI 兼容端点处理（openai / openrouter / litellm / 自定义 base_url）。
+/// 协议分派见 [`build_provider_config`]：依据 `provider_catalog::resolve_protocol`
+/// 解析出的线路协议，而不是服务名。
 async fn ensure_real_runtime(
     config_dir: &Path,
     tool_gateway: &Arc<r_code_gateway::ToolGateway>,
@@ -872,9 +921,18 @@ async fn ensure_real_runtime(
 
     // max_tokens / temperature 也是 runtime 的一部分。遗漏这两个字段会导致用户在
     // 设置页保存后，当前进程继续沿用旧的输出上限或随机性。
+    // 协议也必须进指纹：只改「线路协议」而不动地址/模型时，其余字段完全没变，
+    // 漏掉它会让当前进程继续用旧协议的 provider，直到重启才生效。
+    // 用有效协议而非裸 `pcfg.protocol`——旧配置补上一个与推断结果相同的值时，
+    // 实际行为没变，不该白白重建 runtime 并清空会话。
     let fingerprint = format!(
-        "{provider_name}|{}|{}|{}|{:?}|{:?}",
-        pcfg.base_url, pcfg.model, pcfg.api_key, pcfg.max_tokens, pcfg.temperature
+        "{provider_name}|{}|{}|{}|{:?}|{:?}|{}",
+        pcfg.base_url,
+        pcfg.model,
+        pcfg.api_key,
+        pcfg.max_tokens,
+        pcfg.temperature,
+        resolve_effective_protocol(&provider_name, pcfg).as_str()
     );
     if matches!(&bridge.kind, AgentRuntimeKind::Real(_))
         && bridge.fingerprint.as_deref() == Some(fingerprint.as_str())
@@ -885,27 +943,7 @@ async fn ensure_real_runtime(
         return Err("当前运行尚未结束，不能在执行期间切换模型服务配置".to_string());
     }
 
-    let provider_config = match provider_name.as_str() {
-        "anthropic" => hermes_llm::ProviderConfig::Anthropic {
-            api_key: pcfg.api_key.clone(),
-            model: pcfg.model.clone(),
-            base_url: if pcfg.base_url.trim().is_empty() {
-                None
-            } else {
-                Some(pcfg.base_url.clone())
-            },
-        },
-        "deepseek" => hermes_llm::ProviderConfig::DeepSeek {
-            api_key: pcfg.api_key.clone(),
-            model: pcfg.model.clone(),
-            base_url: (!pcfg.base_url.trim().is_empty()).then_some(pcfg.base_url.clone()),
-        },
-        _ => hermes_llm::ProviderConfig::OpenAi {
-            api_key: pcfg.api_key.clone(),
-            model: pcfg.model.clone(),
-            base_url: pcfg.base_url.clone(),
-        },
-    };
+    let provider_config = build_provider_config(&provider_name, pcfg);
     let provider = hermes_llm::create_provider(provider_config).map_err(err_str)?;
     let max_tokens = effective_max_tokens(&provider_name, pcfg);
     let runtime = r_code_agent_worker::LlmAgentRuntime::new(
@@ -1301,7 +1339,7 @@ async fn ensure_runtime_session(
             task_id: task.id.clone(),
             goal: task.goal.clone(),
             mode: task.mode,
-            model: None,
+            model: task.model.clone(),
             context: vec![],
         })
         .await
@@ -1400,12 +1438,20 @@ async fn start_run_locked(
         .await
         .map_err(err_str)?;
 
-    let run_model = bridge
-        .fingerprint
-        .as_deref()
-        .and_then(|fingerprint| fingerprint.split('|').nth(2))
-        .unwrap_or("mock")
-        .to_string();
+    // 会话有显式模型时以它为准；否则回退到 runtime fingerprint 里的 provider 默认模型。
+    // 若继续只读 fingerprint，切换过模型的会话会把运行记录写成错误的模型名。
+    let run_model = task
+        .model
+        .clone()
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| {
+            bridge
+                .fingerprint
+                .as_deref()
+                .and_then(|fingerprint| fingerprint.split('|').nth(2))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "mock".to_string());
     let mut run = AgentRun::new_for_branch(&task.id, &branch.id, run_model);
     // Runtime 生成的 run id 同时是工具审计和子代理父子关系的锚点；不能再另起一个
     // 仅供数据库使用的 UUID，否则实时事件与持久化运行树会失去关联。
@@ -2220,6 +2266,28 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
                 .map_err(err_str)?,
         );
     }
+
+    // 与 accept 对称：回滚后把最新主 run 标为 RolledBack，并把任务放回 idle。
+    // 原先两件都没做 —— 前端 runPresentation / settledItems 的 rolled_back 分支
+    // 因此永远命中不到，回滚过的任务还会卡在 review_ready。
+    let runs = AgentRunRepository::new(&state.db);
+    if let Some(run) = runs.get_latest_main_run(task_id).map_err(err_str)? {
+        // 只改写待审查的 run。已中止 / 已接受的是终态，覆写会丢掉原有结论。
+        if run.review_state == ReviewState::Pending {
+            runs.update_review_state(&run.id, ReviewState::RolledBack)
+                .map_err(err_str)?;
+        }
+    }
+    let tasks = TaskRepository::new(&state.db);
+    if let Some(task) = tasks.get(task_id).map_err(err_str)? {
+        // 归档任务不因回滚而复活。
+        if task.state != TaskState::Archived {
+            tasks
+                .update_state(task_id, TaskState::Idle)
+                .map_err(err_str)?;
+        }
+    }
+
     Ok(results.into_iter().map(|r| format!("{r:?}")).collect())
 }
 
@@ -2439,15 +2507,41 @@ pub async fn run_verification(
     command: &str,
 ) -> Result<VerificationRecord, String> {
     let workspace_root = attached_task_workspace_root(state, task_id)?;
-    let run = AgentRunRepository::new(&state.db)
-        .get_active_run(task_id)
-        .map_err(err_str)?
-        .or_else(|| {
-            let r = AgentRun::new(task_id, "verification");
-            let _ = AgentRunRepository::new(&state.db).create(&r);
-            Some(r)
-        })
-        .unwrap();
+    // 验证只需要一个合法的 agent_runs 外键（verifications.run_id 是
+    // NOT NULL REFERENCES agent_runs(id)，且 PRAGMA foreign_keys=ON）。
+    //
+    // 原实现在没有活跃 run 时插一条 ended_at=NULL 的主 run，而全仓无人给它收尾：
+    // 时间线永久多一条转圈的"运行中"、任务被判定为永久 running、崩溃恢复误报、
+    // 还会顶替 get_active_run 让 accept 写到错误的记录上。
+    //
+    // 而"点验证"的典型时机恰恰是 agent 已经跑完（任务处于 review_ready / idle），
+    // 此时 get_active_run 必然是 None —— 所以这是必现而非偶发。
+    //
+    // 改为：活跃 run → 最近一条主 run → 都没有才补一条**已结束**的占位 run。
+    let runs = AgentRunRepository::new(&state.db);
+    let run_id = match runs.get_active_run(task_id).map_err(err_str)? {
+        Some(active) => active.id,
+        None => match runs.get_latest_main_run(task_id).map_err(err_str)? {
+            Some(latest) => latest.id,
+            None => {
+                // 任务从未跑过 agent。占位 run 建出来就是终态，不留 ended_at=NULL。
+                // 复用已有的占位 run，避免每点一次验证就多一行。
+                match runs
+                    .get_verification_placeholder_run(task_id)
+                    .map_err(err_str)?
+                {
+                    Some(existing) => existing.id,
+                    None => {
+                        let mut placeholder =
+                            AgentRun::new(task_id, VERIFICATION_PLACEHOLDER_MODEL);
+                        placeholder.ended_at = Some(chrono::Utc::now());
+                        runs.create(&placeholder).map_err(err_str)?;
+                        placeholder.id
+                    }
+                }
+            }
+        },
+    };
 
     let config = VerificationConfig {
         command: command.to_string(),
@@ -2455,7 +2549,7 @@ pub async fn run_verification(
     };
 
     VerificationService::new(&state.db, state.blobs_dir.clone())
-        .run_verification(task_id, &run.id, &config, &workspace_root)
+        .run_verification(task_id, &run_id, &config, &workspace_root)
         .await
         .map_err(err_str)
 }
@@ -3133,38 +3227,160 @@ pub struct ProviderSettingsInput {
     pub api_key: Option<String>,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+    /// 用户显式选择的线路协议 slug（见 `provider_catalog::Protocol::as_str`）。
+    ///
+    /// 省略 = 沿用该服务已存的选择；从未存过则走
+    /// [`infer_protocol_never_responses`]。旧版前端不发这个字段，此时不会有任何
+    /// 配置被切到 Responses。
+    pub protocol: Option<String>,
     /// 保存后是否立即设为新会话默认服务。省略时沿用旧 IPC 的行为（启用）。
     pub activate: Option<bool>,
 }
 
-#[derive(Clone, Copy)]
-struct ProviderPreset {
-    base_url: &'static str,
-    model: &'static str,
+/// 常用服务的保守默认值，直接取自 [`crate::provider_catalog`]。用户仍可在设置页
+/// 覆盖模型或地址。
+///
+/// 这里曾经维护一份只有 4 条的本地表，与目录里的 29 条预设各说各话；目录才是
+/// 唯一事实来源，新增服务只改 `provider_catalog::PRESETS`。
+fn provider_preset(name: &str) -> Option<&'static ProviderPreset> {
+    crate::provider_catalog::find(name)
 }
 
-/// 常用服务的保守默认值。用户仍可在设置页覆盖模型或地址。
-fn provider_preset(name: &str) -> Option<ProviderPreset> {
-    match name {
-        "anthropic" => Some(ProviderPreset {
-            base_url: "https://api.anthropic.com",
-            model: "claude-sonnet-4",
-        }),
-        "openai" => Some(ProviderPreset {
-            base_url: "https://api.openai.com/v1",
-            model: "gpt-5",
-        }),
-        "deepseek" => Some(ProviderPreset {
-            // DeepSeek 文档的 OpenAI-compatible 根地址；请求路径由 provider 层补齐。
-            base_url: "https://api.deepseek.com",
-            model: "deepseek-v4-flash",
-        }),
-        "openrouter" => Some(ProviderPreset {
-            base_url: "https://openrouter.ai/api/v1",
-            model: "openai/gpt-4.1-mini",
-        }),
-        _ => None,
+/// 决定一条已保存的配置该用哪个协议。
+///
+/// 优先级：**用户存下来的 `protocol` 字段 > 目录推断**。协议是计费和能力都不同
+/// 的选择（同一个 base_url 常常多协议并存），只能由用户在设置页显式选，不能替他
+/// 猜——所以存了就照存的走，哪怕目录声明了别的。
+///
+/// 没存过（升级前的旧配置）才推断，且**推断结果永不为 Responses**：Responses 与
+/// Chat 在同一地址上往往都可用但计费不同，静默切过去等于替用户改了账单。目录声明
+/// Responses 的一律降级为 Chat，等用户自己去设置页选。
+fn resolve_effective_protocol(
+    name: &str,
+    pcfg: &hermes_config::ProviderConfig,
+) -> ProviderProtocol {
+    pcfg.protocol
+        .as_deref()
+        .and_then(ProviderProtocol::parse)
+        .unwrap_or_else(|| infer_protocol_never_responses(name, &pcfg.base_url))
+}
+
+/// 没存过 protocol 时的推断规则，**唯一实现**。
+///
+/// 保存路径和运行时路径必须共用它：任何一边多写一份，两份规则迟早漂移，结果就是
+/// 设置页显示的协议和实际发出的请求对不上。
+///
+/// 规则 = `resolve_protocol` 的结果，但 Responses 一律降级为 Chat。Responses 与
+/// Chat 常常在同一地址上都可用而计费不同，替用户选等于替他改账单。
+fn infer_protocol_never_responses(name: &str, base_url: &str) -> ProviderProtocol {
+    match crate::provider_catalog::resolve_protocol(name, base_url.trim()) {
+        ProviderProtocol::OpenAiResponses => ProviderProtocol::OpenAiChat,
+        other => other,
     }
+}
+
+/// 保存时该往 `config.toml` 写哪个协议。
+///
+/// 优先级：本次表单显式选的 > 该服务已存的 > 推断。抽成纯函数是为了能直接测——
+/// 走 `settings_save_provider` 会写 OS keychain，而 keychain 是全局的，用真实服务名
+/// （`openai` 之类）跑测试会覆盖开发者本机的密钥。
+///
+/// 最后那步**必须**复用 [`infer_protocol_never_responses`]。这里曾经直接取
+/// `preset.protocol`，而 openai / xai 的预设协议就是 Responses——于是任何不带
+/// protocol 字段的保存请求（旧版前端、脚本直接调 IPC）都会把旧配置写成 Responses，
+/// 运行时再照存值执行，等于从后门绕过「不替用户切协议」这条规矩。
+fn protocol_to_persist(
+    name: &str,
+    base_url: &str,
+    requested: Option<&str>,
+    stored: Option<ProviderProtocol>,
+) -> Result<ProviderProtocol, String> {
+    let requested = requested.map(str::trim).filter(|value| !value.is_empty());
+    let Some(requested) = requested else {
+        return Ok(stored.unwrap_or_else(|| infer_protocol_never_responses(name, base_url)));
+    };
+    let parsed =
+        ProviderProtocol::parse(requested).ok_or_else(|| format!("未知的线路协议“{requested}”"))?;
+    // 校验对象是**这个地址**，不是这条预设：备用线路往往是另一个协议口，拿主入口
+    // 的 `native` 去卡它会把合法组合拦下。地址被改写到目录以外时不设限。
+    if let Some(allowed) = crate::provider_catalog::allowed_protocols(name, base_url) {
+        if !allowed.contains(&parsed) {
+            let options: Vec<&str> = allowed.iter().map(|p| p.as_str()).collect();
+            return Err(format!(
+                "该地址不支持“{}”，可选：{}",
+                parsed.as_str(),
+                options.join(" / ")
+            ));
+        }
+    }
+    Ok(parsed)
+}
+
+/// 按 [`resolve_effective_protocol`] 的结果构造 Provider 配置。
+///
+/// 关键点：**分派依据是协议，不是服务名**。目录里 29 条预设有一多半（Kimi、
+/// 智谱、MiniMax、火山 `/api/coding`、百炼……）走的是 Anthropic Messages 口，
+/// 旧代码「除 anthropic / deepseek 外一律当 OpenAI Chat」会把它们全部发错协议。
+fn build_provider_config(
+    name: &str,
+    pcfg: &hermes_config::ProviderConfig,
+) -> hermes_llm::ProviderConfig {
+    use crate::provider_catalog::{resolve_reasoning_replay, Protocol};
+
+    let configured = pcfg.base_url.trim();
+    // 地址留空时必须回填目录里的默认值：`ProviderConfig::Anthropic { base_url: None }`
+    // 会让 AnthropicProvider 打到 api.anthropic.com，把 Kimi / 智谱这些 Anthropic 口
+    // 的请求发到 Anthropic 官方去。对 id 为 `anthropic` 的服务回填是无害的——预设
+    // 地址与 AnthropicProvider 的内置默认值本就是同一个。
+    let base_url = if configured.is_empty() {
+        provider_preset(name).map_or("", |preset| preset.base_url)
+    } else {
+        configured
+    };
+    let optional_base_url = (!base_url.is_empty()).then(|| base_url.to_string());
+    match resolve_effective_protocol(name, pcfg) {
+        Protocol::AnthropicMessages => hermes_llm::ProviderConfig::Anthropic {
+            api_key: pcfg.api_key.clone(),
+            model: pcfg.model.clone(),
+            base_url: optional_base_url,
+        },
+        Protocol::OpenAiResponses => hermes_llm::ProviderConfig::Responses {
+            api_key: pcfg.api_key.clone(),
+            model: pcfg.model.clone(),
+            base_url: base_url.to_string(),
+            // 只有目录里明确标了 reasoning_replay 且地址未被改写的服务才打开；
+            // 对不支持 `include=reasoning.encrypted_content` 的实现打开会 400。
+            reasoning: if resolve_reasoning_replay(name, configured) {
+                hermes_llm::ReasoningMode::EncryptedReplay
+            } else {
+                hermes_llm::ReasoningMode::Drop
+            },
+        },
+        // DeepSeek 也是 OpenAI Chat，但 DeepSeekProvider 会按模型名报出正确的
+        // 上下文窗口（v4 为 1M，其余 64K），压缩策略依赖这个值，故保留特例。
+        Protocol::OpenAiChat if is_deepseek_chat(name, base_url) => {
+            hermes_llm::ProviderConfig::DeepSeek {
+                api_key: pcfg.api_key.clone(),
+                model: pcfg.model.clone(),
+                base_url: optional_base_url,
+            }
+        }
+        Protocol::OpenAiChat => hermes_llm::ProviderConfig::OpenAi {
+            api_key: pcfg.api_key.clone(),
+            model: pcfg.model.clone(),
+            base_url: base_url.to_string(),
+        },
+    }
+}
+
+/// 是否应走 `DeepSeekProvider`（而非通用 OpenAI 兼容实现）。
+///
+/// 命中条件是「id 就是 `deepseek`」**或**「地址在官方域名下」。前者保证地址留空
+/// 时也能命中（此时会回填官方地址）；代价是把 id 为 `deepseek` 的服务改指到自建
+/// 网关后，上下文窗口仍按模型名猜（v4 为 1M，其余 64K）——协议一样是 Chat，只影响
+/// 压缩策略的估算。
+fn is_deepseek_chat(name: &str, base_url: &str) -> bool {
+    name == "deepseek" || base_url.contains("api.deepseek.com")
 }
 
 /// 服务端声明的单次输出上限，不等同于上下文窗口。
@@ -3172,14 +3388,20 @@ fn provider_preset(name: &str) -> Option<ProviderPreset> {
 /// DeepSeek V4 当前提供 1M context，但每次 Chat Completions 的输出最多为
 /// 384K（API 报错中以 393_216 表示）。把上下文窗口填入 `max_tokens` 会被服务端
 /// 拒绝，因此在保存和运行旧配置时都使用同一规则保护。
+///
+/// 其余服务取目录里的 `max_output_tokens`（同样只是输出上限，不是 `context_window`）。
 fn provider_max_output_tokens(name: &str, provider: &hermes_config::ProviderConfig) -> Option<u32> {
-    let is_deepseek = name == "deepseek" || provider.base_url.contains("api.deepseek.com");
     let is_v4 = provider
         .model
         .trim()
         .to_ascii_lowercase()
         .starts_with("deepseek-v4-");
-    (is_deepseek && is_v4).then_some(393_216)
+    if is_deepseek_chat(name, &provider.base_url) && is_v4 {
+        return Some(393_216);
+    }
+    // 地址被改写过时目录不再可信（preset_for 会返回 None），此时不做钳制。
+    crate::provider_catalog::preset_for(name, &provider.base_url)
+        .and_then(|preset| preset.max_output_tokens)
 }
 
 /// 兼容已保存的旧配置：不因历史上误填的 1M/10M 输出上限而重新触发 400。
@@ -3221,12 +3443,25 @@ fn provider_readiness_error(
     if provider.model.trim().is_empty() {
         return Some("缺少默认模型".to_string());
     }
-    // Anthropic 与 DeepSeek 的 runtime 具有官方默认地址；其余 OpenAI 兼容
-    // Provider 必须指定 API 根地址。
-    if provider.base_url.trim().is_empty() && !matches!(name, "anthropic" | "deepseek") {
+    // 地址留空只有在目录能补出默认值时才成立。
+    if provider.base_url.trim().is_empty() && !has_default_base_url(name) {
         return Some("缺少接口地址".to_string());
     }
+    // 带占位符的预设（Azure 的 ${RESOURCE_NAME}、Bedrock 的 ${AWS_REGION} 等）
+    // 必须由用户替换后才能发请求，否则会打到一个字面量域名上。
+    if provider.base_url.contains("${") {
+        return Some("接口地址中的占位符尚未替换".to_string());
+    }
     None
+}
+
+/// 地址留空时，目录或 runtime 能否补出一个可用的默认地址。
+///
+/// `anthropic` / `deepseek` 由 runtime 自带默认值（见 `DeepSeekProvider` 与
+/// `AnthropicProvider`）；其余服务只有在目录里有一条不含占位符的 base_url 时才算。
+fn has_default_base_url(name: &str) -> bool {
+    matches!(name, "anthropic" | "deepseek")
+        || provider_preset(name).is_some_and(|preset| !preset.needs_template())
 }
 
 /// 校验来自新建/切换会话界面的显式服务选择。
@@ -3263,6 +3498,14 @@ fn load_config_json_for_editing(state: &CommandState) -> Result<serde_json::Valu
     }
 }
 
+/// 内置模型服务预设目录，驱动设置页的"新建服务"表单。
+///
+/// 纯静态数据、不碰磁盘也不碰网络，因此不需要 `state`；保持 `async` 只是为了让
+/// `tauri_commands::cmd_provider_catalog` 的转发写法与其它命令一致。
+pub async fn provider_catalog() -> Result<serde_json::Value, String> {
+    serde_json::to_value(crate::provider_catalog::catalog_dto()).map_err(err_str)
+}
+
 pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, String> {
     // 宽松加载：未配置 provider 不是错误（由用户自行决定是否配置）。
     // runtime 视图会从 OS keychain / 环境变量填充密钥，但返回 WebView 前必须清空。
@@ -3292,6 +3535,11 @@ pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, Str
                 "configured": !provider.api_key.trim().is_empty(),
                 "ready": provider_readiness_error(name, provider).is_none(),
                 "source": source,
+                // 这条配置**实际**会用的协议。设置页必须显示它而不是自己按预设猜：
+                // 前端只看得到 `preset.protocol`，看不到地址被改写后的启发式结果，
+                // 两边各猜一次必然漂移（届时表单显示 A、请求发的是 B，而且用户一
+                // 点保存就把错误的 A 存了下来）。
+                "effective_protocol": resolve_effective_protocol(name, provider).as_str(),
             }),
         );
         provider.api_key.clear();
@@ -3332,8 +3580,11 @@ pub async fn settings_save_provider(
     if model.is_empty() {
         return Err("请填写默认模型".to_string());
     }
-    if base_url.is_empty() && !matches!(name.as_str(), "anthropic" | "deepseek") {
+    if base_url.is_empty() && !has_default_base_url(&name) {
         return Err("请填写接口地址".to_string());
+    }
+    if base_url.contains("${") {
+        return Err("请把接口地址里的占位符替换为实际值".to_string());
     }
     if !base_url.is_empty()
         && !(base_url.starts_with("https://") || base_url.starts_with("http://"))
@@ -3349,15 +3600,19 @@ pub async fn settings_save_provider(
         model: model.clone(),
         max_tokens: input.max_tokens,
         temperature: input.temperature,
+        protocol: None,
     };
     if let (Some(requested), Some(limit)) = (
         input.max_tokens,
         provider_max_output_tokens(&name, &output_limits),
     ) {
         if requested > limit {
-            return Err(format!(
-                "DeepSeek V4 的最大输出为 {limit} Token；1,000,000 是上下文窗口，不能填入最大输出"
-            ));
+            // 最常见的误填是把上下文窗口当成最大输出，所以把两者区别写进提示。
+            let context_hint = provider_preset(&name)
+                .and_then(|preset| preset.context_window)
+                .map(|window| format!("，{window} 是上下文窗口，不是单次输出上限"))
+                .unwrap_or_default();
+            return Err(format!("“{name}”的最大输出为 {limit} Token{context_hint}"));
         }
     }
     if let Some(temperature) = input.temperature {
@@ -3391,6 +3646,15 @@ pub async fn settings_save_provider(
         return Err("请填写访问密钥后再保存".to_string());
     }
 
+    let stored_protocol = config_json
+        .get("providers")
+        .and_then(|providers| providers.get(&name))
+        .and_then(|provider| provider.get("protocol"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(ProviderProtocol::parse);
+    let protocol =
+        protocol_to_persist(&name, &base_url, input.protocol.as_deref(), stored_protocol)?;
+
     let root = config_json
         .as_object_mut()
         .ok_or_else(|| "配置文件根节点必须是对象".to_string())?;
@@ -3407,6 +3671,7 @@ pub async fn settings_save_provider(
             "model": model,
             "max_tokens": input.max_tokens,
             "temperature": input.temperature,
+            "protocol": protocol.as_str(),
         }),
     );
     if input.activate.unwrap_or(true) {
@@ -4302,6 +4567,7 @@ mod tests {
                 api_key: Some("sk-one-step-test".into()),
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
+                protocol: None,
                 activate: None,
             },
         )
@@ -4341,6 +4607,7 @@ mod tests {
                 api_key: None,
                 max_tokens: None,
                 temperature: None,
+                protocol: None,
                 activate: None,
             },
         )
@@ -4372,6 +4639,7 @@ mod tests {
                     api_key: Some(format!("sk-{name}")),
                     max_tokens: Some(2048),
                     temperature: Some(0.2),
+                    protocol: None,
                     activate: Some(activate),
                 },
             )
@@ -4417,6 +4685,268 @@ mod tests {
         assert_eq!(deepseek.model, "deepseek-v4-flash");
     }
 
+    /// 未存过 protocol 的配置（即升级前保存的旧配置）。
+    fn provider_cfg(base_url: &str, model: &str) -> hermes_config::ProviderConfig {
+        hermes_config::ProviderConfig {
+            base_url: base_url.into(),
+            api_key: "sk-test".into(),
+            model: model.into(),
+            max_tokens: None,
+            temperature: None,
+            protocol: None,
+        }
+    }
+
+    /// 用户在设置页显式选过协议的配置。
+    fn provider_cfg_with(
+        base_url: &str,
+        model: &str,
+        protocol: ProviderProtocol,
+    ) -> hermes_config::ProviderConfig {
+        hermes_config::ProviderConfig {
+            protocol: Some(protocol.as_str().to_string()),
+            ..provider_cfg(base_url, model)
+        }
+    }
+
+    /// 回归：目录里一多半预设走 Anthropic Messages 口，旧的按名字分派会把它们
+    /// 全部当成 OpenAI Chat 发出去。
+    #[test]
+    fn anthropic_style_gateways_are_not_dispatched_as_openai() {
+        for id in ["kimi", "zhipu", "minimax", "ark_coding", "bailian"] {
+            let preset = provider_preset(id).unwrap();
+            let built = build_provider_config(id, &provider_cfg(preset.base_url, preset.model));
+            assert!(
+                matches!(built, hermes_llm::ProviderConfig::Anthropic { .. }),
+                "{id} 应走 Anthropic Messages，实际 {built:?}"
+            );
+        }
+    }
+
+    /// 同一家厂商的不同入口是不同协议，必须按 base_url 区分，不能按名字前缀。
+    #[test]
+    fn same_vendor_different_endpoints_get_different_protocols() {
+        let anthropic_port = provider_preset("ark_coding").unwrap();
+        assert!(matches!(
+            build_provider_config(
+                "ark_coding",
+                &provider_cfg(anthropic_port.base_url, anthropic_port.model)
+            ),
+            hermes_llm::ProviderConfig::Anthropic { .. }
+        ));
+
+        let openai_port = provider_preset("ark_coding_openai").unwrap();
+        assert!(matches!(
+            build_provider_config(
+                "ark_coding_openai",
+                &provider_cfg(openai_port.base_url, openai_port.model)
+            ),
+            hermes_llm::ProviderConfig::OpenAi { .. }
+        ));
+    }
+
+    /// 地址被改写 = 预设不再可信，退回按地址猜；自建网关基本只有 Chat。
+    #[test]
+    fn rewritten_base_url_falls_back_to_chat_completions() {
+        let built = build_provider_config(
+            "openai",
+            &provider_cfg("https://my-gateway.internal/v1", "gpt-5.6-sol"),
+        );
+        assert!(
+            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            "自建网关不应被当成 Responses，实际 {built:?}"
+        );
+    }
+
+    /// 回归：**绝不替用户自动切到 Responses**。
+    ///
+    /// 目录声明 openai 官方走 Responses，但升级前存下的配置里没有 protocol 字段。
+    /// 若此时按目录推断，用户会在毫不知情的情况下换一套 API 和计费方式。
+    #[test]
+    fn legacy_config_is_never_auto_upgraded_to_responses() {
+        let openai = provider_preset("openai").unwrap();
+        assert_eq!(openai.protocol, ProviderProtocol::OpenAiResponses);
+
+        let built = build_provider_config("openai", &provider_cfg(openai.base_url, openai.model));
+        assert!(
+            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            "没存过 protocol 的旧配置必须留在 Chat，实际 {built:?}"
+        );
+    }
+
+    /// 存了什么就走什么——目录只提供推荐值，不覆盖用户的选择。
+    #[test]
+    fn stored_protocol_wins_over_the_catalog() {
+        let openai = provider_preset("openai").unwrap();
+
+        // 手动选了 Responses 才会走 Responses
+        let built = build_provider_config(
+            "openai",
+            &provider_cfg_with(
+                openai.base_url,
+                openai.model,
+                ProviderProtocol::OpenAiResponses,
+            ),
+        );
+        match built {
+            hermes_llm::ProviderConfig::Responses { reasoning, .. } => {
+                // EncryptedReplay 只对目录里标了 reasoning_replay 的服务打开
+                assert_eq!(reasoning, hermes_llm::ReasoningMode::EncryptedReplay);
+            }
+            other => panic!("显式选了 Responses 却没走，实际 {other:?}"),
+        }
+
+        // 反过来：目录说 Anthropic，用户偏要 Chat，也照办
+        let kimi = provider_preset("kimi").unwrap();
+        assert_eq!(kimi.protocol, ProviderProtocol::AnthropicMessages);
+        let built = build_provider_config(
+            "kimi",
+            &provider_cfg_with(kimi.base_url, kimi.model, ProviderProtocol::OpenAiChat),
+        );
+        assert!(
+            matches!(built, hermes_llm::ProviderConfig::OpenAi { .. }),
+            "用户选的 Chat 被目录覆盖了，实际 {built:?}"
+        );
+    }
+
+    /// 回归：保存路径同样不能把旧配置升级到 Responses。
+    ///
+    /// 运行时那条「推断永不为 Responses」的规则曾被保存路径绕过——`None` 分支直接
+    /// 取 `preset.protocol`，而 openai 的预设协议正是 Responses。于是旧版前端（不发
+    /// protocol 字段）一次保存就把配置写成 Responses，运行时再照存值执行。
+    #[test]
+    fn saving_without_protocol_never_writes_responses() {
+        // openai 的预设协议是 Responses，正是最容易被静默升级的那条
+        let preset = provider_preset("openai").unwrap();
+        assert_eq!(preset.protocol, ProviderProtocol::OpenAiResponses);
+
+        let persisted = protocol_to_persist("openai", preset.base_url, None, None).unwrap();
+        assert_eq!(
+            persisted,
+            ProviderProtocol::OpenAiChat,
+            "不带 protocol 的保存把配置升级到了 {persisted:?}"
+        );
+    }
+
+    /// 用户选过之后，后续不带 protocol 的保存必须沿用他的选择，不能被预设改回去。
+    #[test]
+    fn saving_without_protocol_keeps_the_stored_choice() {
+        let preset = provider_preset("openai").unwrap();
+        for stored in [
+            ProviderProtocol::OpenAiResponses,
+            ProviderProtocol::OpenAiChat,
+        ] {
+            assert_eq!(
+                protocol_to_persist("openai", preset.base_url, None, Some(stored)).unwrap(),
+                stored,
+                "已存的选择被后续保存冲掉了"
+            );
+        }
+    }
+
+    /// 目录不认的协议要被拒绝，避免存下一个必然 400 的组合。
+    #[test]
+    fn saving_a_protocol_the_preset_does_not_support_is_rejected() {
+        let preset = provider_preset("zhipu_coding").unwrap();
+        assert!(!preset.native.contains(&ProviderProtocol::OpenAiResponses));
+
+        let error = protocol_to_persist(
+            "zhipu_coding",
+            preset.base_url,
+            Some("openai_responses"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("该地址不支持") && error.contains("openai_chat"),
+            "实际报错：{error}"
+        );
+
+        // 但地址被改写后不设限：自建网关实现了什么我们无从知道
+        let rewritten = "https://relay.example.com/v1";
+        let allowed =
+            protocol_to_persist("zhipu_coding", rewritten, Some("openai_responses"), None).unwrap();
+        assert_eq!(allowed, ProviderProtocol::OpenAiResponses);
+
+        // 写错的字面量要报错，而不是静默落到某个默认值
+        let typo = protocol_to_persist("openai", preset.base_url, Some("grpc_whatever"), None)
+            .unwrap_err();
+        assert!(typo.contains("未知的线路协议"), "实际报错：{typo}");
+    }
+
+    /// 只改协议、其它字段不动时，runtime 指纹必须变，否则当前进程不会重建 provider。
+    #[test]
+    fn protocol_participates_in_the_runtime_fingerprint() {
+        let preset = provider_preset("openai").unwrap();
+        let chat = provider_cfg_with(preset.base_url, preset.model, ProviderProtocol::OpenAiChat);
+        let responses = provider_cfg_with(
+            preset.base_url,
+            preset.model,
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert_ne!(
+            resolve_effective_protocol("openai", &chat),
+            resolve_effective_protocol("openai", &responses)
+        );
+
+        // 旧配置补上一个与推断结果相同的值时，有效协议没变，不该白白重建 runtime
+        let legacy = provider_cfg(preset.base_url, preset.model);
+        assert_eq!(
+            resolve_effective_protocol("openai", &legacy),
+            resolve_effective_protocol("openai", &chat)
+        );
+    }
+
+    /// 无法识别的 protocol 字面量（手改配置文件写错）退回推断，不 panic。
+    #[test]
+    fn unknown_stored_protocol_falls_back_to_inference() {
+        let kimi = provider_preset("kimi").unwrap();
+        let mut cfg = provider_cfg(kimi.base_url, kimi.model);
+        cfg.protocol = Some("grpc_whatever".into());
+        assert!(matches!(
+            build_provider_config("kimi", &cfg),
+            hermes_llm::ProviderConfig::Anthropic { .. }
+        ));
+    }
+
+    /// 地址留空必须回填预设默认值，否则 Anthropic 口的服务会打到 api.anthropic.com。
+    #[test]
+    fn blank_base_url_is_backfilled_from_the_catalog() {
+        match build_provider_config("kimi", &provider_cfg("", "kimi-k2.7-code")) {
+            hermes_llm::ProviderConfig::Anthropic { base_url, .. } => {
+                assert_eq!(
+                    base_url.as_deref(),
+                    Some(provider_preset("kimi").unwrap().base_url)
+                );
+            }
+            other => panic!("kimi 应走 Anthropic Messages，实际 {other:?}"),
+        }
+
+        // anthropic 自己回填出来的就是 AnthropicProvider 的内置默认值，等价于 None。
+        match build_provider_config("anthropic", &provider_cfg("", "claude-sonnet-5")) {
+            hermes_llm::ProviderConfig::Anthropic { base_url, .. } => {
+                assert_eq!(base_url.as_deref(), Some("https://api.anthropic.com"));
+            }
+            other => panic!("anthropic 应走 Anthropic Messages，实际 {other:?}"),
+        }
+    }
+
+    /// 带占位符的预设在用户替换前不算就绪，否则会打到字面量域名上。
+    #[test]
+    fn unresolved_template_placeholders_block_readiness() {
+        let azure = provider_preset("azure_openai").unwrap();
+        assert!(azure.needs_template());
+        let problem =
+            provider_readiness_error("azure_openai", &provider_cfg(azure.base_url, "gpt-5.5"));
+        assert!(
+            problem.is_some_and(|text| text.contains("占位符")),
+            "未替换的 ${{RESOURCE_NAME}} 应拦下"
+        );
+
+        let resolved = provider_cfg("https://acme.openai.azure.com/openai/v1", "gpt-5.5");
+        assert_eq!(provider_readiness_error("azure_openai", &resolved), None);
+    }
+
     #[test]
     fn deepseek_v4_keeps_context_window_separate_from_output_limit() {
         let provider = hermes_config::ProviderConfig {
@@ -4425,6 +4955,7 @@ mod tests {
             model: "deepseek-v4-pro".into(),
             max_tokens: Some(1_000_000),
             temperature: Some(0.2),
+            protocol: None,
         };
         assert_eq!(
             provider_max_output_tokens("deepseek", &provider),
@@ -4447,6 +4978,7 @@ mod tests {
                 api_key: Some("sk-profile-test".into()),
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
+                protocol: None,
                 activate: Some(false),
             },
         )
@@ -4483,6 +5015,7 @@ mod tests {
                 api_key: Some("sk-unused".into()),
                 max_tokens: Some(1_000_000),
                 temperature: Some(0.2),
+                protocol: None,
                 activate: Some(false),
             },
         )

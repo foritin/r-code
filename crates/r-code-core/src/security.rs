@@ -228,6 +228,11 @@ mod tests {
 
     /// 创建一个外层 TempDir，并在其中建 `root` 子目录，便于放置 root 外部
     /// 的符号链接目标（仍在外层 TempDir 内、唯一隔离）。
+    ///
+    /// 只有 `#[cfg(unix)]` 的符号链接测试用得到它——Windows 建符号链接需要额外
+    /// 权限，那几个测试不编译。不加这个 gate，Windows 上会报 dead_code；CI 跑在
+    /// ubuntu 上看不见，本地 `cargo check` 才会暴露。
+    #[cfg(unix)]
     fn make_outer_with_root() -> (TempDir, PathBuf) {
         let outer = TempDir::new().expect("create outer temp dir");
         let root = outer.path().join("root");

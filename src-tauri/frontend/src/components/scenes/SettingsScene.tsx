@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { errText } from "../../lib/format";
 import { useAppStore } from "../../store/app";
 import { usePoll } from "../../lib/poll";
 import {
@@ -18,49 +19,96 @@ import type {
   AppConfig,
   CodexIntegrationStatus,
   LogEntry,
+  ProviderCategory,
   ProviderConfig,
+  ProviderPreset,
+  ProviderProtocol,
   ProviderStatus,
   SupportBundlePreview,
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
+import { catalogPresets, loadCatalog, presetOf, providerLabel } from "../../lib/provider";
 
-const PROVIDER_PRESETS = [
-  {
-    name: "anthropic",
-    label: "Anthropic",
-    baseUrl: "https://api.anthropic.com",
-    model: "claude-sonnet-4",
-  },
-  {
-    name: "openai",
-    label: "OpenAI",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-5",
-  },
-  {
-    name: "deepseek",
-    label: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    model: "deepseek-v4-flash",
-  },
-  {
-    name: "openrouter",
-    label: "OpenRouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    model: "openai/gpt-4.1-mini",
-  },
-] as const;
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
 const EMPTY_PROVIDERS: NonNullable<AppConfig["providers"]> = {};
 const OUTPUT_DEFAULT = "8192";
+/** 自建网关：不套用任何预设，全部字段手填。 */
+const CUSTOM_PRESET = "custom";
 
-function providerPreset(name: string) {
-  return PROVIDER_PRESETS.find((preset) => preset.name === name);
+const CATEGORY_LABELS: Record<ProviderCategory, string> = {
+  official: "海外官方",
+  cn_official: "国内厂商",
+  cloud_provider: "云厂商托管",
+  aggregator: "路由 / 聚合",
+};
+
+const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
+  anthropic_messages: "Anthropic Messages",
+  openai_chat: "OpenAI Chat Completions",
+  openai_responses: "OpenAI Responses",
+};
+
+/** 按 category 分组，保持目录里的原始顺序。 */
+function groupByCategory(presets: ProviderPreset[]) {
+  const groups = new Map<ProviderCategory, ProviderPreset[]>();
+  for (const preset of presets) {
+    const bucket = groups.get(preset.category);
+    if (bucket) bucket.push(preset);
+    else groups.set(preset.category, [preset]);
+  }
+  return [...groups.entries()];
 }
 
-function providerLabel(name: string) {
-  return providerPreset(name)?.label ?? name;
+const ALL_PROTOCOLS: ProviderProtocol[] = ["openai_chat", "anthropic_messages", "openai_responses"];
+
+/**
+ * 新建（还没有后端状态）时下拉框的初值。
+ *
+ * 与后端 `infer_protocol_never_responses` 同规则：预设推荐值，但 Responses 降级为
+ * Chat。Responses 与 Chat 常在同一地址上都可用而计费不同，必须由用户主动选。
+ */
+function fallbackProtocol(preset: ProviderPreset | undefined): ProviderProtocol {
+  const inferred = preset?.protocol ?? "openai_chat";
+  return inferred === "openai_responses" ? "openai_chat" : inferred;
+}
+
+const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, "").toLowerCase();
+
+/**
+ * 该地址允许选哪些协议，`null` = 目录管不到、不设限。
+ *
+ * 必须与后端 `provider_catalog::allowed_protocols` 逐条对齐，否则 UI 会拦下后端愿意
+ * 接受的选择、或者放行后端会拒绝的。规则：主入口给 `native`；备用线路只给它自己
+ * 那一个（我们对候选地址的了解仅限目录里写的那条）；改到目录以外则不设限。
+ */
+function allowedProtocols(
+  preset: ProviderPreset | undefined,
+  baseUrl: string
+): ProviderProtocol[] | null {
+  if (!preset) return null;
+  const url = normalizeUrl(baseUrl);
+  // 留空 = 保存时回填预设地址，按主入口算
+  if (!url || url === normalizeUrl(preset.base_url)) return preset.native;
+  const candidate = preset.endpoint_candidates.find((item) => normalizeUrl(item.url) === url);
+  return candidate ? candidate.native : null;
+}
+
+function protocolChoices(
+  preset: ProviderPreset | undefined,
+  baseUrl: string,
+  current: ProviderProtocol
+): ProviderProtocol[] {
+  const choices = allowedProtocols(preset, baseUrl) ?? ALL_PROTOCOLS;
+  // 当前值必须在选项里，否则 <select> 会显示第一项而 state 仍是旧值，
+  // 用户看到的和即将提交的对不上。
+  return choices.includes(current) ? [...choices] : [...choices, current];
+}
+
+/** base_url 里还有没填的 `${VAR}` 占位符。 */
+function unresolvedTemplateVars(preset: ProviderPreset | undefined, baseUrl: string) {
+  if (!preset) return [];
+  return preset.template_vars.filter((variable) => baseUrl.includes(`\${${variable.name}}`));
 }
 
 function optionalInteger(value: string) {
@@ -114,7 +162,7 @@ export function SettingsScene() {
       setProviderStatus(res.provider_status ?? {});
       setConfigErr(null);
     } catch (e) {
-      setConfigErr(String(e));
+      setConfigErr(errText(e));
     }
   }, []);
 
@@ -132,7 +180,7 @@ export function SettingsScene() {
 
         <div className="set-grid">
           {configErr && (
-            <div className="errbar">
+            <div className="errbar" role="alert">
               读取配置失败：{configErr}
               <span className="spacer" />
               <button className="btn" onClick={() => void loadConfig()}>
@@ -141,7 +189,7 @@ export function SettingsScene() {
             </div>
           )}
           {validation && !configErr && (
-            <div className="notebar">
+            <div className="notebar" role="status">
               还不能开始对话。选择模型服务并保存访问密钥后即可使用。
               <span className="dim">{validation}</span>
             </div>
@@ -178,14 +226,38 @@ function ProviderSection({
   const configDefault = config.default_provider ?? "";
   const providers = config.providers ?? EMPTY_PROVIDERS;
   const names = Object.keys(providers).sort((a, b) => a.localeCompare(b));
+  const [catalog, setCatalog] = useState<ProviderPreset[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
-  const [presetName, setPresetName] = useState("deepseek");
+  const [presetName, setPresetName] = useState(CUSTOM_PRESET);
   const [profileName, setProfileName] = useState("");
-  const [fields, setFields] = useState({ base_url: "", model: "", max_tokens: OUTPUT_DEFAULT, temperature: "0.2" });
+  const [fields, setFields] = useState({
+    base_url: "",
+    model: "",
+    max_tokens: OUTPUT_DEFAULT,
+    temperature: "0.2",
+    protocol: "openai_chat" as ProviderProtocol,
+  });
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+
+  // 目录来自后端 provider_catalog.rs：预设一旦分散成两份就会漂移，
+  // 前端不再自带硬编码表。
+  useEffect(() => {
+    let alive = true;
+    void loadCatalog().then(() => {
+      if (!alive) return;
+      const presets = catalogPresets();
+      setCatalog(presets);
+      setPresetName((current) =>
+        current === CUSTOM_PRESET && presets.length > 0 ? presets[0].id : current
+      );
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     setSelectedProvider((current) => {
@@ -196,19 +268,25 @@ function ProviderSection({
   }, [configDefault, names.join("|")]);
 
   const applyPreset = useCallback((nextPreset: string) => {
-    const preset = providerPreset(nextPreset);
+    const preset = presetOf(nextPreset);
     setPresetName(nextPreset);
+    setProfileName(nextPreset === CUSTOM_PRESET ? "" : nextPreset);
     setFields({
-      base_url: preset?.baseUrl ?? "",
+      base_url: preset?.base_url ?? "",
       model: preset?.model ?? "",
-      max_tokens: OUTPUT_DEFAULT,
+      // 预设声明了单次输出上限时用它，避免保存后被服务端 400
+      max_tokens: preset?.max_output_tokens != null
+        ? String(Math.min(preset.max_output_tokens, Number(OUTPUT_DEFAULT)))
+        : OUTPUT_DEFAULT,
       temperature: "0.2",
+      // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
+      // 就自己去选一下，这条规矩对新建和编辑一视同仁。
+      protocol: fallbackProtocol(preset),
     });
   }, []);
 
   useEffect(() => {
     if (!selectedProvider) {
-      setProfileName("");
       setKeyInput("");
       setSaved(null);
       setErr(null);
@@ -216,19 +294,29 @@ function ProviderSection({
       return;
     }
     const profile = providers[selectedProvider] as ProviderConfig | undefined;
-    const preset = providerPreset(selectedProvider);
+    const preset = presetOf(selectedProvider);
     setProfileName(selectedProvider);
-    setPresetName(preset?.name ?? "custom");
+    setPresetName(preset?.id ?? CUSTOM_PRESET);
     setFields({
-      base_url: profile?.base_url ?? preset?.baseUrl ?? "",
+      base_url: profile?.base_url ?? preset?.base_url ?? "",
       model: profile?.model ?? preset?.model ?? "",
       max_tokens: profile?.max_tokens != null ? String(profile.max_tokens) : OUTPUT_DEFAULT,
       temperature: displayNumber(profile?.temperature) || "0.2",
+      // 编辑已有配置时以后端算出的 effective_protocol 为准——它已经把"存过的值"
+      // 和"地址被改写后的推断"都算进去了。前端再推一遍只会和后端对不上，而用户
+      // 随手点个保存就会把错的那个存下来。
+      protocol:
+        profile?.protocol ??
+        providerStatus[selectedProvider]?.effective_protocol ??
+        fallbackProtocol(preset),
     });
     setKeyInput("");
     setSaved(null);
     setErr(null);
-  }, [applyPreset, providers, selectedProvider]);
+  }, [applyPreset, providers, providerStatus, selectedProvider]);
+
+  const activePreset = presetOf(presetName);
+  const pendingVars = unresolvedTemplateVars(activePreset, fields.base_url);
 
   const run = async (fn: () => Promise<void>, message: string) => {
     if (busy) return;
@@ -240,7 +328,7 @@ function ProviderSection({
       await reload();
       setSaved(message);
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     } finally {
       setBusy(false);
     }
@@ -257,6 +345,7 @@ function ProviderSection({
         apiKey: keyInput.trim() || null,
         maxTokens: optionalInteger(fields.max_tokens),
         temperature: optionalDecimal(fields.temperature),
+        protocol: fields.protocol,
         activate,
       });
       setSelectedProvider(name);
@@ -284,6 +373,8 @@ function ProviderSection({
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
   const outputExceedsDeepSeekLimit = deepSeekV4 && Number.isFinite(outputValue) && outputValue > 393_216;
+  // 占位符没替换就保存 = 一个必然 404 的地址进了配置
+  const saveBlocked = busy || outputExceedsDeepSeekLimit || pendingVars.length > 0;
 
   return (
     <section className="pane setcard provider-settings">
@@ -297,15 +388,15 @@ function ProviderSection({
           disabled={busy}
           onClick={() => {
             setSelectedProvider(null);
-            setPresetName("deepseek");
+            applyPreset(catalog[0]?.id ?? CUSTOM_PRESET);
           }}
         >
           新建服务
         </button>
       </div>
 
-      {err && <div className="errbar">{err}</div>}
-      {saved && <div className="okbar">{saved}</div>}
+      {err && <div className="errbar" role="alert">{err}</div>}
+      {saved && <div className="okbar" role="status">{saved}</div>}
 
       <div className="provider-layout">
         <div className="provider-list" aria-label="已保存的模型服务">
@@ -350,23 +441,41 @@ function ProviderSection({
           </div>
 
           <div className="field">
-            <label>预设</label>
-            <select
+            <label htmlFor="set-preset">预设</label>
+            <select id="set-preset"
               className="input"
               value={presetName}
               disabled={busy || Boolean(editing)}
               onChange={(event) => applyPreset(event.target.value)}
             >
-              {PROVIDER_PRESETS.map((preset) => (
-                <option key={preset.name} value={preset.name}>{preset.label}</option>
+              {groupByCategory(catalog).map(([category, presets]) => (
+                <optgroup key={category} label={CATEGORY_LABELS[category] ?? category}>
+                  {presets.map((preset) => (
+                    <option key={preset.id} value={preset.id}>{preset.label}</option>
+                  ))}
+                </optgroup>
               ))}
-              <option value="custom">OpenAI 兼容接口</option>
+              <option value={CUSTOM_PRESET}>自建 / 其它 OpenAI 兼容接口</option>
             </select>
+            {activePreset && (
+              <span className="hint">
+                {`推荐 ${PROTOCOL_LABELS[activePreset.protocol]}`}
+                {activePreset.context_window != null &&
+                  ` · 上下文 ${activePreset.context_window.toLocaleString()}`}
+                {activePreset.api_key_url && (
+                  <>
+                    {" · "}
+                    <a href={activePreset.api_key_url} target="_blank" rel="noreferrer">获取密钥</a>
+                  </>
+                )}
+              </span>
+            )}
+            {activePreset?.note && <span className="field-warning">{activePreset.note}</span>}
             {editing && <span className="hint">已有服务保留其当前设置；如需新预设，请新建一项。</span>}
           </div>
           <div className="field">
-            <label>配置名称</label>
-            <input
+            <label htmlFor="set-profile-name">配置名称</label>
+            <input id="set-profile-name"
               className="input"
               value={profileName}
               readOnly={Boolean(editing)}
@@ -376,28 +485,113 @@ function ProviderSection({
             {editing && <span className="hint">名称用于区分配置；需要改名时新建后删除旧项。</span>}
           </div>
           <div className="field">
-            <label>接口地址</label>
-            <input
+            <label htmlFor="set-base-url">接口地址</label>
+            <input id="set-base-url"
               className="input"
               value={fields.base_url}
               placeholder="https://api.example.com/v1"
               onChange={(event) => setFields((value) => ({ ...value, base_url: event.target.value }))}
             />
             <span className="hint">填写服务根地址，不要填写完整的 /chat/completions 路径。</span>
+            {pendingVars.length > 0 && (
+              <span className="field-warning">
+                地址里还有占位符待替换：
+                {pendingVars.map((variable) => `\${${variable.name}}（${variable.label}）`).join("、")}
+              </span>
+            )}
+            {activePreset && activePreset.endpoint_candidates.length > 0 && (
+              <span className="hint">
+                备用线路：
+                {activePreset.endpoint_candidates.map((candidate, index) => (
+                  <Fragment key={candidate.url}>
+                    {index > 0 && " · "}
+                    <button
+                      className="quiet-link"
+                      type="button"
+                      disabled={busy}
+                      title={`${candidate.url}（${PROTOCOL_LABELS[candidate.protocol]}）`}
+                      // 协议必须跟着地址一起切：多数备用线路是同一厂商的另一个协议口，
+                      // 只改地址会把 Anthropic 的请求发到一个只有 Chat 的 endpoint 上。
+                      onClick={() =>
+                        setFields((value) => ({
+                          ...value,
+                          base_url: candidate.url,
+                          protocol: candidate.protocol,
+                        }))
+                      }
+                    >
+                      {candidate.label}
+                    </button>
+                  </Fragment>
+                ))}
+              </span>
+            )}
           </div>
           <div className="field">
-            <label>模型</label>
-            <input
+            <label htmlFor="set-protocol">线路协议</label>
+            <select id="set-protocol"
               className="input"
+              disabled={busy}
+              value={fields.protocol}
+              onChange={(event) =>
+                setFields((value) => ({
+                  ...value,
+                  protocol: event.target.value as ProviderProtocol,
+                }))
+              }
+            >
+              {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
+                <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
+              ))}
+            </select>
+            <span className="hint">
+              决定请求体形状与鉴权头。同一地址支持多种协议时计费和能力可能不同，由你决定走哪个。
+            </span>
+            {fields.protocol === "openai_responses" && (
+              <span className="field-warning">
+                Responses 仅部分服务实现完整；不确定时选 Chat Completions。
+                {activePreset && !activePreset.reasoning_replay &&
+                  " 该服务不支持加密推理回放，多轮工具调用间的思维链不连续。"}
+              </span>
+            )}
+            {(() => {
+              const allowed = allowedProtocols(activePreset, fields.base_url);
+              if (!allowed) {
+                return activePreset ? (
+                  <span className="hint">
+                    地址已改写，协议不再受预设约束——请按你这条线路实际实现的接口选择。
+                  </span>
+                ) : null;
+              }
+              if (allowed.includes(fields.protocol)) return null;
+              return (
+                <span className="field-warning">
+                  该地址不支持这个协议，保存会被拒绝。可选：
+                  {allowed.map((protocol) => PROTOCOL_LABELS[protocol]).join(" / ")}
+                </span>
+              );
+            })()}
+          </div>
+          <div className="field">
+            <label htmlFor="set-model">模型</label>
+            <input id="set-model"
+              className="input"
+              list="set-model-options"
               value={fields.model}
               placeholder="模型名称"
               onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
             />
+            {/* 候选来自预设，但仍是自由输入：厂商换型号的速度快过我们发版 */}
+            <datalist id="set-model-options">
+              {(activePreset?.models ?? []).map((model) => (
+                <option key={model} value={model} />
+              ))}
+            </datalist>
           </div>
           <div className="field">
-            <label>访问密钥</label>
+            <label htmlFor="set-api-key">访问密钥</label>
             <span className="val">{credentialLabel}</span>
-            <input
+            <input id="set-api-key"
               className="input"
               type="password"
               placeholder={credential?.configured ? "留空则保留当前密钥" : "粘贴访问密钥"}
@@ -406,8 +600,8 @@ function ProviderSection({
             />
           </div>
           <div className="field token-field">
-            <label>最大输出</label>
-            <input
+            <label htmlFor="set-max-tokens">最大输出</label>
+            <input id="set-max-tokens"
               className="input"
               inputMode="numeric"
               value={fields.max_tokens}
@@ -428,8 +622,8 @@ function ProviderSection({
             )}
           </div>
           <div className="field">
-            <label>随机性</label>
-            <input
+            <label htmlFor="set-temperature">随机性</label>
+            <input id="set-temperature"
               className="input"
               inputMode="decimal"
               value={fields.temperature}
@@ -445,8 +639,8 @@ function ProviderSection({
               </button>
             )}
             <span className="spacer" />
-            <button className="btn" disabled={busy || outputExceedsDeepSeekLimit} onClick={() => saveProvider(false)}>保存</button>
-            <button className="btn accent" disabled={busy || outputExceedsDeepSeekLimit} onClick={() => saveProvider(true)}>保存并用于新对话</button>
+            <button className="btn" disabled={saveBlocked} onClick={() => saveProvider(false)}>保存</button>
+            <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并用于新对话</button>
           </div>
         </div>
       </div>
@@ -465,17 +659,17 @@ function GeneralSection({ config, reload }: { config: AppConfig; reload: () => P
       await settingsSet("log_level", v);
       await reload();
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     }
   };
 
   return (
     <section className="pane setcard">
       <h3>通用</h3>
-      {err && <div className="errbar">{err}</div>}
+      {err && <div className="errbar" role="alert">{err}</div>}
       <div className="field">
-        <label>日志级别</label>
-        <select
+        <label htmlFor="set-log-level">日志级别</label>
+        <select id="set-log-level"
           className="input"
           value={config.log_level ?? "info"}
           onChange={(e) => void setLevel(e.target.value)}
@@ -510,11 +704,13 @@ function AppearanceSection() {
     <section className="pane setcard">
       <h3>外观</h3>
       <div className="field">
-        <label>主题</label>
-        <div className="chips">
+        <label id="set-theme-label">主题</label>
+        <div className="chips" role="radiogroup" aria-labelledby="set-theme-label">
           {modes.map((m) => (
             <button
               key={m.key}
+              role="radio"
+              aria-checked={themeMode === m.key}
               className={`chipbtn${themeMode === m.key ? " on" : ""}`}
               onClick={() => setThemeMode(m.key)}
               title={m.hint}
@@ -525,8 +721,8 @@ function AppearanceSection() {
         </div>
       </div>
       <div className="field">
-        <label>界面缩放</label>
-        <input
+        <label htmlFor="set-zoom">界面缩放</label>
+        <input id="set-zoom"
           type="range"
           min={80}
           max={200}
@@ -553,8 +749,8 @@ function AccessibilitySection() {
     <section className="pane setcard">
       <h3>无障碍</h3>
       <div className="field">
-        <label>文本差异视图</label>
-        <input
+        <label htmlFor="set-diff-mode">文本差异视图</label>
+        <input id="set-diff-mode"
           className="switch"
           type="checkbox"
           role="switch"
@@ -581,7 +777,7 @@ function LogSection() {
       setLogs(await logsTail(200, filter === "all" ? undefined : filter));
       setErr(null);
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     }
   }, 1500);
 
@@ -598,10 +794,12 @@ function LogSection() {
     <section className="pane setcard">
       <h3>日志</h3>
       <div className="field">
-        <div className="chips">
+        <div className="chips" role="radiogroup" aria-label="日志级别过滤">
           {LOG_FILTERS.map((l) => (
             <button
               key={l}
+              role="radio"
+              aria-checked={filter === l}
               className={`chipbtn${filter === l ? " on" : ""}`}
               onClick={() => setFilter(l)}
             >
@@ -610,8 +808,8 @@ function LogSection() {
           ))}
         </div>
       </div>
-      {err && <div className="errbar">{err}</div>}
-      <div className="logbox" ref={boxRef}>
+      {err && <div className="errbar" role="alert">{err}</div>}
+      <div className="logbox" role="log" aria-live="off" ref={boxRef}>
         {logs.length === 0 ? (
           <div className="empty">暂无日志</div>
         ) : (
@@ -644,7 +842,7 @@ function SupportSection() {
     try {
       setPreview(await supportPreview());
     } catch (e) {
-      setErr(`预览失败：${String(e)}`);
+      setErr(`预览失败：${errText(e)}`);
     } finally {
       setBusy(false);
     }
@@ -659,7 +857,7 @@ function SupportSection() {
     try {
       setBundlePath(await supportBundle(dir));
     } catch (e) {
-      setErr(`导出失败：${String(e)}`);
+      setErr(`导出失败：${errText(e)}`);
     } finally {
       setBusy(false);
     }
@@ -669,7 +867,7 @@ function SupportSection() {
     <section className="pane setcard">
       <h3>支持包</h3>
       <p className="desc">导出版本、平台、近期日志和本地统计，便于提交问题；预览不会写入文件。</p>
-      {err && <div className="errbar">{err}</div>}
+      {err && <div className="errbar" role="alert">{err}</div>}
       <div className="footbar">
         <button className="btn" disabled={busy} onClick={() => void doPreview()}>
           生成预览
@@ -693,14 +891,14 @@ function SupportSection() {
         </dl>
       )}
       <div className="field export-row">
-        <label>输出目录</label>
-        <input className="input" value={outDir} onChange={(e) => setOutDir(e.target.value)} />
+        <label htmlFor="set-output-dir">输出目录</label>
+        <input id="set-output-dir" className="input" value={outDir} onChange={(e) => setOutDir(e.target.value)} />
         <button className="btn accent" disabled={busy || !outDir.trim()} onClick={() => void doExport()}>
           导出
         </button>
       </div>
       {bundlePath && (
-        <div className="okbar">
+        <div className="okbar" role="status">
           已生成：<span className="val">{bundlePath}</span>
         </div>
       )}
@@ -721,7 +919,7 @@ function CodexIntegrationSection() {
       setStatus(await codexIntegrationStatus());
       setErr(null);
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     }
   }, []);
 
@@ -737,7 +935,7 @@ function CodexIntegrationSection() {
       await codexInstallSkill();
       await refresh();
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     } finally {
       setBusy(false);
     }
@@ -751,7 +949,7 @@ function CodexIntegrationSection() {
       await codexStartLogin();
       setNotice("已在系统终端打开 Codex 登录。完成浏览器授权后，点击“刷新状态”。");
     } catch (e) {
-      setErr(String(e));
+      setErr(errText(e));
     } finally {
       setBusy(false);
     }
@@ -770,8 +968,8 @@ function CodexIntegrationSection() {
       <p className="desc">
         这是独立于 R-Code Agent 模型服务的 Codex 登录与协作入口。R-Code 的 Provider 列表不会修改 Codex 的登录态、模型或第三方路由。
       </p>
-      {err && <div className="errbar">{err}</div>}
-      {notice && <div className="okbar">{notice}</div>}
+      {err && <div className="errbar" role="alert">{err}</div>}
+      {notice && <div className="okbar" role="status">{notice}</div>}
       {status && (
         <dl className="kv">
           <dt>Codex CLI</dt>

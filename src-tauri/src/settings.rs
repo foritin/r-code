@@ -272,6 +272,7 @@ mod tests {
             model: "claude-sonnet-4".into(),
             max_tokens: None,
             temperature: None,
+            protocol: None,
         }
     }
 

@@ -19,6 +19,56 @@ use tokio::sync::RwLock;
 
 use crate::permission::{PermissionCheckResult, PermissionEngine};
 
+/// 路径参数缺失时的处理策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathArity {
+    /// 必须提供；缺失即拒绝调用（fail-closed）。
+    Required,
+    /// 缺失时回落到工作区根目录。
+    DefaultRoot,
+    /// 缺失时保持缺失，不注入任何值。
+    Optional,
+}
+
+/// 声明工具输入中哪些键是文件系统路径，需经 `PathGuard` 重新解析。
+///
+/// 运行时用它把模型给出的任意路径（含绝对路径、`..`、符号链接）重绑定到当前
+/// 会话工作区内。工具自己声明键名，运行时不再硬编码 `"path"`。
+#[derive(Debug, Clone, Copy)]
+pub struct PathBinding {
+    /// 输入对象里的键名，例如 `"path"` / `"cwd"`。
+    pub key: &'static str,
+    /// 键缺失时的处理策略。
+    pub arity: PathArity,
+}
+
+impl PathBinding {
+    /// 必填路径键。
+    pub const fn required(key: &'static str) -> Self {
+        Self {
+            key,
+            arity: PathArity::Required,
+        }
+    }
+    /// 可选路径键，缺失时回落到工作区根。
+    pub const fn default_root(key: &'static str) -> Self {
+        Self {
+            key,
+            arity: PathArity::DefaultRoot,
+        }
+    }
+    /// 可选路径键，缺失时不注入。
+    pub const fn optional(key: &'static str) -> Self {
+        Self {
+            key,
+            arity: PathArity::Optional,
+        }
+    }
+}
+
+/// 默认绑定：单个必填 `path`（与历史行为一致）。
+const DEFAULT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("path")];
+
 /// 工具 trait -- 每个内置工具实现此接口。
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -26,8 +76,20 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     /// 工具描述（注入模型提示）。
     fn description(&self) -> &str;
-    /// 默认风险等级。
+    /// 默认（静态）风险等级。用于 `ToolSpec.requires_confirmation` 的 UI 提示，
+    /// 也是 `risk_for` 的兜底值。
     fn risk_level(&self) -> RiskLevel;
+    /// 按具体输入动态定级。
+    ///
+    /// 命令类工具必须覆写此方法：`cargo test` 与 `sudo rm -rf /` 不该同级。
+    /// 默认回落到静态 [`Tool::risk_level`]，因此既有工具无需改动。
+    fn risk_for(&self, _input: &serde_json::Value) -> RiskLevel {
+        self.risk_level()
+    }
+    /// 声明需要经 `PathGuard` 重绑定的输入键。默认单个必填 `path`。
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        DEFAULT_PATH_BINDINGS
+    }
     /// JSON Schema 输入定义。
     fn input_schema(&self) -> serde_json::Value;
     /// 执行工具，返回输出文本。
@@ -37,8 +99,13 @@ pub trait Tool: Send + Sync {
 /// 子代理只能经由 Gateway 使用这组可证明无副作用的工作区工具。
 ///
 /// 运行时与 Gateway 都复用此规则，避免未来新增调用路径时绕过只读边界。
+///
+/// `glob` / `search` 只读遍历，可安全授予；`edit` / `bash` 有副作用，永不授予。
 pub fn subagent_read_only_tool_allowed(name: &str) -> bool {
-    matches!(name, "read_file" | "list_files" | "search" | "git_status")
+    matches!(
+        name,
+        "read_file" | "list_files" | "search" | "glob" | "git_status"
+    )
 }
 
 fn is_subagent_caller(caller: Option<&str>) -> bool {
@@ -68,6 +135,13 @@ impl ToolGateway {
     /// 注册一个工具。
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
+    }
+
+    /// 查询某工具声明的路径绑定；工具未注册时返回 `None`。
+    ///
+    /// 供 Agent 运行时在调用前把路径参数重绑定到会话工作区。
+    pub fn path_bindings(&self, tool_name: &str) -> Option<&'static [PathBinding]> {
+        self.tools.get(tool_name).map(|tool| tool.path_bindings())
     }
 
     /// 列出所有已注册工具的规格。
@@ -129,8 +203,8 @@ impl ToolGateway {
             .get(tool_name)
             .ok_or_else(|| ProductError::PermissionError(format!("tool not found: {tool_name}")))?;
 
-        // 2. 获取风险等级
-        let risk_level = tool.risk_level();
+        // 2. 获取风险等级（按本次输入动态定级；非命令类工具回落到静态等级）
+        let risk_level = tool.risk_for(&input);
         if is_subagent_caller(caller) && !subagent_read_only_tool_allowed(tool_name) {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
             let mut audit =
@@ -208,6 +282,7 @@ impl ToolGateway {
     /// - 权限请求用 `check_detailed` 创建（带真实 tool_call_id 与 input_summary）
     /// - 审批中挂起等待（最长 10 分钟），`abort_flag` 置位时提前返回取消错误
     /// - 批复 Allow / AllowAlways 后执行；Deny / 超时返回权限错误
+    #[allow(clippy::too_many_arguments)]
     pub async fn execute_with_wait(
         &self,
         task_id: &str,
@@ -252,7 +327,7 @@ impl ToolGateway {
             .get(tool_name)
             .ok_or_else(|| ProductError::PermissionError(format!("tool not found: {tool_name}")))?;
 
-        let risk_level = tool.risk_level();
+        let risk_level = tool.risk_for(&input);
         let target = input.get("target").and_then(|v| v.as_str());
 
         let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);

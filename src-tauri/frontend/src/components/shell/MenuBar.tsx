@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { useAppStore } from "../../store/app";
+import { KEYMAP, keyLabel, type KeyAction } from "../../lib/keys";
+import { useFocusTrap, useReturnFocus } from "../../lib/hooks";
 import { useTasksStore, selectRunning, selectNeedsYou } from "../../store/tasks";
 import { elapsedSince } from "../../lib/format";
 import { IconClose, IconMaximize, IconMinimize } from "../icons";
@@ -38,24 +40,72 @@ export function MenuBar() {
 
   const [open, setOpen] = useState<string | null>(null);
   const [about, setAbout] = useState<string | null>(null);
+  const [shortcuts, setShortcuts] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
+  const dropRef = useRef<HTMLDivElement>(null);
+  const aboutRef = useRef<HTMLDivElement>(null);
+  const shortcutsRef = useRef<HTMLDivElement>(null);
 
-  // 点击外部关闭菜单
+  // 点击外部关闭菜单。改用 pointerdown（触控/笔也能正确关闭），
+  // 并在 Escape 时把焦点还给菜单标题 —— 原先焦点会掉到 body。
   useEffect(() => {
     if (!open) return;
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: PointerEvent) => {
       if (barRef.current && !barRef.current.contains(e.target as Node)) setOpen(null);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(null);
+      if (e.key !== "Escape") return;
+      setOpen(null);
+      barRef.current?.querySelector<HTMLElement>(`[data-menu="${open}"]`)?.focus();
     };
-    window.addEventListener("mousedown", onDown);
+    window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  // 打开后把焦点移进第一项；文件头注释一直声称支持 ↑↓⏎，实现其实不存在。
+  useEffect(() => {
+    if (!open) return;
+    dropRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')
+      ?.focus();
+  }, [open]);
+
+  const onMenuKeys = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(
+      dropRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []
+    );
+    if (items.length === 0) return;
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const delta = e.key === "ArrowDown" ? 1 : -1;
+      items[(index + delta + items.length) % items.length].focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      items[0].focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      items[items.length - 1].focus();
+    } else if (e.key === "Tab") {
+      setOpen(null);
+    }
+  };
+
+  useFocusTrap(aboutRef, Boolean(about));
+  useReturnFocus(Boolean(about));
+  useFocusTrap(shortcutsRef, shortcuts);
+  useReturnFocus(shortcuts);
+
+  // 窗口级 Ctrl+/ 也能打开，见 App.tsx 的 useGlobalKeys
+  useEffect(() => {
+    const open = () => setShortcuts(true);
+    window.addEventListener("r-code:shortcuts", open);
+    return () => window.removeEventListener("r-code:shortcuts", open);
+  }, []);
 
   const currentTask = tasks.find((t) => t.id === currentTaskId);
   const workspaceName = (path: string | null) => {
@@ -97,10 +147,10 @@ export function MenuBar() {
       key: "file",
       title: "文件",
       items: [
-        { label: "新建会话", shortcut: "Ctrl N", action: goHome },
+        { label: "新建会话", shortcut: keyLabel("new"), action: goHome },
         { label: "打开工作区…", action: () => setScene("projects") },
         { separator: true },
-        { label: "设置", shortcut: "Ctrl ,", action: () => setScene("settings") },
+        { label: "设置", shortcut: keyLabel("settings"), action: () => setScene("settings") },
         { separator: true },
         { label: "退出", action: () => void getCurrentWindow().close() },
       ],
@@ -123,21 +173,23 @@ export function MenuBar() {
         { label: "活动", action: () => setScene("deck") },
         { label: "待处理", action: () => setScene("inbox") },
         { label: "文件夹", action: () => setScene("projects") },
-        { label: "文件预览", shortcut: "Ctrl E", action: () => setScene("editor") },
-        { label: "搜索", shortcut: "Ctrl K", action: toggleSearch },
+        { label: "文件预览", shortcut: keyLabel("editor"), action: () => setScene("editor") },
+        { label: "搜索", shortcut: keyLabel("search"), action: toggleSearch },
         { separator: true },
         { label: "查看变更", disabled: scene !== "room", action: () => setCanvasTab("changes") },
         { label: "查看验证", disabled: scene !== "room", action: () => setCanvasTab("review") },
         { separator: true },
-        { label: "放大", shortcut: "Ctrl +", action: zoomIn },
-        { label: "缩小", shortcut: "Ctrl −", action: zoomOut },
-        { label: "重置缩放", shortcut: "Ctrl 0", action: zoomReset },
+        { label: "放大", shortcut: keyLabel("zoomIn"), action: zoomIn },
+        { label: "缩小", shortcut: keyLabel("zoomOut"), action: zoomOut },
+        { label: "重置缩放", shortcut: keyLabel("zoomReset"), action: zoomReset },
       ],
     },
     {
       key: "help",
       title: "帮助",
       items: [
+        { label: "快捷键参考", shortcut: keyLabel("shortcuts"), action: () => setShortcuts(true) },
+        { separator: true },
         { label: "查看日志", action: () => setScene("settings") },
         { label: "支持包", action: () => setScene("settings") },
         { separator: true },
@@ -162,17 +214,24 @@ export function MenuBar() {
               }}
               aria-expanded={open === m.key}
               aria-haspopup="menu"
+              data-menu={m.key}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown" && open !== m.key) {
+                  e.preventDefault();
+                  setOpen(m.key);
+                }
+              }}
             >
               {m.title}
             </button>
             {open === m.key && (
-              <div className="dropdown" role="menu">
+              <div className="dropdown" role="menu" aria-label={m.title} ref={dropRef} onKeyDown={onMenuKeys}>
                 {m.items.map((it, i) =>
                   it.separator ? (
                     <div className="sep" key={i} />
                   ) : (
                     <button
-                      className="mi"
+                      className="mi ring-inset"
                       key={i}
                       role="menuitem"
                       disabled={it.disabled}
@@ -220,13 +279,53 @@ export function MenuBar() {
           <IconClose />
         </button>
       </span>
+      {shortcuts && (
+        <div className="about-backdrop" onClick={() => setShortcuts(false)}>
+          <div
+            className="about pane"
+            role="dialog"
+            aria-modal="true"
+            aria-label="键盘快捷键"
+            ref={shortcutsRef}
+            style={{ width: "min(560px, 92vw)", textAlign: "left" }}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setShortcuts(false);
+            }}
+          >
+            <div className="about-brand">键盘快捷键</div>
+            <div className="shortcuts-grid">
+              {(Object.keys(KEYMAP) as KeyAction[]).map((action) => (
+                <div className="shortcuts-row" key={action}>
+                  <span>{KEYMAP[action].description}</span>
+                  <span className="spacer" />
+                  <kbd>{keyLabel(action)}</kbd>
+                </div>
+              ))}
+            </div>
+            <button className="btn" autoFocus onClick={() => setShortcuts(false)}>
+              关闭
+            </button>
+          </div>
+        </div>
+      )}
       {about && (
         <div className="about-backdrop" onClick={() => setAbout(null)}>
-          <div className="about pane" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="about pane"
+            role="dialog"
+            aria-modal="true"
+            aria-label="关于 R-Code"
+            ref={aboutRef}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setAbout(null);
+            }}
+          >
             <div className="about-brand">R-Code</div>
             <div className="about-ver">版本 {about}</div>
             <div className="about-desc">本地优先的编码 agent 驾驶舱。</div>
-            <button className="btn" onClick={() => setAbout(null)}>
+            <button className="btn" autoFocus onClick={() => setAbout(null)}>
               关闭
             </button>
           </div>

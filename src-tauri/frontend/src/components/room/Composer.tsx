@@ -1,23 +1,35 @@
 /**
  * Room 输入区 —— Enter 发送 / Shift+Enter 换行；运行中以引导为主动作。
- * `@` 触发 quickOpen 文件下拉,选中后插入 @path 文本。
- * 发送错误(如未配置 provider)显示在上方错误条,不静默。
+ * `@` 触发 quickOpen 文件下拉，选中后插入 @path 文本。
+ *
+ * 输入区脚下现在镜像了「模型」与「权限」两个控件（与新对话页同构）。原先这里
+ * 只有一个只读的模型状态芯片，想换模型或改权限必须回到会话顶栏找。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  agentQueueRemove,
-  agentSend,
-  quickOpen,
-  settingsGet,
-} from "../../lib/ipc";
-import type { AgentSendMode, QueuedMessage } from "../../lib/types";
+import { agentQueueRemove, agentSend, quickOpen } from "../../lib/ipc";
+import type { AgentSendMode, ProjectAccessMode, QueuedMessage } from "../../lib/types";
+import type { ProviderChoice } from "../../lib/provider";
+import { useArmedAction, useAsyncAction } from "../../lib/hooks";
 import { useTasksStore } from "../../store/tasks";
+import { Menu, MenuItem } from "../ui/Menu";
+import { StatusBar } from "../ui/StatusBar";
+import { ProjectAccessSelector } from "../ProjectAccessSelector";
+import { ModelSwitcher } from "./ModelSwitcher";
 import { IconChevronDown, IconSend, IconStop } from "../icons";
 
 interface Props {
   taskId: string;
   workspacePath: string | null;
   workspaceAttached: boolean;
+  workspaceName: string | null;
+  workspaceAccessMode: ProjectAccessMode;
+  onAccessModeChange: (mode: ProjectAccessMode) => Promise<void> | void;
+  scopeBusy: boolean;
+  providerName: string | null;
+  model: string | null;
+  providerChoices: ProviderChoice[];
+  providerFallback: string;
+  onProviderChanged: () => void;
   running: boolean;
   queuedMessages: QueuedMessage[];
   onAbort: () => Promise<void>;
@@ -38,6 +50,15 @@ export function Composer({
   taskId,
   workspacePath,
   workspaceAttached,
+  workspaceName,
+  workspaceAccessMode,
+  onAccessModeChange,
+  scopeBusy,
+  providerName,
+  model,
+  providerChoices,
+  providerFallback,
+  onProviderChanged,
   running,
   queuedMessages,
   onAbort,
@@ -49,105 +70,14 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [at, setAt] = useState<AtState | null>(null);
-  const [rtChip, setRtChip] = useState<{ cls: string; text: string }>({ cls: "", text: "…" });
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [queueOpen, setQueueOpen] = useState(false);
-  const [sendNowArmed, setSendNowArmed] = useState(false);
-  const [aborting, setAborting] = useState(false);
-  const [abortError, setAbortError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const commandBarRef = useRef<HTMLDivElement>(null);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sendNowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
-  const lastRun = useTasksStore((s) => {
-    const runs = s.details[taskId]?.runs;
-    return runs && runs.length > 0 ? runs[runs.length - 1] : undefined;
-  });
-  const boundProviderName = useTasksStore(
-    (s) => s.details[taskId]?.task.provider_name ?? null
-  );
-
-  const disarmSendNow = useCallback(() => {
-    if (sendNowTimerRef.current) {
-      window.clearTimeout(sendNowTimerRef.current);
-      sendNowTimerRef.current = null;
-    }
-    setSendNowArmed(false);
-  }, []);
 
   useEffect(() => () => {
     if (debRef.current) window.clearTimeout(debRef.current);
-    if (sendNowTimerRef.current) window.clearTimeout(sendNowTimerRef.current);
   }, []);
-
-  useEffect(() => {
-    disarmSendNow();
-  }, [text, disarmSendNow]);
-
-  useEffect(() => {
-    if (running) return;
-    setMoreOpen(false);
-    setQueueOpen(false);
-    setAbortError(null);
-    disarmSendNow();
-  }, [running, disarmSendNow]);
-
-  useEffect(() => {
-    if (!queueOpen && !moreOpen) return;
-
-    const dismissFromOutside = (event: PointerEvent) => {
-      if (commandBarRef.current?.contains(event.target as Node)) return;
-      setQueueOpen(false);
-      setMoreOpen(false);
-      disarmSendNow();
-    };
-    const dismissFromKeyboard = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setQueueOpen(false);
-      setMoreOpen(false);
-      disarmSendNow();
-      taRef.current?.focus();
-    };
-
-    document.addEventListener("pointerdown", dismissFromOutside);
-    document.addEventListener("keydown", dismissFromKeyboard);
-    return () => {
-      document.removeEventListener("pointerdown", dismissFromOutside);
-      document.removeEventListener("keydown", dismissFromKeyboard);
-    };
-  }, [queueOpen, moreOpen, disarmSendNow]);
-
-  // 优先展示最近一次运行模型；避免把 runtime 内部术语暴露给用户。
-  useEffect(() => {
-    let dead = false;
-    void (async () => {
-      let provider = "";
-      let cfgModel = "";
-      try {
-        const res = await settingsGet();
-        provider = boundProviderName ?? res.config.default_provider ?? "";
-        cfgModel = (provider && res.config.providers?.[provider]?.model) || "";
-      } catch {
-        /* 设置读取失败不阻塞输入区 */
-      }
-      if (dead) return;
-      const runModel = lastRun?.model ?? "";
-      if (runModel.toLowerCase().includes("mock")) {
-        setRtChip({ cls: "", text: "演示模型" });
-      } else if (runModel) {
-        setRtChip({ cls: "ok", text: `模型：${runModel}` });
-      } else if (provider) {
-        setRtChip({ cls: "ok", text: `模型：${cfgModel || provider}` });
-      } else {
-        setRtChip({ cls: "warn", text: "未连接模型服务" });
-      }
-    })();
-    return () => {
-      dead = true;
-    };
-  }, [lastRun?.model, boundProviderName]);
 
   // `@` 文件引用：仅在已附加工作区中触发文件搜索。
   const detectAt = useCallback((value: string, pos: number) => {
@@ -159,13 +89,7 @@ export function Composer({
     const query = m[1];
     const start = pos - query.length - 1;
     if (!workspacePath || !workspaceAttached) {
-      setAt({
-        start,
-        query,
-        items: [],
-        active: 0,
-        error: "附加一个文件夹后才能引用本地文件",
-      });
+      setAt({ start, query, items: [], active: 0, error: "附加一个文件夹后才能引用本地文件" });
       return;
     }
     if (debRef.current) clearTimeout(debRef.current);
@@ -204,11 +128,8 @@ export function Composer({
       // 不等待 IPC 往返：运行中的引导、排队和立即发送都应立即可见。
       onSent(msg, mode);
       await agentSend(taskId, msg, mode);
-      // IPC 成功后才把引导标为“已接纳”，失败时会由下方 catch 回滚时间线。
+      // IPC 成功后才把引导标为"已接纳"，失败时由下方 catch 回滚时间线。
       onActivitySent(mode);
-      setMoreOpen(false);
-      setQueueOpen(mode === "queue");
-      disarmSendNow();
       setText("");
       setAt(null);
       await refreshDetail(taskId);
@@ -219,54 +140,21 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [
-    text,
-    sending,
-    taskId,
-    onSent,
-    onSendFailed,
-    onActivitySent,
-    refreshDetail,
-    disarmSendNow,
-  ]);
+  }, [text, sending, taskId, onSent, onSendFailed, onActivitySent, refreshDetail]);
 
-  const requestSendNow = useCallback(() => {
-    if (!text.trim() || sending) return;
-    if (sendNowArmed) {
-      disarmSendNow();
-      void send("send_now");
-      return;
-    }
-    setMoreOpen(true);
-    setSendNowArmed(true);
-    if (sendNowTimerRef.current) window.clearTimeout(sendNowTimerRef.current);
-    sendNowTimerRef.current = window.setTimeout(() => {
-      sendNowTimerRef.current = null;
-      setSendNowArmed(false);
-    }, 4000);
-  }, [text, sending, sendNowArmed, disarmSendNow, send]);
+  // 立即发送会打断当前运行，保留二次确认（原先是本地手写的 4s 计时器）
+  const sendNow = useArmedAction(() => void send("send_now"));
+  const disarmSendNow = sendNow.disarm;
+  useEffect(() => {
+    if (!running) disarmSendNow();
+  }, [running, disarmSendNow]);
 
-  const removeQueued = useCallback(async (queueId: string) => {
-    try {
-      await agentQueueRemove(taskId, queueId);
-      await refreshDetail(taskId);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [taskId, refreshDetail]);
+  const removeQueued = useAsyncAction(async (queueId: string) => {
+    await agentQueueRemove(taskId, queueId);
+    await refreshDetail(taskId);
+  }, { label: "移除队列消息" });
 
-  const abort = useCallback(async () => {
-    if (aborting) return;
-    setAborting(true);
-    setAbortError(null);
-    try {
-      await onAbort();
-    } catch (cause) {
-      setAbortError(String(cause));
-    } finally {
-      setAborting(false);
-    }
-  }, [aborting, onAbort]);
+  const abort = useAsyncAction(onAbort, { label: "中断" });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (at && !at.error && at.items.length > 0) {
@@ -289,13 +177,9 @@ export function Composer({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (running) {
-        if (e.ctrlKey || e.metaKey) {
-          requestSendNow();
-        } else if (e.altKey) {
-          void send("queue");
-        } else {
-          void send("steer");
-        }
+        if (e.ctrlKey || e.metaKey) sendNow.trigger();
+        else if (e.altKey) void send("queue");
+        else void send("steer");
       } else {
         void send();
       }
@@ -305,22 +189,29 @@ export function Composer({
   return (
     <div className="composer">
       {error && (
-        <div className="comp-error" role="alert">
+        <StatusBar kind="error" compact onDismiss={() => setError(null)}>
           发送失败：{error}
-        </div>
+        </StatusBar>
       )}
-      {abortError && <div className="comp-error" role="alert">中断失败：{abortError}</div>}
+      {abort.error && (
+        <StatusBar kind="error" compact onDismiss={abort.clearError}>
+          {abort.error}
+        </StatusBar>
+      )}
       {at && (
-        <div className="at-menu">
+        <div className="at-menu popover popover--up" role="listbox" aria-label="引用文件">
           {at.error ? (
-            <div className="at-item dim">文件搜索失败:{at.error}</div>
+            <div className="popover-empty">文件搜索失败：{at.error}</div>
           ) : at.items.length === 0 ? (
-            <div className="at-item dim">无匹配文件</div>
+            <div className="popover-empty">无匹配文件</div>
           ) : (
             at.items.map((p, i) => (
               <button
                 key={p}
-                className={"at-item" + (i === at.active ? " on" : "")}
+                type="button"
+                role="option"
+                aria-selected={i === at.active}
+                className={"at-item ring-inset" + (i === at.active ? " on" : "")}
                 onMouseDown={(e) => {
                   e.preventDefault(); // 保持 textarea 焦点
                   pickAt(p);
@@ -338,6 +229,7 @@ export function Composer({
           ref={taRef}
           rows={2}
           value={text}
+          aria-label="给 Agent 的消息"
           placeholder={
             running
               ? "正在处理，可继续补充要求…"
@@ -349,22 +241,44 @@ export function Composer({
           }}
           onKeyDown={onKeyDown}
         />
+
+        {/* 输入区脚下的控件：与新对话页同构的「模型」「权限」入口 */}
         <div className="comp-meta">
-          <span className={"chip rt-chip " + rtChip.cls}>{rtChip.text}</span>
+          <ModelSwitcher
+            taskId={taskId}
+            providerName={providerName}
+            model={model}
+            choices={providerChoices}
+            fallback={providerFallback}
+            running={running}
+            onChanged={onProviderChanged}
+            variant="pill"
+          />
+          {workspaceAttached && (
+            <ProjectAccessSelector
+              value={workspaceAccessMode}
+              workspaceName={workspaceName ?? "当前工作区"}
+              placement="up"
+              disabled={scopeBusy || running}
+              onChange={onAccessModeChange}
+            />
+          )}
           <span className="spacer" />
           {!running && (
             <button
               className="send"
               disabled={!text.trim() || sending}
               onClick={() => void send("auto")}
+              aria-label="发送消息"
               title="发送（Enter）"
             >
               <IconSend width={12} height={12} />
             </button>
           )}
         </div>
+
         {running && (
-          <div className="run-command-bar" ref={commandBarRef} aria-label="运行中消息操作">
+          <div className="run-command-bar" aria-label="运行中消息操作">
             <button
               className="run-command-action primary"
               type="button"
@@ -384,91 +298,98 @@ export function Composer({
             >
               排队 <kbd>Alt+Enter</kbd>
             </button>
-            <div className="run-queue">
-              <button
-                className="run-queue-summary"
-                type="button"
-                onClick={() => {
-                  setQueueOpen((value) => !value);
-                  setMoreOpen(false);
-                  disarmSendNow();
-                }}
-                aria-expanded={queueOpen}
-                aria-controls={`queue-popover-${taskId}`}
-                aria-haspopup="dialog"
-              >
-                队列 <strong>{queuedMessages.length}</strong>
-              </button>
-              {queueOpen && (
-                <div className="queue-popover" id={`queue-popover-${taskId}`} role="dialog" aria-label="待发送队列">
-                  <div className="queue-popover-head">
-                    <span>待发送队列</span>
-                    <span>{queuedMessages.length} 条</span>
-                  </div>
-                  {queuedMessages.length === 0 ? (
-                    <p className="queue-empty">没有待发送的消息</p>
-                  ) : (
-                    <div className="queue-list">
-                      {queuedMessages.map((item) => (
-                        <div className="queue-item" key={item.id}>
-                          <span title={item.message}>{item.message}</span>
-                          <span className={"queue-state " + item.state}>{queueStateLabel(item.state)}</span>
-                          <button type="button" onClick={() => void removeQueued(item.id)} aria-label={`移除队列消息：${item.message}`}>
-                            移除
-                          </button>
-                        </div>
-                      ))}
+
+            <Menu
+              role="dialog"
+              label="待发送队列"
+              placement="up"
+              align="left"
+              menuClassName="queue-popover"
+              trigger={
+                <button className="run-queue-summary" type="button">
+                  队列 <strong>{queuedMessages.length}</strong>
+                </button>
+              }
+            >
+              <div className="queue-popover-head">
+                <span>待发送队列</span>
+                <span>{queuedMessages.length} 条</span>
+              </div>
+              {queuedMessages.length === 0 ? (
+                <p className="queue-empty">没有待发送的消息</p>
+              ) : (
+                <div className="queue-list">
+                  {queuedMessages.map((item) => (
+                    <div className="queue-item" key={item.id}>
+                      <span title={item.message}>{item.message}</span>
+                      <span className={"queue-state " + item.state}>{queueStateLabel(item.state)}</span>
+                      <button
+                        type="button"
+                        className="iconbtn"
+                        disabled={removeQueued.busy}
+                        onClick={() => void removeQueued.run(item.id)}
+                        aria-label={`移除队列消息：${item.message}`}
+                      >
+                        移除
+                      </button>
                     </div>
-                  )}
+                  ))}
                 </div>
               )}
-            </div>
+            </Menu>
+
             <span className="run-command-spacer" />
-            <div className="comp-more">
-              <button
-                className="run-command-more"
-                type="button"
-                disabled={!text.trim() || sending}
-                onClick={() => {
-                  setMoreOpen((value) => !value);
-                  setQueueOpen(false);
-                }}
-                aria-label="更多运行中发送操作"
-                aria-expanded={moreOpen}
-                aria-haspopup="menu"
-                title="更多操作"
-              >
-                <IconChevronDown width={12} height={12} />
-              </button>
-              {moreOpen && (
-                <div className="comp-more-menu" role="menu">
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={sendNowArmed ? "confirm" : ""}
-                    onClick={requestSendNow}
+
+            <Menu
+              label="更多发送方式"
+              placement="up"
+              align="right"
+              menuClassName="comp-more-menu"
+              trigger={
+                <button
+                  className="run-command-more"
+                  type="button"
+                  disabled={!text.trim() || sending}
+                  aria-label="更多运行中发送操作"
+                  title="更多操作"
+                >
+                  <IconChevronDown width={12} height={12} />
+                </button>
+              }
+            >
+              {({ close }) => (
+                <>
+                  <MenuItem
+                    close={close}
+                    closeOnSelect={false}
+                    className={sendNow.armed ? "confirm is-destructive" : "is-destructive"}
+                    shortcut="Ctrl+Enter"
+                    onSelect={() => {
+                      sendNow.trigger();
+                      if (sendNow.armed) close();
+                    }}
                   >
-                    {sendNowArmed ? "确认立即发送" : "立即发送"}
-                    <span>Ctrl+Enter</span>
-                  </button>
-                  {sendNowArmed && (
+                    {sendNow.armed ? "确认立即发送" : "立即发送"}
+                  </MenuItem>
+                  {sendNow.armed && (
                     <p className="comp-send-now-note" role="status">
                       将停止当前运行；再次点击或按 Ctrl+Enter 确认
                     </p>
                   )}
-                </div>
+                </>
               )}
-            </div>
+            </Menu>
+
             <button
-              className="run-command-stop"
+              className="run-command-stop is-destructive"
               type="button"
-              disabled={aborting}
-              onClick={() => void abort()}
-              aria-label={aborting ? "正在中断当前运行" : "中断当前运行"}
+              disabled={abort.busy}
+              onClick={() => void abort.run()}
+              aria-label={abort.busy ? "正在中断当前运行" : "中断当前运行"}
               title="中断当前运行"
             >
               <IconStop width={11} height={11} />
-              <span>{aborting ? "中断中" : "中断"}</span>
+              <span>{abort.busy ? "中断中" : "中断"}</span>
             </button>
           </div>
         )}

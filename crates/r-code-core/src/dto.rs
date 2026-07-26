@@ -29,6 +29,9 @@ pub struct Task {
     /// 本会话绑定的模型服务配置名。为空时兼容旧会话，运行时回退到全局默认服务。
     #[serde(default)]
     pub provider_name: Option<String>,
+    /// 本会话绑定的具体模型。为空时使用该服务在设置里配置的默认模型。
+    #[serde(default)]
+    pub model: Option<String>,
     /// 用户可见标题
     pub title: String,
     /// 用户输入的目标描述
@@ -58,6 +61,7 @@ impl Task {
             id: Uuid::new_v4().to_string(),
             workspace_path,
             provider_name: None,
+            model: None,
             title: title.into(),
             goal: goal.into(),
             mode,

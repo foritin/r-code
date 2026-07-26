@@ -270,15 +270,17 @@ impl<'a> ReviewService<'a> {
         Ok(paths)
     }
 
-    /// 设置任务活跃 Run 的审查状态。
+    /// 设置任务最近一条主 Run 的审查状态。
     fn set_review_state(
         &self,
         task_id: &str,
         review_state: ReviewState,
     ) -> Result<(), ProductError> {
         let repo = AgentRunRepository::new(self.db);
-        let run = repo.get_active_run(task_id)?.ok_or_else(|| {
-            ProductError::StateMachineError(format!("no active run for task {task_id}"))
+        // 必须取"最近一条主 run"而非"活跃 run"：用户能执行审查动作时，
+        // 那条 run 按定义已经结束，get_active_run 恒为 None。
+        let run = repo.get_latest_main_run(task_id)?.ok_or_else(|| {
+            ProductError::StateMachineError(format!("no main run for task {task_id}"))
         })?;
         repo.update_review_state(&run.id, review_state)?;
         Ok(())
@@ -525,6 +527,33 @@ mod tests {
     }
 
     // ── apply_action ───────────────────────────────────────────────
+
+    /// 回归：drain loop 结束 run 之后仍能接受。
+    ///
+    /// 原实现走 get_active_run（要求 ended_at IS NULL），而生产中用户能点接受时
+    /// run 早已收尾 —— 于是 accept_task 100% 返回 "no active run for task"。
+    /// 旧测试没复现这个前置条件（Fixture 的 run 从未结束），所以整个测试套件都没抓到。
+    #[tokio::test]
+    async fn apply_action_accept_all_after_run_ended() {
+        let fx = Fixture::new();
+        let repo = AgentRunRepository::new(&fx.db);
+
+        // 模拟 commands.rs 的 drain loop：写入 Pending 并结束 run
+        repo.update_review_state(&fx.run.id, ReviewState::Pending)
+            .unwrap();
+        let ended_before = repo.get(&fx.run.id).unwrap().unwrap().ended_at;
+        assert!(ended_before.is_some());
+
+        fx.service()
+            .apply_action(&fx.task.id, ReviewAction::AcceptAll)
+            .await
+            .unwrap();
+
+        let run = repo.get(&fx.run.id).unwrap().unwrap();
+        assert_eq!(run.review_state, ReviewState::Accepted);
+        // 结束时刻必须保持首次值，不被接受时刻覆盖
+        assert_eq!(run.ended_at, ended_before);
+    }
 
     #[tokio::test]
     async fn apply_action_accept_all() {

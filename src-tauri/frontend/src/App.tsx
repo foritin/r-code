@@ -12,6 +12,7 @@ import { ProjectsScene } from "./components/scenes/ProjectsScene";
 import { EditorScene } from "./components/scenes/EditorScene";
 import { SettingsScene } from "./components/scenes/SettingsScene";
 import { SearchOverlay } from "./components/SearchOverlay";
+import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
 
 /**
  * R-Code 应用根组件。
@@ -23,6 +24,8 @@ export default function App() {
   const themeMode = useAppStore((s) => s.themeMode);
   const zoomLevel = useAppStore((s) => s.zoomLevel);
   const searchOpen = useAppStore((s) => s.searchOpen);
+  const railCollapsed = useAppStore((s) => s.railCollapsed);
+  const toggleRail = useAppStore((s) => s.toggleRail);
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
   const toggleSearch = useAppStore((s) => s.toggleSearch);
@@ -34,13 +37,15 @@ export default function App() {
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
 
   useGlobalKeys({
-    onSearch: toggleSearch,
-    onEditor: () => setScene("editor"),
-    onNew: goHome,
-    onSettings: () => setScene("settings"),
-    onZoomIn: zoomIn,
-    onZoomOut: zoomOut,
-    onZoomReset: zoomReset,
+    search: toggleSearch,
+    editor: () => setScene("editor"),
+    new: goHome,
+    settings: () => setScene("settings"),
+    toggleRail,
+    shortcuts: () => window.dispatchEvent(new Event("r-code:shortcuts")),
+    zoomIn,
+    zoomOut,
+    zoomReset,
   });
 
   // 主题解析：light → studio-light；dark → obsidian；system → 跟随 OS（含变化监听）
@@ -61,11 +66,19 @@ export default function App() {
     void refreshTasks().catch(() => {});
   }, [refreshWorkspaces, refreshTasks]);
 
+  // 后台任务跑完 / 权限卡住时播报（不在场就完全无感的那部分）
+  useTaskCompletionToasts();
+
   return (
-    <div id="app" style={{ zoom: zoomLevel / 100 }}>
+    <div
+      id="app"
+      className={railCollapsed ? "rail-is-collapsed" : undefined}
+      style={{ zoom: zoomLevel / 100 }}
+    >
+      <a className="skip-link" href="#main-content">跳到主内容</a>
       <MenuBar />
       <Rail />
-      <main className="main" role="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         {scene === "home" && <HomeScene />}
         {scene === "deck" && <DeckScene />}
         {scene === "room" && <RoomScene />}
@@ -75,6 +88,8 @@ export default function App() {
         {scene === "settings" && <SettingsScene />}
       </main>
       {searchOpen && <SearchOverlay />}
+      {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
+      <ToastHost />
     </div>
   );
 }

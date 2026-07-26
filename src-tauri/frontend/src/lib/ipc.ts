@@ -28,6 +28,7 @@ import type {
   VerificationRecord,
   ProjectAccessMode, Workspace,
   ProviderSettingsInput,
+  ProviderCatalog,
   CodexIntegrationStatus,
 } from "./types";
 
@@ -58,6 +59,10 @@ export const taskSetWorkspace = (taskId: string, workspacePath: string | null) =
 
 export const taskSetProvider = (taskId: string, providerName: string) =>
   ipc<Task>("cmd_task_set_provider", { taskId, providerName });
+
+/** 切换会话使用的具体模型；传 null 回退到该服务的默认模型。 */
+export const taskSetModel = (taskId: string, model: string | null) =>
+  ipc<Task>("cmd_task_set_model", { taskId, model });
 
 export const taskDetail = (taskId: string) =>
   ipc<TaskDetail>("cmd_task_detail", { taskId });
@@ -212,6 +217,9 @@ export const memorySet = (workspacePath: string, content: string) =>
 
 // ---------- 设置 ----------
 export const settingsGet = () => ipc<SettingsResponse>("cmd_settings_get");
+
+/** 内置模型服务目录。编译期常量，进程内只需拉一次。 */
+export const providerCatalog = () => ipc<ProviderCatalog>("cmd_provider_catalog");
 
 export const settingsSet = (key: string, value: unknown) =>
   ipc<void>("cmd_settings_set", { key, value });

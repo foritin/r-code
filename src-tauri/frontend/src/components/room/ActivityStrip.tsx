@@ -1,6 +1,7 @@
 /**
- * 运行期间常驻的可观察活动条。
- * 只呈现 reducer 已归类的工具、权限和引导活动，不展示模型私有推理。
+ * 运行期间常驻的状态条 —— 只回答「现在在做什么、做了多久」。
+ * 逐条工具动作由时间线（verb + target + 结果）承担，此处不再重复罗列，
+ * 避免同一件事在时间线、活动条、画布 live 标签里各说一遍。
  */
 import { useEffect, useState } from "react";
 import type { ActivityTraceState } from "./activity";
@@ -23,24 +24,14 @@ export function ActivityStrip({ state, running }: Props) {
   if (!running) return null;
 
   const elapsed = elapsedLabel(state.startedAt, now);
-  const recent = [...state.recentActivities].reverse();
 
   return (
     <div className={"activity-strip phase-" + state.phase} role="status" aria-live="polite">
-      <div className="activity-current">
-        <span className="activity-lamp" aria-hidden="true" />
-        <span className="activity-label">{state.label}</span>
-        <span className="activity-elapsed">{elapsed}</span>
-      </div>
-      {recent.length > 0 && (
-        <div className="activity-trace" aria-label="近期可观察活动">
-          {recent.map((item) => (
-            <span className={"activity-item kind-" + item.kind} key={item.id}>
-              {item.label}
-            </span>
-          ))}
-        </div>
-      )}
+      <span className="activity-lamp" aria-hidden="true" />
+      <span className="activity-label">{state.label}</span>
+      <span className="activity-elapsed" title="本次运行已进行时长">
+        {elapsed}
+      </span>
     </div>
   );
 }

@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
 import type { ProjectAccessMode } from "../lib/types";
-import { IconCheck, IconChevronDown } from "./icons";
+import { useAsyncAction } from "../lib/hooks";
+import { Menu, MenuItem } from "./ui/Menu";
+import { StatusBar } from "./ui/StatusBar";
+import { IconChevronDown } from "./icons";
 
 const OPTIONS: ReadonlyArray<{
   value: ProjectAccessMode;
@@ -42,76 +44,74 @@ interface Props {
   value: ProjectAccessMode;
   workspaceName: string;
   disabled?: boolean;
+  /** up：输入区（菜单向上展开）；down：会话顶栏 */
+  placement?: "up" | "down";
   onChange: (next: ProjectAccessMode) => Promise<void> | void;
 }
 
 /**
  * 项目级权限入口。模式只影响 Agent 的自动工具调用；本地路径始终受当前工作区边界限制。
+ *
+ * 开合、Escape、方向键导航、焦点归还都交给 Menu —— 原先这里自己挂了一个**常驻**
+ * 的 document mousedown 监听器（useEffect 依赖 []，没有 open 守卫），Rail 里每渲染
+ * 一个工作区行就多挂一个。
  */
-export function ProjectAccessSelector({ value, workspaceName, disabled = false, onChange }: Props) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    const onPointerDown = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, []);
-
-  const choose = async (next: ProjectAccessMode) => {
-    if (saving || next === value) {
-      setOpen(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await onChange(next);
-      setOpen(false);
-    } finally {
-      setSaving(false);
-    }
-  };
+export function ProjectAccessSelector({
+  value,
+  workspaceName,
+  disabled = false,
+  placement = "up",
+  onChange,
+}: Props) {
+  const save = useAsyncAction(async (next: ProjectAccessMode) => {
+    if (next === value) return;
+    await onChange(next);
+  }, { label: "更新权限" });
 
   return (
-    <div className="project-access-control" ref={rootRef}>
-      <button
-        type="button"
-        className={`project-access-trigger${open ? " open" : ""}`}
-        aria-expanded={open}
-        disabled={disabled || saving}
-        onClick={() => setOpen((current) => !current)}
-        title={`${workspaceName}：${projectAccessModeLabel(value)}（仅限此工作区）`}
+    <div className="project-access-control">
+      <Menu
+        trigger={
+          <button
+            type="button"
+            className="project-access-trigger"
+            title={`${workspaceName}：${projectAccessModeLabel(value)}（仅限此工作区）`}
+          >
+            <span>权限：{save.busy ? "保存中…" : projectAccessModeLabel(value)}</span>
+            <IconChevronDown width={12} height={12} />
+          </button>
+        }
+        label="项目 Agent 权限"
+        placement={placement}
+        align="right"
+        disabled={disabled || save.busy}
+        menuClassName="project-access-menu"
       >
-        <span>权限：{saving ? "保存中…" : projectAccessModeLabel(value)}</span>
-        <IconChevronDown width={12} height={12} />
-      </button>
-      {open && (
-        <div className="project-access-menu" role="menu" aria-label="项目 Agent 权限">
-          <div className="project-access-head">
-            <strong>应如何批准操作？</strong>
-            <span>仅限「{workspaceName}」工作区</span>
-          </div>
-          {OPTIONS.map((option) => (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={option.value === value}
-              className={`project-access-option${option.value === value ? " selected" : ""}`}
-              key={option.value}
-              disabled={saving}
-              onClick={() => void choose(option.value)}
-            >
-              <span className="project-access-option-copy">
-                <strong>{option.label}</strong>
-                <small>{option.description}</small>
-              </span>
-              {option.value === value && <IconCheck width={15} height={15} />}
-            </button>
-          ))}
-        </div>
+        {({ close }) => (
+          <>
+            <div className="popover-head">
+              <strong>应如何批准操作？</strong>
+              <span>仅限「{workspaceName}」工作区</span>
+            </div>
+            {OPTIONS.map((option) => (
+              <MenuItem
+                key={option.value}
+                close={close}
+                checked={option.value === value}
+                hint={option.description}
+                disabled={save.busy}
+                onSelect={() => void save.run(option.value)}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </>
+        )}
+      </Menu>
+      {save.error && (
+        <StatusBar kind="error" compact onDismiss={save.clearError}>
+          {save.error}
+        </StatusBar>
       )}
     </div>
   );

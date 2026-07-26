@@ -21,6 +21,8 @@ export interface Task {
   workspace_path: string | null;
   /** 会话绑定的模型服务；null 代表兼容旧会话并回退全局默认。 */
   provider_name: string | null;
+  /** 会话绑定的具体模型；null 表示沿用该服务在设置里配置的默认模型。 */
+  model: string | null;
   title: string;
   goal: string;
   mode: TaskMode;
@@ -322,12 +324,71 @@ export interface ProviderConfig {
   model?: string;
   max_tokens?: number;
   temperature?: number;
+  /** 用户显式选定的线路协议。缺省 = 升级前保存的旧配置，后端会按目录推断。 */
+  protocol?: ProviderProtocol;
+}
+
+/** 线路协议。同一厂商的不同 base_url 往往是不同协议，不能按名字推断。 */
+export type ProviderProtocol = "anthropic_messages" | "openai_chat" | "openai_responses";
+
+export type ProviderCategory = "official" | "cn_official" | "cloud_provider" | "aggregator";
+
+export interface ProviderTemplateVar {
+  name: string;
+  label: string;
+  placeholder: string;
+}
+
+/**
+ * 一条备用线路。
+ *
+ * 协议跟着地址走：目录里多数候选是同一厂商的**另一个协议口**（火山 `/api/coding`
+ * 是 Anthropic、`/api/coding/v3` 是 OpenAI），切线路时必须把协议一起切过去。
+ */
+export interface ProviderEndpoint {
+  url: string;
+  protocol: ProviderProtocol;
+  /** 该入口支持的全部协议。按地址声明，与主入口的 `native` 可以不同。 */
+  native: ProviderProtocol[];
+  label: string;
+}
+
+/** 后端 `cmd_provider_catalog` 下发的一条预设，字段与 provider_catalog.rs 对应。 */
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  protocol: ProviderProtocol;
+  native: ProviderProtocol[];
+  auth: "x_api_key" | "bearer";
+  base_url: string;
+  reasoning_replay: boolean;
+  model: string;
+  models: string[];
+  category: ProviderCategory;
+  website_url: string;
+  api_key_url: string | null;
+  endpoint_candidates: ProviderEndpoint[];
+  template_vars: ProviderTemplateVar[];
+  max_output_tokens: number | null;
+  context_window: number | null;
+  note: string | null;
+}
+
+export interface ProviderCatalog {
+  presets: ProviderPreset[];
 }
 
 export interface ProviderStatus {
   configured: boolean;
   ready: boolean;
   source: "keychain" | "environment" | "legacy_file" | "missing" | string;
+  /**
+   * 这条配置实际会用的线路协议，由后端 `resolve_effective_protocol` 算出。
+   *
+   * 已存 protocol 时就是它；没存过则是后端的推断结果。前端**不要**自己按预设推断——
+   * 后端在地址被改写时会走启发式，前端看不到那部分逻辑，各猜一次必然对不上。
+   */
+  effective_protocol?: ProviderProtocol;
 }
 
 export interface ProviderSettingsInput {
@@ -337,6 +398,8 @@ export interface ProviderSettingsInput {
   apiKey?: string | null;
   maxTokens?: number | null;
   temperature?: number | null;
+  /** 省略 = 沿用已存的选择；从未存过则落到预设默认值。 */
+  protocol?: ProviderProtocol | null;
   activate?: boolean | null;
 }
 

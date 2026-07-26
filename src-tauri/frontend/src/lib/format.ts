@@ -48,6 +48,19 @@ export function clockTime(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * RFC3339 → "HH:MM:SS"（本地时间）。
+ * 审计流里同一分钟常有多条记录，分钟级时间无法排序取证，必须到秒。
+ */
+export function clockSeconds(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return [d.getHours(), d.getMinutes(), d.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
+}
+
 /** 从 task id 派生确定性的会话光谱色（rail 色条 / 会话标识）。 */
 const HUES = ["#6ee7f2", "#eebf6d", "#8b7cf6", "#5fe3a1", "#f2a3d8", "#8fb8e8", "#f0a05a"];
 export function hueFor(id: string): string {
@@ -94,6 +107,15 @@ export function modeLabel(mode: "ask" | "edit" | "auto"): string {
     case "ask": return "Ask — 先聊清楚";
     case "edit": return "Edit — 改动要批准";
     case "auto": return "Auto — 放手让它做";
+  }
+}
+
+/** 模式 → 芯片用短标签；解释性文案放 title，避免与项目权限芯片撞车。 */
+export function modeShortLabel(mode: "ask" | "edit" | "auto"): string {
+  switch (mode) {
+    case "ask": return "Ask";
+    case "edit": return "Edit";
+    case "auto": return "Auto";
   }
 }
 

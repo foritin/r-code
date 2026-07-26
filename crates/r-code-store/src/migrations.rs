@@ -36,6 +36,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
         (5, MIGRATION_005),
         (6, MIGRATION_006),
         (7, MIGRATION_007),
+        (8, MIGRATION_008),
+        (9, MIGRATION_009),
     ];
 
     for (version, sql) in migrations {
@@ -323,9 +325,91 @@ SET access_mode = CASE trust_state
 END;
 "#;
 
+/// Migration 008: 会话级具体模型绑定。
+///
+/// NULL 语义与 `provider_name` 对称：沿用该服务在设置里配置的默认模型。
+/// 运行时（LlmAgentRuntime）本就支持 per-session 覆盖，这里只是补上持久化。
+const MIGRATION_008: &str = r#"
+ALTER TABLE tasks ADD COLUMN model TEXT;
+"#;
+
+/// Migration 009: 修复历史遗留的"验证占位 Run"。
+///
+/// `run_verification` 曾在无活跃 Run 时插入 `model = 'verification'` 的主 Run
+/// 且从不写 `ended_at`，导致时间线永久转圈、任务被判定为永久运行中、
+/// 崩溃恢复误报，并顶替 `get_active_run` 让接受动作写到错误的记录上。
+///
+/// 这里只补 `ended_at` 而**不删除**这些 Run：`verifications.run_id` 是
+/// `ON DELETE CASCADE`，删 Run 会连带丢掉用户的验证历史。
+///
+/// 四道守卫确保不会误伤真实的运行中记录：
+///   - `model = 'verification'` 是唯一指纹（真实 run 的 model 来自 provider 配置）
+///   - `review_state = 'pending'` 排除已被任何流程改写过状态的 run
+///   - 没有任何 tool_call 挂在它下面（真实 run 一开跑就会产生工具调用）
+///   - 没有子代理以它为父
+/// 结束时刻取该 run 对应验证的最晚 ended_at，取不到则退回 started_at
+/// （时长为 0 好过显示"跑了三个月"）。`ended_at IS NULL` 使其可重复执行。
+const MIGRATION_009: &str = r#"
+UPDATE agent_runs
+SET ended_at = COALESCE(
+        (SELECT MAX(v.ended_at) FROM verifications v
+          WHERE v.run_id = agent_runs.id AND v.ended_at IS NOT NULL),
+        started_at
+    )
+WHERE model = 'verification'
+  AND agent_kind = 'main'
+  AND ended_at IS NULL
+  AND review_state = 'pending'
+  AND parent_run_id IS NULL
+  AND NOT EXISTS (SELECT 1 FROM tool_calls tc WHERE tc.run_id = agent_runs.id)
+  AND NOT EXISTS (SELECT 1 FROM agent_runs child WHERE child.parent_run_id = agent_runs.id);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 回归：v9 只结束"验证占位 run"，不碰真实的运行中记录，也不删任何行。
+    #[test]
+    fn migration_v9_ends_verification_placeholder_runs_only() {
+        // 先跑全量迁移建好表结构，再退回 v8 只重放 009
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO tasks (id, workspace_path, title, goal, mode, state, created_at, updated_at)
+             VALUES ('t1', '/p', 'T', 'g', 'edit', 'review_ready', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+             -- 验证占位 run：应被结束
+             INSERT INTO agent_runs (id, task_id, model, review_state, started_at, agent_kind, branch_id)
+             VALUES ('fake', 't1', 'verification', 'pending', '2026-01-01T00:01:00Z', 'main', 'main');
+             -- 真实运行中的 run：必须原封不动
+             INSERT INTO agent_runs (id, task_id, model, review_state, started_at, agent_kind, branch_id)
+             VALUES ('real', 't1', 'deepseek-v4-pro', 'pending', '2026-01-01T00:02:00Z', 'main', 'main');",
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM schema_version WHERE version = 9", [])
+            .unwrap();
+        run_migrations(&conn).unwrap();
+
+        let ended_of = |id: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT ended_at FROM agent_runs WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        let fake_ended = ended_of("fake");
+        let real_ended = ended_of("real");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM agent_runs", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(fake_ended.as_deref(), Some("2026-01-01T00:01:00Z"));
+        assert!(real_ended.is_none(), "真实运行中的 run 不能被结束");
+        assert_eq!(count, 2, "迁移只能 UPDATE，不能删除任何行");
+    }
 
     #[test]
     fn migration_creates_all_tables() {
@@ -379,7 +463,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 9);
     }
 
     #[test]
@@ -389,6 +473,15 @@ mod tests {
             r#"
             CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
             INSERT INTO schema_version (version) VALUES (6);
+            CREATE TABLE IF NOT EXISTS verifications (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             CREATE TABLE workspaces (
                 canonical_path TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
@@ -399,6 +492,42 @@ mod tests {
             VALUES
                 ('/legacy-untrusted', 'Legacy Untrusted', 'untrusted', '2025-01-01T00:00:00Z'),
                 ('/legacy-trusted', 'Legacy Trusted', 'trusted', '2025-01-01T00:00:00Z');
+            -- 后续迁移的 SQL 会引用下列表/列：SQLite 在 prepare 阶段就解析表名，
+            -- 与表里有没有数据无关。真实旧库在 v1/v3/v4 已建好它们，
+            -- 这里补齐骨架以复现真实的升级路径（已存在的会被 IF NOT EXISTS 跳过）。
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ask',
+                state TEXT NOT NULL DEFAULT 'idle',
+                worktree_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                review_state TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                usage_json TEXT,
+                branch_id TEXT NOT NULL DEFAULT 'main',
+                agent_kind TEXT NOT NULL DEFAULT 'main',
+                parent_run_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tool_calls (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL,
+                risk_level TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             "#,
         )
         .unwrap();
@@ -443,6 +572,15 @@ mod tests {
             r#"
             CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
             INSERT INTO schema_version (version) VALUES (1);
+            CREATE TABLE IF NOT EXISTS verifications (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             CREATE TABLE tasks (
                 id TEXT PRIMARY KEY,
                 project_id TEXT NOT NULL,
@@ -477,6 +615,42 @@ mod tests {
             );
             INSERT INTO tasks (id, project_id, title, goal, mode, state, created_at, updated_at)
             VALUES ('legacy', '/legacy/workspace', 'Legacy', 'Goal', 'ask', 'idle', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');
+            -- 后续迁移的 SQL 会引用下列表/列：SQLite 在 prepare 阶段就解析表名，
+            -- 与表里有没有数据无关。真实旧库在 v1/v3/v4 已建好它们，
+            -- 这里补齐骨架以复现真实的升级路径（已存在的会被 IF NOT EXISTS 跳过）。
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ask',
+                state TEXT NOT NULL DEFAULT 'idle',
+                worktree_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                review_state TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                usage_json TEXT,
+                branch_id TEXT NOT NULL DEFAULT 'main',
+                agent_kind TEXT NOT NULL DEFAULT 'main',
+                parent_run_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tool_calls (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL,
+                risk_level TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             "#,
         )
         .unwrap();
@@ -516,6 +690,15 @@ mod tests {
             PRAGMA foreign_keys = ON;
             CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
             INSERT INTO schema_version (version) VALUES (3);
+            CREATE TABLE IF NOT EXISTS verifications (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                command TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             CREATE TABLE tasks (
                 id TEXT PRIMARY KEY,
                 workspace_path TEXT,
@@ -560,6 +743,42 @@ mod tests {
             VALUES ('task-1', '/legacy', 'Legacy', 'Goal', 'ask', 'idle', '2025-01-01T00:00:00Z', '2025-01-01T00:00:00Z');
             INSERT INTO agent_runs (id, task_id, model, review_state, started_at, branch_id)
             VALUES ('run-1', 'task-1', 'legacy-model', 'pending', '2025-01-01T00:00:00Z', 'main');
+            -- 后续迁移的 SQL 会引用下列表/列：SQLite 在 prepare 阶段就解析表名，
+            -- 与表里有没有数据无关。真实旧库在 v1/v3/v4 已建好它们，
+            -- 这里补齐骨架以复现真实的升级路径（已存在的会被 IF NOT EXISTS 跳过）。
+            CREATE TABLE IF NOT EXISTS tasks (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ask',
+                state TEXT NOT NULL DEFAULT 'idle',
+                worktree_path TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                model TEXT NOT NULL,
+                review_state TEXT NOT NULL DEFAULT 'pending',
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                usage_json TEXT,
+                branch_id TEXT NOT NULL DEFAULT 'main',
+                agent_kind TEXT NOT NULL DEFAULT 'main',
+                parent_run_id TEXT
+            );
+            CREATE TABLE IF NOT EXISTS tool_calls (
+                id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                input_json TEXT NOT NULL,
+                risk_level TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                started_at TEXT NOT NULL,
+                ended_at TEXT
+            );
             "#,
         )
         .unwrap();

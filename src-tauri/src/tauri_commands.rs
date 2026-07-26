@@ -78,6 +78,16 @@ pub async fn cmd_task_set_provider(
     r_code_host::commands::task_set_provider(&state, &task_id, &provider_name).await
 }
 
+/// 切换空闲会话使用的具体模型；下一次运行生效。传 null 表示回退服务默认模型。
+#[tauri::command]
+pub async fn cmd_task_set_model(
+    state: State<'_, CommandState>,
+    task_id: String,
+    model: Option<String>,
+) -> Result<Task, String> {
+    r_code_host::commands::task_set_model(&state, &task_id, model.as_deref()).await
+}
+
 /// 获取任务详情（含事件、变更、权限、验证）。
 #[tauri::command]
 pub async fn cmd_task_detail(
@@ -459,6 +469,12 @@ pub async fn cmd_logs_tail(
 #[tauri::command]
 pub async fn cmd_settings_get(state: State<'_, CommandState>) -> Result<serde_json::Value, String> {
     r_code_host::commands::settings_get(&state).await
+}
+
+/// 获取内置模型服务目录，驱动设置页的"新建服务"表单。
+#[tauri::command]
+pub async fn cmd_provider_catalog() -> Result<serde_json::Value, String> {
+    r_code_host::commands::provider_catalog().await
 }
 
 /// 设置应用配置项。`key` 支持点分路径（如 "providers.anthropic.model"）。

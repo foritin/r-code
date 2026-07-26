@@ -1,0 +1,330 @@
+/* ============================================================================
+   Components — 共享交互组件的样式
+   （Menu / ModelSwitcher / 折叠侧栏 / 输入区控件行）
+   只引用 tokens.css 的刻度，不写裸 px。
+   ============================================================================ */
+
+/* ---------- Menu 包裹层：所有弹层的定位锚点 ---------- */
+.menu-root { position: relative; display: inline-flex; min-width: 0; }
+
+/* 旧类名保持为锚点（Menu 通过 className 复用它们的宽度约束） */
+.scope-control,
+.provider-control,
+.project-access-control,
+.room-provider { position: relative; min-width: 0; }
+
+/* ---------- 模型二级菜单 ---------- */
+.model-menu { width: min(300px, calc(100vw - var(--sp-10))); }
+
+.model-group + .model-group { margin-top: var(--sp-2); }
+.model-group-head {
+  display: flex; align-items: baseline; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+  color: var(--fg-faint);
+  font-size: var(--kicker-size); font-weight: var(--kicker-weight);
+  letter-spacing: var(--kicker-tracking);
+}
+.model-group-head::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.model-group-head small { color: var(--fg-faint); font-weight: var(--weight-normal); letter-spacing: 0; }
+
+.model-custom { padding: var(--sp-1) var(--sp-2) var(--sp-3); }
+.model-custom .input { min-height: var(--control-h); font-size: var(--text-sm); }
+/* 二级菜单比普通菜单长，给足高度免得自定义输入被裁掉 */
+.model-menu.popover--scroll {  }
+.menu-item.model-custom-open { color: var(--fg-muted); }
+
+/* ---------- 输入区控件行 ----------
+   与新对话页 .chat-composer-foot 同构：模型 / 权限 / 弹性空隙 / 发送。 */
+.comp-meta {
+  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  margin-top: var(--sp-4); padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+.comp-meta .project-access-trigger { max-width: 170px; }
+/* 服务名不参与压缩，只让模型名截断 —— 否则窄输入区里会变成 "DeepS…" */
+.comp-meta .provider-pill { max-width: 260px; }
+.comp-meta .provider-pill > span { flex: none; }
+
+/* 输入区里的 provider 胶囊与新对话页共用外观 */
+.comp-meta .provider-pill {
+  display: inline-flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--border); border-radius: var(--radius-xs);
+  background: var(--bg-chip); color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.comp-meta .provider-pill:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
+.comp-meta .provider-pill:disabled { opacity: 0.55; }
+.comp-meta .provider-pill.ready { color: var(--accent); }
+.comp-meta .provider-pill small {
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-meta);
+}
+
+/* 切换确认条挂在控件行下方，不撑开输入框 */
+.comp-meta .room-provider-confirm { flex-basis: 100%; }
+
+/* ---------- 侧栏折叠 ---------- */
+#app.rail-is-collapsed { --rail-current-w: var(--rail-w-collapsed); }
+
+.rail-collapse { margin-left: auto; color: var(--fg-faint); transform: rotate(90deg); }
+#app.rail-is-collapsed .rail-collapse { transform: rotate(-90deg); }
+
+#app.rail-is-collapsed .rail-label,
+#app.rail-is-collapsed .rail-search kbd,
+#app.rail-is-collapsed .rail-tree,
+#app.rail-is-collapsed .rail-tree-section-head,
+#app.rail-is-collapsed .rail-workspace-current small,
+#app.rail-is-collapsed .srow-time { display: none; }
+
+#app.rail-is-collapsed .rail-top,
+#app.rail-is-collapsed .rail-nav { margin: 0 var(--sp-1); }
+#app.rail-is-collapsed .rail-new,
+#app.rail-is-collapsed .rail-search,
+#app.rail-is-collapsed .rail-nav-item,
+#app.rail-is-collapsed .rail-workspace-current,
+#app.rail-is-collapsed .rail-settings {
+  justify-content: center; padding: var(--sp-3) 0;
+}
+/* 折叠态下未读计数改为角标，避免把图标挤走 */
+#app.rail-is-collapsed .rail-nav-item { position: relative; }
+#app.rail-is-collapsed .rail-nav-item small {
+  position: absolute; top: var(--sp-1); right: var(--sp-1);
+  min-width: var(--sp-6); padding: 0 var(--sp-1);
+  border-radius: var(--radius-pill);
+  background: var(--warning); color: var(--bg-app);
+  font-size: var(--text-meta); line-height: var(--lh-tight); text-align: center;
+}
+
+/* ---------- 侧栏密度 ----------
+   分组标签原先用 14px/650 + 42px 垂直空间，比会话名还重；
+   它本该是最弱的层级。改为标准 kicker 并省下约 20px/组。 */
+.rail-tree-section-head {
+  min-height: var(--sp-8);
+  padding: var(--sp-4) var(--sp-6) var(--sp-2);
+  font-size: var(--kicker-size);
+  font-weight: var(--kicker-weight);
+  letter-spacing: var(--kicker-tracking);
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+/* 会话行：36px → 30px，13px 字下行高比仍有 2.3；可视会话数 +20% */
+.srow { height: 30px; padding: var(--sp-3) var(--sp-4) var(--sp-3) var(--sp-6); }
+/* 归档按钮改为覆盖式出现，不再永久占掉 34px（约行宽的 14%） */
+.srow-wrap { position: relative; }
+.srow-archive { position: absolute; top: 50%; right: var(--sp-2); transform: translateY(-50%); }
+
+/* ---------- 快捷键参考 ---------- */
+.shortcuts-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--sp-2) var(--sp-7);
+}
+.shortcuts-row {
+  display: flex; align-items: baseline; gap: var(--sp-4);
+  padding: var(--sp-2) 0; font-size: var(--text-sm); color: var(--fg-muted);
+}
+.shortcuts-row .spacer { border-bottom: 1px dotted var(--border); align-self: center; }
+.shortcuts-row kbd { color: var(--fg); }
+
+/* ============================================================================
+   全局 Toast 通知（store/toast.ts + components/ui/Toast.tsx）
+   ----------------------------------------------------------------------------
+   语义色沿用状态条那一套：tint 作底、edge 作描边、纯色只给图标。
+   但 toast 是浮层，底必须不透明——所以 background-color 走 --bg-card，
+   kind 的 tint 叠在 background-image 上（.statusbar 直接用半透明底是因为它
+   永远贴在实心面板里，浮层照抄会透出下面的界面）。
+   正文一律 --fg / --fg-muted，暗色亮色两套主题下都过对比度。
+   ============================================================================ */
+.toast-host {
+  position: fixed;
+  right: var(--sp-8);
+  bottom: var(--sp-8);
+  z-index: var(--z-toast);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-4);
+  width: min(360px, calc(100vw - var(--sp-10)));
+  /* 队列为空时容器仍然挂载（aria-live 区域要先于内容存在），
+     所以整块不能挡住底下的界面，可点性由每条 toast 自己打开。 */
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-6);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-card);
+  box-shadow: var(--shadow-popover);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: var(--lh-tight);
+  animation: toastIn var(--dur-3) var(--ease-out) both;
+}
+
+.toast.is-leaving {
+  animation: toastOut var(--dur-2) var(--ease) both;
+}
+
+.toast-icon {
+  display: inline-flex;
+  align-items: center;
+  /* 撑到标题的行盒高度，让图标垂直居中对齐标题首行而不是贴顶 */
+  min-height: calc(var(--text-base) * var(--lh-tight));
+  color: var(--fg-muted);
+}
+
+.toast-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.toast-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.toast-text {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.toast-action {
+  align-self: flex-start;
+  margin-top: var(--sp-1);
+}
+
+.toast-close {
+  /* 24px 命中区比标题行盒高，往上提半档让它对齐标题而不是压住正文 */
+  margin-top: calc(-1 * var(--sp-2));
+}
+
+/* ---------- kind 变体 ---------- */
+.toast--info {
+  border-color: var(--edge-accent);
+  background-image: linear-gradient(var(--tint-accent), var(--tint-accent));
+}
+.toast--info .toast-icon { color: var(--accent); }
+
+.toast--success {
+  border-color: var(--edge-success);
+  background-image: linear-gradient(var(--tint-success), var(--tint-success));
+}
+.toast--success .toast-icon { color: var(--success); }
+
+.toast--warn {
+  border-color: var(--edge-warning);
+  background-image: linear-gradient(var(--tint-warning), var(--tint-warning));
+}
+.toast--warn .toast-icon { color: var(--warning); }
+
+.toast--error {
+  border-color: var(--edge-danger);
+  background-image: linear-gradient(var(--tint-danger), var(--tint-danger));
+}
+.toast--error .toast-icon { color: var(--danger); }
+
+/* ---------- 出入场 ---------- */
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(var(--sp-4)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes toastOut {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateX(var(--sp-5));
+  }
+}
+
+/* base.css 里已有全局 reduced-motion 停用规则；这里显式再写一次，
+   免得后续有人给 .toast 单独加带 !important 的动画时漏掉这块。 */
+@media (prefers-reduced-motion: reduce) {
+  .toast,
+  .toast.is-leaving {
+    animation: none;
+  }
+}
+
+/* ============================================================================
+   崩溃兜底屏 —— ErrorBoundary 的唯一消费者
+   渲染期抛错时 React 会卸载整棵树；这一屏取代原来的纯白窗口。
+   ============================================================================ */
+
+.crash {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--sp-9);
+  background: var(--bg-app);
+}
+
+.crash-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  max-width: 68ch;
+  padding: var(--sp-9);
+  border: 1px solid var(--edge-danger);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+}
+
+.crash-box h1 {
+  margin: 0;
+  color: var(--fg);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-strong);
+}
+
+.crash-box p {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--text-base);
+  line-height: var(--lh-relaxed);
+}
+
+.crash-detail {
+  max-height: 40vh;
+  overflow: auto;
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.crash-actions {
+  display: flex;
+  gap: var(--sp-4);
+  justify-content: flex-end;
+}

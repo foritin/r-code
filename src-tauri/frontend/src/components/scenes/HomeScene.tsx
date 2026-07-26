@@ -17,6 +17,10 @@ import {
   ProjectAccessSelector,
   projectAccessModeLabel,
 } from "../ProjectAccessSelector";
+import { useProviders, type ProviderChoice } from "../../lib/provider";
+import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
+import { StatusBar } from "../ui/StatusBar";
+import { keyLabel } from "../../lib/keys";
 import {
   IconAlert,
   IconAttach,
@@ -24,21 +28,6 @@ import {
   IconProjects,
   IconSend,
 } from "../icons";
-
-interface ProviderChoice {
-  name: string;
-  model: string;
-  ready: boolean;
-}
-
-function providerLabel(name: string) {
-  return ({
-    anthropic: "Anthropic",
-    openai: "OpenAI",
-    deepseek: "DeepSeek",
-    openrouter: "OpenRouter",
-  } as Record<string, string>)[name] ?? name;
-}
 
 /**
  * 新对话页：Provider-first。
@@ -59,9 +48,6 @@ export function HomeScene() {
 
   const [goal, setGoal] = useState("");
   const [provider, setProvider] = useState<ProviderChoice | null>(null);
-  const [providerChoices, setProviderChoices] = useState<ProviderChoice[]>([]);
-  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
-  const [scopeMenuOpen, setScopeMenuOpen] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [selectingFolder, setSelectingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,8 +55,7 @@ export function HomeScene() {
   const [cleaning, setCleaning] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const scopeRef = useRef<HTMLDivElement>(null);
-  const providerRef = useRef<HTMLDivElement>(null);
+  const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
   const providerReady = provider?.ready ?? false;
   const canSend = providerReady && goal.trim().length > 0 && !launching;
@@ -84,25 +69,13 @@ export function HomeScene() {
     if (activeIds.length > 0) await refreshDetails(activeIds);
   }, 2500);
 
-  const loadProvider = useCallback(async () => {
-    try {
-      const result = await settingsGet();
-      const name = result.config.default_provider ?? "";
-      const choices = Object.entries(result.config.providers ?? {}).map(([providerName, profile]) => ({
-        name: providerName,
-        model: profile.model || providerName,
-        ready: Boolean(result.provider_status?.[providerName]?.ready),
-      }));
-      setProviderChoices(choices);
-      setProvider(choices.find((choice) => choice.name === name) ?? null);
-    } catch (cause) {
-      setError(`读取模型服务设置失败：${errText(cause)}`);
-    }
-  }, []);
-
+  // provider 列表来自共享 hook；这里只维护"本次要创建的会话用哪个"。
   useEffect(() => {
-    void loadProvider();
-  }, [loadProvider]);
+    setProvider((current) => {
+      if (current && providerChoices.some((choice) => choice.name === current.name)) return current;
+      return providerChoices.find((choice) => choice.name === fallback) ?? null;
+    });
+  }, [providerChoices, fallback]);
 
   const loadRecovery = useCallback(async () => {
     try {
@@ -123,19 +96,6 @@ export function HomeScene() {
     element.style.height = `${Math.min(element.scrollHeight, 196)}px`;
   }, [goal]);
 
-  useEffect(() => {
-    if (!scopeMenuOpen && !providerMenuOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (scopeRef.current && !scopeRef.current.contains(target)) {
-        setScopeMenuOpen(false);
-      }
-      if (providerRef.current && !providerRef.current.contains(target)) setProviderMenuOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [providerMenuOpen, scopeMenuOpen]);
-
   const selectFolder = async () => {
     if (selectingFolder) return;
     setSelectingFolder(true);
@@ -145,7 +105,6 @@ export function HomeScene() {
       if (!workspace) return;
       await refreshWorkspaces();
       setCurrentWorkspace(workspace.canonical_path);
-      setScopeMenuOpen(false);
     } catch (cause) {
       setError(`选择文件夹失败：${errText(cause)}`);
     } finally {
@@ -168,7 +127,6 @@ export function HomeScene() {
     setError(null);
     // 新对话页的选择只作用于即将创建的会话，不能悄悄改写全局默认服务。
     setProvider(choice);
-    setProviderMenuOpen(false);
   };
 
   const send = async () => {
@@ -240,15 +198,12 @@ export function HomeScene() {
         </p>
 
         {hasRecovery && recovery && (
-          <div className="home-notice" role="status">
-            <IconAlert width={14} height={14} />
-            <span>
-              上次有 {recovery.interrupted_tasks.length} 个中断任务、{recovery.orphaned_permissions} 项待清理。
-            </span>
-            <button className="quiet-link" disabled={cleaning} onClick={() => void cleanRecovery()}>
-              {cleaning ? "清理中…" : "现在处理"}
-            </button>
-          </div>
+          <StatusBar
+            kind="warn"
+            action={{ label: cleaning ? "清理中…" : "现在处理", onClick: () => void cleanRecovery(), disabled: cleaning }}
+          >
+            上次有 {recovery.interrupted_tasks.length} 个中断任务、{recovery.orphaned_permissions} 项待清理。
+          </StatusBar>
         )}
 
         <div className="chat-composer home-composer">
@@ -266,94 +221,100 @@ export function HomeScene() {
             }}
           />
           <div className="chat-composer-foot">
-            <div className="scope-control" ref={scopeRef}>
-              <button
-                className={`scope-pill${currentWorkspace ? " attached" : ""}`}
-                onClick={() => setScopeMenuOpen((open) => !open)}
-                title={currentWorkspace?.canonical_path ?? "未附加工作区（纯聊天）"}
-              >
-                <IconProjects width={14} height={14} />
-                <span>{currentWorkspace?.display_name ?? "未附加文件夹"}</span>
-                <IconChevronDown width={12} height={12} />
-              </button>
-              {scopeMenuOpen && (
-                <div className="scope-menu" role="menu">
-                  <button
-                    className="scope-menu-item"
-                    onClick={() => {
-                      setCurrentWorkspace(null);
-                      setScopeMenuOpen(false);
-                    }}
+            <Menu
+              className="scope-control"
+              label="会话可访问的文件夹"
+              placement="up"
+              align="left"
+              menuClassName="scope-menu"
+              trigger={
+                <button
+                  className={`scope-pill${currentWorkspace ? " attached" : ""}`}
+                  title={currentWorkspace?.canonical_path ?? "未附加工作区（纯聊天）"}
+                >
+                  <IconProjects width={14} height={14} />
+                  <span>{currentWorkspace?.display_name ?? "未附加文件夹"}</span>
+                  <IconChevronDown width={12} height={12} />
+                </button>
+              }
+            >
+              {({ close }) => (
+                <>
+                  <MenuItem
+                    close={close}
+                    checked={currentWorkspacePath === null}
+                    hint="不读取本地文件"
+                    onSelect={() => setCurrentWorkspace(null)}
                   >
-                    <span>仅聊天</span>
-                    <small>不读取本地文件</small>
-                  </button>
+                    仅聊天
+                  </MenuItem>
                   {workspaces.map((workspace) => (
-                    <button
+                    <MenuItem
                       key={workspace.canonical_path}
-                      className={`scope-menu-item${workspace.canonical_path === currentWorkspacePath ? " selected" : ""}`}
-                      onClick={() => {
-                        setCurrentWorkspace(workspace.canonical_path);
-                        setScopeMenuOpen(false);
-                      }}
+                      close={close}
+                      checked={workspace.canonical_path === currentWorkspacePath}
+                      hint={projectAccessModeLabel(workspace.access_mode)}
+                      onSelect={() => setCurrentWorkspace(workspace.canonical_path)}
                     >
-                      <span>{workspace.display_name}</span>
-                      <small>{projectAccessModeLabel(workspace.access_mode)}</small>
-                    </button>
+                      {workspace.display_name}
+                    </MenuItem>
                   ))}
-                  <div className="scope-menu-separator" />
-                  <button className="scope-menu-item action" onClick={() => void selectFolder()}>
+                  <MenuSeparator />
+                  <MenuItem close={close} onSelect={() => void selectFolder()}>
                     <IconAttach width={14} height={14} />
-                    <span>{selectingFolder ? "正在打开…" : "选择文件夹…"}</span>
-                  </button>
-                  <button className="scope-menu-item action" onClick={() => setScene("projects")}>
+                    {selectingFolder ? "正在打开…" : "选择文件夹…"}
+                  </MenuItem>
+                  <MenuItem close={close} onSelect={() => setScene("projects")}>
                     <IconProjects width={14} height={14} />
-                    <span>管理工作区</span>
-                  </button>
-                </div>
+                    管理工作区
+                  </MenuItem>
+                </>
               )}
-            </div>
+            </Menu>
 
-            <div className="provider-control" ref={providerRef}>
-              <button
-                className={`provider-pill${providerReady ? " ready" : ""}`}
-                onClick={() => setProviderMenuOpen((open) => !open)}
-                title={providerReady ? `当前使用：${providerLabel(provider?.name ?? "")} / ${provider?.model}` : "选择模型服务"}
-              >
-                <span>{providerReady ? providerLabel(provider?.name ?? "") : "选择模型服务"}</span>
-                {providerReady && <small>{provider?.model}</small>}
-                <IconChevronDown width={12} height={12} />
-              </button>
-              {providerMenuOpen && (
-                <div className="provider-menu" role="menu">
-                  {providerChoices.length === 0 ? (
-                    <div className="provider-menu-empty">还没有可用的模型服务。</div>
-                  ) : (
-                    providerChoices.map((choice) => (
-                      <button
-                        key={choice.name}
-                        className={`provider-menu-item${choice.name === provider?.name ? " selected" : ""}`}
-                        disabled={!choice.ready}
-                        onClick={() => void chooseProvider(choice)}
-                      >
-                        <span>{providerLabel(choice.name)}</span>
-                        <small>{choice.ready ? choice.model : "尚未完成配置"}</small>
-                      </button>
-                    ))
-                  )}
-                  <div className="scope-menu-separator" />
-                  <button
-                    className="provider-menu-item action"
-                    onClick={() => {
-                      setProviderMenuOpen(false);
-                      setScene("settings");
-                    }}
-                  >
+            <Menu
+              className="provider-control"
+              label="选择模型服务"
+              placement="up"
+              align="left"
+              menuClassName="provider-menu"
+              trigger={
+                <button
+                  className={`provider-pill${providerReady ? " ready" : ""}`}
+                  title={
+                    providerReady
+                      ? `当前使用：${provider?.label} / ${provider?.model}`
+                      : "选择模型服务"
+                  }
+                >
+                  <span>{providerReady ? provider?.label : "选择模型服务"}</span>
+                  {providerReady && <small>{provider?.model}</small>}
+                  <IconChevronDown width={12} height={12} />
+                </button>
+              }
+            >
+              {({ close }) => (
+                <>
+                  {providerChoices.length === 0 && <MenuEmpty>还没有可用的模型服务。</MenuEmpty>}
+                  {providerChoices.map((choice) => (
+                    <MenuItem
+                      key={choice.name}
+                      close={close}
+                      checked={choice.name === provider?.name}
+                      hint={choice.ready ? choice.model : "尚未完成配置"}
+                      disabled={!choice.ready}
+                      onSelect={() => chooseProvider(choice)}
+                    >
+                      {choice.label}
+                    </MenuItem>
+                  ))}
+                  <MenuSeparator />
+                  <MenuItem close={close} onSelect={() => setScene("settings")}>
                     管理模型服务
-                  </button>
-                </div>
+                  </MenuItem>
+                </>
               )}
-            </div>
+            </Menu>
 
             {currentWorkspace && (
               <ProjectAccessSelector
@@ -369,7 +330,7 @@ export function HomeScene() {
                 连接模型服务
               </button>
             )}
-            <span className="send-hint">Ctrl + Enter</span>
+            <span className="send-hint">{keyLabel("new").replace(/ .*/, "")} + Enter</span>
             <button className="send-button" disabled={!canSend} onClick={() => void send()} aria-label="发送">
               <IconSend width={15} height={15} />
               <span>{launching ? "发送中" : "发送"}</span>
@@ -377,12 +338,10 @@ export function HomeScene() {
           </div>
         </div>
 
-        {error && (
-          <div className="home-error" role="alert">
-            <IconAlert width={14} height={14} />
-            <span>{error}</span>
-            <button onClick={() => setError(null)} aria-label="关闭错误提示">×</button>
-          </div>
+        {(error || providerError) && (
+          <StatusBar kind="error" onDismiss={error ? () => setError(null) : undefined}>
+            {error ?? providerError}
+          </StatusBar>
         )}
       </div>
 

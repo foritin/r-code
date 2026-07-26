@@ -6,6 +6,7 @@ import {
   selectRunning,
 } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
+import { keyLabel } from "../../lib/keys";
 import { displayPath, elapsedMinutes } from "../../lib/format";
 import { taskArchive, workspaceChoose } from "../../lib/ipc";
 import type { Scene } from "../../store/app";
@@ -13,6 +14,7 @@ import type { Task } from "../../lib/types";
 import { projectAccessModeShortLabel } from "../ProjectAccessSelector";
 import {
   IconArchive,
+  IconChevronDown,
   IconDeck,
   IconFolderOpen,
   IconHome,
@@ -119,18 +121,33 @@ export function Rail() {
   };
 
   const currentWorkspace = workspaces.find((workspace) => workspace.canonical_path === currentWorkspacePath);
+  const collapsed = useAppStore((s) => s.railCollapsed);
+  const toggleRail = useAppStore((s) => s.toggleRail);
 
   return (
     <aside className="rail" aria-label="会话和导航">
       <div className="rail-top">
-        <button className="rail-new" onClick={goHome}>
+        <button className="rail-new" onClick={goHome} title={`新对话（${keyLabel("new")}）`}>
           <IconPlus width={15} height={15} />
-          新对话
+          <span className="rail-label">新对话</span>
         </button>
-        <button className="rail-search" onClick={toggleSearch} title="搜索本地文件（Ctrl K）">
+        <button
+          className="rail-search"
+          onClick={toggleSearch}
+          title={`搜索本地文件（${keyLabel("search")}）`}
+        >
           <IconSearch width={14} height={14} />
-          <span>搜索</span>
-          <kbd>Ctrl K</kbd>
+          <span className="rail-label">搜索</span>
+          <kbd>{keyLabel("search")}</kbd>
+        </button>
+        <button
+          className="rail-collapse iconbtn"
+          onClick={toggleRail}
+          aria-label={collapsed ? "展开侧栏" : "折叠侧栏"}
+          aria-expanded={!collapsed}
+          title={`${collapsed ? "展开" : "折叠"}侧栏（${keyLabel("toggleRail")}）`}
+        >
+          <IconChevronDown width={14} height={14} />
         </button>
       </div>
 
@@ -170,6 +187,10 @@ export function Rail() {
                           setHoveredItem({ kind: "project", project, rect: event.currentTarget.getBoundingClientRect() })
                         }
                         onMouseLeave={() => setHoveredItem(null)}
+                        onFocus={(event) =>
+                          setHoveredItem({ kind: "project", project, rect: event.currentTarget.getBoundingClientRect() })
+                        }
+                        onBlur={() => setHoveredItem(null)}
                       >
                         <button
                           type="button"
@@ -300,10 +321,17 @@ function NavItem({
   onClick: () => void;
 }) {
   return (
-    <button className={`rail-nav-item${active ? " active" : ""}`} onClick={onClick}>
+    <button
+      className={`rail-nav-item${active ? " active" : ""}`}
+      aria-current={active ? "page" : undefined}
+      title={label}
+      onClick={onClick}
+    >
       {icon}
-      <span>{label}</span>
-      {count ? <small>{count}</small> : null}
+      <span className="rail-label">{label}</span>
+      {count ? (
+        <small aria-label={`${count} 项${label}`}>{count}</small>
+      ) : null}
     </button>
   );
 }
@@ -369,7 +397,7 @@ function SessionRow({
       onMouseLeave={onLeave}
     >
       <button
-        className={`srow${live ? " live" : ""}${needsYou ? " needs-you" : ""}${scene === "room" && currentTaskId === task.id ? " sel" : ""}`}
+        className={`srow ring-inset${live ? " live" : ""}${needsYou ? " needs-you" : ""}${scene === "room" && currentTaskId === task.id ? " sel" : ""}`}
         onClick={() => openRoom(task.id)}
         title={`${sessionTitle(task)} · ${status}`}
       >
@@ -379,7 +407,7 @@ function SessionRow({
       </button>
       <button
         type="button"
-        className="srow-archive"
+        className="srow-archive reveal-on-hover"
         disabled={live || archiving}
         title={live ? "会话仍在运行，请先停止后归档" : "归档会话"}
         aria-label="归档会话"

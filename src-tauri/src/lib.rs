@@ -16,6 +16,7 @@ pub mod logging;
 pub mod migration;
 pub mod packaging;
 pub mod project_memory;
+pub mod provider_catalog;
 pub mod recovery;
 pub mod replay;
 pub mod search;
@@ -36,6 +37,10 @@ pub use packaging::{
     UpdateChannel, UpdateConfig, WindowsConfig,
 };
 pub use project_memory::ProjectMemory;
+pub use provider_catalog::{
+    AuthStyle as ProviderAuthStyle, Category as ProviderCategory, Endpoint as ProviderEndpoint,
+    Preset as ProviderPreset, Protocol as ProviderProtocol,
+};
 pub use recovery::{InterruptedTask, RecoveryManager, RecoveryPageData};
 pub use replay::{EvidenceLevel, ReplayDepth, ReplayEntry, ReplayService};
 pub use search::{ReplacePreview, SearchMatch, SearchService};

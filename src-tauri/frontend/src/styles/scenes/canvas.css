@@ -1,0 +1,271 @@
+/* ============================================================================
+   Canvas —— Room 右列画布的无障碍补强
+   ----------------------------------------------------------------------------
+   这里只放两类样式，其余 canvas 视觉仍归 room.css：
+
+   1) 三个列表（Changes / Terminal / Review）改成键盘可达后新增的结构与焦点样式。
+      行本身的观感（.chg-row / .term-row / .ver-row）继续由 room.css 负责，
+      本文件只补它没有的部分，不重复定义同一属性。
+   2) accessibleDiffMode（设置 → 无障碍 → 文本差异视图）开启时的文本 diff 呈现。
+      默认路径一个像素都不碰：所有规则都挂在 .diff-body-a11y 或 .dla* 上。
+
+   覆写 room.css 时一律用双类选择器（如 .diff-body.diff-body-a11y）拉高特异度，
+   这样不依赖 scenes.css 里的 @import 顺序。
+   ============================================================================ */
+
+/* ============================================================================
+   一、列表键盘可达
+   ============================================================================ */
+
+/* ---------- Changes：grid 容器 ----------
+   .changes-list 是滚动容器，role="grid" 只能直接包 row，
+   所以行外面多包了一层。它是纯块级容器，不改变原有堆叠。 */
+.chg-options {
+  display: block;
+}
+
+/* ---------- Terminal：grid 容器 ----------
+   .term-side 是 flex 列且带 gap，多包一层会让行之间的 gap 失效，
+   这里把同一份 gap 还给包装层，视觉与改造前一致。 */
+.term-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* ---------- 行内的两个 gridcell ----------
+   role="row" 的子节点必须是 cell，所以「类型 + 路径」「图标 + id + 状态灯」和
+   行尾那颗 回滚 / 终止 按钮各自多包了一层 span。行的观感要一个像素都不动：
+   主格接管原来那一层 flex 布局，align-items / gap 一律 inherit —— 这两个属性
+   默认不继承，显式 inherit 才能拿到 room.css 里 .chg-row / .term-row 的值，
+   也就不必在这里抄一份常量、日后两边跑偏。
+   （.sr-only 是 absolute，不是 flex item，拆格前后 gap 的数量都不变。） */
+.rcell {
+  display: flex;
+  align-items: inherit;
+  flex: none;
+}
+
+/* 主格吃掉整行剩余宽度，里面的 .chg-path / .t-id 才能继续 flex:1 + 省略号 */
+.rcell-main {
+  flex: 1;
+  min-width: 0;
+  gap: inherit;
+}
+
+/* ---------- Review：行由 div 变 button ----------
+   button 默认收缩到内容宽、文本居中，需要显式还原成整行块级。 */
+button.ver-row {
+  width: 100%;
+  text-align: left;
+}
+
+.ver-items {
+  display: block;
+}
+
+/* ---------- 行内操作按钮：键盘聚焦时必须显形 ----------
+   room.css 里 .chg-rb / .t-kill 是 opacity:0 + 仅 hover 显形，
+   键盘用户永远看不到。补上 focus 通路（选择器特异度 0,2,0，
+   稳压 room.css 的 .chg-rb { opacity: 0 }）。 */
+.chg-row:focus-within .chg-rb,
+.chg-rb:focus-visible,
+.term-row:focus-within .t-kill,
+.t-kill:focus-visible {
+  opacity: 1;
+}
+
+/* ============================================================================
+   二、Files：未保存切文件的 armed 二次确认（取代 window.confirm）
+   ============================================================================ */
+
+.files-guard {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-5);
+  border-bottom: 1px solid var(--edge-warning);
+  background: var(--tint-warning);
+  color: var(--warning);
+  font-size: var(--text-meta);
+  line-height: var(--lh-tight);
+}
+
+.files-guard > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.files-guard strong {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-strong);
+  overflow-wrap: anywhere;
+}
+
+.files-guard .btn {
+  flex: none;
+  color: var(--warning);
+}
+
+/* 「重新加载」进入待确认时借用全库统一的 .confirm 观感 */
+.files-editor-head .btn.confirm {
+  border-color: var(--edge-warning-hi);
+  background: var(--tint-warning);
+  color: var(--warning);
+}
+
+/* ============================================================================
+   三、accessibleDiffMode 的文本 diff
+   ============================================================================ */
+
+.diff-body.diff-body-a11y {
+  padding: var(--sp-4) 0 var(--sp-8);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+}
+
+/* 顶部两句概览：先给总量，再进变更块 */
+.diff-body-a11y .dsum,
+.diff-body-a11y .dnote {
+  margin: var(--sp-2) var(--sp-6) var(--sp-5);
+  padding: var(--sp-3) var(--sp-5);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-base);
+}
+
+.diff-body-a11y .dnote {
+  border-color: var(--edge-warning);
+  background: var(--tint-warning);
+  color: var(--warning);
+}
+
+/* ---------- 变更块 ---------- */
+.dhunk {
+  margin-bottom: var(--sp-5);
+}
+
+.dhunk + .dhunk {
+  padding-top: var(--sp-5);
+  border-top: 1px solid var(--border);
+}
+
+.dhunk-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-5);
+  margin: 0 var(--sp-6) var(--sp-3);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-strong);
+  line-height: var(--lh-tight);
+}
+
+/* 原始 @@ 头：给看得懂的人留个锚点，读屏跳过（aria-hidden） */
+.dhunk-raw {
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-normal);
+}
+
+.dlines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ---------- 单行 ----------
+   上下文行的标记列是空的，用 baseline 对齐会因为空盒没有行盒而错位，
+   所以走 flex-start + 统一 line-height。 */
+.dla {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-5);
+  padding: var(--sp-1) var(--sp-6);
+  border-left: var(--sp-1) solid transparent;
+  font-size: var(--text-meta);
+  line-height: var(--lh-relaxed);
+}
+
+/* 增删标记：文本本身就是语义，颜色只是冗余强化。
+   固定宽度让代码列在增删 / 上下文行之间对齐。 */
+.dla-mark {
+  flex: none;
+  min-width: 4.5em;
+  color: var(--fg-faint);
+  font-family: var(--font-ui);
+  font-weight: var(--weight-strong);
+  white-space: nowrap;
+}
+
+/* min-width 而非 width：万行文件的行号要能撑开，不能被裁 */
+.dla-no {
+  flex: none;
+  min-width: 4ch;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
+
+/* pre-wrap + anywhere：长行折行而不是逼用户横向滚动 */
+.dla-code {
+  flex: 1;
+  min-width: 0;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dla-ctx .dla-code {
+  color: var(--fg-muted);
+}
+
+/* 底色与左边条都是冗余提示；即使全部失效，"+ 新增 / - 删除" 文本仍在。 */
+.dla-add {
+  border-left-color: var(--edge-success-hi);
+  background: var(--tint-success);
+}
+
+.dla-add .dla-mark {
+  color: var(--success);
+}
+
+.dla-del {
+  border-left-color: var(--edge-danger-hi);
+  background: var(--tint-danger);
+}
+
+.dla-del .dla-mark {
+  color: var(--danger);
+}
+
+/* F7 当前变更点，与 room.css 的 .dl.f7-cur 保持同一套观感 */
+.dla.f7-cur {
+  border-left-color: var(--accent);
+  background: var(--tint-accent-hi);
+}
+
+/* ============================================================================
+   四、高对比度：把冗余的底色提示也拉满
+   ============================================================================ */
+@media (prefers-contrast: more) {
+  .dla-add,
+  .dla-del,
+  .dla.f7-cur {
+    border-left-width: var(--sp-2);
+  }
+
+  .diff-body-a11y .dla-code {
+    color: var(--fg);
+  }
+}

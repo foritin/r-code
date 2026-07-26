@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../store/app";
+import { useFocusTrap, useReturnFocus } from "../lib/hooks";
 import { useTasksStore } from "../store/tasks";
 import { globalSearch, quickOpen } from "../lib/ipc";
 import { errText } from "../lib/format";
@@ -40,8 +41,12 @@ export function SearchOverlay() {
     [files, hits],
   );
   const selSafe = items.length === 0 ? 0 : Math.min(sel, items.length - 1);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialogRef, true);
+  useReturnFocus(true);
 
-  // 挂载自动聚焦
+  // 挂载自动聚焦。焦点陷阱与归还见下方 hook —— 原先只声明了 aria-modal="true"
+  // 却没有任何实现，按 Tab 会直接跑到背景的侧栏按钮上，关闭后焦点掉进 body。
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -129,6 +134,7 @@ export function SearchOverlay() {
         role="dialog"
         aria-modal="true"
         aria-label="搜索"
+        ref={dialogRef}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="ovl-input-row">
@@ -136,6 +142,11 @@ export function SearchOverlay() {
           <input
             ref={inputRef}
             className="ovl-input"
+            role="combobox"
+            aria-expanded={items.length > 0}
+            aria-controls="ovl-results"
+            aria-autocomplete="list"
+            aria-label="搜索文件与内容"
             value={query}
             placeholder={searchable ? "搜文件，也搜内容…" : "附加文件夹后可搜索本地文件"}
             onChange={(e) => setQuery(e.target.value)}
@@ -148,13 +159,13 @@ export function SearchOverlay() {
           <div className="errbar" role="alert">
             <IconAlert width={13} height={13} />
             <span className="t">{error}</span>
-            <button className="x" onClick={() => setError(null)} title="知道了">
-              ✗
+            <button className="x" onClick={() => setError(null)} aria-label="关闭错误提示" title="知道了">
+              <span aria-hidden="true">✗</span>
             </button>
           </div>
         )}
 
-        <div className="ovl-results" ref={listRef}>
+        <div className="ovl-results" id="ovl-results" role="listbox" aria-label="搜索结果" ref={listRef}>
           {!searchable ? (
             <div className="empty">
               搜索只会访问当前附加的文件夹。<br />

@@ -1,23 +1,33 @@
 //! 内置工具 -- R0/R1 只读工具集 + R2 写入工具。 [doc-02 §5] [doc-18 M8-02]
 //!
 //! 实现以下工具：
-//! - `read_file`（R1）：读取文件内容
+//! - `read_file`（R1）：读取文件内容，支持 offset / limit 分页
 //! - `list_files`（R0）：列出目录内容
-//! - `search`（R0）：递归搜索文本
 //! - `git_status`（R0）：获取 git 状态
 //! - `load_skill`（R0）：加载 SKILL.md，路径穿越拒绝 [doc-02 §5]
+//! - `edit`（R2）：按字面量精确替换片段（首选的修改方式）
 //! - `apply_patch`（R2）：原子化应用补丁（全文件替换）
 //! - `create_file`（R2）：创建新文件
 //! - `delete_file`（R2）：删除文件
+//!
+//! 内容搜索（`search`）与文件名匹配（`glob`）在 [`crate::tools_search`]；
+//! shell 命令执行（`bash`）在 [`crate::tools_command`]。
 
 use std::path::{Component, Path};
 
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
-use serde::Serialize;
 
 use crate::gateway::Tool;
+
+/// `read_file` 不带 limit 时，单次最多返回的行数。
+///
+/// 没有这个上限，模型读一个几万行的生成文件就能把整个上下文撑爆，
+/// 之后的对话全部失效。宁可截断并告诉它怎么翻页。
+const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
+/// `read_file` 单次返回的字符上限（约 100 KiB）。
+const MAX_READ_CHARS: usize = 100_000;
 
 // ============================================================================
 // read_file  [doc-02 §5] -- R1
@@ -34,7 +44,9 @@ impl Tool for ReadFileTool {
         "read_file"
     }
     fn description(&self) -> &str {
-        "Read the full contents of a text file."
+        "Read the contents of a text file. \
+For large files, page through with offset (1-based line number) and limit. \
+Output is truncated with a note if it would be too large; read the note and page instead."
     }
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R1
@@ -46,6 +58,14 @@ impl Tool for ReadFileTool {
                 "path": {
                     "type": "string",
                     "description": "Absolute or relative path to the file."
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "1-based line number to start reading from. Defaults to 1."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return. Defaults to 2000."
                 }
             },
             "required": ["path"]
@@ -56,8 +76,74 @@ impl Tool for ReadFileTool {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        std::fs::read_to_string(path)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+
+        let offset = input
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.max(1) as usize)
+            .unwrap_or(1);
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.max(1) as usize)
+            .unwrap_or(DEFAULT_READ_LINE_LIMIT);
+        let paging_requested = input.get("offset").is_some() || input.get("limit").is_some();
+
+        // 未分页且文件不大：原样返回，与历史行为完全一致。
+        if !paging_requested
+            && content.len() <= MAX_READ_CHARS
+            && content.lines().count() <= DEFAULT_READ_LINE_LIMIT
+        {
+            return Ok(content);
+        }
+
+        let all_lines: Vec<&str> = content.lines().collect();
+        let total = all_lines.len();
+        let start = offset.saturating_sub(1);
+        if start >= total && total > 0 {
+            return Err(ProductError::Other(format!(
+                "offset {offset} is past the end of {path} ({total} lines)"
+            )));
+        }
+
+        let mut body = String::new();
+        let mut emitted = 0usize;
+        let mut char_capped = false;
+        for line in all_lines.iter().skip(start).take(limit) {
+            if body.len() + line.len() + 1 > MAX_READ_CHARS {
+                char_capped = true;
+                break;
+            }
+            body.push_str(line);
+            body.push('\n');
+            emitted += 1;
+        }
+
+        let last = start + emitted;
+        let has_more = last < total;
+        if has_more || start > 0 {
+            let mut note = format!(
+                "\n[{path} 共 {total} 行；本次返回第 {}–{last} 行",
+                start + 1
+            );
+            if has_more {
+                let reason = if char_capped {
+                    format!("已达单次 {MAX_READ_CHARS} 字符上限")
+                } else {
+                    format!("已达单次上限 {limit} 行")
+                };
+                note.push_str(&format!(
+                    "（{reason}）。继续读取请调用 read_file 并设 offset={}]\n",
+                    last + 1
+                ));
+            } else {
+                note.push_str("，已到文件末尾]\n");
+            }
+            body.push_str(&note);
+        }
+        Ok(body)
     }
 }
 
@@ -108,112 +194,6 @@ impl Tool for ListFilesTool {
         names.sort();
         serde_json::to_string(&names).map_err(|e| ProductError::Other(format!("JSON error: {e}")))
     }
-}
-
-// ============================================================================
-// search  [doc-02 §5] -- R0
-// ============================================================================
-
-/// 搜索命中结果。
-#[derive(Debug, Clone, Serialize, serde::Deserialize)]
-struct SearchHit {
-    file: String,
-    line: usize,
-    text: String,
-}
-
-/// `search` 工具 -- 递归搜索文件中的文本。
-///
-/// R0：只读。最多返回 100 条命中。
-pub struct SearchTool;
-
-#[async_trait]
-impl Tool for SearchTool {
-    fn name(&self) -> &str {
-        "search"
-    }
-    fn description(&self) -> &str {
-        "Search for a text pattern in files under a directory."
-    }
-    fn risk_level(&self) -> RiskLevel {
-        RiskLevel::R0
-    }
-    fn input_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Directory to search in."
-                },
-                "pattern": {
-                    "type": "string",
-                    "description": "Text pattern to search for."
-                }
-            },
-            "required": ["path", "pattern"]
-        })
-    }
-    async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let pattern = input
-            .get("pattern")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'pattern' parameter".to_string()))?;
-
-        let mut hits: Vec<SearchHit> = Vec::new();
-        search_recursive(Path::new(path), pattern, &mut hits, 100)?;
-        serde_json::to_string(&hits).map_err(|e| ProductError::Other(format!("JSON error: {e}")))
-    }
-}
-
-/// 递归搜索目录中的文本匹配。
-fn search_recursive(
-    dir: &Path,
-    pattern: &str,
-    results: &mut Vec<SearchHit>,
-    max_results: usize,
-) -> Result<(), ProductError> {
-    if results.len() >= max_results {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(dir)
-        .map_err(|e| ProductError::Other(format!("failed to read dir {}: {e}", dir.display())))?
-    {
-        if results.len() >= max_results {
-            return Ok(());
-        }
-        let entry = entry.map_err(|e| ProductError::Other(format!("dir entry error: {e}")))?;
-        let path = entry.path();
-        if path.is_dir() {
-            // 跳过隐藏目录
-            if let Some(name) = path.file_name() {
-                if name.to_string_lossy().starts_with('.') {
-                    continue;
-                }
-            }
-            search_recursive(&path, pattern, results, max_results)?;
-        } else if path.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                for (idx, line) in content.lines().enumerate() {
-                    if results.len() >= max_results {
-                        return Ok(());
-                    }
-                    if line.contains(pattern) {
-                        results.push(SearchHit {
-                            file: path.to_string_lossy().to_string(),
-                            line: idx + 1,
-                            text: line.to_string(),
-                        });
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 // ============================================================================
@@ -311,6 +291,146 @@ impl Tool for LoadSkillTool {
         std::fs::read_to_string(p)
             .map_err(|e| ProductError::Other(format!("failed to read skill {path}: {e}")))
     }
+}
+
+// ============================================================================
+// edit -- R2, 字面量精确替换
+// ============================================================================
+
+/// `edit` 工具 -- 用 `new_string` 替换文件中的 `old_string`。
+///
+/// R2：中风险。相比 `apply_patch` 的全文件覆盖，本工具有两个关键优势：
+///
+/// 1. **省 token**：改一行不必重发整个文件，长文件上差别是数量级的。
+/// 2. **自带并发保护**：`old_string` 必须在当前磁盘内容里唯一命中。若文件在模型
+///    读取之后被别人改过，命中数会变成 0 或多于 1，替换直接失败而不是把别人的
+///    修改静默覆盖掉。这比对比哈希更好用——它同时校验了"改的是我以为的那段"。
+pub struct EditTool;
+
+#[async_trait]
+impl Tool for EditTool {
+    fn name(&self) -> &str {
+        "edit"
+    }
+    fn description(&self) -> &str {
+        "Replace an exact literal snippet in a file. This is the preferred way to modify files. \
+old_string must appear exactly once, so include enough surrounding lines to make it unique \
+(indentation must match the file byte for byte). \
+Set replace_all=true to replace every occurrence instead — useful for renaming a symbol. \
+The uniqueness check also guards against overwriting concurrent edits: if the file changed \
+since you read it, the edit fails instead of clobbering."
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R2
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to edit."
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "Exact literal text to replace, including indentation."
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "Replacement text. Use an empty string to delete the snippet."
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of requiring exactly one. Default false."
+                }
+            },
+            "required": ["path", "old_string", "new_string"]
+        })
+    }
+    async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
+        let path = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+        let old_string = input
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ProductError::Other("missing 'old_string' parameter".to_string()))?;
+        let new_string = input
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ProductError::Other("missing 'new_string' parameter".to_string()))?;
+        let replace_all = input
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if old_string.is_empty() {
+            return Err(ProductError::Other(
+                "'old_string' must not be empty; use create_file to write a new file".to_string(),
+            ));
+        }
+        if old_string == new_string {
+            return Err(ProductError::Other(
+                "'old_string' and 'new_string' are identical; nothing to do".to_string(),
+            ));
+        }
+
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+
+        let occurrences = content.matches(old_string).count();
+        if occurrences == 0 {
+            return Err(ProductError::Other(format!(
+                "'old_string' was not found in {path}. \
+Re-read the file: it may have changed, or the indentation / line endings may differ."
+            )));
+        }
+        if occurrences > 1 && !replace_all {
+            let lines = match_line_numbers(&content, old_string);
+            let shown: Vec<String> = lines.iter().take(10).map(usize::to_string).collect();
+            return Err(ProductError::Other(format!(
+                "'old_string' matches {occurrences} places in {path} (lines {}). \
+Add surrounding context to make it unique, or set replace_all=true.",
+                shown.join(", ")
+            )));
+        }
+
+        let updated = if replace_all {
+            content.replace(old_string, new_string)
+        } else {
+            content.replacen(old_string, new_string, 1)
+        };
+        atomic_write(Path::new(path), updated.as_bytes())?;
+
+        let first_line = match_line_numbers(&content, old_string)
+            .first()
+            .copied()
+            .unwrap_or(0);
+        if replace_all {
+            Ok(format!(
+                "edited {path}: replaced {occurrences} occurrence(s)"
+            ))
+        } else {
+            Ok(format!("edited {path} at line {first_line}"))
+        }
+    }
+}
+
+/// 找出 `needle` 每次出现所在的 1-based 行号。
+fn match_line_numbers(content: &str, needle: &str) -> Vec<usize> {
+    let mut lines = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(found) = content[cursor..].find(needle) {
+        let absolute = cursor + found;
+        // 出现位置之前的换行数 + 1 即行号。
+        lines.push(content[..absolute].matches('\n').count() + 1);
+        cursor = absolute + needle.len().max(1);
+        if cursor >= content.len() {
+            break;
+        }
+    }
+    lines
 }
 
 // ============================================================================
@@ -564,57 +684,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn search_finds_matches() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.txt"), "foo bar\nbaz foo").unwrap();
-        fs::write(dir.path().join("b.txt"), "no match here").unwrap();
-        fs::create_dir(dir.path().join("sub")).unwrap();
-        fs::write(dir.path().join("sub").join("c.txt"), "foo again").unwrap();
-
-        let tool = SearchTool;
-        let result = tool
-            .execute(serde_json::json!({
-                "path": dir.path().to_str().unwrap(),
-                "pattern": "foo"
-            }))
-            .await
-            .unwrap();
-        let hits: Vec<SearchHit> = serde_json::from_str(&result).unwrap();
-        assert_eq!(hits.len(), 3);
-        assert_eq!(tool.risk_level(), RiskLevel::R0);
-    }
-
-    #[tokio::test]
-    async fn search_no_matches() {
-        let dir = TempDir::new().unwrap();
-        fs::write(dir.path().join("a.txt"), "hello world").unwrap();
-
-        let tool = SearchTool;
-        let result = tool
-            .execute(serde_json::json!({
-                "path": dir.path().to_str().unwrap(),
-                "pattern": "nonexistent"
-            }))
-            .await
-            .unwrap();
-        let hits: Vec<SearchHit> = serde_json::from_str(&result).unwrap();
-        assert!(hits.is_empty());
-    }
-
-    #[tokio::test]
-    async fn search_missing_params() {
-        let tool = SearchTool;
-        assert!(tool
-            .execute(serde_json::json!({ "path": "." }))
-            .await
-            .is_err());
-        assert!(tool
-            .execute(serde_json::json!({ "pattern": "x" }))
-            .await
-            .is_err());
-    }
-
-    #[tokio::test]
     async fn git_status_runs() {
         // 只在 git 可用时测试
         if std::process::Command::new("git")
@@ -712,13 +781,243 @@ mod tests {
         assert!(result.is_err());
     }
 
+    // ── read_file 分页 ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn read_file_small_file_is_returned_verbatim() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("s.txt");
+        fs::write(&file, "line1\nline2\n").unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        // 不分页、不超限时行为与改造前完全一致（含末尾换行）
+        assert_eq!(out, "line1\nline2\n");
+    }
+
+    #[tokio::test]
+    async fn read_file_offset_and_limit() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("m.txt");
+        let body: String = (1..=100).map(|i| format!("line{i}\n")).collect();
+        fs::write(&file, body).unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 10, "limit": 3
+            }))
+            .await
+            .unwrap();
+        assert!(out.starts_with("line10\nline11\nline12\n"));
+        assert!(out.contains("共 100 行"));
+        assert!(out.contains("offset=13"));
+    }
+
+    #[tokio::test]
+    async fn read_file_last_page_says_end_of_file() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("m.txt");
+        fs::write(&file, "a\nb\nc\n").unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 3
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains('c'));
+        assert!(out.contains("已到文件末尾"));
+        assert!(!out.contains("offset="));
+    }
+
+    #[tokio::test]
+    async fn read_file_offset_past_end_is_an_error() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("m.txt");
+        fs::write(&file, "a\nb\n").unwrap();
+
+        let result = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 99
+            }))
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_file_truncates_huge_file_without_paging() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("big.txt");
+        let body: String = (0..DEFAULT_READ_LINE_LIMIT + 500)
+            .map(|i| format!("l{i}\n"))
+            .collect();
+        fs::write(&file, body).unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(out.contains("已达单次上限"));
+        assert!(out.contains(&format!("offset={}", DEFAULT_READ_LINE_LIMIT + 1)));
+    }
+
+    // ── edit ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn edit_replaces_unique_snippet() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "fn main() {\n    let x = 1;\n}\n").unwrap();
+
+        let out = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "let x = 1;",
+                "new_string": "let x = 42;"
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("line 2"), "message was: {out}");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "fn main() {\n    let x = 42;\n}\n"
+        );
+        assert_eq!(EditTool.risk_level(), RiskLevel::R2);
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_ambiguous_match() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "let x = 1;\nlet y = 2;\nlet x = 1;\n").unwrap();
+
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "let x = 1;",
+                "new_string": "let x = 9;"
+            }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("matches 2 places"), "message was: {err}");
+        assert!(err.contains("lines 1, 3"), "message was: {err}");
+        // 失败必须不落盘
+        assert!(fs::read_to_string(&file)
+            .unwrap()
+            .contains("let x = 1;\nlet y"));
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all_rewrites_every_occurrence() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "old\nkeep\nold\n").unwrap();
+
+        let out = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "old",
+                "new_string": "new",
+                "replace_all": true
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains('2'), "message was: {out}");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "new\nkeep\nnew\n");
+    }
+
+    #[tokio::test]
+    async fn edit_reports_missing_snippet() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "hello\n").unwrap();
+
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "goodbye",
+                "new_string": "hi"
+            }))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "message was: {err}");
+    }
+
+    #[tokio::test]
+    async fn edit_can_delete_a_snippet() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "keep\nDROP ME\nkeep2\n").unwrap();
+
+        EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "DROP ME\n",
+                "new_string": ""
+            }))
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "keep\nkeep2\n");
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_degenerate_input() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("a.rs");
+        fs::write(&file, "x\n").unwrap();
+        let path = file.to_str().unwrap();
+
+        // 空 old_string
+        assert!(EditTool
+            .execute(serde_json::json!({"path": path, "old_string": "", "new_string": "y"}))
+            .await
+            .is_err());
+        // 新旧相同
+        assert!(EditTool
+            .execute(serde_json::json!({"path": path, "old_string": "x", "new_string": "x"}))
+            .await
+            .is_err());
+        // 缺参数
+        assert!(EditTool
+            .execute(serde_json::json!({"path": path, "old_string": "x"}))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn edit_missing_file_is_an_error() {
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": "/nonexistent/a.rs", "old_string": "a", "new_string": "b"
+            }))
+            .await;
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn match_line_numbers_locates_every_occurrence() {
+        let content = "a\nneedle\nb\nneedle\nc\n";
+        assert_eq!(match_line_numbers(content, "needle"), vec![2, 4]);
+        assert_eq!(match_line_numbers(content, "a"), vec![1]);
+        assert!(match_line_numbers(content, "zzz").is_empty());
+        // 首行命中
+        assert_eq!(match_line_numbers("x\ny\n", "x"), vec![1]);
+        // 跨行片段按起始行计
+        assert_eq!(match_line_numbers("a\nb\nc\n", "b\nc"), vec![2]);
+    }
+
     #[test]
     fn tool_names_and_descriptions() {
         assert_eq!(ReadFileTool.name(), "read_file");
         assert!(!ReadFileTool.description().is_empty());
         assert_eq!(ListFilesTool.name(), "list_files");
-        assert_eq!(SearchTool.name(), "search");
         assert_eq!(GitStatusTool.name(), "git_status");
+        assert_eq!(EditTool.name(), "edit");
+        assert!(!EditTool.description().is_empty());
         assert_eq!(LoadSkillTool.name(), "load_skill");
         assert_eq!(ApplyPatchTool.name(), "apply_patch");
         assert!(!ApplyPatchTool.description().is_empty());
@@ -731,8 +1030,8 @@ mod tests {
         for schema in [
             ReadFileTool.input_schema(),
             ListFilesTool.input_schema(),
-            SearchTool.input_schema(),
             GitStatusTool.input_schema(),
+            EditTool.input_schema(),
             LoadSkillTool.input_schema(),
             ApplyPatchTool.input_schema(),
             CreateFileTool.input_schema(),

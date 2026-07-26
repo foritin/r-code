@@ -30,6 +30,12 @@ uuid = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+# 搜索引擎（ripgrep 库形态：gitignore 感知遍历 + 行式正则搜索）
+ignore = { workspace = true }
+globset = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true }

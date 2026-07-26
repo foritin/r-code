@@ -107,7 +107,8 @@ fn parse_access_mode(s: &str) -> Result<ProjectAccessMode, ProductError> {
 
 /// 将数据库行映射为 `Task`。
 ///
-/// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at
+/// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model
+/// 注意：model 追加在末尾（索引 10），以免位移既有列索引。
 fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
     let mode_str: String = row.get(5).map_err(db_err)?;
     let mode = parse_task_mode(&mode_str)?;
@@ -130,6 +131,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
         worktree_path: row.get(7).map_err(db_err)?,
         created_at,
         updated_at,
+        model: row.get(10).map_err(db_err)?,
     })
 }
 
@@ -235,8 +237,8 @@ impl<'a> TaskRepository<'a> {
     pub fn create(&self, task: &Task) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task.id,
                 task.workspace_path,
@@ -248,6 +250,7 @@ impl<'a> TaskRepository<'a> {
                 task.worktree_path,
                 task.created_at.to_rfc3339(),
                 task.updated_at.to_rfc3339(),
+                task.model,
             ],
         )
         .map_err(db_err)?;
@@ -259,7 +262,7 @@ impl<'a> TaskRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at \
+                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model \
                  FROM tasks WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -279,7 +282,7 @@ impl<'a> TaskRepository<'a> {
     ) -> Result<Vec<Task>, ProductError> {
         let conn = self.db.conn()?;
         let mut sql = String::from(
-            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at \
+            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model \
              FROM tasks WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -329,6 +332,17 @@ impl<'a> TaskRepository<'a> {
         conn.execute(
             "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
             params![workspace_path, Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 绑定会话在后续运行中使用的具体模型。`None` 表示沿用该服务的默认模型。
+    pub fn set_model(&self, id: &str, model: Option<&str>) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET model = ?1, updated_at = ?2 WHERE id = ?3",
+            params![model, Utc::now().to_rfc3339(), id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -393,6 +407,13 @@ impl<'a> TaskRepository<'a> {
 // ============================================================================
 // AgentRunRepository
 // ============================================================================
+
+/// 验证占位 Run 的 model 值。
+///
+/// 它不是真实模型名，只是一个哨兵：任务从未跑过 agent 时，验证记录需要一条
+/// `agent_runs` 行来满足 `verifications.run_id` 外键。MIGRATION_009 也用同一个
+/// 指纹识别历史遗留数据。
+pub const VERIFICATION_PLACEHOLDER_MODEL: &str = "verification";
 
 /// Agent Run 仓库 -- `agent_runs` 表的 CRUD。
 pub struct AgentRunRepository<'a> {
@@ -551,7 +572,65 @@ impl<'a> AgentRunRepository<'a> {
         }
     }
 
-    /// 更新审查状态并设置 `ended_at`（标记 Run 结束）。
+    /// 获取 Task 最近一条**可审阅**的主 Run（不要求仍活跃）。
+    ///
+    /// 与 [`Self::get_active_run`] 的分工：
+    /// - `get_active_run` 回答"现在有没有在跑"，因此过滤 `ended_at IS NULL`；
+    /// - 本方法回答"用户正在审阅的是哪条"。
+    ///
+    /// 审查（接受/回滚）作用的那条 run 按定义已经结束（drain loop 收尾时写入
+    /// `ended_at`），所以不能用 `get_active_run` 定位。
+    ///
+    /// 排除验证占位 Run：它由 `run_verification` 在任务从未跑过 agent 时创建，
+    /// `started_at` 是"用户点验证的时刻"，必然晚于真实 run —— 不排除的话
+    /// 存量库里审查动作会写到占位 run 上，真实 run 永远停在 pending。
+    pub fn get_latest_main_run(&self, task_id: &str) -> Result<Option<AgentRun>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' \
+                   AND model <> ?2 \
+                 ORDER BY started_at DESC, id DESC LIMIT 1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt
+            .query(params![task_id, VERIFICATION_PLACEHOLDER_MODEL])
+            .map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => Ok(Some(row_to_agent_run(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 获取该 Task 的验证占位 Run。
+    ///
+    /// `verifications.run_id` 是 `NOT NULL REFERENCES agent_runs(id)`，从未跑过
+    /// agent 的任务需要一条占位记录来满足外键。复用它，避免每点一次验证多一行。
+    pub fn get_verification_placeholder_run(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<AgentRun>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        model, review_state, started_at, ended_at, usage_json, summary \
+                 FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND model = ?2 \
+                 ORDER BY started_at DESC, id DESC LIMIT 1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt
+            .query(params![task_id, VERIFICATION_PLACEHOLDER_MODEL])
+            .map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => Ok(Some(row_to_agent_run(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 更新审查状态；`ended_at` 仅在尚未设置时填入。
     pub fn update_review_state(
         &self,
         id: &str,
@@ -559,7 +638,9 @@ impl<'a> AgentRunRepository<'a> {
     ) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "UPDATE agent_runs SET review_state = ?1, ended_at = ?2 WHERE id = ?3",
+            // COALESCE：首次结束时刻不可变。接受/回滚发生在 run 结束之后，
+            // 若无条件覆写会把审计里的"运行结束时间"改成"用户点按钮的时间"。
+            "UPDATE agent_runs SET review_state = ?1, ended_at = COALESCE(ended_at, ?2) WHERE id = ?3",
             params![review_state.to_string(), Utc::now().to_rfc3339(), id],
         )
         .map_err(db_err)?;
@@ -1514,6 +1595,53 @@ mod tests {
         let fetched = repo.get(&run.id).unwrap().unwrap();
         assert_eq!(fetched.review_state, ReviewState::Accepted);
         assert!(fetched.ended_at.is_some());
+    }
+
+    /// 回归：首次结束时刻不可变。审查动作发生在 run 结束之后，
+    /// 若二次覆写会把审计里的"运行结束时间"改成"用户点按钮的时间"。
+    #[test]
+    fn test_update_review_state_preserves_first_ended_at() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "Ended At Guard");
+        let repo = AgentRunRepository::new(&db);
+
+        let run = AgentRun::new(&task.id, "gpt-4");
+        repo.create(&run).unwrap();
+
+        // 模拟 drain loop 收尾
+        repo.update_review_state(&run.id, ReviewState::Pending)
+            .unwrap();
+        let first_ended = repo.get(&run.id).unwrap().unwrap().ended_at.unwrap();
+
+        // 稍后用户点接受
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        repo.update_review_state(&run.id, ReviewState::Accepted)
+            .unwrap();
+
+        let after = repo.get(&run.id).unwrap().unwrap();
+        assert_eq!(after.review_state, ReviewState::Accepted);
+        assert_eq!(after.ended_at.unwrap(), first_ended);
+    }
+
+    /// 回归：run 结束后 get_active_run 是 None，但 get_latest_main_run 仍能找到它。
+    /// 这正是 accept_task 曾经必然失败的原因。
+    #[test]
+    fn test_get_latest_main_run_finds_ended_run() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "Latest Main Run");
+        let repo = AgentRunRepository::new(&db);
+
+        assert!(repo.get_latest_main_run(&task.id).unwrap().is_none());
+
+        let run = AgentRun::new(&task.id, "gpt-4");
+        repo.create(&run).unwrap();
+        repo.update_review_state(&run.id, ReviewState::Pending)
+            .unwrap();
+
+        assert!(repo.get_active_run(&task.id).unwrap().is_none());
+        let latest = repo.get_latest_main_run(&task.id).unwrap().unwrap();
+        assert_eq!(latest.id, run.id);
+        assert!(latest.ended_at.is_some());
     }
 
     #[test]

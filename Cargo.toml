@@ -70,6 +70,13 @@ keyring = { version = "3", features = ["windows-native"] }
 # 文件监听
 notify = "6"
 
+# 搜索引擎（ripgrep 的库形态：进程内嵌，不依赖外部 rg 二进制，跨平台行为一致）
+# [doc-12 §搜索服务] ADR-0003 选定「直接用 grep-* crates 自行实现」而非 shell 出去调 rg
+ignore = "0.4"
+globset = "0.4"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+
 # Git
 git2 = { version = "0.19", features = ["ssh"] }
 
