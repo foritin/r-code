@@ -7,6 +7,12 @@
 use r_code_core::error::ProductError;
 use rusqlite::Connection;
 
+/// 当前 SQLite schema 的最新版本。
+///
+/// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
+/// 预检和实际 store 迁移版本发生漂移。
+pub const LATEST_SCHEMA_VERSION: u32 = 11;
+
 /// 运行所有待执行的 migration。
 pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
     // 创建 schema_version 表（如果不存在）
@@ -38,6 +44,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
         (7, MIGRATION_007),
         (8, MIGRATION_008),
         (9, MIGRATION_009),
+        (10, MIGRATION_010),
+        (11, MIGRATION_011),
     ];
 
     for (version, sql) in migrations {
@@ -365,6 +373,43 @@ WHERE model = 'verification'
   AND NOT EXISTS (SELECT 1 FROM agent_runs child WHERE child.parent_run_id = agent_runs.id);
 "#;
 
+/// Migration 010: 用户通知中心。
+///
+/// `source_key` 是可重放的去重键：轮询同步同一个权限请求或同一轮审查时，只刷新
+/// 文案，不会每次都制造新的未读记录。`sequence` 仅用于稳定游标，不暴露给业务 UI。
+const MIGRATION_010: &str = r#"
+CREATE TABLE IF NOT EXISTS notifications (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    source_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    workspace_path TEXT,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_unread
+    ON notifications(read_at, sequence DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_task
+    ON notifications(task_id, sequence DESC);
+"#;
+
+/// Migration 011: 外部 Agent 执行驱动与可恢复会话标识。
+///
+/// 历史记录默认 `native`，不改变原有 R-Code provider runtime 的语义。外部会话 ID
+/// 仅保存用于续接和诊断的公开标识，绝不保存认证令牌或完整外部转录。
+const MIGRATION_011: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN runtime_kind TEXT NOT NULL DEFAULT 'native';
+ALTER TABLE agent_runs ADD COLUMN external_session_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_agent_runs_runtime_kind
+    ON agent_runs(runtime_kind, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_external_session
+    ON agent_runs(external_session_id)
+    WHERE external_session_id IS NOT NULL;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -372,7 +417,8 @@ mod tests {
     /// 回归：v9 只结束"验证占位 run"，不碰真实的运行中记录，也不删任何行。
     #[test]
     fn migration_v9_ends_verification_placeholder_runs_only() {
-        // 先跑全量迁移建好表结构，再退回 v8 只重放 009
+        // 先跑全量迁移建好表结构，再直接重放 009。不能只删 schema_version=9
+        // 后调用 run_migrations：一旦后续已有 v10/v11，MAX(version) 仍会跳过 v9。
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
 
@@ -388,9 +434,7 @@ mod tests {
         )
         .unwrap();
 
-        conn.execute("DELETE FROM schema_version WHERE version = 9", [])
-            .unwrap();
-        run_migrations(&conn).unwrap();
+        conn.execute_batch(MIGRATION_009).unwrap();
 
         let ended_of = |id: &str| -> Option<String> {
             conn.query_row(
@@ -437,6 +481,7 @@ mod tests {
             "verifications",
             "session_branches",
             "queued_messages",
+            "notifications",
             "schema_version",
         ] {
             assert!(
@@ -463,7 +508,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, i64::from(LATEST_SCHEMA_VERSION));
     }
 
     #[test]
@@ -791,9 +836,12 @@ mod tests {
             String,
             Option<String>,
             Option<String>,
+            String,
+            Option<String>,
         ) = conn
             .query_row(
-                "SELECT branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id \
+                "SELECT branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
+                        runtime_kind, external_session_id \
                  FROM agent_runs WHERE id = 'run-1'",
                 [],
                 |row| {
@@ -803,6 +851,8 @@ mod tests {
                         row.get(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -812,6 +862,8 @@ mod tests {
         assert_eq!(legacy_values.2, "main");
         assert!(legacy_values.3.is_none());
         assert!(legacy_values.4.is_none());
+        assert_eq!(legacy_values.5, "native");
+        assert!(legacy_values.6.is_none());
 
         let columns: Vec<String> = conn
             .prepare("PRAGMA table_info(agent_runs)")
@@ -826,6 +878,8 @@ mod tests {
             "agent_label",
             "summary",
             "delegated_by_tool_call_id",
+            "runtime_kind",
+            "external_session_id",
         ] {
             assert!(
                 columns.contains(&expected.to_string()),
@@ -844,5 +898,7 @@ mod tests {
             .collect();
         assert!(indexes.contains(&"idx_agent_runs_parent".to_string()));
         assert!(indexes.contains(&"idx_agent_runs_delegated_by_tool_call".to_string()));
+        assert!(indexes.contains(&"idx_agent_runs_runtime_kind".to_string()));
+        assert!(indexes.contains(&"idx_agent_runs_external_session".to_string()));
     }
 }

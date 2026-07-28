@@ -8,6 +8,8 @@ import { create } from "zustand";
 
 export type Scene =
   | "home"
+  | "dashboard"
+  | "conversations"
   | "deck"
   | "room"
   | "inbox"
@@ -23,6 +25,7 @@ export type ResolvedTheme = "studio-light" | "obsidian";
 
 /** Room 画布页签（titlebar 按钮可远程切换）。 */
 export type CanvasTab = "summary" | "changes" | "files" | "terminal" | "review";
+export type SettingsPane = "providers" | "preferences" | "diagnostics" | "codex";
 
 interface AppState {
   scene: Scene;
@@ -30,6 +33,8 @@ interface AppState {
   currentTaskId: string | null;
   /** Room 画布激活页签 */
   canvasTab: CanvasTab;
+  /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
+  settingsPane: SettingsPane;
   /** Ctrl K 搜索 overlay */
   searchOpen: boolean;
   /** Editor 当前浏览的文件（Ctrl K 搜索写入，Editor 场景消费） */
@@ -47,9 +52,12 @@ interface AppState {
 
   setScene: (scene: Scene) => void;
   goHome: () => void;
+  openDashboard: () => void;
+  openConversations: () => void;
   openDeck: () => void;
   openRoom: (taskId: string) => void;
   setCanvasTab: (tab: CanvasTab) => void;
+  setSettingsPane: (pane: SettingsPane) => void;
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
   setEditorFile: (path: string | null) => void;
@@ -64,6 +72,7 @@ interface AppState {
 }
 
 const RAIL_KEY = "r-code.rail.collapsed";
+const THEME_KEY = "r-code.theme.mode";
 
 function readCollapsed(): boolean {
   try {
@@ -73,23 +82,37 @@ function readCollapsed(): boolean {
   }
 }
 
+function readThemeMode(): ThemeMode {
+  try {
+    const saved = window.localStorage.getItem(THEME_KEY);
+    if (saved === "light" || saved === "dark" || saved === "system") return saved;
+  } catch {
+    // 受限环境下使用产品默认值
+  }
+  return "light";
+}
+
 export const useAppStore = create<AppState>((set) => ({
   scene: "home",
   currentTaskId: null,
   canvasTab: "summary",
+  settingsPane: "providers",
   searchOpen: false,
   editorFile: null,
   railCollapsed: readCollapsed(),
   deckDensity: "cards",
-  themeMode: "dark",
+  themeMode: readThemeMode(),
   zoomLevel: 100,
   accessibleDiffMode: false,
 
   setScene: (scene) => set({ scene }),
   goHome: () => set({ scene: "home" }),
+  openDashboard: () => set({ scene: "dashboard" }),
+  openConversations: () => set({ scene: "conversations" }),
   openDeck: () => set({ scene: "deck" }),
   openRoom: (taskId) => set({ scene: "room", currentTaskId: taskId }),
   setCanvasTab: (canvasTab) => set({ canvasTab }),
+  setSettingsPane: (settingsPane) => set({ settingsPane, scene: "settings" }),
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setEditorFile: (editorFile) => set({ editorFile }),
@@ -104,7 +127,14 @@ export const useAppStore = create<AppState>((set) => ({
       return { railCollapsed };
     }),
   setDeckDensity: (deckDensity) => set({ deckDensity }),
-  setThemeMode: (themeMode) => set({ themeMode }),
+  setThemeMode: (themeMode) => {
+    try {
+      window.localStorage.setItem(THEME_KEY, themeMode);
+    } catch {
+      // 受限环境下不持久化，不影响本次使用
+    }
+    set({ themeMode });
+  },
   setZoom: (level) => set({ zoomLevel: Math.max(80, Math.min(200, level)) }),
   zoomIn: () => set((s) => ({ zoomLevel: Math.min(200, s.zoomLevel + 10) })),
   zoomOut: () => set((s) => ({ zoomLevel: Math.max(80, s.zoomLevel - 10) })),

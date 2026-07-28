@@ -5,7 +5,9 @@ import { useGlobalKeys } from "./lib/keys";
 import { MenuBar } from "./components/shell/MenuBar";
 import { Rail } from "./components/shell/Rail";
 import { HomeScene } from "./components/scenes/HomeScene";
-import { DeckScene } from "./components/scenes/DeckScene";
+import { DashboardScene } from "./components/scenes/DashboardScene";
+import { ConversationsScene } from "./components/scenes/ConversationsScene";
+import { ActivityScene } from "./components/scenes/ActivityScene";
 import { RoomScene } from "./components/scenes/RoomScene";
 import { InboxScene } from "./components/scenes/InboxScene";
 import { ProjectsScene } from "./components/scenes/ProjectsScene";
@@ -13,11 +15,13 @@ import { EditorScene } from "./components/scenes/EditorScene";
 import { SettingsScene } from "./components/scenes/SettingsScene";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
+import { selectRunning } from "./store/tasks";
 
 /**
  * R-Code 应用根组件。
  * 紧凑标题栏 / 单一会话侧栏 / 主工作区（场景切换）。
- * 主题（亮/暗/跟随系统）解析后写入 <html data-theme>，缩放写入 #app zoom。
+ * 主题（亮/暗/跟随系统）解析后写入 <html data-theme>。
+ * 界面缩放同步补偿根节点尺寸，避免放大后底栏和侧栏页脚被视口裁掉。
  */
 export default function App() {
   const scene = useAppStore((s) => s.scene);
@@ -69,27 +73,49 @@ export default function App() {
   // 后台任务跑完 / 权限卡住时播报（不在场就完全无感的那部分）
   useTaskCompletionToasts();
 
+  const appScale = zoomLevel / 100;
+
   return (
     <div
       id="app"
-      className={railCollapsed ? "rail-is-collapsed" : undefined}
-      style={{ zoom: zoomLevel / 100 }}
+      className={`app-shell scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}`}
+      style={{
+        zoom: appScale,
+        width: `${100 / appScale}%`,
+        height: `${100 / appScale}%`,
+      }}
     >
       <a className="skip-link" href="#main-content">跳到主内容</a>
       <MenuBar />
       <Rail />
-      <main className="main" id="main-content" tabIndex={-1}>
+      <main className="main" id="main-content" role="main" tabIndex={-1}>
         {scene === "home" && <HomeScene />}
-        {scene === "deck" && <DeckScene />}
+        {scene === "dashboard" && <DashboardScene />}
+        {scene === "conversations" && <ConversationsScene />}
+        {scene === "deck" && <ActivityScene />}
         {scene === "room" && <RoomScene />}
         {scene === "inbox" && <InboxScene />}
         {scene === "projects" && <ProjectsScene />}
         {scene === "editor" && <EditorScene />}
         {scene === "settings" && <SettingsScene />}
       </main>
+      <AppStatusBar />
       {searchOpen && <SearchOverlay />}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
     </div>
+  );
+}
+
+function AppStatusBar() {
+  const workspaceCount = useTasksStore((s) => s.workspaces.length);
+  const runningCount = useTasksStore((s) => selectRunning(s).length);
+  const refreshedAt = useTasksStore((s) => s.refreshedAt);
+  return (
+    <footer className="app-statusbar" aria-label="应用状态">
+      <span><i className="status-live-dot" />{workspaceCount} 个项目</span>
+      <span>{runningCount} 个任务运行中</span>
+      <span className="app-statusbar-sync">{refreshedAt ? "数据已同步" : "正在连接数据"}</span>
+    </footer>
   );
 }

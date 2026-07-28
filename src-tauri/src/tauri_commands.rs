@@ -8,12 +8,13 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use r_code_core::dto::{
-    AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage, Task,
-    VerificationRecord, Workspace,
+    AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage, Task,
+    SessionBranch, VerificationRecord, Workspace,
 };
 use r_code_host::commands::{
-    ChangeDiff, CommandState, RecoveryPageData, SearchMatch, SessionMessage, TaskDetail,
-    TerminalInfo,
+    ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
+    RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage, TaskDetail,
+    TaskDetailBatch, TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard,
 };
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::replay::ReplayEntry;
@@ -88,6 +89,35 @@ pub async fn cmd_task_set_model(
     r_code_host::commands::task_set_model(&state, &task_id, model.as_deref()).await
 }
 
+/// 修改会话在列表中显示的名称。
+#[tauri::command]
+pub async fn cmd_task_rename(
+    state: State<'_, CommandState>,
+    task_id: String,
+    title: String,
+) -> Result<Task, String> {
+    r_code_host::commands::task_rename(&state, &task_id, &title).await
+}
+
+/// 从当前上下文末端创建新的活跃会话分支。
+#[tauri::command]
+pub async fn cmd_task_fork_context(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<SessionBranch, String> {
+    r_code_host::commands::task_fork_context(&state, &task_id).await
+}
+
+/// 手动压缩当前分支的模型上下文；完整聊天记录继续保留用于回看与审计。
+#[tauri::command]
+pub async fn cmd_task_compact_context(
+    state: State<'_, CommandState>,
+    task_id: String,
+    focus: Option<String>,
+) -> Result<r_code_host::commands::ContextCompactionResult, String> {
+    r_code_host::commands::task_compact_context(&state, &task_id, focus.as_deref()).await
+}
+
 /// 获取任务详情（含事件、变更、权限、验证）。
 #[tauri::command]
 pub async fn cmd_task_detail(
@@ -95,6 +125,15 @@ pub async fn cmd_task_detail(
     task_id: String,
 ) -> Result<TaskDetail, String> {
     r_code_host::commands::task_detail(&state, &task_id).await
+}
+
+/// 批量获取任务详情，避免项目 / 活动页产生 IPC N+1。
+#[tauri::command]
+pub async fn cmd_task_detail_batch(
+    state: State<'_, CommandState>,
+    task_ids: Vec<String>,
+) -> Result<TaskDetailBatch, String> {
+    r_code_host::commands::task_detail_batch(&state, &task_ids).await
 }
 
 /// 发送用户消息到 Agent。 [doc-04 §7]
@@ -130,6 +169,28 @@ pub async fn cmd_agent_abort_subagent(
     subagent_id: String,
 ) -> Result<(), String> {
     r_code_host::commands::agent_abort_subagent(&state, &task_id, &subagent_id).await
+}
+
+/// 以只读 `codex exec --json` 委派当前主运行的一项子任务。
+#[tauri::command]
+pub async fn cmd_agent_delegate_codex(
+    state: State<'_, CommandState>,
+    task_id: String,
+    goal: String,
+    label: Option<String>,
+) -> Result<AgentRun, String> {
+    r_code_host::commands::agent_delegate_codex(&state, &task_id, &goal, label.as_deref()).await
+}
+
+/// 以持久 MCP 会话委派 Codex；完成后可保留外部 thread ID 供后续续接。
+#[tauri::command]
+pub async fn cmd_agent_delegate_codex_mcp(
+    state: State<'_, CommandState>,
+    task_id: String,
+    goal: String,
+    label: Option<String>,
+) -> Result<AgentRun, String> {
+    r_code_host::commands::agent_delegate_codex_mcp(&state, &task_id, &goal, label.as_deref()).await
 }
 
 /// 列出当前会话分支的待发送消息。
@@ -183,6 +244,32 @@ pub async fn cmd_permission_pending(
     r_code_host::commands::permission_pending(&state, &task_id).await
 }
 
+/// 列出可已读的顶栏通知。
+#[tauri::command]
+pub async fn cmd_notification_list(
+    state: State<'_, CommandState>,
+    cursor: Option<String>,
+    limit: u32,
+    unread_only: bool,
+) -> Result<NotificationPage, String> {
+    r_code_host::commands::notification_list(&state, cursor.as_deref(), limit, unread_only).await
+}
+
+/// 将一条通知标记为已读。
+#[tauri::command]
+pub async fn cmd_notification_mark_read(
+    state: State<'_, CommandState>,
+    notification_id: String,
+) -> Result<bool, String> {
+    r_code_host::commands::notification_mark_read(&state, &notification_id).await
+}
+
+/// 将全部通知标记为已读，返回受影响数量。
+#[tauri::command]
+pub async fn cmd_notification_mark_all_read(state: State<'_, CommandState>) -> Result<u64, String> {
+    r_code_host::commands::notification_mark_all_read(&state).await
+}
+
 /// 获取任务的文件变更列表。
 #[tauri::command]
 pub async fn cmd_changes_list(
@@ -218,6 +305,16 @@ pub async fn cmd_accept_task(
     task_id: String,
 ) -> Result<(), String> {
     r_code_host::commands::accept_task(&state, &task_id).await
+}
+
+/// 在审核阶段提出修改请求，启动下一轮 Agent 运行。
+#[tauri::command]
+pub async fn cmd_change_request(
+    state: State<'_, CommandState>,
+    task_id: String,
+    message: String,
+) -> Result<(), String> {
+    r_code_host::commands::change_request(&state, &task_id, &message).await
 }
 
 /// 单文件变更 diff（blob 缺失时降级返回元信息）。
@@ -302,6 +399,37 @@ pub async fn cmd_workspace_set_access_mode(
     r_code_host::commands::workspace_set_access_mode(&state, &workspace_path, access_mode).await
 }
 
+/// 获取项目仪表盘聚合数据。
+#[tauri::command]
+pub async fn cmd_workspace_dashboard(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+) -> Result<WorkspaceDashboard, String> {
+    r_code_host::commands::workspace_dashboard(&state, &workspace_path).await
+}
+
+/// 获取项目级活动流。
+#[tauri::command]
+pub async fn cmd_project_activity_list(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+    cursor: Option<String>,
+    limit: u32,
+) -> Result<ProjectActivityPage, String> {
+    r_code_host::commands::project_activity_list(&state, &workspace_path, cursor.as_deref(), limit)
+        .await
+}
+
+/// 获取跨项目活动流。
+#[tauri::command]
+pub async fn cmd_activity_list(
+    state: State<'_, CommandState>,
+    cursor: Option<String>,
+    limit: u32,
+) -> Result<ProjectActivityPage, String> {
+    r_code_host::commands::activity_list(&state, cursor.as_deref(), limit).await
+}
+
 /// 快速打开 -- 模糊匹配文件路径。
 #[tauri::command]
 pub async fn cmd_quick_open(
@@ -342,6 +470,15 @@ pub async fn cmd_terminal_create(
     r_code_host::commands::terminal_create(&state, &shell, &workspace_path).await
 }
 
+/// 使用已探测到的真实 CLI 路径创建交互式 Codex 终端。
+#[tauri::command]
+pub async fn cmd_terminal_create_codex(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+) -> Result<String, String> {
+    r_code_host::commands::terminal_create_codex(&state, &workspace_path).await
+}
+
 /// 发送文本到终端。
 #[tauri::command]
 pub async fn cmd_terminal_send(
@@ -371,6 +508,25 @@ pub async fn cmd_terminal_snapshot(
     r_code_host::commands::terminal_snapshot(&state, &id).await
 }
 
+/// 读取终端原始快照，仅交由桌面终端模拟器渲染。
+#[tauri::command]
+pub async fn cmd_terminal_raw_snapshot(
+    state: State<'_, CommandState>,
+    id: String,
+) -> Result<TerminalRawSnapshot, String> {
+    r_code_host::commands::terminal_raw_snapshot(&state, &id).await
+}
+
+/// 读取自指定游标以来的原始终端输出。
+#[tauri::command]
+pub async fn cmd_terminal_raw_since(
+    state: State<'_, CommandState>,
+    id: String,
+    cursor: u64,
+) -> Result<TerminalRawBatch, String> {
+    r_code_host::commands::terminal_raw_since(&state, &id, cursor).await
+}
+
 /// 终止终端。
 #[tauri::command]
 pub async fn cmd_terminal_kill(state: State<'_, CommandState>, id: String) -> Result<(), String> {
@@ -394,9 +550,11 @@ pub async fn cmd_recovery_data(state: State<'_, CommandState>) -> Result<Recover
     r_code_host::commands::recovery_data(&state).await
 }
 
-/// 清理孤儿权限请求（全部 pending → deny），返回受影响行数。
+/// 收束启动前遗留的运行、工具调用与权限请求。
 #[tauri::command]
-pub async fn cmd_recovery_cleanup(state: State<'_, CommandState>) -> Result<u64, String> {
+pub async fn cmd_recovery_cleanup(
+    state: State<'_, CommandState>,
+) -> Result<RecoveryCleanupResult, String> {
     r_code_host::commands::recovery_cleanup(&state).await
 }
 
@@ -434,6 +592,16 @@ pub async fn cmd_session_messages(
     task_id: String,
 ) -> Result<Vec<SessionMessage>, String> {
     r_code_host::commands::session_messages(&state, &task_id).await
+}
+
+/// 读取子代理独立会话日志（详情面板数据源）。
+#[tauri::command]
+pub async fn cmd_subagent_session_messages(
+    state: State<'_, CommandState>,
+    task_id: String,
+    subagent_id: String,
+) -> Result<Vec<SessionMessage>, String> {
+    r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id).await
 }
 
 /// 读取项目记忆（`<project_root>/.r-code/memory.md`）。
@@ -520,16 +688,63 @@ pub async fn cmd_codex_integration_status() -> Result<serde_json::Value, String>
     r_code_host::commands::codex_integration_status().await
 }
 
+/// 前端展示固定命令并获得用户明确确认后，安装官方 Codex CLI npm 包。
+#[tauri::command]
+pub async fn cmd_codex_install_cli() -> Result<serde_json::Value, String> {
+    r_code_host::commands::codex_install_cli().await
+}
+
 /// 在用户可见的终端中发起 Codex CLI 登录。
 #[tauri::command]
 pub async fn cmd_codex_start_login() -> Result<(), String> {
     r_code_host::commands::codex_start_login().await
 }
 
+/// 在用户可见的终端中发起 Codex CLI 设备码登录。
+#[tauri::command]
+pub async fn cmd_codex_start_device_login() -> Result<(), String> {
+    r_code_host::commands::codex_start_device_login().await
+}
+
 /// 用户确认后，将 R-Code 的终端协作 Skill 安装到 Codex 目录。
 #[tauri::command]
 pub async fn cmd_codex_install_skill() -> Result<(), String> {
     r_code_host::commands::codex_install_skill().await
+}
+
+/// 用户确认后向 Codex 注册本机 R-Code MCP server。
+#[tauri::command]
+pub async fn cmd_codex_install_mcp_server(state: State<'_, CommandState>) -> Result<(), String> {
+    r_code_host::commands::codex_install_mcp_server(&state).await
+}
+
+/// 用户一次确认后，更新协作 Skill 并补齐 R-Code MCP 配置。
+#[tauri::command]
+pub async fn cmd_codex_setup_collaboration(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::codex_setup_collaboration(&state).await
+}
+
+/// 仅在 Codex 已登录后读取 CLI 实际可用模型与当前运行偏好。
+#[tauri::command]
+pub async fn cmd_codex_cli_preferences() -> Result<CodexCliPreferences, String> {
+    r_code_host::commands::codex_cli_preferences().await
+}
+
+/// 保存 Codex CLI 的模型、推理强度与回复详细度；空值恢复 Codex 默认。
+#[tauri::command]
+pub async fn cmd_codex_save_cli_preferences(
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    verbosity: Option<String>,
+) -> Result<CodexCliPreferences, String> {
+    r_code_host::commands::codex_save_cli_preferences(
+        model.as_deref(),
+        reasoning_effort.as_deref(),
+        verbosity.as_deref(),
+    )
+    .await
 }
 
 /// 列出工作区目录的直接子项（仅限受信任工作区）。

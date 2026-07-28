@@ -1,12 +1,12 @@
 //! SkillManager - 外部 CLI Skill 安装 [doc-05 §7] [doc-10 §7]
 //!
-//! 管理 `r-code-terminal` SKILL.md 文件的安装。
-//! 安装到 Claude 和 Codex 的 skills 目录，指导外部 CLI 如何使用
-//! `terminal.*` 控制原语。
+//! 管理 R-Code 协作 SKILL.md 文件的安装。
+//! 安装到 Claude 和 Codex 的 skills 目录，指导外部 CLI 如何安全使用
+//! R-Code MCP 的只读委派边界。
 //!
 //! ## 安装路径 [doc-10 §7.1]
-//! - `~/.claude/skills/r-code-terminal/SKILL.md`
-//! - `~/.codex/skills/r-code-terminal/SKILL.md`
+//! - `~/.claude/skills/r-code-terminal/SKILL.md`（历史稳定路径）
+//! - `~/.codex/skills/r-code-terminal/SKILL.md`（历史稳定路径）
 //!
 //! ## 原则
 //! - 原子写入（temp + rename）。
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use r_code_core::error::ProductError;
 
-/// SKILL.md 内容 - 指导外部 CLI 如何使用 terminal.* 原语。
+/// SKILL.md 内容 - 指导外部 CLI 如何安全使用 R-Code MCP。
 const SKILL_CONTENT: &str = include_str!("../assets/SKILL.md");
 
 /// Skill 安装状态。
@@ -52,6 +52,8 @@ impl SkillManager {
 
     /// 使用指定的 home 目录创建 SkillManager（用于测试）。
     pub fn with_home(home: PathBuf) -> Self {
+        // 保留既有目录名，确保旧版安装会被“更新协作 Skill”原地替换，而不会让
+        // 过时的 ControlDoor 说明和新 MCP 指南同时出现在 Codex 上下文里。
         Self {
             claude_skills_dir: home.join(".claude").join("skills").join("r-code-terminal"),
             codex_skills_dir: home.join(".codex").join("skills").join("r-code-terminal"),
@@ -157,9 +159,9 @@ mod tests {
     fn skill_content_not_empty() {
         let content = SkillManager::skill_content();
         assert!(!content.is_empty());
-        assert!(content.contains("R-Code Terminal Control"));
-        assert!(content.contains("terminal.list"));
-        assert!(content.contains("R_CODE_CTL_TOKEN"));
+        assert!(content.contains("R-Code Collaboration"));
+        assert!(content.contains("r_code_delegate_readonly"));
+        assert!(content.contains("cannot edit files"));
     }
 
     #[test]

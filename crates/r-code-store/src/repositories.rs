@@ -8,9 +8,9 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{
-    AgentKind, AgentRun, ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState,
-    SessionBranch, Task, TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall, ToolCallStatus,
-    Workspace,
+    AgentKind, AgentRun, AgentRunRuntimeKind, Notification, NotificationKind, ProjectAccessMode,
+    QueuedMessage, QueuedMessageState, ReviewState, SessionBranch, Task, TaskEvent, TaskEventType,
+    TaskMode, TaskState, ToolCall, ToolCallStatus, Workspace,
 };
 use r_code_core::error::ProductError;
 use rusqlite::params;
@@ -71,11 +71,18 @@ fn parse_task_event_type(s: &str) -> Result<TaskEventType, ProductError> {
         "permission_decided" => Ok(TaskEventType::PermissionDecided),
         "file_changed" => Ok(TaskEventType::FileChanged),
         "verification_run" => Ok(TaskEventType::VerificationRun),
+        "change_requested" => Ok(TaskEventType::ChangeRequested),
         "system" => Ok(TaskEventType::System),
         _ => Err(ProductError::DatabaseError(format!(
             "invalid task event type: {s}"
         ))),
     }
+}
+
+/// 解析通知类别字符串。
+fn parse_notification_kind(s: &str) -> Result<NotificationKind, ProductError> {
+    NotificationKind::try_from_str(s)
+        .ok_or_else(|| ProductError::DatabaseError(format!("invalid notification kind: {s}")))
 }
 
 /// 解析待发送消息状态字符串。
@@ -138,17 +145,24 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
 /// 将数据库行映射为 `AgentRun`。
 ///
 /// 列顺序：id, task_id, branch_id, parent_run_id, agent_kind, agent_label,
-/// delegated_by_tool_call_id, model, review_state, started_at, ended_at, usage_json, summary
+/// delegated_by_tool_call_id, model, runtime_kind, external_session_id, review_state,
+/// started_at, ended_at, usage_json, summary
 fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
     let agent_kind_str: String = row.get(4).map_err(db_err)?;
     let agent_kind = parse_agent_kind(&agent_kind_str)?;
-    let review_state_str: String = row.get(8).map_err(db_err)?;
+    let runtime_kind_str: String = row.get(8).map_err(db_err)?;
+    let runtime_kind = AgentRunRuntimeKind::try_from_str(&runtime_kind_str).ok_or_else(|| {
+        ProductError::DatabaseError(format!(
+            "invalid agent run runtime kind: {runtime_kind_str}"
+        ))
+    })?;
+    let review_state_str: String = row.get(10).map_err(db_err)?;
     let review_state = ReviewState::try_from_str(&review_state_str).ok_or_else(|| {
         ProductError::DatabaseError(format!("invalid review state: {review_state_str}"))
     })?;
-    let started_str: String = row.get(9).map_err(db_err)?;
+    let started_str: String = row.get(11).map_err(db_err)?;
     let started_at = parse_ts(&started_str)?;
-    let ended_str: Option<String> = row.get(10).map_err(db_err)?;
+    let ended_str: Option<String> = row.get(12).map_err(db_err)?;
     let ended_at = match ended_str {
         Some(s) => Some(parse_ts(&s)?),
         None => None,
@@ -163,11 +177,13 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
         agent_label: row.get(5).map_err(db_err)?,
         delegated_by_tool_call_id: row.get(6).map_err(db_err)?,
         model: row.get(7).map_err(db_err)?,
+        runtime_kind,
+        external_session_id: row.get(9).map_err(db_err)?,
         review_state,
         started_at,
         ended_at,
-        usage_json: row.get(11).map_err(db_err)?,
-        summary: row.get(12).map_err(db_err)?,
+        usage_json: row.get(13).map_err(db_err)?,
+        summary: row.get(14).map_err(db_err)?,
     })
 }
 
@@ -217,6 +233,28 @@ fn row_to_workspace(row: &rusqlite::Row<'_>) -> Result<Workspace, ProductError> 
         access_mode,
         last_opened_at,
     })
+}
+
+/// 将数据库行映射为 `(sequence, Notification)`。
+///
+/// 列顺序：sequence, id, kind, title, body, task_id, workspace_path, created_at, read_at
+fn row_to_notification(row: &rusqlite::Row<'_>) -> Result<(i64, Notification), ProductError> {
+    let kind: String = row.get(2).map_err(db_err)?;
+    let created_at: String = row.get(7).map_err(db_err)?;
+    let read_at: Option<String> = row.get(8).map_err(db_err)?;
+    Ok((
+        row.get(0).map_err(db_err)?,
+        Notification {
+            id: row.get(1).map_err(db_err)?,
+            kind: parse_notification_kind(&kind)?,
+            title: row.get(3).map_err(db_err)?,
+            body: row.get(4).map_err(db_err)?,
+            task_id: row.get(5).map_err(db_err)?,
+            workspace_path: row.get(6).map_err(db_err)?,
+            created_at: parse_ts(&created_at)?,
+            read_at: read_at.as_deref().map(parse_ts).transpose()?,
+        },
+    ))
 }
 
 // ============================================================================
@@ -431,8 +469,8 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "INSERT INTO agent_runs \
              (id, task_id, branch_id, parent_run_id, agent_kind, agent_label, summary, delegated_by_tool_call_id, \
-              model, review_state, started_at, ended_at, usage_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 run.id,
                 run.task_id,
@@ -443,6 +481,8 @@ impl<'a> AgentRunRepository<'a> {
                 run.summary,
                 run.delegated_by_tool_call_id,
                 run.model,
+                run.runtime_kind.to_string(),
+                run.external_session_id,
                 run.review_state.to_string(),
                 run.started_at.to_rfc3339(),
                 run.ended_at.map(|dt| dt.to_rfc3339()),
@@ -459,7 +499,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -476,7 +516,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -497,7 +537,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
             )
             .map_err(db_err)?;
@@ -519,7 +559,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -537,7 +577,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
             )
@@ -559,7 +599,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 \
                    AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
@@ -589,7 +629,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' \
                    AND model <> ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
@@ -616,7 +656,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND model = ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
             )
@@ -653,6 +693,21 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "UPDATE agent_runs SET usage_json = ?1 WHERE id = ?2",
             params![usage_json, id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 保存外部 Agent 的会话标识。该值用于后续续接/诊断，绝不是认证凭据。
+    pub fn set_external_session_id(
+        &self,
+        id: &str,
+        external_session_id: Option<&str>,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE agent_runs SET external_session_id = ?1 WHERE id = ?2",
+            params![external_session_id, id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -847,6 +902,231 @@ impl<'a> TaskEventStore<'a> {
             });
         }
         Ok(events)
+    }
+
+    /// 按事件 ID 倒序列出全局近期事件。
+    ///
+    /// `before_event_id` 是不透明分页游标的内部值；前端只需把响应中的
+    /// `next_cursor` 原样带回。自增 ID 比时间字符串更稳定，也能避免同一毫秒的
+    /// 多条事件在翻页时重叠或遗漏。
+    pub fn list_recent(
+        &self,
+        before_event_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<TaskEvent>, ProductError> {
+        let conn = self.db.conn()?;
+        let before = before_event_id.unwrap_or(i64::MAX);
+        let limit = i64::from(limit.clamp(1, 100));
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, task_id, branch_id, event_type, created_at FROM task_events \
+                 WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![before, limit]).map_err(db_err)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let event_type: String = row.get(3).map_err(db_err)?;
+            events.push(TaskEvent {
+                id: row.get(0).map_err(db_err)?,
+                task_id: row.get(1).map_err(db_err)?,
+                branch_id: row.get(2).map_err(db_err)?,
+                event_type: parse_task_event_type(&event_type)?,
+                created_at: parse_ts(&row.get::<_, String>(4).map_err(db_err)?)?,
+            });
+        }
+        Ok(events)
+    }
+
+    /// 按事件 ID 倒序列出某个工作区的近期事件。
+    pub fn list_by_workspace_recent(
+        &self,
+        workspace_path: &str,
+        before_event_id: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<TaskEvent>, ProductError> {
+        let conn = self.db.conn()?;
+        let before = before_event_id.unwrap_or(i64::MAX);
+        let limit = i64::from(limit.clamp(1, 100));
+        let mut stmt = conn
+            .prepare(
+                "SELECT event.id, event.task_id, event.branch_id, event.event_type, event.created_at \
+                 FROM task_events AS event \
+                 INNER JOIN tasks AS task ON task.id = event.task_id \
+                 WHERE task.workspace_path = ?1 AND event.id < ?2 \
+                 ORDER BY event.id DESC LIMIT ?3",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt
+            .query(params![workspace_path, before, limit])
+            .map_err(db_err)?;
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let event_type: String = row.get(3).map_err(db_err)?;
+            events.push(TaskEvent {
+                id: row.get(0).map_err(db_err)?,
+                task_id: row.get(1).map_err(db_err)?,
+                branch_id: row.get(2).map_err(db_err)?,
+                event_type: parse_task_event_type(&event_type)?,
+                created_at: parse_ts(&row.get::<_, String>(4).map_err(db_err)?)?,
+            });
+        }
+        Ok(events)
+    }
+}
+
+// ============================================================================
+// NotificationRepository
+// ============================================================================
+
+/// 可追溯的用户通知仓库。
+///
+/// `source_key` 是内部去重键（例如 `permission:<request-id>`）；同一待处理项
+/// 在轮询同步时只会刷新展示文案，不会重复制造未读通知。
+pub struct NotificationRepository<'a> {
+    db: &'a Database,
+}
+
+impl<'a> NotificationRepository<'a> {
+    pub fn new(db: &'a Database) -> Self {
+        Self { db }
+    }
+
+    /// 新建或刷新一条通知，同时保留既有的创建时间和已读状态。
+    pub fn upsert(
+        &self,
+        source_key: &str,
+        notification: &Notification,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "INSERT INTO notifications \
+             (id, source_key, kind, title, body, task_id, workspace_path, created_at, read_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             ON CONFLICT(source_key) DO UPDATE SET \
+               kind = excluded.kind, title = excluded.title, body = excluded.body, \
+               task_id = excluded.task_id, workspace_path = excluded.workspace_path",
+            params![
+                notification.id,
+                source_key,
+                notification.kind.to_string(),
+                notification.title,
+                notification.body,
+                notification.task_id,
+                notification.workspace_path,
+                notification.created_at.to_rfc3339(),
+                notification.read_at.map(|time| time.to_rfc3339()),
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 列出通知及其内部顺序号（用于构造下一页游标）。
+    pub fn list(
+        &self,
+        before_sequence: Option<i64>,
+        limit: u32,
+        unread_only: bool,
+    ) -> Result<Vec<(i64, Notification)>, ProductError> {
+        let conn = self.db.conn()?;
+        let before = before_sequence.unwrap_or(i64::MAX);
+        let limit = i64::from(limit.clamp(1, 100));
+        let sql = if unread_only {
+            "SELECT sequence, id, kind, title, body, task_id, workspace_path, created_at, read_at \
+             FROM notifications WHERE sequence < ?1 AND read_at IS NULL \
+             ORDER BY sequence DESC LIMIT ?2"
+        } else {
+            "SELECT sequence, id, kind, title, body, task_id, workspace_path, created_at, read_at \
+             FROM notifications WHERE sequence < ?1 \
+             ORDER BY sequence DESC LIMIT ?2"
+        };
+        let mut stmt = conn.prepare(sql).map_err(db_err)?;
+        let mut rows = stmt.query(params![before, limit]).map_err(db_err)?;
+        let mut items = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            items.push(row_to_notification(row)?);
+        }
+        Ok(items)
+    }
+
+    /// 返回准确的未读数量，不受当前分页大小影响。
+    pub fn unread_count(&self) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notifications WHERE read_at IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// 标记一条通知已读；不存在时返回 false。
+    pub fn mark_read(&self, id: &str) -> Result<bool, ProductError> {
+        let conn = self.db.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE notifications SET read_at = COALESCE(read_at, ?1) WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), id],
+            )
+            .map_err(db_err)?;
+        Ok(changed > 0)
+    }
+
+    /// 处理完一个待办源后，将其关联通知置为已读。
+    pub fn mark_source_read(&self, source_key: &str) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE notifications SET read_at = COALESCE(read_at, ?1) WHERE source_key = ?2",
+            params![Utc::now().to_rfc3339(), source_key],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 将同一任务下某类来源的旧通知置为已读；`keep_source_key` 存在时保留该条。
+    pub fn mark_task_source_prefix_read(
+        &self,
+        task_id: &str,
+        source_prefix: &str,
+        keep_source_key: Option<&str>,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        let pattern = format!("{source_prefix}%");
+        let now = Utc::now().to_rfc3339();
+        match keep_source_key {
+            Some(keep) => {
+                conn.execute(
+                    "UPDATE notifications SET read_at = COALESCE(read_at, ?1) \
+                     WHERE task_id = ?2 AND source_key LIKE ?3 AND source_key != ?4",
+                    params![now, task_id, pattern, keep],
+                )
+                .map_err(db_err)?;
+            }
+            None => {
+                conn.execute(
+                    "UPDATE notifications SET read_at = COALESCE(read_at, ?1) \
+                     WHERE task_id = ?2 AND source_key LIKE ?3",
+                    params![now, task_id, pattern],
+                )
+                .map_err(db_err)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// 将所有当前未读通知标记为已读，返回受影响数量。
+    pub fn mark_all_read(&self) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE notifications SET read_at = ?1 WHERE read_at IS NULL",
+                params![Utc::now().to_rfc3339()],
+            )
+            .map_err(db_err)?;
+        Ok(changed as u64)
     }
 }
 
@@ -1551,6 +1831,36 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(active_main_branch.id, parent.id);
+    }
+
+    #[test]
+    fn test_external_agent_run_roundtrip_preserves_runtime_and_session_id() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "External Delegation");
+        let repo = AgentRunRepository::new(&db);
+        let parent = AgentRun::new(&task.id, "parent-model");
+        repo.create(&parent).unwrap();
+
+        let child = AgentRun::new_subagent_for_branch(
+            &task.id,
+            "main",
+            &parent.id,
+            "codex-cli",
+            Some("Codex CLI · 只读调查".to_string()),
+            None,
+        )
+        .as_codex_exec_subagent();
+        repo.create(&child).unwrap();
+        repo.set_external_session_id(&child.id, Some("thread-123"))
+            .unwrap();
+
+        let fetched = repo.get(&child.id).unwrap().unwrap();
+        assert_eq!(
+            fetched.runtime_kind,
+            r_code_core::dto::AgentRunRuntimeKind::CodexExec
+        );
+        assert_eq!(fetched.external_session_id.as_deref(), Some("thread-123"));
+        assert_eq!(fetched.agent_kind, AgentKind::Subagent);
     }
 
     #[test]

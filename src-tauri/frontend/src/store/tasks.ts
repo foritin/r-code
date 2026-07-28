@@ -1,13 +1,26 @@
 import { create } from "zustand";
 import * as ipc from "../lib/ipc";
-import type { PermissionRequest, Task, TaskDetail, Workspace } from "../lib/types";
+import type {
+  PermissionRequest,
+  ProjectActivityPage,
+  Task,
+  TaskDetail,
+  Workspace,
+  WorkspaceDashboard,
+} from "../lib/types";
+import {
+  browserMockDetails,
+  browserMockTasks,
+  browserMockWorkspaces,
+  shouldUseBrowserMock,
+} from "../lib/mock-data";
 
 /**
  * 任务/工作区数据缓存 + 轮询驱动。
  * Deck / Rail / Home glance 的派生数据都从这里出。
  *
- * 注意：后端暂无聚合查询，needs-you 等靠逐任务 detail 派生；
- * 任务多时由调用方控制刷新范围（仅可见场景轮询）。
+ * 项目仪表盘 / 活动流使用聚合 IPC；单任务细节仍保留在本缓存，供 Room、审核与
+ * 侧栏即时交互使用。
  */
 
 /** Deck / Inbox 共用的「待决项」：一条待批权限或一个 review_ready 任务。 */
@@ -24,6 +37,12 @@ interface TasksState {
   /** taskId → TaskDetail（LRU 语义靠调用方控制刷新） */
   details: Record<string, TaskDetail>;
   workspaces: Workspace[];
+  /** workspacePath → 服务端聚合仪表盘 */
+  dashboards: Record<string, WorkspaceDashboard>;
+  /** workspacePath → 服务端项目活动流第一页 */
+  projectActivities: Record<string, ProjectActivityPage>;
+  /** 跨项目活动流第一页 */
+  activityPage: ProjectActivityPage | null;
   /** 当前准备附加到新会话的工作区路径；null 即纯聊天。 */
   currentProjectId: string | null;
   /** 上次全量刷新时间（用于"今日"派生） */
@@ -34,6 +53,9 @@ interface TasksState {
   refreshDetail: (taskId: string) => Promise<void>;
   /** 批量刷新一组任务的 detail（Deck 聚合用，并发限 4） */
   refreshDetails: (taskIds: string[]) => Promise<void>;
+  refreshDashboard: (workspacePath: string) => Promise<void>;
+  refreshProjectActivity: (workspacePath: string) => Promise<void>;
+  refreshActivity: () => Promise<void>;
   setCurrentProject: (projectId: string | null) => void;
 }
 
@@ -41,16 +63,30 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   tasks: [],
   details: {},
   workspaces: [],
+  dashboards: {},
+  projectActivities: {},
+  activityPage: null,
   currentProjectId: null,
   refreshedAt: 0,
 
   refreshTasks: async () => {
-    const tasks = await ipc.taskList(undefined, false);
-    set({ tasks, refreshedAt: Date.now() });
+    try {
+      const tasks = await ipc.taskList(undefined, false);
+      set({ tasks, refreshedAt: Date.now() });
+    } catch (error) {
+      if (!shouldUseBrowserMock()) throw error;
+      set({ tasks: browserMockTasks, details: browserMockDetails, refreshedAt: Date.now() });
+    }
   },
 
   refreshWorkspaces: async () => {
-    const workspaces = await ipc.workspaceList();
+    let workspaces: Workspace[];
+    try {
+      workspaces = await ipc.workspaceList();
+    } catch (error) {
+      if (!shouldUseBrowserMock()) throw error;
+      workspaces = browserMockWorkspaces;
+    }
     set((s) => ({
       workspaces,
       // 不能因为存在最近项目就自动把它附加到新对话：默认应是纯聊天。
@@ -61,26 +97,50 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   },
 
   refreshDetail: async (taskId) => {
-    const detail = await ipc.taskDetail(taskId);
+    let detail: TaskDetail;
+    try {
+      detail = await ipc.taskDetail(taskId);
+    } catch (error) {
+      if (!shouldUseBrowserMock() || !browserMockDetails[taskId]) throw error;
+      detail = browserMockDetails[taskId];
+    }
     set((s) => ({ details: { ...s.details, [taskId]: detail } }));
   },
 
   refreshDetails: async (taskIds) => {
-    const queue = [...new Set(taskIds)];
-    const results: Record<string, TaskDetail> = {};
-    const worker = async () => {
-      for (;;) {
-        const id = queue.shift();
-        if (!id) return;
+    const ids = [...new Set(taskIds)].filter(Boolean);
+    if (!ids.length) return;
+    try {
+      const batch = await ipc.taskDetailBatch(ids);
+      const details = Object.fromEntries(batch.details.map((detail) => [detail.task.id, detail]));
+      set((s) => ({ details: { ...s.details, ...details } }));
+    } catch {
+      // 批量接口在旧桌面端不可用时，保留逐项降级，避免一次升级影响现有会话。
+      const results: Record<string, TaskDetail> = {};
+      for (const id of ids) {
         try {
           results[id] = await ipc.taskDetail(id);
         } catch {
-          /* 单任务失败不阻塞整批 */
+          if (shouldUseBrowserMock() && browserMockDetails[id]) results[id] = browserMockDetails[id];
         }
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(4, queue.length) }, worker));
-    set((s) => ({ details: { ...s.details, ...results } }));
+      if (Object.keys(results).length) set((s) => ({ details: { ...s.details, ...results } }));
+    }
+  },
+
+  refreshDashboard: async (workspacePath) => {
+    const dashboard = await ipc.workspaceDashboard(workspacePath);
+    set((s) => ({ dashboards: { ...s.dashboards, [workspacePath]: dashboard } }));
+  },
+
+  refreshProjectActivity: async (workspacePath) => {
+    const page = await ipc.projectActivityList(workspacePath);
+    set((s) => ({ projectActivities: { ...s.projectActivities, [workspacePath]: page } }));
+  },
+
+  refreshActivity: async () => {
+    const activityPage = await ipc.activityList();
+    set({ activityPage });
   },
 
   setCurrentProject: (currentProjectId) => set({ currentProjectId }),

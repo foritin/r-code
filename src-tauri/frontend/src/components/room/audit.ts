@@ -62,6 +62,7 @@ const SELF_EXPLANATORY_EVENTS: Partial<
   run_aborted: { kind: "session", tag: "会话", text: "运行被中止", state: "fail" },
   session_branched: { kind: "session", tag: "会话", text: "已创建编辑分支", state: "info" },
   permission_decided: { kind: "permission", tag: "权限", text: "权限已批复", state: "info" },
+  change_requested: { kind: "session", tag: "审核", text: "已请求继续修改", state: "info" },
   system: { kind: "session", tag: "系统", text: "系统事件", state: "info" },
 };
 

@@ -90,6 +90,13 @@ pub trait Tool: Send + Sync {
     fn path_bindings(&self) -> &'static [PathBinding] {
         DEFAULT_PATH_BINDINGS
     }
+    /// 工具是否要求路径已存在。默认 `true`（只读工具）。
+    ///
+    /// `create_file` 等写入工具覆写为 `false`：目标文件尚未创建，需通过
+    /// `PathGuard::resolve`（而非 `resolve_existing`）解析。
+    fn requires_existing_path(&self) -> bool {
+        true
+    }
     /// JSON Schema 输入定义。
     fn input_schema(&self) -> serde_json::Value;
     /// 执行工具，返回输出文本。
@@ -142,6 +149,14 @@ impl ToolGateway {
     /// 供 Agent 运行时在调用前把路径参数重绑定到会话工作区。
     pub fn path_bindings(&self, tool_name: &str) -> Option<&'static [PathBinding]> {
         self.tools.get(tool_name).map(|tool| tool.path_bindings())
+    }
+
+    /// 查询某工具是否要求路径已存在。未注册工具默认 `true`（fail-closed）。
+    pub fn requires_existing_path(&self, tool_name: &str) -> bool {
+        self.tools
+            .get(tool_name)
+            .map(|tool| tool.requires_existing_path())
+            .unwrap_or(true)
     }
 
     /// 列出所有已注册工具的规格。

@@ -1,0 +1,872 @@
+<!doctype html>
+<!--
+  R-Code Task Room vNext / V2 — visual refinement prototype, not production UI.
+
+  Assumptions carried forward
+  - This is a desktop-first task room: the conversation is the default surface;
+    child-agent detail is an inspector, never a permanent dashboard column.
+  - “More refined” means a more authored visual rhythm and more legible
+    orchestration detail, not extra decorative cards, gradients, or fabricated data.
+  - One thing is deliberately taken to 120%: the running workstream ledger gives
+    multi-agent work a physical, inspectable presence without exposing private
+    reasoning.
+  - The existing product capabilities remain represented: composing, tool
+    disclosure, child-agent inspection, user-scoped permission, completion
+    delivery, theme switching, and stopping the current task.
+
+  Design changes from the first pass
+  - Content starts closer to the navigation instead of floating in a large empty
+    center well.
+  - The visual language uses ink, bone-white type, a single mineral-blue action
+    accent, and a quiet moss success color. Surfaces are layered by material,
+    not by repeated blue outlines.
+  - The agent state is a three-lane work ledger with meaningful progress states,
+    rather than a generic three-card dashboard.
+-->
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>R-Code · Task Room vNext V2</title>
+  <style>
+    :root {
+      --canvas: #0c0d0f;
+      --rail: #121317;
+      --paper: #17191d;
+      --raised: #1e2025;
+      --hover: #272a31;
+      --ink: #f2eee6;
+      --ink-soft: #c7c2b8;
+      --quiet: #85878d;
+      --faint: #5e6067;
+      --line: #2a2d33;
+      --line-quiet: #22252a;
+      --blue: #7aa7ff;
+      --blue-ink: #4c7fdf;
+      --blue-wash: rgba(93, 145, 240, .13);
+      --moss: #74c99a;
+      --moss-wash: rgba(91, 188, 132, .12);
+      --amber: #e0ad58;
+      --amber-wash: rgba(224, 173, 88, .11);
+      --coral: #e4867d;
+      --shadow-float: 0 24px 60px rgba(0, 0, 0, .32);
+      --font-sans: "Geist", "Noto Sans SC", "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      --font-display: "Iowan Old Style", "Noto Serif CJK SC", "Songti SC", STSong, serif;
+      --font-mono: "Geist Mono", "Cascadia Code", Consolas, monospace;
+    }
+
+    [data-theme="light"] {
+      --canvas: #f5f2ea;
+      --rail: #ebe8e0;
+      --paper: #fffdf8;
+      --raised: #ffffff;
+      --hover: #f0eee8;
+      --ink: #27262a;
+      --ink-soft: #535157;
+      --quiet: #77757a;
+      --faint: #9b9894;
+      --line: #d9d6ce;
+      --line-quiet: #e8e5dd;
+      --blue: #326bd2;
+      --blue-ink: #285bb9;
+      --blue-wash: rgba(50, 107, 210, .10);
+      --moss: #2c7e51;
+      --moss-wash: rgba(44, 126, 81, .09);
+      --amber: #a76808;
+      --amber-wash: rgba(167, 104, 8, .09);
+      --coral: #b84d46;
+      --shadow-float: 0 22px 52px rgba(49, 43, 32, .16);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      min-width: 960px;
+      overflow: hidden;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      letter-spacing: -.012em;
+    }
+    button, textarea { font: inherit; }
+    button { border: 0; cursor: pointer; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    ::selection { background: var(--blue-wash); color: var(--ink); }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 272px minmax(0, 1fr);
+      height: 100%;
+    }
+
+    /* Navigation: dense enough to orient, quiet enough to disappear during work. */
+    .rail {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      padding: 16px 14px 13px;
+      border-right: 1px solid var(--line-quiet);
+      background: var(--rail);
+    }
+    .brandline { display: flex; align-items: center; justify-content: space-between; height: 35px; padding: 0 8px; }
+    .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-size: 16px; font-weight: 660; letter-spacing: -.03em; }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 24px; height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--paper);
+      color: var(--blue);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .more { display: inline-flex; gap: 4px; padding: 7px; background: transparent; }
+    .more i { display: block; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
+
+    .new-task {
+      display: flex; align-items: center; justify-content: space-between;
+      width: 100%; height: 42px; margin: 14px 0 11px; padding: 0 12px;
+      border: 1px solid rgba(122,167,255,.5); border-radius: 7px;
+      background: var(--blue-ink); color: #fbfdff; text-align: left;
+      font-size: 13px; font-weight: 650; letter-spacing: -.02em;
+      transition: transform .15s ease, background .15s ease;
+    }
+    .new-task:hover { background: #5a8eed; }
+    .new-task:active { transform: translateY(1px); }
+    .key { color: rgba(255,255,255,.62); font-family: var(--font-mono); font-size: 10px; font-weight: 500; }
+
+    .rail-search, .rail-button {
+      display: flex; align-items: center; gap: 10px;
+      width: 100%; min-height: 35px; padding: 0 9px;
+      border-radius: 6px; background: transparent; color: var(--quiet); text-align: left;
+      transition: color .14s ease, background .14s ease;
+    }
+    .rail-search { justify-content: flex-start; margin-bottom: 19px; }
+    .rail-search:hover, .rail-button:hover { background: var(--hover); color: var(--ink-soft); }
+    .rail-glyph { width: 13px; color: var(--faint); font-family: var(--font-mono); font-size: 13px; text-align: center; }
+    .rail-search .key { margin-left: auto; color: var(--faint); }
+    .rail-section { margin-bottom: 20px; }
+    .rail-caption {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0 9px; margin: 0 0 7px; color: var(--faint);
+      font-size: 10px; font-weight: 680; letter-spacing: .09em; text-transform: uppercase;
+    }
+    .rail-caption .live-word { color: var(--blue); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0; text-transform: none; }
+    .rail-list { display: grid; gap: 2px; padding: 0; margin: 0; list-style: none; }
+    .rail-button.active { position: relative; color: var(--ink); background: var(--raised); }
+    .rail-button.active::before { content: ""; position: absolute; left: 0; width: 2px; height: 16px; background: var(--blue); }
+    .badge {
+      display: inline-grid; place-items: center; min-width: 18px; height: 18px;
+      margin-left: auto; padding: 0 5px; border-radius: 999px;
+      background: var(--blue-wash); color: var(--blue); font-family: var(--font-mono); font-size: 10px;
+    }
+    .project-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 590; }
+    .task-button { align-items: flex-start; min-height: 56px; padding-top: 8px; padding-bottom: 8px; }
+    .task-copy { min-width: 0; }
+    .task-name { overflow: hidden; display: block; text-overflow: ellipsis; white-space: nowrap; color: inherit; font-size: 12px; font-weight: 570; }
+    .task-meta { display: block; margin-top: 5px; color: var(--faint); font-size: 10px; }
+    .rail-footer { display: grid; gap: 2px; margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line-quiet); }
+
+    .dot { display: inline-block; flex: 0 0 auto; width: 7px; height: 7px; border-radius: 50%; background: var(--quiet); }
+    .dot.run { background: var(--blue); box-shadow: 0 0 0 3px var(--blue-wash); }
+    .dot.done { background: var(--moss); box-shadow: 0 0 0 3px var(--moss-wash); }
+    .dot.wait { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-wash); }
+
+    .workspace { display: flex; flex-direction: column; min-width: 0; background: var(--canvas); }
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      min-height: 64px; padding: 0 28px; border-bottom: 1px solid var(--line-quiet);
+    }
+    .crumbs { display: flex; align-items: center; gap: 10px; min-width: 0; color: var(--quiet); font-size: 12px; }
+    .crumbs strong { color: var(--ink-soft); font-weight: 640; }
+    .crumb-sep { color: var(--faint); }
+    .crumb-task { overflow: hidden; max-width: 410px; white-space: nowrap; text-overflow: ellipsis; }
+    .top-controls { position: relative; display: flex; align-items: center; gap: 7px; }
+    .top-control {
+      display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 9px;
+      border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--quiet); font-size: 11px;
+    }
+    .top-control:hover { border-color: var(--line); background: var(--paper); color: var(--ink-soft); }
+    .top-control .dot { width: 6px; height: 6px; }
+    .theme-control { width: 30px; padding: 0; justify-content: center; font-size: 15px; }
+    .mode-menu {
+      position: absolute; top: 37px; right: 36px; z-index: 20; display: none; width: 204px; padding: 6px;
+      border: 1px solid var(--line); border-radius: 8px; background: var(--raised); box-shadow: var(--shadow-float);
+    }
+    .mode-menu.open { display: grid; gap: 2px; }
+    .mode-menu label { padding: 4px 7px 6px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+    .mode-menu button { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--quiet); text-align: left; font-size: 12px; }
+    .mode-menu button:hover, .mode-menu button.selected { color: var(--ink); background: var(--hover); }
+    .mode-menu button.selected::after { content: "✓"; margin-left: auto; color: var(--blue); }
+
+    .room { position: relative; display: flex; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+    .main-flow { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; transition: padding-right .28s cubic-bezier(.2,.8,.2,1); }
+    .room.inspector-open .main-flow { padding-right: 412px; }
+    .scroll { flex: 1 1 auto; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    .thread {
+      width: min(970px, calc(100% - 110px));
+      margin: 0 0 0 clamp(56px, 8vw, 142px);
+      padding: 52px 0 36px;
+    }
+    .task-kicker { display: flex; align-items: center; gap: 8px; margin-bottom: 13px; color: var(--blue); font-family: var(--font-mono); font-size: 10px; font-weight: 640; letter-spacing: .08em; }
+    .task-kicker::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .task-title {
+      max-width: 800px; margin: 0; color: var(--ink); font-family: var(--font-display); font-size: clamp(32px, 3vw, 44px);
+      font-weight: 600; line-height: 1.15; letter-spacing: -.06em; text-wrap: pretty;
+    }
+    .task-context { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 19px; color: var(--quiet); font-size: 11px; }
+    .task-context span { display: inline-flex; align-items: center; gap: 6px; }
+    .task-context .access { color: var(--moss); }
+    .task-context code { font-family: var(--font-mono); font-size: 10px; color: var(--ink-soft); }
+    .context-break { color: var(--line); }
+
+    .messages { margin-top: 43px; }
+    .message {
+      position: relative; display: grid; grid-template-columns: 26px minmax(0, 1fr); column-gap: 13px;
+      max-width: 880px; padding-bottom: 28px;
+    }
+    .message::after { content: ""; position: absolute; top: 33px; bottom: 0; left: 12px; width: 1px; background: var(--line-quiet); }
+    .message:last-child::after { display: none; }
+    .avatar {
+      display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--paper); color: var(--quiet); font-family: var(--font-mono); font-size: 10px; font-weight: 650;
+    }
+    .avatar.assistant { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 43%, var(--line)); }
+    .message-label { margin: 2px 0 7px; color: var(--quiet); font-size: 11px; font-weight: 620; }
+    .message p { max-width: 755px; margin: 0; color: var(--ink-soft); font-size: 15px; line-height: 1.72; letter-spacing: -.025em; }
+    .message p + p { margin-top: 10px; }
+    .tool-fold {
+      display: inline-flex; align-items: center; gap: 9px; margin-top: 16px; padding: 0;
+      background: transparent; color: var(--quiet); font-family: var(--font-mono); font-size: 10px;
+    }
+    .tool-fold::before { content: "›"; color: var(--blue); font-size: 17px; line-height: 1; transition: transform .16s ease; }
+    .tool-fold[aria-expanded="true"]::before { transform: rotate(90deg); }
+    .tool-fold:hover { color: var(--ink-soft); }
+    .tool-log {
+      display: none; width: min(650px, 100%); margin-top: 11px; padding: 10px 0 10px 13px;
+      border-left: 1px solid var(--line); color: var(--quiet); font-family: var(--font-mono); font-size: 10px; line-height: 1.82;
+    }
+    .tool-log.open { display: block; }
+    .tool-log b { color: var(--ink-soft); font-weight: 590; }
+
+    /* Signature detail: the orchestration ledger makes concurrent work readable at a glance. */
+    .work-ledger {
+      width: min(905px, 100%); margin: 2px 0 0 39px; padding: 0;
+      border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: transparent;
+    }
+    .ledger-head { display: flex; align-items: center; min-height: 51px; border-bottom: 1px solid var(--line-quiet); }
+    .ledger-title { display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 13px; font-weight: 650; }
+    .ledger-title small { color: var(--quiet); font-family: var(--font-mono); font-size: 10px; font-weight: 500; }
+    .ledger-caption { margin-left: auto; color: var(--quiet); font-family: var(--font-mono); font-size: 10px; }
+    .ledger-open { margin-left: 12px; padding: 5px 0 5px 9px; background: transparent; color: var(--blue); font-size: 11px; }
+    .ledger-open:hover { color: #aac7ff; }
+    .lanes { display: grid; padding: 8px 0 9px; }
+    .lane {
+      display: grid; grid-template-columns: 183px minmax(85px,1fr) minmax(185px, .88fr); align-items: center; gap: 15px;
+      min-height: 39px; border: 0; background: transparent; color: var(--quiet);
+    }
+    .lane:hover { background: var(--paper); }
+    .lane-name { display: flex; align-items: center; gap: 9px; min-width: 0; padding-left: 2px; background: transparent; color: inherit; text-align: left; }
+    .lane-name span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 570; }
+    .lane-track { position: relative; height: 1px; background: var(--line); }
+    .lane-track::before { content: ""; position: absolute; top: -3px; left: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--canvas); border: 1px solid var(--quiet); }
+    .lane-progress { position: absolute; top: 0; left: 0; height: 1px; background: var(--blue); }
+    .lane-progress::after { content: ""; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 4px var(--blue-wash); }
+    .lane-note { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--quiet); font-size: 10px; }
+    .lane-note em { overflow: hidden; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+    .lane-note code { color: var(--blue); font-family: var(--font-mono); font-size: 9px; }
+    .lane[data-agent="pages"] .lane-progress { background: var(--amber); }
+    .lane[data-agent="pages"] .lane-progress::after { background: var(--amber); box-shadow: 0 0 0 4px var(--amber-wash); }
+    .lane[data-agent="pages"] .lane-note code { color: var(--amber); }
+    .lane[data-agent="ui"] .lane-progress { width: 39% !important; }
+    .lane[data-agent="ui"] .lane-progress::after { animation: pulse-dot 1.8s ease-in-out infinite; }
+    @keyframes pulse-dot { 0%,100% { box-shadow: 0 0 0 3px var(--blue-wash); } 50% { box-shadow: 0 0 0 7px rgba(122,167,255,.03); } }
+
+    .delivery { display: none; width: min(805px, 100%); margin: 2px 0 0 39px; padding: 20px 0 2px; border-top: 1px solid var(--line); }
+    .delivery.visible { display: block; }
+    .delivery-state { display: flex; align-items: center; gap: 8px; color: var(--moss); font-family: var(--font-mono); font-size: 10px; font-weight: 630; letter-spacing: .04em; }
+    .delivery h2 { margin: 12px 0 7px; font-family: var(--font-display); font-size: 23px; font-weight: 590; letter-spacing: -.04em; }
+    .delivery p { max-width: 660px; margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.65; }
+    .delivery-actions { display: flex; gap: 8px; margin-top: 16px; }
+    .button-quiet, .button-primary {
+      display: inline-flex; align-items: center; justify-content: center; height: 32px; padding: 0 11px;
+      border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink-soft); font-size: 11px; font-weight: 600;
+    }
+    .button-quiet:hover { color: var(--ink); background: var(--hover); }
+    .button-primary { border-color: var(--blue-ink); background: var(--blue-ink); color: #f9fbff; }
+    .button-primary:hover { background: #5a8eed; }
+
+    .composer-zone { flex: 0 0 auto; padding: 0 28px 24px; background: var(--canvas); }
+    .composer-stack { width: min(905px, calc(100% - 110px)); margin: 0 0 0 clamp(56px, 8vw, 142px); }
+    .agent-dock {
+      margin-bottom: 10px; border: 1px solid var(--line); border-radius: 9px; background: color-mix(in srgb, var(--paper) 92%, transparent);
+      overflow: hidden;
+    }
+    .dock-head { display: flex; align-items: center; min-height: 40px; padding: 0 12px; }
+    .dock-title { display: flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 11px; font-weight: 630; }
+    .dock-title small { color: var(--quiet); font-family: var(--font-mono); font-size: 9px; font-weight: 500; }
+    .dock-actions { display: flex; gap: 3px; margin-left: auto; }
+    .quiet-link { min-height: 26px; padding: 0 7px; border-radius: 4px; background: transparent; color: var(--quiet); font-size: 10px; }
+    .quiet-link:hover { background: var(--hover); color: var(--ink-soft); }
+    .quiet-link.decision { display: none; color: var(--amber); }
+    .agents { display: flex; border-top: 1px solid var(--line-quiet); }
+    .agent-chip {
+      display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 0; height: 36px; padding: 0 10px;
+      border-right: 1px solid var(--line-quiet); background: transparent; color: var(--quiet); text-align: left;
+    }
+    .agent-chip:last-child { border-right: 0; }
+    .agent-chip:hover, .agent-chip.selected { background: var(--hover); color: var(--ink-soft); }
+    .agent-chip span:last-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; }
+    .agent-expanded { display: none; border-top: 1px solid var(--line-quiet); padding: 6px 8px 8px; }
+    .agent-dock.expanded .agent-expanded { display: grid; gap: 3px; }
+    .agent-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 10px; min-height: 41px; padding: 0 7px; border-radius: 5px; background: transparent; color: var(--quiet); text-align: left; }
+    .agent-row:hover { background: var(--hover); color: var(--ink-soft); }
+    .agent-row span:first-child { display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 11px; }
+    .agent-row small { color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
+
+    .permission-strip {
+      display: none; align-items: center; justify-content: space-between; gap: 14px; min-height: 43px; margin-bottom: 10px; padding: 0 11px;
+      border: 1px solid color-mix(in srgb, var(--amber) 42%, var(--line)); border-radius: 8px; background: var(--amber-wash); color: var(--ink-soft); font-size: 11px;
+    }
+    .permission-strip.visible { display: flex; }
+    .permission-strip strong { color: var(--amber); font-weight: 620; }
+
+    .composer {
+      position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); box-shadow: 0 10px 24px rgba(0,0,0,.12);
+    }
+    .composer:focus-within { border-color: color-mix(in srgb, var(--blue) 58%, var(--line)); box-shadow: 0 0 0 3px var(--blue-wash), 0 10px 24px rgba(0,0,0,.12); }
+    .composer textarea { display: block; width: 100%; height: 75px; padding: 14px 15px 2px; resize: none; border: 0; border-radius: 12px 12px 0 0; background: transparent; color: var(--ink); line-height: 1.5; font-size: 13px; }
+    .composer textarea::placeholder { color: var(--faint); }
+    .composer-footer { display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 0 8px 8px 10px; }
+    .composer-select { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 5px; background: var(--paper); color: var(--quiet); font-size: 10px; }
+    .composer-select:hover { background: var(--hover); color: var(--ink-soft); }
+    .composer-select b { color: var(--ink-soft); font-weight: 590; }
+    .composer-gap { flex: 1; }
+    .composer-hint { color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
+    .send, .stop { display: inline-flex; align-items: center; justify-content: center; height: 29px; border-radius: 6px; font-size: 11px; }
+    .send { width: 29px; background: var(--blue-ink); color: #fff; font-size: 15px; font-weight: 700; }
+    .send:hover { background: #5a8eed; }
+    .stop { display: none; padding: 0 9px; border: 1px solid color-mix(in srgb, var(--coral) 40%, var(--line)); background: transparent; color: var(--coral); }
+    .stop:hover { background: rgba(228,134,125,.08); }
+
+    /* Inspector: a solid material panel, only summoned by intent or a blocking decision. */
+    .inspector {
+      position: absolute; z-index: 10; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; width: 412px;
+      border-left: 1px solid var(--line); background: var(--paper); box-shadow: -18px 0 42px rgba(0,0,0,.2);
+      transform: translateX(101%); transition: transform .28s cubic-bezier(.2,.8,.2,1);
+    }
+    .room.inspector-open .inspector { transform: translateX(0); }
+    .inspector-head { display: flex; align-items: center; justify-content: space-between; flex: 0 0 64px; padding: 0 17px 0 19px; border-bottom: 1px solid var(--line-quiet); }
+    .inspector-head strong { color: var(--ink); font-size: 13px; font-weight: 660; }
+    .inspector-close { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 6px; background: transparent; color: var(--quiet); font-size: 18px; }
+    .inspector-close:hover { background: var(--hover); color: var(--ink); }
+    .tabs { display: flex; gap: 3px; padding: 11px 14px 8px; border-bottom: 1px solid var(--line-quiet); }
+    .tab { min-height: 27px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--quiet); font-size: 10px; }
+    .tab:hover { background: var(--hover); color: var(--ink-soft); }
+    .tab.active { background: var(--raised); color: var(--ink); }
+    .inspector-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 20px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+    .pane { display: none; }
+    .pane.active { display: block; }
+    .pane-kicker { margin: 0 0 7px; color: var(--faint); font-family: var(--font-mono); font-size: 9px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+    .pane h2 { margin: 0; color: var(--ink); font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -.04em; }
+    .pane-copy { margin: 8px 0 0; color: var(--quiet); font-size: 12px; line-height: 1.65; }
+    .decision-card { display: none; margin: 18px 0 24px; padding: 15px; border: 1px solid color-mix(in srgb, var(--amber) 48%, var(--line)); border-radius: 8px; background: var(--amber-wash); }
+    .decision-card.visible { display: block; }
+    .decision-tag { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 999px; background: rgba(224,173,88,.13); color: var(--amber); font-family: var(--font-mono); font-size: 9px; font-weight: 620; }
+    .decision-card h3 { margin: 10px 0 5px; color: var(--ink); font-size: 14px; font-weight: 650; }
+    .decision-card p { margin: 0; color: var(--ink-soft); font-size: 11px; line-height: 1.65; }
+    .command { display: block; margin: 11px 0; padding: 9px; border: 1px solid rgba(224,173,88,.18); border-radius: 5px; color: var(--ink-soft); background: color-mix(in srgb, var(--canvas) 56%, transparent); overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 9px; line-height: 1.6; }
+    .decision-actions { display: flex; gap: 7px; }
+    .decision-actions button { flex: 1; }
+    .inspector-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line-quiet); }
+    .section-title { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 9px; }
+    .section-title b { color: var(--ink-soft); font-size: 10px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+    .section-title small { color: var(--quiet); font-family: var(--font-mono); font-size: 9px; }
+    .pick-list { display: grid; gap: 3px; }
+    .pick {
+      display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; min-height: 40px; padding: 0 8px;
+      border-radius: 6px; background: transparent; color: var(--quiet); text-align: left;
+    }
+    .pick:hover { background: var(--hover); color: var(--ink-soft); }
+    .pick.selected { background: var(--raised); color: var(--ink); }
+    .pick span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+    .pick code { color: var(--faint); font-family: var(--font-mono); font-size: 9px; }
+    .trace-card { margin-top: 13px; padding: 14px; border: 1px solid var(--line-quiet); border-radius: 8px; background: color-mix(in srgb, var(--canvas) 44%, var(--paper)); }
+    .trace-head { display: flex; align-items: baseline; justify-content: space-between; gap: 9px; }
+    .trace-head strong { color: var(--ink); font-size: 12px; font-weight: 630; }
+    .trace-head span { color: var(--blue); font-family: var(--font-mono); font-size: 9px; }
+    .trace { display: grid; gap: 0; margin: 13px 0 0; padding: 0; list-style: none; }
+    .trace li { position: relative; min-height: 35px; padding: 0 0 11px 18px; color: var(--quiet); font-size: 10px; line-height: 1.55; }
+    .trace li::before { content: ""; position: absolute; top: 5px; left: 0; width: 6px; height: 6px; border: 1px solid var(--line); border-radius: 50%; background: var(--raised); }
+    .trace li::after { content: ""; position: absolute; top: 12px; bottom: 0; left: 3px; width: 1px; background: var(--line); }
+    .trace li:last-child { padding-bottom: 0; }
+    .trace li:last-child::after { display: none; }
+    .trace li.done::before { border-color: var(--moss); background: var(--moss); }
+    .trace li.current::before { border-color: var(--blue); background: var(--blue); box-shadow: 0 0 0 3px var(--blue-wash); }
+    .trace code { color: var(--ink-soft); font-family: var(--font-mono); font-size: 9px; }
+    .file-list { display: grid; gap: 4px; margin-top: 15px; }
+    .file { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--ink-soft); font-family: var(--font-mono); font-size: 9px; }
+    .file:hover { background: var(--hover); }
+    .file b { margin-left: auto; color: var(--moss); font-family: var(--font-sans); font-size: 9px; font-weight: 580; }
+    .review-note { margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); }
+    .review-note strong { color: var(--ink); font-size: 12px; font-weight: 640; }
+    .review-note p { margin: 6px 0 0; color: var(--quiet); font-size: 11px; line-height: 1.65; }
+
+    .toast {
+      position: fixed; z-index: 40; bottom: 24px; left: 50%; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px);
+      padding: 10px 13px; border: 1px solid var(--line); border-radius: 7px; background: var(--raised); color: var(--ink-soft); box-shadow: var(--shadow-float);
+      font-size: 11px; opacity: 0; pointer-events: none; transform: translate(-50%, 10px); transition: opacity .18s ease, transform .18s ease;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    [data-mode="permission"] .permission-strip { display: flex; }
+    [data-mode="permission"] .quiet-link.decision { display: inline-flex; }
+    [data-mode="permission"] .send { display: none; }
+    [data-mode="permission"] .stop { display: inline-flex; }
+    [data-mode="complete"] .work-ledger { display: none; }
+    [data-mode="complete"] .delivery { display: block; }
+    [data-mode="complete"] .dock-title .dot { background: var(--moss); box-shadow: 0 0 0 3px var(--moss-wash); }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+    @media (max-width: 1160px) {
+      .shell { grid-template-columns: 236px minmax(0,1fr); }
+      .thread, .composer-stack { margin-left: 52px; width: min(820px, calc(100% - 86px)); }
+      .room.inspector-open .main-flow { padding-right: 390px; }
+      .inspector { width: 390px; }
+    }
+    @media (max-width: 980px) {
+      body { min-width: 0; }
+      .shell { grid-template-columns: 58px minmax(0,1fr); }
+      .rail { align-items: center; padding: 16px 8px 12px; }
+      .brandline { padding: 0; }
+      .brand > span:last-child, .more, .new-task > span:first-child, .key, .rail-search > span:not(.rail-glyph),
+      .rail-caption, .rail-button > span:not(.rail-glyph):not(.badge), .task-copy, .project-title, .rail-footer span:not(.rail-glyph) { display: none; }
+      .new-task { justify-content: center; width: 42px; padding: 0; }
+      .new-task::before { content: "+"; font-size: 19px; font-weight: 400; }
+      .rail-search, .rail-button { justify-content: center; padding: 0; }
+      .badge { position: absolute; margin: -17px 0 0 20px; }
+      .crumb-task { display: none; }
+      .room.inspector-open .main-flow { padding-right: 0; }
+      .inspector { width: min(400px, calc(100vw - 58px)); }
+      .thread, .composer-stack { width: calc(100% - 56px); margin-left: 28px; }
+    }
+  </style>
+</head>
+<body data-mode="running">
+  <main class="shell" aria-label="R-Code task room visual prototype">
+    <aside class="rail" aria-label="任务导航">
+      <div class="brandline">
+        <div class="brand"><span class="brand-mark">R</span><span>R-Code</span></div>
+        <button class="more" aria-label="更多"><i></i><i></i><i></i></button>
+      </div>
+
+      <button class="new-task" type="button" data-toast="已准备好创建新任务"><span>新对话</span><span class="key">⌘ K</span></button>
+      <button class="rail-search" type="button" data-toast="搜索沿用现有快捷键和索引"><span class="rail-glyph">⌕</span><span>搜索</span><span class="key">⌘ K</span></button>
+
+      <section class="rail-section">
+        <p class="rail-caption">工作区</p>
+        <ul class="rail-list">
+          <li><button class="rail-button active" type="button"><span class="rail-glyph">⌂</span><span>对话</span></button></li>
+          <li><button class="rail-button" type="button" data-toast="待处理任务入口"><span class="rail-glyph">◌</span><span>待处理</span><span class="badge">1</span></button></li>
+          <li><button class="rail-button" type="button" data-toast="活动记录入口"><span class="rail-glyph">◷</span><span>活动</span></button></li>
+          <li><button class="rail-button" type="button" data-toast="文件夹入口"><span class="rail-glyph">□</span><span>文件夹</span></button></li>
+        </ul>
+      </section>
+
+      <section class="rail-section">
+        <p class="rail-caption"><span>项目</span><span class="live-word">1 运行中</span></p>
+        <ul class="rail-list">
+          <li><button class="rail-button" type="button" data-toast="CryptoPlatform 项目"><span class="rail-glyph">□</span><span class="project-title">CryptoPlatform</span><span class="badge">1</span></button></li>
+          <li>
+            <button class="rail-button task-button active" type="button">
+              <span class="dot run"></span>
+              <span class="task-copy"><span class="task-name">调用子代理查看项目，剖析一下</span><span class="task-meta">刚刚 · 运行中</span></span>
+            </button>
+          </li>
+          <li>
+            <button class="rail-button task-button" type="button" data-toast="切换到上一项分析">
+              <span class="dot done"></span>
+              <span class="task-copy"><span class="task-name">当前是什么项目？看看</span><span class="task-meta">24 分钟前</span></span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
+      <section class="rail-section">
+        <p class="rail-caption">最近</p>
+        <ul class="rail-list">
+          <li><button class="rail-button task-button" type="button" data-toast="切换到 testcode"><span class="rail-glyph">□</span><span class="task-copy"><span class="task-name">testcode</span><span class="task-meta">今天星期几？</span></span></button></li>
+        </ul>
+      </section>
+
+      <div class="rail-footer">
+        <button class="rail-button" type="button" data-toast="附加文件夹入口"><span class="rail-glyph">□</span><span>附加文件夹</span></button>
+        <button class="rail-button" type="button" data-toast="设置入口"><span class="rail-glyph">⚙</span><span>设置</span></button>
+      </div>
+    </aside>
+
+    <section class="workspace">
+      <header class="topbar">
+        <div class="crumbs"><strong>CryptoPlatform</strong><span class="crumb-sep">/</span><span class="crumb-task">调用子代理查看项目，剖析一下</span></div>
+        <div class="top-controls">
+          <button id="modeButton" class="top-control" type="button" aria-expanded="false" aria-controls="modeMenu"><span class="dot run"></span>演示状态</button>
+          <button id="themeButton" class="top-control theme-control" type="button" title="切换深浅色" aria-label="切换深浅色">◐</button>
+          <div id="modeMenu" class="mode-menu" role="menu">
+            <label>原型状态</label>
+            <button type="button" data-mode-choice="running" role="menuitem"><span class="dot run"></span>子代理执行中</button>
+            <button type="button" data-mode-choice="permission" role="menuitem"><span class="dot wait"></span>需要权限决定</button>
+            <button type="button" data-mode-choice="complete" role="menuitem"><span class="dot done"></span>交付已完成</button>
+          </div>
+        </div>
+      </header>
+
+      <div id="room" class="room">
+        <section class="main-flow">
+          <div class="scroll">
+            <article class="thread">
+              <header>
+                <div class="task-kicker">当前任务</div>
+                <h1 class="task-title">调用子代理查看项目，剖析一下</h1>
+                <div class="task-context">
+                  <span><code>CryptoPlatform</code></span><span class="context-break">·</span><span class="access">编辑 · 完全访问</span><span class="context-break">·</span><span>分支 <code>main</code></span>
+                </div>
+              </header>
+
+              <div class="messages">
+                <section class="message">
+                  <div class="avatar">你</div>
+                  <div>
+                    <div class="message-label">你</div>
+                    <p>后端和前端分析因代码量过大超时了。让我们拆分成更小的子任务重新分析。</p>
+                  </div>
+                </section>
+
+                <section class="message">
+                  <div class="avatar assistant">R</div>
+                  <div>
+                    <div class="message-label">R-Code</div>
+                    <p>我把后端服务、页面与配置、组件状态拆成三个可独立验证的方向。执行过程保留在任务内，只有你需要介入时才会把决定带到近处。</p>
+                    <button id="toolToggle" class="tool-fold" type="button" aria-expanded="false" aria-controls="toolLog">4 项可观察活动</button>
+                    <div id="toolLog" class="tool-log"><div><b>delegate_task</b> · 后端服务层</div><div><b>delegate_task</b> · 前端页面与配置</div><div><b>delegate_task</b> · 前端组件与状态</div><div><b>collect_subagents</b> · 汇集子任务状态</div></div>
+                  </div>
+                </section>
+              </div>
+
+              <section id="ledger" class="work-ledger" aria-label="当前子代理工作流">
+                <div class="ledger-head">
+                  <div class="ledger-title"><span class="dot run"></span><span id="ledgerTitle">正在协调 3 个子代理</span><small id="ledgerMeta">任务内运行 · 00:46</small></div>
+                  <span class="ledger-caption">可观察活动</span>
+                  <button class="ledger-open" type="button" data-open-pane="overview">查看</button>
+                </div>
+                <div class="lanes">
+                  <button class="lane" type="button" data-agent="backend">
+                    <span class="lane-name"><span class="dot run"></span><span>后端服务层</span></span>
+                    <span class="lane-track"><i class="lane-progress" style="width:72%"></i></span>
+                    <span class="lane-note"><code>72%</code><em>整理接口边界与运行时</em></span>
+                  </button>
+                  <button class="lane" type="button" data-agent="pages">
+                    <span class="lane-name"><span class="dot run"></span><span>页面与配置</span></span>
+                    <span class="lane-track"><i class="lane-progress" style="width:46%"></i></span>
+                    <span class="lane-note"><code>46%</code><em>核对入口与配置读法</em></span>
+                  </button>
+                  <button class="lane" type="button" data-agent="ui">
+                    <span class="lane-name"><span class="dot run"></span><span>组件与状态</span></span>
+                    <span class="lane-track"><i class="lane-progress" style="width:39%"></i></span>
+                    <span class="lane-note"><code>39%</code><em>归纳消息与状态边界</em></span>
+                  </button>
+                </div>
+              </section>
+
+              <section id="delivery" class="delivery">
+                <div class="delivery-state"><span class="dot done"></span>交付已就绪</div>
+                <h2>项目分析已汇总为一份可审阅的结论</h2>
+                <p>服务边界、页面入口与状态流已交叉核对。变更和审阅入口留在交付下方，不强迫你离开这条对话。</p>
+                <div class="delivery-actions"><button class="button-quiet" type="button" data-open-pane="changes">查看变更</button><button class="button-primary" type="button" data-open-pane="review">打开审阅</button></div>
+              </section>
+            </article>
+          </div>
+
+          <div class="composer-zone">
+            <div class="composer-stack">
+              <div id="permissionStrip" class="permission-strip"><span><strong>需要你决定</strong> · 页面与配置子任务请求读取本地配置以继续核对。</span><button class="button-quiet" type="button" data-open-pane="overview">查看请求</button></div>
+
+              <section id="agentDock" class="agent-dock">
+                <div class="dock-head">
+                  <div class="dock-title"><span class="dot run"></span><span id="dockTitle">子代理 · 3 正在工作</span><small id="dockMeta">0 完成</small></div>
+                  <div class="dock-actions"><button id="decisionLink" class="quiet-link decision" type="button">需要决定</button><button id="expandAgents" class="quiet-link" type="button" aria-expanded="false">展开</button></div>
+                </div>
+                <div class="agents">
+                  <button class="agent-chip" type="button" data-agent="backend"><span class="dot run"></span><span>后端服务层</span></button>
+                  <button class="agent-chip" type="button" data-agent="pages"><span class="dot run"></span><span>页面与配置</span></button>
+                  <button class="agent-chip" type="button" data-agent="ui"><span class="dot run"></span><span>组件与状态</span></button>
+                </div>
+                <div class="agent-expanded">
+                  <button class="agent-row" type="button" data-agent="backend"><span><span class="dot run"></span>后端服务层</span><small data-row-state="backend">运行中 · 46s</small></button>
+                  <button class="agent-row" type="button" data-agent="pages"><span><span class="dot run"></span>前端页面与配置</span><small data-row-state="pages">运行中 · 46s</small></button>
+                  <button class="agent-row" type="button" data-agent="ui"><span><span class="dot run"></span>前端组件与状态</span><small data-row-state="ui">运行中 · 46s</small></button>
+                </div>
+              </section>
+
+              <section class="composer">
+                <textarea aria-label="给 R-Code 的消息" placeholder="补充要求，或继续输入…"></textarea>
+                <div class="composer-footer">
+                  <button class="composer-select" type="button" data-toast="模型选择沿用当前实现"><b>Terra 5.6</b><span>⌄</span></button>
+                  <button class="composer-select" type="button" data-toast="权限范围沿用当前实现"><b>完全访问</b><span>⌄</span></button>
+                  <span class="composer-gap"></span><span class="composer-hint">Enter 发送</span>
+                  <button class="stop" type="button" data-toast="将向当前任务发出中断请求">中断</button><button class="send" type="button" data-toast="示例原型：消息将进入现有会话流">↑</button>
+                </div>
+              </section>
+            </div>
+          </div>
+        </section>
+
+        <aside id="inspector" class="inspector" aria-label="任务检查器" aria-hidden="true">
+          <header class="inspector-head"><strong>任务检查器</strong><button id="closeInspector" class="inspector-close" type="button" aria-label="关闭检查器">×</button></header>
+          <nav class="tabs" aria-label="检查器视图"><button class="tab active" type="button" data-pane-target="overview">概览</button><button class="tab" type="button" data-pane-target="changes">变更</button><button class="tab" type="button" data-pane-target="review">审阅</button></nav>
+          <div class="inspector-scroll">
+            <section class="pane active" data-pane="overview">
+              <p class="pane-kicker">当前活动</p>
+              <h2 id="inspectTitle">子代理正在工作</h2>
+              <p id="inspectCopy" class="pane-copy">点选一位子代理，才会展开它的可观察活动与结果摘要。</p>
+
+              <div id="decisionCard" class="decision-card">
+                <span class="decision-tag">需要你决定</span>
+                <h3>允许读取本地配置吗？</h3>
+                <p>“前端页面与配置”需要读取一个本地环境文件来核对入口。授权只归属本任务，不会扩大到其它项目。</p>
+                <code class="command">Get-Content -Raw .env.local</code>
+                <div class="decision-actions"><button id="denyPermission" class="button-quiet" type="button">暂不允许</button><button id="allowPermission" class="button-primary" type="button">允许一次</button></div>
+              </div>
+
+              <section class="inspector-section">
+                <div class="section-title"><b>子代理</b><small id="agentCount">3 进行中</small></div>
+                <div class="pick-list">
+                  <button class="pick selected" type="button" data-agent="backend"><span class="dot run"></span><span>后端服务层</span><code data-pick-state="backend">RUN</code></button>
+                  <button class="pick" type="button" data-agent="pages"><span class="dot run"></span><span>前端页面与配置</span><code data-pick-state="pages">RUN</code></button>
+                  <button class="pick" type="button" data-agent="ui"><span class="dot run"></span><span>前端组件与状态</span><code data-pick-state="ui">RUN</code></button>
+                </div>
+              </section>
+
+              <section class="trace-card">
+                <div class="trace-head"><strong id="traceName">后端服务层</strong><span id="traceState">正在工作</span></div>
+                <ol id="trace" class="trace"></ol>
+              </section>
+            </section>
+
+            <section class="pane" data-pane="changes">
+              <p class="pane-kicker">交付入口</p><h2>可检查的变更</h2><p class="pane-copy">完成后，当前任务的变更和分析落点会在这里归集，而不是长期占用工作区。</p>
+              <div class="file-list"><div class="file">RoomScene.tsx <b>已分析</b></div><div class="file">SubagentPanel.tsx <b>已分析</b></div><div class="file">commands.rs <b>已核对</b></div></div>
+              <section class="inspector-section"><div class="section-title"><b>展示边界</b></div><p class="pane-copy">子会话只呈现已发送消息、工具调用、结果和系统状态，不展示模型内部推理。</p></section>
+            </section>
+
+            <section class="pane" data-pane="review">
+              <p class="pane-kicker">完成后可用</p><h2>审阅交付</h2><p class="pane-copy">主对话先给出完整的结论；需要复核时，才从这里进入更细的审阅。</p>
+              <div class="review-note"><strong>建议先确认</strong><p>“等待决定”的归属应来自可持久化事件，避免刷新后丢失权限请求和子任务之间的关联。</p></div>
+              <div class="review-note"><strong>体验边界</strong><p>日常执行只在输入框上方显示最小状态，异常或需要决定时才自动召唤检查器。</p></div>
+            </section>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status"><span class="dot done"></span><span id="toastText"></span></div>
+
+  <script>
+    (function () {
+      var doc = document.documentElement;
+      var body = document.body;
+      var room = document.getElementById("room");
+      var inspector = document.getElementById("inspector");
+      var modeButton = document.getElementById("modeButton");
+      var modeMenu = document.getElementById("modeMenu");
+      var agentDock = document.getElementById("agentDock");
+      var expandAgents = document.getElementById("expandAgents");
+      var toolToggle = document.getElementById("toolToggle");
+      var toolLog = document.getElementById("toolLog");
+      var decisionCard = document.getElementById("decisionCard");
+      var permissionStrip = document.getElementById("permissionStrip");
+      var decisionLink = document.getElementById("decisionLink");
+      var ledgerTitle = document.getElementById("ledgerTitle");
+      var ledgerMeta = document.getElementById("ledgerMeta");
+      var dockTitle = document.getElementById("dockTitle");
+      var dockMeta = document.getElementById("dockMeta");
+      var agentCount = document.getElementById("agentCount");
+      var inspectTitle = document.getElementById("inspectTitle");
+      var inspectCopy = document.getElementById("inspectCopy");
+      var traceName = document.getElementById("traceName");
+      var traceState = document.getElementById("traceState");
+      var trace = document.getElementById("trace");
+      var toast = document.getElementById("toast");
+      var toastText = document.getElementById("toastText");
+      var toastTimer;
+      var mode = "running";
+      var selected = "backend";
+      var permissionResolved = false;
+
+      var traces = {
+        backend: {
+          name: "后端服务层",
+          running: [["done", "已梳理任务入口与运行时边界。"], ["done", "已汇集 <code>delegate_task</code> 的公开结果。"], ["current", "正在整理可验证的服务层结论。"]],
+          complete: [["done", "已梳理任务入口与运行时边界。"], ["done", "已确认子任务状态的持久化路径。"], ["done", "结论已汇入任务交付。"]]
+        },
+        pages: {
+          name: "前端页面与配置",
+          running: [["done", "已定位工作区页面入口。"], ["current", "正在核对配置读取的权限边界。"], ["", "结果将与组件状态分析交叉验证。"]],
+          complete: [["done", "已定位工作区页面入口。"], ["done", "已核对配置读取的权限边界。"], ["done", "结论已汇入任务交付。"]]
+        },
+        ui: {
+          name: "前端组件与状态",
+          running: [["done", "已发现消息、工具与子代理的组成关系。"], ["current", "正在归纳状态与活动边界。"], ["", "完成后输出可复用的界面映射。"]],
+          complete: [["done", "已发现消息、工具与子代理的组成关系。"], ["done", "已归纳状态与活动边界。"], ["done", "结论已汇入任务交付。"]]
+        }
+      };
+
+      function notice(message) {
+        toastText.textContent = message;
+        toast.classList.add("show");
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 2400);
+      }
+
+      function openInspector(pane) {
+        room.classList.add("inspector-open");
+        inspector.setAttribute("aria-hidden", "false");
+        setPane(pane || "overview");
+      }
+      function closeInspector() {
+        room.classList.remove("inspector-open");
+        inspector.setAttribute("aria-hidden", "true");
+      }
+      function setPane(pane) {
+        document.querySelectorAll("[data-pane-target]").forEach(function (item) { item.classList.toggle("active", item.getAttribute("data-pane-target") === pane); });
+        document.querySelectorAll(".pane").forEach(function (item) { item.classList.toggle("active", item.getAttribute("data-pane") === pane); });
+      }
+      function paintTrace() {
+        var agent = traces[selected];
+        var traceMode = mode === "complete" ? "complete" : "running";
+        traceName.textContent = agent.name;
+        traceState.textContent = mode === "complete" ? "已汇入交付" : (selected === "pages" && mode === "permission" && !permissionResolved ? "等待你的决定" : "正在工作");
+        trace.innerHTML = "";
+        agent[traceMode].forEach(function (entry) {
+          var item = document.createElement("li");
+          if (entry[0]) item.className = entry[0];
+          item.innerHTML = entry[1];
+          trace.appendChild(item);
+        });
+      }
+      function selectAgent(agent) {
+        selected = agent;
+        document.querySelectorAll(".pick").forEach(function (item) { item.classList.toggle("selected", item.getAttribute("data-agent") === agent); });
+        document.querySelectorAll(".agent-chip").forEach(function (item) { item.classList.toggle("selected", item.getAttribute("data-agent") === agent); });
+        inspectTitle.textContent = traces[agent].name;
+        inspectCopy.textContent = "这是该子任务的可观察活动与结果摘要；主对话始终保持对当前任务的聚焦。";
+        paintTrace();
+        openInspector("overview");
+      }
+      function paintStatuses() {
+        var complete = mode === "complete";
+        document.querySelectorAll("[data-row-state]").forEach(function (item) {
+          var agent = item.getAttribute("data-row-state");
+          item.textContent = complete ? "完成" : (agent === "pages" && mode === "permission" && !permissionResolved ? "等待决定" : "运行中 · 46s");
+          var dot = item.parentElement.querySelector(".dot");
+          dot.className = "dot " + (complete ? "done" : (agent === "pages" && mode === "permission" && !permissionResolved ? "wait" : "run"));
+        });
+        document.querySelectorAll("[data-pick-state]").forEach(function (item) {
+          var agent = item.getAttribute("data-pick-state");
+          item.textContent = complete ? "DONE" : (agent === "pages" && mode === "permission" && !permissionResolved ? "WAIT" : "RUN");
+          var dot = item.parentElement.querySelector(".dot");
+          dot.className = "dot " + (complete ? "done" : (agent === "pages" && mode === "permission" && !permissionResolved ? "wait" : "run"));
+        });
+        document.querySelectorAll(".agent-chip").forEach(function (item) {
+          var agent = item.getAttribute("data-agent");
+          item.querySelector(".dot").className = "dot " + (complete ? "done" : (agent === "pages" && mode === "permission" && !permissionResolved ? "wait" : "run"));
+        });
+        document.querySelectorAll(".lane").forEach(function (item) {
+          var agent = item.getAttribute("data-agent");
+          item.querySelector(".dot").className = "dot " + (complete ? "done" : (agent === "pages" && mode === "permission" && !permissionResolved ? "wait" : "run"));
+        });
+      }
+      function setMode(next, quiet) {
+        mode = next;
+        body.setAttribute("data-mode", next);
+        modeMenu.classList.remove("open");
+        modeButton.setAttribute("aria-expanded", "false");
+        document.querySelectorAll("[data-mode-choice]").forEach(function (item) { item.classList.toggle("selected", item.getAttribute("data-mode-choice") === next); });
+
+        if (next === "permission" && !permissionResolved) {
+          inspectTitle.textContent = "需要你的决定";
+          inspectCopy.textContent = "只有任务被用户决定阻塞时，检查器才会自动打开。";
+          decisionCard.classList.add("visible");
+          permissionStrip.classList.add("visible");
+          ledgerTitle.textContent = "2 个子代理继续工作 · 1 个等待决定";
+          ledgerMeta.textContent = "任务内运行 · 需要授权";
+          dockTitle.textContent = "子代理 · 2 正在工作";
+          dockMeta.textContent = "1 等待决定";
+          agentCount.textContent = "2 进行中 · 1 等待";
+          openInspector("overview");
+          if (!quiet) notice("已切换为“需要权限决定”");
+        } else if (next === "complete") {
+          decisionCard.classList.remove("visible");
+          permissionStrip.classList.remove("visible");
+          ledgerTitle.textContent = "任务已完成";
+          ledgerMeta.textContent = "交付已汇总";
+          dockTitle.textContent = "子代理 · 全部完成";
+          dockMeta.textContent = "3 完成";
+          agentCount.textContent = "3 完成";
+          closeInspector();
+          if (!quiet) notice("已切换为“交付已完成”");
+        } else {
+          decisionCard.classList.remove("visible");
+          permissionStrip.classList.remove("visible");
+          ledgerTitle.textContent = "正在协调 3 个子代理";
+          ledgerMeta.textContent = "任务内运行 · 00:46";
+          dockTitle.textContent = "子代理 · 3 正在工作";
+          dockMeta.textContent = "0 完成";
+          agentCount.textContent = "3 进行中";
+          if (!quiet) notice("已切换为“子代理执行中”");
+        }
+        paintStatuses();
+        paintTrace();
+      }
+
+      document.getElementById("themeButton").addEventListener("click", function () {
+        var next = doc.getAttribute("data-theme") === "dark" ? "light" : "dark";
+        doc.setAttribute("data-theme", next);
+        notice(next === "dark" ? "已切换到深色工作台" : "已切换到浅色工作台");
+      });
+      modeButton.addEventListener("click", function (event) { event.stopPropagation(); var open = modeMenu.classList.toggle("open"); modeButton.setAttribute("aria-expanded", String(open)); });
+      document.querySelectorAll("[data-mode-choice]").forEach(function (item) {
+        item.addEventListener("click", function () {
+          var next = item.getAttribute("data-mode-choice");
+          if (next === "permission") permissionResolved = false;
+          setMode(next);
+        });
+      });
+      document.getElementById("toolToggle").addEventListener("click", function () { var open = toolLog.classList.toggle("open"); toolToggle.setAttribute("aria-expanded", String(open)); });
+      expandAgents.addEventListener("click", function () { var open = agentDock.classList.toggle("expanded"); expandAgents.textContent = open ? "收起" : "展开"; expandAgents.setAttribute("aria-expanded", String(open)); });
+      document.querySelectorAll("[data-agent]").forEach(function (item) { item.addEventListener("click", function () { selectAgent(item.getAttribute("data-agent")); }); });
+      document.getElementById("closeInspector").addEventListener("click", closeInspector);
+      document.querySelectorAll("[data-pane-target]").forEach(function (item) { item.addEventListener("click", function () { setPane(item.getAttribute("data-pane-target")); }); });
+      document.querySelectorAll("[data-open-pane]").forEach(function (item) { item.addEventListener("click", function () { openInspector(item.getAttribute("data-open-pane")); }); });
+      decisionLink.addEventListener("click", function () { openInspector("overview"); });
+      document.getElementById("allowPermission").addEventListener("click", function () {
+        permissionResolved = true; setMode("running", true); inspectTitle.textContent = "子代理继续执行"; inspectCopy.textContent = "授权仅对这一次请求生效。你仍可以按需查看公开的任务活动。"; openInspector("overview"); notice("已允许一次读取，子代理继续执行");
+      });
+      document.getElementById("denyPermission").addEventListener("click", function () {
+        permissionResolved = true; setMode("running", true); inspectTitle.textContent = "子代理正在调整方案"; inspectCopy.textContent = "已拒绝读取请求；该子任务会在不读取本地配置的边界内继续。"; openInspector("overview"); notice("已拒绝读取，任务将采用替代路径");
+      });
+      document.querySelectorAll("[data-toast]").forEach(function (item) { item.addEventListener("click", function () { notice(item.getAttribute("data-toast")); }); });
+      document.addEventListener("click", function (event) { if (!modeMenu.contains(event.target) && event.target !== modeButton) { modeMenu.classList.remove("open"); modeButton.setAttribute("aria-expanded", "false"); } });
+      document.addEventListener("keydown", function (event) { if (event.key === "Escape") { closeInspector(); modeMenu.classList.remove("open"); modeButton.setAttribute("aria-expanded", "false"); } });
+      setMode("running", true);
+    }());
+  </script>
+</body>
+</html>

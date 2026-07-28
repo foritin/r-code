@@ -13,12 +13,34 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize,
 use r_code_core::error::ProductError;
 
 use crate::block::BlockParser;
+use crate::cli_detector::{CliDetector, ExternalCli};
+use crate::shell_integration::{shell_integration_spawn, ShellIntegrationConfig};
 
 /// Scrollback 缓冲区最大大小（约 200KB）。
 const MAX_SCROLLBACK: usize = 200_000;
 
 /// 终端 ID 类型。
 pub type TerminalId = String;
+
+/// 终端渲染器用的完整原始快照。
+///
+/// 普通 `terminal.read` 故意仍然返回去除了 ANSI 的文本，以便 agent 安全地读取；
+/// 只有桌面渲染器使用本类型将控制序列交给真正的终端模拟器解释。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TerminalRawSnapshot {
+    pub output: String,
+    /// 原始输出的绝对尾部游标。后续增量读取必须原样传回。
+    pub cursor: u64,
+}
+
+/// 自某个原始输出游标以来的终端更新。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TerminalRawBatch {
+    pub output: String,
+    pub cursor: u64,
+    /// 请求的游标已经落在滚动缓冲区之前时为 true；渲染器应 reset 后重放 output。
+    pub reset: bool,
+}
 
 /// 终端状态。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -41,6 +63,10 @@ pub struct TerminalHandle {
     pub working_dir: PathBuf,
     /// Scrollback 缓冲区（ANSI-stripped，约 200KB 上限）
     pub scrollback: Vec<u8>,
+    /// 原始 PTY 字节流的 scrollback，供受控的本地终端模拟器恢复画面。
+    raw_scrollback: Vec<u8>,
+    /// 原始 PTY 字节流已接收的总字节数；即使 scrollback 截断也单调递增。
+    raw_output_cursor: u64,
     /// PTY 子进程
     child: Box<dyn Child + Send + Sync>,
     /// PTY stdin 写入器
@@ -59,6 +85,8 @@ pub struct TerminalHandle {
     exit_code_version: u64,
     /// 已处理的 block_parser 块数（用于增量检测新完成的块）
     blocks_seen: usize,
+    /// shell integration 为本终端建立的临时 profile shim。
+    integration_dir: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for TerminalHandle {
@@ -69,6 +97,7 @@ impl std::fmt::Debug for TerminalHandle {
             .field("shell", &self.shell)
             .field("working_dir", &self.working_dir)
             .field("scrollback_len", &self.scrollback.len())
+            .field("raw_scrollback_len", &self.raw_scrollback.len())
             .finish()
     }
 }
@@ -79,6 +108,9 @@ impl Drop for TerminalHandle {
             // 确保子进程被终止和回收，避免孤儿进程
             let _ = self.child.kill();
             let _ = self.child.wait();
+        }
+        if let Some(path) = self.integration_dir.take() {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
 }
@@ -104,6 +136,19 @@ impl TerminalManager {
         working_dir: &Path,
         env: Vec<(String, String)>,
     ) -> Result<TerminalId, ProductError> {
+        self.create_with_args(shell, working_dir, env, Vec::new())
+            .await
+    }
+
+    /// 创建带固定启动参数的终端。只供宿主为受信任的内置入口（如 Codex CLI）使用；
+    /// WebView 不能直接提供这些参数。
+    pub async fn create_with_args(
+        &self,
+        shell: &str,
+        working_dir: &Path,
+        env: Vec<(String, String)>,
+        initial_args: Vec<String>,
+    ) -> Result<TerminalId, ProductError> {
         let id = uuid::Uuid::new_v4().to_string();
         let shell = resolve_shell(shell)?;
 
@@ -114,26 +159,53 @@ impl TerminalManager {
                 .map_err(|e| ProductError::TerminalError(format!("openpty failed: {e}")))?
         };
 
+        let integration = shell_integration_spawn(&ShellIntegrationConfig {
+            shell: shell.clone(),
+            working_dir: working_dir.to_path_buf(),
+            enabled: true,
+        });
+
         let mut cmd = CommandBuilder::new(&shell);
         cmd.cwd(working_dir);
-        for (k, v) in &env {
+        for arg in &initial_args {
+            cmd.arg(arg);
+        }
+        for arg in &integration.args {
+            cmd.arg(arg);
+        }
+        for (k, v) in env.iter().chain(integration.env.iter()) {
             cmd.env(k, v);
         }
+        // 仅作为终端身份标记；不携带 token、凭据或宿主控制通道。
+        cmd.env("R_CODE_TERMINAL", "1");
 
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| ProductError::TerminalError(format!("spawn failed: {e}")))?;
+        let mut child = match pair.slave.spawn_command(cmd) {
+            Ok(child) => child,
+            Err(err) => {
+                cleanup_integration_dir(integration.cleanup_dir.as_deref());
+                return Err(ProductError::TerminalError(format!("spawn failed: {err}")));
+            }
+        };
 
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| ProductError::TerminalError(format!("take_writer failed: {e}")))?;
+        let writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup_integration_dir(integration.cleanup_dir.as_deref());
+                return Err(ProductError::TerminalError(format!("take_writer failed: {err}")));
+            }
+        };
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| ProductError::TerminalError(format!("try_clone_reader failed: {e}")))?;
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(err) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup_integration_dir(integration.cleanup_dir.as_deref());
+                return Err(ProductError::TerminalError(format!("try_clone_reader failed: {err}")));
+            }
+        };
 
         // 丢弃 slave — 关闭我们的 slave 引用，使子进程退出时 master reader 能收到 EOF
         drop(pair.slave);
@@ -163,6 +235,8 @@ impl TerminalManager {
             shell,
             working_dir: working_dir.to_path_buf(),
             scrollback: Vec::new(),
+            raw_scrollback: Vec::new(),
+            raw_output_cursor: 0,
             child,
             writer,
             master,
@@ -172,6 +246,7 @@ impl TerminalManager {
             last_exit_code: None,
             exit_code_version: 0,
             blocks_seen: 0,
+            integration_dir: integration.cleanup_dir,
         };
 
         self.terminals.lock().await.insert(id.clone(), handle);
@@ -224,6 +299,56 @@ impl TerminalManager {
         Ok(handle.scrollback.clone())
     }
 
+    /// 获取完整原始终端画面及其尾部游标。
+    ///
+    /// 这条通道只供本机 UI 的终端模拟器使用。Agent 和 MCP 工具仍应使用
+    /// [`Self::read`]，后者保持 ANSI-free 的文本契约。
+    pub async fn raw_snapshot(&self, id: &str) -> Result<TerminalRawSnapshot, ProductError> {
+        let mut terminals = self.terminals.lock().await;
+        let handle = terminals
+            .get_mut(id)
+            .ok_or_else(|| ProductError::TerminalError(format!("terminal not found: {id}")))?;
+
+        Self::drain_output(handle)?;
+        Ok(TerminalRawSnapshot {
+            output: String::from_utf8_lossy(&handle.raw_scrollback).to_string(),
+            cursor: handle.raw_output_cursor,
+        })
+    }
+
+    /// 获取某个渲染游标之后的原始终端输出。
+    ///
+    /// 由于 agent 读取和 UI 读取共用 PTY，增量不能直接依赖 receiver 的“谁先读到”
+    /// 语义。这里以滚动缓冲区和绝对游标为真源，因此即使 agent 先消费了输出，UI
+    /// 仍能补回缺失内容；缓冲区滚出时返回 `reset = true` 让模拟器安全重放快照。
+    pub async fn raw_since(
+        &self,
+        id: &str,
+        cursor: u64,
+    ) -> Result<TerminalRawBatch, ProductError> {
+        let mut terminals = self.terminals.lock().await;
+        let handle = terminals
+            .get_mut(id)
+            .ok_or_else(|| ProductError::TerminalError(format!("terminal not found: {id}")))?;
+
+        Self::drain_output(handle)?;
+        let end = handle.raw_output_cursor;
+        let start = end.saturating_sub(handle.raw_scrollback.len() as u64);
+        let reset = cursor < start || cursor > end;
+        let output = if reset {
+            handle.raw_scrollback.clone()
+        } else {
+            let offset = (cursor - start) as usize;
+            handle.raw_scrollback[offset..].to_vec()
+        };
+
+        Ok(TerminalRawBatch {
+            output: String::from_utf8_lossy(&output).to_string(),
+            cursor: end,
+            reset,
+        })
+    }
+
     fn drain_output(handle: &mut TerminalHandle) -> Result<Vec<u8>, ProductError> {
         // 排空通道中所有可用数据
         let mut raw_data = Vec::new();
@@ -250,6 +375,16 @@ impl TerminalManager {
                 }
                 handle.blocks_seen += 1;
             }
+
+            // 保持两份 scrollback：ANSI-free 文本供 agent 读取；原始字节流只给
+            // 受控桌面模拟器渲染，避免 UI 因丢失 cursor/colour 序列退化为日志框。
+            handle.raw_output_cursor = handle
+                .raw_output_cursor
+                .saturating_add(raw_data.len() as u64);
+            handle.raw_scrollback.extend_from_slice(&raw_data);
+            trim_scrollback(&mut handle.raw_scrollback);
+
+            Self::refresh_state_from_shell_markers(handle);
         }
 
         // 去除 ANSI 转义序列
@@ -259,10 +394,7 @@ impl TerminalManager {
         handle.scrollback.extend_from_slice(&stripped);
 
         // 超出上限时截断最旧的数据
-        if handle.scrollback.len() > MAX_SCROLLBACK {
-            let excess = handle.scrollback.len() - MAX_SCROLLBACK;
-            handle.scrollback.drain(..excess);
-        }
+        trim_scrollback(&mut handle.scrollback);
 
         // 检查子进程是否已退出
         if handle.state != TerminalState::Exited
@@ -276,6 +408,31 @@ impl TerminalManager {
         }
 
         Ok(stripped)
+    }
+
+    /// 依据 shell integration 的 OSC 133 边界更新活动状态。
+    ///
+    /// 不存在 shell integration 时保守地保留 Idle，而不是把一次键盘输入误报为
+    /// "正在执行"。当已知 CLI（Codex/Claude）正处于命令输出区时，明确标为
+    /// Agent；其他命令为 Busy。
+    fn refresh_state_from_shell_markers(handle: &mut TerminalHandle) {
+        if handle.state == TerminalState::Exited {
+            return;
+        }
+
+        if !handle.block_parser.command_is_running() {
+            handle.state = TerminalState::Idle;
+            return;
+        }
+
+        handle.state = match handle.block_parser.running_command() {
+            Some(command)
+                if matches!(CliDetector::detect(command), ExternalCli::Claude | ExternalCli::Codex) =>
+            {
+                TerminalState::Agent
+            }
+            _ => TerminalState::Busy,
+        };
     }
 
     /// 终止一个终端。
@@ -297,7 +454,12 @@ impl TerminalManager {
 
     /// 列出所有终端。
     pub async fn list(&self) -> Vec<(TerminalId, TerminalState)> {
-        let terminals = self.terminals.lock().await;
+        let mut terminals = self.terminals.lock().await;
+        for handle in terminals.values_mut() {
+            // 状态/scrollback 由 PTY 输出驱动；列表刷新也应推进它们，不能只在
+            // 某个消费者显式 read 时才发现进程已退出。
+            let _ = Self::drain_output(handle);
+        }
         terminals
             .values()
             .map(|h| (h.id.clone(), h.state.clone()))
@@ -330,15 +492,7 @@ impl TerminalManager {
             .get_mut(id)
             .ok_or_else(|| ProductError::TerminalError(format!("terminal not found: {id}")))?;
 
-        if handle.state != TerminalState::Exited
-            && handle
-                .child
-                .try_wait()
-                .map_err(|e| ProductError::TerminalError(format!("try_wait failed: {e}")))?
-                .is_some()
-        {
-            handle.state = TerminalState::Exited;
-        }
+        Self::drain_output(handle)?;
 
         Ok(handle.state.clone())
     }
@@ -355,11 +509,28 @@ impl TerminalManager {
 
     /// 列出所有终端（含 shell 路径），用于 terminal.list [doc-03 §8]。
     pub async fn list_with_shell(&self) -> Vec<(TerminalId, TerminalState, String)> {
-        let terminals = self.terminals.lock().await;
+        let mut terminals = self.terminals.lock().await;
+        for handle in terminals.values_mut() {
+            let _ = Self::drain_output(handle);
+        }
         terminals
             .values()
             .map(|h| (h.id.clone(), h.state.clone(), h.shell.clone()))
             .collect()
+    }
+}
+
+/// 将 scrollback 截到固定上限，保留最新部分。
+fn trim_scrollback(buffer: &mut Vec<u8>) {
+    if buffer.len() > MAX_SCROLLBACK {
+        let excess = buffer.len() - MAX_SCROLLBACK;
+        buffer.drain(..excess);
+    }
+}
+
+fn cleanup_integration_dir(path: Option<&Path>) {
+    if let Some(path) = path {
+        let _ = std::fs::remove_dir_all(path);
     }
 }
 
@@ -649,6 +820,36 @@ mod tests {
         let _ = manager.kill(&id).await;
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn create_with_args_passes_fixed_windows_command_arguments() {
+        let manager = TerminalManager::new();
+        let id = manager
+            .create_with_args(
+                "cmd.exe",
+                &std::env::temp_dir(),
+                vec![],
+                vec![
+                    "/D".to_string(),
+                    "/C".to_string(),
+                    "echo".to_string(),
+                    "r_code_initial_args".to_string(),
+                ],
+            )
+            .await
+            .expect("create with args should succeed");
+
+        let output = read_until(
+            &manager,
+            &id,
+            |data| String::from_utf8_lossy(data).contains("r_code_initial_args"),
+            Duration::from_secs(3),
+        )
+        .await;
+        assert!(String::from_utf8_lossy(&output).contains("r_code_initial_args"));
+        let _ = manager.kill(&id).await;
+    }
+
     #[tokio::test]
     async fn send_and_read() {
         let cat = match cat_path() {
@@ -705,6 +906,62 @@ mod tests {
             "snapshot should retain prior output: {:?}",
             String::from_utf8_lossy(&snapshot)
         );
+
+        let _ = manager.kill(&id).await;
+    }
+
+    #[tokio::test]
+    async fn raw_cursor_recovers_output_consumed_by_text_reader() {
+        let shell = match cat_path() {
+            Some(path) => path,
+            None => return,
+        };
+
+        let manager = TerminalManager::new();
+        let id = manager
+            .create(shell, &std::env::temp_dir(), vec![])
+            .await
+            .expect("create should succeed");
+        let initial = manager.raw_snapshot(&id).await.expect("initial raw snapshot");
+
+        #[cfg(windows)]
+        let input = "echo r_code_raw_cursor\r";
+        #[cfg(not(windows))]
+        let input = "r_code_raw_cursor\n";
+        manager.send(&id, input).await.expect("send should succeed");
+
+        // 模拟一个 agent 先读取 ANSI-free 文本，UI 随后仍应能由 raw scrollback
+        // 通过绝对游标补回同一段输出。
+        let mut text_seen = String::new();
+        for _ in 0..75 {
+            text_seen.push_str(&String::from_utf8_lossy(
+                &manager.read(&id).await.expect("text read should succeed"),
+            ));
+            if text_seen.contains("r_code_raw_cursor") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(text_seen.contains("r_code_raw_cursor"));
+
+        let batch = manager
+            .raw_since(&id, initial.cursor)
+            .await
+            .expect("raw batch should succeed");
+        assert!(!batch.reset, "fresh cursor must not require a reset");
+        assert!(batch.cursor > initial.cursor, "cursor should advance");
+        assert!(
+            batch.output.contains("r_code_raw_cursor"),
+            "raw UI stream should recover text already consumed by agent: {:?}",
+            batch.output
+        );
+
+        let empty = manager
+            .raw_since(&id, batch.cursor)
+            .await
+            .expect("second raw batch should succeed");
+        assert!(!empty.reset);
+        assert!(empty.output.is_empty());
 
         let _ = manager.kill(&id).await;
     }

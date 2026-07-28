@@ -184,8 +184,10 @@ impl Tool for ListFilesTool {
             .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let entries = std::fs::read_dir(path)
-            .map_err(|e| ProductError::Other(format!("failed to list {path}: {e}")))?;
+        let entries = match std::fs::read_dir(path) {
+            Ok(e) => e,
+            Err(e) => return Ok(format!("Error: cannot list {path}: {e}")),
+        };
         let mut names: Vec<String> = Vec::new();
         for entry in entries {
             let entry = entry.map_err(|e| ProductError::Other(format!("dir entry error: {e}")))?;
@@ -505,6 +507,9 @@ impl Tool for CreateFileTool {
     }
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R2
+    }
+    fn requires_existing_path(&self) -> bool {
+        false
     }
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({

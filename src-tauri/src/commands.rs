@@ -22,36 +22,48 @@
 //!
 //! [doc-09] [doc-11]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use hermes_core::{Message, SessionEvent, SessionMeta};
+use hermes_core::{CompletionRequest, Message, Role, SessionEvent, SessionMeta};
 use hermes_store::SessionStore;
-use r_code_agent_worker::{AgentRuntime, MockAgentRuntime, SteerResult};
+use r_code_agent_worker::{
+    AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRunner,
+    MockAgentRuntime, SteerResult,
+};
 use r_code_core::dto::{
-    AgentEvent, AgentEventScope, AgentRun, AgentSendMode, CreateSessionInput, FileChange,
-    FileChangeType, PermissionDecision, PermissionRequest, PlanStep, ProjectAccessMode,
-    QueuedMessage, QueuedMessageState, ReviewState, RiskLevel, SessionBranch, SubagentState, Task,
-    TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall, VerificationRecord, Workspace,
+    AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRun, AgentRunRuntimeKind,
+    AgentSendMode, CreateSessionInput, FileChange, FileChangeType, Notification, NotificationKind,
+    PermissionDecision, PermissionRequest, PlanStep, ProjectAccessMode, QueuedMessage,
+    QueuedMessageState, ReviewState, RiskLevel, SessionBranch, SubagentState, Task, TaskEvent,
+    TaskEventType, TaskMode, TaskState, ToolCall, VerificationRecord, Workspace,
 };
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
+use r_code_core::secret::redact_text;
 use r_code_gateway::permission::PermissionEngine;
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
-    AgentRunRepository, BlobStore, ChangeService, Database, QueuedMessageRepository, ReviewService,
-    SessionBranchRepository, TaskEventStore, TaskRepository, ToolCallRepository,
-    VerificationConfig, VerificationService, WorkspaceService,
+    AgentRunRepository, BlobStore, ChangeService, Database, NotificationRepository,
+    QueuedMessageRepository, ReviewService, SessionBranchRepository, TaskEventStore,
+    TaskRepository, ToolCallRepository, VerificationConfig, VerificationService, WorkspaceService,
 };
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
+pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command as TokioCommand;
+use tokio::time::{timeout, Duration};
+use tokio_util::sync::CancellationToken;
 
+use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::project_memory::ProjectMemory;
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
-use crate::recovery::RecoveryManager;
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
 use crate::settings::SettingsService;
@@ -75,6 +87,115 @@ struct ActiveRun {
     branch_id: String,
     runtime_session_id: String,
     run_id: String,
+}
+
+/// 应用本次启动前遗留的活动记录。
+///
+/// 不能每次打开首页都扫描 `ended_at IS NULL`：那会把本进程刚启动的真实运行
+/// 误报成“崩溃恢复”。因此只在 `CommandState` 建立时拍一张快照，后续恢复操作
+/// 也只处理这份快照中的 run / 权限请求。
+#[derive(Debug, Clone, Default)]
+struct StartupRecoverySnapshot {
+    runs: Vec<StartupRecoveryRun>,
+    pending_permission_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct StartupRecoveryRun {
+    run_id: String,
+    task_id: String,
+    branch_id: String,
+}
+
+/// 外部 CLI 子代理在当前进程内的取消注册表。
+///
+/// SQLite 是运行记录的真源；注册表只保留不可持久化的进程取消句柄。它从不包含
+/// 命令行、提示词、认证信息或外部 Agent 的原始输出。
+#[derive(Default)]
+pub struct ExternalAgentRegistry {
+    runs: tokio::sync::Mutex<HashMap<String, ExternalAgentHandle>>,
+}
+
+struct ExternalAgentHandle {
+    task_id: String,
+    parent_run_id: String,
+    cancellation: CancellationToken,
+}
+
+impl ExternalAgentRegistry {
+    const MAX_CODEX_EXEC_SUBAGENTS_PER_TASK: usize = 3;
+
+    async fn reserve(
+        &self,
+        task_id: &str,
+        parent_run_id: &str,
+        run_id: &str,
+    ) -> Result<CancellationToken, String> {
+        let mut runs = self.runs.lock().await;
+        let active_for_task = runs
+            .values()
+            .filter(|handle| handle.task_id == task_id)
+            .count();
+        if active_for_task >= Self::MAX_CODEX_EXEC_SUBAGENTS_PER_TASK {
+            return Err(format!(
+                "当前任务最多同时运行 {} 个 Codex 子代理",
+                Self::MAX_CODEX_EXEC_SUBAGENTS_PER_TASK
+            ));
+        }
+        let cancellation = CancellationToken::new();
+        runs.insert(
+            run_id.to_string(),
+            ExternalAgentHandle {
+                task_id: task_id.to_string(),
+                parent_run_id: parent_run_id.to_string(),
+                cancellation: cancellation.clone(),
+            },
+        );
+        Ok(cancellation)
+    }
+
+    async fn remove(&self, run_id: &str) {
+        self.runs.lock().await.remove(run_id);
+    }
+
+    async fn cancel_run_for_task(&self, task_id: &str, run_id: &str) -> bool {
+        let token = self
+            .runs
+            .lock()
+            .await
+            .get(run_id)
+            .filter(|handle| handle.task_id == task_id)
+            .map(|handle| handle.cancellation.clone());
+        if let Some(token) = token {
+            token.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn cancel_task(&self, task_id: &str) -> usize {
+        let tokens: Vec<CancellationToken> = self
+            .runs
+            .lock()
+            .await
+            .values()
+            .filter(|handle| handle.task_id == task_id)
+            .map(|handle| handle.cancellation.clone())
+            .collect();
+        for token in &tokens {
+            token.cancel();
+        }
+        tokens.len()
+    }
+
+    async fn has_for_parent_run(&self, parent_run_id: &str) -> bool {
+        self.runs
+            .lock()
+            .await
+            .values()
+            .any(|handle| handle.parent_run_id == parent_run_id)
+    }
 }
 
 /// 每个运行作用域独立积累流式文本，确保并行子代理不会把增量拼到主回复。
@@ -140,6 +261,12 @@ pub struct CommandState {
     pub db_path: Option<PathBuf>,
     /// Agent 桥接（Mock runtime）
     pub agent: Arc<tokio::sync::Mutex<AgentBridge>>,
+    /// 外部 CLI 子代理的可取消进程注册表。
+    pub external_agents: Arc<ExternalAgentRegistry>,
+    /// R-Code 作为 MCP client 连接 Codex 的长生命周期会话注册表。
+    pub codex_mcp: Arc<CodexMcpRegistry>,
+    /// 本次应用启动前遗留的 run / pending permission 快照。
+    startup_recovery: Arc<Mutex<StartupRecoverySnapshot>>,
     /// Agent 事件出口（bin 侧注入，drain 循环经此转发 WebView；测试环境为 None）
     pub agent_event_sink: Mutex<Option<AgentEventSink>>,
     /// 工具门（内置工具 + 权限门 + 审计账本），真实 runtime 的 ToolHost 来源
@@ -161,6 +288,9 @@ impl CommandState {
         db_path: Option<PathBuf>,
     ) -> Self {
         let permission_engine = Arc::new(PermissionEngine::new());
+        // 在任何新的 Agent / MCP sidecar 有机会写入之前记录遗留项。查询失败不应
+        // 阻断桌面启动，恢复页会安全地显示为空并保留数据库原状。
+        let startup_recovery = capture_startup_recovery(&db).unwrap_or_default();
         let mut gateway = r_code_gateway::ToolGateway::new(permission_engine.clone());
         // 只读（R0/R1）
         gateway.register(Box::new(r_code_gateway::ReadFileTool));
@@ -187,6 +317,9 @@ impl CommandState {
             project_root,
             db_path,
             agent: Arc::new(tokio::sync::Mutex::new(AgentBridge::new())),
+            external_agents: Arc::new(ExternalAgentRegistry::default()),
+            codex_mcp: Arc::new(CodexMcpRegistry::default()),
+            startup_recovery: Arc::new(Mutex::new(startup_recovery)),
             agent_event_sink: Mutex::new(None),
             tool_gateway: Arc::new(gateway),
         }
@@ -216,6 +349,14 @@ impl CommandState {
         *self.agent_event_sink.lock().unwrap() = Some(sink);
     }
 
+    /// 为非 Tauri 宿主（MCP stdio server 等）启用真实 provider runtime。
+    ///
+    /// 调用方仍需自行确保所选 Provider 已在本机设置完成；这里绝不创建 mock
+    /// 降级路径，避免外部编排器误以为得到了真实答复。
+    pub async fn enable_real_agent_mode(&self) {
+        self.agent.lock().await.enable_real_mode();
+    }
+
     /// 向 WebView 广播 agent 事件（未注入出口时静默跳过，如测试环境）。
     pub fn emit_agent_event(&self, task_id: &str, event: &AgentEvent) {
         let sink = self.agent_event_sink.lock().unwrap().clone();
@@ -223,6 +364,45 @@ impl CommandState {
             sink(task_id, event);
         }
     }
+}
+
+fn capture_startup_recovery(db: &Database) -> Result<StartupRecoverySnapshot, ProductError> {
+    let conn = db.conn()?;
+    let mut run_stmt = conn.prepare(
+        "SELECT ar.id, ar.task_id, ar.branch_id \
+         FROM agent_runs ar \
+         INNER JOIN tasks t ON t.id = ar.task_id \
+         WHERE ar.ended_at IS NULL AND t.state NOT IN ('idle', 'archived') \
+         ORDER BY ar.started_at ASC, ar.id ASC",
+    )
+    .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+    let runs = run_stmt
+        .query_map([], |row| {
+            Ok(StartupRecoveryRun {
+                run_id: row.get(0)?,
+                task_id: row.get(1)?,
+                branch_id: row.get(2)?,
+            })
+        })
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+    drop(run_stmt);
+
+    let mut permission_stmt = conn.prepare(
+        "SELECT id FROM permission_requests WHERE decision = 'pending' ORDER BY created_at ASC, id ASC",
+    )
+    .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+    let pending_permission_ids = permission_stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+
+    Ok(StartupRecoverySnapshot {
+        runs,
+        pending_permission_ids,
+    })
 }
 
 // ============================================================================
@@ -250,6 +430,111 @@ pub struct TaskDetail {
     pub verifications: Vec<VerificationRecord>,
     /// 当前活跃分支上等待调度的消息
     pub queued_messages: Vec<QueuedMessage>,
+}
+
+/// 批量任务详情响应。
+///
+/// 保持每项与 `cmd_task_detail` 完全相同的形状，前端可以直接写入现有缓存；
+/// 批量边界主要消除 WebView IPC 的 N+1 往返。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDetailBatch {
+    pub details: Vec<TaskDetail>,
+}
+
+/// 仪表盘中的文件变更摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DashboardChangeSummary {
+    pub files: u32,
+    pub created: u32,
+    pub modified: u32,
+    pub removed: u32,
+    pub renamed: u32,
+}
+
+/// 单个任务在项目仪表盘中的聚合视图。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardTaskSummary {
+    pub task: Task,
+    pub activity: String,
+    pub agent_label: String,
+    pub pending_permission_count: u32,
+    pub active_run: Option<AgentRun>,
+    pub change_summary: DashboardChangeSummary,
+    pub latest_verification: Option<VerificationRecord>,
+}
+
+/// 项目级待处理项目的类型。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DashboardAttentionKind {
+    Permission,
+    ReviewReady,
+}
+
+/// 项目仪表盘上直接可操作的一项待处理记录。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DashboardAttentionItem {
+    pub kind: DashboardAttentionKind,
+    pub task: Task,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<PermissionRequest>,
+    pub since: chrono::DateTime<chrono::Utc>,
+}
+
+/// 项目仪表盘的稳定统计口径。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkspaceDashboardMetrics {
+    pub task_count: u32,
+    pub pending_permission_count: u32,
+    pub review_ready_count: u32,
+    pub running_task_count: u32,
+    pub active_subagent_count: u32,
+    pub completed_last_hour_count: u32,
+}
+
+/// 一个项目的完整仪表盘数据源。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDashboard {
+    pub workspace: Workspace,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub metrics: WorkspaceDashboardMetrics,
+    pub tasks: Vec<DashboardTaskSummary>,
+    pub attention: Vec<DashboardAttentionItem>,
+    pub completed: Vec<DashboardTaskSummary>,
+}
+
+/// 可分页的项目 / 全局活动项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectActivityItem {
+    pub id: String,
+    pub at: chrono::DateTime<chrono::Utc>,
+    pub kind: TaskEventType,
+    pub summary: String,
+    pub task_id: String,
+    pub task_title: String,
+    pub workspace_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    pub metadata: serde_json::Value,
+}
+
+/// 活动流分页响应。`next_cursor` 是不透明字符串，调用方不得自行解析。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectActivityPage {
+    pub items: Vec<ProjectActivityItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// 顶栏通知中心分页响应。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPage {
+    pub notifications: Vec<Notification>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub unread_count: u64,
 }
 
 /// 搜索命中结果。
@@ -285,6 +570,19 @@ pub struct RecoveryPageData {
     pub interrupted_tasks: Vec<String>,
     /// 孤儿权限请求数量
     pub orphaned_permissions: u64,
+}
+
+/// 用户确认处理启动前遗留项后的结果。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RecoveryCleanupResult {
+    /// 被以“中止”收尾的遗留 Agent Run 数量。
+    pub runs_closed: u64,
+    /// 因所有遗留运行均已收尾而标记为 Interrupted 的任务数量。
+    pub tasks_interrupted: u64,
+    /// 被拒绝的遗留权限请求数量。
+    pub permissions_denied: u64,
+    /// 被标记为 error 的遗留中的工具调用数量。
+    pub tool_calls_closed: u64,
 }
 
 /// 会话消息序列条目（Room 时间线数据源）。
@@ -509,6 +807,15 @@ async fn rollback_target(
 // 任务命令
 // ============================================================================
 
+/// 手动上下文压缩结果。可见聊天记录不删除；`before_messages` / `after_messages`
+/// 描述的是下一轮模型使用的工作集。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextCompactionResult {
+    pub compacted: bool,
+    pub before_messages: usize,
+    pub after_messages: usize,
+}
+
 pub async fn task_create(
     state: &CommandState,
     workspace_path: Option<&str>,
@@ -549,6 +856,345 @@ pub async fn task_create_with_provider(
         .append_for_branch(&task.id, &branch.id, TaskEventType::TaskCreated)
         .map_err(err_str)?;
     Ok(task)
+}
+
+/// 修改会话显示名称。标题不参与模型上下文，因此无需重建 runtime。
+pub async fn task_rename(
+    state: &CommandState,
+    task_id: &str,
+    title: &str,
+) -> Result<Task, String> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err("请输入新的会话名称".to_string());
+    }
+    if title.chars().count() > 96 {
+        return Err("会话名称不能超过 96 个字符".to_string());
+    }
+    let repo = TaskRepository::new(&state.db);
+    let task = repo
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能再重命名".to_string());
+    }
+    repo.update(task_id, Some(title), None, None)
+        .map_err(err_str)?;
+    repo.get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found after rename: {task_id}"))
+}
+
+/// 从当前分支末端创建一条新的活跃分支；源分支和完整 JSONL 保持只读。
+pub async fn task_fork_context(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<SessionBranch, String> {
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能创建分支".to_string());
+    }
+    {
+        let bridge = state.agent.lock().await;
+        if bridge
+            .active
+            .as_ref()
+            .is_some_and(|active| active.task_id == task_id)
+        {
+            return Err("当前运行尚未结束，请先停止或等待完成后再创建分支".to_string());
+        }
+    }
+
+    let source_branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    ensure_session_log(
+        &state.session_store,
+        &state.sessions_dir,
+        &source_branch.storage_id,
+    )
+    .await?;
+    let source_path = session_file_path(&state.sessions_dir, &source_branch.storage_id);
+    let source = tokio::fs::read_to_string(source_path)
+        .await
+        .map_err(err_str)?;
+    let mut events = Vec::new();
+    let mut forked_from_message_id = None;
+    for (line_index, line) in source.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<SessionEvent>(line)
+            .map_err(|_| "会话历史存在无法恢复的记录".to_string())?;
+        if matches!(event, SessionEvent::Message(_)) {
+            forked_from_message_id = Some(format!(
+                "{}:{}",
+                source_branch.storage_id,
+                line_index + 1
+            ));
+        }
+        events.push(event);
+    }
+    let forked_from_message_id = forked_from_message_id
+        .ok_or_else(|| "当前会话还没有可分支的消息".to_string())?;
+    let branch = SessionBranch::fork(
+        task_id,
+        &source_branch.id,
+        &forked_from_message_id,
+    );
+    match events.first_mut() {
+        Some(SessionEvent::Meta(meta)) => {
+            meta.id = branch.storage_id.clone();
+            meta.created_at = chrono::Utc::now();
+        }
+        _ => return Err("会话缺少元数据，无法创建分支".to_string()),
+    }
+    state
+        .session_store
+        .write_session_atomic(&branch.storage_id, &events)
+        .await
+        .map_err(err_str)?;
+    SessionBranchRepository::new(&state.db)
+        .create_fork(&branch)
+        .map_err(err_str)?;
+    TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, &branch.id, TaskEventType::SessionBranched)
+        .map_err(err_str)?;
+
+    let mut bridge = state.agent.lock().await;
+    bridge.sessions.remove(task_id);
+    Ok(branch)
+}
+
+const COMPACTION_KEEP_FIRST: usize = 1;
+const COMPACTION_KEEP_RECENT: usize = 10;
+const COMPACTION_MIN_MESSAGES: usize = COMPACTION_KEEP_FIRST + COMPACTION_KEEP_RECENT + 3;
+const COMPACTION_SOURCE_CHARS: usize = 120_000;
+
+fn trim_chars(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn compaction_source(messages: &[Message]) -> String {
+    let mut source = String::new();
+    for message in messages {
+        let role = match message.role {
+            Role::User => "USER",
+            Role::Assistant => "ASSISTANT",
+        };
+        source.push_str(role);
+        source.push_str(":\n");
+        source.push_str(&message.text_content());
+        if message
+            .content
+            .iter()
+            .any(|block| block.is_tool_use() || block.is_tool_result())
+        {
+            source.push_str("\nSTRUCTURED_CONTENT: ");
+            source.push_str(
+                &serde_json::to_string(&message.content)
+                    .unwrap_or_else(|_| "[无法序列化的工具内容]".to_string()),
+            );
+        }
+        source.push_str("\n\n");
+    }
+    if source.chars().count() <= COMPACTION_SOURCE_CHARS {
+        return source;
+    }
+
+    // 极长会话同时保留开头约定与靠近切分点的最新事实；按 char 截取避免切断 UTF-8。
+    let head_chars = COMPACTION_SOURCE_CHARS / 3;
+    let tail_chars = COMPACTION_SOURCE_CHARS - head_chars;
+    let head = trim_chars(&source, head_chars);
+    let tail = source
+        .chars()
+        .rev()
+        .take(tail_chars)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    format!("{head}\n\n[中间内容因长度受限已省略]\n\n{tail}")
+}
+
+fn compacted_working_set(history: &[Message], summary: &str) -> Vec<Message> {
+    if history.len() < COMPACTION_MIN_MESSAGES {
+        return history.to_vec();
+    }
+    let recent_start = history.len().saturating_sub(COMPACTION_KEEP_RECENT);
+    let mut result = history[..COMPACTION_KEEP_FIRST].to_vec();
+    result.push(Message::system_text(format!(
+        "[R-Code 上下文摘要]\n{}",
+        summary.trim()
+    )));
+    result.extend_from_slice(&history[recent_start..]);
+    result
+}
+
+/// 压缩当前分支的模型工作集，同时保留完整可见聊天与审计记录。
+pub async fn task_compact_context(
+    state: &CommandState,
+    task_id: &str,
+    focus: Option<&str>,
+) -> Result<ContextCompactionResult, String> {
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能压缩上下文".to_string());
+    }
+
+    {
+        let bridge = state.agent.lock().await;
+        if bridge
+            .active
+            .as_ref()
+            .is_some_and(|active| active.task_id == task_id)
+        {
+            return Err("当前运行尚未结束，请先停止或等待完成后再压缩上下文".to_string());
+        }
+    }
+
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    ensure_session_log(
+        &state.session_store,
+        &state.sessions_dir,
+        &branch.storage_id,
+    )
+    .await?;
+    let history = state
+        .session_store
+        .load(&branch.storage_id)
+        .await
+        .map_err(err_str)?;
+    let before_messages = history.messages.len();
+    if before_messages < COMPACTION_MIN_MESSAGES {
+        return Ok(ContextCompactionResult {
+            compacted: false,
+            before_messages,
+            after_messages: before_messages,
+        });
+    }
+
+    let settings = SettingsService::new(state.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    let provider_name = task
+        .provider_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(config.default_provider.as_str());
+    let provider_config = config
+        .providers
+        .get(provider_name)
+        .ok_or_else(|| format!("未找到模型服务“{provider_name}”，请前往设置完成配置"))?;
+    if let Some(problem) = provider_readiness_error(provider_name, provider_config) {
+        return Err(format!("模型服务“{provider_name}”尚未就绪：{problem}"));
+    }
+    let provider = hermes_llm::create_provider(build_provider_config(
+        provider_name,
+        provider_config,
+    ))
+    .map_err(err_str)?;
+
+    let recent_start = before_messages.saturating_sub(COMPACTION_KEEP_RECENT);
+    let to_summarize = &history.messages[COMPACTION_KEEP_FIRST..recent_start];
+    let focus = focus
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| trim_chars(value, 2_000));
+    let focus_line = focus
+        .as_deref()
+        .map(|value| format!("\n用户特别要求保留：{value}"))
+        .unwrap_or_default();
+    let prompt = format!(
+        "把下面较早的会话压缩成一份能让另一个编码 Agent 无缝继续工作的中文摘要。\
+必须保留：用户目标与约束、已经确认的决定、重要文件/符号、已做修改、命令与验证结果、错误及根因、未完成事项。\
+删除寒暄、重复过程和无结论的尝试。不要编造，不要写开场白。{focus_line}\n\n{}",
+        compaction_source(to_summarize)
+    );
+    let model = task
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(provider_config.model.as_str())
+        .to_string();
+    let response = provider
+        .complete(CompletionRequest {
+            model,
+            system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
+            messages: vec![Message::user_text(prompt)],
+            tools: vec![],
+            max_tokens: 4_096,
+            temperature: Some(0.1),
+            enable_caching: false,
+        })
+        .await
+        .map_err(|error| format!("生成上下文摘要失败：{}", err_str(error)))?;
+    let summary = response.text();
+    if summary.trim().is_empty() {
+        return Err("模型没有返回可用的上下文摘要".to_string());
+    }
+    let compacted = compacted_working_set(&history.messages, &summary);
+
+    // 摘要生成期间可能有另一入口启动了运行；写快照前再次检查并持锁，避免新消息
+    // 落在快照之后却被旧摘要覆盖。
+    let mut bridge = state.agent.lock().await;
+    if bridge
+        .active
+        .as_ref()
+        .is_some_and(|active| active.task_id == task_id)
+    {
+        return Err("摘要生成期间会话开始了新的运行，本次未应用压缩".to_string());
+    }
+    let current_branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    if current_branch.id != branch.id || current_branch.storage_id != branch.storage_id {
+        return Err("摘要生成期间会话分支已变化，本次未应用压缩".to_string());
+    }
+    state
+        .session_store
+        .append(
+            &branch.storage_id,
+            SessionEvent::HistorySnapshot {
+                messages: compacted.clone(),
+            },
+        )
+        .await
+        .map_err(err_str)?;
+    state
+        .session_store
+        .append(
+            &branch.storage_id,
+            SessionEvent::System {
+                event: "r_code_context_compacted".to_string(),
+                data: serde_json::json!({
+                    "before_messages": before_messages,
+                    "after_messages": compacted.len(),
+                }),
+            },
+        )
+        .await
+        .map_err(err_str)?;
+    bridge.sessions.remove(task_id);
+    drop(bridge);
+    TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, &branch.id, TaskEventType::System)
+        .map_err(err_str)?;
+
+    Ok(ContextCompactionResult {
+        compacted: true,
+        before_messages,
+        after_messages: compacted.len(),
+    })
 }
 
 pub async fn task_list(
@@ -767,6 +1413,503 @@ pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDeta
     })
 }
 
+/// 单次读取多个任务详情，供项目 / 活动页避免为每个任务走一次 WebView IPC。
+pub async fn task_detail_batch(
+    state: &CommandState,
+    task_ids: &[String],
+) -> Result<TaskDetailBatch, String> {
+    const MAX_BATCH_SIZE: usize = 80;
+    let mut unique_ids = Vec::new();
+    for task_id in task_ids {
+        if task_id.trim().is_empty() || unique_ids.iter().any(|known| known == task_id) {
+            continue;
+        }
+        unique_ids.push(task_id.clone());
+    }
+    if unique_ids.len() > MAX_BATCH_SIZE {
+        return Err(format!("一次最多读取 {MAX_BATCH_SIZE} 个任务详情"));
+    }
+
+    let mut details = Vec::with_capacity(unique_ids.len());
+    for task_id in unique_ids {
+        details.push(task_detail(state, &task_id).await?);
+    }
+    Ok(TaskDetailBatch { details })
+}
+
+fn display_task_title(task: &Task) -> String {
+    let title = task.title.trim();
+    if !title.is_empty() {
+        return title.to_string();
+    }
+    let goal = task.goal.trim();
+    if !goal.is_empty() {
+        return goal.to_string();
+    }
+    "未命名任务".to_string()
+}
+
+fn summarize_changes(changes: &[FileChange]) -> DashboardChangeSummary {
+    let mut summary = DashboardChangeSummary {
+        files: changes.len() as u32,
+        ..DashboardChangeSummary::default()
+    };
+    for change in changes {
+        match change.change_type {
+            FileChangeType::Create => summary.created += 1,
+            FileChangeType::Modify => summary.modified += 1,
+            FileChangeType::Delete => summary.removed += 1,
+            FileChangeType::Rename => summary.renamed += 1,
+        }
+    }
+    summary
+}
+
+fn is_live_dashboard_task(task: &Task, runs: &[AgentRun]) -> bool {
+    matches!(task.state, TaskState::Exploring | TaskState::InProgress)
+        || runs
+            .iter()
+            .any(|run| run.ended_at.is_none() && run.model != VERIFICATION_PLACEHOLDER_MODEL)
+}
+
+fn current_dashboard_run(runs: &[AgentRun]) -> Option<AgentRun> {
+    runs.iter()
+        .find(|run| run.ended_at.is_none() && run.model != VERIFICATION_PLACEHOLDER_MODEL)
+        .cloned()
+        .or_else(|| {
+            runs.iter()
+                .find(|run| {
+                    run.agent_kind == AgentKind::Main && run.model != VERIFICATION_PLACEHOLDER_MODEL
+                })
+                .cloned()
+        })
+        .or_else(|| runs.first().cloned())
+}
+
+fn dashboard_agent_label(run: Option<&AgentRun>) -> String {
+    match run {
+        Some(run)
+            if run
+                .agent_label
+                .as_deref()
+                .is_some_and(|label| !label.trim().is_empty()) =>
+        {
+            run.agent_label.clone().unwrap_or_default()
+        }
+        Some(run) if run.agent_kind == AgentKind::Subagent => "子代理".to_string(),
+        _ => "主代理".to_string(),
+    }
+}
+
+fn dashboard_activity(
+    task: &Task,
+    permissions: &[PermissionRequest],
+    run: Option<&AgentRun>,
+) -> String {
+    if let Some(permission) = permissions.first() {
+        return format!("等待授权 · {}", permission.tool_name);
+    }
+    if let Some(summary) = run.and_then(|item| item.summary.as_deref()) {
+        if !summary.trim().is_empty() {
+            return summary.trim().to_string();
+        }
+    }
+    match task.state {
+        TaskState::Exploring => "梳理代码与执行路径".to_string(),
+        TaskState::InProgress => "正在推进任务".to_string(),
+        TaskState::ReviewReady => "变更已准备好审查".to_string(),
+        TaskState::Interrupted => "任务已停止".to_string(),
+        TaskState::Idle => "任务已完成".to_string(),
+        TaskState::Archived => "会话已归档".to_string(),
+    }
+}
+
+fn dashboard_task_rank(summary: &DashboardTaskSummary) -> u8 {
+    if summary.pending_permission_count > 0 {
+        0
+    } else if summary.task.state == TaskState::ReviewReady {
+        1
+    } else if summary
+        .active_run
+        .as_ref()
+        .is_some_and(|run| run.ended_at.is_none())
+        || matches!(
+            summary.task.state,
+            TaskState::Exploring | TaskState::InProgress
+        )
+    {
+        2
+    } else if summary.task.state == TaskState::Interrupted {
+        3
+    } else if summary.task.state == TaskState::Idle {
+        4
+    } else {
+        5
+    }
+}
+
+/// 获取一个工作区的仪表盘聚合数据。
+///
+/// 所有统计口径在同一后端时刻计算，前端不再根据多轮轮询的详情缓存拼装数量。
+pub async fn workspace_dashboard(
+    state: &CommandState,
+    workspace_path: &str,
+) -> Result<WorkspaceDashboard, String> {
+    let workspace = WorkspaceService::new(&state.db)
+        .get(workspace_path)
+        .map_err(err_str)?
+        .ok_or_else(|| {
+            "workspace is not open; choose the folder before viewing its dashboard".to_string()
+        })?;
+    let tasks = TaskRepository::new(&state.db)
+        .list(Some(&workspace.canonical_path), None, false)
+        .map_err(err_str)?;
+
+    let now = chrono::Utc::now();
+    let completed_since = now - chrono::Duration::hours(1);
+    let runs = AgentRunRepository::new(&state.db);
+    let change_service = ChangeService::new(&state.db, state.blobs_dir.clone());
+    let verification_service = VerificationService::new(&state.db, state.blobs_dir.clone());
+    let mut metrics = WorkspaceDashboardMetrics::default();
+    let mut summaries = Vec::with_capacity(tasks.len());
+    let mut attention = Vec::new();
+    let mut completed = Vec::new();
+
+    for task in tasks {
+        metrics.task_count += 1;
+        let task_runs = runs.list_by_task(&task.id).map_err(err_str)?;
+        let active_run = current_dashboard_run(&task_runs);
+        let pending_permissions = state.permission_engine.pending_for_task(&task.id).await;
+        let changes = change_service
+            .list_changes(&task.id)
+            .await
+            .map_err(err_str)?;
+        let verifications = verification_service
+            .list_for_task(&task.id)
+            .await
+            .map_err(err_str)?;
+        let latest_verification = verifications
+            .iter()
+            .max_by_key(|record| record.ended_at.as_ref().unwrap_or(&record.started_at))
+            .cloned();
+        let live = is_live_dashboard_task(&task, &task_runs);
+
+        metrics.pending_permission_count += pending_permissions.len() as u32;
+        if task.state == TaskState::ReviewReady {
+            metrics.review_ready_count += 1;
+        }
+        // 与旧 UI 保持一致：正在等用户授权的任务优先归入“待处理”，不重复记到运行中。
+        if live && pending_permissions.is_empty() {
+            metrics.running_task_count += 1;
+        }
+        metrics.active_subagent_count += task_runs
+            .iter()
+            .filter(|run| run.agent_kind == AgentKind::Subagent && run.ended_at.is_none())
+            .count() as u32;
+        if task.state == TaskState::Idle && task.updated_at >= completed_since {
+            metrics.completed_last_hour_count += 1;
+        }
+
+        for permission in &pending_permissions {
+            attention.push(DashboardAttentionItem {
+                kind: DashboardAttentionKind::Permission,
+                task: task.clone(),
+                permission: Some(permission.clone()),
+                since: permission.created_at,
+            });
+        }
+        if task.state == TaskState::ReviewReady {
+            attention.push(DashboardAttentionItem {
+                kind: DashboardAttentionKind::ReviewReady,
+                task: task.clone(),
+                permission: None,
+                since: task.updated_at,
+            });
+        }
+
+        let summary = DashboardTaskSummary {
+            activity: dashboard_activity(&task, &pending_permissions, active_run.as_ref()),
+            agent_label: dashboard_agent_label(active_run.as_ref()),
+            pending_permission_count: pending_permissions.len() as u32,
+            change_summary: summarize_changes(&changes),
+            latest_verification,
+            active_run,
+            task,
+        };
+        if summary.task.state == TaskState::Idle && summary.task.updated_at >= completed_since {
+            completed.push(summary.clone());
+        }
+        summaries.push(summary);
+    }
+
+    summaries.sort_by(|left, right| {
+        dashboard_task_rank(left)
+            .cmp(&dashboard_task_rank(right))
+            .then_with(|| right.task.updated_at.cmp(&left.task.updated_at))
+    });
+    attention.sort_by(|left, right| left.since.cmp(&right.since));
+    completed.sort_by(|left, right| right.task.updated_at.cmp(&left.task.updated_at));
+    completed.truncate(6);
+
+    Ok(WorkspaceDashboard {
+        workspace,
+        generated_at: now,
+        metrics,
+        tasks: summaries,
+        attention,
+        completed,
+    })
+}
+
+fn parse_page_cursor(cursor: Option<&str>, label: &str) -> Result<Option<i64>, String> {
+    let Some(cursor) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = cursor
+        .parse::<i64>()
+        .map_err(|_| format!("invalid {label} cursor"))?;
+    if parsed < 0 {
+        return Err(format!("invalid {label} cursor"));
+    }
+    Ok(Some(parsed))
+}
+
+fn run_for_activity_event(runs: &[AgentRun], event: &TaskEvent) -> Option<AgentRun> {
+    runs.iter()
+        .filter(|run| run.branch_id == event.branch_id && run.started_at <= event.created_at)
+        .max_by_key(|run| run.started_at)
+        .cloned()
+        .or_else(|| {
+            runs.iter()
+                .find(|run| run.branch_id == event.branch_id)
+                .cloned()
+        })
+        .or_else(|| runs.first().cloned())
+}
+
+fn activity_presentation(event: &TaskEvent, run: Option<&AgentRun>) -> (String, String) {
+    let agent = dashboard_agent_label(run);
+    match event.event_type {
+        TaskEventType::TaskCreated => ("创建了任务".to_string(), "你".to_string()),
+        TaskEventType::StateChanged => ("更新了任务状态".to_string(), agent),
+        TaskEventType::RunStarted => ("开始执行".to_string(), agent),
+        TaskEventType::RunEnded => ("完成了一次执行".to_string(), agent),
+        TaskEventType::UserSteered => ("补充了执行指令".to_string(), "你".to_string()),
+        TaskEventType::UserMessageQueued => ("将消息加入队列".to_string(), "你".to_string()),
+        TaskEventType::QueueDispatched => ("发送了队列消息".to_string(), "系统".to_string()),
+        TaskEventType::RunAborted => ("停止了执行".to_string(), "你".to_string()),
+        TaskEventType::SessionBranched => ("创建了会话分支".to_string(), "你".to_string()),
+        TaskEventType::SubagentStarted => ("启动了子代理".to_string(), "子代理".to_string()),
+        TaskEventType::SubagentFinished => ("子代理已完成".to_string(), "子代理".to_string()),
+        TaskEventType::ToolCall => ("调用了工具".to_string(), agent),
+        TaskEventType::ToolResult => ("收到了工具结果".to_string(), agent),
+        TaskEventType::PermissionRequested => ("请求了权限".to_string(), agent),
+        TaskEventType::PermissionDecided => ("完成了权限裁决".to_string(), "你".to_string()),
+        TaskEventType::FileChanged => ("修改了文件".to_string(), agent),
+        TaskEventType::VerificationRun => ("运行了验证".to_string(), agent),
+        TaskEventType::ChangeRequested => ("请求继续修改".to_string(), "你".to_string()),
+        TaskEventType::System => ("更新了系统记录".to_string(), "系统".to_string()),
+    }
+}
+
+fn build_activity_page(
+    state: &CommandState,
+    events: Vec<TaskEvent>,
+) -> Result<ProjectActivityPage, String> {
+    let next_cursor = events.last().map(|event| event.id.to_string());
+    let tasks = TaskRepository::new(&state.db);
+    let runs = AgentRunRepository::new(&state.db);
+    let mut task_cache: HashMap<String, Task> = HashMap::new();
+    let mut run_cache: HashMap<String, Vec<AgentRun>> = HashMap::new();
+    let mut items = Vec::with_capacity(events.len());
+
+    for event in events {
+        let task = if let Some(task) = task_cache.get(&event.task_id) {
+            task.clone()
+        } else {
+            let task = tasks
+                .get(&event.task_id)
+                .map_err(err_str)?
+                .ok_or_else(|| format!("task missing for activity event: {}", event.task_id))?;
+            task_cache.insert(event.task_id.clone(), task.clone());
+            task
+        };
+        let task_runs = if let Some(cached) = run_cache.get(&event.task_id) {
+            cached.clone()
+        } else {
+            let records = runs.list_by_task(&event.task_id).map_err(err_str)?;
+            run_cache.insert(event.task_id.clone(), records.clone());
+            records
+        };
+        let run = run_for_activity_event(&task_runs, &event);
+        let (summary, actor) = activity_presentation(&event, run.as_ref());
+        items.push(ProjectActivityItem {
+            id: event.id.to_string(),
+            at: event.created_at,
+            kind: event.event_type,
+            summary,
+            task_id: task.id.clone(),
+            task_title: display_task_title(&task),
+            workspace_path: task.workspace_path.clone(),
+            run_id: run.as_ref().map(|item| item.id.clone()),
+            actor: Some(actor),
+            metadata: serde_json::json!({
+                "event_id": event.id,
+                "branch_id": event.branch_id,
+                "task_state": task.state.to_string(),
+                "run_id": run.as_ref().map(|item| item.id.clone()),
+            }),
+        });
+    }
+
+    Ok(ProjectActivityPage { items, next_cursor })
+}
+
+/// 读取一个项目的真实、可分页活动流。
+pub async fn project_activity_list(
+    state: &CommandState,
+    workspace_path: &str,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<ProjectActivityPage, String> {
+    let workspace = WorkspaceService::new(&state.db)
+        .get(workspace_path)
+        .map_err(err_str)?
+        .ok_or_else(|| {
+            "workspace is not open; choose the folder before viewing its activity".to_string()
+        })?;
+    let cursor = parse_page_cursor(cursor, "project activity")?;
+    let events = TaskEventStore::new(&state.db)
+        .list_by_workspace_recent(&workspace.canonical_path, cursor, limit)
+        .map_err(err_str)?;
+    build_activity_page(state, events)
+}
+
+/// 读取跨项目的真实、可分页活动流。
+pub async fn activity_list(
+    state: &CommandState,
+    cursor: Option<&str>,
+    limit: u32,
+) -> Result<ProjectActivityPage, String> {
+    let cursor = parse_page_cursor(cursor, "activity")?;
+    let events = TaskEventStore::new(&state.db)
+        .list_recent(cursor, limit)
+        .map_err(err_str)?;
+    build_activity_page(state, events)
+}
+
+fn review_notification_source_key(task_id: &str, run: Option<&AgentRun>) -> String {
+    format!(
+        "review:{task_id}:{}",
+        run.map(|record| record.id.as_str()).unwrap_or("task")
+    )
+}
+
+async fn sync_notifications(state: &CommandState) -> Result<(), String> {
+    let tasks = TaskRepository::new(&state.db)
+        .list(None, None, false)
+        .map_err(err_str)?;
+    let notifications = NotificationRepository::new(&state.db);
+    let runs = AgentRunRepository::new(&state.db);
+
+    for task in tasks {
+        for permission in state.permission_engine.pending_for_task(&task.id).await {
+            let body = if permission.input_summary.trim().is_empty() {
+                format!("{} 需要你的批准才能继续。", permission.tool_name)
+            } else {
+                permission.input_summary.clone()
+            };
+            let notification = Notification::new(
+                NotificationKind::PermissionRequested,
+                format!("需要授权：{}", display_task_title(&task)),
+                body,
+                Some(task.id.clone()),
+                task.workspace_path.clone(),
+            );
+            notifications
+                .upsert(&format!("permission:{}", permission.id), &notification)
+                .map_err(err_str)?;
+        }
+
+        if task.state == TaskState::ReviewReady {
+            let latest_run = runs.get_latest_main_run(&task.id).map_err(err_str)?;
+            let source_key = review_notification_source_key(&task.id, latest_run.as_ref());
+            notifications
+                .mark_task_source_prefix_read(&task.id, "review:", Some(&source_key))
+                .map_err(err_str)?;
+            let notification = Notification::new(
+                NotificationKind::ReviewReady,
+                format!("等待审核：{}", display_task_title(&task)),
+                "本轮变更已准备好验收。".to_string(),
+                Some(task.id.clone()),
+                task.workspace_path.clone(),
+            );
+            notifications
+                .upsert(&source_key, &notification)
+                .map_err(err_str)?;
+        } else {
+            notifications
+                .mark_task_source_prefix_read(&task.id, "review:", None)
+                .map_err(err_str)?;
+        }
+    }
+    Ok(())
+}
+
+fn mark_current_review_notification_read(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<(), String> {
+    let run = AgentRunRepository::new(&state.db)
+        .get_latest_main_run(task_id)
+        .map_err(err_str)?;
+    NotificationRepository::new(&state.db)
+        .mark_source_read(&review_notification_source_key(task_id, run.as_ref()))
+        .map_err(err_str)
+}
+
+/// 读取通知中心；每次读取会先把当前待授权 / 待审查状态同步成幂等通知。
+pub async fn notification_list(
+    state: &CommandState,
+    cursor: Option<&str>,
+    limit: u32,
+    unread_only: bool,
+) -> Result<NotificationPage, String> {
+    sync_notifications(state).await?;
+    let cursor = parse_page_cursor(cursor, "notification")?;
+    let notifications = NotificationRepository::new(&state.db);
+    let rows = notifications
+        .list(cursor, limit, unread_only)
+        .map_err(err_str)?;
+    let next_cursor = rows.last().map(|(sequence, _)| sequence.to_string());
+    let records = rows
+        .into_iter()
+        .map(|(_, notification)| notification)
+        .collect();
+    Ok(NotificationPage {
+        notifications: records,
+        next_cursor,
+        unread_count: notifications.unread_count().map_err(err_str)?,
+    })
+}
+
+/// 标记一条通知已读。不存在的通知返回 false，便于前端处理已被清理的旧链接。
+pub async fn notification_mark_read(
+    state: &CommandState,
+    notification_id: &str,
+) -> Result<bool, String> {
+    NotificationRepository::new(&state.db)
+        .mark_read(notification_id)
+        .map_err(err_str)
+}
+
+/// 标记全部通知已读，返回受影响数量。
+pub async fn notification_mark_all_read(state: &CommandState) -> Result<u64, String> {
+    NotificationRepository::new(&state.db)
+        .mark_all_read()
+        .map_err(err_str)
+}
+
 // ============================================================================
 // Agent 命令（真实 provider runtime；无配置直接报错，不做 mock 降级）
 // ============================================================================
@@ -952,7 +2095,8 @@ async fn ensure_real_runtime(
         tool_gateway.clone(),
         max_tokens,
         pcfg.temperature,
-    );
+    )
+    .with_codex_subagent_runner(Arc::new(RCodeCodexSubagentRunner));
 
     bridge.kind = AgentRuntimeKind::Real(runtime);
     bridge.sessions.clear(); // provider 配置变了，旧会话随旧 runtime 一起失效
@@ -1087,11 +2231,15 @@ fn ensure_subagent_run(
         task_id,
         branch_id,
         parent_run_id,
-        "subagent",
+        scope
+            .model
+            .clone()
+            .unwrap_or_else(|| "subagent".to_string()),
         scope.agent_label.clone(),
         scope.delegated_by_tool_call_id.clone(),
     );
     run.id = scope.run_id.clone();
+    run.runtime_kind = scope.runtime_kind;
     repo.create(&run)?;
     Ok(true)
 }
@@ -1309,7 +2457,25 @@ async fn persist_runtime_event(
                 )
                 .await;
         }
-        AgentEvent::Activity { .. } => {}
+        AgentEvent::Activity { phase, detail } => {
+            // 主运行活动是易失的 UI 状态；子代理活动需要进入其独立日志，才能在完成后
+            // 仍然打开查看。这里只保存宿主已分类的阶段和受限说明，不保存推理正文。
+            if let Some(scope) = scope {
+                let _ = session_store
+                    .append(
+                        &event_storage_id,
+                        SessionEvent::System {
+                            event: "subagent_activity".into(),
+                            data: serde_json::json!({
+                                "run_id": scope.run_id.as_str(),
+                                "phase": phase,
+                                "detail": detail,
+                            }),
+                        },
+                    )
+                    .await;
+            }
+        }
         AgentEvent::Scoped { .. } => unreachable!("split_scoped_event 已解包所有作用域"),
     }
 }
@@ -1604,6 +2770,7 @@ pub async fn agent_send_with_mode(
                 let sink = { state.agent_event_sink.lock().unwrap().clone() };
                 dispatch_next_queued(
                     state.agent.clone(),
+                    state.external_agents.clone(),
                     state.db.clone(),
                     state.sessions_dir.clone(),
                     state.config_dir.clone(),
@@ -1719,6 +2886,7 @@ pub async fn agent_send_with_mode(
 fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
     spawn_drain_loop_with_resources(
         state.agent.clone(),
+        state.external_agents.clone(),
         state.db.clone(),
         state.sessions_dir.clone(),
         state.config_dir.clone(),
@@ -1730,6 +2898,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
 
 fn spawn_drain_loop_with_resources(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
+    external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
@@ -1754,6 +2923,26 @@ fn spawn_drain_loop_with_resources(
         let mut pending_text: HashMap<String, PendingAssistantText> = HashMap::new();
 
         loop {
+            // MCP stdio can run in a sibling process so that Codex owns its server lifetime.
+            // The desktop process therefore cannot hold that runtime's cancellation token.  A
+            // persisted Interrupted state is the cross-process cancellation handshake: the
+            // owning drain loop observes it and aborts its own provider run promptly.
+            let externally_interrupted = TaskRepository::new(&db)
+                .get(&task_id)
+                .ok()
+                .flatten()
+                .is_some_and(|task| task.state == TaskState::Interrupted);
+            if externally_interrupted {
+                let mut bridge = agent.lock().await;
+                if bridge
+                    .active
+                    .as_ref()
+                    .is_some_and(|current| current.run_id == active.run_id)
+                    && !bridge.aborted()
+                {
+                    let _ = bridge.kind.abort(&active.runtime_session_id).await;
+                }
+            }
             let (events, running, real) = {
                 let mut bridge = agent.lock().await;
                 let events = bridge.kind.poll_events().await.unwrap_or_else(|error| {
@@ -1795,7 +2984,7 @@ fn spawn_drain_loop_with_resources(
             } else {
                 empty_streak >= 3
             };
-            if drained {
+            if drained && !external_agents.has_for_parent_run(&active.run_id).await {
                 break;
             }
             // 事件已由 runtime 实时写入通道；以约 25 FPS 排空，在流式文本与工具状态之间
@@ -1891,13 +3080,23 @@ fn spawn_drain_loop_with_resources(
             }
         }
 
-        dispatch_next_queued(agent, db, sessions_dir, config_dir, tool_gateway, sink).await;
+        dispatch_next_queued(
+            agent,
+            external_agents,
+            db,
+            sessions_dir,
+            config_dir,
+            tool_gateway,
+            sink,
+        )
+        .await;
     });
 }
 
 /// 物理 runtime 空闲后，从所有任务的持久化队列中取出最高优先级消息并启动。
 async fn dispatch_next_queued(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
+    external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
@@ -1989,6 +3188,7 @@ async fn dispatch_next_queued(
                 }
                 spawn_drain_loop_with_resources(
                     agent,
+                    external_agents,
                     db,
                     sessions_dir,
                     config_dir,
@@ -2016,6 +3216,9 @@ pub async fn agent_abort(state: &CommandState, task_id: &str) -> Result<(), Stri
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能中止运行".to_string());
     }
+    // 外部 CLI 子代理不归内置 runtime 的 supervisor 管理，先向其发送取消信号。
+    // 进程收尾仍由对应任务负责，避免过早把持久化运行记为结束。
+    let _ = state.external_agents.cancel_task(task_id).await;
     {
         let mut bridge = state.agent.lock().await;
         let Some(active) = bridge.active.clone() else {
@@ -2058,6 +3261,13 @@ pub async fn agent_abort_subagent(
     task_id: &str,
     subagent_id: &str,
 ) -> Result<(), String> {
+    if state
+        .external_agents
+        .cancel_run_for_task(task_id, subagent_id)
+        .await
+    {
+        return Ok(());
+    }
     let mut bridge = state.agent.lock().await;
     let active = bridge
         .active
@@ -2207,11 +3417,28 @@ pub async fn permission_approve(
     decision: &str,
 ) -> Result<(), String> {
     let decision = parse_decision(decision)?;
+    let request = state.permission_engine.pending_by_id(request_id).await;
     state
         .permission_engine
         .decide(request_id, decision)
         .await
-        .map_err(err_str)
+        .map_err(err_str)?;
+    if let Some(request) = request {
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&request.task_id)
+            .map_err(err_str)?;
+        TaskEventStore::new(&state.db)
+            .append_for_branch(
+                &request.task_id,
+                &branch.id,
+                TaskEventType::PermissionDecided,
+            )
+            .map_err(err_str)?;
+        NotificationRepository::new(&state.db)
+            .mark_source_read(&format!("permission:{}", request.id))
+            .map_err(err_str)?;
+    }
+    Ok(())
 }
 
 pub async fn permission_pending(
@@ -2288,6 +3515,8 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
         }
     }
 
+    mark_current_review_notification_read(state, task_id)?;
+
     Ok(results.into_iter().map(|r| format!("{r:?}")).collect())
 }
 
@@ -2298,6 +3527,53 @@ pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), Stri
         .map_err(err_str)?;
     TaskRepository::new(&state.db)
         .update_state(task_id, TaskState::Idle)
+        .map_err(err_str)?;
+    mark_current_review_notification_read(state, task_id)?;
+    Ok(())
+}
+
+/// 将审核反馈作为一个新的用户指令发送给任务，并保留明确的审计事件。
+///
+/// 该动作只允许发生在 `review_ready`：它不会悄悄接受或回滚现有改动，而是启动
+/// 下一轮 Agent 运行，让用户的反馈和后续修改都留在同一会话历史中。
+pub async fn change_request(
+    state: &CommandState,
+    task_id: &str,
+    message: &str,
+) -> Result<(), String> {
+    const MAX_REVIEW_FEEDBACK_CHARS: usize = 8_000;
+    let feedback = message.trim();
+    if feedback.is_empty() {
+        return Err("请说明希望修改的内容".to_string());
+    }
+    if feedback.chars().count() > MAX_REVIEW_FEEDBACK_CHARS {
+        return Err(format!(
+            "审核反馈不能超过 {MAX_REVIEW_FEEDBACK_CHARS} 个字符"
+        ));
+    }
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state != TaskState::ReviewReady {
+        return Err("只有等待审核的任务可以请求修改".to_string());
+    }
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    let reviewed_run = AgentRunRepository::new(&state.db)
+        .get_latest_main_run(task_id)
+        .map_err(err_str)?;
+    let reviewed_source = review_notification_source_key(task_id, reviewed_run.as_ref());
+    let instruction =
+        format!("审核反馈：\n{feedback}\n\n请根据以上反馈继续修改；完成后说明变更内容与验证结果。");
+
+    agent_send_with_mode(state, task_id, &instruction, AgentSendMode::Auto).await?;
+    TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, &branch.id, TaskEventType::ChangeRequested)
+        .map_err(err_str)?;
+    NotificationRepository::new(&state.db)
+        .mark_source_read(&reviewed_source)
         .map_err(err_str)?;
     Ok(())
 }
@@ -2680,6 +3956,61 @@ pub async fn terminal_create(
     svc.create(shell, &root, Vec::new()).await.map_err(err_str)
 }
 
+/// 在真实 PTY 中打开交互式 Codex CLI。CLI 路径由后端探测并作为进程参数传递，
+/// 避免 Windows Store 同名别名抢占 npm CLI，也不让 WebView 拼接 shell 命令。
+pub async fn terminal_create_codex(
+    state: &CommandState,
+    workspace_path: &str,
+) -> Result<String, String> {
+    let root = attached_workspace_root(state, workspace_path)?;
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+    let executable = cli
+        .path
+        .ok_or_else(|| "无法定位 Codex CLI 可执行文件。".to_string())?;
+
+    #[cfg(windows)]
+    {
+        let executable = executable
+            .to_str()
+            .ok_or_else(|| "Codex CLI 路径不是有效的 Unicode 文本。".to_string())?;
+        state
+            .terminal_manager
+            .create_with_args(
+                "cmd.exe",
+                &root,
+                Vec::new(),
+                vec![
+                    "/D".to_string(),
+                    "/K".to_string(),
+                    "call".to_string(),
+                    executable.to_string(),
+                ],
+            )
+            .await
+            .map_err(err_str)
+    }
+    #[cfg(not(windows))]
+    {
+        state
+            .terminal_manager
+            .create(
+                executable
+                    .to_str()
+                    .ok_or_else(|| "Codex CLI 路径不是有效的 Unicode 文本。".to_string())?,
+                &root,
+                Vec::new(),
+            )
+            .await
+            .map_err(err_str)
+    }
+}
+
 pub async fn terminal_send(
     state: &CommandState,
     id: &str,
@@ -2710,6 +4041,26 @@ pub async fn terminal_snapshot(state: &CommandState, id: &str) -> Result<String,
     svc.snapshot(id).await.map_err(err_str)
 }
 
+/// 读取原始终端快照，仅供桌面终端模拟器恢复 ANSI/cursor 状态。
+/// Agent 工具必须继续使用 `terminal_read` 的 ANSI-free 文本结果。
+pub async fn terminal_raw_snapshot(
+    state: &CommandState,
+    id: &str,
+) -> Result<TerminalRawSnapshot, String> {
+    let svc = TerminalControlService::new(state.terminal_manager.clone());
+    svc.raw_snapshot(id).await.map_err(err_str)
+}
+
+/// 读取自前端游标以来的原始终端输出。
+pub async fn terminal_raw_since(
+    state: &CommandState,
+    id: &str,
+    cursor: u64,
+) -> Result<TerminalRawBatch, String> {
+    let svc = TerminalControlService::new(state.terminal_manager.clone());
+    svc.raw_since(id, cursor).await.map_err(err_str)
+}
+
 pub async fn terminal_kill(state: &CommandState, id: &str) -> Result<(), String> {
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.kill(id, false).await.map_err(err_str)
@@ -2732,48 +4083,183 @@ pub async fn terminal_resize(
 // 恢复命令
 // ============================================================================
 
-pub async fn recovery_data(state: &CommandState) -> Result<RecoveryPageData, String> {
-    // 查询中断的任务（状态非 Idle/Archived 且有活跃 Run）
+/// 返回仍然存在的启动前遗留项，并把已经被正常收尾的记录从快照中移除。
+///
+/// 这里绝不重新扫描所有活跃记录：启动之后新建的运行不属于崩溃恢复范围。
+fn startup_recovery_items(state: &CommandState) -> Result<StartupRecoverySnapshot, String> {
+    let recorded = state
+        .startup_recovery
+        .lock()
+        .map_err(|_| "恢复状态不可用".to_string())?
+        .clone();
+    if recorded.runs.is_empty() && recorded.pending_permission_ids.is_empty() {
+        return Ok(recorded);
+    }
+
     let conn = state.db.conn().map_err(err_str)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT DISTINCT t.id FROM tasks t \
-             JOIN agent_runs ar ON ar.task_id = t.id \
-             WHERE t.state NOT IN ('idle', 'archived') AND ar.ended_at IS NULL",
-        )
-        .map_err(|e: rusqlite::Error| ProductError::DatabaseError(e.to_string()).to_string())?;
+    let mut run_stmt = conn
+        .prepare("SELECT EXISTS(SELECT 1 FROM agent_runs WHERE id = ?1 AND ended_at IS NULL)")
+        .map_err(err_str)?;
+    let mut runs = Vec::new();
+    for run in recorded.runs {
+        let is_still_active: i64 = run_stmt
+            .query_row([&run.run_id], |row| row.get(0))
+            .map_err(err_str)?;
+        if is_still_active != 0 {
+            runs.push(run);
+        }
+    }
+    drop(run_stmt);
 
-    let interrupted: Vec<String> = stmt
-        .query_map([], |row| row.get(0))
-        .map_err(|e| ProductError::DatabaseError(e.to_string()).to_string())?
-        .filter_map(|r| r.ok())
+    let mut permission_stmt = conn
+        .prepare("SELECT EXISTS(SELECT 1 FROM permission_requests WHERE id = ?1 AND decision = 'pending')")
+        .map_err(err_str)?;
+    let mut pending_permission_ids = Vec::new();
+    for permission_id in recorded.pending_permission_ids {
+        let is_still_pending: i64 = permission_stmt
+            .query_row([&permission_id], |row| row.get(0))
+            .map_err(err_str)?;
+        if is_still_pending != 0 {
+            pending_permission_ids.push(permission_id);
+        }
+    }
+
+    let snapshot = StartupRecoverySnapshot {
+        runs,
+        pending_permission_ids,
+    };
+    *state
+        .startup_recovery
+        .lock()
+        .map_err(|_| "恢复状态不可用".to_string())? = snapshot.clone();
+    Ok(snapshot)
+}
+
+pub async fn recovery_data(state: &CommandState) -> Result<RecoveryPageData, String> {
+    let snapshot = startup_recovery_items(state)?;
+    let mut task_ids = HashSet::new();
+    let interrupted_tasks = snapshot
+        .runs
+        .into_iter()
+        .filter_map(|run| task_ids.insert(run.task_id.clone()).then_some(run.task_id))
         .collect();
-    drop(stmt);
-
-    // 查询孤儿权限（pending 状态）
-    let orphaned: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM permission_requests WHERE decision = 'pending'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e: rusqlite::Error| ProductError::DatabaseError(e.to_string()).to_string())?;
 
     Ok(RecoveryPageData {
-        interrupted_tasks: interrupted,
-        orphaned_permissions: orphaned.max(0) as u64,
+        interrupted_tasks,
+        orphaned_permissions: snapshot.pending_permission_ids.len() as u64,
     })
 }
 
-pub async fn recovery_cleanup(state: &CommandState) -> Result<u64, String> {
-    // RecoveryManager 直接连数据库文件；内存库（测试）无文件可清，返回 0
-    let Some(db_path) = &state.db_path else {
-        return Ok(0);
-    };
-    RecoveryManager::new(db_path.clone())
-        .cancel_orphaned_permissions()
-        .await
-        .map_err(err_str)
+/// 收束本次启动前遗留的执行，不触碰本进程新建的运行或新的权限请求。
+pub async fn recovery_cleanup(state: &CommandState) -> Result<RecoveryCleanupResult, String> {
+    let snapshot = startup_recovery_items(state)?;
+    if snapshot.runs.is_empty() && snapshot.pending_permission_ids.is_empty() {
+        return Ok(RecoveryCleanupResult::default());
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_summary = "应用在这次运行结束前已退出；已在下次启动时安全收束。";
+    let tool_error = serde_json::json!({
+        "error": "应用在工具调用完成前退出，已在下次启动时结束该调用。"
+    })
+    .to_string();
+    let mut conn = state.db.conn().map_err(err_str)?;
+    let tx = conn.transaction().map_err(err_str)?;
+    let mut result = RecoveryCleanupResult::default();
+    let mut closed_runs = Vec::new();
+
+    for run in &snapshot.runs {
+        let closed = tx
+            .execute(
+                "UPDATE agent_runs
+                 SET review_state = CASE WHEN review_state = 'pending' THEN 'aborted' ELSE review_state END,
+                     ended_at = COALESCE(ended_at, ?1),
+                     summary = COALESCE(summary, ?2)
+                 WHERE id = ?3 AND ended_at IS NULL",
+                rusqlite::params![&now, run_summary, &run.run_id],
+            )
+            .map_err(err_str)?;
+        if closed == 0 {
+            continue;
+        }
+        result.runs_closed += closed as u64;
+        closed_runs.push(run.clone());
+        result.tool_calls_closed += tx
+            .execute(
+                "UPDATE tool_calls
+                 SET status = 'error',
+                     output_json = COALESCE(output_json, ?1),
+                     ended_at = COALESCE(ended_at, ?2)
+                 WHERE run_id = ?3 AND status = 'running'",
+                rusqlite::params![&tool_error, &now, &run.run_id],
+            )
+            .map_err(err_str)? as u64;
+    }
+
+    let interrupted_state = TaskState::Interrupted.to_string();
+    let mut interrupted_task_ids = HashSet::new();
+    for task_id in closed_runs
+        .iter()
+        .map(|run| run.task_id.as_str())
+        .collect::<HashSet<_>>()
+    {
+        let updated = tx
+            .execute(
+                "UPDATE tasks
+                 SET state = ?1, updated_at = ?2
+                 WHERE id = ?3
+                   AND state NOT IN ('idle', 'archived', 'interrupted')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM agent_runs AS live
+                       WHERE live.task_id = tasks.id AND live.ended_at IS NULL
+                   )",
+                rusqlite::params![&interrupted_state, &now, task_id],
+            )
+            .map_err(err_str)?;
+        if updated != 0 {
+            result.tasks_interrupted += updated as u64;
+            interrupted_task_ids.insert(task_id.to_string());
+        }
+    }
+
+    let mut event_branches = HashSet::new();
+    for run in &closed_runs {
+        if interrupted_task_ids.contains(&run.task_id) {
+            event_branches.insert((run.task_id.clone(), run.branch_id.clone()));
+        }
+    }
+    for (task_id, branch_id) in event_branches {
+        tx.execute(
+            "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![task_id, branch_id, TaskEventType::RunAborted.to_string(), &now],
+        )
+        .map_err(err_str)?;
+        tx.execute(
+            "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![task_id, branch_id, TaskEventType::RunEnded.to_string(), &now],
+        )
+        .map_err(err_str)?;
+    }
+
+    for permission_id in &snapshot.pending_permission_ids {
+        result.permissions_denied += tx
+            .execute(
+                "UPDATE permission_requests
+                 SET decision = 'deny', decided_at = COALESCE(decided_at, ?1)
+                 WHERE id = ?2 AND decision = 'pending'",
+                rusqlite::params![&now, permission_id],
+            )
+            .map_err(err_str)? as u64;
+    }
+
+    tx.commit().map_err(err_str)?;
+    *state
+        .startup_recovery
+        .lock()
+        .map_err(|_| "恢复状态不可用".to_string())? = StartupRecoverySnapshot::default();
+    Ok(result)
 }
 
 // ============================================================================
@@ -2837,7 +4323,14 @@ pub async fn session_messages(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(err_str(e)),
     };
+    Ok(parse_session_messages(
+        &content,
+        &branch.id,
+        &branch.storage_id,
+    ))
+}
 
+fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> Vec<SessionMessage> {
     let mut out: Vec<SessionMessage> = Vec::new();
     // JSONL 的 ToolCall 不存 call_id → 按顺序给 tool_call 分配占位 ID，
     // tool_result 的 call_id 映射回最近一条未配对的 tool_call
@@ -2850,11 +4343,11 @@ pub async fn session_messages(
         let Ok(event) = serde_json::from_str::<SessionEvent>(line) else {
             continue; // 跳过无法解析的行（崩溃恢复场景）
         };
-        let message_id = Some(format!("{}:{}", branch.storage_id, line_index + 1));
+        let message_id = Some(format!("{}:{}", storage_id, line_index + 1));
         match event {
             SessionEvent::Meta(meta) => out.push(SessionMessage {
                 id: message_id,
-                branch_id: branch.id.clone(),
+                branch_id: branch_id.to_string(),
                 kind: "meta".into(),
                 role: None,
                 text: Some(format!("{} · {}", meta.provider, meta.model)),
@@ -2891,7 +4384,7 @@ pub async fn session_messages(
                 }
                 out.push(SessionMessage {
                     id: message_id,
-                    branch_id: branch.id.clone(),
+                    branch_id: branch_id.to_string(),
                     kind: "message".into(),
                     role: Some(role.into()),
                     text: Some(text),
@@ -2908,7 +4401,7 @@ pub async fn session_messages(
                 pending_calls.push(call_id.clone());
                 out.push(SessionMessage {
                     id: message_id,
-                    branch_id: branch.id.clone(),
+                    branch_id: branch_id.to_string(),
                     kind: "tool_call".into(),
                     role: None,
                     text: None,
@@ -2934,7 +4427,7 @@ pub async fn session_messages(
                 pending_calls.retain(|c| c != &resolved);
                 out.push(SessionMessage {
                     id: message_id,
-                    branch_id: branch.id.clone(),
+                    branch_id: branch_id.to_string(),
                     kind: "tool_result".into(),
                     role: None,
                     text: None,
@@ -2950,7 +4443,7 @@ pub async fn session_messages(
             SessionEvent::HistorySnapshot { .. } => {}
             SessionEvent::System { event, data } => out.push(SessionMessage {
                 id: message_id,
-                branch_id: branch.id.clone(),
+                branch_id: branch_id.to_string(),
                 kind: "system".into(),
                 role: None,
                 text: Some(event),
@@ -2964,7 +4457,39 @@ pub async fn session_messages(
             SessionEvent::Usage(_) => {}
         }
     }
-    Ok(out)
+    out
+}
+
+/// 读取某个子代理的独立日志。先校验运行归属，避免使用任意 ID 探测其他任务文件。
+pub async fn subagent_session_messages(
+    state: &CommandState,
+    task_id: &str,
+    subagent_id: &str,
+) -> Result<Vec<SessionMessage>, String> {
+    let run = AgentRunRepository::new(&state.db)
+        .get(subagent_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "子代理运行不存在".to_string())?;
+    if run.task_id != task_id || run.agent_kind != AgentKind::Subagent {
+        return Err("子代理运行不属于当前任务".to_string());
+    }
+    let branch = SessionBranchRepository::new(&state.db)
+        .list_by_task(task_id)
+        .map_err(err_str)?
+        .into_iter()
+        .find(|branch| branch.id == run.branch_id)
+        .ok_or_else(|| "子代理所属会话分支不存在".to_string())?;
+    if branch.task_id != task_id {
+        return Err("子代理所属会话分支不属于当前任务".to_string());
+    }
+    let storage_id = subagent_storage_id(&branch.storage_id, subagent_id);
+    let path = session_file_path(&state.sessions_dir, &storage_id);
+    let content = match tokio::fs::read_to_string(path).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(err_str(error)),
+    };
+    Ok(parse_session_messages(&content, &branch.id, &storage_id))
 }
 
 // ============================================================================
@@ -3740,20 +5265,447 @@ pub async fn settings_delete_provider(state: &CommandState, name: &str) -> Resul
     settings.set_provider_secret(name, "").map_err(err_str)
 }
 
-fn codex_cli_path() -> Option<PathBuf> {
-    let candidates: &[&str] = if cfg!(windows) {
-        &["codex.exe", "codex"]
-    } else {
-        &["codex"]
-    };
-    std::env::var_os("PATH").and_then(|paths| {
-        std::env::split_paths(&paths)
-            .flat_map(|dir| candidates.iter().map(move |name| dir.join(name)))
-            .find(|path| path.exists())
-    })
+const CODEX_CLI_PROBE_TIMEOUT: Duration = Duration::from_secs(4);
+const CODEX_CLI_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
+const CODEX_CLI_INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
+const CODEX_CLI_INSTALL_COMMAND: &str = "npm install -g @openai/codex";
+const CODEX_CLI_INSTALL_ARGS: &[&str] = &["install", "-g", "@openai/codex"];
+static CODEX_CLI_INSTALL_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CODEX_COLLAB_SETUP_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static CODEX_PREFERENCES_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Codex CLI 的可用性。不要把 PATH 上一个同名文件的存在误认为 CLI 可运行：
+/// Windows App 的受保护安装目录、陈旧 shim 和损坏的 npm 安装都会命中这种误判。
+#[derive(Debug, Clone)]
+struct CodexCliProbe {
+    available: bool,
+    path: Option<PathBuf>,
+    version: Option<String>,
+    error: Option<&'static str>,
 }
 
-/// 返回 Codex CLI 协作入口的状态。它不会读取、修改或回传认证令牌。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexAuthState {
+    Authenticated,
+    NotAuthenticated,
+    Unknown,
+}
+
+impl CodexAuthState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Authenticated => "authenticated",
+            Self::NotAuthenticated => "not_authenticated",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexSetupState {
+    InstallCli,
+    Login,
+    Check,
+    Configure,
+    Ready,
+}
+
+impl CodexSetupState {
+    fn from_components(
+        cli_available: bool,
+        auth_state: CodexAuthState,
+        skill_status: &str,
+        mcp_server_configured: bool,
+    ) -> Self {
+        if !cli_available {
+            Self::InstallCli
+        } else if auth_state == CodexAuthState::NotAuthenticated {
+            Self::Login
+        } else if auth_state == CodexAuthState::Unknown {
+            Self::Check
+        } else if skill_status != "up_to_date" || !mcp_server_configured {
+            Self::Configure
+        } else {
+            Self::Ready
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::InstallCli => "install_cli",
+            Self::Login => "login",
+            Self::Check => "check",
+            Self::Configure => "configure",
+            Self::Ready => "ready",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexAuthProbe {
+    state: CodexAuthState,
+    method: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CodexReasoningOption {
+    pub effort: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CodexModelOption {
+    pub slug: String,
+    pub display_name: String,
+    pub description: String,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<CodexReasoningOption>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CodexCliPreferences {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub verbosity: Option<String>,
+    pub models: Vec<CodexModelOption>,
+    pub config_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelCatalogWire {
+    models: Vec<CodexModelWire>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexModelWire {
+    slug: String,
+    display_name: String,
+    description: String,
+    default_reasoning_level: String,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<CodexReasoningWire>,
+    visibility: Option<String>,
+    priority: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexReasoningWire {
+    effort: String,
+    description: String,
+}
+
+#[derive(Debug)]
+enum CodexCommandError {
+    Launch(std::io::ErrorKind),
+    Timeout,
+}
+
+fn executable_paths(candidates: &[&str]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if let Some(paths) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&paths) {
+            push_executable_candidates(&mut found, &directory, candidates);
+        }
+    }
+    found
+}
+
+fn push_executable_candidates(found: &mut Vec<PathBuf>, directory: &Path, names: &[&str]) {
+    for name in names {
+        let path = directory.join(name);
+        if path.is_file() && !found.iter().any(|candidate| candidate == &path) {
+            found.push(path);
+        }
+    }
+}
+
+fn codex_cli_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        // npm 安装通常留下 .cmd shim；只找 exe 会把正常的 npm CLI 误判为未安装。
+        &["codex.exe", "codex.cmd", "codex.bat", "codex"]
+    } else {
+        &["codex"]
+    }
+}
+
+fn codex_cli_paths() -> Vec<PathBuf> {
+    let mut found = executable_paths(codex_cli_names());
+    #[cfg(windows)]
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
+        let npm_prefix = Path::new(&app_data).join("npm");
+        push_executable_candidates(&mut found, &npm_prefix, codex_cli_names());
+    }
+    found
+}
+
+fn npm_cli_paths() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        executable_paths(&["npm.exe", "npm.cmd", "npm.bat", "npm"])
+    } else {
+        executable_paths(&["npm"])
+    }
+}
+
+fn codex_home_dir_from(configured: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
+    configured.unwrap_or_else(|| home.unwrap_or_else(|| PathBuf::from(".")).join(".codex"))
+}
+
+fn codex_home_dir() -> PathBuf {
+    let configured = std::env::var_os("CODEX_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    codex_home_dir_from(configured, dirs::home_dir())
+}
+
+/// 只运行由本模块声明的固定 Codex 参数，绝不把 WebView 文字拼到 shell 命令中。
+async fn run_codex_cli_at(
+    cli_path: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, CodexCommandError> {
+    run_codex_cli_at_with_timeout(cli_path, args, CODEX_CLI_PROBE_TIMEOUT).await
+}
+
+async fn run_codex_cli_at_with_timeout(
+    cli_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<std::process::Output, CodexCommandError> {
+    #[cfg(windows)]
+    let mut command = if cli_path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    }) {
+        // npm 安装通常是 .cmd shim。命令路径来自 PATH 且先拒绝 cmd 元字符，参数只
+        // 来自本模块字面量；这样既能绕开 Windows Store 别名，也不接受 WebView 文本。
+        debug_assert!(args.iter().all(|arg| {
+            arg.chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        }));
+        windows_cmd_safe_path(cli_path)
+            .map_err(|_| CodexCommandError::Launch(std::io::ErrorKind::InvalidInput))?;
+        let mut command = TokioCommand::new("cmd.exe");
+        command
+            .args(["/D", "/S", "/C", "call"])
+            .arg(cli_path)
+            .args(args);
+        command
+    } else {
+        let mut command = TokioCommand::new(cli_path);
+        command.args(args);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = TokioCommand::new(cli_path);
+        command.args(args);
+        command
+    };
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match timeout(deadline, command.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
+        Err(_) => Err(CodexCommandError::Timeout),
+    }
+}
+
+/// 构造 npm 命令。调用方只能传入本模块声明的固定参数；WebView 不能提供包名、
+/// registry、脚本或任意 shell 文本。
+fn npm_command_at(npm_path: &Path, args: &[&str]) -> Result<TokioCommand, String> {
+    #[cfg(windows)]
+    if npm_path.extension().is_some_and(|extension| {
+        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+    }) {
+        windows_cmd_safe_path(npm_path)?;
+        let mut command = TokioCommand::new("cmd.exe");
+        command
+            .args(["/D", "/S", "/C", "call"])
+            .arg(npm_path)
+            .args(args);
+        return Ok(command);
+    }
+
+    let mut command = TokioCommand::new(npm_path);
+    command.args(args);
+    Ok(command)
+}
+
+async fn run_npm_at(
+    npm_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<std::process::Output, CodexCommandError> {
+    let mut command = npm_command_at(npm_path, args)
+        .map_err(|_| CodexCommandError::Launch(std::io::ErrorKind::InvalidInput))?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match timeout(deadline, command.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
+        Err(_) => Err(CodexCommandError::Timeout),
+    }
+}
+
+fn first_nonempty_line(bytes: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(|line| line.chars().take(120).collect())
+}
+
+async fn probe_npm_cli() -> Option<PathBuf> {
+    for path in npm_cli_paths() {
+        if matches!(
+            run_npm_at(&path, &["--version"], CODEX_CLI_PROBE_TIMEOUT).await,
+            Ok(output) if output.status.success()
+        ) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+async fn npm_global_prefix(npm_path: &Path) -> Option<PathBuf> {
+    let output = run_npm_at(
+        npm_path,
+        &["prefix", "-g"],
+        CODEX_CLI_PROBE_TIMEOUT,
+    )
+    .await
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let prefix = PathBuf::from(first_nonempty_line(&output.stdout)?);
+    prefix.is_absolute().then_some(prefix)
+}
+
+async fn codex_cli_paths_with_npm_prefix() -> (Vec<PathBuf>, Option<PathBuf>) {
+    let mut paths = codex_cli_paths();
+    let npm_path = probe_npm_cli().await;
+    if let Some(npm_path) = npm_path.as_deref() {
+        if let Some(prefix) = npm_global_prefix(npm_path).await {
+            let bin = if cfg!(windows) { prefix } else { prefix.join("bin") };
+            push_executable_candidates(&mut paths, &bin, codex_cli_names());
+        }
+    }
+    (paths, npm_path)
+}
+
+async fn probe_codex_cli() -> CodexCliProbe {
+    let (paths, _) = codex_cli_paths_with_npm_prefix().await;
+    if paths.is_empty() {
+        return CodexCliProbe {
+            available: false,
+            path: None,
+            version: None,
+            error: Some("未检测到可运行的 Codex CLI。请先独立安装 Codex CLI。"),
+        };
+    }
+
+    let mut permission_denied = false;
+    let mut timed_out = false;
+    for path in paths {
+        match run_codex_cli_at(&path, &["--version"]).await {
+            Ok(output) if output.status.success() => {
+                return CodexCliProbe {
+                    available: true,
+                    path: Some(path),
+                    version: first_nonempty_line(&output.stdout),
+                    error: None,
+                };
+            }
+            Ok(_) => {}
+            Err(CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied)) => {
+                permission_denied = true;
+            }
+            Err(CodexCommandError::Timeout) => timed_out = true,
+            Err(CodexCommandError::Launch(_)) => {}
+        }
+    }
+
+    let error = if permission_denied {
+        "只检测到无法从命令行启动的 Codex Desktop 受保护程序。请独立安装 Codex CLI；安装后刷新状态。"
+    } else if timed_out {
+        "Codex CLI 启动超时。请在系统终端运行 `codex doctor` 排查。"
+    } else {
+        "检测到 Codex 命令，但无法正常启动。请在系统终端运行 `codex --version` 排查。"
+    };
+    CodexCliProbe {
+        available: false,
+        path: None,
+        version: None,
+        error: Some(error),
+    }
+}
+
+/// 解析 `codex login status` 的公开、人类可读状态。只归纳状态和登录方式，绝不把
+/// stdout/stderr、账户名或凭据传回前端或写入日志。
+fn parse_codex_login_status(success: bool, stdout: &[u8], stderr: &[u8]) -> CodexAuthProbe {
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(stdout),
+        String::from_utf8_lossy(stderr)
+    )
+    .to_ascii_lowercase();
+    let method = if text.contains("chatgpt") {
+        Some("ChatGPT")
+    } else if text.contains("api key") || text.contains("api-key") {
+        Some("API Key")
+    } else if text.contains("access token") {
+        Some("访问令牌")
+    } else {
+        None
+    };
+    let explicitly_signed_out = [
+        "not logged in",
+        "not authenticated",
+        "no active authentication",
+        "no active login",
+        "signed out",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle));
+    let state = if explicitly_signed_out {
+        CodexAuthState::NotAuthenticated
+    } else if success {
+        // `codex login status` 的公开契约是：存在有效登录时退出码为 0。
+        // 输出文本用于识别认证方式，不应反过来把成功退出误判为 unknown。
+        CodexAuthState::Authenticated
+    } else {
+        CodexAuthState::Unknown
+    };
+    CodexAuthProbe { state, method }
+}
+
+async fn probe_codex_login(cli_path: Option<&Path>) -> CodexAuthProbe {
+    let Some(cli_path) = cli_path else {
+        return CodexAuthProbe {
+            state: CodexAuthState::Unknown,
+            method: None,
+        };
+    };
+    match run_codex_cli_at(cli_path, &["login", "status"]).await {
+        Ok(output) => {
+            parse_codex_login_status(output.status.success(), &output.stdout, &output.stderr)
+        }
+        Err(_) => CodexAuthProbe {
+            state: CodexAuthState::Unknown,
+            method: None,
+        },
+    }
+}
+
+/// 返回 Codex CLI 协作入口的状态。它不会读取、修改或回传认证令牌，也不把
+/// `auth.json` 是否存在当作登录结论，因为 Codex 可将凭据保存到系统密钥库。
 pub async fn codex_integration_status() -> Result<serde_json::Value, String> {
     let manager = SkillManager::new();
     let skill_path = manager
@@ -3767,55 +5719,2160 @@ pub async fn codex_integration_status() -> Result<serde_json::Value, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => "not_installed",
         Err(error) => return Err(format!("读取 Codex Skill 状态失败：{error}")),
     };
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let codex_dir = home.join(".codex");
+    let codex_dir = codex_home_dir();
     let config_path = codex_dir.join("config.toml");
     let auth_path = codex_dir.join("auth.json");
-    // 仅检查文件存在和大小，不解析内容，更不会把任何认证材料送到 WebView。
-    let authenticated = auth_path
-        .metadata()
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
-        .unwrap_or(false);
+    let cli = probe_codex_cli().await;
+    let npm_path = if cli.available {
+        None
+    } else {
+        probe_npm_cli().await
+    };
+    let auth = if cli.available {
+        probe_codex_login(cli.path.as_deref()).await
+    } else {
+        CodexAuthProbe {
+            state: CodexAuthState::Unknown,
+            method: None,
+        }
+    };
+    let mcp_server_configured = if cli.available {
+        codex_mcp_server_configured(cli.path.as_deref()).await
+    } else {
+        false
+    };
+    let setup_state = CodexSetupState::from_components(
+        cli.available,
+        auth.state,
+        skill_status,
+        mcp_server_configured,
+    );
     Ok(serde_json::json!({
-        "cli_available": codex_cli_path().is_some(),
-        "cli_path": codex_cli_path(),
+        "cli_available": cli.available,
+        "cli_path": cli.path,
+        "cli_version": cli.version,
+        "cli_error": cli.error,
+        "installer_available": npm_path.is_some(),
+        "installer_command": CODEX_CLI_INSTALL_COMMAND,
+        "installer_error": if npm_path.is_some() {
+            None
+        } else {
+            Some("未检测到 npm。请先安装 Node.js，或在系统终端手动安装 Codex CLI。")
+        },
         "config_path": config_path,
         "config_exists": config_path.exists(),
         "auth_path": auth_path,
-        "authenticated": authenticated,
+        "authenticated": auth.state == CodexAuthState::Authenticated,
+        "auth_status": auth.state.as_str(),
+        "auth_method": auth.method,
         "skill_path": skill_path,
         "skill_status": skill_status,
+        "mcp_server_configured": mcp_server_configured,
+        "mcp_server_name": "r-code",
+        "integration_ready": setup_state == CodexSetupState::Ready,
+        "setup_state": setup_state.as_str(),
         "wire_api": "responses",
     }))
 }
 
+fn parse_codex_model_catalog(stdout: &[u8]) -> Result<Vec<CodexModelOption>, String> {
+    const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+    if stdout.len() > MAX_CATALOG_BYTES {
+        return Err("Codex 返回的模型目录过大，已停止读取。".to_string());
+    }
+    let wire: CodexModelCatalogWire =
+        serde_json::from_slice(stdout).map_err(|_| "Codex 模型目录格式无法识别。".to_string())?;
+    let mut models = wire
+        .models
+        .into_iter()
+        .filter(|model| model.visibility.as_deref() == Some("list"))
+        .filter_map(|model| {
+            let slug = model.slug.trim().to_string();
+            if slug.is_empty() {
+                return None;
+            }
+            let mut seen = HashSet::new();
+            let supported_reasoning_efforts = model
+                .supported_reasoning_levels
+                .into_iter()
+                .filter_map(|option| {
+                    let effort = option.effort.trim().to_string();
+                    if effort.is_empty() || !seen.insert(effort.clone()) {
+                        return None;
+                    }
+                    Some(CodexReasoningOption {
+                        effort,
+                        description: option.description.trim().to_string(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Some((
+                model.priority.unwrap_or(u32::MAX),
+                CodexModelOption {
+                    display_name: if model.display_name.trim().is_empty() {
+                        slug.clone()
+                    } else {
+                        model.display_name.trim().to_string()
+                    },
+                    slug,
+                    description: model.description.trim().to_string(),
+                    default_reasoning_effort: model.default_reasoning_level.trim().to_string(),
+                    supported_reasoning_efforts,
+                },
+            ))
+        })
+        .collect::<Vec<_>>();
+    models.sort_by(|(left_priority, left), (right_priority, right)| {
+        left_priority
+            .cmp(right_priority)
+            .then_with(|| left.display_name.cmp(&right.display_name))
+    });
+    let models = models
+        .into_iter()
+        .map(|(_, model)| model)
+        .take(32)
+        .collect::<Vec<_>>();
+    if models.is_empty() {
+        return Err("Codex 当前没有返回可选模型。".to_string());
+    }
+    Ok(models)
+}
+
+async fn require_authenticated_codex_cli() -> Result<CodexCliProbe, String> {
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+    match probe_codex_login(cli.path.as_deref()).await.state {
+        CodexAuthState::Authenticated => Ok(cli),
+        CodexAuthState::NotAuthenticated => {
+            Err("Codex CLI 尚未登录，暂时不能读取运行偏好。".to_string())
+        }
+        CodexAuthState::Unknown => Err("暂时无法确认 Codex 登录状态。".to_string()),
+    }
+}
+
+async fn load_codex_model_catalog(cli_path: &Path) -> Result<Vec<CodexModelOption>, String> {
+    let output =
+        run_codex_cli_at_with_timeout(cli_path, &["debug", "models"], CODEX_CLI_CATALOG_TIMEOUT)
+            .await
+            .map_err(|error| match error {
+                CodexCommandError::Timeout => "读取 Codex 模型目录超时，请稍后重试。".to_string(),
+                CodexCommandError::Launch(_) => "无法启动 Codex CLI 读取模型目录。".to_string(),
+            })?;
+    if !output.status.success() {
+        return Err("Codex 未能读取模型目录，请确认登录状态后重试。".to_string());
+    }
+    parse_codex_model_catalog(&output.stdout)
+}
+
+fn codex_config_string(
+    document: &toml_edit::DocumentMut,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match document.get(key) {
+        None => Ok(None),
+        Some(item) => item
+            .as_str()
+            .map(|value| Some(value.to_string()))
+            .ok_or_else(|| format!("Codex 配置项 `{key}` 不是字符串，无法安全修改。")),
+    }
+}
+
+fn read_codex_preference_values(
+    config_path: &Path,
+) -> Result<(String, Option<String>, Option<String>, Option<String>), String> {
+    let source = match std::fs::read_to_string(config_path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("读取 Codex 配置失败：{error}")),
+    };
+    let document = source
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("Codex config.toml 格式有误：{error}"))?;
+    let model = codex_config_string(&document, "model")?;
+    let reasoning_effort = codex_config_string(&document, "model_reasoning_effort")?;
+    let verbosity = codex_config_string(&document, "model_verbosity")?;
+    Ok((source, model, reasoning_effort, verbosity))
+}
+
+fn codex_preferences_payload(
+    config_path: &Path,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    verbosity: Option<String>,
+    models: Vec<CodexModelOption>,
+) -> CodexCliPreferences {
+    CodexCliPreferences {
+        model,
+        reasoning_effort,
+        verbosity,
+        models,
+        config_path: config_path.to_string_lossy().to_string(),
+    }
+}
+
+pub async fn codex_cli_preferences() -> Result<CodexCliPreferences, String> {
+    let cli = require_authenticated_codex_cli().await?;
+    let cli_path = cli
+        .path
+        .as_deref()
+        .ok_or_else(|| "无法定位 Codex CLI。".to_string())?;
+    let models = load_codex_model_catalog(cli_path).await?;
+    let config_path = codex_home_dir().join("config.toml");
+    let (_, model, reasoning_effort, verbosity) = read_codex_preference_values(&config_path)?;
+    Ok(codex_preferences_payload(
+        &config_path,
+        model,
+        reasoning_effort,
+        verbosity,
+        models,
+    ))
+}
+
+fn normalize_codex_preference(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_codex_preferences(
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    verbosity: Option<&str>,
+    current_model: Option<&str>,
+    models: &[CodexModelOption],
+) -> Result<(), String> {
+    let selected_model = model.and_then(|slug| models.iter().find(|item| item.slug == slug));
+    if let Some(model) = model {
+        if selected_model.is_none() && Some(model) != current_model {
+            return Err("所选模型不在 Codex 当前可用目录中，请刷新后重试。".to_string());
+        }
+    }
+    if let Some(effort) = reasoning_effort {
+        let supported = match selected_model {
+            Some(model) => model
+                .supported_reasoning_efforts
+                .iter()
+                .any(|option| option.effort == effort),
+            None if model.is_none() => models.iter().any(|model| {
+                model
+                    .supported_reasoning_efforts
+                    .iter()
+                    .any(|option| option.effort == effort)
+            }),
+            None => matches!(
+                effort,
+                "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+            ),
+        };
+        if !supported {
+            return Err("当前模型不支持所选推理强度。".to_string());
+        }
+    }
+    if let Some(verbosity) = verbosity {
+        if !matches!(verbosity, "low" | "medium" | "high") {
+            return Err("回复详细度必须是 low、medium 或 high。".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn render_codex_preferences(
+    source: &str,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    verbosity: Option<&str>,
+) -> Result<String, String> {
+    let mut document = source
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("Codex config.toml 格式有误：{error}"))?;
+    for (key, value) in [
+        ("model", model),
+        ("model_reasoning_effort", reasoning_effort),
+        ("model_verbosity", verbosity),
+    ] {
+        if let Some(value) = value {
+            document[key] = toml_edit::value(value);
+        } else {
+            document.remove(key);
+        }
+    }
+    Ok(document.to_string())
+}
+
+pub async fn codex_save_cli_preferences(
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    verbosity: Option<&str>,
+) -> Result<CodexCliPreferences, String> {
+    let _guard = CODEX_PREFERENCES_LOCK.lock().await;
+    let cli = require_authenticated_codex_cli().await?;
+    let cli_path = cli
+        .path
+        .as_deref()
+        .ok_or_else(|| "无法定位 Codex CLI。".to_string())?;
+    let models = load_codex_model_catalog(cli_path).await?;
+    let config_path = codex_home_dir().join("config.toml");
+    let (source, current_model, _, _) = read_codex_preference_values(&config_path)?;
+    let model = normalize_codex_preference(model);
+    let reasoning_effort = normalize_codex_preference(reasoning_effort);
+    let verbosity = normalize_codex_preference(verbosity);
+    validate_codex_preferences(
+        model.as_deref(),
+        reasoning_effort.as_deref(),
+        verbosity.as_deref(),
+        current_model.as_deref(),
+        &models,
+    )?;
+    let rendered = render_codex_preferences(
+        &source,
+        model.as_deref(),
+        reasoning_effort.as_deref(),
+        verbosity.as_deref(),
+    )?;
+    let parent = config_path
+        .parent()
+        .ok_or_else(|| "无法定位 Codex 配置目录。".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|error| format!("创建 Codex 配置目录失败：{error}"))?;
+    std::fs::write(&config_path, rendered)
+        .map_err(|error| format!("保存 Codex 配置失败：{error}"))?;
+    Ok(codex_preferences_payload(
+        &config_path,
+        model,
+        reasoning_effort,
+        verbosity,
+        models,
+    ))
+}
+
+fn npm_install_failure_message(stderr: &[u8]) -> &'static str {
+    let text = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if ["eacces", "eperm", "permission denied", "access is denied"]
+        .iter()
+        .any(|needle| text.contains(needle))
+    {
+        "npm 没有写入全局安装目录的权限。R-Code 不会自动请求管理员权限；请在系统终端按你的 Node.js 安装方式处理权限后重试。"
+    } else if [
+        "enotfound",
+        "econnreset",
+        "etimedout",
+        "network",
+        "unable to get local issuer certificate",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+    {
+        "npm 无法连接软件源。请检查网络、代理或 npm registry 后重试。"
+    } else {
+        "npm 未能安装 Codex CLI。请在系统终端运行 `npm install -g @openai/codex` 查看完整诊断。"
+    }
+}
+
+/// 用户在前端确认后安装官方 Codex CLI npm 包。
+///
+/// 命令形状完全固定，不接收 WebView 参数，不自动提权，也不读取 npm/Codex 凭据。
+/// 安装完成后重新执行真实 CLI 探测，并返回与设置页相同的脱敏状态。
+pub async fn codex_install_cli() -> Result<serde_json::Value, String> {
+    let _guard = CODEX_CLI_INSTALL_LOCK.lock().await;
+    if probe_codex_cli().await.available {
+        return codex_integration_status().await;
+    }
+
+    let npm_path = probe_npm_cli().await.ok_or_else(|| {
+        "未检测到可运行的 npm。请先安装 Node.js，再运行 `npm install -g @openai/codex`。"
+            .to_string()
+    })?;
+    let output = match run_npm_at(
+        &npm_path,
+        CODEX_CLI_INSTALL_ARGS,
+        CODEX_CLI_INSTALL_TIMEOUT,
+    )
+    .await
+    {
+        Ok(output) => output,
+        Err(CodexCommandError::Timeout) => {
+            return Err("安装超过 5 分钟仍未完成，已停止 npm 进程。请检查网络后重试。".to_string())
+        }
+        Err(CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied)) => {
+            return Err("系统拒绝启动 npm。请检查 Node.js 安装与当前用户权限。".to_string())
+        }
+        Err(CodexCommandError::Launch(_)) => {
+            return Err("无法启动 npm。请确认 Node.js 安装完整后重试。".to_string())
+        }
+    };
+    if !output.status.success() {
+        return Err(npm_install_failure_message(&output.stderr).to_string());
+    }
+
+    let installed = probe_codex_cli().await;
+    if !installed.available {
+        return Err(
+            "npm 已完成安装，但 R-Code 仍未找到可运行的 Codex CLI。请重启 R-Code；若仍不可用，请在系统终端运行 `codex --version`。"
+                .to_string(),
+        );
+    }
+    codex_integration_status().await
+}
+
+const CODEX_MCP_CONFIG_TIMEOUT: Duration = Duration::from_secs(12);
+const CODEX_MCP_GET_MAX_BYTES: usize = 64 * 1024;
+const CODEX_MCP_SERVER_NAME: &str = "r-code";
+const CODEX_MCP_HOST_DIR: &str = "mcp-host";
+const CODEX_MCP_HOST_PREFIX: &str = "r-code-mcp-host-";
+
+#[derive(Debug, Deserialize)]
+struct CodexMcpRegistrationWire {
+    name: String,
+    enabled: bool,
+    transport: CodexMcpTransportWire,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexMcpTransportWire {
+    #[serde(rename = "type")]
+    transport_type: String,
+    command: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexMcpRegistration {
+    enabled: bool,
+    command: PathBuf,
+    args: Vec<String>,
+}
+
+impl CodexMcpRegistration {
+    fn data_dir(&self) -> Option<PathBuf> {
+        match self.args.as_slice() {
+            [subcommand, flag, data_dir] if subcommand == "mcp-server" && flag == "--data-dir" => {
+                Some(PathBuf::from(data_dir))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_managed_for(&self, data_dir: &Path) -> bool {
+        let Some(file_name) = self.command.file_name().and_then(|value| value.to_str()) else {
+            return false;
+        };
+        let Some(parent) = self.command.parent() else {
+            return false;
+        };
+        file_name.starts_with(CODEX_MCP_HOST_PREFIX)
+            && paths_equal(parent, &data_dir.join(CODEX_MCP_HOST_DIR))
+    }
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    if cfg!(windows) {
+        left.to_string_lossy()
+            .replace('/', "\\")
+            .eq_ignore_ascii_case(&right.to_string_lossy().replace('/', "\\"))
+    } else {
+        left == right
+    }
+}
+
+fn parse_codex_mcp_registration(stdout: &[u8]) -> Result<CodexMcpRegistration, String> {
+    if stdout.len() > CODEX_MCP_GET_MAX_BYTES {
+        return Err("Codex MCP 配置响应过大，已停止读取。".to_string());
+    }
+    let wire: CodexMcpRegistrationWire =
+        serde_json::from_slice(stdout).map_err(|_| "Codex MCP 配置格式无法识别。".to_string())?;
+    if wire.name != CODEX_MCP_SERVER_NAME || wire.transport.transport_type != "stdio" {
+        return Err("Codex 中的 r-code 条目不是受支持的本地 MCP 配置。".to_string());
+    }
+    let command = wire
+        .transport
+        .command
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "Codex MCP 配置缺少启动命令。".to_string())?;
+    Ok(CodexMcpRegistration {
+        enabled: wire.enabled,
+        command,
+        args: wire.transport.args,
+    })
+}
+
+async fn codex_mcp_registration(cli_path: &Path) -> Result<Option<CodexMcpRegistration>, String> {
+    let output = run_codex_cli_at_with_timeout(
+        cli_path,
+        &["mcp", "get", CODEX_MCP_SERVER_NAME, "--json"],
+        CODEX_MCP_CONFIG_TIMEOUT,
+    )
+    .await
+    .map_err(|error| match error {
+        CodexCommandError::Timeout => "读取 Codex MCP 配置超时。".to_string(),
+        CodexCommandError::Launch(_) => "无法启动 Codex CLI 读取 MCP 配置。".to_string(),
+    })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    parse_codex_mcp_registration(&output.stdout).map(Some)
+}
+
+fn file_fingerprint(path: &Path) -> Result<String, String> {
+    let mut file =
+        std::fs::File::open(path).map_err(|error| format!("读取 R-Code MCP 主机失败：{error}"))?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("读取 R-Code MCP 主机失败：{error}"))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
+fn managed_codex_mcp_file_name(source: &Path, fingerprint: &str) -> String {
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    format!("{CODEX_MCP_HOST_PREFIX}{fingerprint}{extension}")
+}
+
+fn deploy_codex_mcp_host(source: &Path, data_dir: &Path) -> Result<PathBuf, String> {
+    let fingerprint = file_fingerprint(source)?;
+    let host_dir = data_dir.join(CODEX_MCP_HOST_DIR);
+    std::fs::create_dir_all(&host_dir)
+        .map_err(|error| format!("创建 R-Code MCP 主机目录失败：{error}"))?;
+    let target = host_dir.join(managed_codex_mcp_file_name(source, &fingerprint));
+    if target.is_file() {
+        if file_fingerprint(&target)? == fingerprint {
+            return Ok(target);
+        }
+        return Err("R-Code MCP 主机副本校验失败，请删除损坏的副本后重试。".to_string());
+    }
+
+    let temporary = host_dir.join(format!(
+        ".{}-{}.tmp",
+        target
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("r-code-mcp-host"),
+        std::process::id()
+    ));
+    std::fs::copy(source, &temporary)
+        .map_err(|error| format!("部署 R-Code MCP 主机失败：{error}"))?;
+    if let Err(error) = std::fs::rename(&temporary, &target) {
+        let _ = std::fs::remove_file(&temporary);
+        if target.is_file() && file_fingerprint(&target)? == fingerprint {
+            return Ok(target);
+        }
+        return Err(format!("启用 R-Code MCP 主机失败：{error}"));
+    }
+    Ok(target)
+}
+
+fn registration_uses_current_host(
+    registration: &CodexMcpRegistration,
+    current_executable: &Path,
+) -> bool {
+    let Some(data_dir) = registration.data_dir() else {
+        return false;
+    };
+    if !registration.enabled
+        || !registration.is_managed_for(&data_dir)
+        || !registration.command.is_file()
+    {
+        return false;
+    }
+    let Ok(fingerprint) = file_fingerprint(current_executable) else {
+        return false;
+    };
+    let expected = managed_codex_mcp_file_name(current_executable, &fingerprint);
+    if registration
+        .command
+        .file_name()
+        .and_then(|value| value.to_str())
+        == Some(expected.as_str())
+    {
+        return true;
+    }
+    file_fingerprint(&registration.command).is_ok_and(|configured| configured == fingerprint)
+}
+
+fn registration_is_owned_by_r_code(
+    registration: &CodexMcpRegistration,
+    current_executable: &Path,
+    data_dir: &Path,
+) -> bool {
+    registration
+        .data_dir()
+        .is_some_and(|configured| paths_equal(&configured, data_dir))
+        && (registration.is_managed_for(data_dir)
+            || paths_equal(&registration.command, current_executable)
+            || registration
+                .command
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.eq_ignore_ascii_case("r-code-host")))
+}
+
+fn cleanup_old_codex_mcp_hosts(data_dir: &Path, current: &Path) {
+    let host_dir = data_dir.join(CODEX_MCP_HOST_DIR);
+    let Ok(entries) = std::fs::read_dir(host_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let managed = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| value.starts_with(CODEX_MCP_HOST_PREFIX));
+        if managed && !paths_equal(&path, current) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// 只有内容与当前 R-Code 构建一致、且位于应用数据目录中的独立副本才算就绪。
+/// 旧版直接指向 `target/debug/r-code-host.exe` 的配置会被判定为待迁移，避免 Codex
+/// 长驻进程锁住 Cargo 下一次需要覆盖的热编译产物。
+async fn codex_mcp_server_configured(cli_path: Option<&Path>) -> bool {
+    let Some(cli_path) = cli_path else {
+        return false;
+    };
+    let Ok(Some(registration)) = codex_mcp_registration(cli_path).await else {
+        return false;
+    };
+    let Ok(current_executable) = std::env::current_exe() else {
+        return false;
+    };
+    registration_uses_current_host(&registration, &current_executable)
+}
+
+/// 在用户从设置页明确点击后，将本机 R-Code MCP server 加入 Codex 配置。
+///
+/// 这是一个可见、可逆的外部配置写入：它只写入 `r-code` MCP 条目，不会读取/复制
+/// Codex 凭据，也不会替换用户其它 MCP server。Codex 运行应用数据目录中的内容寻址
+/// 副本，不直接运行 Cargo / 安装器需要覆盖的主程序，因此长驻连接不会阻塞重编译或更新。
+pub async fn codex_install_mcp_server(state: &CommandState) -> Result<(), String> {
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+    let current_executable = std::env::current_exe()
+        .map_err(|_| "无法定位当前 R-Code 可执行文件，无法配置 MCP 服务。".to_string())?;
+    let data_dir = state
+        .config_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "无法定位 R-Code 应用数据目录，无法配置 MCP 服务。".to_string())?;
+    let cli_path = cli
+        .path
+        .ok_or_else(|| "无法定位 Codex CLI，无法配置 MCP 服务。".to_string())?;
+    let executable = deploy_codex_mcp_host(&current_executable, &data_dir)?;
+    if let Some(existing) = codex_mcp_registration(&cli_path).await? {
+        if registration_uses_current_host(&existing, &current_executable) {
+            return Ok(());
+        }
+        if !registration_is_owned_by_r_code(&existing, &current_executable, &data_dir) {
+            return Err(
+                "Codex 中已存在一个不是由当前 R-Code 管理的 r-code MCP 条目；为避免覆盖，请先手动检查该配置。"
+                    .to_string(),
+            );
+        }
+        let removed = run_codex_mcp_remove(&cli_path).await?;
+        if !removed.status.success() {
+            return Err("Codex 未能移除旧的 R-Code MCP 配置，请稍后重试。".to_string());
+        }
+    }
+    let output = run_codex_mcp_add(Some(cli_path.clone()), &executable, &data_dir).await?;
+    if !output.status.success() {
+        return Err(
+            "Codex 未能写入 R-Code MCP 配置。请在系统终端运行 `codex mcp add` 后重试。".to_string(),
+        );
+    }
+    let refreshed = codex_mcp_registration(&cli_path).await?;
+    if !refreshed.as_ref().is_some_and(|registration| {
+        registration_uses_current_host(registration, &current_executable)
+    }) {
+        return Err("Codex 已写入配置，但校验未通过；请重新配置 MCP。".to_string());
+    }
+    cleanup_old_codex_mcp_hosts(&data_dir, &executable);
+    Ok(())
+}
+
+async fn run_codex_mcp_remove(cli_path: &Path) -> Result<std::process::Output, String> {
+    run_codex_cli_at_with_timeout(
+        cli_path,
+        &["mcp", "remove", CODEX_MCP_SERVER_NAME],
+        CODEX_MCP_CONFIG_TIMEOUT,
+    )
+    .await
+    .map_err(|error| match error {
+        CodexCommandError::Timeout => "移除旧的 Codex MCP 配置超时。".to_string(),
+        CodexCommandError::Launch(_) => "无法启动 Codex CLI 更新 MCP 配置。".to_string(),
+    })
+}
+
+/// 运行固定形状的 `codex mcp add`。动态路径仅来自本进程的 `current_exe` 和已创建的
+/// 应用数据目录；Windows .cmd shim 需要 cmd 解析时，会先拒绝 cmd 元字符，避免把路径
+/// 变成 shell 语法。
+async fn run_codex_mcp_add(
+    cli_path: Option<PathBuf>,
+    executable: &Path,
+    data_dir: &Path,
+) -> Result<std::process::Output, String> {
+    #[cfg(windows)]
+    let mut command = match cli_path {
+        Some(path)
+            if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) =>
+        {
+            let mut command = TokioCommand::new(path);
+            command
+                .args(["mcp", "add", "r-code", "--"])
+                .arg(executable)
+                .args(["mcp-server", "--data-dir"])
+                .arg(data_dir);
+            command
+        }
+        path => {
+            let cli = path.unwrap_or_else(|| PathBuf::from("codex"));
+            windows_cmd_safe_path(&cli)?;
+            windows_cmd_safe_path(executable)?;
+            windows_cmd_safe_path(data_dir)?;
+            let mut command = TokioCommand::new("cmd.exe");
+            command
+                .args(["/D", "/S", "/C", "call"])
+                .arg(cli)
+                .args(["mcp", "add", "r-code", "--"])
+                .arg(executable)
+                .args(["mcp-server", "--data-dir"])
+                .arg(data_dir);
+            command
+        }
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = TokioCommand::new(cli_path.unwrap_or_else(|| PathBuf::from("codex")));
+        command
+            .args(["mcp", "add", "r-code", "--"])
+            .arg(executable)
+            .args(["mcp-server", "--data-dir"])
+            .arg(data_dir);
+        command
+    };
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    match timeout(CODEX_MCP_CONFIG_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(_)) => Err("无法启动 Codex MCP 配置命令。".to_string()),
+        Err(_) => Err("Codex MCP 配置命令超时。".to_string()),
+    }
+}
+
+#[cfg(windows)]
+fn windows_cmd_safe_path(path: &Path) -> Result<String, String> {
+    let text = path
+        .to_str()
+        .ok_or_else(|| "命令路径不是有效的 Unicode 文本。".to_string())?;
+    if text.chars().any(|character| {
+        matches!(
+            character,
+            '\0' | '\r' | '\n' | '"' | '&' | '|' | '<' | '>' | '^' | '%' | '!'
+        )
+    }) {
+        return Err("命令路径包含 cmd 不支持的字符；请改用不含特殊字符的安装目录。".to_string());
+    }
+    Ok(format!("\"{text}\""))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CodexLoginMode {
+    Browser,
+    DeviceCode,
+}
+
+impl CodexLoginMode {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Browser => &["login"],
+            Self::DeviceCode => &["login", "--device-auth"],
+        }
+    }
+}
+
 /// 在用户可见的系统终端中启动 Codex 登录。它不接收任何来自 WebView 的命令文本，
 /// 也不读取登录输出或 auth.json；OAuth 交互完全由 Codex CLI 处理。
-pub async fn codex_start_login() -> Result<(), String> {
-    if codex_cli_path().is_none() {
-        return Err("未检测到 Codex CLI。请先安装或打开 Codex Desktop 后重试".to_string());
+async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String> {
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
     }
 
     #[cfg(windows)]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", "cmd", "/K", "codex login"])
+        let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
+        windows_cmd_safe_path(&executable)?;
+        // `start` 显式创建可见窗口，避免 Tauri 的 GUI 子进程吞掉交互式登录提示。
+        let mut command = Command::new("cmd.exe");
+        command.args([
+            "/D", "/C", "start", "", "cmd.exe", "/D", "/K", "call",
+        ])
+            .arg(executable)
+            .args(mode.args());
+        command
             .spawn()
-            .map_err(|error| format!("无法启动 Codex 登录终端：{error}"))?;
+            .map_err(|_| "无法启动 Codex 登录终端。请在系统终端运行 `codex login`。".to_string())?;
     }
     #[cfg(not(windows))]
     {
-        Command::new("codex")
-            .arg("login")
+        let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
+        let mut command = Command::new(executable);
+        command.args(mode.args());
+        command
             .spawn()
-            .map_err(|error| format!("无法启动 Codex 登录：{error}"))?;
+            .map_err(|_| "无法启动 Codex 登录。请在系统终端运行 `codex login`。".to_string())?;
     }
     Ok(())
+}
+
+pub async fn codex_start_login() -> Result<(), String> {
+    codex_start_login_with_mode(CodexLoginMode::Browser).await
+}
+
+/// 适合远程桌面、无浏览器回调或 localhost callback 被拦截的设备码登录。
+pub async fn codex_start_device_login() -> Result<(), String> {
+    codex_start_login_with_mode(CodexLoginMode::DeviceCode).await
+}
+
+const CODEX_EXEC_MAX_GOAL_CHARS: usize = 12_000;
+const CODEX_EXEC_MAX_SUMMARY_CHARS: usize = 8_000;
+const CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS: usize = 320;
+const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const CODEX_EXEC_HARD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+#[derive(Debug, Clone, Copy)]
+struct CodexExecLimits {
+    idle_timeout: Duration,
+    hard_timeout: Duration,
+}
+
+impl Default for CodexExecLimits {
+    fn default() -> Self {
+        Self {
+            idle_timeout: CODEX_EXEC_IDLE_TIMEOUT,
+            hard_timeout: CODEX_EXEC_HARD_TIMEOUT,
+        }
+    }
+}
+
+/// Codex `--json` 输出里可安全进入 R-Code 状态机的事件。
+///
+/// reasoning 只映射为阶段，不保留正文；命令/MCP 只保留经脱敏、截断后的动作标签，
+/// 原始输出永不进入 UI 或持久化存储。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexExecJsonEvent {
+    ThreadStarted(String),
+    Activity {
+        phase: AgentActivityPhase,
+        detail: String,
+    },
+    ToolStarted {
+        call_id: String,
+        name: String,
+        summary: String,
+    },
+    ToolCompleted {
+        call_id: String,
+        is_error: bool,
+    },
+    AssistantMessage(String),
+    Usage(String),
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexExecFailure {
+    Launch,
+    Input,
+    Stream,
+    Reported,
+    IdleTimeout,
+    Deadline,
+    ExitStatus,
+}
+
+#[derive(Debug, Default)]
+struct CodexExecCompletion {
+    cancelled: bool,
+    succeeded: bool,
+    summary: Option<String>,
+    usage_json: Option<String>,
+    failure: Option<CodexExecFailure>,
+}
+
+/// Codex CLI backend exposed to the native R-Code agent's `delegate_task` tool.
+///
+/// Tool orchestration and lifecycle events stay in `r-code-agent-worker`; this adapter only owns
+/// official CLI discovery, authentication gating and the read-only child process.
+struct RCodeCodexSubagentRunner;
+
+#[async_trait::async_trait]
+impl CodexSubagentRunner for RCodeCodexSubagentRunner {
+    async fn run_readonly(
+        &self,
+        workspace: PathBuf,
+        goal: String,
+        abort: Arc<AtomicBool>,
+        event_sink: CodexSubagentEventSink,
+    ) -> Result<CodexSubagentOutcome, ProductError> {
+        let goal = bounded_text(&goal, CODEX_EXEC_MAX_GOAL_CHARS);
+        if goal.is_empty() || goal.contains('\0') {
+            return Err(ProductError::Other(
+                "Codex 子代理需要一项有效的委派任务".to_string(),
+            ));
+        }
+        let workspace = PathGuard::new(workspace)?.root().to_path_buf();
+        let cli = probe_codex_cli().await;
+        if !cli.available {
+            return Err(ProductError::Other(
+                cli.error
+                    .unwrap_or("未检测到可运行的 Codex CLI。请先在设置中完成安装。")
+                    .to_string(),
+            ));
+        }
+        match probe_codex_login(cli.path.as_deref()).await.state {
+            CodexAuthState::Authenticated => {}
+            CodexAuthState::NotAuthenticated => {
+                return Err(ProductError::Other(
+                    "Codex CLI 尚未登录。请先在设置中完成浏览器登录或设备码登录。".to_string(),
+                ))
+            }
+            CodexAuthState::Unknown => {
+                return Err(ProductError::Other(
+                    "暂时无法确认 Codex CLI 登录状态，请在设置中刷新状态后重试。".to_string(),
+                ))
+            }
+        }
+
+        let cancellation = CancellationToken::new();
+        let cancellation_monitor = {
+            let cancellation = cancellation.clone();
+            tokio::spawn(async move {
+                while !abort.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                cancellation.cancel();
+            })
+        };
+        let completion = run_codex_exec_process_with_options(
+            &workspace,
+            &build_codex_delegation_prompt(&goal),
+            cli.path,
+            cancellation,
+            None,
+            Some(&event_sink),
+            CodexExecLimits::default(),
+        )
+        .await;
+        cancellation_monitor.abort();
+
+        if completion.cancelled {
+            return Ok(CodexSubagentOutcome::Cancelled);
+        }
+        if !completion.succeeded {
+            return Err(ProductError::Other(codex_exec_failure_message(
+                completion.failure,
+            )));
+        }
+        Ok(CodexSubagentOutcome::Completed(
+            completion
+                .summary
+                .unwrap_or_else(|| "Codex CLI 已完成，但没有返回可显示的摘要。".to_string()),
+        ))
+    }
+}
+
+fn bounded_text(value: &str, max_chars: usize) -> String {
+    let mut chars = value.trim().chars();
+    let mut bounded: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn sanitize_codex_usage(usage: &serde_json::Value) -> Option<String> {
+    let source = usage.as_object()?;
+    let mut safe = serde_json::Map::new();
+    for key in [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ] {
+        if let Some(value) = source.get(key).and_then(serde_json::Value::as_u64) {
+            safe.insert(key.to_string(), serde_json::Value::from(value));
+        }
+    }
+    (!safe.is_empty()).then(|| serde_json::Value::Object(safe).to_string())
+}
+
+fn safe_codex_action(value: &str, fallback: &str) -> String {
+    let redacted = redact_text(value);
+    let normalized = redacted.split_whitespace().collect::<Vec<_>>().join(" ");
+    let bounded = bounded_text(&normalized, 180);
+    if bounded.is_empty() {
+        fallback.to_string()
+    } else {
+        bounded
+    }
+}
+
+fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)> {
+    let item_type = item.get("type")?.as_str()?;
+    let call_id = item
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| bounded_text(value, 160))?;
+    let (name, summary) = match item_type {
+        "command_execution" => {
+            let command = item
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("读取工作区");
+            ("Codex 命令", safe_codex_action(command, "读取工作区"))
+        }
+        "mcp_tool_call" => {
+            let server = item
+                .get("server")
+                .or_else(|| item.get("server_name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("MCP");
+            let tool = item
+                .get("tool")
+                .or_else(|| item.get("tool_name"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("工具");
+            (
+                "Codex MCP",
+                safe_codex_action(&format!("{server} · {tool}"), "MCP 工具"),
+            )
+        }
+        "web_search" => {
+            let query = item
+                .get("query")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("搜索资料");
+            ("Codex 搜索", safe_codex_action(query, "搜索资料"))
+        }
+        _ => return None,
+    };
+    Some((call_id, name.to_string(), summary))
+}
+
+fn parse_codex_exec_json_line(line: &str) -> Option<CodexExecJsonEvent> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    match value.get("type")?.as_str()? {
+        "thread.started" => value
+            .get("thread_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| CodexExecJsonEvent::ThreadStarted(bounded_text(id, 160))),
+        "turn.started" => Some(CodexExecJsonEvent::Activity {
+            phase: AgentActivityPhase::Requesting,
+            detail: "Codex CLI 正在分析任务".to_string(),
+        }),
+        "item.started" => {
+            let item = value.get("item")?;
+            if item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning") {
+                return Some(CodexExecJsonEvent::Activity {
+                    phase: AgentActivityPhase::Requesting,
+                    detail: "Codex CLI 正在分析工作区".to_string(),
+                });
+            }
+            codex_item_tool(item).map(|(call_id, name, summary)| {
+                CodexExecJsonEvent::ToolStarted {
+                    call_id,
+                    name,
+                    summary,
+                }
+            })
+        }
+        "item.completed" => {
+            let item = value.get("item")?;
+            match item.get("type")?.as_str()? {
+                "agent_message" => item
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|text| {
+                        CodexExecJsonEvent::AssistantMessage(bounded_text(
+                            text,
+                            CODEX_EXEC_MAX_SUMMARY_CHARS,
+                        ))
+                    })
+                    .filter(|event| {
+                        !matches!(event, CodexExecJsonEvent::AssistantMessage(text) if text.is_empty())
+                    }),
+                "reasoning" => Some(CodexExecJsonEvent::Activity {
+                    phase: AgentActivityPhase::Finalizing,
+                    detail: "Codex CLI 已完成一轮分析".to_string(),
+                }),
+                _ => codex_item_tool(item).map(|(call_id, _, _)| {
+                    let is_error = item
+                        .get("status")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|status| {
+                            matches!(status, "failed" | "error" | "cancelled")
+                        });
+                    CodexExecJsonEvent::ToolCompleted { call_id, is_error }
+                }),
+            }
+        }
+        "turn.completed" => value
+            .get("usage")
+            .and_then(sanitize_codex_usage)
+            .map(CodexExecJsonEvent::Usage),
+        "turn.failed" | "error" => Some(CodexExecJsonEvent::Failed),
+        _ => None,
+    }
+}
+
+fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
+    match failure {
+        Some(CodexExecFailure::IdleTimeout) => {
+            "Codex CLI 连续 5 分钟没有返回任何进度，R-Code 已自动停止该子代理。请缩小任务范围后重试。"
+                .to_string()
+        }
+        Some(CodexExecFailure::Deadline) => {
+            "Codex CLI 已达到 30 分钟运行上限，R-Code 已自动停止该子代理。请拆分任务后重试。"
+                .to_string()
+        }
+        Some(CodexExecFailure::Launch) => {
+            "Codex CLI 子代理未能启动。请在设置中刷新安装与登录状态后重试。".to_string()
+        }
+        Some(CodexExecFailure::Input) => {
+            "R-Code 无法把委派任务发送给 Codex CLI，请重试。".to_string()
+        }
+        Some(CodexExecFailure::Stream) => {
+            "Codex CLI 的进度通道意外中断，请重试。".to_string()
+        }
+        Some(CodexExecFailure::Reported | CodexExecFailure::ExitStatus) | None => {
+            "Codex CLI 子代理未能完成。请在设置中刷新 Codex 状态后重试。".to_string()
+        }
+    }
+}
+
+fn build_codex_delegation_prompt(goal: &str) -> String {
+    format!(
+        "You are a read-only delegated subagent inside R-Code. Work only within the current repository. \
+Do not edit files, do not create commits, do not change configuration, and do not start more agents. \
+Investigate the assignment and return a concise factual summary for the parent agent. Do not expose private chain-of-thought.\n\nAssignment:\n{goal}"
+    )
+}
+
+fn external_agent_scope(run: &AgentRun) -> AgentEventScope {
+    AgentEventScope {
+        run_id: run.id.clone(),
+        agent_id: run.id.clone(),
+        parent_run_id: run.parent_run_id.clone(),
+        agent_kind: run.agent_kind,
+        agent_label: run.agent_label.clone(),
+        delegated_by_tool_call_id: run.delegated_by_tool_call_id.clone(),
+        runtime_kind: run.runtime_kind,
+        model: Some(run.model.clone()),
+    }
+}
+
+fn scoped_external_event(run: &AgentRun, event: AgentEvent) -> AgentEvent {
+    AgentEvent::Scoped {
+        scope: external_agent_scope(run),
+        event: Box::new(event),
+    }
+}
+
+struct CodexExecObserver<'a> {
+    db: &'a Database,
+    session_store: &'a SessionStore,
+    sessions_dir: &'a Path,
+    parent_storage_id: &'a str,
+    run: &'a AgentRun,
+    sink: &'a Option<AgentEventSink>,
+}
+
+async fn persist_and_emit_external_event(
+    db: &Database,
+    session_store: &SessionStore,
+    sessions_dir: &Path,
+    parent_storage_id: &str,
+    run: &AgentRun,
+    event: AgentEvent,
+    sink: &Option<AgentEventSink>,
+) {
+    let mut pending_text = HashMap::new();
+    let parent_run_id = run.parent_run_id.as_deref().unwrap_or(&run.id);
+    persist_runtime_event(
+        db,
+        session_store,
+        sessions_dir,
+        &run.task_id,
+        &run.branch_id,
+        parent_run_id,
+        parent_storage_id,
+        &event,
+        &mut pending_text,
+    )
+    .await;
+    if let Some(sink) = sink {
+        sink(&run.task_id, &event);
+    }
+}
+
+/// 构造 Codex 非交互进程。任务文本统一走 stdin（`codex exec -`），绝不进入 shell
+/// 命令串；Windows 因而可以安全支持 npm 的 `.cmd` shim，同时绕开同名 Store 别名。
+fn codex_exec_command(cli_path: Option<PathBuf>, workspace: &Path) -> Result<TokioCommand, String> {
+    #[cfg(windows)]
+    let mut command = match cli_path {
+        Some(path)
+            if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) =>
+        {
+            let mut command = TokioCommand::new(path);
+            command.args(["exec", "--json", "--sandbox", "read-only", "-"]);
+            command
+        }
+        path => {
+            let executable = path.unwrap_or_else(|| PathBuf::from("codex"));
+            windows_cmd_safe_path(&executable)?;
+            let mut command = TokioCommand::new("cmd.exe");
+            command
+                .args(["/D", "/S", "/C", "call"])
+                .arg(executable)
+                .args(["exec", "--json", "--sandbox", "read-only", "-"]);
+            command
+        }
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = TokioCommand::new(cli_path.unwrap_or_else(|| PathBuf::from("codex")));
+        command.args(["exec", "--json", "--sandbox", "read-only", "-"]);
+        command
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Codex 本身可能继续派生 shell、Node 或工具进程。让 wrapper 成为独立进程组
+        // 的组长，取消与超时时即可只回收这一棵子树，不影响 R-Code 或其他任务。
+        command.as_std_mut().process_group(0);
+    }
+    command
+        .current_dir(workspace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    Ok(command)
+}
+
+async fn emit_codex_observable_event(
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    event: AgentEvent,
+) {
+    if let Some(event_sink) = event_sink {
+        event_sink(event.clone());
+    }
+    if let Some(observer) = observer {
+        persist_and_emit_external_event(
+            observer.db,
+            observer.session_store,
+            observer.sessions_dir,
+            observer.parent_storage_id,
+            observer.run,
+            scoped_external_event(observer.run, event),
+            observer.sink,
+        )
+        .await;
+    }
+}
+
+/// 终止 Codex 的整棵进程树。
+///
+/// Windows 通过 `taskkill /T` 回收 `.cmd` wrapper 与 Node 后代；Unix/macOS 在启动时
+/// 已为 Codex 建立独立进程组，这里向该组发送 SIGKILL。最后再杀直接子进程作为兜底。
+async fn terminate_codex_child(child: &mut tokio::process::Child) {
+    #[cfg(windows)]
+    if let Some(pid) = child.id() {
+        let pid = pid.to_string();
+        let mut terminate_tree = TokioCommand::new("taskkill");
+        terminate_tree
+            .args(["/PID", pid.as_str(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let _ = timeout(Duration::from_secs(5), terminate_tree.status()).await;
+    }
+    #[cfg(unix)]
+    if let Some(process_group) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+        // SAFETY: process_group 来自刚由本进程启动、且通过 process_group(0) 隔离的
+        // Codex 子进程。负 PID 只命中这一进程组；返回值仅用于 best-effort 清理。
+        let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    }
+    let _ = child.kill().await;
+}
+
+async fn run_codex_exec_process(
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+) -> CodexExecCompletion {
+    run_codex_exec_process_with_options(
+        workspace,
+        prompt,
+        cli_path,
+        cancellation,
+        observer,
+        None,
+        CodexExecLimits::default(),
+    )
+    .await
+}
+
+async fn run_codex_exec_process_with_options(
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    limits: CodexExecLimits,
+) -> CodexExecCompletion {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    if cancellation.is_cancelled() {
+        return CodexExecCompletion {
+            cancelled: true,
+            ..Default::default()
+        };
+    }
+
+    let mut child = match codex_exec_command(cli_path, workspace)
+        .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let run_id = observer
+                .as_ref()
+                .map(|value| value.run.id.as_str())
+                .unwrap_or("agent-tool");
+            tracing::warn!(run_id, error = %error, "failed to launch Codex exec child");
+            return CodexExecCompletion {
+                failure: Some(CodexExecFailure::Launch),
+                ..Default::default()
+            };
+        }
+    };
+    emit_codex_observable_event(
+        observer.as_ref(),
+        event_sink,
+        AgentEvent::Activity {
+            phase: AgentActivityPhase::Requesting,
+            detail: Some("Codex CLI 进程已启动".to_string()),
+        },
+    )
+    .await;
+
+    let Some(mut stdin) = child.stdin.take() else {
+        terminate_codex_child(&mut child).await;
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::Input),
+            ..Default::default()
+        };
+    };
+    if stdin.write_all(prompt.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+        terminate_codex_child(&mut child).await;
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::Input),
+            ..Default::default()
+        };
+    }
+    let Some(stdout) = child.stdout.take() else {
+        terminate_codex_child(&mut child).await;
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::Stream),
+            ..Default::default()
+        };
+    };
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            // Codex 的补充诊断会写入 stderr。持续排空防止管道回压，但绝不把原始输出
+            // 写入日志、数据库或 WebView（它可能含本地路径或敏感上下文）。
+            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        })
+    });
+
+    let mut lines = BufReader::new(stdout).lines();
+    let mut cancelled = false;
+    let mut failure = None;
+    let mut summary = None;
+    let mut usage_json = None;
+    let idle_timer = tokio::time::sleep(limits.idle_timeout);
+    let deadline_timer = tokio::time::sleep(limits.hard_timeout);
+    tokio::pin!(idle_timer);
+    tokio::pin!(deadline_timer);
+
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                cancelled = true;
+                terminate_codex_child(&mut child).await;
+                break;
+            }
+            _ = &mut idle_timer => {
+                failure = Some(CodexExecFailure::IdleTimeout);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("连续 5 分钟没有进度，正在自动停止 Codex CLI".to_string()),
+                    },
+                ).await;
+                terminate_codex_child(&mut child).await;
+                break;
+            }
+            _ = &mut deadline_timer => {
+                failure = Some(CodexExecFailure::Deadline);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("已达到 30 分钟运行上限，正在自动停止 Codex CLI".to_string()),
+                    },
+                ).await;
+                terminate_codex_child(&mut child).await;
+                break;
+            }
+            next = lines.next_line() => match next {
+                Ok(Some(line)) => {
+                    // 任何 JSONL 行都证明进程仍在推进；即便该事件因隐私策略未映射，也重置空闲计时。
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+                    if let Some(event) = parse_codex_exec_json_line(&line) {
+                        match event {
+                            CodexExecJsonEvent::ThreadStarted(thread_id) => {
+                                if let Some(observer) = observer.as_ref() {
+                                    let _ = AgentRunRepository::new(observer.db)
+                                        .set_external_session_id(&observer.run.id, Some(&thread_id));
+                                }
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::Activity {
+                                        phase: AgentActivityPhase::Requesting,
+                                        detail: Some("已连接 Codex CLI，正在准备工作区".to_string()),
+                                    },
+                                ).await;
+                            }
+                            CodexExecJsonEvent::Activity { phase, detail } => {
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::Activity { phase, detail: Some(detail) },
+                                ).await;
+                            }
+                            CodexExecJsonEvent::ToolStarted { call_id, name, summary: action } => {
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::ToolCall {
+                                        name,
+                                        input: serde_json::json!({ "summary": action }),
+                                        call_id,
+                                    },
+                                ).await;
+                            }
+                            CodexExecJsonEvent::ToolCompleted { call_id, is_error } => {
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::ToolResult {
+                                        call_id,
+                                        output: serde_json::json!({
+                                            "status": if is_error { "failed" } else { "completed" }
+                                        }),
+                                        is_error,
+                                    },
+                                ).await;
+                            }
+                            CodexExecJsonEvent::AssistantMessage(text) => {
+                                summary = Some(text.clone());
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::Message { text, delta: false },
+                                ).await;
+                            }
+                            CodexExecJsonEvent::Usage(value) => {
+                                usage_json = Some(value.clone());
+                                if let Some(observer) = observer.as_ref() {
+                                    let _ = AgentRunRepository::new(observer.db)
+                                        .set_usage(&observer.run.id, &value);
+                                }
+                            }
+                            CodexExecJsonEvent::Failed => {
+                                failure = Some(CodexExecFailure::Reported);
+                                emit_codex_observable_event(
+                                    observer.as_ref(),
+                                    event_sink,
+                                    AgentEvent::Activity {
+                                        phase: AgentActivityPhase::Finalizing,
+                                        detail: Some("Codex CLI 报告执行失败".to_string()),
+                                    },
+                                ).await;
+                            }
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let run_id = observer
+                        .as_ref()
+                        .map(|value| value.run.id.as_str())
+                        .unwrap_or("agent-tool");
+                    tracing::warn!(run_id, kind = ?error.kind(), "Codex exec JSONL stream failed");
+                    failure = Some(CodexExecFailure::Stream);
+                    terminate_codex_child(&mut child).await;
+                    break;
+                }
+            }
+        }
+    }
+
+    let child_was_terminated = cancelled
+        || matches!(
+            failure,
+            Some(
+                CodexExecFailure::Stream
+                    | CodexExecFailure::IdleTimeout
+                    | CodexExecFailure::Deadline
+            )
+        );
+    let status = if child_was_terminated {
+        child.wait().await
+    } else {
+        tokio::select! {
+            status = child.wait() => status,
+            _ = cancellation.cancelled() => {
+                cancelled = true;
+                terminate_codex_child(&mut child).await;
+                child.wait().await
+            }
+            _ = &mut idle_timer => {
+                failure = Some(CodexExecFailure::IdleTimeout);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("连续 5 分钟没有进度，正在自动停止 Codex CLI".to_string()),
+                    },
+                ).await;
+                terminate_codex_child(&mut child).await;
+                child.wait().await
+            }
+            _ = &mut deadline_timer => {
+                failure = Some(CodexExecFailure::Deadline);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("已达到 30 分钟运行上限，正在自动停止 Codex CLI".to_string()),
+                    },
+                ).await;
+                terminate_codex_child(&mut child).await;
+                child.wait().await
+            }
+        }
+    };
+    if let Some(stderr_task) = stderr_task {
+        let _ = timeout(Duration::from_secs(2), stderr_task).await;
+    }
+    if !cancelled && failure.is_none() && !status.as_ref().is_ok_and(|value| value.success()) {
+        failure = Some(CodexExecFailure::ExitStatus);
+    }
+
+    CodexExecCompletion {
+        cancelled,
+        succeeded: !cancelled && failure.is_none(),
+        summary,
+        usage_json,
+        failure,
+    }
+}
+
+async fn run_codex_exec_subagent(
+    db: &Database,
+    session_store: &SessionStore,
+    sessions_dir: &Path,
+    parent_storage_id: &str,
+    run: &AgentRun,
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    sink: &Option<AgentEventSink>,
+) -> CodexExecCompletion {
+    run_codex_exec_process(
+        workspace,
+        prompt,
+        cli_path,
+        cancellation,
+        Some(CodexExecObserver {
+            db,
+            session_store,
+            sessions_dir,
+            parent_storage_id,
+            run,
+            sink,
+        }),
+    )
+    .await
+}
+
+fn spawn_codex_exec_subagent(
+    external_agents: Arc<ExternalAgentRegistry>,
+    db: Arc<Database>,
+    sessions_dir: PathBuf,
+    parent_storage_id: String,
+    run: AgentRun,
+    workspace: PathBuf,
+    prompt: String,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    sink: Option<AgentEventSink>,
+) {
+    tokio::spawn(async move {
+        let session_store = SessionStore::new(sessions_dir.clone());
+        persist_and_emit_external_event(
+            &db,
+            &session_store,
+            &sessions_dir,
+            &parent_storage_id,
+            &run,
+            scoped_external_event(
+                &run,
+                AgentEvent::SubagentLifecycle {
+                    state: SubagentState::Running,
+                    detail: Some("Codex CLI 正在以只读模式检查工作区".to_string()),
+                },
+            ),
+            &sink,
+        )
+        .await;
+
+        let completion = run_codex_exec_subagent(
+            &db,
+            &session_store,
+            &sessions_dir,
+            &parent_storage_id,
+            &run,
+            &workspace,
+            &prompt,
+            cli_path,
+            cancellation,
+            &sink,
+        )
+        .await;
+
+        let (state, review_state, summary) = if completion.cancelled {
+            (
+                SubagentState::Cancelled,
+                ReviewState::Aborted,
+                "Codex CLI 子代理已取消。".to_string(),
+            )
+        } else if completion.succeeded {
+            (
+                SubagentState::Completed,
+                ReviewState::Answered,
+                completion.summary.unwrap_or_else(|| {
+                    "Codex CLI 子代理已完成，但没有返回可显示的摘要。".to_string()
+                }),
+            )
+        } else {
+            (
+                SubagentState::Failed,
+                ReviewState::Failed,
+                codex_exec_failure_message(completion.failure),
+            )
+        };
+        let summary = bounded_text(&summary, CODEX_EXEC_MAX_SUMMARY_CHARS);
+        let lifecycle_detail = bounded_text(&summary, CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS);
+
+        let repository = AgentRunRepository::new(&db);
+        if let Some(usage_json) = completion.usage_json.as_deref() {
+            let _ = repository.set_usage(&run.id, usage_json);
+        }
+        let _ = repository.set_summary(&run.id, Some(&summary));
+        let _ = repository.update_review_state(&run.id, review_state);
+        let _ = TaskEventStore::new(&db).append_for_branch(
+            &run.task_id,
+            &run.branch_id,
+            TaskEventType::SubagentFinished,
+        );
+
+        persist_and_emit_external_event(
+            &db,
+            &session_store,
+            &sessions_dir,
+            &parent_storage_id,
+            &run,
+            scoped_external_event(
+                &run,
+                AgentEvent::SubagentLifecycle {
+                    state,
+                    detail: Some(lifecycle_detail),
+                },
+            ),
+            &sink,
+        )
+        .await;
+        external_agents.remove(&run.id).await;
+    });
+}
+
+/// 启动由官方 `codex mcp-server` 驱动的只读子代理。
+///
+/// 与 `codex exec` 路径共享同一份运行树、取消注册和安全投影规则；差异仅在于
+/// MCP 会话返回的 thread ID 会被保存，以便后续可显式续接。
+fn spawn_codex_mcp_subagent(
+    external_agents: Arc<ExternalAgentRegistry>,
+    codex_mcp: Arc<CodexMcpRegistry>,
+    db: Arc<Database>,
+    sessions_dir: PathBuf,
+    parent_storage_id: String,
+    run: AgentRun,
+    workspace: PathBuf,
+    prompt: String,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    sink: Option<AgentEventSink>,
+) {
+    tokio::spawn(async move {
+        let session_store = SessionStore::new(sessions_dir.clone());
+        persist_and_emit_external_event(
+            &db,
+            &session_store,
+            &sessions_dir,
+            &parent_storage_id,
+            &run,
+            scoped_external_event(
+                &run,
+                AgentEvent::SubagentLifecycle {
+                    state: SubagentState::Running,
+                    detail: Some("Codex MCP 会话正在以只读模式检查工作区".to_string()),
+                },
+            ),
+            &sink,
+        )
+        .await;
+
+        let outcome = codex_mcp
+            .run_readonly(cli_path, &workspace, &prompt, cancellation)
+            .await;
+        let (state, review_state, summary) = match outcome {
+            Ok(CodexMcpCallOutcome::Cancelled) => (
+                SubagentState::Cancelled,
+                ReviewState::Aborted,
+                "Codex MCP 子代理已取消。".to_string(),
+            ),
+            Ok(CodexMcpCallOutcome::Completed(response)) => {
+                if let Some(thread_id) = response.thread_id.as_deref() {
+                    let _ = AgentRunRepository::new(&db)
+                        .set_external_session_id(&run.id, Some(thread_id));
+                }
+                if let Some(text) = response
+                    .text
+                    .as_deref()
+                    .map(|text| bounded_text(text, CODEX_EXEC_MAX_SUMMARY_CHARS))
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    persist_and_emit_external_event(
+                        &db,
+                        &session_store,
+                        &sessions_dir,
+                        &parent_storage_id,
+                        &run,
+                        scoped_external_event(
+                            &run,
+                            AgentEvent::Message {
+                                text: text.clone(),
+                                delta: false,
+                            },
+                        ),
+                        &sink,
+                    )
+                    .await;
+                    (SubagentState::Completed, ReviewState::Answered, text)
+                } else {
+                    (
+                        SubagentState::Completed,
+                        ReviewState::Answered,
+                        "Codex MCP 子代理已完成，但没有返回可显示的摘要。".to_string(),
+                    )
+                }
+            }
+            Err(error) => {
+                tracing::warn!(run_id = %run.id, error = ?error, "Codex MCP subagent failed");
+                (
+                    SubagentState::Failed,
+                    ReviewState::Failed,
+                    "Codex MCP 子代理未能完成。请在设置中检查 Codex CLI 的安装与登录状态后重试。"
+                        .to_string(),
+                )
+            }
+        };
+        let summary = bounded_text(&summary, CODEX_EXEC_MAX_SUMMARY_CHARS);
+        let lifecycle_detail = bounded_text(&summary, CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS);
+
+        let repository = AgentRunRepository::new(&db);
+        let _ = repository.set_summary(&run.id, Some(&summary));
+        let _ = repository.update_review_state(&run.id, review_state);
+        let _ = TaskEventStore::new(&db).append_for_branch(
+            &run.task_id,
+            &run.branch_id,
+            TaskEventType::SubagentFinished,
+        );
+        persist_and_emit_external_event(
+            &db,
+            &session_store,
+            &sessions_dir,
+            &parent_storage_id,
+            &run,
+            scoped_external_event(
+                &run,
+                AgentEvent::SubagentLifecycle {
+                    state,
+                    detail: Some(lifecycle_detail),
+                },
+            ),
+            &sink,
+        )
+        .await;
+        external_agents.remove(&run.id).await;
+    });
+}
+
+/// 将一项工作委派给本机已登录的 Codex CLI。
+///
+/// 首版只允许作为正在运行的 R-Code 主运行的**只读子代理**启动：它不会编辑工作区、
+/// 不会读取/复制 Codex 凭据，也不会把外部工具活动伪装成 R-Code 网关审计。
+pub async fn agent_delegate_codex(
+    state: &CommandState,
+    task_id: &str,
+    goal: &str,
+    label: Option<&str>,
+) -> Result<AgentRun, String> {
+    let goal = goal.trim();
+    if goal.is_empty() {
+        return Err("Codex 子代理需要一项明确的委派任务".to_string());
+    }
+    if goal.contains('\0') {
+        return Err("Codex 子代理任务不能包含空字符".to_string());
+    }
+    let goal = bounded_text(goal, CODEX_EXEC_MAX_GOAL_CHARS);
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能委派 Codex 子代理".to_string());
+    }
+    let workspace_path = task
+        .workspace_path
+        .as_deref()
+        .ok_or_else(|| "请先为会话附加一个本地 Git 工作区，再委派 Codex 子代理".to_string())?;
+    let workspace = PathGuard::new(PathBuf::from(workspace_path))
+        .map_err(err_str)?
+        .root()
+        .to_path_buf();
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    let parent = AgentRunRepository::new(&state.db)
+        .get_active_run_for_branch(task_id, &branch.id)
+        .map_err(err_str)?
+        .ok_or_else(|| "请先启动当前 R-Code 会话，再委派 Codex 子代理".to_string())?;
+    if parent.runtime_kind != AgentRunRuntimeKind::Native {
+        return Err("当前外部运行暂不能继续委派其他 Agent".to_string());
+    }
+
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+    if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
+        return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
+    }
+
+    let user_label = label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| bounded_text(value, 100));
+    let agent_label = user_label
+        .map(|value| format!("Codex CLI · {value}"))
+        .unwrap_or_else(|| "Codex CLI · 只读调查".to_string());
+    let run = AgentRun::new_subagent_for_branch(
+        task_id,
+        &branch.id,
+        &parent.id,
+        "codex-cli",
+        Some(agent_label),
+        None,
+    )
+    .as_codex_exec_subagent();
+    let cancellation = state
+        .external_agents
+        .reserve(task_id, &parent.id, &run.id)
+        .await?;
+    if let Err(error) = AgentRunRepository::new(&state.db)
+        .create(&run)
+        .map_err(err_str)
+    {
+        state.external_agents.remove(&run.id).await;
+        return Err(error);
+    }
+    if let Err(error) = TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, &branch.id, TaskEventType::SubagentStarted)
+        .map_err(err_str)
+    {
+        let _ =
+            AgentRunRepository::new(&state.db).update_review_state(&run.id, ReviewState::Failed);
+        state.external_agents.remove(&run.id).await;
+        return Err(error);
+    }
+
+    let sink = state.agent_event_sink.lock().unwrap().clone();
+    persist_and_emit_external_event(
+        &state.db,
+        &state.session_store,
+        &state.sessions_dir,
+        &branch.storage_id,
+        &run,
+        scoped_external_event(
+            &run,
+            AgentEvent::SubagentLifecycle {
+                state: SubagentState::Queued,
+                detail: Some("已加入 Codex CLI 只读子代理队列".to_string()),
+            },
+        ),
+        &sink,
+    )
+    .await;
+
+    spawn_codex_exec_subagent(
+        state.external_agents.clone(),
+        state.db.clone(),
+        state.sessions_dir.clone(),
+        branch.storage_id,
+        run.clone(),
+        workspace,
+        build_codex_delegation_prompt(&goal),
+        cli.path,
+        cancellation,
+        sink,
+    );
+    Ok(run)
+}
+
+/// 以可续接的官方 `codex mcp-server` 会话委派一项只读子任务。
+///
+/// 这条路径与 `agent_delegate_codex` 的非交互式 `exec` 保持并存：前者更适合一次
+/// 性快速调查，MCP 版本则保留 Codex thread ID，供 R-Code 及未来的外部编排器继续
+/// 对话。两条路径都只能从正在运行的原生 R-Code 主 Agent 发起。
+pub async fn agent_delegate_codex_mcp(
+    state: &CommandState,
+    task_id: &str,
+    goal: &str,
+    label: Option<&str>,
+) -> Result<AgentRun, String> {
+    let goal = goal.trim();
+    if goal.is_empty() {
+        return Err("Codex MCP 子代理需要一项明确的委派任务".to_string());
+    }
+    if goal.contains('\0') {
+        return Err("Codex MCP 子代理任务不能包含空字符".to_string());
+    }
+    let goal = bounded_text(goal, CODEX_EXEC_MAX_GOAL_CHARS);
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能委派 Codex MCP 子代理".to_string());
+    }
+    let workspace_path = task
+        .workspace_path
+        .as_deref()
+        .ok_or_else(|| "请先为会话附加一个本地 Git 工作区，再委派 Codex MCP 子代理".to_string())?;
+    let workspace = PathGuard::new(PathBuf::from(workspace_path))
+        .map_err(err_str)?
+        .root()
+        .to_path_buf();
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    let parent = AgentRunRepository::new(&state.db)
+        .get_active_run_for_branch(task_id, &branch.id)
+        .map_err(err_str)?
+        .ok_or_else(|| "请先启动当前 R-Code 会话，再委派 Codex MCP 子代理".to_string())?;
+    if parent.runtime_kind != AgentRunRuntimeKind::Native {
+        return Err("当前外部运行暂不能继续委派其他 Agent".to_string());
+    }
+
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+    if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
+        return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
+    }
+
+    let user_label = label
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| bounded_text(value, 100));
+    let agent_label = user_label
+        .map(|value| format!("Codex MCP · {value}"))
+        .unwrap_or_else(|| "Codex MCP · 只读调查".to_string());
+    let run = AgentRun::new_subagent_for_branch(
+        task_id,
+        &branch.id,
+        &parent.id,
+        "codex-cli",
+        Some(agent_label),
+        None,
+    )
+    .as_codex_mcp_subagent();
+    let cancellation = state
+        .external_agents
+        .reserve(task_id, &parent.id, &run.id)
+        .await?;
+    if let Err(error) = AgentRunRepository::new(&state.db)
+        .create(&run)
+        .map_err(err_str)
+    {
+        state.external_agents.remove(&run.id).await;
+        return Err(error);
+    }
+    if let Err(error) = TaskEventStore::new(&state.db)
+        .append_for_branch(task_id, &branch.id, TaskEventType::SubagentStarted)
+        .map_err(err_str)
+    {
+        let _ =
+            AgentRunRepository::new(&state.db).update_review_state(&run.id, ReviewState::Failed);
+        state.external_agents.remove(&run.id).await;
+        return Err(error);
+    }
+
+    let sink = state.agent_event_sink.lock().unwrap().clone();
+    persist_and_emit_external_event(
+        &state.db,
+        &state.session_store,
+        &state.sessions_dir,
+        &branch.storage_id,
+        &run,
+        scoped_external_event(
+            &run,
+            AgentEvent::SubagentLifecycle {
+                state: SubagentState::Queued,
+                detail: Some("已加入 Codex MCP 只读子代理队列".to_string()),
+            },
+        ),
+        &sink,
+    )
+    .await;
+    spawn_codex_mcp_subagent(
+        state.external_agents.clone(),
+        state.codex_mcp.clone(),
+        state.db.clone(),
+        state.sessions_dir.clone(),
+        branch.storage_id,
+        run.clone(),
+        workspace,
+        build_codex_delegation_prompt(&goal),
+        cli.path,
+        cancellation,
+        sink,
+    );
+    Ok(run)
 }
 
 /// 用户显式请求时才把 R-Code 终端协作 Skill 安装到 Codex 的用户目录。
 pub async fn codex_install_skill() -> Result<(), String> {
     SkillManager::new().install_codex().map_err(err_str)
+}
+
+/// 一次完成 R-Code 与 Codex 的协作配置。
+///
+/// 调用方必须已通过安装和登录门禁。本命令会更新 R-Code 协作 Skill，并注册固定名称
+/// 的只读 MCP server；旧版直连构建产物的配置会自动迁移，当前配置不会重复写入。
+pub async fn codex_setup_collaboration(state: &CommandState) -> Result<serde_json::Value, String> {
+    let _guard = CODEX_COLLAB_SETUP_LOCK.lock().await;
+    let cli = probe_codex_cli().await;
+    if !cli.available {
+        return Err(cli
+            .error
+            .unwrap_or("未检测到可运行的 Codex CLI。")
+            .to_string());
+    }
+
+    match probe_codex_login(cli.path.as_deref()).await.state {
+        CodexAuthState::Authenticated => {}
+        CodexAuthState::NotAuthenticated => {
+            return Err("Codex CLI 尚未登录。请先完成 Codex 官方登录流程。".to_string())
+        }
+        CodexAuthState::Unknown => {
+            return Err("暂时无法确认 Codex 登录状态，请重新检测后再试。".to_string())
+        }
+    }
+
+    codex_install_skill().await?;
+    if !codex_mcp_server_configured(cli.path.as_deref()).await {
+        codex_install_mcp_server(state).await?;
+    }
+    codex_integration_status().await
 }
 
 pub async fn settings_set(
@@ -3937,6 +7994,68 @@ mod tests {
         (dir, state)
     }
 
+    /// 构造一个“上次进程退出前仍在运行”的文件数据库。
+    ///
+    /// `CommandState::new` 在此之后建立，因而它记录到的项目才是恢复范围；
+    /// 测试可再往同一数据库写入新运行，验证它不会被误收束。
+    fn setup_persisted_recovery_state() -> (
+        TempDir,
+        CommandState,
+        Task,
+        AgentRun,
+        ToolCall,
+        String,
+    ) {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("r-code.db");
+        let db = Arc::new(Database::open(&db_path).unwrap());
+        let task = Task::new(None, "Interrupted", "recover me", TaskMode::Edit);
+        TaskRepository::new(db.as_ref()).create(&task).unwrap();
+        TaskRepository::new(db.as_ref())
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+        let branch = SessionBranchRepository::new(db.as_ref())
+            .ensure_active(&task.id)
+            .unwrap();
+        let run = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(db.as_ref()).create(&run).unwrap();
+        let tool_call = ToolCall::new(&run.id, &task.id, "shell", "{}", RiskLevel::R2);
+        ToolCallRepository::new(db.as_ref())
+            .create_if_absent(&tool_call)
+            .unwrap();
+        let permission_id = uuid::Uuid::new_v4().to_string();
+        let conn = db.conn().unwrap();
+        conn.execute(
+            "INSERT INTO permission_requests \
+             (id, task_id, tool_call_id, tool_name, risk_level, input_summary, decision, created_at) \
+             VALUES (?1, ?2, ?3, 'shell', 'R2', 'cargo test', 'pending', ?4)",
+            rusqlite::params![
+                &permission_id,
+                &task.id,
+                &tool_call.id,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let blobs_dir = dir.path().join("blobs");
+        let sessions_dir = dir.path().join("sessions");
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&blobs_dir).unwrap();
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let state = CommandState::new(
+            db,
+            blobs_dir,
+            sessions_dir,
+            config_dir,
+            dir.path().to_path_buf(),
+            Some(db_path),
+        );
+        (dir, state, task, run, tool_call, permission_id)
+    }
+
     async fn scoped_test_workspace(state: &CommandState) -> String {
         let workspace = workspace_open(state, &state.project_root).await.unwrap();
         workspace_set_access_mode(
@@ -3966,6 +8085,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_rename_preserves_session_and_rejects_blank_title() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Before", "Do thing", "ask")
+            .await
+            .unwrap();
+
+        let renamed = task_rename(&state, &task.id, "  After  ").await.unwrap();
+        assert_eq!(renamed.id, task.id);
+        assert_eq!(renamed.title, "After");
+        assert!(task_rename(&state, &task.id, "   ").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn task_fork_context_preserves_source_and_switches_active_branch() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Fork", "Try another direction", "ask")
+            .await
+            .unwrap();
+        let source = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        ensure_session_log(&state.session_store, &state.sessions_dir, &source.storage_id)
+            .await
+            .unwrap();
+        state
+            .session_store
+            .append(
+                &source.storage_id,
+                SessionEvent::Message(Message::user_text("first")),
+            )
+            .await
+            .unwrap();
+        state
+            .session_store
+            .append(
+                &source.storage_id,
+                SessionEvent::Message(Message::assistant_text("answer")),
+            )
+            .await
+            .unwrap();
+
+        let fork = task_fork_context(&state, &task.id).await.unwrap();
+        let repo = SessionBranchRepository::new(&state.db);
+        let active = repo.ensure_active(&task.id).unwrap();
+        let source_history = state.session_store.load(&source.storage_id).await.unwrap();
+        let fork_history = state.session_store.load(&fork.storage_id).await.unwrap();
+
+        assert_eq!(fork.parent_branch_id.as_deref(), Some(source.id.as_str()));
+        assert_eq!(active.id, fork.id);
+        assert_eq!(repo.list_by_task(&task.id).unwrap().len(), 2);
+        assert_eq!(source_history.messages.len(), 2);
+        assert_eq!(fork_history.messages.len(), 2);
+    }
+
+    #[test]
+    fn compacted_working_set_keeps_opening_context_and_recent_messages() {
+        let history = (0..18)
+            .map(|index| {
+                if index % 2 == 0 {
+                    Message::user_text(format!("message-{index}"))
+                } else {
+                    Message::assistant_text(format!("message-{index}"))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let compacted = compacted_working_set(&history, "decisions and pending work");
+
+        assert_eq!(compacted.len(), COMPACTION_KEEP_FIRST + 1 + COMPACTION_KEEP_RECENT);
+        assert_eq!(compacted[0].text_content(), "message-0");
+        assert!(compacted[1]
+            .text_content()
+            .contains("decisions and pending work"));
+        assert_eq!(compacted[2].text_content(), "message-8");
+        assert_eq!(compacted.last().unwrap().text_content(), "message-17");
+    }
+
+    #[tokio::test]
     async fn task_create_invalid_mode() {
         let (_dir, state) = setup_state();
         let result = task_create(&state, None, "T", "g", "invalid").await;
@@ -3986,6 +8183,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_detail_batch_deduplicates_ids_and_keeps_detail_shape() {
+        let (_dir, state) = setup_state();
+        let first = task_create(&state, None, "First", "g", "edit")
+            .await
+            .unwrap();
+        let second = task_create(&state, None, "Second", "g", "edit")
+            .await
+            .unwrap();
+
+        let batch = task_detail_batch(
+            &state,
+            &[first.id.clone(), second.id.clone(), first.id.clone()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(batch.details.len(), 2);
+        assert!(batch
+            .details
+            .iter()
+            .any(|detail| detail.task.id == first.id));
+        assert!(batch
+            .details
+            .iter()
+            .any(|detail| detail.task.id == second.id));
+    }
+
+    #[tokio::test]
+    async fn workspace_dashboard_and_activity_use_workspace_scoped_records() {
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(&state, Some(&workspace), "Dashboard", "g", "edit")
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::ReviewReady)
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        TaskEventStore::new(&state.db)
+            .append_for_branch(&task.id, &branch.id, TaskEventType::RunEnded)
+            .unwrap();
+
+        let dashboard = workspace_dashboard(&state, &workspace).await.unwrap();
+        assert_eq!(dashboard.metrics.task_count, 1);
+        assert_eq!(dashboard.metrics.review_ready_count, 1);
+        assert_eq!(dashboard.attention.len(), 1);
+        assert_eq!(dashboard.tasks[0].task.id, task.id);
+
+        let activity = project_activity_list(&state, &workspace, None, 20)
+            .await
+            .unwrap();
+        assert!(activity.items.iter().any(|item| item.task_id == task.id));
+        assert!(activity.next_cursor.is_some());
+    }
+
+    #[tokio::test]
+    async fn notification_center_persists_read_state_for_review_ready_tasks() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Review", "g", "edit")
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::ReviewReady)
+            .unwrap();
+
+        let first_page = notification_list(&state, None, 20, false).await.unwrap();
+        let notification = first_page
+            .notifications
+            .iter()
+            .find(|item| item.task_id.as_deref() == Some(task.id.as_str()))
+            .unwrap();
+        assert_eq!(notification.kind, NotificationKind::ReviewReady);
+        assert_eq!(first_page.unread_count, 1);
+
+        assert!(notification_mark_read(&state, &notification.id)
+            .await
+            .unwrap());
+        let second_page = notification_list(&state, None, 20, false).await.unwrap();
+        assert_eq!(second_page.unread_count, 0);
+        assert!(second_page.notifications[0].read_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn change_request_records_an_audit_event_and_starts_follow_up() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Review", "g", "edit")
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::ReviewReady)
+            .unwrap();
+
+        change_request(&state, &task.id, "请补充错误分支测试")
+            .await
+            .unwrap();
+        let events = TaskEventStore::new(&state.db)
+            .list_by_task(&task.id, None, None)
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == TaskEventType::ChangeRequested));
+    }
+
+    #[tokio::test]
     async fn scoped_subagent_lifecycle_persists_run_tree_and_replay_log() {
         let (_dir, state) = setup_state();
         let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
@@ -4001,6 +8303,8 @@ mod tests {
             agent_kind: r_code_core::dto::AgentKind::Subagent,
             agent_label: Some("只读检查".to_string()),
             delegated_by_tool_call_id: Some("delegate-call".to_string()),
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: Some("test-model".to_string()),
         };
         let event = AgentEvent::Scoped {
             scope: scope.clone(),
@@ -4055,6 +8359,25 @@ mod tests {
             &parent.id,
             &branch.storage_id,
             &event,
+            &mut pending_text,
+        )
+        .await;
+        let child_activity = AgentEvent::Scoped {
+            scope: scope.clone(),
+            event: Box::new(AgentEvent::Activity {
+                phase: AgentActivityPhase::Tool,
+                detail: Some("正在读取 README.md".to_string()),
+            }),
+        };
+        persist_runtime_event(
+            &state.db,
+            &state.session_store,
+            &state.sessions_dir,
+            &task.id,
+            &branch.id,
+            &parent.id,
+            &branch.storage_id,
+            &child_activity,
             &mut pending_text,
         )
         .await;
@@ -4125,6 +8448,8 @@ mod tests {
         assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
         assert_eq!(child.agent_label.as_deref(), Some("只读检查"));
         assert_eq!(child.summary.as_deref(), Some("已找到所需信息"));
+        assert_eq!(child.runtime_kind, AgentRunRuntimeKind::Native);
+        assert_eq!(child.model, "test-model");
         assert_eq!(
             child.delegated_by_tool_call_id.as_deref(),
             Some("delegate-call")
@@ -4148,6 +8473,20 @@ mod tests {
         assert!(std::fs::read_to_string(child_log)
             .unwrap()
             .contains("subagent_lifecycle"));
+        let child_messages = subagent_session_messages(&state, &task.id, "child-run")
+            .await
+            .unwrap();
+        assert!(child_messages.iter().any(|message| {
+            message.kind == "system"
+                && message.text.as_deref() == Some("subagent_activity")
+                && message
+                    .output_json
+                    .as_deref()
+                    .is_some_and(|value| value.contains("正在读取 README.md"))
+        }));
+        assert!(subagent_session_messages(&state, "another-task", "child-run")
+            .await
+            .is_err());
         let events = TaskEventStore::new(&state.db)
             .list_by_task_branch(&task.id, &branch.id, Some(100), None)
             .unwrap();
@@ -4167,6 +8506,55 @@ mod tests {
             1,
             "子代理工具结果不能污染主分支时间锚点"
         );
+    }
+
+    #[tokio::test]
+    async fn codex_scoped_lifecycle_persists_external_runtime_identity() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Codex", "delegate", "ask")
+            .await
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let event = AgentEvent::Scoped {
+            scope: AgentEventScope {
+                run_id: "codex-child".to_string(),
+                agent_id: "codex-child".to_string(),
+                parent_run_id: Some(parent.id.clone()),
+                agent_kind: AgentKind::Subagent,
+                agent_label: Some("Codex CLI · 检查边界".to_string()),
+                delegated_by_tool_call_id: None,
+                runtime_kind: AgentRunRuntimeKind::CodexExec,
+                model: Some("codex-cli".to_string()),
+            },
+            event: Box::new(AgentEvent::SubagentLifecycle {
+                state: SubagentState::Queued,
+                detail: Some("已加入 Codex CLI 子代理队列".to_string()),
+            }),
+        };
+        persist_runtime_event(
+            &state.db,
+            &state.session_store,
+            &state.sessions_dir,
+            &task.id,
+            &branch.id,
+            &parent.id,
+            &branch.storage_id,
+            &event,
+            &mut HashMap::new(),
+        )
+        .await;
+
+        let child = AgentRunRepository::new(&state.db)
+            .get("codex-child")
+            .unwrap()
+            .unwrap();
+        assert_eq!(child.runtime_kind, AgentRunRuntimeKind::CodexExec);
+        assert_eq!(child.model, "codex-cli");
+        assert_eq!(child.agent_label.as_deref(), Some("Codex CLI · 检查边界"));
     }
 
     #[tokio::test]
@@ -4498,8 +8886,122 @@ mod tests {
     #[tokio::test]
     async fn recovery_cleanup_in_memory_is_noop() {
         let (_dir, state) = setup_state();
-        // 内存库无文件路径，清理返回 0
-        assert_eq!(recovery_cleanup(&state).await.unwrap(), 0);
+        let result = recovery_cleanup(&state).await.unwrap();
+        assert_eq!(result.runs_closed, 0);
+        assert_eq!(result.tasks_interrupted, 0);
+        assert_eq!(result.permissions_denied, 0);
+        assert_eq!(result.tool_calls_closed, 0);
+    }
+
+    #[tokio::test]
+    async fn recovery_only_closes_runs_captured_at_startup() {
+        let (_dir, state, stale_task, stale_run, stale_call, permission_id) =
+            setup_persisted_recovery_state();
+
+        // 这条运行在 CommandState 已建立后才开始，绝不能被当作崩溃遗留项。
+        let fresh_task = Task::new(None, "Fresh", "keep running", TaskMode::Edit);
+        TaskRepository::new(&state.db).create(&fresh_task).unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&fresh_task.id, TaskState::InProgress)
+            .unwrap();
+        let fresh_branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&fresh_task.id)
+            .unwrap();
+        let fresh_run = AgentRun::new_for_branch(&fresh_task.id, &fresh_branch.id, "test-model");
+        AgentRunRepository::new(&state.db)
+            .create(&fresh_run)
+            .unwrap();
+        let fresh_call = ToolCall::new(&fresh_run.id, &fresh_task.id, "shell", "{}", RiskLevel::R2);
+        ToolCallRepository::new(&state.db)
+            .create_if_absent(&fresh_call)
+            .unwrap();
+        let fresh_permission_id = uuid::Uuid::new_v4().to_string();
+        let conn = state.db.conn().unwrap();
+        conn.execute(
+            "INSERT INTO permission_requests \
+             (id, task_id, tool_call_id, tool_name, risk_level, input_summary, decision, created_at) \
+             VALUES (?1, ?2, ?3, 'shell', 'R2', 'fresh command', 'pending', ?4)",
+            rusqlite::params![
+                &fresh_permission_id,
+                &fresh_task.id,
+                &fresh_call.id,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        let page = recovery_data(&state).await.unwrap();
+        assert_eq!(page.interrupted_tasks, vec![stale_task.id.clone()]);
+        assert_eq!(page.orphaned_permissions, 1);
+
+        let result = recovery_cleanup(&state).await.unwrap();
+        assert_eq!(result.runs_closed, 1);
+        assert_eq!(result.tasks_interrupted, 1);
+        assert_eq!(result.tool_calls_closed, 1);
+        assert_eq!(result.permissions_denied, 1);
+        assert!(recovery_data(&state).await.unwrap().interrupted_tasks.is_empty());
+
+        let closed_run = AgentRunRepository::new(&state.db)
+            .get(&stale_run.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(closed_run.review_state, ReviewState::Aborted);
+        assert!(closed_run.ended_at.is_some());
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&stale_task.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TaskState::Interrupted
+        );
+
+        let conn = state.db.conn().unwrap();
+        let tool_status: String = conn
+            .query_row(
+                "SELECT status FROM tool_calls WHERE id = ?1",
+                [&stale_call.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let permission_decision: String = conn
+            .query_row(
+                "SELECT decision FROM permission_requests WHERE id = ?1",
+                [&permission_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let fresh_permission_decision: String = conn
+            .query_row(
+                "SELECT decision FROM permission_requests WHERE id = ?1",
+                [&fresh_permission_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tool_status, "error");
+        assert_eq!(permission_decision, "deny");
+        assert_eq!(fresh_permission_decision, "pending");
+
+        assert!(AgentRunRepository::new(&state.db)
+            .get(&fresh_run.id)
+            .unwrap()
+            .unwrap()
+            .is_active());
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&fresh_task.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TaskState::InProgress
+        );
+        let events = TaskEventStore::new(&state.db)
+            .list_by_task(&stale_task.id, None, None)
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == TaskEventType::RunAborted));
     }
 
     #[tokio::test]
@@ -5269,6 +9771,556 @@ mod tests {
         assert!(text.contains("\x1b[201~"));
         assert!(!text.ends_with('\r'));
         assert!(!text.ends_with('\n'));
+    }
+
+    #[test]
+    fn codex_login_status_uses_official_exit_code_contract() {
+        let status = parse_codex_login_status(true, b"Logged in using ChatGPT\n", b"");
+        assert_eq!(status.state, CodexAuthState::Authenticated);
+        assert_eq!(status.method, Some("ChatGPT"));
+
+        let status = parse_codex_login_status(false, b"", b"Not logged in");
+        assert_eq!(status.state, CodexAuthState::NotAuthenticated);
+        assert_eq!(status.method, None);
+
+        let status = parse_codex_login_status(true, b"status unavailable", b"");
+        assert_eq!(status.state, CodexAuthState::Authenticated);
+        assert_eq!(status.method, None);
+
+        let status = parse_codex_login_status(false, b"", b"temporary transport error");
+        assert_eq!(status.state, CodexAuthState::Unknown);
+    }
+
+    #[test]
+    fn codex_model_catalog_only_exposes_listed_models_and_efforts() {
+        let catalog = parse_codex_model_catalog(
+            br#"{
+              "models": [
+                {
+                  "slug": "gpt-5.6-terra",
+                  "display_name": "GPT-5.6-Terra",
+                  "description": "Balanced model",
+                  "default_reasoning_level": "medium",
+                  "supported_reasoning_levels": [
+                    {"effort": "low", "description": "Fast"},
+                    {"effort": "medium", "description": "Balanced"}
+                  ],
+                  "visibility": "list",
+                  "priority": 2
+                },
+                {
+                  "slug": "hidden-model",
+                  "display_name": "Hidden",
+                  "description": "Internal",
+                  "default_reasoning_level": "high",
+                  "supported_reasoning_levels": [],
+                  "visibility": "hidden",
+                  "priority": 1
+                }
+              ]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].slug, "gpt-5.6-terra");
+        assert_eq!(catalog[0].default_reasoning_effort, "medium");
+        assert_eq!(catalog[0].supported_reasoning_efforts.len(), 2);
+    }
+
+    #[test]
+    fn legacy_codex_mcp_registration_is_owned_but_not_build_safe() {
+        let registration = parse_codex_mcp_registration(
+            br#"{
+              "name": "r-code",
+              "enabled": true,
+              "transport": {
+                "type": "stdio",
+                "command": "D:\\project\\r-code\\target\\debug\\r-code-host.exe",
+                "args": [
+                  "mcp-server",
+                  "--data-dir",
+                  "C:\\Users\\demo\\AppData\\Roaming\\com.r-code.app\\r-code"
+                ]
+              }
+            }"#,
+        )
+        .unwrap();
+        let current = Path::new(r"D:\project\r-code\target\debug\r-code-host.exe");
+        let data_dir = Path::new(r"C:\Users\demo\AppData\Roaming\com.r-code.app\r-code");
+        assert!(registration_is_owned_by_r_code(
+            &registration,
+            current,
+            data_dir
+        ));
+        assert!(!registration_uses_current_host(&registration, current));
+    }
+
+    #[test]
+    fn codex_mcp_host_uses_a_content_addressed_copy_outside_cargo_target() {
+        let directory = TempDir::new().unwrap();
+        let source = directory.path().join(if cfg!(windows) {
+            "target/debug/r-code-host.exe"
+        } else {
+            "target/debug/r-code-host"
+        });
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"first R-Code build").unwrap();
+        let data_dir = directory.path().join("app-data/r-code");
+
+        let first = deploy_codex_mcp_host(&source, &data_dir).unwrap();
+        assert_ne!(first, source);
+        assert_eq!(
+            first.parent(),
+            Some(data_dir.join(CODEX_MCP_HOST_DIR).as_path())
+        );
+        assert_eq!(std::fs::read(&first).unwrap(), b"first R-Code build");
+        let registration = CodexMcpRegistration {
+            enabled: true,
+            command: first.clone(),
+            args: vec![
+                "mcp-server".to_string(),
+                "--data-dir".to_string(),
+                data_dir.to_string_lossy().to_string(),
+            ],
+        };
+        assert!(registration_uses_current_host(&registration, &source));
+        let bootstrap = first.parent().unwrap().join(if cfg!(windows) {
+            "r-code-mcp-host-bootstrap.exe"
+        } else {
+            "r-code-mcp-host-bootstrap"
+        });
+        std::fs::copy(&first, &bootstrap).unwrap();
+        let bootstrap_registration = CodexMcpRegistration {
+            command: bootstrap,
+            ..registration.clone()
+        };
+        assert!(registration_uses_current_host(
+            &bootstrap_registration,
+            &source
+        ));
+
+        std::fs::write(&source, b"second R-Code build").unwrap();
+        assert!(!registration_uses_current_host(&registration, &source));
+        let second = deploy_codex_mcp_host(&source, &data_dir).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read(second).unwrap(), b"second R-Code build");
+    }
+
+    #[test]
+    fn codex_preference_edit_preserves_comments_and_mcp_sections() {
+        let source = r#"# keep this note
+model = "old-model"
+model_reasoning_effort = "low"
+
+[mcp_servers.r-code]
+command = "r-code-host"
+"#;
+        let rendered =
+            render_codex_preferences(source, Some("gpt-5.6-sol"), Some("high"), Some("medium"))
+                .unwrap();
+        assert!(rendered.contains("# keep this note"));
+        assert!(rendered.contains("[mcp_servers.r-code]"));
+        assert!(rendered.contains("command = \"r-code-host\""));
+        let document = rendered.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(document["model"].as_str(), Some("gpt-5.6-sol"));
+        assert_eq!(document["model_reasoning_effort"].as_str(), Some("high"));
+        assert_eq!(document["model_verbosity"].as_str(), Some("medium"));
+    }
+
+    #[test]
+    fn codex_preference_edit_can_restore_cli_defaults() {
+        let rendered = render_codex_preferences(
+            "model = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"max\"\nmodel_verbosity = \"high\"\n[features]\nfast_mode = true\n",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let document = rendered.parse::<toml_edit::DocumentMut>().unwrap();
+        assert!(document.get("model").is_none());
+        assert!(document.get("model_reasoning_effort").is_none());
+        assert!(document.get("model_verbosity").is_none());
+        assert_eq!(document["features"]["fast_mode"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn codex_setup_state_follows_prerequisite_order() {
+        assert_eq!(
+            CodexSetupState::from_components(
+                false,
+                CodexAuthState::Unknown,
+                "not_installed",
+                false,
+            ),
+            CodexSetupState::InstallCli
+        );
+        assert_eq!(
+            CodexSetupState::from_components(
+                true,
+                CodexAuthState::NotAuthenticated,
+                "up_to_date",
+                true,
+            ),
+            CodexSetupState::Login
+        );
+        assert_eq!(
+            CodexSetupState::from_components(true, CodexAuthState::Unknown, "up_to_date", true,),
+            CodexSetupState::Check
+        );
+        assert_eq!(
+            CodexSetupState::from_components(
+                true,
+                CodexAuthState::Authenticated,
+                "update_available",
+                true,
+            ),
+            CodexSetupState::Configure
+        );
+        assert_eq!(
+            CodexSetupState::from_components(
+                true,
+                CodexAuthState::Authenticated,
+                "up_to_date",
+                true,
+            ),
+            CodexSetupState::Ready
+        );
+    }
+
+    #[test]
+    fn codex_login_status_detects_supported_auth_methods() {
+        let api = parse_codex_login_status(true, b"Authenticated with API Key", b"");
+        assert_eq!(api.state, CodexAuthState::Authenticated);
+        assert_eq!(api.method, Some("API Key"));
+
+        let token = parse_codex_login_status(true, b"Signed in with access token", b"");
+        assert_eq!(token.state, CodexAuthState::Authenticated);
+        assert_eq!(token.method, Some("访问令牌"));
+    }
+
+    #[test]
+    fn codex_home_prefers_explicit_codex_home() {
+        let home = codex_home_dir_from(
+            Some(PathBuf::from("D:/isolated/codex-home")),
+            Some(PathBuf::from("C:/Users/example")),
+        );
+        assert_eq!(home, PathBuf::from("D:/isolated/codex-home"));
+
+        let default = codex_home_dir_from(None, Some(PathBuf::from("C:/Users/example")));
+        assert_eq!(default, PathBuf::from("C:/Users/example/.codex"));
+    }
+
+    #[test]
+    fn codex_login_modes_are_fixed_commands() {
+        assert_eq!(CodexLoginMode::Browser.args(), ["login"]);
+        assert_eq!(CodexLoginMode::DeviceCode.args(), ["login", "--device-auth"]);
+    }
+
+    #[test]
+    fn npm_installer_only_targets_the_official_codex_package() {
+        let npm_path = if cfg!(windows) {
+            Path::new(r"C:\Program Files\nodejs\npm.exe")
+        } else {
+            Path::new("/usr/local/bin/npm")
+        };
+        let command = npm_command_at(npm_path, CODEX_CLI_INSTALL_ARGS).unwrap();
+        let command = command.as_std();
+        assert_eq!(command.get_program(), npm_path.as_os_str());
+        assert_eq!(
+            command
+                .get_args()
+                .map(|value| value.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            ["install", "-g", "@openai/codex"]
+        );
+    }
+
+    #[test]
+    fn npm_install_errors_are_actionable_without_leaking_output() {
+        assert!(npm_install_failure_message(b"npm ERR! code EACCES").contains("权限"));
+        assert!(npm_install_failure_message(b"npm ERR! code ENOTFOUND").contains("网络"));
+        assert!(npm_install_failure_message(b"secret registry output").contains("系统终端"));
+        assert!(!npm_install_failure_message(b"secret registry output").contains("secret"));
+    }
+
+    #[test]
+    fn codex_exec_json_parser_keeps_safe_progress_without_private_reasoning() {
+        assert_eq!(
+            parse_codex_exec_json_line(
+                r#"{"type":"thread.started","thread_id":"thread-123","secret":"ignore"}"#
+            ),
+            Some(CodexExecJsonEvent::ThreadStarted("thread-123".to_string()))
+        );
+        assert_eq!(
+            parse_codex_exec_json_line(
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"调查完成"}}"#
+            ),
+            Some(CodexExecJsonEvent::AssistantMessage("调查完成".to_string()))
+        );
+        assert_eq!(
+            parse_codex_exec_json_line(
+                r#"{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":5,"ignored":"secret"}}"#
+            ),
+            Some(CodexExecJsonEvent::Usage(
+                r#"{"input_tokens":12,"output_tokens":5}"#.to_string()
+            ))
+        );
+        assert_eq!(
+            parse_codex_exec_json_line(
+                r#"{"type":"item.completed","item":{"type":"reasoning","text":"private"}}"#
+            ),
+            Some(CodexExecJsonEvent::Activity {
+                phase: AgentActivityPhase::Finalizing,
+                detail: "Codex CLI 已完成一轮分析".to_string(),
+            })
+        );
+        let command = parse_codex_exec_json_line(
+            r#"{"type":"item.started","item":{"id":"item-7","type":"command_execution","command":"curl -H 'Authorization: Bearer secret-token' https://example.test","status":"in_progress"}}"#,
+        );
+        assert!(matches!(
+            command,
+            Some(CodexExecJsonEvent::ToolStarted { call_id, name, summary })
+                if call_id == "item-7"
+                    && name == "Codex 命令"
+                    && summary.contains("Authorization: ***")
+                    && !summary.contains("secret-token")
+        ));
+    }
+
+    #[tokio::test]
+    async fn external_agent_registry_caps_and_cancels_by_run() {
+        let registry = ExternalAgentRegistry::default();
+        let first = registry.reserve("task", "parent", "one").await.unwrap();
+        registry.reserve("task", "parent", "two").await.unwrap();
+        registry.reserve("task", "parent", "three").await.unwrap();
+        assert!(registry.reserve("task", "parent", "four").await.is_err());
+        assert!(registry.has_for_parent_run("parent").await);
+        assert!(!registry.cancel_run_for_task("other-task", "one").await);
+        assert!(registry.cancel_run_for_task("task", "one").await);
+        assert!(first.is_cancelled());
+        registry.remove("one").await;
+        assert!(registry.reserve("task", "parent", "four").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn codex_delegation_requires_an_active_native_parent_run() {
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(&state, Some(&workspace), "Codex", "inspect", "ask")
+            .await
+            .unwrap();
+
+        let error = agent_delegate_codex(&state, &task.id, "检查入口", None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("启动当前 R-Code 会话"));
+    }
+
+    #[tokio::test]
+    async fn codex_mcp_delegation_requires_an_active_native_parent_run() {
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(&state, Some(&workspace), "Codex MCP", "inspect", "ask")
+            .await
+            .unwrap();
+
+        let error = agent_delegate_codex_mcp(&state, &task.id, "检查入口", None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("启动当前 R-Code 会话"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_mcp_config_rejects_cmd_metacharacters_in_paths() {
+        assert!(windows_cmd_safe_path(Path::new(r"C:\Program Files\R-Code\R-Code.exe")).is_ok());
+        assert!(windows_cmd_safe_path(Path::new(r"C:\bad&path\R-Code.exe")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_probe_runner_uses_an_exact_cmd_shim_with_spaces() {
+        let directory = TempDir::new().unwrap();
+        let shim_dir = directory.path().join("Codex Test");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join("codex.cmd");
+        std::fs::write(&shim, "@echo off\r\necho codex-test 1.0\r\n").unwrap();
+
+        let output = run_codex_cli_at(&shim, &["--version"]).await.unwrap();
+        assert!(
+            output.status.success(),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(first_nonempty_line(&output.stdout).as_deref(), Some("codex-test 1.0"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_subagent_process_collects_a_safe_summary_from_the_cli_stream() {
+        let directory = TempDir::new().unwrap();
+        let shim_dir = directory.path().join("Codex Test");
+        std::fs::create_dir_all(&shim_dir).unwrap();
+        let shim = shim_dir.join("codex.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\
+echo {\"type\":\"thread.started\",\"thread_id\":\"thread-test\"}\r\n\
+echo {\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Codex child summary\"}}\r\n\
+echo {\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\r\n\
+exit /b 0\r\n",
+        )
+        .unwrap();
+
+        let completion = run_codex_exec_process(
+            directory.path(),
+            "inspect only",
+            Some(shim),
+            CancellationToken::new(),
+            None,
+        )
+        .await;
+
+        assert!(completion.succeeded);
+        assert!(!completion.cancelled);
+        assert_eq!(completion.summary.as_deref(), Some("Codex child summary"));
+        assert_eq!(
+            completion.usage_json.as_deref(),
+            Some(r#"{"input_tokens":1,"output_tokens":2}"#)
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_subagent_process_stops_an_idle_process_tree() {
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex-idle.cmd");
+        std::fs::write(&shim, "@echo off\r\n:idle\r\ngoto idle\r\n").unwrap();
+        let observed = Arc::new(Mutex::new(Vec::<AgentEvent>::new()));
+        let observed_for_sink = observed.clone();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            observed_for_sink.lock().unwrap().push(event);
+        });
+        let started = std::time::Instant::now();
+
+        let completion = run_codex_exec_process_with_options(
+            directory.path(),
+            "inspect only",
+            Some(shim),
+            CancellationToken::new(),
+            None,
+            Some(&event_sink),
+            CodexExecLimits {
+                idle_timeout: Duration::from_millis(80),
+                hard_timeout: Duration::from_secs(5),
+            },
+        )
+        .await;
+
+        assert_eq!(completion.failure, Some(CodexExecFailure::IdleTimeout));
+        assert!(!completion.succeeded);
+        assert!(!completion.cancelled);
+        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(observed.lock().unwrap().iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity { detail: Some(detail), .. }
+                if detail.contains("自动停止")
+        )));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_subagent_process_stops_an_idle_unix_process_group() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex-idle");
+        let descendant_pid_path = directory.path().join("codex-descendant.pid");
+        std::fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nsleep 30 &\necho $! > '{}'\nwait\n",
+                descendant_pid_path.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&shim).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&shim, permissions).unwrap();
+
+        let completion = run_codex_exec_process_with_options(
+            directory.path(),
+            "inspect only",
+            Some(shim),
+            CancellationToken::new(),
+            None,
+            None,
+            CodexExecLimits {
+                idle_timeout: Duration::from_millis(250),
+                hard_timeout: Duration::from_secs(5),
+            },
+        )
+        .await;
+
+        assert_eq!(completion.failure, Some(CodexExecFailure::IdleTimeout));
+        let descendant_pid = std::fs::read_to_string(&descendant_pid_path)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        let mut descendant_gone = false;
+        for _ in 0..40 {
+            // SAFETY: signal 0 performs an existence check only and does not mutate the process.
+            let exists = unsafe { libc::kill(descendant_pid, 0) } == 0;
+            if !exists && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                descendant_gone = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(descendant_gone, "Codex descendant process survived group termination");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn npm_installer_routes_cmd_shim_without_shell_text() {
+        let command = npm_command_at(
+            Path::new(r"C:\Program Files\nodejs\npm.cmd"),
+            CODEX_CLI_INSTALL_ARGS,
+        )
+        .unwrap();
+        let command = command.as_std();
+        assert_eq!(command.get_program(), "cmd.exe");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args[0..4], ["/D", "/S", "/C", "call"]);
+        assert_eq!(args[4], r"C:\Program Files\nodejs\npm.cmd");
+        assert_eq!(args[5..], ["install", "-g", "@openai/codex"]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_exec_routes_cmd_shim_through_stdin_mode() {
+        let command = codex_exec_command(
+            Some(PathBuf::from(r"C:\Program Files\Codex\codex.cmd")),
+            Path::new(r"C:\repo"),
+        )
+        .unwrap();
+        let command = command.as_std();
+        assert_eq!(command.get_program(), "cmd.exe");
+        let args = command
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(args[0..4], ["/D", "/S", "/C", "call"]);
+        assert_eq!(args[4], r"C:\Program Files\Codex\codex.cmd");
+        assert_eq!(
+            args[5..],
+            ["exec", "--json", "--sandbox", "read-only", "-"]
+        );
     }
 
     #[test]

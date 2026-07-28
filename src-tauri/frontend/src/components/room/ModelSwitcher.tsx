@@ -29,6 +29,7 @@ interface Props {
   onChanged: () => void;
   /** bar：会话顶栏的紧凑样式；pill：输入区的胶囊样式 */
   variant?: "bar" | "pill";
+  openRequest?: number;
 }
 
 interface PendingSwitch {
@@ -45,6 +46,7 @@ export function ModelSwitcher({
   running,
   onChanged,
   variant = "bar",
+  openRequest,
 }: Props) {
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [customFor, setCustomFor] = useState<string | null>(null);
@@ -109,6 +111,7 @@ export function ModelSwitcher({
         disabled={running || apply.busy}
         menuClassName="model-menu"
         scroll
+        openRequest={openRequest}
       >
         {({ close }) => (
           <>

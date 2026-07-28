@@ -27,15 +27,37 @@ export interface ActivityQueueSummary {
   failed: number;
 }
 
+export type ActivitySubagentEventKind =
+  | "lifecycle"
+  | "activity"
+  | "tool_call"
+  | "tool_result"
+  | "message"
+  | "plan";
+
+/** 子代理的公开动作记录；只保存后端已分类的信息和最终可见文本摘要。 */
+export interface ActivitySubagentEvent {
+  id: string;
+  kind: ActivitySubagentEventKind;
+  label: string;
+  detail: string | null;
+  at: number;
+  isError?: boolean;
+}
+
 /** 一个子代理的可观察状态；不保存子模型的私有推理文本。 */
 export interface ActivitySubagent {
   id: string;
   label: string;
+  runtimeKind: AgentRun["runtime_kind"];
+  model: string | null;
   status: SubagentStatus;
   phase: ActivityPhase;
   detail: string | null;
   startedAt: number;
+  lastEventAt: number;
   endedAt: number | null;
+  events: ActivitySubagentEvent[];
 }
 
 export interface ActivityTraceState {
@@ -187,11 +209,15 @@ function applyScopedEvent(
   const child: ActivitySubagent = {
     id: scope.run_id,
     label: scope.agent_label?.trim() || prior?.label || "子代理",
+    runtimeKind: scope.runtime_kind ?? prior?.runtimeKind ?? "native",
+    model: scope.model?.trim() || prior?.model || null,
     status: prior?.status ?? "queued",
     phase: prior?.phase ?? "requesting",
     detail: prior?.detail ?? null,
     startedAt: prior?.startedAt ?? at,
+    lastEventAt: at,
     endedAt: prior?.endedAt ?? null,
+    events: prior?.events ?? [],
   };
 
   switch (event.type) {
@@ -200,40 +226,50 @@ function applyScopedEvent(
       child.detail = safeChildDetail(event.detail);
       child.endedAt = isTerminalChildStatus(event.state) ? at : null;
       child.phase = childPhaseForStatus(event.state, child.phase);
+      appendChildEvent(child, "lifecycle", childStatusEventLabel(event.state), child.detail, at,
+        event.state === "failed");
       break;
     case "activity":
       child.phase = event.phase;
-      child.detail = event.phase === "tool" ? safeChildDetail(event.detail) : null;
+      child.detail = safeChildDetail(event.detail) ?? activityLabel(event.phase);
       if (event.phase === "waiting_permission") child.status = "waiting_permission";
       else if (!isTerminalChildStatus(child.status)) child.status = "running";
+      appendChildEvent(child, "activity", "进度", child.detail, at);
       break;
     case "tool_call":
       child.phase = "tool";
       child.status = "running";
-      child.detail = `正在使用工具：${observableToolName(event.name)}`;
+      child.detail = observableChildToolCall(event.name, event.input);
+      appendChildEvent(child, "tool_call", observableToolName(event.name), child.detail, at);
       break;
     case "tool_result":
       child.phase = "tool";
       child.status = "running";
       child.detail = event.is_error ? "工具执行失败" : "工具已完成";
+      appendChildEvent(child, "tool_result", event.is_error ? "工具失败" : "工具完成", child.detail, at,
+        event.is_error);
       break;
     case "message":
       child.phase = "streaming";
       child.status = "running";
-      child.detail = "正在生成可见结果";
+      child.detail = event.delta ? "正在生成可见结果" : "已生成一条可见结果";
+      appendChildEvent(child, "message", "可见结果", safeChildDetail(event.text), at);
       break;
     case "plan":
       child.phase = "finalizing";
       child.status = "running";
       child.detail = "正在整理结果";
+      appendChildEvent(child, "plan", "计划", `已更新 ${event.steps.length} 个步骤`, at);
       break;
     case "state":
       if (event.state === "interrupted") {
         child.status = "cancelled";
         child.endedAt = at;
+        appendChildEvent(child, "lifecycle", "已停止", null, at);
       } else if (event.state === "review_ready") {
         child.status = "completed";
         child.endedAt = at;
+        appendChildEvent(child, "lifecycle", "已完成", null, at);
       }
       break;
   }
@@ -273,6 +309,54 @@ function isTerminalChildStatus(status: SubagentStatus): boolean {
 function safeChildDetail(value: string | undefined): string | null {
   if (!value) return null;
   return value.trim().replace(/\s+/g, " ").slice(0, 120) || null;
+}
+
+function appendChildEvent(
+  child: ActivitySubagent,
+  kind: ActivitySubagentEventKind,
+  label: string,
+  detail: string | null,
+  at: number,
+  isError = false
+) {
+  const previous = child.events[child.events.length - 1];
+  if (previous?.kind === kind && previous.label === label && previous.detail === detail) {
+    return;
+  }
+  child.events = [
+    ...child.events,
+    {
+      id: `${child.id}:${at}:${child.events.length}`,
+      kind,
+      label,
+      detail,
+      at,
+      ...(isError ? { isError: true } : {}),
+    },
+  ].slice(-60);
+}
+
+function childStatusEventLabel(status: SubagentStatus): string {
+  switch (status) {
+    case "queued": return "已加入队列";
+    case "running": return "已开始";
+    case "waiting_permission": return "等待权限";
+    case "completed": return "已完成";
+    case "failed": return "运行失败";
+    case "cancelled": return "已停止";
+  }
+}
+
+function observableChildToolCall(name: string, input: unknown): string {
+  const tool = observableToolName(name);
+  if (input && typeof input === "object" && "summary" in input) {
+    const summary = (input as { summary?: unknown }).summary;
+    if (typeof summary === "string") {
+      const detail = safeChildDetail(summary);
+      if (detail) return `${tool} · ${detail}`;
+    }
+  }
+  return `正在使用工具：${tool}`;
 }
 
 function applyActivityEvent(
@@ -341,11 +425,15 @@ function mergePersistedSubagents(
     live.set(run.id, {
       id: run.id,
       label: run.agent_label?.trim() || "子代理",
+      runtimeKind: run.runtime_kind,
+      model: run.model || null,
       status: persistedSubagentStatus(run),
       phase: prior?.phase ?? (run.ended_at ? "idle" : "requesting"),
       detail: safeChildDetail(run.summary ?? undefined) ?? prior?.detail ?? null,
       startedAt,
+      lastEventAt: prior?.lastEventAt ?? endedAt ?? startedAt,
       endedAt,
+      events: prior?.events ?? [],
     });
   }
   return [...live.values()]

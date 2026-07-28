@@ -1,0 +1,178 @@
+{
+  "global": {
+    "pending": 5,
+    "running": 4,
+    "subagents": 6,
+    "completedLastHour": 12,
+    "runningSessions": 6
+  },
+  "projects": [
+    {
+      "id": "r-code",
+      "name": "r-code",
+      "path": "D:\\project\\rust\\r-code",
+      "accessMode": "风险模式",
+      "defaultModel": "GPT-5",
+      "memoryRules": 12,
+      "activeTasks": 4,
+      "pending": 2,
+      "running": 3,
+      "subagents": 4,
+      "completedLastHour": 8
+    },
+    {
+      "id": "api-server",
+      "name": "api-server",
+      "path": "D:\\project\\api-server",
+      "accessMode": "请求批准",
+      "defaultModel": "GPT-5",
+      "memoryRules": 6,
+      "activeTasks": 2,
+      "pending": 3,
+      "running": 1,
+      "subagents": 2,
+      "completedLastHour": 4
+    }
+  ],
+  "tasks": [
+    {
+      "id": "queue-concurrency",
+      "project": "r-code",
+      "title": "修复任务队列并发问题",
+      "status": "运行中",
+      "duration": "00:18:42",
+      "primaryAgent": "lin",
+      "subagents": 2,
+      "currentActivity": "运行 cargo test",
+      "risk": "R2",
+      "added": 54,
+      "removed": 13,
+      "files": [
+        {
+          "path": "src/queue.rs",
+          "added": 24,
+          "removed": 8
+        },
+        {
+          "path": "src/worker.rs",
+          "added": 17,
+          "removed": 3
+        },
+        {
+          "path": "tests/queue_test.rs",
+          "added": 13,
+          "removed": 2
+        }
+      ],
+      "verification": {
+        "stage": "授权后",
+        "command": "cargo test",
+        "status": "已通过",
+        "durationMs": 148,
+        "passed": 32,
+        "failed": 0,
+        "ignored": 0
+      }
+    },
+    {
+      "id": "pagination-api",
+      "project": "r-code",
+      "title": "实现分页查询接口",
+      "status": "运行中",
+      "duration": "00:15:07",
+      "primaryAgent": "lin",
+      "subagents": 2,
+      "currentActivity": "编写分页逻辑",
+      "added": 41,
+      "removed": 12
+    },
+    {
+      "id": "rust-compile",
+      "project": "r-code",
+      "title": "优化 Rust 编译性能",
+      "status": "运行中",
+      "duration": "00:11:33",
+      "primaryAgent": "codex",
+      "subagents": 1,
+      "currentActivity": "分析编译瓶颈",
+      "added": 19,
+      "removed": 4
+    },
+    {
+      "id": "unified-errors",
+      "project": "r-code",
+      "title": "统一错误处理规范",
+      "status": "待审核",
+      "primaryAgent": "lin",
+      "added": 86,
+      "removed": 24,
+      "files": [
+        {
+          "path": "src/error.rs",
+          "added": 36,
+          "removed": 8
+        },
+        {
+          "path": "src/api.rs",
+          "added": 22,
+          "removed": 6
+        },
+        {
+          "path": "tests/error_test.rs",
+          "added": 18,
+          "removed": 6
+        },
+        {
+          "path": "docs/errors.md",
+          "added": 10,
+          "removed": 4
+        }
+      ],
+      "verification": [
+        {
+          "command": "cargo fmt",
+          "status": "已通过",
+          "durationMs": 84
+        },
+        {
+          "command": "cargo test",
+          "status": "已通过",
+          "durationMs": 148
+        },
+        {
+          "command": "cargo clippy",
+          "status": "已通过",
+          "durationMs": 312
+        }
+      ]
+    },
+    {
+      "id": "rate-limit",
+      "project": "api-server",
+      "title": "添加请求限流中间件",
+      "status": "运行中",
+      "duration": "00:09:21",
+      "primaryAgent": "lin",
+      "subagents": 1,
+      "currentActivity": "实现令牌桶算法",
+      "added": 18,
+      "removed": 3
+    }
+  ],
+  "recentCompleted": [
+    {
+      "project": "r-code",
+      "title": "修复配置加载错误",
+      "duration": "00:06:52",
+      "added": 6,
+      "removed": 2
+    },
+    {
+      "project": "r-code",
+      "title": "更新依赖并修复告警",
+      "duration": "00:05:14",
+      "added": 3,
+      "removed": 1
+    }
+  ]
+}

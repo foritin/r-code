@@ -1,0 +1,5 @@
+# The frontend lives inside the Tauri crate. Vite rewrites these generated
+# directories during startup; watching them makes `tauri dev` kill and relaunch
+# the desktop host even though no Rust source changed.
+frontend/dist/
+frontend/node_modules/

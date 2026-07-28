@@ -71,6 +71,34 @@ impl PathGuard {
         }
     }
 
+    /// 与 [`resolve`](Self::resolve) 类似，但要求路径必须已存在。
+    ///
+    /// 用于只读工具（`list_files`、`read_file` 等）：路径不存在时直接返回
+    /// [`ProductError::PathNotFound`]，而不是通过祖先目录推断 containment。
+    /// 后者是写入工具（如 `create_file`）的语义——文件尚不存在但父目录在工作区内。
+    pub fn resolve_existing(&self, path: &Path) -> Result<PathBuf, ProductError> {
+        match path.canonicalize() {
+            Ok(canonical) => {
+                if canonical.starts_with(&self.root) {
+                    Ok(canonical)
+                } else {
+                    Err(ProductError::PathEscape(format!(
+                        "path {path:?} canonicalizes to {canonical:?} outside root {:?}",
+                        self.root
+                    )))
+                }
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                Err(ProductError::PathNotFound(format!(
+                    "path does not exist: {path:?}"
+                )))
+            }
+            Err(err) => Err(ProductError::PathEscape(format!(
+                "cannot canonicalize {path:?}: {err} (fail-closed)"
+            ))),
+        }
+    }
+
     /// 为尚不存在的路径解析 containment：找到最近的现存祖先并重新拼接尾段。
     ///
     /// 尾段中若出现 `..` / `.`（无法被祖先 canonical 化消解的相对组件），
@@ -306,6 +334,45 @@ mod tests {
         let guard = PathGuard::new(root.path().to_path_buf()).unwrap();
         let target = Path::new("/etc/r_code_nonexistent_marker_xyz.txt");
         let err = guard.resolve(target).unwrap_err();
+        assert!(matches!(err, ProductError::PathEscape(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn resolve_existing_accepts_existing_path() {
+        let root = make_root();
+        let guard = PathGuard::new(root.path().to_path_buf()).unwrap();
+        let file = root.path().join("hello.txt");
+        fs::write(&file, "hi").unwrap();
+        let resolved = guard
+            .resolve_existing(&file)
+            .expect("existing path should resolve");
+        assert_eq!(resolved, file.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn resolve_existing_rejects_nonexistent_path() {
+        let root = make_root();
+        let guard = PathGuard::new(root.path().to_path_buf()).unwrap();
+        let target = root.path().join("does_not_exist.txt");
+        assert!(!target.exists());
+        let err = guard.resolve_existing(&target).unwrap_err();
+        assert!(
+            matches!(err, ProductError::PathNotFound(_)),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_existing_rejects_escape() {
+        // 用外层 TempDir 包裹 root，在 root 之外放一个存在的文件，
+        // 验证 resolve_existing 对"存在但逃逸"的路径返回 PathEscape。
+        let outer = TempDir::new().expect("create outer temp dir");
+        let root = outer.path().join("root");
+        fs::create_dir(&root).expect("create root dir");
+        let guard = PathGuard::new(root).unwrap();
+        let outside = outer.path().join("outside.txt");
+        fs::write(&outside, "outside").unwrap();
+        let err = guard.resolve_existing(&outside).unwrap_err();
         assert!(matches!(err, ProductError::PathEscape(_)), "got: {err:?}");
     }
 

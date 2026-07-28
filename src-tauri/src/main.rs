@@ -6,6 +6,8 @@
 //! 3. 在 setup hook 中创建持久化 CommandState（AppData/r-code）+ 后台启动 IPC server
 //! 4. 注册 Tauri 命令（前端通过 invoke 调用）
 
+use std::ffi::OsStr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use hermes_ipc::IpcServer;
@@ -21,6 +23,24 @@ fn ping() -> bool {
 }
 
 fn main() {
+    // MCP stdio is a protocol endpoint: it must run before the normal JSON logger is
+    // initialized, otherwise a single log line would corrupt Codex's JSON-RPC stream.
+    match mcp_server_data_dir_from_args() {
+        Ok(Some(data_dir)) => {
+            let runtime = tokio::runtime::Runtime::new().expect("create MCP Tokio runtime");
+            if let Err(error) = runtime.block_on(r_code_host::mcp_server::serve_stdio(data_dir)) {
+                eprintln!("R-Code MCP server failed: {error}");
+                std::process::exit(1);
+            }
+            return;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    }
+
     r_code_host::init_logging();
     tracing::info!("R-Code Host starting (Tauri shell)...");
 
@@ -93,20 +113,30 @@ fn main() {
             tauri_commands::cmd_task_set_workspace,
             tauri_commands::cmd_task_set_provider,
             tauri_commands::cmd_task_set_model,
+            tauri_commands::cmd_task_rename,
+            tauri_commands::cmd_task_fork_context,
+            tauri_commands::cmd_task_compact_context,
             tauri_commands::cmd_task_detail,
+            tauri_commands::cmd_task_detail_batch,
             tauri_commands::cmd_agent_send,
             tauri_commands::cmd_agent_abort,
             tauri_commands::cmd_agent_abort_subagent,
+            tauri_commands::cmd_agent_delegate_codex,
+            tauri_commands::cmd_agent_delegate_codex_mcp,
             tauri_commands::cmd_agent_queue_list,
             tauri_commands::cmd_agent_queue_remove,
             tauri_commands::cmd_agent_resend,
             tauri_commands::cmd_permission_approve,
             tauri_commands::cmd_permission_pending,
+            tauri_commands::cmd_notification_list,
+            tauri_commands::cmd_notification_mark_read,
+            tauri_commands::cmd_notification_mark_all_read,
             tauri_commands::cmd_changes_list,
             tauri_commands::cmd_change_diff,
             tauri_commands::cmd_rollback_file,
             tauri_commands::cmd_rollback_task,
             tauri_commands::cmd_accept_task,
+            tauri_commands::cmd_change_request,
             tauri_commands::cmd_run_verification,
             tauri_commands::cmd_verification_list,
             tauri_commands::cmd_verification_output,
@@ -114,13 +144,19 @@ fn main() {
             tauri_commands::cmd_workspace_open,
             tauri_commands::cmd_workspace_choose,
             tauri_commands::cmd_workspace_set_access_mode,
+            tauri_commands::cmd_workspace_dashboard,
+            tauri_commands::cmd_project_activity_list,
+            tauri_commands::cmd_activity_list,
             tauri_commands::cmd_quick_open,
             tauri_commands::cmd_global_search,
             tauri_commands::cmd_terminal_list,
             tauri_commands::cmd_terminal_create,
+            tauri_commands::cmd_terminal_create_codex,
             tauri_commands::cmd_terminal_send,
             tauri_commands::cmd_terminal_read,
             tauri_commands::cmd_terminal_snapshot,
+            tauri_commands::cmd_terminal_raw_snapshot,
+            tauri_commands::cmd_terminal_raw_since,
             tauri_commands::cmd_terminal_kill,
             tauri_commands::cmd_terminal_resize,
             tauri_commands::cmd_recovery_data,
@@ -132,6 +168,7 @@ fn main() {
             tauri_commands::cmd_file_write,
             tauri_commands::cmd_replay,
             tauri_commands::cmd_session_messages,
+            tauri_commands::cmd_subagent_session_messages,
             tauri_commands::cmd_memory_get,
             tauri_commands::cmd_memory_set,
             tauri_commands::cmd_logs_tail,
@@ -142,11 +179,42 @@ fn main() {
             tauri_commands::cmd_settings_select_provider,
             tauri_commands::cmd_settings_delete_provider,
             tauri_commands::cmd_codex_integration_status,
+            tauri_commands::cmd_codex_install_cli,
             tauri_commands::cmd_codex_start_login,
+            tauri_commands::cmd_codex_start_device_login,
             tauri_commands::cmd_codex_install_skill,
+            tauri_commands::cmd_codex_install_mcp_server,
+            tauri_commands::cmd_codex_setup_collaboration,
+            tauri_commands::cmd_codex_cli_preferences,
+            tauri_commands::cmd_codex_save_cli_preferences,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 解析 `r-code-host mcp-server [--data-dir <path>]`。
+///
+/// 该小型 parser 不引入 CLI 框架，且只在第一个参数明确为 `mcp-server` 时接管
+/// 启动；普通 Tauri 命令行参数完全保持原状。
+fn mcp_server_data_dir_from_args() -> Result<Option<Option<PathBuf>>, String> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(OsStr::new("mcp-server")) {
+        return Ok(None);
+    }
+    let mut data_dir = None;
+    while let Some(argument) = args.next() {
+        if argument == OsStr::new("--data-dir") {
+            let path = args
+                .next()
+                .ok_or_else(|| "--data-dir requires a path".to_string())?;
+            if data_dir.replace(PathBuf::from(path)).is_some() {
+                return Err("--data-dir can only be specified once".to_string());
+            }
+        } else {
+            return Err("usage: r-code-host mcp-server [--data-dir <path>]".to_string());
+        }
+    }
+    Ok(Some(data_dir))
 }
 
 /// 启动后台 IPC server（保留 P0 行为：内存 SQLite + ping / task.create）。

@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use r_code_core::error::ProductError;
 use rusqlite::Connection;
 
-/// 目标 schema 版本（与 r-code-store::migrations 保持同步）。
-const TARGET_VERSION: u32 = 9;
+/// 目标 schema 版本（由实际 store migration 作为唯一来源）。
+const TARGET_VERSION: u32 = r_code_store::migrations::LATEST_SCHEMA_VERSION;
 
 /// Migration strategy for upgrading from previous versions.
 /// [doc-19 §6]
@@ -302,6 +302,21 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 9,
+            to_version: 10,
+            description: "Persistent notification center with read state".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 10,
+            to_version: 11,
+            description: "External agent runtime kind and resumable session identifiers"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -381,7 +396,7 @@ mod tests {
         let (_dir, db_path) = setup_fresh_db();
         let mgr = MigrationManager::new(db_path);
         let steps = mgr.pending_steps().unwrap();
-        assert_eq!(steps.len(), 7);
+        assert_eq!(steps.len(), TARGET_VERSION as usize);
         assert_eq!(steps[0].from_version, 0);
         assert_eq!(steps[0].to_version, 1);
         assert!(!steps[0].is_reversible);
@@ -394,6 +409,9 @@ mod tests {
         assert_eq!(steps[3].to_version, 4);
         assert_eq!(steps[4].to_version, 5);
         assert_eq!(steps[6].to_version, 7);
+        assert_eq!(steps[7].to_version, 8);
+        assert_eq!(steps[8].to_version, 9);
+        assert_eq!(steps.last().unwrap().to_version, TARGET_VERSION);
     }
 
     // ── dry_run ───────────────────────────────────────────────────
@@ -427,7 +445,7 @@ mod tests {
         assert!(!result.steps_applied.is_empty());
 
         // After: latest version, no migration needed
-        assert_eq!(mgr.current_version().unwrap(), 9);
+        assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION);
         assert!(!mgr.needs_migration().unwrap());
     }
 

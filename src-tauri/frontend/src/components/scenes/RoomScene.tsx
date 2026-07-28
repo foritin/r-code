@@ -84,6 +84,8 @@ export function RoomScene() {
   );
   const providers = useProviders([currentTaskId, boundProvider]);
   const [activity, dispatchActivity] = useReducer(activityTraceReducer, createActivityTraceState());
+  const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
+  const [subagentPanelRequest, setSubagentPanelRequest] = useState(0);
   const tlRef = useRef<TimelineHandle>(null);
   const roomRef = useRef<HTMLElement>(null);
   const splitDraggingRef = useRef(false);
@@ -105,6 +107,7 @@ export function RoomScene() {
 
   useEffect(() => {
     dispatchActivity({ type: "reset" });
+    setSelectedSubagentId(null);
   }, [currentTaskId]);
 
   usePoll(
@@ -321,7 +324,14 @@ export function RoomScene() {
           state={activity}
           running={running}
         />
-        <SubagentPanel key={currentTaskId} state={activity} onAbortSubagent={abortSubagent} />
+        <SubagentPanel
+          key={currentTaskId}
+          state={activity}
+          selectedSubagentId={selectedSubagentId}
+          onInspectSubagent={setSelectedSubagentId}
+          onAbortSubagent={abortSubagent}
+          openRequest={subagentPanelRequest}
+        />
         <PendingPermissions taskId={currentTaskId} />
         <Composer
           taskId={currentTaskId}
@@ -342,6 +352,7 @@ export function RoomScene() {
           onSent={(text, mode) => tlRef.current?.onSent(text, mode)}
           onSendFailed={() => tlRef.current?.reload()}
           onActivitySent={observeSend}
+          onShowSubagents={() => setSubagentPanelRequest((value) => value + 1)}
         />
       </div>
       <div
@@ -369,6 +380,9 @@ export function RoomScene() {
         activity={activity}
         workspacePath={workspacePath}
         workspaceAttached={workspaceAttached}
+        selectedSubagentId={selectedSubagentId}
+        onCloseSubagent={() => setSelectedSubagentId(null)}
+        onAbortSubagent={abortSubagent}
       />
     </section>
   );

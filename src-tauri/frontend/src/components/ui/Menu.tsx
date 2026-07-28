@@ -63,6 +63,8 @@ interface Props {
   /** 内容可滚动（长列表） */
   scroll?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** 递增该值可从斜杠命令等外部入口打开菜单。 */
+  openRequest?: number;
 }
 
 export function Menu({
@@ -77,6 +79,7 @@ export function Menu({
   className,
   scroll = false,
   onOpenChange,
+  openRequest,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
@@ -84,6 +87,13 @@ export function Menu({
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const menuId = useId();
+  const previousOpenRequest = useRef(openRequest);
+
+  useEffect(() => {
+    if (openRequest == null || openRequest === previousOpenRequest.current) return;
+    previousOpenRequest.current = openRequest;
+    if (!disabled) setOpen(true);
+  }, [disabled, openRequest]);
 
   const close = useCallback((returnFocus = true) => {
     setOpen((wasOpen) => {

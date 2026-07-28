@@ -185,6 +185,44 @@ impl AgentKind {
     }
 }
 
+/// Agent Run 的执行驱动。
+///
+/// `agent_kind` 描述它在运行树中的位置（主代理 / 子代理），本枚举描述实际由谁
+/// 执行。两者刻意分离：例如 Codex CLI 可以是 R-Code 主运行委派出的子代理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunRuntimeKind {
+    /// R-Code 内置 provider runtime。
+    #[default]
+    Native,
+    /// 非交互式 Codex CLI（`codex exec --json`）。
+    CodexExec,
+    /// 以 MCP 会话方式运行的 Codex CLI（`codex mcp-server`）。
+    CodexMcp,
+}
+
+impl std::fmt::Display for AgentRunRuntimeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Native => write!(f, "native"),
+            Self::CodexExec => write!(f, "codex_exec"),
+            Self::CodexMcp => write!(f, "codex_mcp"),
+        }
+    }
+}
+
+impl AgentRunRuntimeKind {
+    /// 尝试从持久化字符串解析。
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "native" => Some(Self::Native),
+            "codex_exec" => Some(Self::CodexExec),
+            "codex_mcp" => Some(Self::CodexMcp),
+            _ => None,
+        }
+    }
+}
+
 /// Agent Run DTO —— 一次 Agent 执行的生命周期记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
@@ -212,6 +250,14 @@ pub struct AgentRun {
     pub delegated_by_tool_call_id: Option<String>,
     /// 使用的模型名称
     pub model: String,
+    /// 实际执行此运行的驱动；历史记录缺省为 R-Code 内置 runtime。
+    #[serde(default)]
+    pub runtime_kind: AgentRunRuntimeKind,
+    /// 外部 Agent 的可恢复会话标识（例如 Codex thread ID）。
+    ///
+    /// 它不是凭据，也不会保存外部 Agent 的完整转录。
+    #[serde(default)]
+    pub external_session_id: Option<String>,
     /// 审查状态
     pub review_state: ReviewState,
     /// 开始时间
@@ -244,6 +290,8 @@ impl AgentRun {
             summary: None,
             delegated_by_tool_call_id: None,
             model: model.into(),
+            runtime_kind: AgentRunRuntimeKind::Native,
+            external_session_id: None,
             review_state: ReviewState::Pending,
             started_at: Utc::now(),
             ended_at: None,
@@ -284,6 +332,18 @@ impl AgentRun {
         run.agent_label = agent_label;
         run.delegated_by_tool_call_id = delegated_by_tool_call_id;
         run
+    }
+
+    /// 标记为由外部 Codex CLI 执行的只读子代理。
+    pub fn as_codex_exec_subagent(mut self) -> Self {
+        self.runtime_kind = AgentRunRuntimeKind::CodexExec;
+        self
+    }
+
+    /// 标记为由 Codex MCP 会话执行的只读子代理。
+    pub fn as_codex_mcp_subagent(mut self) -> Self {
+        self.runtime_kind = AgentRunRuntimeKind::CodexMcp;
+        self
     }
 
     /// 标记结束
@@ -784,6 +844,90 @@ impl Workspace {
 }
 
 // ============================================================================
+// Notification DTO
+// ============================================================================
+
+/// 顶栏通知的类别。
+///
+/// 通知是用户需要回看的产品级记录；它与任务事件不同，支持已读状态，且会跨越
+/// 页面刷新和应用重启保留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationKind {
+    /// Agent 正在等待一项权限决定。
+    PermissionRequested,
+    /// 一轮任务已经完成，等待用户审查变更。
+    ReviewReady,
+    /// 用户已对审查结果提出修改要求。
+    ChangeRequested,
+}
+
+impl std::fmt::Display for NotificationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PermissionRequested => write!(f, "permission_requested"),
+            Self::ReviewReady => write!(f, "review_ready"),
+            Self::ChangeRequested => write!(f, "change_requested"),
+        }
+    }
+}
+
+impl NotificationKind {
+    /// 从持久化字符串恢复通知类别。
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "permission_requested" => Some(Self::PermissionRequested),
+            "review_ready" => Some(Self::ReviewReady),
+            "change_requested" => Some(Self::ChangeRequested),
+            _ => None,
+        }
+    }
+}
+
+/// 一条可已读的用户通知。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Notification {
+    /// 稳定 UUID。
+    pub id: String,
+    /// 通知类别。
+    pub kind: NotificationKind,
+    /// 短标题。
+    pub title: String,
+    /// 可直接显示的正文摘要。
+    pub body: String,
+    /// 相关任务；无任务的系统通知可为 None。
+    pub task_id: Option<String>,
+    /// 相关工作区；纯聊天任务可为 None。
+    pub workspace_path: Option<String>,
+    /// 创建时间。
+    pub created_at: DateTime<Utc>,
+    /// 已读时间；None 表示未读。
+    pub read_at: Option<DateTime<Utc>>,
+}
+
+impl Notification {
+    /// 创建一条未读通知。
+    pub fn new(
+        kind: NotificationKind,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        task_id: Option<String>,
+        workspace_path: Option<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            kind,
+            title: title.into(),
+            body: body.into(),
+            task_id,
+            workspace_path,
+            created_at: Utc::now(),
+            read_at: None,
+        }
+    }
+}
+
+// ============================================================================
 // Task Event DTO  [doc-06 §3.9] [doc-16 §2]
 // ============================================================================
 
@@ -825,6 +969,8 @@ pub enum TaskEventType {
     FileChanged,
     /// 验证运行
     VerificationRun,
+    /// 用户在审查阶段请求继续修改。
+    ChangeRequested,
     /// 系统事件
     System,
 }
@@ -849,6 +995,7 @@ impl std::fmt::Display for TaskEventType {
             Self::PermissionDecided => write!(f, "permission_decided"),
             Self::FileChanged => write!(f, "file_changed"),
             Self::VerificationRun => write!(f, "verification_run"),
+            Self::ChangeRequested => write!(f, "change_requested"),
             Self::System => write!(f, "system"),
         }
     }
@@ -1160,6 +1307,12 @@ pub struct AgentEventScope {
     /// 触发此委派的父代理工具调用 ID。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegated_by_tool_call_id: Option<String>,
+    /// 实际执行此子运行的驱动；旧事件缺省为 R-Code 内置 runtime。
+    #[serde(default)]
+    pub runtime_kind: AgentRunRuntimeKind,
+    /// 此子运行使用的模型或执行器标签；旧事件可能没有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// 子代理的可观察生命周期状态。
@@ -1465,6 +1618,8 @@ mod tests {
         assert!(run.parent_run_id.is_none());
         assert!(run.agent_label.is_none());
         assert!(run.delegated_by_tool_call_id.is_none());
+        assert_eq!(run.runtime_kind, AgentRunRuntimeKind::Native);
+        assert!(run.external_session_id.is_none());
         assert_eq!(run.review_state, ReviewState::Pending);
         run.finish(ReviewState::Accepted);
         assert!(!run.is_active());
@@ -1490,6 +1645,8 @@ mod tests {
         assert!(legacy.parent_run_id.is_none());
         assert!(legacy.agent_label.is_none());
         assert!(legacy.delegated_by_tool_call_id.is_none());
+        assert_eq!(legacy.runtime_kind, AgentRunRuntimeKind::Native);
+        assert!(legacy.external_session_id.is_none());
 
         let child = AgentRun::new_subagent_for_branch(
             "task-1",
@@ -1511,7 +1668,39 @@ mod tests {
         let main_child = AgentRun::new_subagent("task-1", "parent-run", "child-model", None, None);
         assert_eq!(main_child.branch_id, "main");
         assert_eq!(main_child.agent_kind, AgentKind::Subagent);
+
+        let codex_child = main_child.clone().as_codex_exec_subagent();
+        assert_eq!(codex_child.runtime_kind, AgentRunRuntimeKind::CodexExec);
+        let codex_mcp_child = main_child.clone().as_codex_mcp_subagent();
+        assert_eq!(codex_mcp_child.runtime_kind, AgentRunRuntimeKind::CodexMcp);
+        assert_eq!(
+            AgentRunRuntimeKind::try_from_str("codex_mcp"),
+            Some(AgentRunRuntimeKind::CodexMcp)
+        );
         assert_eq!(main_child.parent_run_id.as_deref(), Some("parent-run"));
+    }
+
+    #[test]
+    fn agent_event_scope_preserves_runtime_identity_with_legacy_defaults() {
+        let legacy: AgentEventScope = serde_json::from_str(
+            r#"{
+                "run_id": "child-run",
+                "agent_id": "child-agent",
+                "agent_kind": "subagent"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.runtime_kind, AgentRunRuntimeKind::Native);
+        assert!(legacy.model.is_none());
+
+        let codex = AgentEventScope {
+            runtime_kind: AgentRunRuntimeKind::CodexExec,
+            model: Some("codex-cli".to_string()),
+            ..legacy
+        };
+        let encoded = serde_json::to_value(codex).unwrap();
+        assert_eq!(encoded["runtime_kind"], "codex_exec");
+        assert_eq!(encoded["model"], "codex-cli");
     }
 
     #[test]
