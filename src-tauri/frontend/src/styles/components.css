@@ -64,6 +64,94 @@
 /* 切换确认条挂在控件行下方，不撑开输入框 */
 .comp-meta .room-provider-confirm { flex-basis: 100%; }
 
+/* ---------- 斜杠命令 ----------
+   扁平列表而不是“弹层里再堆卡片”：命令、说明和参数在一条清晰基线上。 */
+.slash-menu {
+  position: absolute;
+  z-index: var(--z-popover);
+  right: 0;
+  bottom: calc(100% + var(--sp-4));
+  left: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-popover);
+  animation: popIn var(--dur-2) var(--ease-out);
+}
+.composer > .slash-menu {
+  right: var(--sp-6);
+  bottom: calc(100% - var(--sp-1));
+  left: var(--sp-6);
+}
+.slash-menu-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--control-h-lg);
+  gap: var(--sp-6);
+  padding: 0 var(--sp-6);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+}
+.slash-menu-head > span:first-child { color: var(--fg-muted); font-weight: var(--weight-strong); }
+.slash-menu-list { max-height: min(356px, 48vh); overflow-y: auto; padding: var(--sp-2); }
+.slash-menu-category {
+  padding: var(--sp-4) var(--sp-4) var(--sp-2);
+  color: var(--fg-faint);
+  font-size: var(--kicker-size);
+  font-weight: var(--kicker-weight);
+  letter-spacing: var(--kicker-tracking);
+}
+.slash-menu-item {
+  display: grid;
+  grid-template-columns: minmax(92px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 46px;
+  gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--fg-muted);
+  text-align: left;
+}
+.slash-menu-item:hover,
+.slash-menu-item[data-active="true"] { background: var(--bg-hover); }
+.slash-menu-item[aria-disabled="true"] { opacity: .48; cursor: default; }
+.slash-command-name { color: var(--accent); font: var(--text-sm) var(--font-mono); white-space: nowrap; }
+.slash-command-copy { display: grid; min-width: 0; gap: var(--sp-1); }
+.slash-command-copy strong {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slash-command-copy small {
+  overflow: hidden;
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slash-command-args {
+  max-width: 190px;
+  overflow: hidden;
+  color: var(--fg-faint);
+  font: var(--text-meta) var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .slash-menu-head > span:last-child,
+  .slash-command-args { display: none; }
+  .slash-menu-item { grid-template-columns: 86px minmax(0, 1fr); }
+}
+
 /* ---------- 侧栏折叠 ---------- */
 #app.rail-is-collapsed { --rail-current-w: var(--rail-w-collapsed); }
 

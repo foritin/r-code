@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 
 use r_code_core::error::ProductError;
 
-use crate::manager::{TerminalId, TerminalManager, TerminalState};
+use crate::manager::{
+    TerminalId, TerminalManager, TerminalRawBatch, TerminalRawSnapshot, TerminalState,
+};
 
 /// Terminal control service - implements the six terminal.* primitives.
 /// All operations go through the same Tool Gateway + Permission Engine + Ledger.
@@ -106,6 +108,26 @@ impl TerminalControlService {
     pub async fn snapshot(&self, terminal_id: &str) -> Result<String, ProductError> {
         let data = self.manager.snapshot(terminal_id).await?;
         Ok(String::from_utf8_lossy(&data).to_string())
+    }
+
+    /// 受控桌面渲染器的原始快照。
+    ///
+    /// 这不是 agent 工具：原始控制序列只能交给本机终端模拟器渲染，agent 继续走
+    /// [`Self::read`] 获取 ANSI-free 文本。
+    pub async fn raw_snapshot(
+        &self,
+        terminal_id: &str,
+    ) -> Result<TerminalRawSnapshot, ProductError> {
+        self.manager.raw_snapshot(terminal_id).await
+    }
+
+    /// 受控桌面渲染器的原始增量输出。
+    pub async fn raw_since(
+        &self,
+        terminal_id: &str,
+        cursor: u64,
+    ) -> Result<TerminalRawBatch, ProductError> {
+        self.manager.raw_since(terminal_id, cursor).await
     }
 
     /// terminal.send - Inject text + optional Enter.

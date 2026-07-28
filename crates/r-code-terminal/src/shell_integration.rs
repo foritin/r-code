@@ -23,6 +23,19 @@ pub struct ShellIntegrationConfig {
 pub struct ShellIntegrationResult {
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    /// 为本次 shell 启动创建的临时目录。PTY 退出后由 TerminalManager 清理，
+    /// 避免每次打开终端都遗留一份 profile shim。
+    pub cleanup_dir: Option<PathBuf>,
+}
+
+impl ShellIntegrationResult {
+    fn none() -> Self {
+        Self {
+            args: vec![],
+            env: vec![],
+            cleanup_dir: None,
+        }
+    }
 }
 
 /// 生成 shell 集成 spawn 参数。
@@ -31,10 +44,7 @@ pub struct ShellIntegrationResult {
 /// 对于不支持的 shell 或 `enabled: false`，返回空结果（降级模式，无错误）。
 pub fn shell_integration_spawn(config: &ShellIntegrationConfig) -> ShellIntegrationResult {
     if !config.enabled {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        return ShellIntegrationResult::none();
     }
 
     let shell_name = Path::new(&config.shell)
@@ -47,10 +57,7 @@ pub fn shell_integration_spawn(config: &ShellIntegrationConfig) -> ShellIntegrat
         "bash" => spawn_bash(),
         "fish" => spawn_fish(),
         "powershell" | "powershell.exe" | "pwsh" | "pwsh.exe" => spawn_powershell(),
-        _ => ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        },
+        _ => ShellIntegrationResult::none(),
     }
 }
 
@@ -59,10 +66,7 @@ fn spawn_zsh() -> ShellIntegrationResult {
     let zdotdir = std::env::temp_dir().join(format!("r-code-zsh-{}", uuid::Uuid::new_v4()));
 
     if fs::create_dir_all(&zdotdir).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        return ShellIntegrationResult::none();
     }
 
     let zshrc = r#"# R-Code shell integration for zsh
@@ -90,10 +94,8 @@ preexec_functions=(_r_code_preexec $preexec_functions)
 "#;
 
     if fs::write(zdotdir.join(".zshrc"), zshrc).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        let _ = fs::remove_dir_all(&zdotdir);
+        return ShellIntegrationResult::none();
     }
 
     // 保存用户原始 ZDOTDIR（如果有）
@@ -105,7 +107,11 @@ preexec_functions=(_r_code_preexec $preexec_functions)
     }
     env.push(("ZDOTDIR".to_string(), zdotdir.to_string_lossy().to_string()));
 
-    ShellIntegrationResult { args: vec![], env }
+    ShellIntegrationResult {
+        args: vec![],
+        env,
+        cleanup_dir: Some(zdotdir),
+    }
 }
 
 /// bash 集成：使用 --init-file 指向脚本，安装 PROMPT_COMMAND + DEBUG trap。
@@ -113,10 +119,7 @@ fn spawn_bash() -> ShellIntegrationResult {
     let script_dir = std::env::temp_dir().join(format!("r-code-bash-{}", uuid::Uuid::new_v4()));
 
     if fs::create_dir_all(&script_dir).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        return ShellIntegrationResult::none();
     }
 
     let script_path = script_dir.join("r-code-init.bash");
@@ -151,10 +154,8 @@ trap '__r_code_preexec' DEBUG
 "#;
 
     if fs::write(&script_path, script).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        let _ = fs::remove_dir_all(&script_dir);
+        return ShellIntegrationResult::none();
     }
 
     ShellIntegrationResult {
@@ -163,6 +164,7 @@ trap '__r_code_preexec' DEBUG
             script_path.to_string_lossy().to_string(),
         ],
         env: vec![],
+        cleanup_dir: Some(script_dir),
     }
 }
 
@@ -172,10 +174,7 @@ fn spawn_fish() -> ShellIntegrationResult {
     let conf_dir = data_dir.join("fish").join("vendor_conf.d");
 
     if fs::create_dir_all(&conf_dir).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        return ShellIntegrationResult::none();
     }
 
     let script = r#"# R-Code shell integration for fish
@@ -195,10 +194,8 @@ end
 "#;
 
     if fs::write(conf_dir.join("r-code.fish"), script).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        let _ = fs::remove_dir_all(&data_dir);
+        return ShellIntegrationResult::none();
     }
 
     // Prepend 到 XDG_DATA_DIRS（保留原始值）
@@ -216,21 +213,20 @@ end
     ShellIntegrationResult {
         args: vec![],
         env: vec![("XDG_DATA_DIRS".to_string(), xdg)],
+        cleanup_dir: Some(data_dir),
     }
 }
 
 /// PowerShell 集成：使用 -NoProfile + 自定义 profile 脚本安装 OSC 133 hooks。
 ///
 /// 兼容 Windows PowerShell 5.x 和 PowerShell Core 7.x (pwsh)。
-/// 通过自定义 prompt 函数发射 A/B 标记，通过 PSReadLine OutBuffer 处理 C 标记。
+/// 通过自定义 prompt 函数发射 A/B/D 标记，通过 PSReadLine Enter handler
+/// 在**保留原有 AcceptLine 行为**的前提下发射 C 标记。
 fn spawn_powershell() -> ShellIntegrationResult {
     let script_dir = std::env::temp_dir().join(format!("r-code-pwsh-{}", uuid::Uuid::new_v4()));
 
     if fs::create_dir_all(&script_dir).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        return ShellIntegrationResult::none();
     }
 
     let script_path = script_dir.join("r-code-init.ps1");
@@ -239,40 +235,35 @@ fn spawn_powershell() -> ShellIntegrationResult {
 # Source user's profile first
 if (Test-Path $PROFILE) { . $PROFILE }
 
-# OSC 133 shell integration
-$_r_code_exit_code = 0
-
 # Override prompt to emit OSC 133 A/B markers
 function global:prompt {
-    # Emit exit code of last command (D marker)
-    [Console]::Write("`e]133;D;$_r_code_exit_code`a")
+    # `$?` still represents the command that completed immediately before the
+    # prompt. Map it to a portable process-style status code for OSC 133.
+    $exitCode = if ($?) { 0 } else { 1 }
+    [Console]::Write("`e]133;D;$exitCode`a")
     # Emit A (prompt start) and B (command input start)
     [Console]::Write("`e]133;A`a")
     [Console]::Write("`e]133;B`a")
-    # Reset exit code tracker
-    $_r_code_exit_code = 0
     # Return original prompt text (simplified)
     "PS $($executionContext.SessionState.Path.CurrentLocation)> "
 }
 
 # Use PSReadLine to detect command execution (C marker)
-# This fires when the user presses Enter to execute a command
+# This fires when the user presses Enter. It must call AcceptLine afterwards:
+# replacing the handler without it leaves the PowerShell prompt unable to run
+# commands, which is worse than having no shell integration at all.
 if (Get-Module -ListAvailable -Name PSReadLine) {
     Import-Module PSReadLine
     Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {
-        # Emit C marker before executing the command
         [Console]::Write("`e]133;C`a")
-        # Save the exit code after the command runs
-        $_r_code_exit_code = $LASTEXITCODE
+        [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
     }
 }
 "#;
 
     if fs::write(&script_path, script).is_err() {
-        return ShellIntegrationResult {
-            args: vec![],
-            env: vec![],
-        };
+        let _ = fs::remove_dir_all(&script_dir);
+        return ShellIntegrationResult::none();
     }
 
     ShellIntegrationResult {
@@ -283,6 +274,7 @@ if (Get-Module -ListAvailable -Name PSReadLine) {
             script_path.to_string_lossy().to_string(),
         ],
         env: vec![],
+        cleanup_dir: Some(script_dir),
     }
 }
 
@@ -599,6 +591,10 @@ mod tests {
         assert!(
             content.contains("PSReadLine"),
             "should use PSReadLine for C marker"
+        );
+        assert!(
+            content.contains("AcceptLine()"),
+            "custom Enter handler must preserve command execution"
         );
         assert!(
             content.contains("function global:prompt"),

@@ -32,6 +32,12 @@ export interface Task {
   updated_at: string;
 }
 
+export interface ContextCompactionResult {
+  compacted: boolean;
+  before_messages: number;
+  after_messages: number;
+}
+
 export type ReviewState =
   | "pending"
   | "accepted"
@@ -42,6 +48,7 @@ export type ReviewState =
   | "failed";
 
 export type AgentRunKind = "main" | "subagent";
+export type AgentRunRuntimeKind = "native" | "codex_exec" | "codex_mcp";
 
 export interface AgentRun {
   id: string;
@@ -53,6 +60,8 @@ export interface AgentRun {
   summary: string | null;
   delegated_by_tool_call_id: string | null;
   model: string;
+  runtime_kind: AgentRunRuntimeKind;
+  external_session_id: string | null;
   review_state: ReviewState;
   started_at: string;
   ended_at: string | null;
@@ -77,6 +86,7 @@ export type TaskEventType =
   | "permission_decided"
   | "file_changed"
   | "verification_run"
+  | "change_requested"
   | "system";
 
 export interface TaskEvent {
@@ -150,6 +160,95 @@ export interface TaskDetail {
   queued_messages: QueuedMessage[];
 }
 
+/** cmd_task_detail_batch：每项与单任务详情完全一致。 */
+export interface TaskDetailBatch {
+  details: TaskDetail[];
+}
+
+// ---------- 项目仪表盘 / 活动 ----------
+export interface DashboardChangeSummary {
+  files: number;
+  created: number;
+  modified: number;
+  removed: number;
+  renamed: number;
+}
+
+export interface DashboardTaskSummary {
+  task: Task;
+  activity: string;
+  agent_label: string;
+  pending_permission_count: number;
+  active_run: AgentRun | null;
+  change_summary: DashboardChangeSummary;
+  latest_verification: VerificationRecord | null;
+}
+
+export type DashboardAttentionKind = "permission" | "review_ready";
+
+export interface DashboardAttentionItem {
+  kind: DashboardAttentionKind;
+  task: Task;
+  permission?: PermissionRequest;
+  since: string;
+}
+
+export interface WorkspaceDashboardMetrics {
+  task_count: number;
+  pending_permission_count: number;
+  review_ready_count: number;
+  running_task_count: number;
+  active_subagent_count: number;
+  completed_last_hour_count: number;
+}
+
+export interface WorkspaceDashboard {
+  workspace: Workspace;
+  generated_at: string;
+  metrics: WorkspaceDashboardMetrics;
+  tasks: DashboardTaskSummary[];
+  attention: DashboardAttentionItem[];
+  completed: DashboardTaskSummary[];
+}
+
+export interface ProjectActivityItem {
+  id: string;
+  at: string;
+  kind: TaskEventType;
+  summary: string;
+  task_id: string;
+  task_title: string;
+  workspace_path: string | null;
+  run_id?: string;
+  actor?: string;
+  metadata: unknown;
+}
+
+export interface ProjectActivityPage {
+  items: ProjectActivityItem[];
+  next_cursor?: string;
+}
+
+// ---------- 通知中心 ----------
+export type NotificationKind = "permission_requested" | "review_ready" | "change_requested";
+
+export interface Notification {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  task_id: string | null;
+  workspace_path: string | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+export interface NotificationPage {
+  notifications: Notification[];
+  next_cursor?: string;
+  unread_count: number;
+}
+
 // ---------- 会话分支与运行控制 ----------
 export type AgentSendMode = "auto" | "steer" | "queue" | "send_now";
 
@@ -204,10 +303,28 @@ export interface TerminalInfo {
   is_busy: boolean;
 }
 
+/** 原始 PTY 快照，只能交给本机终端模拟器解释。 */
+export interface TerminalRawSnapshot {
+  output: string;
+  cursor: number;
+}
+
+/** 自某个 PTY 游标以来的原始输出；reset 时需重放完整 output。 */
+export interface TerminalRawBatch extends TerminalRawSnapshot {
+  reset: boolean;
+}
+
 // ---------- 恢复 ----------
 export interface RecoveryPageData {
   interrupted_tasks: string[];
   orphaned_permissions: number;
+}
+
+export interface RecoveryCleanupResult {
+  runs_closed: number;
+  tasks_interrupted: number;
+  permissions_denied: number;
+  tool_calls_closed: number;
 }
 
 // ---------- 回放 ----------
@@ -253,6 +370,8 @@ export interface AgentEventScope {
   agent_kind: AgentRunKind;
   agent_label?: string;
   delegated_by_tool_call_id?: string;
+  runtime_kind?: AgentRunRuntimeKind;
+  model?: string;
 }
 
 export type AgentEvent =
@@ -406,13 +525,53 @@ export interface ProviderSettingsInput {
 export interface CodexIntegrationStatus {
   cli_available: boolean;
   cli_path?: string | null;
+  cli_version?: string | null;
+  /** 本地命令不可用时的脱敏诊断，不含 CLI 原始输出。 */
+  cli_error?: string | null;
+  /** 是否找到可运行的 npm，可在用户确认后执行固定的官方安装命令。 */
+  installer_available?: boolean;
+  installer_command?: string;
+  installer_error?: string | null;
   config_path: string;
   config_exists: boolean;
   auth_path: string;
   authenticated: boolean;
+  /** 由 `codex login status` 得到；不根据 auth.json 是否存在猜测。 */
+  auth_status?: "authenticated" | "not_authenticated" | "unknown" | string;
+  auth_method?: "ChatGPT" | "API Key" | "访问令牌" | string | null;
   skill_path: string;
   skill_status: "not_installed" | "up_to_date" | "update_available" | string;
+  /** 是否已在 Codex 中配置本机 `r-code` stdio MCP server。 */
+  mcp_server_configured?: boolean;
+  mcp_server_name?: string;
+  /** CLI、登录、Skill 与 MCP 是否全部可以用于 R-Code 协作。 */
+  integration_ready?: boolean;
+  /** 后端根据真实探针归纳出的唯一下一步。 */
+  setup_state?: "install_cli" | "login" | "check" | "configure" | "ready";
   wire_api: "responses" | string;
+}
+
+export interface CodexReasoningOption {
+  effort: string;
+  description: string;
+}
+
+export interface CodexModelOption {
+  slug: string;
+  display_name: string;
+  description: string;
+  default_reasoning_effort: string;
+  supported_reasoning_efforts: CodexReasoningOption[];
+}
+
+export interface CodexCliPreferences {
+  /** null 表示不覆盖，继续使用 Codex 默认。 */
+  model: string | null;
+  reasoning_effort: string | null;
+  verbosity: "low" | "medium" | "high" | string | null;
+  /** 由当前已登录 CLI 的 `codex debug models` 返回。 */
+  models: CodexModelOption[];
+  config_path: string;
 }
 
 export interface AppConfig {

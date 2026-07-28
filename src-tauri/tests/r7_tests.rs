@@ -329,8 +329,8 @@ fn r7_t4_desktop_verification_html_structure() {
         "should have viewport meta for responsive"
     );
     assert!(
-        html.contains("name=\"color-scheme\" content=\"dark\""),
-        "should declare dark color scheme"
+        html.contains("name=\"color-scheme\" content=\"light dark\""),
+        "should declare both supported color schemes"
     );
     assert!(
         html.contains("id=\"root\""),
@@ -343,7 +343,9 @@ fn r7_t4_desktop_verification_html_structure() {
             .unwrap();
     for scene in [
         "HomeScene",
-        "DeckScene",
+        "DashboardScene",
+        "ConversationsScene",
+        "ActivityScene",
         "RoomScene",
         "InboxScene",
         "ProjectsScene",
@@ -357,7 +359,9 @@ fn r7_t4_desktop_verification_html_structure() {
     // 验证场景文件存在
     for scene in [
         "HomeScene",
-        "DeckScene",
+        "DashboardScene",
+        "ConversationsScene",
+        "ActivityScene",
         "RoomScene",
         "InboxScene",
         "ProjectsScene",
@@ -387,13 +391,15 @@ fn r7_t4_desktop_verification_motion_safety() {
         "reduced-motion should stop all animations"
     );
 
-    // shell 栅格：紧凑标题栏 / 单一会话侧栏 / 主工作区
+    // 当前桌面壳：顶栏 / 项目 rail / 主工作区。r-code-ui.css 在基础 shell 之后加载，
+    // 因此验证最终生效的网格合同，而不是过期的 34px / 252px 原型值。
     let shell = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/styles/shell.css"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/styles/r-code-ui.css"),
     )
     .unwrap();
-    assert!(shell.contains("grid-template-rows: 34px"));
-    assert!(shell.contains("grid-template-columns: 252px"));
+    assert!(shell.contains("--rc-topbar-h: 66px"));
+    assert!(shell.contains("grid-template-rows: var(--rc-topbar-h)"));
+    assert!(shell.contains("grid-template-columns: var(--rc-current-rail)"));
 }
 
 #[test]
@@ -455,11 +461,15 @@ fn r7_t4_desktop_verification_app_wiring() {
         "cmd_task_create",
         "cmd_agent_send",
         "cmd_agent_abort",
+        "cmd_agent_delegate_codex",
+        "cmd_agent_delegate_codex_mcp",
         "cmd_permission_approve",
         "cmd_changes_list",
         "cmd_change_diff",
         "cmd_run_verification",
         "cmd_terminal_create",
+        "cmd_terminal_raw_snapshot",
+        "cmd_terminal_raw_since",
         "cmd_replay",
         "cmd_session_messages",
         "cmd_memory_get",
@@ -469,6 +479,9 @@ fn r7_t4_desktop_verification_app_wiring() {
         "cmd_settings_get",
         "cmd_settings_save_provider",
         "cmd_codex_integration_status",
+        "cmd_codex_start_login",
+        "cmd_codex_start_device_login",
+        "cmd_codex_install_mcp_server",
     ] {
         assert!(ipc.contains(cmd), "ipc wrapper should exist: {cmd}");
     }
@@ -517,9 +530,10 @@ fn r7_t5_accessibility_aria_roles() {
     assert!(app.contains("role=\"main\""), "main region role");
 
     let home = read("frontend/src/components/scenes/HomeScene.tsx");
+    let status_bar = read("frontend/src/components/ui/StatusBar.tsx");
     assert!(
-        home.contains("role=\"status\""),
-        "status region for recovery banner"
+        home.contains("<StatusBar") && status_bar.contains("warn: \"status\""),
+        "recovery banner should use the shared status live region"
     );
 
     let deck = read("frontend/src/components/scenes/DeckScene.tsx");

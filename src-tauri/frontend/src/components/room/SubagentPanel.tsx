@@ -1,20 +1,30 @@
 /**
- * 子代理监督面板。
- * 只展示运行树、已分类工具动作、权限等待与最终摘要，不渲染模型增量或私有推理。
+ * 子代理概览。
+ *
+ * 主对话只保留一条可展开的运行树和扁平列表；完整审计在右侧详情中查看，避免
+ * “面板 → 分组 → 卡片”三层边框。这里不渲染模型私有推理。
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ActivitySubagent, ActivityTraceState } from "./activity";
-import { IconStop } from "../icons";
+import { IconChevronDown, IconChevronRight, IconStop } from "../icons";
 
 interface Props {
   state: ActivityTraceState;
+  selectedSubagentId?: string | null;
+  onInspectSubagent?: (subagentId: string) => void;
   onAbortSubagent?: (subagentId: string) => Promise<void>;
+  openRequest?: number;
 }
 
-export function SubagentPanel({ state, onAbortSubagent }: Props) {
+export function SubagentPanel({
+  state,
+  selectedSubagentId,
+  onInspectSubagent,
+  onAbortSubagent,
+  openRequest,
+}: Props) {
   const [now, setNow] = useState(() => Date.now());
-  const [activeOpen, setActiveOpen] = useState(true);
-  const [doneOpen, setDoneOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,8 +38,12 @@ export function SubagentPanel({ state, onAbortSubagent }: Props) {
   );
 
   useEffect(() => {
-    if (active.length > 0) setActiveOpen(true);
+    if (active.length > 0) setOpen(true);
   }, [active.length]);
+
+  useEffect(() => {
+    if (openRequest) setOpen(true);
+  }, [openRequest]);
 
   useEffect(() => {
     if (active.length === 0) return;
@@ -54,117 +68,102 @@ export function SubagentPanel({ state, onAbortSubagent }: Props) {
   };
 
   return (
-    <section className="subagent-panel" aria-label="子代理监督">
-      <div className="subagent-panel-head">
-        <span className="subagent-panel-title">子代理监督</span>
-        <span className="subagent-panel-count">
-          Active {active.length} · Done {done.length}
+    <section className="subagent-panel" aria-label="子代理">
+      <button
+        className="subagent-panel-toggle"
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <span className="subagent-panel-title">
+          <i className={active.length > 0 ? "is-active" : ""} aria-hidden="true" />
+          子代理
         </span>
-      </div>
+        <span className="subagent-panel-count">
+          {active.length > 0 ? `${active.length} 正在运行` : "无运行中"}
+          {done.length > 0 ? ` · ${done.length} 已完成` : ""}
+        </span>
+        {open ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+      </button>
 
-      {active.length > 0 && (
-        <AgentGroup
-          title="Active"
-          count={active.length}
-          open={activeOpen}
-          onToggle={() => setActiveOpen((value) => !value)}
-        >
+      {open && (
+        <div className="subagent-list">
+          {active.length > 0 && <div className="subagent-list-label">正在运行</div>}
           {active.map((child) => (
-            <AgentCard
+            <AgentRow
               key={child.id}
               child={child}
               now={now}
+              selected={selectedSubagentId === child.id}
               stopping={stoppingId === child.id}
+              onInspect={onInspectSubagent ? () => onInspectSubagent(child.id) : undefined}
               onStop={onAbortSubagent ? () => void stop(child.id) : undefined}
             />
           ))}
-        </AgentGroup>
-      )}
-
-      {done.length > 0 && (
-        <AgentGroup
-          title="Done"
-          count={done.length}
-          open={doneOpen}
-          onToggle={() => setDoneOpen((value) => !value)}
-        >
+          {done.length > 0 && <div className="subagent-list-label done">最近完成</div>}
           {done.map((child) => (
-            <AgentCard key={child.id} child={child} now={now} />
+            <AgentRow
+              key={child.id}
+              child={child}
+              now={now}
+              selected={selectedSubagentId === child.id}
+              onInspect={onInspectSubagent ? () => onInspectSubagent(child.id) : undefined}
+            />
           ))}
-        </AgentGroup>
+        </div>
       )}
 
-      {error && <div className="subagent-panel-error">停止子代理失败：{error}</div>}
+      {error && <div className="subagent-panel-error">停止失败：{error}</div>}
     </section>
   );
 }
 
-function AgentGroup({
-  title,
-  count,
-  open,
-  onToggle,
-  children,
-}: {
-  title: "Active" | "Done";
-  count: number;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <div className={`subagent-group group-${title.toLowerCase()}`}>
-      <button
-        className="subagent-group-toggle"
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-      >
-        <span>{title}</span>
-        <span className="subagent-group-count">{count}</span>
-        <span className="subagent-group-arrow">{open ? "收起" : "展开"}</span>
-      </button>
-      {open && <div className="subagent-group-list">{children}</div>}
-    </div>
-  );
-}
-
-function AgentCard({
+function AgentRow({
   child,
   now,
+  selected,
   stopping = false,
+  onInspect,
   onStop,
 }: {
   child: ActivitySubagent;
   now: number;
+  selected: boolean;
   stopping?: boolean;
+  onInspect?: () => void;
   onStop?: () => void;
 }) {
-  const terminal = !isActive(child.status);
   const observation = childObservation(child);
   return (
-    <article className={`subagent-card status-${child.status}`}>
-      <span className="subagent-card-lamp" aria-hidden="true" />
-      <div className="subagent-card-main">
-        <div className="subagent-card-topline">
-          <span className="subagent-card-label" title={child.label}>
-            {child.label}
+    <div className={`subagent-row status-${child.status}${selected ? " selected" : ""}`}>
+      <button className="subagent-row-main" type="button" onClick={onInspect} disabled={!onInspect}>
+        <span className="subagent-row-lamp" aria-hidden="true" />
+        <span className="subagent-row-copy">
+          <span className="subagent-row-topline">
+            <strong title={child.label}>{child.label}</strong>
+            <span>{statusLabel(child.status)}</span>
           </span>
-          <span className="subagent-card-status">{statusLabel(child.status)}</span>
-          <span className="subagent-card-elapsed">
-            {elapsedLabel(child.startedAt, child.endedAt ?? now)}
-          </span>
-        </div>
-        <div className={`subagent-card-observation${terminal ? " summary" : ""}`} title={observation}>
-          {terminal ? "摘要：" : "动作："}{observation}
-        </div>
-      </div>
+          <span className="subagent-row-observation" title={observation}>{observation}</span>
+        </span>
+        <span className="subagent-row-time">
+          {elapsedLabel(child.startedAt, child.endedAt ?? now)}
+        </span>
+        {onInspect && <IconChevronRight className="subagent-row-arrow" width={13} height={13} />}
+      </button>
       {onStop && (
-        <button className="subagent-card-stop" type="button" disabled={stopping} onClick={onStop}>
-          <IconStop width={11} height={11} /> {stopping ? "停止中…" : "停止"}
+        <button
+          className="subagent-row-stop"
+          type="button"
+          disabled={stopping}
+          onClick={onStop}
+          aria-label={`停止 ${child.label}`}
+          title="停止子代理"
+        >
+          <IconStop width={11} height={11} />
+          <span>{stopping ? "停止中" : "停止"}</span>
         </button>
       )}
-    </article>
+    </div>
   );
 }
 
@@ -174,36 +173,24 @@ function isActive(status: ActivitySubagent["status"]): boolean {
 
 function statusLabel(status: ActivitySubagent["status"]): string {
   switch (status) {
-    case "queued":
-      return "等待执行";
-    case "running":
-      return "工作中";
-    case "waiting_permission":
-      return "等待权限";
-    case "completed":
-      return "已完成";
-    case "failed":
-      return "失败";
-    case "cancelled":
-      return "已停止";
+    case "queued": return "等待执行";
+    case "running": return "工作中";
+    case "waiting_permission": return "等待权限";
+    case "completed": return "已完成";
+    case "failed": return "失败";
+    case "cancelled": return "已停止";
   }
 }
 
 function childObservation(child: ActivitySubagent): string {
   if (child.detail) return child.detail;
   switch (child.status) {
-    case "queued":
-      return "等待调度";
-    case "running":
-      return "等待可观察动作";
-    case "waiting_permission":
-      return "等待权限批准";
-    case "completed":
-      return "已完成，暂无摘要";
-    case "failed":
-      return "运行未完成";
-    case "cancelled":
-      return "已停止";
+    case "queued": return "等待调度";
+    case "running": return "等待第一条进度";
+    case "waiting_permission": return "等待权限批准";
+    case "completed": return "已完成，暂无摘要";
+    case "failed": return "运行未完成";
+    case "cancelled": return "已停止";
   }
 }
 

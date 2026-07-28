@@ -14,6 +14,8 @@ import {
 import { agentResend, onAgentEvent as listenAgentEvent, sessionMessages } from "../../lib/ipc";
 import type { AgentEvent, AgentSendMode } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
+import { IconChevronDown, IconChevronRight } from "../icons";
+import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
 import { Markdown } from "./Markdown";
 import { ToolCard } from "./ToolCard";
@@ -66,17 +68,49 @@ function queuedStateLabel(state: "queued" | "dispatching" | "failed"): string {
   }
 }
 
+function runRuntimeLabel(kind: "native" | "codex_exec" | "codex_mcp"): string {
+  if (kind === "codex_exec") return "Codex CLI";
+  if (kind === "codex_mcp") return "Codex MCP";
+  return "R-Code Agent";
+}
+
+function runTimeLabel(value: string): string {
+  const timestamp = Date.parse(value);
+  if (Number.isNaN(timestamp)) return "—";
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function runUsageLabel(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const usage = JSON.parse(value) as Record<string, unknown>;
+    const input = typeof usage.input_tokens === "number" ? usage.input_tokens : null;
+    const output = typeof usage.output_tokens === "number" ? usage.output_tokens : null;
+    if (input == null && output == null) return null;
+    return [
+      input == null ? null : `输入 ${input.toLocaleString()}`,
+      output == null ? null : `输出 ${output.toLocaleString()}`,
+    ].filter(Boolean).join(" · ");
+  } catch {
+    return null;
+  }
+}
+
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   { taskId, cur, running, onAgentEvent },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [showSubagentRuns, setShowSubagentRuns] = useState(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [editError, setEditError] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
+  const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const eventsLen = useTasksStore((s) =>
     s.details[taskId]?.task.id === taskId ? s.details[taskId].events.length : 0
@@ -132,11 +166,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     idRef.current = 0;
     setItems([]);
     setError(null);
-    setShowSubagentRuns(false);
     setEditingMessageId(null);
     setEditingText("");
     setEditError(null);
     setResending(false);
+    setExpandedRunIds(new Set());
     void reload();
   }, [reload]);
 
@@ -254,6 +288,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setEditingText(text);
     setEditError(null);
   }, [running, resending]);
+  const toggleRun = useCallback((runId: string) => {
+    setExpandedRunIds((current) => {
+      const next = new Set(current);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+  }, []);
   const resendEdited = useCallback(async () => {
     const messageId = editingMessageId;
     const message = editingText.trim();
@@ -272,12 +314,10 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       setResending(false);
     }
   }, [editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
-  const subagentRunCount = items.filter(
-    (item) => item.kind === "run" && item.agentKind === "subagent"
-  ).length;
-  const visibleItems = showSubagentRuns
-    ? items
-    : items.filter((item) => item.kind !== "run" || item.agentKind !== "subagent");
+  // 子代理运行树由紧邻输入区的可展开概览统一承载；时间线不再重复一套 run 卡片。
+  const visibleItems = items.filter(
+    (item) => item.kind !== "run" || item.agentKind !== "subagent"
+  );
 
   return (
     <div
@@ -296,17 +336,6 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           在下方输入第一句话,运行中再发即为 steer。
         </div>
       )}
-      {subagentRunCount > 0 && (
-        <button
-          type="button"
-          className="timeline-subagent-toggle"
-          onClick={() => setShowSubagentRuns((visible) => !visible)}
-          aria-expanded={showSubagentRuns}
-        >
-          子代理运行 · {subagentRunCount}
-          <span>{showSubagentRuns ? "收起" : "展开"}</span>
-        </button>
-      )}
       {visibleItems.map((it) => {
         switch (it.kind) {
           case "ms":
@@ -319,6 +348,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             );
           case "you":
             {
+              const workflow = parseWorkflowInvocation(it.text);
               const modeLabel = userSendModeLabel(it.sendMode);
               const queueState =
                 it.queuedState === "queued" ||
@@ -342,7 +372,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                 <div className="who">
                   YOU
                   {modeLabel && <span className="user-send-mode">{modeLabel}</span>}
-                  {it.messageId && !running && !editing && (
+                  {it.messageId && !running && !editing && !workflow && (
                     <button
                       type="button"
                       className="message-edit"
@@ -392,6 +422,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                     </div>
                     {editError && <div className="message-inline-error" role="alert">重发失败：{editError}</div>}
                   </div>
+                ) : workflow ? (
+                  <div className="workflow-invocation">
+                    <span>内置工作流</span>
+                    <strong>/{workflow.name}</strong>
+                    {workflow.args && <small>{workflow.args}</small>}
+                  </div>
                 ) : (
                   it.text
                 )}
@@ -425,27 +461,54 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
               </div>
             );
           }
-          case "run":
+          case "run": {
+            const expanded = expandedRunIds.has(it.id);
+            const detailId = `${it.id}-details`;
+            const usage = runUsageLabel(it.usageJson);
             return (
               <div
-                className={"run-row " + it.state + (it.agentKind === "subagent" ? " subagent" : "") + dim(it.t)}
+                className={"run-disclosure " + it.state + (it.agentKind === "subagent" ? " subagent" : "") + dim(it.t)}
                 data-t={it.t}
                 key={it.id}
-                title={`Run · ${it.model} · ${it.label}`}
               >
-                {it.state === "active" && <span className="spin" />}
-                <span className="run-name">{it.agentKind === "subagent" ? "子代理" : "运行"}</span>
-                <span className="run-model">
-                  {it.agentLabel || (it.agentKind === "subagent" ? "只读调查" : it.model || "agent")}
-                </span>
-                <span className="run-status">{it.label}</span>
-                {it.agentKind === "subagent" && it.agentSummary && (
-                  <span className="run-summary" title={it.agentSummary}>
-                    {it.agentSummary}
+                <button
+                  type="button"
+                  className="run-row ring-inset"
+                  aria-expanded={expanded}
+                  aria-controls={detailId}
+                  title={expanded ? "收起运行详情" : "展开运行详情"}
+                  onClick={() => toggleRun(it.id)}
+                >
+                  {it.state === "active" && <span className="spin" />}
+                  <span className="run-name">{it.agentKind === "subagent" ? "子代理" : "主运行"}</span>
+                  <span className="run-model">
+                    {it.agentLabel || (it.agentKind === "subagent" ? "只读调查" : "主代理")}
                   </span>
+                  <span className="run-status">{it.label}</span>
+                  <span className="run-chevron" aria-hidden="true">
+                    {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+                  </span>
+                </button>
+                {expanded && (
+                  <div className="run-detail" id={detailId}>
+                    <div className="run-detail-meta">
+                      <span><b>模型</b>{it.model || "默认"}</span>
+                      <span><b>运行时</b>{runRuntimeLabel(it.runtimeKind)}</span>
+                      <span><b>开始</b>{runTimeLabel(it.startedAt)}</span>
+                      {it.endedAt && <span><b>结束</b>{runTimeLabel(it.endedAt)}</span>}
+                      {usage && <span><b>用量</b>{usage} tokens</span>}
+                    </div>
+                    {it.agentSummary && (
+                      <div className="run-detail-summary">
+                        <b>{it.state === "active" ? "当前工作" : "结果摘要"}</b>
+                        <p>{it.agentSummary}</p>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             );
+          }
           case "tool":
             return (
               <ToolCard

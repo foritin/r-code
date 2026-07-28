@@ -148,6 +148,28 @@ impl BlockParser {
         self.current_block.as_ref()
     }
 
+    /// 当前 shell 是否已经开始执行一条命令。
+    ///
+    /// `OSC 133;C` 表示输入已提交、命令输出即将开始；直到随后收到
+    /// `OSC 133;D;<exit>` 之前，终端应被视为忙碌。这个小查询让 PTY 管理器
+    /// 可以根据 shell 集成的真实边界更新状态，而不是根据一次 `send` 猜测。
+    pub fn command_is_running(&self) -> bool {
+        self.state == ParseState::InOutput
+    }
+
+    /// 返回当前正在执行的命令文本（若 shell 集成已经捕获到）。
+    ///
+    /// 仅在 [`Self::command_is_running`] 为真时使用；调用方不得把该文本写入
+    /// 不受信任的日志或跨进程协议中。
+    pub fn running_command(&self) -> Option<&str> {
+        if !self.command_is_running() {
+            return None;
+        }
+        self.current_block
+            .as_ref()
+            .and_then(|block| block.command.as_deref())
+    }
+
     /// 处理 OSC 序列参数。
     fn handle_osc(&mut self, params: &[u8]) {
         let param_str = String::from_utf8_lossy(params);
@@ -428,6 +450,26 @@ mod tests {
         assert_eq!(parser.blocks().len(), 1);
         assert_eq!(parser.blocks()[0].command.as_deref(), Some("echo hello"));
         assert!(parser.blocks()[0].output.contains("hello"));
+    }
+
+    #[test]
+    fn reports_running_command_only_between_c_and_d() {
+        let mut parser = BlockParser::new();
+        let mut start = Vec::new();
+        start.extend(osc133("A"));
+        start.extend(osc133("B"));
+        start.extend(b"codex review");
+        parser.feed(&start);
+        assert!(!parser.command_is_running());
+        assert_eq!(parser.running_command(), None);
+
+        parser.feed(&osc133("C"));
+        assert!(parser.command_is_running());
+        assert_eq!(parser.running_command(), Some("codex review"));
+
+        parser.feed(&osc133_d(0));
+        assert!(!parser.command_is_running());
+        assert_eq!(parser.running_command(), None);
     }
 
     #[test]

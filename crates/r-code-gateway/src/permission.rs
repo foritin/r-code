@@ -397,6 +397,14 @@ impl PermissionEngine {
             .cloned()
             .collect()
     }
+
+    /// 按 ID 读取仍待审批的请求，不改变其状态。
+    ///
+    /// 审批入口需要在 `decide` 移除内存请求前记住任务归属，以便写入项目活动与
+    /// 关闭同源通知；暴露只读副本不会泄露任何额外能力。
+    pub async fn pending_by_id(&self, request_id: &str) -> Option<PermissionRequest> {
+        self.pending_requests.read().await.get(request_id).cloned()
+    }
 }
 
 impl Default for PermissionEngine {

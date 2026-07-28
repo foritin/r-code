@@ -211,6 +211,8 @@
   --ring-offset: 2px;
   --ring-color: var(--edge-accent-hi);
   --ring-color-danger: color-mix(in srgb, var(--danger) 62%, transparent);
+  /* 供编辑器、终端等需要低调强调而非阴影卡片的区域使用。 */
+  --fx-glow-accent: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* 高对比度：把柔边框和焦点环拉满，不改变布局 */

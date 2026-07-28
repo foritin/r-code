@@ -210,6 +210,9 @@ export function useTaskCompletionToasts(): void {
     const seenState = new Map<string, TaskState>();
     const notifiedPermissions = new Set<string>();
     const initial = useTasksStore.getState();
+    // task 列表和 detail 是异步分两批到达的；第一批 detail 只是初始基线，
+    // 不能被误判成“刚刚出现”的权限请求。
+    let permissionBaselineEstablished = Object.keys(initial.details).length > 0;
     for (const task of initial.tasks) seenState.set(task.id, task.state);
     for (const detail of Object.values(initial.details)) {
       for (const p of detail.permissions) {
@@ -262,11 +265,21 @@ export function useTaskCompletionToasts(): void {
         notifiedPermissions.clear();
         for (const id of stillPending) notifiedPermissions.add(id);
 
+        if (!permissionBaselineEstablished) {
+          permissionBaselineEstablished = true;
+          return;
+        }
+
         for (const [taskId, fresh] of freshByTask) {
-          // 用户就在这个任务的 Room 里，权限卡片已经摆在眼前，再弹一条就是噪音。
-          if (app.scene === "room" && app.currentTaskId === taskId) continue;
           const task = state.tasks.find((t) => t.id === taskId);
           if (!task) continue;
+          // 当前页面已经能直接处理该请求时，不再叠一层全局弹窗。
+          // Dashboard 只展示当前项目的待处理项；Inbox 则展示全部待处理项。
+          const alreadyVisible =
+            app.scene === "inbox" ||
+            (app.scene === "room" && app.currentTaskId === taskId) ||
+            (app.scene === "dashboard" && task.workspace_path === state.currentProjectId);
+          if (alreadyVisible) continue;
           pushToast({
             kind: "warn",
             title: `需要授权：${taskLabel(task)}`,

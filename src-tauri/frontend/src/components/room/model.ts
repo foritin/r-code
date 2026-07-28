@@ -72,6 +72,10 @@ export type TimelineItem =
       agentKind: AgentRun["agent_kind"];
       agentLabel: string | null;
       agentSummary: string | null;
+      runtimeKind: AgentRun["runtime_kind"];
+      startedAt: string;
+      endedAt: string | null;
+      usageJson: string | null;
       state: RunViewState;
       label: string;
     }
@@ -531,6 +535,10 @@ export function mergeRunItems(
         agentKind: run.agent_kind,
         agentLabel: run.agent_label,
         agentSummary: run.summary,
+        runtimeKind: run.runtime_kind,
+        startedAt: run.started_at,
+        endedAt: run.ended_at,
+        usageJson: run.usage_json,
         ...runPresentation(run),
       }))
     );

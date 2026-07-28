@@ -46,6 +46,7 @@ interface Props {
   disabled?: boolean;
   /** up：输入区（菜单向上展开）；down：会话顶栏 */
   placement?: "up" | "down";
+  openRequest?: number;
   onChange: (next: ProjectAccessMode) => Promise<void> | void;
 }
 
@@ -61,6 +62,7 @@ export function ProjectAccessSelector({
   workspaceName,
   disabled = false,
   placement = "up",
+  openRequest,
   onChange,
 }: Props) {
   const save = useAsyncAction(async (next: ProjectAccessMode) => {
@@ -86,6 +88,7 @@ export function ProjectAccessSelector({
         align="right"
         disabled={disabled || save.busy}
         menuClassName="project-access-menu"
+        openRequest={openRequest}
       >
         {({ close }) => (
           <>

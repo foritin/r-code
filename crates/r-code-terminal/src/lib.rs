@@ -21,7 +21,10 @@ pub use cli_detector::{CliDetector, ExternalCli};
 pub use control_service::{
     SendOptions, TerminalControlService, TerminalInfo, WaitMode, WaitResult,
 };
-pub use manager::{TerminalHandle, TerminalId, TerminalManager, TerminalState};
+pub use manager::{
+    TerminalHandle, TerminalId, TerminalManager, TerminalRawBatch, TerminalRawSnapshot,
+    TerminalState,
+};
 pub use replay_parser::{
     detect_format, parse_claude_line, parse_codex_line, ReplayEvent, ReplayParser,
 };

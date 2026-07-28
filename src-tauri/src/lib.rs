@@ -7,12 +7,14 @@
 //!
 //! [doc-08] [agent-core/12 §6] [agent-core/10]
 
+pub mod codex_mcp;
 pub mod commands;
 #[cfg(unix)] // Control Door 仅 Unix（Windows 不编译且 main.rs 未启动）
 pub mod control_door;
 pub mod ipc;
 pub mod log_buffer;
 pub mod logging;
+pub mod mcp_server;
 pub mod migration;
 pub mod packaging;
 pub mod project_memory;

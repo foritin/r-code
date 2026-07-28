@@ -1,10 +1,13 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { errText } from "../../lib/format";
-import { useAppStore } from "../../store/app";
+import { useAppStore, type SettingsPane } from "../../store/app";
 import { usePoll } from "../../lib/poll";
 import {
-  codexInstallSkill,
+  codexCliPreferences,
   codexIntegrationStatus,
+  codexSaveCliPreferences,
+  codexSetupCollaboration,
+  codexStartDeviceLogin,
   codexStartLogin,
   logsTail,
   settingsDeleteProvider,
@@ -17,7 +20,9 @@ import {
 } from "../../lib/ipc";
 import type {
   AppConfig,
+  CodexCliPreferences,
   CodexIntegrationStatus,
+  CodexModelOption,
   LogEntry,
   ProviderCategory,
   ProviderConfig,
@@ -28,6 +33,8 @@ import type {
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
 import { catalogPresets, loadCatalog, presetOf, providerLabel } from "../../lib/provider";
+import { useCodexCliGate } from "../codex/CodexCliGate";
+import { IconCheck, IconRefresh } from "../icons";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -35,6 +42,17 @@ const EMPTY_PROVIDERS: NonNullable<AppConfig["providers"]> = {};
 const OUTPUT_DEFAULT = "8192";
 /** 自建网关：不套用任何预设，全部字段手填。 */
 const CUSTOM_PRESET = "custom";
+
+const SETTINGS_PANES: Array<{
+  key: SettingsPane;
+  label: string;
+  description: string;
+}> = [
+  { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
+  { key: "preferences", label: "应用偏好", description: "调整外观、缩放和辅助阅读方式。" },
+  { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
+  { key: "codex", label: "Codex CLI", description: "连接本机 Codex，并管理它的运行偏好。" },
+];
 
 const CATEGORY_LABELS: Record<ProviderCategory, string> = {
   official: "海外官方",
@@ -149,6 +167,8 @@ function providerStateLabel(status: ProviderStatus | undefined) {
  * settingsGet 失败（配置损坏等）时表单区显示错误条而非空白。
  */
 export function SettingsScene() {
+  const activePane = useAppStore((state) => state.settingsPane);
+  const setActivePane = useAppStore((state) => state.setSettingsPane);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configErr, setConfigErr] = useState<string | null>(null);
   const [validation, setValidation] = useState<string | null>(null);
@@ -170,42 +190,82 @@ export function SettingsScene() {
     void loadConfig();
   }, [loadConfig]);
 
+  const pane = SETTINGS_PANES.find((item) => item.key === activePane) ?? SETTINGS_PANES[0];
+
   return (
     <div className="scene">
       <div className="scene-scroll">
         <div className="page-head">
           <h1>设置</h1>
-          <span className="meta">连接、偏好与诊断</span>
         </div>
 
-        <div className="set-grid">
-          {configErr && (
-            <div className="errbar" role="alert">
-              读取配置失败：{configErr}
-              <span className="spacer" />
-              <button className="btn" onClick={() => void loadConfig()}>
-                重试
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="设置分类">
+            {SETTINGS_PANES.map((item) => (
+              <button
+                key={item.key}
+                className={activePane === item.key ? "active" : ""}
+                aria-current={activePane === item.key ? "page" : undefined}
+                onClick={() => setActivePane(item.key)}
+              >
+                {item.label}
               </button>
-            </div>
-          )}
-          {validation && !configErr && (
-            <div className="notebar" role="status">
-              还不能开始对话。选择模型服务并保存访问密钥后即可使用。
-              <span className="dim">{validation}</span>
-            </div>
-          )}
-          {config && (
-            <>
-              <ProviderSection config={config} providerStatus={providerStatus} reload={loadConfig} />
-              <GeneralSection config={config} reload={loadConfig} />
-            </>
-          )}
+            ))}
+          </nav>
 
-          <AppearanceSection />
-          <AccessibilitySection />
-          <LogSection />
-          <SupportSection />
-          <CodexIntegrationSection />
+          <div className="settings-detail">
+            <header className="settings-detail-head">
+              <h2>{pane.label}</h2>
+              <p>{pane.description}</p>
+            </header>
+
+            {configErr && (activePane === "providers" || activePane === "diagnostics") && (
+              <div className="errbar" role="alert">
+                读取配置失败：{configErr}
+                <span className="spacer" />
+                <button className="btn" onClick={() => void loadConfig()}>
+                  重试
+                </button>
+              </div>
+            )}
+            {activePane === "providers" && validation && !configErr && (
+              <div className="notebar" role="status">
+                选择模型服务并保存访问密钥后即可开始对话。
+                <span className="dim">{validation}</span>
+              </div>
+            )}
+
+            {activePane === "providers" && (
+              <div className="settings-sheet">
+                {config ? (
+                  <ProviderSection config={config} providerStatus={providerStatus} reload={loadConfig} />
+                ) : (
+                  !configErr && <div className="settings-loading">正在读取模型服务…</div>
+                )}
+              </div>
+            )}
+
+            {activePane === "preferences" && (
+              <div className="settings-sheet">
+                <AppearanceSection />
+                <AccessibilitySection />
+              </div>
+            )}
+
+            {activePane === "diagnostics" && (
+              <div className="settings-sheet">
+                {config && <LogLevelSection config={config} reload={loadConfig} />}
+                <LogSection />
+                <SupportSection />
+              </div>
+            )}
+
+            {activePane === "codex" && (
+              <div className="settings-sheet">
+                <CodexIntegrationSection />
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -377,11 +437,11 @@ function ProviderSection({
   const saveBlocked = busy || outputExceedsDeepSeekLimit || pendingVars.length > 0;
 
   return (
-    <section className="pane setcard provider-settings">
+    <section className="settings-block provider-settings">
       <div className="section-heading">
         <div>
-          <h3>R-Code Agent 模型服务</h3>
-          <p className="desc">管理 R-Code 自己发起对话所用的服务。保存后仍可随时修改、切换或删除；密钥只保存在系统凭据库。</p>
+          <h3>对话模型</h3>
+          <p className="desc">R-Code 对话使用的模型服务。密钥仅保存在系统凭据库。</p>
         </div>
         <button
           className="btn"
@@ -650,7 +710,7 @@ function ProviderSection({
 
 // ---------- 通用 ----------
 
-function GeneralSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
+function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
   const [err, setErr] = useState<string | null>(null);
 
   const setLevel = async (v: string) => {
@@ -664,11 +724,11 @@ function GeneralSection({ config, reload }: { config: AppConfig; reload: () => P
   };
 
   return (
-    <section className="pane setcard">
-      <h3>通用</h3>
+    <section className="settings-block">
+      <h3>日志记录</h3>
       {err && <div className="errbar" role="alert">{err}</div>}
       <div className="field">
-        <label htmlFor="set-log-level">日志级别</label>
+        <label htmlFor="set-log-level">记录级别</label>
         <select id="set-log-level"
           className="input"
           value={config.log_level ?? "info"}
@@ -696,12 +756,12 @@ function AppearanceSection() {
 
   const modes: { key: "light" | "dark" | "system"; label: string; hint: string }[] = [
     { key: "light", label: "亮色", hint: "干净的浅色界面" },
-    { key: "dark", label: "暗色", hint: "默认深色界面" },
+    { key: "dark", label: "暗色", hint: "适合低光环境" },
     { key: "system", label: "跟随系统", hint: "随操作系统明暗切换" },
   ];
 
   return (
-    <section className="pane setcard">
+    <section className="settings-block">
       <h3>外观</h3>
       <div className="field">
         <label id="set-theme-label">主题</label>
@@ -746,7 +806,7 @@ function AccessibilitySection() {
   const toggleDiffMode = useAppStore((s) => s.toggleDiffMode);
 
   return (
-    <section className="pane setcard">
+    <section className="settings-block">
       <h3>无障碍</h3>
       <div className="field">
         <label htmlFor="set-diff-mode">文本差异视图</label>
@@ -791,8 +851,8 @@ function LogSection() {
   }, [logs]);
 
   return (
-    <section className="pane setcard">
-      <h3>日志</h3>
+    <section className="settings-block">
+      <h3>实时日志</h3>
       <div className="field">
         <div className="chips" role="radiogroup" aria-label="日志级别过滤">
           {LOG_FILTERS.map((l) => (
@@ -864,7 +924,7 @@ function SupportSection() {
   };
 
   return (
-    <section className="pane setcard">
+    <section className="settings-block">
       <h3>支持包</h3>
       <p className="desc">导出版本、平台、近期日志和本地统计，便于提交问题；预览不会写入文件。</p>
       {err && <div className="errbar" role="alert">{err}</div>}
@@ -908,18 +968,291 @@ function SupportSection() {
 
 // ---------- 外部 Agent ----------
 
-function CodexIntegrationSection() {
-  const [status, setStatus] = useState<CodexIntegrationStatus | null>(null);
-  const [busy, setBusy] = useState(false);
+type CodexSetupState = NonNullable<CodexIntegrationStatus["setup_state"]>;
+
+function resolveCodexSetupState(status: CodexIntegrationStatus): CodexSetupState {
+  if (status.setup_state) return status.setup_state;
+  if (!status.cli_available) return "install_cli";
+  if (status.auth_status === "not_authenticated") return "login";
+  if (status.auth_status !== "authenticated") return "check";
+  if (status.skill_status !== "up_to_date" || !status.mcp_server_configured) return "configure";
+  return "ready";
+}
+
+function codexSetupCopy(status: CodexIntegrationStatus | null, state: CodexSetupState | "loading") {
+  if (!status || state === "loading") {
+    return { title: "正在检测 Codex", detail: "检查 CLI、登录和协作配置。", action: "正在检测…" };
+  }
+  if (state === "install_cli") {
+    return {
+      title: "还需要安装 Codex CLI",
+      detail: status.installer_available === false
+        ? "当前没有可用的 npm，请按下方说明手动安装。"
+        : "R-Code 会先展示官方安装命令，确认后再执行。",
+      action: status.installer_available === false ? "无法自动安装" : "安装并继续",
+    };
+  }
+  if (state === "login") {
+    return { title: "还需要登录 Codex", detail: "使用浏览器登录；设备码仅在浏览器回调不可用时使用。", action: "登录并继续" };
+  }
+  if (state === "check") {
+    return { title: "暂时无法确认登录状态", detail: "不会重复打开登录页，先重新读取 Codex 的认证状态。", action: "重新检测" };
+  }
+  if (state === "configure") {
+    return { title: "还差最后一步", detail: "一次更新协作 Skill，并补齐 R-Code 只读 MCP 配置。", action: "完成协作配置" };
+  }
+  return {
+    title: "Codex 已就绪",
+    detail: `已通过${status.auth_method ? ` ${status.auth_method}` : " Codex"} 登录，R-Code 只读协作已连接。`,
+    action: "已就绪",
+  };
+}
+
+type CodexPreferenceDraft = {
+  model: string;
+  reasoningEffort: string;
+  verbosity: string;
+};
+
+const REASONING_LABELS: Record<string, string> = {
+  minimal: "最少",
+  low: "低",
+  medium: "中等",
+  high: "高",
+  xhigh: "极高",
+  max: "最大",
+  ultra: "超强",
+};
+
+function codexPreferenceDraft(preferences: CodexCliPreferences): CodexPreferenceDraft {
+  return {
+    model: preferences.model ?? "",
+    reasoningEffort: preferences.reasoning_effort ?? "",
+    verbosity: preferences.verbosity ?? "",
+  };
+}
+
+function sameCodexPreference(
+  left: CodexPreferenceDraft,
+  right: CodexPreferenceDraft
+) {
+  return left.model === right.model
+    && left.reasoningEffort === right.reasoningEffort
+    && left.verbosity === right.verbosity;
+}
+
+function uniqueReasoningOptions(models: CodexModelOption[]) {
+  const seen = new Set<string>();
+  return models.flatMap((model) => model.supported_reasoning_efforts).filter((option) => {
+    if (seen.has(option.effort)) return false;
+    seen.add(option.effort);
+    return true;
+  });
+}
+
+function CodexRuntimePreferences() {
+  const [preferences, setPreferences] = useState<CodexCliPreferences | null>(null);
+  const [draft, setDraft] = useState<CodexPreferenceDraft>({
+    model: "",
+    reasoningEffort: "",
+    verbosity: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
     try {
-      setStatus(await codexIntegrationStatus());
-      setErr(null);
+      const next = await codexCliPreferences();
+      setPreferences(next);
+      setDraft(codexPreferenceDraft(next));
     } catch (e) {
       setErr(errText(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const selectedModel = preferences?.models.find((model) => model.slug === draft.model);
+  const reasoningOptions = selectedModel
+    ? selectedModel.supported_reasoning_efforts
+    : uniqueReasoningOptions(preferences?.models ?? []);
+  const reasoningValues = new Set(reasoningOptions.map((option) => option.effort));
+  const displayedReasoningOptions = draft.reasoningEffort && !reasoningValues.has(draft.reasoningEffort)
+    ? [{ effort: draft.reasoningEffort, description: "当前配置" }, ...reasoningOptions]
+    : reasoningOptions;
+  const savedDraft = preferences ? codexPreferenceDraft(preferences) : null;
+  const dirty = savedDraft ? !sameCodexPreference(savedDraft, draft) : false;
+
+  const changeModel = (model: string) => {
+    const nextModel = preferences?.models.find((item) => item.slug === model);
+    setDraft((current) => ({
+      ...current,
+      model,
+      reasoningEffort:
+        current.reasoningEffort
+        && nextModel
+        && !nextModel.supported_reasoning_efforts.some((option) => option.effort === current.reasoningEffort)
+          ? ""
+          : current.reasoningEffort,
+    }));
+    setNotice(null);
+  };
+
+  const save = async () => {
+    if (!dirty || saving) return;
+    setSaving(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      const next = await codexSaveCliPreferences(
+        draft.model,
+        draft.reasoningEffort,
+        draft.verbosity
+      );
+      setPreferences(next);
+      setDraft(codexPreferenceDraft(next));
+      setNotice("运行偏好已保存。");
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="codex-runtime-preferences">
+      <div className="codex-runtime-head">
+        <div>
+          <h4>运行偏好</h4>
+          <p>保存到 Codex 的全局配置，也会用于其他 Codex CLI 会话。</p>
+        </div>
+        <button className="quiet-link" disabled={loading || saving} onClick={() => void load()}>
+          重新读取
+        </button>
+      </div>
+
+      {loading && <div className="settings-loading">正在读取 Codex 可用模型…</div>}
+      {err && (
+        <div className="errbar" role="alert">
+          {err}
+          <span className="spacer" />
+          <button className="btn sm" disabled={loading || saving} onClick={() => void load()}>
+            重试
+          </button>
+        </div>
+      )}
+
+      {!loading && preferences && (
+        <>
+          <div className="settings-control-list">
+            <label className="settings-control-row" htmlFor="codex-model">
+              <span>
+                <strong>模型</strong>
+                <small>{selectedModel ? "可用列表由当前 Codex 账户与 CLI 版本提供。" : "留空时由 Codex 选择默认模型。"}</small>
+              </span>
+              <select
+                id="codex-model"
+                className="input"
+                value={draft.model}
+                onChange={(event) => changeModel(event.target.value)}
+              >
+                <option value="">Codex 默认</option>
+                {draft.model && !preferences.models.some((model) => model.slug === draft.model) && (
+                  <option value={draft.model}>{draft.model}（当前配置）</option>
+                )}
+                {preferences.models.map((model) => (
+                  <option key={model.slug} value={model.slug}>{model.display_name}</option>
+                ))}
+              </select>
+            </label>
+
+            <label className="settings-control-row" htmlFor="codex-reasoning">
+              <span>
+                <strong>思考强度</strong>
+                <small>{selectedModel ? `该模型默认：${REASONING_LABELS[selectedModel.default_reasoning_effort] ?? selectedModel.default_reasoning_effort}` : "留空时跟随所用模型的默认值。"}</small>
+              </span>
+              <select
+                id="codex-reasoning"
+                className="input"
+                value={draft.reasoningEffort}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, reasoningEffort: event.target.value }));
+                  setNotice(null);
+                }}
+              >
+                <option value="">随模型默认</option>
+                {displayedReasoningOptions.map((option) => (
+                  <option key={option.effort} value={option.effort}>
+                    {REASONING_LABELS[option.effort] ?? option.effort}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="settings-control-row" htmlFor="codex-verbosity">
+              <span>
+                <strong>回复详略</strong>
+                <small>控制 Codex 最终回复的展开程度，不改变代码质量要求。</small>
+              </span>
+              <select
+                id="codex-verbosity"
+                className="input"
+                value={draft.verbosity}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, verbosity: event.target.value }));
+                  setNotice(null);
+                }}
+              >
+                <option value="">Codex 默认</option>
+                <option value="low">精简</option>
+                <option value="medium">标准</option>
+                <option value="high">详细</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="codex-runtime-actions">
+            {notice && <span role="status">{notice}</span>}
+            <button className="btn accent" disabled={!dirty || saving} onClick={() => void save()}>
+              {saving ? "正在保存…" : "应用"}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CodexIntegrationSection() {
+  const { runWithCodexCli } = useCodexCliGate();
+  const [status, setStatus] = useState<CodexIntegrationStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [awaitingLogin, setAwaitingLogin] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const setupState: CodexSetupState | "loading" = status ? resolveCodexSetupState(status) : "loading";
+
+  const refresh = useCallback(async (quiet = false) => {
+    if (!quiet) setChecking(true);
+    try {
+      const next = await codexIntegrationStatus();
+      setStatus(next);
+      if (!quiet) setErr(null);
+      return next;
+    } catch (e) {
+      if (!quiet) setErr(errText(e));
+      return null;
+    } finally {
+      if (!quiet) setChecking(false);
     }
   }, []);
 
@@ -927,13 +1260,41 @@ function CodexIntegrationSection() {
     void refresh();
   }, [refresh]);
 
-  const install = async () => {
+  useEffect(() => {
+    if (!awaitingLogin) return;
+    let active = true;
+    let attempts = 0;
+    const check = async () => {
+      attempts += 1;
+      const next = await refresh(true);
+      if (!active) return;
+      if (next?.auth_status === "authenticated") {
+        setAwaitingLogin(false);
+        setNotice("已确认 Codex 登录，下一步可以完成协作配置。");
+      } else if (attempts >= 60) {
+        setAwaitingLogin(false);
+        setNotice("暂时没有检测到登录完成；你可以稍后点击重新检测。");
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [awaitingLogin, refresh]);
+
+  const startLogin = async (mode: "browser" | "device") => {
     setBusy(true);
     setErr(null);
     setNotice(null);
     try {
-      await codexInstallSkill();
-      await refresh();
+      await runWithCodexCli({ feature: "Codex 登录" }, async () => {
+        if (mode === "browser") await codexStartLogin();
+        else await codexStartDeviceLogin();
+        setAwaitingLogin(true);
+        setNotice("等待 Codex 完成登录；R-Code 会自动检测，不需要手动刷新。");
+      });
     } catch (e) {
       setErr(errText(e));
     } finally {
@@ -941,15 +1302,24 @@ function CodexIntegrationSection() {
     }
   };
 
-  const startLogin = async () => {
+  const completeSetup = async () => {
+    if (setupState === "check") {
+      await refresh();
+      return;
+    }
+    if (!status || setupState === "ready") return;
     setBusy(true);
     setErr(null);
     setNotice(null);
     try {
-      await codexStartLogin();
-      setNotice("已在系统终端打开 Codex 登录。完成浏览器授权后，点击“刷新状态”。");
+      await runWithCodexCli({ feature: "完成 Codex 设置", requireAuth: true }, async () => {
+        const next = await codexSetupCollaboration();
+        setStatus(next);
+        setNotice("Codex 已就绪，可以作为 R-Code 的只读协作代理使用。");
+      });
     } catch (e) {
       setErr(errText(e));
+      void refresh(true);
     } finally {
       setBusy(false);
     }
@@ -957,44 +1327,129 @@ function CodexIntegrationSection() {
 
   const skillLabel =
     status?.skill_status === "up_to_date"
-      ? "已连接"
+      ? "已安装"
       : status?.skill_status === "update_available"
         ? "可以更新"
-        : "尚未连接";
+        : "尚未安装";
+  const loginLabel = status?.auth_status === "authenticated"
+    ? `已登录${status.auth_method ? ` · ${status.auth_method}` : ""}`
+    : status?.auth_status === "not_authenticated"
+      ? "尚未登录"
+      : "暂时无法确认";
+  const skillReady = status?.skill_status === "up_to_date";
+  const authReady = status?.auth_status === "authenticated";
+  const collaborationReady = Boolean(skillReady && status?.mcp_server_configured);
+  const copy = codexSetupCopy(status, setupState);
+  const mainDisabled = busy
+    || checking
+    || awaitingLogin
+    || !status
+    || setupState === "ready"
+    || (setupState === "install_cli" && status.installer_available === false);
+  const loginDisabled = busy
+    || checking
+    || awaitingLogin
+    || !status?.cli_available
+    || status.auth_status !== "not_authenticated";
+  const loginDisabledReason = authReady
+    ? "当前已经登录，无需重复操作"
+    : status?.auth_status === "unknown"
+      ? "请先重新检测登录状态"
+      : !status?.cli_available
+        ? "请先安装 Codex CLI"
+        : undefined;
 
   return (
-    <section className="pane setcard">
-      <h3>Codex CLI</h3>
-      <p className="desc">
-        这是独立于 R-Code Agent 模型服务的 Codex 登录与协作入口。R-Code 的 Provider 列表不会修改 Codex 的登录态、模型或第三方路由。
-      </p>
-      {err && <div className="errbar" role="alert">{err}</div>}
-      {notice && <div className="okbar" role="status">{notice}</div>}
-      {status && (
-        <dl className="kv">
-          <dt>Codex CLI</dt>
-          <dd>{status.cli_available ? "已检测到" : "未检测到"}</dd>
-          <dt>登录状态</dt>
-          <dd>{status.authenticated ? "已发现本地登录凭据" : "尚未登录"}</dd>
-          <dt>Codex 配置</dt>
-          <dd>{status.config_exists ? "已发现配置文件" : "尚未创建配置文件"}</dd>
-          <dt>R-Code 协作 Skill</dt>
-          <dd>{skillLabel}</dd>
-          <dt>配置位置</dt>
-          <dd className="val">{status.config_path}</dd>
-        </dl>
-      )}
-      <div className="footbar">
-        <button className="btn accent" disabled={busy || !status?.cli_available} onClick={() => void startLogin()}>
-          在终端中登录
-        </button>
-        <button className="btn" disabled={busy} onClick={() => void install()}>
-          {status?.skill_status === "up_to_date" ? "更新协作 Skill" : "安装协作 Skill"}
-        </button>
-        <button className="btn ghost" disabled={busy} onClick={() => void refresh()}>
-          刷新状态
+    <section className="settings-block codex-setup">
+      <div className="codex-setup-heading">
+        <div>
+          <h3>Codex 协作</h3>
+          <p className="desc">连接本机 Codex CLI，启用只读代理协作。登录凭据始终由 Codex 管理。</p>
+        </div>
+        <button
+          className={`codex-status-refresh${checking ? " checking" : ""}`}
+          disabled={busy || checking || awaitingLogin}
+          onClick={() => void refresh()}
+          aria-label="重新检测 Codex 状态"
+          title="重新检测 Codex 状态"
+        >
+          <IconRefresh width={16} height={16} />
         </button>
       </div>
+      {err && <div className="errbar" role="alert">{err}</div>}
+      <div className={`codex-setup-status state-${setupState}`} role="status" aria-live="polite">
+        <div className="codex-setup-status-copy">
+          <span className="codex-status-dot" aria-hidden="true" />
+          <div>
+            <strong>{copy.title}</strong>
+            <p>{copy.detail}</p>
+          </div>
+        </div>
+        <button
+          className={`btn codex-primary-action${setupState === "ready" ? "" : " accent"}`}
+          disabled={mainDisabled}
+          onClick={() => void completeSetup()}
+        >
+          {busy ? "正在处理…" : awaitingLogin ? "等待登录…" : copy.action}
+        </button>
+      </div>
+
+      <ol className="codex-setup-steps" aria-label="Codex 设置进度">
+        <li className={status?.cli_available ? "done" : setupState === "install_cli" ? "current" : "pending"}>
+          <span className="codex-step-mark">{status?.cli_available && <IconCheck width={12} height={12} />}</span>
+          <div><strong>Codex CLI</strong><small>{status?.cli_available ? "可运行" : "待安装"}</small></div>
+        </li>
+        <li className={authReady ? "done" : setupState === "login" || setupState === "check" ? "current" : "pending"}>
+          <span className="codex-step-mark">{authReady && <IconCheck width={12} height={12} />}</span>
+          <div><strong>登录</strong><small>{loginLabel}</small></div>
+        </li>
+        <li className={collaborationReady ? "done" : setupState === "configure" ? "current" : "pending"}>
+          <span className="codex-step-mark">{collaborationReady && <IconCheck width={12} height={12} />}</span>
+          <div><strong>R-Code 协作</strong><small>{collaborationReady ? "Skill 与 MCP 已连接" : "待配置"}</small></div>
+        </li>
+      </ol>
+
+      {notice && <p className="codex-inline-note" role="status"><IconCheck width={14} height={14} />{notice}</p>}
+      {status?.cli_error && setupState === "install_cli" && <p className="codex-inline-warning">{status.cli_error}</p>}
+
+      {setupState === "ready" && <CodexRuntimePreferences />}
+
+      {status && (
+        <details className="codex-advanced">
+          <summary>高级选项 <span>登录方式与配置详情</span></summary>
+          <div className="codex-advanced-body">
+            <div className="codex-login-options">
+              <div>
+                <strong>登录方式</strong>
+                <small>{authReady ? "当前已登录，按钮已停用。" : "浏览器登录优先；设备码用于远程或回调受阻环境。"}</small>
+              </div>
+              <div>
+                <button className="btn sm" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("browser")}>
+                  浏览器登录
+                </button>
+                <button className="btn sm ghost" disabled={loginDisabled} title={loginDisabledReason} onClick={() => void startLogin("device")}>
+                  设备码（备用）
+                </button>
+              </div>
+            </div>
+            <dl className="codex-details-list">
+              <dt>CLI</dt>
+              <dd>{status.cli_available ? `${status.cli_version || "可运行"}` : "不可用"}</dd>
+              <dt>登录</dt>
+              <dd>{loginLabel}</dd>
+              <dt>协作 Skill</dt>
+              <dd>{skillLabel}</dd>
+              <dt>只读 MCP</dt>
+              <dd>{status.mcp_server_configured ? "已启用" : "尚未启用"}</dd>
+              <dt>配置位置</dt>
+              <dd className="val">{status.config_path}</dd>
+            </dl>
+            {!status.cli_available && (
+              <p className="codex-manual-install">手动安装：<code>{status.installer_command || "npm install -g @openai/codex"}</code></p>
+            )}
+          </div>
+        </details>
+      )}
     </section>
   );
 }

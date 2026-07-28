@@ -203,3 +203,84 @@ export const IconAlert = (p: P) => (
     <path d="M12 10v4.5M12 17.2v.3" />
   </svg>
 );
+
+export const IconActivity = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 19.5V10M10 19.5V4.5M16 19.5v-6M22 19.5H2" />
+  </svg>
+);
+
+export const IconHistory = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4.5 8.5V4.8m0 0h3.7m-3.7 0A8.5 8.5 0 1 1 3.8 15" />
+    <path d="M12 7v5l3.2 2" />
+  </svg>
+);
+
+export const IconBell = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M18 10a6 6 0 0 0-12 0c0 7-2.5 7-2.5 8.8h17C20.5 17 18 17 18 10Z" />
+    <path d="M10 21h4" />
+  </svg>
+);
+
+export const IconHelp = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M9.5 9.4a2.7 2.7 0 1 1 4.5 2c-.9.7-2 1.2-2 2.8M12 17.3v.1" />
+  </svg>
+);
+
+export const IconChevronRight = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m9.5 6 6 6-6 6" />
+  </svg>
+);
+
+export const IconChevronLeft = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m14.5 6-6 6 6 6" />
+  </svg>
+);
+
+export const IconSidebar = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="1.8" />
+    <path d="M9.5 4.5v15" />
+  </svg>
+);
+
+export const IconShield = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M12 3.5 19 6v5.4c0 4.2-2.7 7-7 9.1-4.3-2.1-7-4.9-7-9.1V6z" />
+    <path d="m8.8 12 2.1 2.1 4.4-4.4" />
+  </svg>
+);
+
+export const IconUser = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="8" r="3.2" />
+    <path d="M5.5 20a6.5 6.5 0 0 1 13 0" />
+  </svg>
+);
+
+export const IconMore = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="5" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="19" cy="12" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+export const IconRefresh = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M19.2 8.6A7.6 7.6 0 0 0 5.5 7L3.8 9.3M4.8 15.4A7.6 7.6 0 0 0 18.5 17l1.7-2.3" />
+    <path d="M3.8 5.3v4h4M20.2 18.7v-4h-4" />
+  </svg>
+);
+
+export const IconArrowRight = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 12h15M14 6.5l5.5 5.5-5.5 5.5" />
+  </svg>
+);

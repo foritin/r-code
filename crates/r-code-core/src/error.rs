@@ -19,6 +19,10 @@ pub enum ProductError {
     #[error("path escape: {0}")]
     PathEscape(String),
 
+    /// 路径不存在（只读工具要求路径已存在）
+    #[error("path not found: {0}")]
+    PathNotFound(String),
+
     /// Blob 存储错误
     #[error("blob error: {0}")]
     BlobError(String),
@@ -89,6 +93,7 @@ impl From<ProductError> for hermes_error::Error {
         match err {
             ProductError::WorktreeError(msg) => Self::Storage(format!("worktree: {msg}")),
             ProductError::PathEscape(msg) => Self::PermissionDenied(format!("path escape: {msg}")),
+            ProductError::PathNotFound(msg) => Self::ToolHost(format!("path not found: {msg}")),
             ProductError::BlobError(msg) => Self::Storage(format!("blob: {msg}")),
             ProductError::DatabaseError(msg) => Self::Storage(msg),
             ProductError::MigrationError(msg) => Self::Storage(format!("migration: {msg}")),

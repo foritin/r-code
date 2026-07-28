@@ -4,8 +4,12 @@
  * Changes 的文件列表直接用 detail.changes(随 RoomScene 2s 轮询自动刷新,与 changesList 同源)。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { Terminal as XtermTerminal } from "@xterm/xterm";
+import "@xterm/xterm/css/xterm.css";
 import {
   acceptTask,
+  changeRequest,
   changeDiff,
   fileList,
   fileRead,
@@ -14,13 +18,15 @@ import {
   rollbackTask,
   runVerification,
   sessionMessages,
+  subagentSessionMessages,
   terminalCreate,
+  terminalCreateCodex,
   terminalKill,
   terminalList,
-  terminalRead,
+  terminalRawSince,
+  terminalRawSnapshot,
   terminalResize,
   terminalSend,
-  terminalSnapshot,
   verificationList,
   verificationOutput,
   type FileContent,
@@ -29,6 +35,7 @@ import {
 import type {
   ChangeDiff,
   ChangeDiffLine,
+  AgentRun,
   FileChange,
   ProjectAccessMode,
   SessionMessage,
@@ -49,11 +56,21 @@ import {
   modeLabel,
   modeShortLabel,
 } from "../../lib/format";
-import { stripAnsi } from "./model";
 import { buildAuditFeed } from "./audit";
-import type { ActivityTraceState } from "./activity";
-import { IconCheck, IconEditor, IconFile, IconPlus, IconProjects, IconTerminal } from "../icons";
+import type { ActivitySubagent, ActivityTraceState } from "./activity";
+import {
+  IconCheck,
+  IconChevronDown,
+  IconChevronLeft,
+  IconEditor,
+  IconFile,
+  IconPlus,
+  IconProjects,
+  IconStop,
+  IconTerminal,
+} from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
+import { useCodexCliGate } from "../codex/CodexCliGate";
 
 interface Props {
   taskId: string;
@@ -61,6 +78,9 @@ interface Props {
   activity: ActivityTraceState;
   workspacePath: string | null;
   workspaceAttached: boolean;
+  selectedSubagentId: string | null;
+  onCloseSubagent: () => void;
+  onAbortSubagent: (subagentId: string) => Promise<void>;
 }
 
 const TABS: { id: CanvasTab; label: string }[] = [
@@ -128,7 +148,16 @@ function rovingIndexOf(focusIndex: number, selectedIndex: number, count: number)
   return selectedIndex >= 0 && selectedIndex < count ? selectedIndex : 0;
 }
 
-export function Canvas({ taskId, running, activity, workspacePath, workspaceAttached }: Props) {
+export function Canvas({
+  taskId,
+  running,
+  activity,
+  workspacePath,
+  workspaceAttached,
+  selectedSubagentId,
+  onCloseSubagent,
+  onAbortSubagent,
+}: Props) {
   const tab = useAppStore((s) => s.canvasTab);
   const setTab = useAppStore((s) => s.setCanvasTab);
   const detail = useTasksStore((s) => s.details[taskId]);
@@ -138,6 +167,20 @@ export function Canvas({ taskId, running, activity, workspacePath, workspaceAtta
   const workingSubagents = activity.subagents.filter(
     (item) => item.status === "queued" || item.status === "running" || item.status === "waiting_permission"
   ).length;
+
+  if (selectedSubagentId) {
+    return (
+      <div className="canvas pane pane-lit">
+        <SubagentInspector
+          taskId={taskId}
+          child={activity.subagents.find((item) => item.id === selectedSubagentId)}
+          run={detail?.runs.find((item) => item.id === selectedSubagentId)}
+          onBack={onCloseSubagent}
+          onAbort={onAbortSubagent}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="canvas pane pane-lit">
@@ -202,6 +245,278 @@ export function Canvas({ taskId, running, activity, workspacePath, workspaceAtta
       </div>
     </div>
   );
+}
+
+// ---------- Subagent inspector ----------
+
+interface SubagentHistoryRow {
+  id: string;
+  label: string;
+  detail: string | null;
+  tone: "normal" | "success" | "danger" | "muted";
+  at?: number;
+}
+
+function SubagentInspector({
+  taskId,
+  child,
+  run,
+  onBack,
+  onAbort,
+}: {
+  taskId: string;
+  child?: ActivitySubagent;
+  run?: AgentRun;
+  onBack: () => void;
+  onAbort: (subagentId: string) => Promise<void>;
+}) {
+  const id = child?.id ?? run?.id ?? null;
+  const [messages, setMessages] = useState<SessionMessage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const active = child
+    ? child.status === "queued" || child.status === "running" || child.status === "waiting_permission"
+    : run?.ended_at == null;
+
+  useEffect(() => {
+    if (!id) {
+      setLoading(false);
+      return;
+    }
+    let dead = false;
+    const load = () => {
+      subagentSessionMessages(taskId, id)
+        .then((items) => {
+          if (!dead) {
+            setMessages(items);
+            setError(null);
+            setLoading(false);
+          }
+        })
+        .catch((cause) => {
+          if (!dead) {
+            setError(String(cause));
+            setLoading(false);
+          }
+        });
+    };
+    load();
+    const timer = active ? window.setInterval(load, 1600) : null;
+    return () => {
+      dead = true;
+      if (timer != null) window.clearInterval(timer);
+    };
+  }, [active, id, taskId]);
+
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  const persistedRows = useMemo(() => buildPersistedSubagentHistory(messages), [messages]);
+  const liveRows = child?.events.map<SubagentHistoryRow>((event) => ({
+    id: event.id,
+    label: event.label,
+    detail: event.detail,
+    tone: event.isError ? "danger" : event.kind === "lifecycle" && child.status === "completed" ? "success" : "normal",
+    at: event.at,
+  })) ?? [];
+  const rows = liveRows.length > 0 ? liveRows : persistedRows;
+  const label = child?.label ?? run?.agent_label ?? "子代理";
+  const runtimeKind = child?.runtimeKind ?? run?.runtime_kind ?? "native";
+  const model = child?.model ?? run?.model ?? null;
+  const startedAt = child?.startedAt ?? (run ? Date.parse(run.started_at) : now);
+  const endedAt = child?.endedAt ?? (run?.ended_at ? Date.parse(run.ended_at) : null);
+  const summary = child?.detail ?? run?.summary ?? null;
+  const lastEventAt = child?.lastEventAt ?? endedAt ?? startedAt;
+  const progressIsStale = active && now - lastEventAt >= 120_000;
+
+  const stop = async () => {
+    if (!id || stopping || !active) return;
+    setStopping(true);
+    setError(null);
+    try {
+      await onAbort(id);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  return (
+    <div className="subagent-inspector">
+      <div className="subagent-inspector-nav">
+        <button type="button" onClick={onBack}>
+          <IconChevronLeft width={15} height={15} /> 子代理
+        </button>
+        <span>{elapsedCompact(startedAt, endedAt ?? now)}</span>
+      </div>
+
+      <header className="subagent-inspector-hero">
+        <div className="subagent-inspector-kicker">
+          <span className={`subagent-state-dot${active ? " active" : ""}`} />
+          {subagentRuntimeLabel(runtimeKind)}
+          {model ? ` · ${model}` : ""}
+        </div>
+        <h2>{label}</h2>
+        <p>{summary ?? (active ? "已启动，等待第一条公开进度。" : "没有保存结果摘要。")}</p>
+        <div className="subagent-inspector-meta">
+          <span className={progressIsStale ? "is-stale" : undefined}>
+            {active
+              ? progressIsStale
+                ? `${relativeActivity(lastEventAt, now)}没有可见进度；持续 5 分钟会自动停止`
+                : `最近更新 ${relativeActivity(lastEventAt, now)}`
+              : statusText(child, run)}
+          </span>
+          <span>只读工作区</span>
+          {active && (
+            <button type="button" disabled={stopping} onClick={() => void stop()}>
+              <IconStop width={11} height={11} /> {stopping ? "停止中…" : "停止"}
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="subagent-inspector-section-head">
+        <strong>公开活动</strong>
+        <span>不显示私有推理与原始命令输出</span>
+      </div>
+      {error && <div className="subagent-inspector-error">{error}</div>}
+      {loading && rows.length === 0 ? (
+        <div className="subagent-inspector-empty">正在读取子代理日志…</div>
+      ) : rows.length === 0 ? (
+        <div className="subagent-inspector-empty">还没有可显示的活动。</div>
+      ) : (
+        <div className="subagent-history">
+          {rows.map((row) => (
+            <div className={`subagent-history-row tone-${row.tone}`} key={row.id}>
+              <span className="subagent-history-dot" />
+              <strong>{row.label}</strong>
+              {row.detail && <span title={row.detail}>{row.detail}</span>}
+              {row.at && <time>{clockFromMillis(row.at)}</time>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildPersistedSubagentHistory(messages: SessionMessage[]): SubagentHistoryRow[] {
+  const rows: SubagentHistoryRow[] = [];
+  for (const [index, message] of messages.entries()) {
+    const id = message.id ?? `persisted-${index}`;
+    if (message.kind === "tool_call") {
+      const input = parseObject(message.input_json);
+      rows.push({
+        id,
+        label: message.tool_name || "工具",
+        detail: safePreview(typeof input?.summary === "string" ? input.summary : null),
+        tone: "normal",
+      });
+    } else if (message.kind === "tool_result") {
+      rows.push({
+        id,
+        label: message.is_error ? "工具失败" : "工具完成",
+        detail: null,
+        tone: message.is_error ? "danger" : "success",
+      });
+    } else if (message.kind === "message" && message.role === "assistant") {
+      rows.push({ id, label: "可见结果", detail: safePreview(message.text), tone: "normal" });
+    } else if (message.kind === "system" && message.text === "subagent_activity") {
+      const data = parseObject(message.output_json);
+      rows.push({
+        id,
+        label: persistedPhaseLabel(typeof data?.phase === "string" ? data.phase : null),
+        detail: safePreview(typeof data?.detail === "string" ? data.detail : null),
+        tone: "normal",
+      });
+    } else if (message.kind === "system" && message.text === "subagent_lifecycle") {
+      const data = parseObject(message.output_json);
+      const state = typeof data?.state === "string" ? data.state : "running";
+      rows.push({
+        id,
+        label: persistedStateLabel(state),
+        detail: safePreview(typeof data?.detail === "string" ? data.detail : null),
+        tone: state === "completed" ? "success" : state === "failed" || state === "cancelled" ? "danger" : "normal",
+      });
+    }
+  }
+  return rows.slice(-60);
+}
+
+function parseObject(value: string | null | undefined): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function safePreview(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const normalized = value.trim().replace(/\s+/g, " ");
+  return normalized ? normalized.slice(0, 180) : null;
+}
+
+function subagentRuntimeLabel(kind: AgentRun["runtime_kind"]): string {
+  if (kind === "codex_exec") return "Codex CLI";
+  if (kind === "codex_mcp") return "Codex MCP";
+  return "R-Code 子代理";
+}
+
+function statusText(child: ActivitySubagent | undefined, run: AgentRun | undefined): string {
+  const status = child?.status;
+  if (status === "completed" || run?.review_state === "answered") return "已完成";
+  if (status === "failed" || run?.review_state === "failed") return "运行失败";
+  if (status === "cancelled" || run?.review_state === "aborted") return "已停止";
+  return "已结束";
+}
+
+function persistedPhaseLabel(phase: string | null): string {
+  switch (phase) {
+    case "tool": return "工具";
+    case "streaming": return "生成结果";
+    case "finalizing": return "整理结果";
+    case "waiting_permission": return "等待权限";
+    default: return "进度";
+  }
+}
+
+function persistedStateLabel(state: string): string {
+  switch (state) {
+    case "queued": return "已加入队列";
+    case "running": return "已开始";
+    case "waiting_permission": return "等待权限";
+    case "completed": return "已完成";
+    case "failed": return "运行失败";
+    case "cancelled": return "已停止";
+    default: return "状态更新";
+  }
+}
+
+function elapsedCompact(startedAt: number, endedAt: number): string {
+  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}分${String(seconds % 60).padStart(2, "0")}秒` : `${seconds}秒`;
+}
+
+function relativeActivity(at: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 5) return "刚刚";
+  if (seconds < 60) return `${seconds} 秒前`;
+  return `${Math.floor(seconds / 60)} 分钟前`;
+}
+
+function clockFromMillis(value: number): string {
+  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 // ---------- Summary ----------
@@ -287,16 +602,7 @@ function SummaryPanel({
   const pending = permissions.filter((p) => p.decision === "pending").length;
   const passed = verifications.filter((v) => v.status === "passed").length;
   const queued = queuedMessages.filter((message) => message.state === "queued" || message.state === "dispatching").length;
-  const subagents = runs.filter((run) => run.agent_kind === "subagent");
-  const activeSubagents = subagents.filter((run) => run.ended_at == null).length;
   const activeMainRun = runs.find((run) => run.agent_kind === "main" && run.ended_at == null);
-  const completedSubagents = subagents
-    .filter((run) => run.ended_at != null && run.summary)
-    .sort((a, b) => (b.ended_at ?? "").localeCompare(a.ended_at ?? ""))
-    .slice(0, 3);
-  const visibleSubagents = activity.subagents
-    .filter((item) => item.status === "queued" || item.status === "running" || item.status === "waiting_permission")
-    .slice(0, 3);
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
   const hasDistinctGoal = Boolean(task.goal.trim() && task.goal.trim() !== title);
   const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "纯聊天");
@@ -336,19 +642,10 @@ function SummaryPanel({
             <span><i /> 当前运行</span>
             <strong>{activity.label}</strong>
           </div>
-          {visibleSubagents.length > 0 && (
-            <div className="sum-live-subagents">
-              {visibleSubagents.map((subagent) => (
-                <span key={subagent.id} title={subagent.detail ?? subagent.label}>
-                  {subagent.label} · {subagent.phase}
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       )}
-      {/* 常驻三格都是可点开的产出；队列和子代理只在真的有值时出现，避免长期陈列 0。 */}
-      <div className="sum-grid">
+      {/* 产出摘要使用一条平面事实栏，不再把每个数字包成独立卡片。 */}
+      <div className="sum-facts">
         <button className="sum-cell action" onClick={() => setTab("changes")}>
           <div className="k">变更文件</div>
           <div className="v">{changes.length}</div>
@@ -369,29 +666,7 @@ function SummaryPanel({
             <div className="v warn">{queued}</div>
           </div>
         )}
-        {subagents.length > 0 && (
-          <div className="sum-cell">
-            <div className="k">子代理</div>
-            <div className={"v" + (activeSubagents > 0 ? " warn" : "")}>
-              {activeSubagents > 0 ? `${activeSubagents} 运行中 / ` : ""}{subagents.length}
-            </div>
-          </div>
-        )}
       </div>
-      {completedSubagents.length > 0 && (
-        <>
-          <div className="zone-head">子代理结果</div>
-          {completedSubagents.map((run) => (
-            <div className="sum-ev subagent-summary" key={run.id}>
-              <span className="dot" />
-              <span className="t">{run.agent_label || "只读调查"}</span>
-              <span className="subagent-summary-text" title={run.summary ?? undefined}>
-                {run.summary}
-              </span>
-            </div>
-          ))}
-        </>
-      )}
       <div className="zone-head">
         运行审计
         <span className="zone-hint">工具 · 目标 · 结果</span>
@@ -1181,20 +1456,206 @@ function defaultShell(): string {
   return "bash";
 }
 
-const TERMINAL_OUTPUT_LIMIT = 200_000;
-
 /** .lamp 只有颜色，读屏得靠这段文本。 */
 function terminalStateLabel(t: TerminalInfo): string {
   if (t.state === "exited") return "已退出";
+  if (t.state === "agent") return "外部 Agent 运行中";
   return t.is_busy ? "运行中" : "空闲";
 }
 
-function appendTerminalOutput(current: string, incoming: string): string {
-  if (!incoming) return current;
-  const next = current + stripAnsi(incoming);
-  return next.length > TERMINAL_OUTPUT_LIMIT
-    ? next.slice(next.length - TERMINAL_OUTPUT_LIMIT)
-    : next;
+function shellName(shell: string): string {
+  const parts = shell.split(/[\\/]/).filter(Boolean);
+  const name = parts[parts.length - 1] ?? shell;
+  return name.replace(/\.exe$/i, "") || "shell";
+}
+
+function terminalTheme() {
+  const style = getComputedStyle(document.documentElement);
+  const token = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+  return {
+    background: token("--bg-inset", "#131417"),
+    foreground: token("--fg", "#e4e6ea"),
+    cursor: token("--accent", "#7aa2f7"),
+    cursorAccent: token("--bg-inset", "#131417"),
+    selectionBackground: token("--tint-accent-hi", "rgba(122, 162, 247, .28)"),
+    black: token("--bg-app", "#16171b"),
+    brightBlack: token("--fg-faint", "#767b84"),
+    red: token("--danger", "#d97066"),
+    brightRed: token("--danger", "#d97066"),
+    green: token("--success", "#63b183"),
+    brightGreen: token("--success", "#63b183"),
+    yellow: token("--warning", "#cfa05c"),
+    brightYellow: token("--warning", "#cfa05c"),
+    blue: token("--accent", "#7aa2f7"),
+    brightBlue: token("--accent", "#7aa2f7"),
+    magenta: token("--accent-2", "#9d7cd8"),
+    brightMagenta: token("--accent-2", "#9d7cd8"),
+    cyan: token("--accent", "#7aa2f7"),
+    brightCyan: token("--accent", "#7aa2f7"),
+    white: token("--fg-muted", "#9ba0a8"),
+    brightWhite: token("--fg", "#e4e6ea"),
+  };
+}
+
+/**
+ * 真正的 PTY viewport。
+ *
+ * 后端为 agent 保留 ANSI-free 的 terminal.read，同时为这个唯一的本机渲染器提供
+ * 原始字节快照 + 游标增量。这样 Ctrl+C、方向键、TUI、颜色和光标移动都不会再被
+ * 降级成“命令输入框 + 日志”。
+ */
+function TerminalViewport({
+  terminalId,
+  onError,
+}: {
+  terminalId: string;
+  onError: (message: string | null) => void;
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const terminalRef = useRef<XtermTerminal | null>(null);
+  const activeIdRef = useRef<string | null>(null);
+  const cursorRef = useRef(0);
+  const writeChainRef = useRef(Promise.resolve());
+  const [readyForId, setReadyForId] = useState<string | null>(null);
+  const ready = readyForId === terminalId;
+
+  const enqueueWrite = useCallback(
+    (targetId: string, output: string, reset: boolean) => {
+      writeChainRef.current = writeChainRef.current
+        .then(
+          () =>
+            new Promise<void>((resolve) => {
+              const terminal = terminalRef.current;
+              if (!terminal || activeIdRef.current !== targetId) {
+                resolve();
+                return;
+              }
+              if (reset) terminal.reset();
+              if (!output) {
+                resolve();
+                return;
+              }
+              terminal.write(output, resolve);
+            })
+        )
+        .catch((cause) => {
+          onError(String(cause));
+        });
+      return writeChainRef.current;
+    },
+    [onError]
+  );
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    let disposed = false;
+    let resizeFrame: number | null = null;
+    let sendChain = Promise.resolve();
+    let terminal: XtermTerminal | null = null;
+    let fit: FitAddon | null = null;
+    let inputDisposable: { dispose: () => void } | null = null;
+    setReadyForId(null);
+    activeIdRef.current = terminalId;
+    cursorRef.current = 0;
+    writeChainRef.current = Promise.resolve();
+
+    const report = (cause: unknown) => {
+      if (!disposed) onError(String(cause));
+    };
+    const resize = () => {
+      if (disposed || !terminal || !fit || terminalRef.current !== terminal) return;
+      try {
+        fit.fit();
+        void terminalResize(terminalId, terminal.cols, terminal.rows).catch(report);
+      } catch {
+        // 面板刚挂载或被隐藏时 xterm 可能尚无可测尺寸；下一帧会重试。
+      }
+    };
+    const scheduleResize = () => {
+      if (resizeFrame != null) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = null;
+        resize();
+      });
+    };
+    const observer = new ResizeObserver(scheduleResize);
+    observer.observe(host);
+    const themeObserver = new MutationObserver(() => {
+      if (terminal && terminalRef.current === terminal) {
+        terminal.options.theme = terminalTheme();
+      }
+    });
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+    // xterm 仅在真正打开 Terminal 页时下载，避免把终端模拟器塞进首屏包。
+    void Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")])
+      .then(async ([xterm, fitModule]) => {
+        if (disposed) return;
+        terminal = new xterm.Terminal({
+          fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace",
+          fontSize: 12,
+          lineHeight: 1.42,
+          cursorBlink: true,
+          scrollback: 10_000,
+          theme: terminalTheme(),
+        });
+        fit = new fitModule.FitAddon();
+        terminal.loadAddon(fit);
+        terminal.open(host);
+        terminalRef.current = terminal;
+        inputDisposable = terminal.onData((data) => {
+          // IPC 是异步的；串行化可以保证 Ctrl+C、方向键和连续粘贴到达 PTY 的顺序。
+          sendChain = sendChain
+            .then(() => terminalSend(terminalId, data, false))
+            .catch((cause) => report(cause));
+        });
+
+        const snapshot = await terminalRawSnapshot(terminalId);
+        if (disposed) return;
+        cursorRef.current = snapshot.cursor;
+        await enqueueWrite(terminalId, snapshot.output, true);
+        if (disposed) return;
+        onError(null);
+        setReadyForId(terminalId);
+        scheduleResize();
+      })
+      .catch(report);
+
+    return () => {
+      disposed = true;
+      if (resizeFrame != null) cancelAnimationFrame(resizeFrame);
+      observer.disconnect();
+      themeObserver.disconnect();
+      inputDisposable?.dispose();
+      if (terminal && terminalRef.current === terminal) terminalRef.current = null;
+      if (activeIdRef.current === terminalId) activeIdRef.current = null;
+      terminal?.dispose();
+    };
+  }, [enqueueWrite, onError, terminalId]);
+
+  const pullOutput = useCallback(async () => {
+    if (!ready) return;
+    const batch = await terminalRawSince(terminalId, cursorRef.current);
+    cursorRef.current = batch.cursor;
+    if (batch.reset || batch.output) await enqueueWrite(terminalId, batch.output, batch.reset);
+  }, [enqueueWrite, ready, terminalId]);
+
+  usePoll(
+    () => pullOutput().catch((cause) => onError(String(cause))),
+    250,
+    ready
+  );
+
+  return (
+    <div
+      ref={hostRef}
+      className="term-viewport"
+      aria-label="交互式终端"
+      role="application"
+    />
+  );
 }
 
 function TerminalPanel({
@@ -1204,23 +1665,23 @@ function TerminalPanel({
   workspacePath: string | null;
   workspaceAttached: boolean;
 }) {
+  const { runWithCodexCli } = useCodexCliGate();
   const [terms, setTerms] = useState<TerminalInfo[]>([]);
   const [selId, setSelId] = useState<string | null>(null);
-  const [out, setOut] = useState("");
-  const [cmd, setCmd] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [loadedOutputId, setLoadedOutputId] = useState<string | null>(null);
+  const [launcherOpen, setLauncherOpen] = useState(false);
   const [rowFocus, setRowFocus] = useState(-1);
-  const outRef = useRef<HTMLPreElement>(null);
-  const pinnedRef = useRef(true);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const resizeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const list = useCallback(async () => {
     try {
       const ts = await terminalList();
       setTerms(ts);
+      setSelId((current) =>
+        current != null && ts.some((terminal) => terminal.id === current)
+          ? current
+          : ts[0]?.id ?? null
+      );
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -1231,87 +1692,47 @@ function TerminalPanel({
     void list();
   }, [list]);
 
-  const sel = selId ?? terms[0]?.id ?? null;
+  // 状态由真实 PTY 输出和 shell integration 推进；定期刷新列表才能及时显示
+  // Busy / Agent / Exited，而不是只在第一次打开画布时读到一份静态状态。
+  usePoll(list, 1200, true);
+
+  const sel = selId;
   const selIndex = terms.findIndex((item) => item.id === sel);
   const rovingIndex = rovingIndexOf(rowFocus, selIndex, terms.length);
 
-  // 终端输出可能已被 agent 或早前轮询消费；切换终端时必须从后端 scrollback
-  // 快照恢复，而不是只等待下一次增量 read。
-  useEffect(() => {
-    if (!sel) {
-      setOut("");
-      setLoadedOutputId(null);
-      return;
-    }
-    let dead = false;
-    setOut("");
-    setLoadedOutputId(null);
-    void terminalSnapshot(sel)
-      .then((snapshot) => {
-        if (dead) return;
-        setOut(stripAnsi(snapshot));
-        setError(null);
-        setLoadedOutputId(sel);
-      })
-      .catch((cause) => {
-        if (!dead) setError(String(cause));
-      });
-    return () => {
-      dead = true;
-    };
-  }, [sel]);
-
-  // 输出 1s 轮询(strip ANSI 后 <pre> 展示)
-  usePoll(
-    async () => {
-      if (!sel) return;
-      try {
-        const raw = await terminalRead(sel);
-        setOut((current) => appendTerminalOutput(current, raw));
-        setError(null);
-      } catch (e) {
-        setError(String(e));
-      }
-    },
-    1000,
-    sel != null && loadedOutputId === sel
-  );
-
-  // 贴底跟随
-  useEffect(() => {
-    const el = outRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
-  }, [out]);
-
-  // 容器尺寸 → PTY resize(估算行列,400ms 防抖)
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el || !sel) return;
-    const ro = new ResizeObserver(() => {
-      if (resizeTimer.current) clearTimeout(resizeTimer.current);
-      resizeTimer.current = setTimeout(() => {
-        const cols = Math.max(20, Math.min(400, Math.floor(el.clientWidth / 7.5)));
-        const rows = Math.max(5, Math.min(100, Math.floor(el.clientHeight / 16)));
-        void terminalResize(sel, cols, rows).catch(() => {
-          /* resize 失败不影响展示 */
-        });
-      }, 400);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [sel]);
-
-  const create = async () => {
+  const create = async (shell = defaultShell()) => {
     if (!workspacePath || !workspaceAttached) {
       setError("先为这个会话附加一个文件夹，才能打开终端。");
       return;
     }
     setCreating(true);
+    setLauncherOpen(false);
     setError(null);
     try {
-      const id = await terminalCreate(defaultShell(), workspacePath);
+      const id = await terminalCreate(shell, workspacePath);
       await list();
       setSelId(id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const createCodex = async () => {
+    if (!workspacePath || !workspaceAttached) {
+      setError("先为这个会话附加一个文件夹，才能打开 Codex CLI。");
+      return;
+    }
+    setCreating(true);
+    setLauncherOpen(false);
+    setError(null);
+    try {
+      await runWithCodexCli({ feature: "Codex CLI 终端" }, async () => {
+        const id = await terminalCreateCodex(workspacePath);
+        await list();
+        setSelId(id);
+      });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -1323,32 +1744,46 @@ function TerminalPanel({
     setError(null);
     try {
       await terminalKill(id);
-      if (selId === id) setSelId(null);
       await list();
     } catch (e) {
       setError(String(e));
     }
   };
 
-  const sendLine = async () => {
-    if (!sel || !cmd.trim()) return;
-    setError(null);
-    const line = cmd;
-    setCmd("");
-    try {
-      await terminalSend(sel, line, true);
-    } catch (e) {
-      setError(String(e));
-      setCmd(line);
-    }
-  };
+  const reportViewportError = useCallback((message: string | null) => {
+    setError(message);
+  }, []);
 
   return (
-    <div className="term-wrap" ref={wrapRef}>
+    <div className="term-wrap">
       <div className="term-side">
-        <button className="btn sm term-new" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
-          <IconPlus width={11} height={11} /> 新建终端
-        </button>
+        <div className="term-new-wrap">
+          <button className="btn sm term-new" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
+            <IconPlus width={11} height={11} /> 新建终端
+          </button>
+          <button
+            className="btn sm term-new-more"
+            disabled={creating || !workspacePath || !workspaceAttached}
+            aria-label="选择终端类型"
+            aria-expanded={launcherOpen}
+            aria-haspopup="menu"
+            onClick={() => setLauncherOpen((open) => !open)}
+          >
+            <IconChevronDown width={11} height={11} />
+          </button>
+          {launcherOpen && (
+            <div className="term-launcher" role="menu" aria-label="新建终端类型">
+              <button role="menuitem" onClick={() => void create(defaultShell())}>
+                <span>系统 Shell</span>
+                <small>工作区根目录</small>
+              </button>
+              <button role="menuitem" onClick={() => void createCodex()}>
+                <span>Codex CLI</span>
+                <small>使用它自己的登录与权限</small>
+              </button>
+            </div>
+          )}
+        </div>
         {terms.length > 0 && (
           <div className="term-options" role="grid" aria-label="终端列表">
             {terms.map((t, index) => (
@@ -1371,7 +1806,7 @@ function TerminalPanel({
                 <span className="rcell rcell-main" role="gridcell">
                   <IconTerminal width={12} height={12} aria-hidden="true" />
                   <span className="t-id" title={t.id}>
-                    {t.id.slice(0, 8)}
+                    {shellName(t.shell)}
                   </span>
                   {/* 状态灯是纯颜色编码，读屏走后面的文本 */}
                   <span
@@ -1401,38 +1836,13 @@ function TerminalPanel({
         {terms.length === 0 && <div className="term-hint">无终端</div>}
       </div>
       <div className="term-main">
-        {error && <div className="panel-error">{error}</div>}
+        {error && <div className="panel-error" role="alert">{error}</div>}
         {sel ? (
-          <>
-            <pre
-              className="term-out"
-              ref={outRef}
-              onScroll={(e) => {
-                const el = e.currentTarget;
-                pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-              }}
-            >
-              {out || " "}
-            </pre>
-            <div className="term-in">
-              <input
-                className="input"
-                value={cmd}
-                placeholder="输入命令,Enter 注入终端"
-                onChange={(e) => setCmd(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void sendLine();
-                  }
-                }}
-              />
-            </div>
-          </>
+          <TerminalViewport terminalId={sel} onError={reportViewportError} />
         ) : (
           <div className="empty">
             {workspacePath && workspaceAttached
-              ? "还没有终端 — 点击左侧「新建终端」（将自动选择可用 shell，cwd = 工作区根）。"
+              ? "还没有终端 — 点击左侧「新建终端」。终端运行在此设备，cwd 为工作区根。"
               : "附加一个工作区后，才能使用终端。"}
           </div>
         )}
@@ -1459,9 +1869,12 @@ function ReviewPanel({ taskId }: { taskId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [runningCmd, setRunningCmd] = useState(false);
   const [confirm, setConfirm] = useState<null | "accept" | "rollback">(null);
+  const [requestingChange, setRequestingChange] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
+  const taskState = useTasksStore((s) => s.details[taskId]?.task.state);
   // 输出查看（点击记录行展开，懒加载 + 缓存）
   const [openId, setOpenId] = useState<string | null>(null);
   const [outputs, setOutputs] = useState<Record<string, string>>({});
@@ -1537,6 +1950,26 @@ function ReviewPanel({ taskId }: { taskId: string }) {
     }
   };
 
+  const requestChanges = async () => {
+    const message = feedback.trim();
+    if (!message) {
+      setError("请先说明希望修改的内容。");
+      return;
+    }
+    setError(null);
+    setNotice(null);
+    try {
+      await changeRequest(taskId, message);
+      setFeedback("");
+      setRequestingChange(false);
+      setNotice("已发送修改请求，正在启动下一轮处理。");
+      await refreshDetail(taskId);
+      await refreshTasks();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
   // 没有「选中」概念，roving 落点退回已展开的那一条，都没有就第一条
   const rovingIndex = rovingIndexOf(rowFocus, records.findIndex((r) => r.id === openId), records.length);
 
@@ -1604,6 +2037,13 @@ function ReviewPanel({ taskId }: { taskId: string }) {
           </div>
         )}
       </div>
+      {requestingChange && (
+        <div className="review-request">
+          <label htmlFor={`review-feedback-${taskId}`}>修改说明</label>
+          <textarea id={`review-feedback-${taskId}`} value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="说明需要调整的实现、边界或测试。" autoFocus />
+          <div><button className="btn accent" disabled={!feedback.trim()} onClick={() => void requestChanges()}>发送修改请求</button><button className="btn" onClick={() => setRequestingChange(false)}>取消</button></div>
+        </div>
+      )}
       <div className="review-actions">
         <button
           className={"btn accent" + (confirm === "accept" ? " confirm" : "")}
@@ -1617,6 +2057,7 @@ function ReviewPanel({ taskId }: { taskId: string }) {
         >
           {confirm === "rollback" ? "确认回滚?" : "Rollback"}
         </button>
+        {taskState === "review_ready" && <button className="btn" onClick={() => setRequestingChange((open) => !open)}>{requestingChange ? "收起修改说明" : "请求修改"}</button>}
         <span className="review-hint">审阅门永远显式 — 接受或回滚,不留中间态。</span>
       </div>
     </div>
