@@ -29,7 +29,7 @@ fn csp_navigation_security_matrix() {
 
     // Safe URLs
     assert!(!should_block_navigation("https://example.com"));
-    assert!(!should_block_navigation("http://localhost:1420"));
+    assert!(!should_block_navigation("http://localhost:5173"));
 
     // CSP should be present and restrictive
     assert!(prod.csp.contains("default-src 'self'"));

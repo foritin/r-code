@@ -10,6 +10,7 @@ import {
   codexStartDeviceLogin,
   codexStartLogin,
   logsTail,
+  providerModels,
   settingsDeleteProvider,
   settingsGet,
   settingsSaveProvider,
@@ -301,6 +302,11 @@ function ProviderSection({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
+  const [remoteModels, setRemoteModels] = useState<string[]>([]);
+  const [modelsBusy, setModelsBusy] = useState(false);
+  const [modelsMessage, setModelsMessage] = useState<string | null>(null);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const modelRequest = useRef(0);
 
   // 目录来自后端 provider_catalog.rs：预设一旦分散成两份就会漂移，
   // 前端不再自带硬编码表。
@@ -375,8 +381,52 @@ function ProviderSection({
     setErr(null);
   }, [applyPreset, providers, providerStatus, selectedProvider]);
 
+  // 地址、协议或编辑对象变化后，旧请求结果不再属于当前表单。
+  useEffect(() => {
+    modelRequest.current += 1;
+    setRemoteModels([]);
+    setModelsMessage(null);
+    setModelsError(null);
+    setModelsBusy(false);
+  }, [selectedProvider, presetName, fields.base_url, fields.protocol]);
+
   const activePreset = presetOf(presetName);
   const pendingVars = unresolvedTemplateVars(activePreset, fields.base_url);
+  const modelChoices = Array.from(
+    new Set(
+      [fields.model, ...remoteModels, ...(activePreset?.models ?? [])]
+        .map((model) => model.trim())
+        .filter(Boolean)
+    )
+  );
+
+  const fetchModels = async () => {
+    if (modelsBusy || busy) return;
+    const requestId = ++modelRequest.current;
+    setModelsBusy(true);
+    setModelsMessage(null);
+    setModelsError(null);
+    try {
+      const response = await providerModels({
+        name: profileName.trim(),
+        preset: activePreset?.id ?? null,
+        baseUrl: fields.base_url,
+        apiKey: keyInput.trim() || null,
+        protocol: fields.protocol,
+      });
+      if (modelRequest.current !== requestId) return;
+      setRemoteModels(response.models);
+      if (!fields.model.trim() && response.models[0]) {
+        setFields((value) => ({ ...value, model: response.models[0] }));
+      }
+      setModelsMessage(`服务返回 ${response.models.length} 个可用模型`);
+    } catch (cause) {
+      if (modelRequest.current !== requestId) return;
+      setModelsError(errText(cause));
+    } finally {
+      if (modelRequest.current === requestId) setModelsBusy(false);
+    }
+  };
 
   const run = async (fn: () => Promise<void>, message: string) => {
     if (busy) return;
@@ -634,19 +684,45 @@ function ProviderSection({
           </div>
           <div className="field">
             <label htmlFor="set-model">模型</label>
-            <input id="set-model"
-              className="input"
-              list="set-model-options"
-              value={fields.model}
-              placeholder="模型名称"
-              onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
-            />
-            {/* 候选来自预设，但仍是自由输入：厂商换型号的速度快过我们发版 */}
-            <datalist id="set-model-options">
-              {(activePreset?.models ?? []).map((model) => (
-                <option key={model} value={model} />
-              ))}
-            </datalist>
+            <div className="provider-model-controls">
+              {/* 保留自由输入：并不是所有兼容网关都实现 /models。 */}
+              <input id="set-model"
+                className="input"
+                value={fields.model}
+                placeholder="模型名称"
+                onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
+              />
+              <select
+                className="input provider-model-select"
+                aria-label="从模型列表选择"
+                title="从模型列表选择"
+                value=""
+                disabled={busy || modelChoices.length === 0}
+                onChange={(event) => {
+                  if (event.target.value) {
+                    setFields((value) => ({ ...value, model: event.target.value }));
+                  }
+                }}
+              >
+                <option value="">选择模型（{modelChoices.length}）</option>
+                {modelChoices.map((model) => (
+                  <option key={model} value={model}>{model}</option>
+                ))}
+              </select>
+              <button
+                className={`btn provider-model-refresh${modelsBusy ? " loading" : ""}`}
+                type="button"
+                disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
+                title="从当前接口实时获取模型列表"
+                onClick={() => void fetchModels()}
+              >
+                <IconRefresh width={15} height={15} />
+                {modelsBusy ? "获取中" : "获取列表"}
+              </button>
+            </div>
+            <span className="hint">可从当前接口实时获取并选择；接口不支持时仍可直接填写。</span>
+            {modelsMessage && <span className="field-success" role="status">{modelsMessage}</span>}
+            {modelsError && <span className="field-warning" role="alert">{modelsError}</span>}
           </div>
           <div className="field">
             <label htmlFor="set-api-key">访问密钥</label>

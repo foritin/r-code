@@ -49,7 +49,7 @@ export function InboxScene() {
 
   return (
     <div className={`scene scene-inbox${selected ? " has-inspector" : ""}${inspectorCollapsed ? " inspector-collapsed" : ""}`}>
-      <main className="inbox-main">
+      <div className="inbox-main">
         <div className="inbox-scroll">
           <header className="inbox-header">
             <div>
@@ -78,7 +78,7 @@ export function InboxScene() {
             </section>
           )}
         </div>
-      </main>
+      </div>
 
       {selected && (
         <aside className="inbox-inspector" aria-label={kind === "permission" ? "权限详情" : "审核摘要"}>
@@ -161,13 +161,12 @@ function ReviewInspector({ item, onError, onCollapse }: { item: NeedsYouItem; on
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const openRoom = useAppStore((s) => s.openRoom);
-  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const [busy, setBusy] = useState(false);
   const [requestingChanges, setRequestingChanges] = useState(false);
   const [feedback, setFeedback] = useState("");
   const changes = detail?.changes ?? [];
   const verify = detail?.verifications.slice(-1)[0];
-  const open = (tab: "review" | "changes") => { setCanvasTab(tab); openRoom(item.task.id); };
+  const open = (tab: "review" | "changes") => openRoom(item.task.id, tab);
   const run = async (action: "accept" | "rollback") => {
     if (busy) return;
     setBusy(true);

@@ -3098,6 +3098,7 @@ dependencies = [
  "r-code-gateway",
  "r-code-store",
  "r-code-terminal",
+ "reqwest 0.12.28",
  "rusqlite",
  "serde",
  "serde_json",

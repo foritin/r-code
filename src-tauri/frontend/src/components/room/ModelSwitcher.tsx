@@ -131,7 +131,7 @@ export function ModelSwitcher({
                       hint={candidate === choice.model ? "服务默认" : undefined}
                       onSelect={() => choose(choice, candidate)}
                     >
-                      {candidate}
+                      <span className="model-name" title={candidate}>{candidate}</span>
                     </MenuItem>
                   ))}
                 {choice.ready &&

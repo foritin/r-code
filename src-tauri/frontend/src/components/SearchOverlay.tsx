@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppStore } from "../store/app";
-import { useFocusTrap, useReturnFocus } from "../lib/hooks";
+import { useFocusTrap } from "../lib/hooks";
 import { useTasksStore } from "../store/tasks";
 import { globalSearch, quickOpen } from "../lib/ipc";
 import { errText } from "../lib/format";
@@ -32,6 +32,9 @@ export function SearchOverlay() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const seqRef = useRef(0);
+  const returnFocusRef = useRef<HTMLElement | null>(
+    typeof document === "undefined" ? null : document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
 
   const items = useMemo<Item[]>(
     () => [
@@ -43,12 +46,12 @@ export function SearchOverlay() {
   const selSafe = items.length === 0 ? 0 : Math.min(sel, items.length - 1);
   const dialogRef = useRef<HTMLDivElement>(null);
   useFocusTrap(dialogRef, true);
-  useReturnFocus(true);
 
   // 挂载自动聚焦。焦点陷阱与归还见下方 hook —— 原先只声明了 aria-modal="true"
   // 却没有任何实现，按 Tab 会直接跑到背景的侧栏按钮上，关闭后焦点掉进 body。
   useEffect(() => {
     inputRef.current?.focus();
+    return () => returnFocusRef.current?.focus({ preventScroll: true });
   }, []);
 
   // Esc 关闭（即使焦点不在输入框）
@@ -145,6 +148,7 @@ export function SearchOverlay() {
             role="combobox"
             aria-expanded={items.length > 0}
             aria-controls="ovl-results"
+            aria-activedescendant={items.length > 0 ? `ovl-option-${selSafe}` : undefined}
             aria-autocomplete="list"
             aria-label="搜索文件与内容"
             value={query}
@@ -184,6 +188,9 @@ export function SearchOverlay() {
           {files.map((path, i) => (
             <button
               key={`f:${path}`}
+              id={`ovl-option-${i}`}
+              role="option"
+              aria-selected={selSafe === i}
               className={`ovl-item${selSafe === i ? " sel" : ""}`}
               onMouseEnter={() => setSel(i)}
               onClick={() => openItem({ kind: "file", path })}
@@ -203,6 +210,9 @@ export function SearchOverlay() {
             return (
               <button
                 key={`h:${m.path}:${m.line}:${j}`}
+                id={`ovl-option-${idx}`}
+                role="option"
+                aria-selected={selSafe === idx}
                 className={`ovl-item${selSafe === idx ? " sel" : ""}`}
                 onMouseEnter={() => setSel(idx)}
                 onClick={() => openItem({ kind: "hit", match: m })}

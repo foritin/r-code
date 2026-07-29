@@ -1,50 +1,44 @@
 # R-Code UI — Current
 
-这是当前唯一有效的 UI 评审入口。静态原型与交互 Demo 现在由同一份实现生成，不再维护两套视觉标准。
+当前 UI 的唯一可执行评审入口是 [完整产品交互 Demo](./demo/index.html)。它直接由 `src-tauri/frontend/` 的正式 React 前端构建，页面、组件、样式和交互不再另写一套。
 
-## 最新原型（1600 × 1000）
+## 完整 Demo
 
-| 状态 | 亮色 | 暗色 |
-| --- | --- | --- |
-| 工作台启动器 | [查看](./prototypes/workbench/01-launcher-light.png) | [查看](./prototypes/workbench/02-launcher-dark.png) |
-| 运行与子代理详情 | [查看](./prototypes/workbench/03-subagents-light.png) | [查看](./prototypes/workbench/04-subagents-dark.png) |
-| 集成终端 | [查看](./prototypes/workbench/05-terminal-light.png) | [查看](./prototypes/workbench/06-terminal-dark.png) |
-| 文件 Peek 与项目树 | [查看](./prototypes/workbench/07-files-light.png) | [查看](./prototypes/workbench/08-files-dark.png) |
-| 审核、Diff 与变更树 | [查看](./prototypes/workbench/09-review-light.png) | [查看](./prototypes/workbench/10-review-dark.png) |
-| 审核摘要收起 | [查看](./prototypes/workbench/11-review-collapsed-light.png) | [查看](./prototypes/workbench/12-review-collapsed-dark.png) |
+Demo 覆盖应用外壳、新对话、项目仪表盘、对话列表、活动、任务房间、待处理、项目、项目文件和设置；任务房间内包含工作台启动器、运行与子代理、终端、文件、审核/变更、权限处理与审核窄轨。
 
-原型图说明见 [prototypes/workbench/README.md](./prototypes/workbench/README.md)。
+浏览器内存后端让创建任务、发送消息、审批、审核、文件保存、终端命令、项目记忆和设置变更都能在页面内演示。数据仅存在当前页面，刷新即复位，不会触碰本机文件或桌面端配置。
 
-- `state=launcher|run|terminal|files|review|review-collapsed`
-- `theme=dark|light`
+常用确定性入口：
 
-## 设计结论
+- `scene=home|dashboard|conversations|activity|room|inbox|projects|editor|settings`
+- `task=queue|review|permission|api|complete`
+- `tab=summary|changes|files|terminal|review`
+- `settings=providers|preferences|diagnostics|codex`
+- `theme=light|dark|system`
 
-- 右侧采用可停靠宽工作台，不沿用 340–414px 的全局 inspector。
-- 主对话始终稳定；终端、文件、审核和子代理在一个排他的工作台槽位中切换。
-- 子代理从运行列表下钻，不显示内部事件 JSON 或私有推理。
-- 待处理审核收起后仍是同一审核摘要，点击恢复完整审核；不会替换成项目动态。
-- 工具画布使用连续平面和分隔线，不做卡片套卡片。
+完整参数、构建与验证说明见 [demo/README.md](./demo/README.md)。
 
-完整行为和视觉合同见 [SPEC.md](./SPEC.md)，能力边界见 [BACKEND-CONTRACT.md](./BACKEND-CONTRACT.md)。Codex 参照事实记录在 [PRODUCT-FACTS.md](./PRODUCT-FACTS.md)。
+## 任务房间设计约束
 
-## 当前 Demo（唯一实现）
+- 主对话与右侧工作台属于同一个任务房间；工具互斥切换，任务上下文、文件草稿和终端选择不丢失。
+- 子代理只展示公开生命周期、工具审计和可见结果，不展示私有推理。
+- 文件、终端、变更和审核始终受当前任务附加的工作区范围约束。
+- 颜色不是唯一状态提示，核心控件具备键盘与无障碍语义，窄屏保持可用。
 
-[打开交互 Demo](./demo/index.html)
+完整工作台规范见 [SPEC.md](./SPEC.md)，能力边界见 [BACKEND-CONTRACT.md](./BACKEND-CONTRACT.md)，Codex 参照事实见 [PRODUCT-FACTS.md](./PRODUCT-FACTS.md)。
 
-支持启动器、工具切换、隐藏与恢复、专注模式、子代理详情与停止确认、终端状态保持、文件选择、审核收起/展开与决策确认，以及任务状态隔离。默认亮色，主题入口位于左下角。
+## 工作台视觉参考
 
-确定性截图参数：
+`prototypes/workbench/` 下的 12 张图片是本轮外壳、比例和交互语言的参考。当前界面验收以可执行 Demo 与正式前端源码为准，参考图不会被构建脚本自动覆盖。
 
-- `state=launcher|run|terminal|files|review|review-collapsed`
-- `theme=light|dark`
-
-## 重新渲染原型
-
-使用可解析 Playwright 的 Node 环境：
+## 构建与验证
 
 ```powershell
-node demo/qa.cjs
+cd src-tauri/frontend
+npm run build:demo
+cd ../../docs/ui/demo
+node qa.cjs --smoke
+node qa.cjs
 ```
 
-默认输出到 `target/ui-demo/`。脚本会验证 6 个状态 × 2 个主题 × 4 个视口、浏览器错误、页面溢出、按钮裁切和关键交互。只有明确传入 `--update-prototypes` 时，才会覆盖 `prototypes/workbench/` 下 12 张正式原型图。
+验证矩阵覆盖完整产品场景、双主题、三档视口和关键跨页面流程，输出位于 `target/ui-demo/`。

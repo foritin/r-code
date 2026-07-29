@@ -3,7 +3,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
 import { notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
-import { keyLabel } from "../../lib/keys";
 import type { Notification, NotificationPage } from "../../lib/types";
 import {
   IconBell,
@@ -12,6 +11,7 @@ import {
   IconMaximize,
   IconMinimize,
   IconSearch,
+  IconSidebar,
 } from "../icons";
 
 /**
@@ -21,8 +21,9 @@ import {
  */
 export function MenuBar() {
   const setScene = useAppStore((s) => s.setScene);
-  const goHome = useAppStore((s) => s.goHome);
   const openRoom = useAppStore((s) => s.openRoom);
+  const railCollapsed = useAppStore((s) => s.railCollapsed);
+  const toggleRail = useAppStore((s) => s.toggleRail);
   const toggleSearch = useAppStore((s) => s.toggleSearch);
   const needsYou = useTasksStore(selectNeedsYou);
   const [notificationOpen, setNotificationOpen] = useState(false);
@@ -90,15 +91,11 @@ export function MenuBar() {
 
   return (
     <header className="menubar app-topbar">
-      <button className="app-brand" onClick={goHome} title="R-Code — 新对话">
-        <span className="app-brand-mark" aria-hidden="true">R</span>
-        <span>R-Code</span>
+      <button className="top-icon desktop-sidebar-toggle" onClick={toggleRail} aria-label={railCollapsed ? "展开侧边栏" : "收起侧边栏"} title={railCollapsed ? "展开侧边栏" : "收起侧边栏"}>
+        <IconSidebar width={16} height={16} />
       </button>
-
-      <button className="global-search-trigger" onClick={toggleSearch} title={`搜索（${keyLabel("search")}）`}>
-        <IconSearch width={17} height={17} />
-        <span>搜索任务、文件、对话…</span>
-        <kbd>{keyLabel("search")}</kbd>
+      <button className="top-icon compact-search-toggle" onClick={toggleSearch} aria-label="搜索任务、文件和对话" title="搜索">
+        <IconSearch width={16} height={16} />
       </button>
 
       <div className="topbar-spacer" />

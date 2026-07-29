@@ -113,6 +113,11 @@ const CODEX_DELEGATION_PROMPT_HINT: &str = " When the user explicitly asks for C
 not claim Codex is unsupported before trying the tool. Codex runs through the user's installed and \
 authenticated Codex CLI in a read-only sandbox; setup failures are returned as tool errors.";
 
+const CODEX_WORKSPACE_REQUIRED_PROMPT_HINT: &str = "\n\nCodex CLI delegation requires an attached \
+workspace. If the user asks you to invoke Codex while no workspace is attached, tell them to attach \
+a folder to this conversation first. Do not describe this as a model permission problem, and do not \
+infer that Codex is unconfigured.";
+
 /// Result returned by the host-provided Codex CLI bridge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodexSubagentOutcome {
@@ -295,7 +300,10 @@ impl AgentRuntime for LlmAgentRuntime {
         // Ask 是带工作区的只读问答，而不是“允许写入、只是碰巧没有点确认”。
         // 外部 MCP 调用会创建 Ask 任务，因此这里形成可执行的最小权限边界。
         let policy = tool_policy_for_task_mode(mode);
-        let allows_delegation = policy == ToolPolicy::Main;
+        // “Ask”只决定工作区工具为只读，不能再被当成“当前运行就是子代理”。
+        // 只要用户已经附加工作区，主运行就可以委派只读调查；真正的子代理仍由
+        // run_child 单独构造 ToolHost，并且没有 delegation，因而不能递归委派。
+        let allows_delegation = workspace_scope.is_some();
         let run_id_text = run_id.to_string();
         let supervisor = Arc::new(SubagentSupervisor::new(
             self.provider.clone(),
@@ -561,16 +569,16 @@ async fn run_loop(ctx: RunLoopCtx) {
             delegation: ctx.allows_delegation.then(|| ctx.supervisor.clone()),
         };
         let tools = tool_host.tool_specs();
-        let mut system_prompt = if ctx.policy == ToolPolicy::ReadOnly {
-            build_subagent_system_prompt(!tools.is_empty())
-        } else {
-            build_system_prompt(!tools.is_empty())
-        };
+        // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
+        // run_child 中的 build_subagent_system_prompt。
+        let mut system_prompt = build_system_prompt(ctx.workspace_scope.is_some());
         if ctx.allows_delegation {
             system_prompt.push_str(DELEGATION_PROMPT_HINT);
             if ctx.supervisor.codex_available() {
                 system_prompt.push_str(CODEX_DELEGATION_PROMPT_HINT);
             }
+        } else if ctx.supervisor.codex_configured() {
+            system_prompt.push_str(CODEX_WORKSPACE_REQUIRED_PROMPT_HINT);
         }
         let request = CompletionRequest {
             model: ctx.model.clone(),
@@ -1194,6 +1202,10 @@ impl SubagentSupervisor {
     }
 
     fn codex_available(&self) -> bool {
+        self.codex_configured() && self.workspace_scope.is_some()
+    }
+
+    fn codex_configured(&self) -> bool {
         self.codex_subagent_runner.is_some()
     }
 
@@ -1212,6 +1224,11 @@ impl SubagentSupervisor {
         if backend == SubagentBackend::Codex && self.codex_subagent_runner.is_none() {
             return Err(ProductError::Other(
                 "当前 R-Code 宿主没有启用 Codex CLI 子代理桥".to_string(),
+            ));
+        }
+        if backend == SubagentBackend::Codex && self.workspace_scope.is_none() {
+            return Err(ProductError::Other(
+                "Codex 子代理需要先为当前对话附加一个工作区".to_string(),
             ));
         }
         let run_id = Uuid::new_v4().to_string();
@@ -1914,6 +1931,171 @@ mod tests {
                 state: TaskState::ReviewReady
             }
         )));
+    }
+
+    #[tokio::test]
+    async fn pure_chat_main_run_is_not_misidentified_as_a_subagent() {
+        let release = Arc::new(Notify::new());
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let provider = DelayedProvider::new(
+            vec![(
+                false,
+                vec![
+                    StreamEvent::TextDelta {
+                        text: "请先附加工作区".to_string(),
+                    },
+                    StreamEvent::Stop {
+                        reason: StopReason::EndTurn,
+                    },
+                ],
+            )],
+            release,
+            requests.clone(),
+        );
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        )
+        .with_codex_subagent_runner(Arc::new(RecordingCodexRunner {
+            calls: AtomicUsize::new(0),
+        }));
+
+        let session = runtime.create_session(input()).await.unwrap();
+        runtime
+            .start_run(&session.meta.id, "能调用 Codex 子代理吗")
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!runtime.is_running());
+
+        let requests = requests.lock().unwrap();
+        let request = requests.first().unwrap();
+        let system = request.system.as_deref().unwrap();
+        assert!(!system.contains("You are a read-only delegated subagent"));
+        assert!(system.contains("requires an attached workspace"));
+        assert!(!request
+            .tools
+            .iter()
+            .any(|tool| tool.name == "delegate_task"));
+    }
+
+    #[tokio::test]
+    async fn ask_main_run_exposes_codex_delegation_after_workspace_is_attached() {
+        let directory = TempDir::new().unwrap();
+        let release = Arc::new(Notify::new());
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let provider = DelayedProvider::new(
+            vec![(
+                false,
+                vec![
+                    StreamEvent::TextDelta {
+                        text: "done".to_string(),
+                    },
+                    StreamEvent::Stop {
+                        reason: StopReason::EndTurn,
+                    },
+                ],
+            )],
+            release,
+            requests.clone(),
+        );
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        )
+        .with_codex_subagent_runner(Arc::new(RecordingCodexRunner {
+            calls: AtomicUsize::new(0),
+        }));
+
+        // 复现 UI 路径：先创建纯聊天 Ask 会话，随后在 Room 顶部附加工作区。
+        let session = runtime.create_session(input()).await.unwrap();
+        runtime
+            .update_workspace_scope(
+                &session.meta.id,
+                Some(directory.path().to_string_lossy().into_owned()),
+                ProjectAccessMode::RequestApproval,
+            )
+            .await
+            .unwrap();
+        runtime
+            .start_run(&session.meta.id, "检查代码")
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!runtime.is_running());
+
+        let requests = requests.lock().unwrap();
+        let request = requests.first().unwrap();
+        let system = request.system.as_deref().unwrap();
+        assert!(system.contains("coding agent working inside a user-approved workspace"));
+        assert!(system.contains("When the user explicitly asks for Codex"));
+        assert!(!system.contains("You are a read-only delegated subagent"));
+        assert!(request.tools.iter().any(|tool| tool.name == "read_file"));
+        let delegate = request
+            .tools
+            .iter()
+            .find(|tool| tool.name == "delegate_task")
+            .unwrap();
+        assert!(delegate.input_schema["properties"]["agent"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "codex"));
+        assert!(request
+            .tools
+            .iter()
+            .any(|tool| tool.name == "collect_subagents"));
+    }
+
+    #[tokio::test]
+    async fn codex_delegation_without_workspace_fails_before_queueing_a_child() {
+        let runner = Arc::new(RecordingCodexRunner {
+            calls: AtomicUsize::new(0),
+        });
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = SubagentSupervisor::new(
+            Arc::new(MockProvider::new("mock")),
+            test_gateway(),
+            event_tx,
+            "task-1".to_string(),
+            "parent-run".to_string(),
+            "mock-model".to_string(),
+            512,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+            Some(runner.clone()),
+        );
+
+        let error = supervisor
+            .spawn(
+                SubagentBackend::Codex,
+                None,
+                "检查代码".to_string(),
+                Some("call-codex".to_string()),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("先为当前对话附加一个工作区"));
+        assert_eq!(runner.calls.load(Ordering::Relaxed), 0);
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[tokio::test]

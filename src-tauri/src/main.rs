@@ -174,6 +174,7 @@ fn main() {
             tauri_commands::cmd_logs_tail,
             tauri_commands::cmd_settings_get,
             tauri_commands::cmd_provider_catalog,
+            tauri_commands::cmd_provider_models,
             tauri_commands::cmd_settings_set,
             tauri_commands::cmd_settings_save_provider,
             tauri_commands::cmd_settings_select_provider,

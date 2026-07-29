@@ -43,8 +43,8 @@ use r_code_core::dto::{
     TaskEventType, TaskMode, TaskState, ToolCall, VerificationRecord, Workspace,
 };
 use r_code_core::error::ProductError;
-use r_code_core::security::PathGuard;
 use r_code_core::secret::redact_text;
+use r_code_core::security::PathGuard;
 use r_code_gateway::permission::PermissionEngine;
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
@@ -368,14 +368,15 @@ impl CommandState {
 
 fn capture_startup_recovery(db: &Database) -> Result<StartupRecoverySnapshot, ProductError> {
     let conn = db.conn()?;
-    let mut run_stmt = conn.prepare(
-        "SELECT ar.id, ar.task_id, ar.branch_id \
+    let mut run_stmt = conn
+        .prepare(
+            "SELECT ar.id, ar.task_id, ar.branch_id \
          FROM agent_runs ar \
          INNER JOIN tasks t ON t.id = ar.task_id \
          WHERE ar.ended_at IS NULL AND t.state NOT IN ('idle', 'archived') \
          ORDER BY ar.started_at ASC, ar.id ASC",
-    )
-    .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+        )
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
     let runs = run_stmt
         .query_map([], |row| {
             Ok(StartupRecoveryRun {
@@ -859,11 +860,7 @@ pub async fn task_create_with_provider(
 }
 
 /// 修改会话显示名称。标题不参与模型上下文，因此无需重建 runtime。
-pub async fn task_rename(
-    state: &CommandState,
-    task_id: &str,
-    title: &str,
-) -> Result<Task, String> {
+pub async fn task_rename(state: &CommandState, task_id: &str, title: &str) -> Result<Task, String> {
     let title = title.trim();
     if title.is_empty() {
         return Err("请输入新的会话名称".to_string());
@@ -931,21 +928,14 @@ pub async fn task_fork_context(
         let event = serde_json::from_str::<SessionEvent>(line)
             .map_err(|_| "会话历史存在无法恢复的记录".to_string())?;
         if matches!(event, SessionEvent::Message(_)) {
-            forked_from_message_id = Some(format!(
-                "{}:{}",
-                source_branch.storage_id,
-                line_index + 1
-            ));
+            forked_from_message_id =
+                Some(format!("{}:{}", source_branch.storage_id, line_index + 1));
         }
         events.push(event);
     }
-    let forked_from_message_id = forked_from_message_id
-        .ok_or_else(|| "当前会话还没有可分支的消息".to_string())?;
-    let branch = SessionBranch::fork(
-        task_id,
-        &source_branch.id,
-        &forked_from_message_id,
-    );
+    let forked_from_message_id =
+        forked_from_message_id.ok_or_else(|| "当前会话还没有可分支的消息".to_string())?;
+    let branch = SessionBranch::fork(task_id, &source_branch.id, &forked_from_message_id);
     match events.first_mut() {
         Some(SessionEvent::Meta(meta)) => {
             meta.id = branch.storage_id.clone();
@@ -1098,11 +1088,9 @@ pub async fn task_compact_context(
     if let Some(problem) = provider_readiness_error(provider_name, provider_config) {
         return Err(format!("模型服务“{provider_name}”尚未就绪：{problem}"));
     }
-    let provider = hermes_llm::create_provider(build_provider_config(
-        provider_name,
-        provider_config,
-    ))
-    .map_err(err_str)?;
+    let provider =
+        hermes_llm::create_provider(build_provider_config(provider_name, provider_config))
+            .map_err(err_str)?;
 
     let recent_start = before_messages.saturating_sub(COMPACTION_KEEP_RECENT);
     let to_summarize = &history.messages[COMPACTION_KEEP_FIRST..recent_start];
@@ -4232,13 +4220,23 @@ pub async fn recovery_cleanup(state: &CommandState) -> Result<RecoveryCleanupRes
         tx.execute(
             "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![task_id, branch_id, TaskEventType::RunAborted.to_string(), &now],
+            rusqlite::params![
+                task_id,
+                branch_id,
+                TaskEventType::RunAborted.to_string(),
+                &now
+            ],
         )
         .map_err(err_str)?;
         tx.execute(
             "INSERT INTO task_events (task_id, branch_id, event_type, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            rusqlite::params![task_id, branch_id, TaskEventType::RunEnded.to_string(), &now],
+            rusqlite::params![
+                task_id,
+                branch_id,
+                TaskEventType::RunEnded.to_string(),
+                &now
+            ],
         )
         .map_err(err_str)?;
     }
@@ -4762,6 +4760,18 @@ pub struct ProviderSettingsInput {
     pub activate: Option<bool>,
 }
 
+/// 设置页发起的模型目录读取。`api_key` 只在本次请求内存中使用；留空时尝试读取
+/// `name` 对应的已保存凭据或环境变量。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelsInput {
+    pub name: String,
+    pub preset: Option<String>,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub protocol: String,
+}
+
 /// 常用服务的保守默认值，直接取自 [`crate::provider_catalog`]。用户仍可在设置页
 /// 覆盖模型或地址。
 ///
@@ -5029,6 +5039,64 @@ fn load_config_json_for_editing(state: &CommandState) -> Result<serde_json::Valu
 /// `tauri_commands::cmd_provider_catalog` 的转发写法与其它命令一致。
 pub async fn provider_catalog() -> Result<serde_json::Value, String> {
     serde_json::to_value(crate::provider_catalog::catalog_dto()).map_err(err_str)
+}
+
+/// 读取服务端实时模型列表。显式传入的新密钥优先；留空时只从运行时设置视图读取
+/// 该配置已有的 keychain / 环境变量密钥。响应和错误都不会包含密钥或响应正文。
+pub async fn provider_models(
+    state: &CommandState,
+    input: ProviderModelsInput,
+) -> Result<serde_json::Value, String> {
+    use crate::provider_catalog::{AuthStyle, Protocol};
+
+    let name = input.name.trim();
+    let preset = input
+        .preset
+        .as_deref()
+        .and_then(provider_preset)
+        .or_else(|| provider_preset(name));
+    let base_url = if input.base_url.trim().is_empty() {
+        preset.map_or("", |item| item.base_url)
+    } else {
+        input.base_url.trim()
+    };
+    let protocol = Protocol::parse(&input.protocol)
+        .ok_or_else(|| format!("未知的线路协议“{}”", input.protocol.trim()))?;
+    let auth = preset.map_or_else(
+        || {
+            if protocol == Protocol::AnthropicMessages {
+                AuthStyle::XApiKey
+            } else {
+                AuthStyle::Bearer
+            }
+        },
+        |item| item.auth,
+    );
+
+    let supplied_key = input
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string);
+    let api_key = if supplied_key.is_some() || name.is_empty() {
+        supplied_key
+    } else {
+        let settings = SettingsService::new(state.config_dir.clone());
+        settings
+            .load_global_unvalidated()
+            .map_err(err_str)?
+            .providers
+            .get(name)
+            .map(|provider| provider.api_key.trim())
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+    };
+
+    let response =
+        crate::provider_models::discover_models(base_url, api_key.as_deref(), protocol, auth)
+            .await?;
+    serde_json::to_value(response).map_err(err_str)
 }
 
 pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, String> {
@@ -5574,13 +5642,9 @@ async fn probe_npm_cli() -> Option<PathBuf> {
 }
 
 async fn npm_global_prefix(npm_path: &Path) -> Option<PathBuf> {
-    let output = run_npm_at(
-        npm_path,
-        &["prefix", "-g"],
-        CODEX_CLI_PROBE_TIMEOUT,
-    )
-    .await
-    .ok()?;
+    let output = run_npm_at(npm_path, &["prefix", "-g"], CODEX_CLI_PROBE_TIMEOUT)
+        .await
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -5593,7 +5657,11 @@ async fn codex_cli_paths_with_npm_prefix() -> (Vec<PathBuf>, Option<PathBuf>) {
     let npm_path = probe_npm_cli().await;
     if let Some(npm_path) = npm_path.as_deref() {
         if let Some(prefix) = npm_global_prefix(npm_path).await {
-            let bin = if cfg!(windows) { prefix } else { prefix.join("bin") };
+            let bin = if cfg!(windows) {
+                prefix
+            } else {
+                prefix.join("bin")
+            };
             push_executable_candidates(&mut paths, &bin, codex_cli_names());
         }
     }
@@ -6087,12 +6155,8 @@ pub async fn codex_install_cli() -> Result<serde_json::Value, String> {
         "未检测到可运行的 npm。请先安装 Node.js，再运行 `npm install -g @openai/codex`。"
             .to_string()
     })?;
-    let output = match run_npm_at(
-        &npm_path,
-        CODEX_CLI_INSTALL_ARGS,
-        CODEX_CLI_INSTALL_TIMEOUT,
-    )
-    .await
+    let output = match run_npm_at(&npm_path, CODEX_CLI_INSTALL_ARGS, CODEX_CLI_INSTALL_TIMEOUT)
+        .await
     {
         Ok(output) => output,
         Err(CodexCommandError::Timeout) => {
@@ -6534,9 +6598,8 @@ async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String>
         windows_cmd_safe_path(&executable)?;
         // `start` 显式创建可见窗口，避免 Tauri 的 GUI 子进程吞掉交互式登录提示。
         let mut command = Command::new("cmd.exe");
-        command.args([
-            "/D", "/C", "start", "", "cmd.exe", "/D", "/K", "call",
-        ])
+        command
+            .args(["/D", "/C", "start", "", "cmd.exe", "/D", "/K", "call"])
             .arg(executable)
             .args(mode.args());
         command
@@ -6811,12 +6874,10 @@ fn parse_codex_exec_json_line(line: &str) -> Option<CodexExecJsonEvent> {
                     detail: "Codex CLI 正在分析工作区".to_string(),
                 });
             }
-            codex_item_tool(item).map(|(call_id, name, summary)| {
-                CodexExecJsonEvent::ToolStarted {
-                    call_id,
-                    name,
-                    summary,
-                }
+            codex_item_tool(item).map(|(call_id, name, summary)| CodexExecJsonEvent::ToolStarted {
+                call_id,
+                name,
+                summary,
             })
         }
         "item.completed" => {
@@ -7998,14 +8059,8 @@ mod tests {
     ///
     /// `CommandState::new` 在此之后建立，因而它记录到的项目才是恢复范围；
     /// 测试可再往同一数据库写入新运行，验证它不会被误收束。
-    fn setup_persisted_recovery_state() -> (
-        TempDir,
-        CommandState,
-        Task,
-        AgentRun,
-        ToolCall,
-        String,
-    ) {
+    fn setup_persisted_recovery_state() -> (TempDir, CommandState, Task, AgentRun, ToolCall, String)
+    {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("r-code.db");
         let db = Arc::new(Database::open(&db_path).unwrap());
@@ -8106,9 +8161,13 @@ mod tests {
         let source = SessionBranchRepository::new(&state.db)
             .ensure_active(&task.id)
             .unwrap();
-        ensure_session_log(&state.session_store, &state.sessions_dir, &source.storage_id)
-            .await
-            .unwrap();
+        ensure_session_log(
+            &state.session_store,
+            &state.sessions_dir,
+            &source.storage_id,
+        )
+        .await
+        .unwrap();
         state
             .session_store
             .append(
@@ -8153,7 +8212,10 @@ mod tests {
 
         let compacted = compacted_working_set(&history, "decisions and pending work");
 
-        assert_eq!(compacted.len(), COMPACTION_KEEP_FIRST + 1 + COMPACTION_KEEP_RECENT);
+        assert_eq!(
+            compacted.len(),
+            COMPACTION_KEEP_FIRST + 1 + COMPACTION_KEEP_RECENT
+        );
         assert_eq!(compacted[0].text_content(), "message-0");
         assert!(compacted[1]
             .text_content()
@@ -8484,9 +8546,11 @@ mod tests {
                     .as_deref()
                     .is_some_and(|value| value.contains("正在读取 README.md"))
         }));
-        assert!(subagent_session_messages(&state, "another-task", "child-run")
-            .await
-            .is_err());
+        assert!(
+            subagent_session_messages(&state, "another-task", "child-run")
+                .await
+                .is_err()
+        );
         let events = TaskEventStore::new(&state.db)
             .list_by_task_branch(&task.id, &branch.id, Some(100), None)
             .unwrap();
@@ -8940,7 +9004,11 @@ mod tests {
         assert_eq!(result.tasks_interrupted, 1);
         assert_eq!(result.tool_calls_closed, 1);
         assert_eq!(result.permissions_denied, 1);
-        assert!(recovery_data(&state).await.unwrap().interrupted_tasks.is_empty());
+        assert!(recovery_data(&state)
+            .await
+            .unwrap()
+            .interrupted_tasks
+            .is_empty());
 
         let closed_run = AgentRunRepository::new(&state.db)
             .get(&stale_run.id)
@@ -10013,7 +10081,10 @@ command = "r-code-host"
     #[test]
     fn codex_login_modes_are_fixed_commands() {
         assert_eq!(CodexLoginMode::Browser.args(), ["login"]);
-        assert_eq!(CodexLoginMode::DeviceCode.args(), ["login", "--device-auth"]);
+        assert_eq!(
+            CodexLoginMode::DeviceCode.args(),
+            ["login", "--device-auth"]
+        );
     }
 
     #[test]
@@ -10153,7 +10224,10 @@ command = "r-code-host"
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert_eq!(first_nonempty_line(&output.stdout).as_deref(), Some("codex-test 1.0"));
+        assert_eq!(
+            first_nonempty_line(&output.stdout).as_deref(),
+            Some("codex-test 1.0")
+        );
     }
 
     #[cfg(windows)]
@@ -10279,7 +10353,10 @@ exit /b 0\r\n",
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        assert!(descendant_gone, "Codex descendant process survived group termination");
+        assert!(
+            descendant_gone,
+            "Codex descendant process survived group termination"
+        );
     }
 
     #[cfg(windows)]
@@ -10317,10 +10394,7 @@ exit /b 0\r\n",
             .collect::<Vec<_>>();
         assert_eq!(args[0..4], ["/D", "/S", "/C", "call"]);
         assert_eq!(args[4], r"C:\Program Files\Codex\codex.cmd");
-        assert_eq!(
-            args[5..],
-            ["exec", "--json", "--sandbox", "read-only", "-"]
-        );
+        assert_eq!(args[5..], ["exec", "--json", "--sandbox", "read-only", "-"]);
     }
 
     #[test]

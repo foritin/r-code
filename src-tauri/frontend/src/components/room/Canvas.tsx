@@ -47,7 +47,7 @@ import { useAppStore, type CanvasTab } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
 import { useArmedAction } from "../../lib/hooks";
-import { isTypingTarget } from "../../lib/keys";
+import { isTypingTarget, useSceneKeys } from "../../lib/keys";
 import {
   clockSeconds,
   clockTime,
@@ -59,13 +59,18 @@ import {
 import { buildAuditFeed } from "./audit";
 import type { ActivitySubagent, ActivityTraceState } from "./activity";
 import {
+  IconActivity,
   IconCheck,
   IconChevronDown,
   IconChevronLeft,
+  IconClose,
   IconEditor,
   IconFile,
+  IconMaximize,
   IconPlus,
   IconProjects,
+  IconShield,
+  IconSidebar,
   IconStop,
   IconTerminal,
 } from "../icons";
@@ -83,13 +88,39 @@ interface Props {
   onAbortSubagent: (subagentId: string) => Promise<void>;
 }
 
-const TABS: { id: CanvasTab; label: string }[] = [
-  { id: "summary", label: "Summary" },
-  { id: "changes", label: "Changes" },
-  { id: "files", label: "Files" },
-  { id: "terminal", label: "Terminal" },
-  { id: "review", label: "Review" },
+const TABS: { id: Exclude<CanvasTab, "changes">; openTab: CanvasTab; label: string; description: string; shortcut: string }[] = [
+  { id: "summary", openTab: "summary", label: "运行与子代理", description: "查看运行状态、会话记录和子代理进度", shortcut: "Alt 1" },
+  { id: "terminal", openTab: "terminal", label: "终端", description: "打开任务级持久终端会话", shortcut: "Alt 2" },
+  { id: "files", openTab: "files", label: "文件", description: "浏览并编辑当前工作区文件", shortcut: "Alt 3" },
+  { id: "review", openTab: "changes", label: "审核", description: "检查差异、运行验证并决定是否接受", shortcut: "Alt 4" },
 ];
+
+// 仅保存纯 UI 会话状态；任务数据和终端进程仍由现有 store / IPC 持有。
+// 面板切走会卸载，因此在应用生命周期内按 task + tool 恢复选择和未保存草稿。
+const panelSessionCache = new Map<string, unknown>();
+
+function readPanelSession<T>(key: string): T | undefined {
+  return panelSessionCache.get(key) as T | undefined;
+}
+
+function useRememberPanelSession<T>(key: string, value: T): void {
+  const latest = useRef(value);
+  latest.current = value;
+  useEffect(() => () => {
+    if (panelSessionCache.size > 120 && !panelSessionCache.has(key)) {
+      const oldest = panelSessionCache.keys().next().value as string | undefined;
+      if (oldest) panelSessionCache.delete(oldest);
+    }
+    panelSessionCache.set(key, latest.current);
+  }, [key]);
+}
+
+function ToolIcon({ tab, ...props }: { tab: CanvasTab; width?: number; height?: number }) {
+  if (tab === "summary") return <IconActivity {...props} />;
+  if (tab === "files") return <IconFile {...props} />;
+  if (tab === "terminal") return <IconTerminal {...props} />;
+  return <IconShield {...props} />;
+}
 
 // ---------- 列表键盘导航（三个面板共用） ----------
 //
@@ -160,6 +191,13 @@ export function Canvas({
 }: Props) {
   const tab = useAppStore((s) => s.canvasTab);
   const setTab = useAppStore((s) => s.setCanvasTab);
+  const mode = useAppStore((s) => s.workbenchMode);
+  const launcherOpen = useAppStore((s) => s.workbenchLauncherOpen);
+  const showLauncher = useAppStore((s) => s.showWorkbenchLauncher);
+  const closeLauncher = useAppStore((s) => s.closeWorkbenchLauncher);
+  const hideWorkbench = useAppStore((s) => s.hideWorkbench);
+  const toggleFocus = useAppStore((s) => s.toggleWorkbenchFocus);
+  const expandReview = useAppStore((s) => s.expandReview);
   const detail = useTasksStore((s) => s.details[taskId]);
   const workspace = useTasksStore((s) =>
     workspacePath ? s.workspaces.find((item) => item.canonical_path === workspacePath) : undefined,
@@ -167,67 +205,158 @@ export function Canvas({
   const workingSubagents = activity.subagents.filter(
     (item) => item.status === "queued" || item.status === "running" || item.status === "waiting_permission"
   ).length;
+  const launcherTriggerRef = useRef<HTMLButtonElement>(null);
+  const launcherButtonsRef = useRef<Array<HTMLButtonElement | null>>([]);
+  const workbenchBodyRef = useRef<HTMLDivElement>(null);
+  const [launcherIndex, setLauncherIndex] = useState(0);
 
-  if (selectedSubagentId) {
+  const openByShortcut = (event: KeyboardEvent, index: number) => {
+    if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const target = TABS[index];
+    if (!target) return;
+    event.preventDefault();
+    setTab(target.openTab);
+  };
+
+  useSceneKeys({
+    Escape: (event) => {
+      if (mode !== "focus" || launcherOpen) return;
+      event.preventDefault();
+      toggleFocus();
+    },
+    "1": (event) => openByShortcut(event, 0),
+    "2": (event) => openByShortcut(event, 1),
+    "3": (event) => openByShortcut(event, 2),
+    "4": (event) => openByShortcut(event, 3),
+  });
+
+  if (mode === "hidden") return null;
+
+  if (mode === "collapsed") {
     return (
-      <div className="canvas pane pane-lit">
-        <SubagentInspector
-          taskId={taskId}
-          child={activity.subagents.find((item) => item.id === selectedSubagentId)}
-          run={detail?.runs.find((item) => item.id === selectedSubagentId)}
-          onBack={onCloseSubagent}
-          onAbort={onAbortSubagent}
-        />
-      </div>
+      <aside className="workbench-review-rail" data-testid="review-collapsed" aria-label="审核工作台已收起">
+        <button type="button" className="workbench-review-rail-button" onClick={expandReview} aria-label="展开审核工作台">
+          <span className="workbench-review-rail-icon"><IconShield width={19} height={19} /><b>{detail?.changes.length ?? 0}</b></span>
+          <span>审核</span>
+        </button>
+        <span className="workbench-review-rail-spacer" />
+        <i className="workbench-review-rail-status" aria-label="等待审核" />
+      </aside>
     );
   }
 
+  const activeToolId = tab === "changes" ? "review" : tab;
+  const activeTool = TABS.find((item) => item.id === activeToolId) ?? TABS[0];
+  const reviewIsPending = detail?.task.state === "review_ready";
+  const dismissWorkbench = () => {
+    hideWorkbench(!launcherOpen && reviewIsPending && (tab === "review" || tab === "changes"));
+  };
+  const openLauncher = () => {
+    showLauncher();
+    setLauncherIndex(0);
+    requestAnimationFrame(() => launcherButtonsRef.current[0]?.focus());
+  };
+  const dismissLauncher = () => {
+    closeLauncher();
+    requestAnimationFrame(() => launcherTriggerRef.current?.focus());
+  };
+  const openTool = (tool: CanvasTab) => {
+    setTab(tool);
+    requestAnimationFrame(() => workbenchBodyRef.current?.focus());
+  };
+  const onLauncherKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      dismissLauncher();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const next = event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? TABS.length - 1
+        : (launcherIndex + (event.key === "ArrowDown" ? 1 : -1) + TABS.length) % TABS.length;
+    setLauncherIndex(next);
+    launcherButtonsRef.current[next]?.focus();
+  };
+
   return (
-    <div className="canvas pane pane-lit">
-      <div
-        className="canvas-tabs"
-        role="tablist"
-        aria-label="画布视图"
-        onKeyDown={(event) => {
-          // ← → 在页签间移动，符合 WAI-ARIA tablist 约定
-          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-          event.preventDefault();
-          const index = TABS.findIndex((item) => item.id === tab);
-          const delta = event.key === "ArrowRight" ? 1 : -1;
-          const next = TABS[(index + delta + TABS.length) % TABS.length];
-          setTab(next.id);
-          requestAnimationFrame(() => {
-            document.getElementById(`ctab-${next.id}`)?.focus();
-          });
-        }}
-      >
-        {TABS.map((t) => (
+    <aside
+      className={`canvas workbench pane pane-lit${mode === "focus" ? " is-focus" : ""}`}
+      data-testid="workbench-panel"
+      data-workbench-kind={launcherOpen ? "launcher" : activeToolId}
+      data-workbench-section={tab}
+      data-workbench-mode={mode}
+      aria-label="任务工作台"
+    >
+      <header className="workbench-head">
+        <div className="workbench-active-tab">
+          {launcherOpen ? <IconSidebar width={15} height={15} /> : <ToolIcon tab={tab} width={15} height={15} />}
+          <strong>{launcherOpen ? "工具启动器" : activeTool.label}</strong>
           <button
-            key={t.id}
-            id={`ctab-${t.id}`}
-            role="tab"
-            aria-selected={tab === t.id}
-            aria-controls="canvas-panel"
-            tabIndex={tab === t.id ? 0 : -1}
-            className={"ctab ring-inset" + (tab === t.id ? " on" : "")}
-            onClick={() => setTab(t.id)}
+            type="button"
+            className="workbench-tab-close"
+            data-testid="workbench-close"
+            onClick={dismissWorkbench}
+            aria-label={launcherOpen ? "关闭工具启动器" : `关闭${activeTool.label}`}
           >
-            {t.label}
-            {t.id === "changes" && (
-              <span className="n" aria-label={`${detail?.changes.length ?? 0} 项变更`}>
-                {detail?.changes.length ?? 0}
-              </span>
-            )}
+            <IconClose width={13} height={13} />
           </button>
-        ))}
+        </div>
+        <button ref={launcherTriggerRef} type="button" className="workbench-head-action" onClick={openLauncher} aria-label="打开工具启动器" aria-pressed={launcherOpen}>
+          <IconPlus width={16} height={16} />
+        </button>
+        <span className="workbench-head-spacer" />
         {running && (
-          <span className="canvas-live" title={activity.label}>
-            <i /> live · {activity.label}{workingSubagents > 0 ? ` · 子代理 ${workingSubagents}` : ""}
+          <span className="workbench-live" title={activity.label}>
+            <i /> live{workingSubagents > 0 ? ` · ${workingSubagents} 子代理` : ""}
           </span>
         )}
-      </div>
-      <div className="canvas-body" id="canvas-panel" role="tabpanel" tabIndex={-1}>
-        {tab === "summary" && (
+        <button type="button" className="workbench-head-action" onClick={toggleFocus} aria-label={mode === "focus" ? "退出专注模式" : "专注工作台"} aria-pressed={mode === "focus"}>
+          {mode === "focus" ? <IconChevronLeft width={15} height={15} /> : <IconMaximize width={15} height={15} />}
+        </button>
+        <button type="button" className="workbench-head-action" onClick={dismissWorkbench} aria-label="隐藏工作台">
+          <IconSidebar width={16} height={16} />
+        </button>
+      </header>
+      <div ref={workbenchBodyRef} className="canvas-body workbench-body" id="workbench-panel" tabIndex={-1}>
+        {launcherOpen ? (
+          <section className="workbench-launcher" role="dialog" aria-label="工作台工具启动器" onKeyDown={onLauncherKeyDown}>
+            <div className="workbench-launcher-intro">
+              <span>任务工作台</span>
+              <strong>在同一个位置打开任务工具</strong>
+              <p>工具按任务保存状态。隐藏工作台不会停止终端或丢失当前上下文。</p>
+            </div>
+            <ul className="workbench-launcher-list" aria-label="可用工具">
+              {TABS.map((tool, index) => (
+                <li key={tool.id}>
+                  <button
+                    ref={(node) => { launcherButtonsRef.current[index] = node; }}
+                    type="button"
+                    className="workbench-launcher-row"
+                    onFocus={() => setLauncherIndex(index)}
+                    onClick={() => openTool(tool.openTab)}
+                  >
+                    <span className="workbench-launcher-glyph"><ToolIcon tab={tool.id} width={17} height={17} /></span>
+                    <span><strong>{tool.label}</strong><small>{tool.description}</small></span>
+                    {tool.id === "review" && <em>{detail?.changes.length ?? 0}</em>}
+                    <kbd>{tool.shortcut}</kbd>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : selectedSubagentId ? (
+          <SubagentInspector
+            taskId={taskId}
+            child={activity.subagents.find((item) => item.id === selectedSubagentId)}
+            run={detail?.runs.find((item) => item.id === selectedSubagentId)}
+            onBack={onCloseSubagent}
+            onAbort={onAbortSubagent}
+          />
+        ) : tab === "summary" ? (
           <SummaryPanel
             detail={detail}
             running={running}
@@ -237,13 +366,36 @@ export function Canvas({
             workspaceAttached={workspaceAttached}
             workspaceAccessMode={workspace?.access_mode ?? null}
           />
+        ) : tab === "files" ? (
+          <FilesPanel key={`${taskId}:${workspacePath ?? "none"}:files`} taskId={taskId} workspacePath={workspacePath} workspaceAttached={workspaceAttached} running={running} />
+        ) : tab === "terminal" ? (
+          <TerminalPanel key={`${taskId}:terminal`} taskId={taskId} workspacePath={workspacePath} workspaceAttached={workspaceAttached} />
+        ) : (
+          <div className="workbench-review-tool">
+            <div
+              className="workbench-review-switch"
+              role="tablist"
+              aria-label="审核视图"
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                const next = tab === "changes" ? "review" : "changes";
+                setTab(next);
+                requestAnimationFrame(() => document.getElementById(`review-view-${next}`)?.focus());
+              }}
+            >
+              <button id="review-view-changes" type="button" role="tab" aria-selected={tab === "changes"} tabIndex={tab === "changes" ? 0 : -1} onClick={() => setTab("changes")}>变更 <span>{detail?.changes.length ?? 0}</span></button>
+              <button id="review-view-review" type="button" role="tab" aria-selected={tab === "review"} tabIndex={tab === "review" ? 0 : -1} onClick={() => setTab("review")}>验证与决策</button>
+            </div>
+            <div className="workbench-review-panel" role="tabpanel">
+              {tab === "changes"
+                ? <ChangesPanel key={`${taskId}:changes`} taskId={taskId} running={running} detail={detail} />
+                : <ReviewPanel key={`${taskId}:review`} taskId={taskId} />}
+            </div>
+          </div>
         )}
-        {tab === "changes" && <ChangesPanel taskId={taskId} running={running} detail={detail} />}
-        {tab === "files" && <FilesPanel workspacePath={workspacePath} workspaceAttached={workspaceAttached} running={running} />}
-        {tab === "terminal" && <TerminalPanel workspacePath={workspacePath} workspaceAttached={workspaceAttached} />}
-        {tab === "review" && <ReviewPanel taskId={taskId} />}
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -711,9 +863,11 @@ function ChangesPanel({
 }) {
   const changes = useMemo(() => detail?.changes ?? [], [detail]);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
+  const sessionKey = `${taskId}:changes`;
+  const session = readPanelSession<{ selectedPath: string | null; f7Index: number }>(sessionKey);
   // A11Y-005：设置里的「文本差异视图」开关，此处是它唯一的消费点。
   const accessibleDiff = useAppStore((s) => s.accessibleDiffMode);
-  const [sel, setSel] = useState<string | null>(null);
+  const [sel, setSel] = useState<string | null>(session?.selectedPath ?? null);
   const [diff, setDiff] = useState<ChangeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -778,8 +932,9 @@ function ChangesPanel({
         .filter((i) => i >= 0),
     [lines]
   );
-  const [f7Idx, setF7Idx] = useState(-1);
+  const [f7Idx, setF7Idx] = useState(session?.f7Index ?? -1);
   const diffBodyRef = useRef<HTMLDivElement>(null);
+  useRememberPanelSession(sessionKey, { selectedPath: sel, f7Index: f7Idx });
   // 已经跳过一次的 f7Idx。detail 每 2s 轮询 → changes/lines/changePoints 全是新引用，
   // 下面那个 effect 会跟着重跑；只认引用的话 scrollIntoView + focus 就会每 2 秒把焦点
   // 从用户当前位置抢回 diff 行。用它把「effect 重跑」和「用户真的按了 F7」区分开。
@@ -1146,25 +1301,50 @@ interface DirectoryState {
   error: string | null;
 }
 
+interface FilesPanelSession {
+  workspacePath: string | null;
+  directories: Record<string, DirectoryState>;
+  expanded: Set<string>;
+  selectedPath: string | null;
+  file: FileContent | null;
+  draft: string;
+  dirty: boolean;
+}
+
 function FilesPanel({
+  taskId,
   workspacePath,
   workspaceAttached,
   running,
 }: {
+  taskId: string;
   workspacePath: string | null;
   workspaceAttached: boolean;
   running: boolean;
 }) {
-  const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [file, setFile] = useState<FileContent | null>(null);
-  const [draft, setDraft] = useState("");
-  const [dirty, setDirty] = useState(false);
+  const sessionKey = `${taskId}:${workspacePath ?? "none"}:files`;
+  const session = readPanelSession<FilesPanelSession>(sessionKey);
+  const [directories, setDirectories] = useState<Record<string, DirectoryState>>(session?.directories ?? {});
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(session?.expanded ?? []));
+  const [selectedPath, setSelectedPath] = useState<string | null>(session?.selectedPath ?? null);
+  const [file, setFile] = useState<FileContent | null>(session?.file ?? null);
+  const [draft, setDraft] = useState(session?.draft ?? "");
+  const [dirty, setDirty] = useState(session?.dirty ?? false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const restoredSessionRef = useRef(Boolean(session && session.workspacePath === workspacePath));
+  const preserveDirtyDraftRef = useRef(Boolean(session?.dirty && session.file && session.selectedPath));
+  useRememberPanelSession<FilesPanelSession>(sessionKey, {
+    workspacePath,
+    directories,
+    expanded,
+    selectedPath,
+    file,
+    draft,
+    dirty,
+  });
   // 未保存时的二次确认走项目自研的 armed 模式：window.confirm 在 Tauri WebView 里
   // 抢焦点、无法主题化，也拿不到统一焦点环。
   const [pendingPath, setPendingPath] = useState<string | null>(null);
@@ -1209,6 +1389,11 @@ function FilesPanel({
   );
 
   useEffect(() => {
+    if (restoredSessionRef.current) {
+      restoredSessionRef.current = false;
+      if (workspacePath && workspaceAttached && Object.keys(directories).length === 0) void loadDirectory("");
+      return;
+    }
     setDirectories({});
     setExpanded(new Set());
     setSelectedPath(null);
@@ -1224,6 +1409,10 @@ function FilesPanel({
   useEffect(() => {
     if (!workspacePath || !workspaceAttached || !selectedPath) {
       setFile(null);
+      return;
+    }
+    if (preserveDirtyDraftRef.current) {
+      preserveDirtyDraftRef.current = false;
       return;
     }
     let disposed = false;
@@ -1659,19 +1848,24 @@ function TerminalViewport({
 }
 
 function TerminalPanel({
+  taskId,
   workspacePath,
   workspaceAttached,
 }: {
+  taskId: string;
   workspacePath: string | null;
   workspaceAttached: boolean;
 }) {
   const { runWithCodexCli } = useCodexCliGate();
+  const sessionKey = `${taskId}:terminal`;
+  const session = readPanelSession<{ selectedTerminalId: string | null }>(sessionKey);
   const [terms, setTerms] = useState<TerminalInfo[]>([]);
-  const [selId, setSelId] = useState<string | null>(null);
+  const [selId, setSelId] = useState<string | null>(session?.selectedTerminalId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [rowFocus, setRowFocus] = useState(-1);
+  useRememberPanelSession(sessionKey, { selectedTerminalId: selId });
 
   const list = useCallback(async () => {
     try {
@@ -1863,22 +2057,37 @@ const VER_STATUS: Record<string, { cls: string; label: string }> = {
 };
 
 function ReviewPanel({ taskId }: { taskId: string }) {
+  const sessionKey = `${taskId}:review`;
+  const session = readPanelSession<{
+    command: string;
+    requestingChange: boolean;
+    feedback: string;
+    openVerificationId: string | null;
+    outputs: Record<string, string>;
+  }>(sessionKey);
   const [records, setRecords] = useState<VerificationRecord[]>([]);
-  const [cmd, setCmd] = useState("");
+  const [cmd, setCmd] = useState(session?.command ?? "");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [runningCmd, setRunningCmd] = useState(false);
   const [confirm, setConfirm] = useState<null | "accept" | "rollback">(null);
-  const [requestingChange, setRequestingChange] = useState(false);
-  const [feedback, setFeedback] = useState("");
+  const [requestingChange, setRequestingChange] = useState(session?.requestingChange ?? false);
+  const [feedback, setFeedback] = useState(session?.feedback ?? "");
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const taskState = useTasksStore((s) => s.details[taskId]?.task.state);
   // 输出查看（点击记录行展开，懒加载 + 缓存）
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [outputs, setOutputs] = useState<Record<string, string>>({});
+  const [openId, setOpenId] = useState<string | null>(session?.openVerificationId ?? null);
+  const [outputs, setOutputs] = useState<Record<string, string>>(session?.outputs ?? {});
   const [rowFocus, setRowFocus] = useState(-1);
+  useRememberPanelSession(sessionKey, {
+    command: cmd,
+    requestingChange,
+    feedback,
+    openVerificationId: openId,
+    outputs,
+  });
 
   const toggleOutput = async (id: string) => {
     if (openId === id) {

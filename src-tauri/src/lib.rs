@@ -19,6 +19,7 @@ pub mod migration;
 pub mod packaging;
 pub mod project_memory;
 pub mod provider_catalog;
+pub mod provider_models;
 pub mod recovery;
 pub mod replay;
 pub mod search;

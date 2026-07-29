@@ -1,5 +1,5 @@
 /**
- * 浏览器预览的最小数据集。
+ * 浏览器 Demo 的确定性数据集。
  * 仅在非 Tauri 环境启用：桌面应用里不会用它掩盖真实 IPC 错误。
  */
 import type {
@@ -199,12 +199,25 @@ export const browserMockSettings: SettingsResponse = {
     default_provider: "codex",
     providers: {
       codex: { base_url: "https://api.openai.com/v1", model: "gpt-5.6" },
+      // 第二个就绪服务既让完整 Demo 覆盖跨 Provider/模型选择，也防止常见的
+      // DeepSeek 模型名在首页胶囊中重新退化为省略号。
+      deepseek: {
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-v4-pro",
+        protocol: "openai_chat",
+      },
     },
     log_level: "info",
   },
   validation: null,
   provider_status: {
     codex: { configured: true, ready: true, source: "environment" },
+    deepseek: {
+      configured: true,
+      ready: true,
+      source: "environment",
+      effective_protocol: "openai_chat",
+    },
   },
 };
 
@@ -318,25 +331,46 @@ export function browserMockSaveCodexCliPreferences(
 }
 
 export const browserMockProviderCatalog: ProviderCatalog = {
-  presets: [{
-    id: "codex",
-    label: "Codex",
-    protocol: "openai_responses",
-    native: ["openai_responses"],
-    auth: "bearer",
-    base_url: "https://api.openai.com/v1",
-    reasoning_replay: true,
-    model: "gpt-5.6",
-    models: ["gpt-5.6"],
-    category: "official",
-    website_url: "https://openai.com",
-    api_key_url: null,
-    endpoint_candidates: [],
-    template_vars: [],
-    max_output_tokens: null,
-    context_window: null,
-    note: null,
-  }],
+  presets: [
+    {
+      id: "codex",
+      label: "Codex",
+      protocol: "openai_responses",
+      native: ["openai_responses"],
+      auth: "bearer",
+      base_url: "https://api.openai.com/v1",
+      reasoning_replay: true,
+      model: "gpt-5.6",
+      models: ["gpt-5.6"],
+      category: "official",
+      website_url: "https://openai.com",
+      api_key_url: null,
+      endpoint_candidates: [],
+      template_vars: [],
+      max_output_tokens: null,
+      context_window: null,
+      note: null,
+    },
+    {
+      id: "deepseek",
+      label: "DeepSeek",
+      protocol: "openai_chat",
+      native: ["openai_chat"],
+      auth: "bearer",
+      base_url: "https://api.deepseek.com",
+      reasoning_replay: false,
+      model: "deepseek-v4-pro",
+      models: ["deepseek-v4-pro", "deepseek-v4-flash"],
+      category: "cn_official",
+      website_url: "https://platform.deepseek.com",
+      api_key_url: "https://platform.deepseek.com/api_keys",
+      endpoint_candidates: [],
+      template_vars: [],
+      max_output_tokens: 8192,
+      context_window: 1_000_000,
+      note: null,
+    },
+  ],
 };
 
 export const browserMockFiles: Record<string, { content: string; revision: string }> = {
@@ -361,14 +395,22 @@ export const browserMockFileEntries = (path: string | null) => {
   return [];
 };
 
+const browserMockMessageStore: Record<string, SessionMessage[]> = {};
+
 export function browserMockMessages(taskId: string): SessionMessage[] {
+  if (browserMockMessageStore[taskId]) return browserMockMessageStore[taskId];
   const task = browserMockTasks.find((item) => item.id === taskId);
   if (!task) return [];
-  return [
+  browserMockMessageStore[taskId] = [
     { id: `${taskId}-message-1`, branch_id: "main", kind: "message", role: "user", text: task.goal, timestamp: task.created_at },
     { id: `${taskId}-message-2`, branch_id: "main", kind: "message", role: "assistant", text: `我会先检查相关实现，然后推进「${task.title}」。`, timestamp: at(12) },
     { id: `${taskId}-message-3`, branch_id: "main", kind: "tool_call", tool_name: "read_file", call_id: "mock-read", input_json: '{"path":"src/error.rs"}', timestamp: task.updated_at },
   ];
+  return browserMockMessageStore[taskId];
+}
+
+export function browserMockSetMessages(taskId: string, messages: SessionMessage[]): void {
+  browserMockMessageStore[taskId] = messages;
 }
 
 export function browserMockSubagentMessages(taskId: string, subagentId: string): SessionMessage[] {
@@ -527,7 +569,7 @@ export function browserMockActivityList(workspacePath?: string | null): ProjectA
   return { items, next_cursor: undefined };
 }
 
-const browserMockNotifications: Notification[] = [
+export const browserMockNotifications: Notification[] = [
   {
     id: "mock-notification-review",
     kind: "review_ready",

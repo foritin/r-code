@@ -25,7 +25,7 @@ export function SlashCommandMenu({
 
   let lastCategory: SlashCommandDefinition["category"] | null = null;
   return (
-    <div className="slash-menu" role="listbox" aria-label="斜杠命令">
+    <div id="slash-command-menu" className="slash-menu" role="listbox" aria-label="斜杠命令">
       <div className="slash-menu-head">
         <span>命令</span>
         <span>↑↓ 选择 · Tab 补全 · Enter 确认</span>
@@ -40,6 +40,7 @@ export function SlashCommandMenu({
               {showCategory && <div className="slash-menu-category">{CATEGORY_LABELS[command.category]}</div>}
               <button
                 type="button"
+                id={`slash-command-option-${index}`}
                 role="option"
                 aria-selected={index === activeIndex}
                 aria-disabled={Boolean(unavailable)}
