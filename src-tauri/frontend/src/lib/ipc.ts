@@ -38,6 +38,8 @@ import type {
   ProjectAccessMode, Workspace,
   ProviderSettingsInput,
   ProviderCatalog,
+  ProviderModelsInput,
+  ProviderModelsResponse,
   CodexCliPreferences,
   CodexIntegrationStatus,
   ContextCompactionResult,
@@ -67,8 +69,12 @@ import {
   browserMockWorkspaceDashboard,
   shouldUseBrowserMock,
 } from "./mock-data";
+import { browserMockInvoke } from "./browser-mock-runtime";
 
 async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  if (shouldUseBrowserMock()) {
+    return browserMockInvoke(command, args) as Promise<T>;
+  }
   return invoke<T>(command, args);
 }
 
@@ -157,8 +163,10 @@ export const agentResend = (taskId: string, messageId: string, message: string) 
   ipc<void>("cmd_agent_resend", { taskId, messageId, message });
 
 /** 订阅 agent 流式事件（后端 drain 循环 emit 的 "agent-event"）。 */
-export const onAgentEvent = (handler: (taskId: string, event: AgentEvent) => void): Promise<UnlistenFn> =>
-  listen<AgentEventEnvelope>("agent-event", (e) => handler(e.payload.task_id, e.payload.event));
+export const onAgentEvent = (handler: (taskId: string, event: AgentEvent) => void): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<AgentEventEnvelope>("agent-event", (e) => handler(e.payload.task_id, e.payload.event));
+};
 
 // ---------- 权限 ----------
 export const permissionApprove = (requestId: string, decision: Exclude<PermissionDecision, "pending">) =>
@@ -441,6 +449,10 @@ export const providerCatalog = async () => {
     return browserMockProviderCatalog;
   }
 };
+
+/** 从当前服务实时读取模型目录；失败时由设置页保留预设和手动输入兜底。 */
+export const providerModels = (request: ProviderModelsInput) =>
+  ipc<ProviderModelsResponse>("cmd_provider_models", { request });
 
 export const settingsSet = (key: string, value: unknown) =>
   ipc<void>("cmd_settings_set", { key, value });

@@ -383,6 +383,9 @@ export function HomeScene() {
             ref={textareaRef}
             rows={1}
             value={goal}
+            aria-label="描述新任务"
+            aria-controls={slashOpen ? "slash-command-menu" : undefined}
+            aria-activedescendant={slashOpen ? `slash-command-option-${slashActive}` : undefined}
             placeholder={providerReady ? "描述你想完成的事…" : "先在设置中连接模型服务…"}
             onChange={(event) => {
               setGoal(event.target.value);

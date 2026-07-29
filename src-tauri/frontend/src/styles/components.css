@@ -14,7 +14,15 @@
 .room-provider { position: relative; min-width: 0; }
 
 /* ---------- 模型二级菜单 ---------- */
-.model-menu { width: min(300px, calc(100vw - var(--sp-10))); }
+.model-menu { width: min(360px, calc(100vw - var(--sp-10))); }
+.model-menu .model-name {
+  display: block; min-width: 0; max-width: 100%;
+  overflow-wrap: anywhere; white-space: normal; line-height: var(--lh-tight);
+}
+.provider-menu .menu-item-copy > span,
+.provider-menu .menu-item-copy > small {
+  overflow-wrap: anywhere; white-space: normal;
+}
 
 .model-group + .model-group { margin-top: var(--sp-2); }
 .model-group-head {
@@ -41,8 +49,8 @@
   border-top: 1px solid var(--border);
 }
 .comp-meta .project-access-trigger { max-width: 170px; }
-/* 服务名不参与压缩，只让模型名截断 —— 否则窄输入区里会变成 "DeepS…" */
-.comp-meta .provider-pill { max-width: 260px; }
+/* 服务名不参与压缩；模型名在空间不足时换行，不能把真实名称静默裁掉。 */
+.comp-meta .provider-pill { max-width: min(360px, 100%); }
 .comp-meta .provider-pill > span { flex: none; }
 
 /* 输入区里的 provider 胶囊与新对话页共用外观 */
@@ -57,7 +65,7 @@
 .comp-meta .provider-pill:disabled { opacity: 0.55; }
 .comp-meta .provider-pill.ready { color: var(--accent); }
 .comp-meta .provider-pill small {
-  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 240px; overflow-wrap: anywhere; white-space: normal; line-height: var(--lh-tight);
   color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-meta);
 }
 

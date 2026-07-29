@@ -15,7 +15,6 @@ import { EditorScene } from "./components/scenes/EditorScene";
 import { SettingsScene } from "./components/scenes/SettingsScene";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
-import { selectRunning } from "./store/tasks";
 
 /**
  * R-Code 应用根组件。
@@ -99,23 +98,9 @@ export default function App() {
         {scene === "editor" && <EditorScene />}
         {scene === "settings" && <SettingsScene />}
       </main>
-      <AppStatusBar />
       {searchOpen && <SearchOverlay />}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
     </div>
-  );
-}
-
-function AppStatusBar() {
-  const workspaceCount = useTasksStore((s) => s.workspaces.length);
-  const runningCount = useTasksStore((s) => selectRunning(s).length);
-  const refreshedAt = useTasksStore((s) => s.refreshedAt);
-  return (
-    <footer className="app-statusbar" aria-label="应用状态">
-      <span><i className="status-live-dot" />{workspaceCount} 个项目</span>
-      <span>{runningCount} 个任务运行中</span>
-      <span className="app-statusbar-sync">{refreshedAt ? "数据已同步" : "正在连接数据"}</span>
-    </footer>
   );
 }

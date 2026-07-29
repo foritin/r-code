@@ -8,8 +8,8 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
 use r_code_core::dto::{
-    AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage, Task,
-    SessionBranch, VerificationRecord, Workspace,
+    AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
+    SessionBranch, Task, VerificationRecord, Workspace,
 };
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
@@ -643,6 +643,15 @@ pub async fn cmd_settings_get(state: State<'_, CommandState>) -> Result<serde_js
 #[tauri::command]
 pub async fn cmd_provider_catalog() -> Result<serde_json::Value, String> {
     r_code_host::commands::provider_catalog().await
+}
+
+/// 从当前 Provider 的模型目录端点读取可用模型。
+#[tauri::command]
+pub async fn cmd_provider_models(
+    state: State<'_, CommandState>,
+    request: r_code_host::commands::ProviderModelsInput,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::provider_models(&state, request).await
 }
 
 /// 设置应用配置项。`key` 支持点分路径（如 "providers.anthropic.model"）。

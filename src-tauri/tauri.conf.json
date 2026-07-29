@@ -5,11 +5,11 @@
   "identifier": "com.r-code.app",
   "build": {
     "beforeDevCommand": {
-      "script": "npm run dev:tauri",
+      "script": "npm run dev",
       "cwd": "frontend",
-      "wait": true
+      "wait": false
     },
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://127.0.0.1:5173",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "frontend/dist"
   },

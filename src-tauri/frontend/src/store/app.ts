@@ -25,6 +25,14 @@ export type ResolvedTheme = "studio-light" | "obsidian";
 
 /** Room 画布页签（titlebar 按钮可远程切换）。 */
 export type CanvasTab = "summary" | "changes" | "files" | "terminal" | "review";
+export type WorkbenchMode = "docked" | "hidden" | "focus" | "collapsed";
+
+export interface TaskWorkbenchState {
+  tab: CanvasTab;
+  lastTab: CanvasTab;
+  mode: WorkbenchMode;
+  launcherOpen: boolean;
+}
 export type SettingsPane = "providers" | "preferences" | "diagnostics" | "codex";
 
 interface AppState {
@@ -33,6 +41,10 @@ interface AppState {
   currentTaskId: string | null;
   /** Room 画布激活页签 */
   canvasTab: CanvasTab;
+  /** 当前任务工作台的展示模式；具体状态同时按任务隔离保存。 */
+  workbenchMode: WorkbenchMode;
+  workbenchLauncherOpen: boolean;
+  workbenches: Record<string, TaskWorkbenchState>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
   /** Ctrl K 搜索 overlay */
@@ -55,8 +67,14 @@ interface AppState {
   openDashboard: () => void;
   openConversations: () => void;
   openDeck: () => void;
-  openRoom: (taskId: string) => void;
+  openRoom: (taskId: string, tab?: CanvasTab) => void;
   setCanvasTab: (tab: CanvasTab) => void;
+  showWorkbenchLauncher: () => void;
+  closeWorkbenchLauncher: () => void;
+  hideWorkbench: (collapseReview?: boolean) => void;
+  restoreWorkbench: () => void;
+  toggleWorkbenchFocus: () => void;
+  expandReview: () => void;
   setSettingsPane: (pane: SettingsPane) => void;
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
@@ -73,6 +91,34 @@ interface AppState {
 
 const RAIL_KEY = "r-code.rail.collapsed";
 const THEME_KEY = "r-code.theme.mode";
+
+function createWorkbenchState(tab: CanvasTab = "summary"): TaskWorkbenchState {
+  return {
+    tab,
+    lastTab: tab,
+    mode: "hidden",
+    // 新任务先给出工具启动器，避免把高级工具一次性铺满。
+    launcherOpen: tab === "summary",
+  };
+}
+
+function withCurrentWorkbench(
+  state: AppState,
+  update: (workbench: TaskWorkbenchState) => TaskWorkbenchState,
+): Partial<AppState> {
+  const taskId = state.currentTaskId;
+  const current = taskId
+    ? state.workbenches[taskId] ?? createWorkbenchState(state.canvasTab)
+    : createWorkbenchState(state.canvasTab);
+  const next = update(current);
+
+  return {
+    canvasTab: next.tab,
+    workbenchMode: next.mode,
+    workbenchLauncherOpen: next.launcherOpen,
+    ...(taskId ? { workbenches: { ...state.workbenches, [taskId]: next } } : {}),
+  };
+}
 
 function readCollapsed(): boolean {
   try {
@@ -96,6 +142,9 @@ export const useAppStore = create<AppState>((set) => ({
   scene: "home",
   currentTaskId: null,
   canvasTab: "summary",
+  workbenchMode: "docked",
+  workbenchLauncherOpen: true,
+  workbenches: {},
   settingsPane: "providers",
   searchOpen: false,
   editorFile: null,
@@ -110,8 +159,64 @@ export const useAppStore = create<AppState>((set) => ({
   openDashboard: () => set({ scene: "dashboard" }),
   openConversations: () => set({ scene: "conversations" }),
   openDeck: () => set({ scene: "deck" }),
-  openRoom: (taskId) => set({ scene: "room", currentTaskId: taskId }),
-  setCanvasTab: (canvasTab) => set({ canvasTab }),
+  openRoom: (taskId, requestedTab) =>
+    set((state) => {
+      const saved = state.workbenches[taskId] ?? createWorkbenchState(requestedTab ?? "summary");
+      const next: TaskWorkbenchState = requestedTab
+        ? { ...saved, tab: requestedTab, lastTab: requestedTab, mode: "docked", launcherOpen: false }
+        : saved;
+      return {
+        scene: "room",
+        currentTaskId: taskId,
+        canvasTab: next.tab,
+        workbenchMode: next.mode,
+        workbenchLauncherOpen: next.launcherOpen,
+        workbenches: { ...state.workbenches, [taskId]: next },
+      };
+    }),
+  setCanvasTab: (canvasTab) =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      tab: canvasTab,
+      lastTab: canvasTab,
+      mode: current.mode === "hidden" || current.mode === "collapsed" ? "docked" : current.mode,
+      launcherOpen: false,
+    }))),
+  showWorkbenchLauncher: () =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      mode: "docked",
+      launcherOpen: true,
+    }))),
+  closeWorkbenchLauncher: () =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      launcherOpen: false,
+    }))),
+  hideWorkbench: (shouldCollapseReview = false) =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      mode: shouldCollapseReview ? "collapsed" : "hidden",
+      launcherOpen: false,
+    }))),
+  restoreWorkbench: () =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      tab: current.lastTab,
+      mode: "docked",
+      launcherOpen: current.launcherOpen,
+    }))),
+  toggleWorkbenchFocus: () =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      mode: current.mode === "focus" ? "docked" : "focus",
+    }))),
+  expandReview: () =>
+    set((state) => withCurrentWorkbench(state, (current) => ({
+      ...current,
+      mode: "docked",
+      launcherOpen: false,
+    }))),
   setSettingsPane: (settingsPane) => set({ settingsPane, scene: "settings" }),
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),

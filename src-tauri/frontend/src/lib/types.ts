@@ -497,6 +497,20 @@ export interface ProviderCatalog {
   presets: ProviderPreset[];
 }
 
+export interface ProviderModelsInput {
+  /** 配置名，用于在 apiKey 留空时读取已保存的系统凭据。 */
+  name: string;
+  /** 当前预设 id；自建服务省略。 */
+  preset?: string | null;
+  baseUrl: string;
+  apiKey?: string | null;
+  protocol: ProviderProtocol;
+}
+
+export interface ProviderModelsResponse {
+  models: string[];
+}
+
 export interface ProviderStatus {
   configured: boolean;
   ready: boolean;

@@ -30,18 +30,20 @@ use serde::Serialize;
 /// 注意这与"厂商是谁"正交：同一家厂商的不同 base_url 往往是不同协议
 /// （火山方舟 `/api/coding` 是 Anthropic 口，`/api/coding/v3` 是 OpenAI 口）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Protocol {
     /// Anthropic Messages：`{base}/v1/messages`，由 `hermes_llm::AnthropicProvider` 处理。
+    #[serde(rename = "anthropic_messages")]
     AnthropicMessages,
     /// OpenAI Chat Completions：`{base}/chat/completions`，由 `hermes_llm::OpenAiProvider` 处理。
+    #[serde(rename = "openai_chat")]
     OpenAiChat,
     /// OpenAI Responses：`{base}/responses`，由 `hermes_llm::ResponsesProvider` 处理。
+    #[serde(rename = "openai_responses")]
     OpenAiResponses,
 }
 
 impl Protocol {
-    /// 存进 `config.toml` 的稳定字面量。与 `#[serde(rename_all = "snake_case")]`
+    /// 存进 `config.toml` 的稳定字面量。与各 variant 的 `serde(rename)`
     /// 下发给前端的值一致，前后端和配置文件用同一套 slug。
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1026,6 +1028,20 @@ pub mod maintenance {}
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn protocol_json_slugs_match_config_and_frontend() {
+        let cases = [
+            (Protocol::AnthropicMessages, "anthropic_messages"),
+            (Protocol::OpenAiChat, "openai_chat"),
+            (Protocol::OpenAiResponses, "openai_responses"),
+        ];
+        for (protocol, expected) in cases {
+            assert_eq!(protocol.as_str(), expected);
+            assert_eq!(serde_json::to_value(protocol).unwrap(), expected);
+            assert_eq!(Protocol::parse(expected), Some(protocol));
+        }
+    }
 
     #[test]
     fn ids_are_unique_and_slug_shaped() {

@@ -143,7 +143,6 @@ function ReviewCard({
   onError: (message: string) => void;
 }) {
   const openRoom = useAppStore((s) => s.openRoom);
-  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const workspaces = useTasksStore((s) => s.workspaces);
   const detail = useTasksStore((s) => s.details[item.task.id]);
   const [confirming, setConfirming] = useState(false);
@@ -223,8 +222,7 @@ function ReviewCard({
         <button
           className="btn primary"
           onClick={() => {
-            openRoom(item.task.id);
-            setCanvasTab("review");
+            openRoom(item.task.id, "review");
           }}
         >
           Open review
@@ -232,8 +230,7 @@ function ReviewCard({
         <button
           className="btn"
           onClick={() => {
-            openRoom(item.task.id);
-            setCanvasTab("changes");
+            openRoom(item.task.id, "changes");
           }}
         >
           Peek changes

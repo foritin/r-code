@@ -1,23 +1,17 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN" data-theme="studio-light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="theme-color" content="#fbfaf7">
-  <title>R-Code 工作台交互 Demo</title>
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f7f6f2">
+  <meta name="description" content="R-Code 完整产品交互 Demo：复用正式 React 前端与浏览器内存后端。">
+  <title>R-Code 完整产品交互 Demo</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <!--
-    交付假设：
-    - 右侧是任务级单一工作台；运行、终端、文件和审核在同一位置切换。
-    - 关闭工作台会完整释放空间；隐藏终端不会终止进程；收起审核会保留当前任务与文件。
-    - 默认亮色，主题切换保存于本机；URL 上的 state/theme 参数仅用于原型截图和验收。
-    - 低于 1180px 时工作台覆盖在主对话之上，避免把工具内容挤到不可读。
-    - Demo 使用确定性的本地模拟数据，不调用后端、不编造产品能力。
-  -->
-  <main id="stage" aria-label="R-Code 工作台交互 Demo"></main>
-  <div id="live-region" class="sr-only" aria-live="polite"></div>
-  <script src="./app.js"></script>
+  <div id="root"></div>
+  <noscript>请启用 JavaScript 以体验 R-Code 完整交互 Demo。</noscript>
+  <script defer src="./app.js"></script>
 </body>
 </html>

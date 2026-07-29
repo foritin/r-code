@@ -32,7 +32,6 @@ export function DashboardScene() {
   const refreshDashboard = useTasksStore((s) => s.refreshDashboard);
   const refreshProjectActivity = useTasksStore((s) => s.refreshProjectActivity);
   const openRoom = useAppStore((s) => s.openRoom);
-  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const setScene = useAppStore((s) => s.setScene);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,7 +74,7 @@ export function DashboardScene() {
 
   return (
     <div className="scene scene-dashboard">
-      <main className="dashboard-main">
+      <div className="dashboard-main">
         <div className="dashboard-scroll">
           <header className="dashboard-header">
             <div className="dashboard-project-mark"><IconProjects width={20} height={20} /></div>
@@ -154,7 +153,7 @@ export function DashboardScene() {
             </div>
           </section>
         </div>
-      </main>
+      </div>
       <ProjectActivityRail items={activityPage?.items ?? []} />
     </div>
   );
@@ -236,7 +235,6 @@ function ProjectPermission({ item, workspacePath, onError }: { item: DashboardAt
 
 function ProjectReview({ item, summary }: { item: DashboardAttentionItem; summary?: DashboardTaskSummary }) {
   const openRoom = useAppStore((s) => s.openRoom);
-  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   return (
     <article className="attention-item review-item">
       <span className="attention-icon"><IconFile width={18} height={18} /></span>
@@ -246,7 +244,7 @@ function ProjectReview({ item, summary }: { item: DashboardAttentionItem; summar
         <small>{summary?.change_summary.files ?? 0} 个文件变更 · 等待 {elapsedSince(item.since)}</small>
       </div>
       <div className="attention-actions">
-        <button className="rc-button rc-button-primary" onClick={() => { setCanvasTab("review"); openRoom(item.task.id); }}>查看审核</button>
+        <button className="rc-button rc-button-primary" onClick={() => openRoom(item.task.id, "review")}>查看审核</button>
       </div>
     </article>
   );

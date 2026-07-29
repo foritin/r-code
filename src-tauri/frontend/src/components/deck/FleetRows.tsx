@@ -41,7 +41,6 @@ interface FleetRowsProps {
 export function FleetRows({ onRefresh, onError }: FleetRowsProps) {
   const active = useAppStore((s) => s.deckDensity) === "rows";
   const openRoom = useAppStore((s) => s.openRoom);
-  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const setScene = useAppStore((s) => s.setScene);
   const tasks = useTasksStore((s) => s.tasks);
   const details = useTasksStore((s) => s.details);
@@ -146,8 +145,7 @@ export function FleetRows({ onRefresh, onError }: FleetRowsProps) {
 
   const openRowRoom = (r: RowItem) => openRoom(r.task.id);
   const peekRow = (r: RowItem) => {
-    openRoom(r.task.id);
-    setCanvasTab("changes");
+    openRoom(r.task.id, "changes");
   };
 
   const selRows = rows.filter((r) => selected.has(r.key));

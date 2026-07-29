@@ -659,6 +659,8 @@ export function Composer({
           rows={2}
           value={text}
           aria-label="给 Agent 的消息"
+          aria-controls={slashOpen ? "slash-command-menu" : undefined}
+          aria-activedescendant={slashOpen ? `slash-command-option-${slashActive}` : undefined}
           placeholder={
             running
               ? "正在处理，可继续补充要求…"

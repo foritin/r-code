@@ -127,13 +127,13 @@ export function EditorScene() {
             <div className="file-tree-head"><span>文件</span>{loadingDirs.has(ROOT) && <small>读取中…</small>}</div>
             <div className="file-tree-items"><FileTree entries={entriesByDir[ROOT] ?? []} entriesByDir={entriesByDir} expanded={expanded} loadingDirs={loadingDirs} selected={file} depth={0} onFile={selectFile} onFolder={toggleDirectory} /></div>
           </aside>
-          <main className="file-preview">
+          <section className="file-preview">
             {!file ? <div className="file-preview-empty"><IconEditor width={25} height={25} /><h2>选择一个文件</h2><p>从左侧文件树选择，或用上方快速打开定位文件。</p></div> : !content ? <div className="file-preview-empty">正在读取 {file}…</div> : <>
               <header className="file-preview-head"><div className="file-breadcrumb"><IconFile width={16} height={16} />{pathParts.map((part, index) => <span key={`${part}-${index}`}>{index > 0 && <b>/</b>}{part}</span>)}</div><div className="file-preview-actions">{content.is_editable && <button className="rc-button rc-button-quiet" onClick={() => setEditing((value) => !value)}>{editing ? "取消编辑" : "编辑"}</button>}{editing && <button className="rc-button rc-button-primary" disabled={saving || draft === content.content} onClick={() => void save()}>{saving ? "保存中…" : "保存"}</button>}</div></header>
               <div className="file-preview-meta"><span>{content.total_lines} 行{content.truncated ? " · 内容已截断" : ""}</span><span>{editing ? "编辑模式" : "只读预览"}</span></div>
               {editing ? <textarea className="file-code-editor" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} /> : <pre className="file-code"><code>{content.content.split("\n").map((line, index) => <span className="file-code-line" key={index}><i>{index + 1}</i><b>{line || " "}</b></span>)}</code></pre>}
             </>}
-          </main>
+          </section>
         </div>
       </div>
     </div>

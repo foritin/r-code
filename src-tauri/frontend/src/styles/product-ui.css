@@ -1,0 +1,592 @@
+/* Complete product shell based on the workbench demo language.
+   This file is the final visual authority for shared application chrome. */
+
+:root {
+  --rc-rail-w: 300px;
+  --rc-rail-collapsed-w: 64px;
+  --rc-topbar-h: 42px;
+  --rc-content-gutter: clamp(22px, 3vw, 42px);
+}
+
+:root[data-theme="studio-light"] {
+  --font-display: var(--font-ui);
+  --bg-app: #fbfaf7;
+  --bg-sidebar: #f7f3ed;
+  --bg-panel: #fffefc;
+  --bg-card: #fffefc;
+  --bg-chip: #f2ebe3;
+  --bg-inset: #f8f4ef;
+  --bg-hover: #f5eee7;
+  --bg-active: #eee2d7;
+  --border: #e7ded4;
+  --border-strong: #d5c7b8;
+  --fg: #211e1b;
+  --fg-muted: #655d56;
+  --fg-faint: #8b8177;
+  --accent: #c74700;
+  --accent-2: #a63b00;
+  --accent-fg: #fff;
+}
+
+:root[data-theme="obsidian"] {
+  --font-display: var(--font-ui);
+  --bg-app: #151311;
+  --bg-sidebar: #1b1917;
+  --bg-panel: #181715;
+  --bg-card: #211f1c;
+  --bg-chip: #292622;
+  --bg-inset: #12110f;
+  --bg-hover: #292520;
+  --bg-active: #332d27;
+  --border: #302e2a;
+  --border-strong: #4b453e;
+  --fg: #f3ede6;
+  --fg-muted: #b9aea2;
+  --fg-faint: #857b71;
+  --accent: #ff8a3d;
+  --accent-2: #ffad75;
+  --accent-fg: #261308;
+}
+
+#app.app-shell {
+  grid-template-rows: var(--rc-topbar-h) minmax(0, 1fr);
+  grid-template-columns: var(--rc-current-rail) minmax(0, 1fr);
+  grid-template-areas:
+    "menubar menubar"
+    "rail main";
+}
+
+#app.app-shell .main {
+  border-left: 0;
+}
+
+.app-topbar {
+  height: var(--rc-topbar-h);
+  gap: 4px;
+  padding: 0 5px 0 10px;
+  background: var(--bg-sidebar);
+}
+
+.desktop-sidebar-toggle {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+}
+
+.compact-search-toggle {
+  display: none;
+}
+
+.top-actions {
+  gap: 1px;
+}
+
+.top-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+}
+
+.app-window-controls {
+  align-self: stretch;
+  margin-left: 8px;
+}
+
+.app-window-controls .wc {
+  width: 42px;
+  height: 100%;
+  border-radius: 0;
+}
+
+.app-sidebar {
+  padding: 0 12px 10px;
+  background: var(--bg-sidebar);
+}
+
+.sidebar-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 54px;
+  padding: 0 6px;
+}
+
+.sidebar-brand {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  color: var(--fg);
+  font-size: 16px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.sidebar-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 1.5px solid var(--accent);
+  border-radius: 6px;
+  color: var(--accent);
+  font: 700 16px/1 var(--font-ui);
+}
+
+.sidebar-search {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 5px;
+  color: var(--fg-faint);
+}
+
+.sidebar-search:hover {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
+.sidebar-create {
+  display: block;
+  padding: 4px 0 8px;
+}
+
+.sidebar-new {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:root[data-theme="obsidian"] .sidebar-new {
+  color: var(--fg);
+}
+
+.sidebar-new:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  filter: none;
+}
+
+.sidebar-collapse {
+  display: none;
+}
+
+.sidebar-nav {
+  gap: 1px;
+  padding: 0 0 12px;
+}
+
+.sidebar-nav-item,
+.sidebar-footer-action {
+  min-height: 36px;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.sidebar-nav-item.active,
+.sidebar-footer-action.active {
+  color: var(--fg);
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.sidebar-projects {
+  padding-top: 12px;
+}
+
+.sidebar-project-list {
+  gap: 8px;
+}
+
+.sidebar-project-head {
+  min-height: 32px;
+}
+
+.sidebar-task {
+  min-height: 32px;
+}
+
+.sidebar-task.active {
+  box-shadow: inset 2px 0 var(--accent);
+}
+
+.sidebar-footer {
+  padding-top: 8px;
+}
+
+#app.rail-is-collapsed .app-sidebar {
+  padding: 0 10px 10px;
+}
+
+#app.rail-is-collapsed .sidebar-brand-row {
+  justify-content: center;
+  padding: 0;
+}
+
+#app.rail-is-collapsed .sidebar-brand {
+  flex: none;
+}
+
+#app.rail-is-collapsed .sidebar-search {
+  display: none;
+}
+
+#app.rail-is-collapsed .sidebar-create {
+  width: 100%;
+  padding-top: 4px;
+}
+
+#app.rail-is-collapsed .sidebar-new {
+  width: 100%;
+  justify-content: center;
+  padding: 0;
+}
+
+/* Shared compact page chrome */
+.dashboard-scroll,
+.conversation-list-page,
+.inbox-scroll,
+.activity-page,
+#app.scene-projects .projects-scroll,
+#app.scene-settings .scene-scroll {
+  padding-top: 24px;
+  padding-bottom: 32px;
+}
+
+.dashboard-header,
+.list-page-header,
+.inbox-header,
+.activity-header,
+#app.scene-projects .workspace-hero,
+#app.scene-settings .page-head {
+  min-height: 58px;
+  padding-bottom: 14px;
+}
+
+.dashboard-header h1,
+.list-page-header h1,
+.inbox-header h1,
+.activity-header h1,
+#app.scene-projects .workspace-hero h1,
+#app.scene-settings .page-head h1,
+.file-gate h1,
+.dashboard-empty h1 {
+  margin-top: 3px;
+  font: 600 20px/1.18 var(--font-ui);
+  letter-spacing: -.015em;
+}
+
+.dashboard-header p:last-child,
+.list-page-header p:last-child,
+.inbox-header p:last-child,
+.activity-header p:last-child {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.dashboard-project-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+}
+
+.dashboard-metrics,
+.activity-summary {
+  margin-top: 12px;
+  margin-bottom: 20px;
+}
+
+.dashboard-metric,
+.activity-summary-metric {
+  min-height: 54px;
+}
+
+.dashboard-metric strong,
+.activity-summary-metric strong {
+  font-size: 20px;
+}
+
+.dashboard-section,
+.activity-section {
+  margin-top: 22px;
+}
+
+.dashboard-section-title,
+.activity-section-head {
+  margin-bottom: 9px;
+}
+
+.dashboard-section-title h2,
+.activity-section-head h2 {
+  font-size: 15px;
+}
+
+.attention-item {
+  min-height: 70px;
+  padding: 10px 8px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.dashboard-attention-list {
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+.attention-icon,
+.inbox-row-icon,
+.activity-need-row > span {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+}
+
+.conversation-list-page,
+.activity-page {
+  width: min(1160px, 100%);
+}
+
+.list-page-header,
+.activity-header,
+.inbox-header {
+  align-items: center;
+}
+
+.conversation-toolbar {
+  padding: 12px 0;
+}
+
+.conversation-row {
+  min-height: 58px;
+}
+
+.inbox-list {
+  margin-top: 12px;
+}
+
+.inbox-row {
+  min-height: 62px;
+}
+
+.inspector-head,
+.project-activity-head {
+  align-items: center;
+  padding-top: 14px;
+  min-height: 52px;
+}
+
+.activity-summary-metric {
+  min-height: 54px;
+}
+
+.activity-needs-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.activity-need-row {
+  min-height: 56px;
+  border-right: 0;
+}
+
+/* Projects use flat library rows, not nested cards. */
+#app.scene-projects .workspace-library {
+  margin-top: 18px;
+}
+
+#app.scene-projects .workspace-list {
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+
+#app.scene-projects .workspace-row,
+#app.scene-projects .workspace-memory {
+  border-width: 0 0 1px;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Editor is a full-height tool surface. */
+#app.scene-editor .scene-editor {
+  overflow: hidden;
+}
+
+#app.scene-editor .file-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+#app.scene-editor .file-page-header {
+  grid-template-columns: minmax(200px, 1fr) minmax(240px, 340px);
+  min-height: 54px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 16px;
+  background: var(--bg-panel);
+}
+
+#app.scene-editor .file-page-header .page-kicker,
+#app.scene-editor .file-page-header h1 {
+  display: none;
+}
+
+#app.scene-editor .file-page-header p:last-child {
+  margin: 0;
+}
+
+#app.scene-editor .file-workspace {
+  grid-template-columns: minmax(380px, 1fr) 280px;
+  min-height: 0;
+  height: 100%;
+  margin-top: 0;
+  border-top: 0;
+}
+
+#app.scene-editor .file-preview {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+#app.scene-editor .file-tree {
+  grid-column: 2;
+  grid-row: 1;
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+
+/* Home remains a starting point, but reads as part of the desktop tool. */
+.scene-home .home-stage {
+  max-width: 760px;
+  padding: 28px 0;
+}
+
+.scene-home h1 {
+  margin: 9px 0 6px;
+  font: 600 22px/1.2 var(--font-ui);
+  letter-spacing: -.015em;
+}
+
+.scene-home .home-subtitle {
+  font-size: 13px;
+}
+
+.scene-home .home-composer {
+  margin-top: 20px;
+  border-radius: 10px;
+}
+
+.pane,
+.btn,
+.rc-button {
+  box-shadow: none;
+}
+
+@media (max-width: 1119px) {
+  .compact-search-toggle {
+    display: grid;
+  }
+  #app.app-shell:not(.rail-is-collapsed) {
+    --rc-current-rail: var(--rc-rail-collapsed-w);
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .app-sidebar {
+    padding: 0 10px 10px;
+    align-items: center;
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .rail-label,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item b,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-projects,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-search {
+    display: none;
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-brand-row,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-new,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer-action {
+    justify-content: center;
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-brand {
+    flex: none;
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-create,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer {
+    width: 100%;
+  }
+
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-new,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item,
+  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer-action {
+    padding-right: 0;
+    padding-left: 0;
+  }
+
+  #app.app-shell .main > .scene-inbox,
+  #app.app-shell .main > .scene-inbox.inspector-collapsed {
+    grid-template-columns: minmax(0, 1fr) 340px;
+  }
+}
+
+@media (max-width: 759px) {
+  .dashboard-scroll,
+  .conversation-list-page,
+  .inbox-scroll,
+  .activity-page,
+  #app.scene-projects .projects-scroll,
+  #app.scene-settings .scene-scroll {
+    padding: 18px 16px 26px;
+  }
+
+  #app.app-shell .main > .scene-inbox,
+  #app.app-shell .main > .scene-inbox.inspector-collapsed {
+    display: block !important;
+  }
+
+  .inbox-inspector {
+    position: absolute;
+    z-index: var(--z-sticky);
+    inset: 0;
+    border-left: 0;
+  }
+
+  #app.scene-editor .file-page-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  #app.scene-editor .file-page-header > div:first-child {
+    display: none;
+  }
+
+  #app.scene-editor .file-workspace {
+    display: block;
+  }
+
+  #app.scene-editor .file-tree {
+    display: none;
+  }
+
+  #app.scene-editor .file-preview {
+    height: 100%;
+  }
+}

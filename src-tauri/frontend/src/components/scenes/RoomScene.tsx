@@ -22,7 +22,7 @@ import { Canvas } from "../room/Canvas";
 import { ActivityStrip } from "../room/ActivityStrip";
 import { SubagentPanel } from "../room/SubagentPanel";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
-import { IconAttach, IconHome, IconProjects } from "../icons";
+import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
 
 const ROOM_SPLIT_STORAGE_KEY = "r-code.room.split-pct";
@@ -30,6 +30,7 @@ const DEFAULT_ROOM_SPLIT_PCT = 55;
 const ROOM_SPLITTER_WIDTH = 11;
 const MIN_CONVERSATION_WIDTH = 360;
 const MIN_CANVAS_WIDTH = 300;
+const taskSubagentSelections = new Map<string, string | null>();
 
 interface RoomSplitBounds {
   min: number;
@@ -72,6 +73,12 @@ function initialRoomSplit(): number {
 export function RoomScene() {
   const currentTaskId = useAppStore((s) => s.currentTaskId);
   const goHome = useAppStore((s) => s.goHome);
+  const workbenchMode = useAppStore((s) => s.workbenchMode);
+  const canvasTab = useAppStore((s) => s.canvasTab);
+  const setCanvasTab = useAppStore((s) => s.setCanvasTab);
+  const hideWorkbench = useAppStore((s) => s.hideWorkbench);
+  const restoreWorkbench = useAppStore((s) => s.restoreWorkbench);
+  const expandReview = useAppStore((s) => s.expandReview);
   const detail = useTasksStore((s) => (currentTaskId ? s.details[currentTaskId] : undefined));
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
@@ -88,6 +95,7 @@ export function RoomScene() {
   const [subagentPanelRequest, setSubagentPanelRequest] = useState(0);
   const tlRef = useRef<TimelineHandle>(null);
   const roomRef = useRef<HTMLElement>(null);
+  const convoRef = useRef<HTMLDivElement>(null);
   const splitDraggingRef = useRef(false);
   const roomSplitRef = useRef(initialRoomSplit());
   const [roomWidth, setRoomWidth] = useState(0);
@@ -105,10 +113,21 @@ export function RoomScene() {
     )
     .join("|");
 
+  const selectSubagent = useCallback((subagentId: string | null) => {
+    if (currentTaskId) taskSubagentSelections.set(currentTaskId, subagentId);
+    setSelectedSubagentId(subagentId);
+    if (subagentId) setCanvasTab("summary");
+  }, [currentTaskId, setCanvasTab]);
+
   useEffect(() => {
     dispatchActivity({ type: "reset" });
-    setSelectedSubagentId(null);
+    setSelectedSubagentId(currentTaskId ? taskSubagentSelections.get(currentTaskId) ?? null : null);
   }, [currentTaskId]);
+
+  useEffect(() => {
+    if (workbenchMode === "focus") convoRef.current?.setAttribute("inert", "");
+    else convoRef.current?.removeAttribute("inert");
+  }, [workbenchMode]);
 
   usePoll(
     () => (currentTaskId ? refreshDetail(currentTaskId) : undefined),
@@ -240,6 +259,25 @@ export function RoomScene() {
   const workspaceAttached = Boolean(workspacePath);
   const workspaceAccessMode = workspace?.access_mode ?? "request_approval";
   const splitBounds = getRoomSplitBounds(roomWidth);
+  const viewportWidth = typeof window === "undefined" ? 1600 : window.innerWidth;
+  const workbenchLayout = workbenchMode === "focus"
+    ? "focus"
+    : viewportWidth <= 759
+      ? "full"
+      : viewportWidth <= 1359
+        ? "overlay"
+        : viewportWidth < 1600
+          ? "compact"
+          : "wide";
+  const dismissWorkbench = () => {
+    hideWorkbench(task?.state === "review_ready" && (canvasTab === "review" || canvasTab === "changes"));
+  };
+
+  const toggleWorkbenchFromRoom = () => {
+    if (workbenchMode === "hidden") restoreWorkbench();
+    else if (workbenchMode === "collapsed") expandReview();
+    else dismissWorkbench();
+  };
 
   const attachFolder = async () => {
     if (scopeBusy) return;
@@ -278,10 +316,34 @@ export function RoomScene() {
   return (
     <section
       ref={roomRef}
-      className={"scene scene-room" + (isSplitDragging ? " is-split-dragging" : "")}
+      className={`scene scene-room workbench-${workbenchMode}${isSplitDragging ? " is-split-dragging" : ""}`}
       style={{ "--room-convo-width": `${roomSplitPct}%` } as CSSProperties}
+      data-testid="workbench-root"
+      data-workbench-mode={workbenchMode}
+      data-workbench-layout={workbenchLayout}
+      data-owner-key={`task:${currentTaskId}`}
     >
-      <div className="convo pane pane-lit">
+      <div
+        ref={convoRef}
+        className="convo pane pane-lit"
+        aria-hidden={workbenchMode === "focus" ? true : undefined}
+      >
+        <header className="room-conversation-head">
+          <IconProjects width={16} height={16} />
+          <div className="room-conversation-title">
+            <strong>{task?.title || "任务会话"}</strong>
+            <span>{workspace?.display_name ?? "未附加项目"} · {running ? "正在运行" : "会话就绪"}</span>
+          </div>
+          <button
+            type="button"
+            className="room-workbench-toggle"
+            onClick={toggleWorkbenchFromRoom}
+            aria-label={workbenchMode === "hidden" || workbenchMode === "collapsed" ? "展开任务工作台" : "隐藏任务工作台"}
+            aria-expanded={workbenchMode !== "hidden" && workbenchMode !== "collapsed"}
+          >
+            <IconSidebar width={17} height={17} />
+          </button>
+        </header>
         <div className="room-scopebar">
           {workspacePath ? (
             <>
@@ -328,7 +390,7 @@ export function RoomScene() {
           key={currentTaskId}
           state={activity}
           selectedSubagentId={selectedSubagentId}
-          onInspectSubagent={setSelectedSubagentId}
+          onInspectSubagent={selectSubagent}
           onAbortSubagent={abortSubagent}
           openRequest={subagentPanelRequest}
         />
@@ -355,25 +417,30 @@ export function RoomScene() {
           onShowSubagents={() => setSubagentPanelRequest((value) => value + 1)}
         />
       </div>
-      <div
-        className="room-splitter"
-        role="separator"
-        tabIndex={0}
-        aria-label="调整对话与画布宽度"
-        aria-orientation="vertical"
-        aria-valuemin={Math.round(splitBounds.min)}
-        aria-valuemax={Math.round(splitBounds.max)}
-        aria-valuenow={Math.round(roomSplitPct)}
-        aria-valuetext={`对话 ${Math.round(roomSplitPct)}%，画布 ${Math.round(100 - roomSplitPct)}%`}
-        onDoubleClick={() => updateRoomSplit(DEFAULT_ROOM_SPLIT_PCT, true)}
-        onKeyDown={onSplitKeyDown}
-        onPointerDown={beginSplitDrag}
-        onPointerMove={moveSplitDrag}
-        onPointerUp={endSplitDrag}
-        onPointerCancel={endSplitDrag}
-      >
-        <span aria-hidden="true" />
-      </div>
+      {workbenchMode === "docked" && (
+        <div
+          className="room-splitter"
+          role="separator"
+          tabIndex={0}
+          aria-label="调整对话与工作台宽度"
+          aria-orientation="vertical"
+          aria-valuemin={Math.round(splitBounds.min)}
+          aria-valuemax={Math.round(splitBounds.max)}
+          aria-valuenow={Math.round(roomSplitPct)}
+          aria-valuetext={`对话 ${Math.round(roomSplitPct)}%，工作台 ${Math.round(100 - roomSplitPct)}%`}
+          onDoubleClick={() => updateRoomSplit(DEFAULT_ROOM_SPLIT_PCT, true)}
+          onKeyDown={onSplitKeyDown}
+          onPointerDown={beginSplitDrag}
+          onPointerMove={moveSplitDrag}
+          onPointerUp={endSplitDrag}
+          onPointerCancel={endSplitDrag}
+        >
+          <span aria-hidden="true" />
+        </div>
+      )}
+      {workbenchMode === "docked" && (
+        <button type="button" className="workbench-backdrop" onClick={dismissWorkbench} aria-label="关闭任务工作台" />
+      )}
       <Canvas
         taskId={currentTaskId}
         running={running}
@@ -381,7 +448,7 @@ export function RoomScene() {
         workspacePath={workspacePath}
         workspaceAttached={workspaceAttached}
         selectedSubagentId={selectedSubagentId}
-        onCloseSubagent={() => setSelectedSubagentId(null)}
+        onCloseSubagent={() => selectSubagent(null)}
         onAbortSubagent={abortSubagent}
       />
     </section>

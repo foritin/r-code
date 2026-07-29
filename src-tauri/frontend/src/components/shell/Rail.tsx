@@ -3,6 +3,7 @@ import { useAppStore } from "../../store/app";
 import { selectNeedsYouTaskIds, selectRunning, useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
 import { elapsedMinutes } from "../../lib/format";
+import { keyLabel } from "../../lib/keys";
 import { isTaskLive, taskStateLabel, taskTitle, visualTaskState } from "../../lib/presentation";
 import type { Task, Workspace } from "../../lib/types";
 import {
@@ -13,6 +14,7 @@ import {
   IconHistory,
   IconInbox,
   IconPlus,
+  IconSearch,
   IconSettings,
   IconSidebar,
 } from "../icons";
@@ -31,6 +33,7 @@ export function Rail() {
   const currentTaskId = useAppStore((s) => s.currentTaskId);
   const collapsed = useAppStore((s) => s.railCollapsed);
   const toggleRail = useAppStore((s) => s.toggleRail);
+  const toggleSearch = useAppStore((s) => s.toggleSearch);
   const tasks = useTasksStore((s) => s.tasks);
   const details = useTasksStore((s) => s.details);
   const workspaces = useTasksStore((s) => s.workspaces);
@@ -78,8 +81,17 @@ export function Rail() {
 
   return (
     <aside className="rail app-sidebar" aria-label="项目与导航">
+      <div className="sidebar-brand-row">
+        <button className="sidebar-brand" onClick={goHome} title="R-Code — 新对话" aria-label="R-Code，新建对话">
+          <span className="sidebar-brand-mark" aria-hidden="true">R</span>
+          <span className="rail-label">R-Code</span>
+        </button>
+        <button className="sidebar-search" onClick={toggleSearch} title={`搜索（${keyLabel("search")}）`} aria-label={`搜索任务、文件和对话，${keyLabel("search")}`}>
+          <IconSearch width={16} height={16} />
+        </button>
+      </div>
       <div className="sidebar-create">
-        <button className="sidebar-new" onClick={goHome} title="新对话">
+        <button className="sidebar-new" onClick={goHome} title="新对话" aria-label="新对话">
           <IconPlus width={17} height={17} />
           <span className="rail-label">新对话</span>
         </button>
@@ -148,7 +160,7 @@ export function Rail() {
       </div>
 
       <div className="sidebar-footer">
-        <button className={`sidebar-footer-action${scene === "settings" ? " active" : ""}`} onClick={() => setScene("settings")}>
+        <button className={`sidebar-footer-action${scene === "settings" ? " active" : ""}`} onClick={() => setScene("settings")} aria-label="设置">
           <IconSettings width={16} height={16} />
           <span className="rail-label">设置</span>
         </button>
