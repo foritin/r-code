@@ -413,7 +413,7 @@ export function Composer({
         return;
       case "codex":
         await runWithCodexCli({ feature: "Codex 快速子代理", requireAuth: true }, async () => {
-          await agentDelegateCodex(taskId, parsed.args, "只读调查");
+          await agentDelegateCodex(taskId, parsed.args, "Codex 调查");
           await refreshDetail(taskId);
           onShowSubagents();
         });
@@ -487,20 +487,21 @@ export function Composer({
   }, { label: "移除队列消息" });
 
   // 复用当前草稿作为子任务，而不是把它同时送进主 Agent。这样用户可以在运行中
-  // 临时请 Codex 做独立只读调查，主会话历史不会被一条“请另一个 Agent 查一下”污染。
+  // 临时请 Codex 做独立任务；实际权限由设置中的 Codex 配置决定，主会话历史不会被
+  // 一条“请另一个 Agent 查一下”污染。
   const delegateCodex = useAsyncAction(async () => {
     const goal = text.trim();
     if (!goal) return;
     await runWithCodexCli({ feature: "Codex 快速子代理", requireAuth: true }, async () => {
-      await agentDelegateCodex(taskId, goal, "只读调查");
+      await agentDelegateCodex(taskId, goal, "Codex 调查");
       setText("");
       setAt(null);
       await refreshDetail(taskId);
     });
   }, { label: "委派 Codex 子代理" });
 
-  // MCP 会话会保留 Codex thread ID，适合需要在同一外部上下文中继续追问的调查。
-  // 它和快速 exec 委派都使用当前草稿，但只会创建一项独立只读子任务。
+  // MCP 会话会保留 Codex thread ID，适合需要在同一外部上下文中继续追问。
+  // 它和快速 exec 委派都使用当前草稿，并读取同一份 Codex 权限配置。
   const delegateCodexMcp = useAsyncAction(async () => {
     const goal = text.trim();
     if (!goal) return;
@@ -815,7 +816,7 @@ export function Composer({
                   <MenuItem
                     close={close}
                     disabled={!workspaceAttached || delegateCodex.busy}
-                    hint={workspaceAttached ? "以只读模式独立检查当前工作区" : "先附加本地工作区后才能使用"}
+                    hint={workspaceAttached ? "使用 Codex 已配置的权限独立处理当前工作区" : "先附加本地工作区后才能使用"}
                     onSelect={() => void delegateCodex.run()}
                   >
                     {delegateCodex.busy ? "正在委派 Codex…" : "委派给 Codex（快速）"}

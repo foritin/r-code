@@ -115,6 +115,12 @@ export const IconArchive = (p: P) => (
   </svg>
 );
 
+export const IconTrash = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M5.5 7.5h13M9 7.5V5h6v2.5M7.5 7.5l.8 12h7.4l.8-12M10 11v5M14 11v5" />
+  </svg>
+);
+
 export const IconAttach = (p: P) => (
   <svg {...base(p)}>
     <path d="M20 11.5 12.5 19a5 5 0 0 1-7-7l7.5-7.5a3.4 3.4 0 0 1 4.8 4.8L10.5 16.6a1.8 1.8 0 0 1-2.6-2.6l6.8-6.8" />

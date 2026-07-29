@@ -315,8 +315,8 @@ function delegateTask(args: MockArgs, runtime: AgentRun["runtime_kind"]): AgentR
     branch_id: detail.active_branch.id,
     parent_run_id: detail.runs.find((item) => item.agent_kind === "main")?.id ?? null,
     agent_kind: "subagent",
-    agent_label: optionalStringArg(args, "label") ?? "只读调查",
-    summary: `已完成只读调查：${stringArg(args, "goal")}`,
+    agent_label: optionalStringArg(args, "label") ?? "Codex 调查",
+    summary: `已完成 Codex 调查：${stringArg(args, "goal")}`,
     delegated_by_tool_call_id: nextId("delegate"),
     model: "gpt-5.6-sol",
     runtime_kind: runtime,
@@ -508,7 +508,19 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const task = taskById(stringArg(args, "taskId"));
       task.state = "archived";
       touchTask(task);
+      if (browserMockDetails[task.id]) browserMockDetails[task.id].task = copy(task);
       return copy(task);
+    }
+    case "cmd_task_delete": {
+      const taskId = stringArg(args, "taskId");
+      const task = taskById(taskId);
+      if (task.state === "exploring" || task.state === "in_progress") {
+        throw new Error("会话仍在运行，请先停止后删除");
+      }
+      const index = browserMockTasks.findIndex((candidate) => candidate.id === taskId);
+      if (index >= 0) browserMockTasks.splice(index, 1);
+      delete browserMockDetails[taskId];
+      return undefined;
     }
     case "cmd_task_set_workspace": return copy(setTaskField(args, "workspace_path"));
     case "cmd_task_set_provider": return copy(setTaskField(args, "provider_name"));
@@ -688,7 +700,12 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_codex_install_mcp_server": browserMockInstallMcp(); return undefined;
     case "cmd_codex_setup_collaboration": return copy(browserMockSetupCollaboration());
     case "cmd_codex_cli_preferences": return copy(browserMockCliPreferences());
-    case "cmd_codex_save_cli_preferences": return copy(browserMockSaveCliPreferences(optionalStringArg(args, "model"), optionalStringArg(args, "reasoningEffort"), optionalStringArg(args, "verbosity")));
+    case "cmd_codex_save_cli_preferences": return copy(browserMockSaveCliPreferences(
+      optionalStringArg(args, "model"),
+      optionalStringArg(args, "reasoningEffort"),
+      optionalStringArg(args, "verbosity"),
+      optionalStringArg(args, "permissionMode"),
+    ));
     case "cmd_logs_tail": {
       const logs: LogEntry[] = [
         { timestamp: nowIso(), level: "INFO", target: "r_code::demo", message: "完整浏览器 Demo 已就绪" },

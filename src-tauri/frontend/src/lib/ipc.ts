@@ -96,6 +96,9 @@ export const taskList = (workspacePath?: string, includeArchived = false) =>
 export const taskArchive = (taskId: string) =>
   ipc<Task>("cmd_task_archive", { taskId });
 
+export const taskDelete = (taskId: string) =>
+  ipc<void>("cmd_task_delete", { taskId });
+
 export const taskSetWorkspace = (taskId: string, workspacePath: string | null) =>
   ipc<Task>("cmd_task_set_workspace", { taskId, workspacePath });
 
@@ -145,11 +148,11 @@ export const agentAbortSubagent = async (taskId: string, subagentId: string) => 
   }
 };
 
-/** 将当前运行中的一项只读调查委派给本机已登录的 Codex CLI。 */
+/** 将当前运行中的一项任务委派给本机已登录的 Codex CLI；权限由 config.toml 决定。 */
 export const agentDelegateCodex = (taskId: string, goal: string, label: string | null = null) =>
   ipc<AgentRun>("cmd_agent_delegate_codex", { taskId, goal, label });
 
-/** 以官方 `codex mcp-server` 创建可续接的只读 Codex 子代理会话。 */
+/** 以官方 `codex mcp-server` 创建可续接的 Codex 子代理会话。 */
 export const agentDelegateCodexMcp = (taskId: string, goal: string, label: string | null = null) =>
   ipc<AgentRun>("cmd_agent_delegate_codex_mcp", { taskId, goal, label });
 
@@ -523,7 +526,7 @@ export const codexInstallMcpServer = async () => {
   }
 };
 
-/** 一次更新协作 Skill 并补齐 R-Code 只读 MCP 配置。 */
+/** 一次更新协作 Skill 并补齐 R-Code 的 Codex MCP 配置。 */
 export const codexSetupCollaboration = async () => {
   try {
     return await ipc<CodexIntegrationStatus>("cmd_codex_setup_collaboration");
@@ -545,19 +548,30 @@ export const codexCliPreferences = async () => {
   }
 };
 
-/** 空字符串会被转换为 null，从 config.toml 移除覆盖并恢复 Codex 默认。 */
-export const codexSaveCliPreferences = async (model: string, reasoningEffort: string, verbosity: string) => {
+/** 空模型字段会从 config.toml 移除覆盖；权限预设由 Codex 子代理启动时读取。 */
+export const codexSaveCliPreferences = async (
+  model: string,
+  reasoningEffort: string,
+  verbosity: string,
+  permissionMode: string,
+) => {
   const args = {
     model: model || null,
     reasoningEffort: reasoningEffort || null,
     verbosity: verbosity || null,
+    permissionMode: permissionMode || null,
   };
   try {
     return await ipc<CodexCliPreferences>("cmd_codex_save_cli_preferences", args);
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     await new Promise((resolve) => window.setTimeout(resolve, 500));
-    return browserMockSaveCodexCliPreferences(args.model, args.reasoningEffort, args.verbosity);
+    return browserMockSaveCodexCliPreferences(
+      args.model,
+      args.reasoningEffort,
+      args.verbosity,
+      args.permissionMode,
+    );
   }
 };
 

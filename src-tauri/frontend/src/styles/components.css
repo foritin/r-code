@@ -210,6 +210,38 @@
 .srow-wrap { position: relative; }
 .srow-archive { position: absolute; top: 50%; right: var(--sp-2); transform: translateY(-50%); }
 
+/* ---------- 会话生命周期菜单 ---------- */
+.task-actions-trigger {
+  display: inline-grid; place-items: center; flex: none;
+  width: 28px; height: 28px; padding: 0;
+  border: 1px solid transparent; border-radius: var(--radius-xs);
+  background: transparent; color: var(--fg-faint);
+}
+.task-actions-trigger:hover,
+.task-actions-trigger[aria-expanded="true"] { color: var(--fg); border-color: var(--border); background: var(--bg-chip); }
+.task-actions-popover { width: min(286px, calc(100vw - var(--sp-10))); }
+.task-actions-popover .menu-item > svg { align-self: start; margin-top: 2px; }
+.task-actions-popover .menu-item.danger:not(:disabled),
+.task-actions-popover .menu-item.danger:not(:disabled) > svg { color: var(--danger); }
+
+.confirm-backdrop {
+  position: fixed; z-index: var(--z-modal); inset: 0;
+  display: grid; place-items: center; padding: var(--sp-8);
+  background: var(--scrim); animation: fadeIn var(--dur-2) var(--ease-out);
+}
+.confirm-dialog {
+  width: min(420px, calc(100vw - var(--sp-10)));
+  padding: var(--sp-8);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
+  background: var(--bg-card); box-shadow: var(--shadow-popover);
+  animation: popIn var(--dur-2) var(--ease-out);
+}
+.confirm-dialog h2 { margin: 0; color: var(--fg); font-size: var(--text-lg); font-weight: var(--weight-strong); }
+.confirm-dialog p { margin: var(--sp-4) 0 0; color: var(--fg-muted); font-size: var(--text-sm); line-height: 1.6; }
+.confirm-dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-3); margin-top: var(--sp-7); }
+.confirm-dialog .rc-button.rc-button-danger { border-color: var(--edge-danger); background: var(--tint-danger); color: var(--danger); }
+.confirm-dialog .rc-button.rc-button-danger:hover:not(:disabled) { border-color: var(--danger); background: var(--tint-danger-hi); color: var(--danger); }
+
 /* ---------- 快捷键参考 ---------- */
 .shortcuts-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

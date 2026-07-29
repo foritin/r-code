@@ -111,7 +111,7 @@ before your final answer to obtain their concise findings. Do not delegate write
 const CODEX_DELEGATION_PROMPT_HINT: &str = " When the user explicitly asks for Codex, call \
 `delegate_task` with `agent` set to `codex`; do not substitute an internal R-Code subagent and do \
 not claim Codex is unsupported before trying the tool. Codex runs through the user's installed and \
-authenticated Codex CLI in a read-only sandbox; setup failures are returned as tool errors.";
+authenticated Codex CLI using the permission profile configured in Codex; setup failures are returned as tool errors.";
 
 const CODEX_WORKSPACE_REQUIRED_PROMPT_HINT: &str = "\n\nCodex CLI delegation requires an attached \
 workspace. If the user asks you to invoke Codex while no workspace is attached, tell them to attach \
@@ -132,18 +132,28 @@ pub enum CodexSubagentOutcome {
 /// reasoning or unredacted command output through this channel.
 pub type CodexSubagentEventSink = Arc<dyn Fn(AgentEvent) + Send + Sync>;
 
+/// 完整的主机委派上下文。将 task/run 归属传到主机，才能把 Codex App Server 的
+/// `on-request` 权限提示准确投影回当前 R-Code 任务，而不是在非交互 CLI 中卡住。
+#[derive(Clone)]
+pub struct CodexSubagentRequest {
+    pub workspace: PathBuf,
+    pub goal: String,
+    pub task_id: String,
+    pub run_id: String,
+    pub caller: String,
+    pub abort: Arc<AtomicBool>,
+    pub event_sink: CodexSubagentEventSink,
+}
+
 /// Host boundary used by the provider runtime to invoke Codex without depending on Tauri.
 ///
 /// The worker owns tool exposure, concurrency and lifecycle events. The desktop host owns CLI
 /// discovery, authentication checks and process execution.
 #[async_trait]
 pub trait CodexSubagentRunner: Send + Sync {
-    async fn run_readonly(
+    async fn run(
         &self,
-        workspace: PathBuf,
-        goal: String,
-        abort: Arc<AtomicBool>,
-        event_sink: CodexSubagentEventSink,
+        request: CodexSubagentRequest,
     ) -> Result<CodexSubagentOutcome, ProductError>;
 }
 
@@ -1458,7 +1468,7 @@ impl SubagentSupervisor {
                 state: SubagentState::Running,
                 detail: Some(match backend {
                     SubagentBackend::RCode => "R-Code 子代理正在进行只读调查".to_string(),
-                    SubagentBackend::Codex => "Codex CLI 正在只读沙箱中调查工作区".to_string(),
+                    SubagentBackend::Codex => "Codex CLI 正在按已配置权限处理工作区".to_string(),
                 }),
             },
         );
@@ -1488,7 +1498,15 @@ impl SubagentSupervisor {
                 emit_scoped(&event_tx, &event_scope, event);
             });
             let outcome = runner
-                .run_readonly(workspace, goal, abort.clone(), event_sink)
+                .run(CodexSubagentRequest {
+                    workspace,
+                    goal,
+                    task_id: self.task_id.clone(),
+                    run_id: scope.run_id.clone(),
+                    caller: format!("subagent:{}", scope.agent_id),
+                    abort: abort.clone(),
+                    event_sink,
+                })
                 .await;
             drop(permit);
             if self.is_child_cancelled(&abort) {
@@ -1734,17 +1752,16 @@ mod tests {
 
     #[async_trait]
     impl CodexSubagentRunner for RecordingCodexRunner {
-        async fn run_readonly(
+        async fn run(
             &self,
-            workspace: PathBuf,
-            goal: String,
-            _abort: Arc<AtomicBool>,
-            event_sink: CodexSubagentEventSink,
+            request: CodexSubagentRequest,
         ) -> Result<CodexSubagentOutcome, ProductError> {
-            assert!(workspace.is_dir());
-            assert_eq!(goal, "请 Codex 检查边界");
+            assert!(request.workspace.is_dir());
+            assert_eq!(request.goal, "请 Codex 检查边界");
+            assert_eq!(request.task_id, "task-1");
+            assert!(!request.run_id.is_empty());
             self.calls.fetch_add(1, Ordering::Relaxed);
-            event_sink(AgentEvent::Activity {
+            (request.event_sink)(AgentEvent::Activity {
                 phase: AgentActivityPhase::Tool,
                 detail: Some("Codex 正在读取边界文件".to_string()),
             });

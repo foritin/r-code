@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "predev": "node scripts/check-loopback.mjs",
-    "dev": "vite",
+    "dev": "node scripts/tauri-dev-server.mjs",
+    "dev:vite": "vite",
+    "test:dev-server": "node --test scripts/tauri-dev-server.test.mjs",
     "build": "tsc && vite build",
     "build:demo": "tsc --noEmit && node scripts/build-demo.mjs",
     "qa:demo": "node ../../docs/ui/demo/qa.cjs",

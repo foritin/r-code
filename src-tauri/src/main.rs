@@ -110,6 +110,7 @@ fn main() {
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_task_list,
             tauri_commands::cmd_task_archive,
+            tauri_commands::cmd_task_delete,
             tauri_commands::cmd_task_set_workspace,
             tauri_commands::cmd_task_set_provider,
             tauri_commands::cmd_task_set_model,

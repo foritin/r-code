@@ -6,6 +6,7 @@ import { elapsedMinutes } from "../../lib/format";
 import { keyLabel } from "../../lib/keys";
 import { isTaskLive, taskStateLabel, taskTitle, visualTaskState } from "../../lib/presentation";
 import type { Task, Workspace } from "../../lib/types";
+import { TaskActionsMenu } from "../TaskActionsMenu";
 import {
   IconActivity,
   IconChevronRight,
@@ -136,19 +137,26 @@ export function Rail() {
                     const state = visualTaskState(task, details[task.id]);
                     const active = scene === "room" && currentTaskId === task.id;
                     return (
-                      <button
-                        className={`sidebar-task${active ? " active" : ""}`}
-                        key={task.id}
-                        onClick={() => {
-                          if (task.workspace_path) setCurrentWorkspace(task.workspace_path);
-                          openRoom(task.id);
-                        }}
-                        title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
-                      >
-                        <i className={`task-state-dot ${state}`} />
-                        <span className="rail-label">{taskTitle(task)}</span>
-                        <time className="rail-label">{elapsedMinutes(task.updated_at)}</time>
-                      </button>
+                      <div className={`sidebar-task-row${active ? " active" : ""}`} key={task.id}>
+                        <button
+                          className={`sidebar-task${active ? " active" : ""}`}
+                          onClick={() => {
+                            if (task.workspace_path) setCurrentWorkspace(task.workspace_path);
+                            openRoom(task.id);
+                          }}
+                          title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
+                        >
+                          <i className={`task-state-dot ${state}`} />
+                          <span className="rail-label">{taskTitle(task)}</span>
+                          <time className="rail-label">{elapsedMinutes(task.updated_at)}</time>
+                        </button>
+                        <TaskActionsMenu
+                          task={task}
+                          detail={details[task.id]}
+                          className="sidebar-task-actions"
+                          placement="up"
+                        />
+                      </div>
                     );
                   })}
                   {projectTasks.length > 6 && <button className="sidebar-more-tasks" onClick={() => openProject(workspace.canonical_path)}><span className="rail-label">查看全部 {projectTasks.length} 个任务</span></button>}

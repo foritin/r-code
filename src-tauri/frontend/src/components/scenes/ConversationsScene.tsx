@@ -1,14 +1,15 @@
-import { useMemo, useState } from "react";
-import { taskArchive } from "../../lib/ipc";
+import { useEffect, useMemo, useState } from "react";
+import { taskList } from "../../lib/ipc";
 import { elapsedMinutes } from "../../lib/format";
 import { isTaskLive, sortTasksByUrgency, taskActivity, taskStateLabel, taskTitle, visualTaskState, workspaceName } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { selectNeedsYouTaskIds, useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import type { Task } from "../../lib/types";
-import { IconArchive, IconHistory, IconPlus, IconProjects, IconSearch } from "../icons";
+import { IconHistory, IconPlus, IconProjects, IconSearch } from "../icons";
+import { TaskActionsMenu } from "../TaskActionsMenu";
 
-type Filter = "all" | "running" | "attention" | "review" | "completed";
+type Filter = "all" | "running" | "attention" | "review" | "completed" | "archived";
 
 /** 跨项目的任务/会话列表。它是全局页，因此不渲染项目动态栏。 */
 export function ConversationsScene() {
@@ -22,6 +23,25 @@ export function ConversationsScene() {
   const openRoom = useAppStore((s) => s.openRoom);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [archivedLoading, setArchivedLoading] = useState(false);
+  const [archivedRevision, setArchivedRevision] = useState(0);
+
+  useEffect(() => {
+    if (filter !== "archived") return;
+    let cancelled = false;
+    setArchivedLoading(true);
+    void taskList(undefined, true)
+      .then((allTasks) => {
+        if (!cancelled) setArchivedTasks(allTasks.filter((task) => task.state === "archived"));
+      })
+      .finally(() => {
+        if (!cancelled) setArchivedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [archivedRevision, filter]);
 
   usePoll(async () => {
     await refreshTasks();
@@ -31,17 +51,19 @@ export function ConversationsScene() {
 
   const filtered = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
-    return sortTasksByUrgency(tasks, details).filter((task) => {
+    const source = filter === "archived" ? archivedTasks : tasks;
+    return sortTasksByUrgency(source, details).filter((task) => {
       const visual = visualTaskState(task, details[task.id]);
       const matchesFilter = filter === "all"
         || (filter === "running" && isTaskLive(task, details[task.id]))
         || (filter === "attention" && visual === "attention")
         || (filter === "review" && visual === "review")
-        || (filter === "completed" && task.state === "idle");
+        || (filter === "completed" && task.state === "idle")
+        || (filter === "archived" && task.state === "archived");
       const haystack = `${taskTitle(task)} ${task.goal} ${workspaceName(task.workspace_path, workspaces)}`.toLocaleLowerCase();
       return matchesFilter && (!normalized || haystack.includes(normalized));
     });
-  }, [details, filter, query, tasks, workspaces]);
+  }, [archivedTasks, details, filter, query, tasks, workspaces]);
 
   return (
     <div className="scene scene-conversations">
@@ -59,7 +81,7 @@ export function ConversationsScene() {
           <label className="conversation-search"><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选任务或项目…" /></label>
           <div className="conversation-filters" role="tablist" aria-label="任务筛选">
             {([
-              ["all", "全部"], ["running", "运行中"], ["attention", "待处理"], ["review", "待审核"], ["completed", "已完成"],
+              ["all", "全部"], ["running", "运行中"], ["attention", "待处理"], ["review", "待审核"], ["completed", "已完成"], ["archived", "已归档"],
             ] as [Filter, string][]).map(([value, label]) => (
               <button key={value} role="tab" aria-selected={filter === value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>
             ))}
@@ -67,10 +89,17 @@ export function ConversationsScene() {
         </div>
 
         <section className="conversation-list" aria-label="任务列表">
-          {filtered.length === 0 ? (
+          {archivedLoading ? (
+            <div className="conversation-empty"><IconHistory width={24} height={24} /><h2>正在读取归档…</h2></div>
+          ) : filtered.length === 0 ? (
             <div className="conversation-empty"><IconHistory width={24} height={24} /><h2>没有匹配的对话</h2><p>换一个筛选条件，或从新对话开始。</p></div>
           ) : filtered.map((task) => (
-            <ConversationRow key={task.id} task={task} needsAttention={needsIds.has(task.id)} />
+            <ConversationRow
+              key={task.id}
+              task={task}
+              needsAttention={needsIds.has(task.id)}
+              onChanged={filter === "archived" ? () => setArchivedRevision((value) => value + 1) : undefined}
+            />
           ))}
         </section>
       </div>
@@ -78,24 +107,11 @@ export function ConversationsScene() {
   );
 }
 
-function ConversationRow({ task, needsAttention }: { task: Task; needsAttention: boolean }) {
+function ConversationRow({ task, needsAttention, onChanged }: { task: Task; needsAttention: boolean; onChanged?: () => void }) {
   const detail = useTasksStore((s) => s.details[task.id]);
   const workspaces = useTasksStore((s) => s.workspaces);
-  const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const openRoom = useAppStore((s) => s.openRoom);
-  const [archiving, setArchiving] = useState(false);
   const visual = visualTaskState(task, detail);
-  const archive = async (event: React.MouseEvent) => {
-    event.stopPropagation();
-    if (archiving || isTaskLive(task, detail)) return;
-    setArchiving(true);
-    try {
-      await taskArchive(task.id);
-      await refreshTasks();
-    } finally {
-      setArchiving(false);
-    }
-  };
   return (
     <article className="conversation-row">
       <span className={`conversation-status ${visual}`}><i /></span>
@@ -104,7 +120,7 @@ function ConversationRow({ task, needsAttention }: { task: Task; needsAttention:
       <span className={`conversation-state ${needsAttention ? "needs" : ""}`}>{taskStateLabel(task.state, detail)}</span>
       <time>{elapsedMinutes(task.updated_at)}</time>
       <span className="conversation-row-actions">
-        <button className="row-action" disabled={archiving || isTaskLive(task, detail)} onClick={(event) => void archive(event)} title={isTaskLive(task, detail) ? "任务运行中，不能归档" : "归档任务"} aria-label="归档任务"><IconArchive width={15} height={15} /></button>
+        <TaskActionsMenu task={task} detail={detail} onChanged={onChanged} />
       </span>
     </article>
   );
