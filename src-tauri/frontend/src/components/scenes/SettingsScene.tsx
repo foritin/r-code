@@ -1075,11 +1075,11 @@ function codexSetupCopy(status: CodexIntegrationStatus | null, state: CodexSetup
     return { title: "暂时无法确认登录状态", detail: "不会重复打开登录页，先重新读取 Codex 的认证状态。", action: "重新检测" };
   }
   if (state === "configure") {
-    return { title: "还差最后一步", detail: "一次更新协作 Skill，并补齐 R-Code 只读 MCP 配置。", action: "完成协作配置" };
+    return { title: "还差最后一步", detail: "一次更新协作 Skill，并补齐 R-Code 的 Codex MCP 配置。", action: "完成协作配置" };
   }
   return {
     title: "Codex 已就绪",
-    detail: `已通过${status.auth_method ? ` ${status.auth_method}` : " Codex"} 登录，R-Code 只读协作已连接。`,
+    detail: `已通过${status.auth_method ? ` ${status.auth_method}` : " Codex"} 登录，R-Code 协作已连接。`,
     action: "已就绪",
   };
 }
@@ -1088,6 +1088,7 @@ type CodexPreferenceDraft = {
   model: string;
   reasoningEffort: string;
   verbosity: string;
+  permissionMode: string;
 };
 
 const REASONING_LABELS: Record<string, string> = {
@@ -1105,6 +1106,7 @@ function codexPreferenceDraft(preferences: CodexCliPreferences): CodexPreference
     model: preferences.model ?? "",
     reasoningEffort: preferences.reasoning_effort ?? "",
     verbosity: preferences.verbosity ?? "",
+    permissionMode: preferences.permission_mode ?? "read_only",
   };
 }
 
@@ -1114,7 +1116,8 @@ function sameCodexPreference(
 ) {
   return left.model === right.model
     && left.reasoningEffort === right.reasoningEffort
-    && left.verbosity === right.verbosity;
+    && left.verbosity === right.verbosity
+    && left.permissionMode === right.permissionMode;
 }
 
 function uniqueReasoningOptions(models: CodexModelOption[]) {
@@ -1132,6 +1135,7 @@ function CodexRuntimePreferences() {
     model: "",
     reasoningEffort: "",
     verbosity: "",
+    permissionMode: "read_only",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -1191,7 +1195,8 @@ function CodexRuntimePreferences() {
       const next = await codexSaveCliPreferences(
         draft.model,
         draft.reasoningEffort,
-        draft.verbosity
+        draft.verbosity,
+        draft.permissionMode,
       );
       setPreferences(next);
       setDraft(codexPreferenceDraft(next));
@@ -1293,6 +1298,40 @@ function CodexRuntimePreferences() {
                 <option value="high">详细</option>
               </select>
             </label>
+
+            <label className="settings-control-row" htmlFor="codex-permission-mode">
+              <span>
+                <strong>子代理权限</strong>
+                <small>
+                  {draft.permissionMode === "request_approval"
+                    ? "工作区内可编辑；需要扩大权限时由 R-Code 显示审批卡。"
+                    : draft.permissionMode === "auto_review"
+                      ? "工作区内可编辑；Codex 自动审查需要额外权限的动作。"
+                      : draft.permissionMode === "full_access"
+                        ? "不受 Codex sandbox 限制，也不会显示审批卡。"
+                        : draft.permissionMode === "custom"
+                          ? "检测到非预设 config.toml；请直接维护该文件，或选择一个预设覆盖。"
+                          : "只允许读取工作区；这是此前 R-Code 的默认行为。"}
+                </small>
+              </span>
+              <select
+                id="codex-permission-mode"
+                className="input"
+                value={draft.permissionMode}
+                onChange={(event) => {
+                  setDraft((current) => ({ ...current, permissionMode: event.target.value }));
+                  setNotice(null);
+                }}
+              >
+                <option value="read_only">仅查看</option>
+                <option value="request_approval">请求批准</option>
+                <option value="auto_review">替我审批</option>
+                <option value="full_access">完全访问权限</option>
+                {draft.permissionMode === "custom" && (
+                  <option value="custom" disabled>自定义（config.toml）</option>
+                )}
+              </select>
+            </label>
           </div>
 
           <div className="codex-runtime-actions">
@@ -1391,7 +1430,7 @@ function CodexIntegrationSection() {
       await runWithCodexCli({ feature: "完成 Codex 设置", requireAuth: true }, async () => {
         const next = await codexSetupCollaboration();
         setStatus(next);
-        setNotice("Codex 已就绪，可以作为 R-Code 的只读协作代理使用。");
+      setNotice("Codex 已就绪，可以作为 R-Code 的协作代理使用。");
       });
     } catch (e) {
       setErr(errText(e));
@@ -1440,7 +1479,7 @@ function CodexIntegrationSection() {
       <div className="codex-setup-heading">
         <div>
           <h3>Codex 协作</h3>
-          <p className="desc">连接本机 Codex CLI，启用只读代理协作。登录凭据始终由 Codex 管理。</p>
+          <p className="desc">连接本机 Codex CLI，权限预设会在每次委派子代理时自动读取。登录凭据始终由 Codex 管理。</p>
         </div>
         <button
           className={`codex-status-refresh${checking ? " checking" : ""}`}
@@ -1515,7 +1554,7 @@ function CodexIntegrationSection() {
               <dd>{loginLabel}</dd>
               <dt>协作 Skill</dt>
               <dd>{skillLabel}</dd>
-              <dt>只读 MCP</dt>
+              <dt>Codex MCP</dt>
               <dd>{status.mcp_server_configured ? "已启用" : "尚未启用"}</dd>
               <dt>配置位置</dt>
               <dd className="val">{status.config_path}</dd>

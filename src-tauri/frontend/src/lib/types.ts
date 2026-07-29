@@ -583,6 +583,8 @@ export interface CodexCliPreferences {
   model: string | null;
   reasoning_effort: string | null;
   verbosity: "low" | "medium" | "high" | string | null;
+  /** R-Code 每次启动 Codex 子代理时读取的 config.toml 权限预设。 */
+  permission_mode: "read_only" | "request_approval" | "auto_review" | "full_access" | "custom" | string;
   /** 由当前已登录 CLI 的 `codex debug models` 返回。 */
   models: CodexModelOption[];
   config_path: string;

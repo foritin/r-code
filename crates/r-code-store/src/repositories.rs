@@ -440,6 +440,16 @@ impl<'a> TaskRepository<'a> {
         conn.execute(&sql, params_refs.as_slice()).map_err(db_err)?;
         Ok(())
     }
+
+    /// 永久删除任务。所有以 task_id 关联的产品记录由数据库外键级联清理。
+    /// 返回 false 表示任务在执行前已经不存在。
+    pub fn delete(&self, id: &str) -> Result<bool, ProductError> {
+        let conn = self.db.conn()?;
+        let changed = conn
+            .execute("DELETE FROM tasks WHERE id = ?1", params![id])
+            .map_err(db_err)?;
+        Ok(changed > 0)
+    }
 }
 
 // ============================================================================

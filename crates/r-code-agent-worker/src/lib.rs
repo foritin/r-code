@@ -21,7 +21,8 @@ pub mod runtime;
 
 pub use agent_loop::run_agent_loop_iteration;
 pub use llm_runtime::{
-    CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRunner, LlmAgentRuntime,
+    CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest, CodexSubagentRunner,
+    LlmAgentRuntime,
 };
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};

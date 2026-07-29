@@ -228,6 +228,7 @@ let browserMockCodexSkillInstalled = false;
 let browserMockCodexModel = "gpt-5.6-sol";
 let browserMockCodexReasoning = "max";
 let browserMockCodexVerbosity = "medium";
+let browserMockCodexPermissionMode: CodexCliPreferences["permission_mode"] = "read_only";
 
 const browserMockCodexModels: CodexCliPreferences["models"] = [
   {
@@ -314,6 +315,7 @@ export function browserMockCodexCliPreferences(): CodexCliPreferences {
     model: browserMockCodexModel || null,
     reasoning_effort: browserMockCodexReasoning || null,
     verbosity: browserMockCodexVerbosity || null,
+    permission_mode: browserMockCodexPermissionMode,
     models: browserMockCodexModels,
     config_path: "C:/Users/demo/.codex/config.toml",
   };
@@ -323,10 +325,12 @@ export function browserMockSaveCodexCliPreferences(
   model: string | null,
   reasoningEffort: string | null,
   verbosity: string | null,
+  permissionMode: string | null,
 ): CodexCliPreferences {
   browserMockCodexModel = model ?? "";
   browserMockCodexReasoning = reasoningEffort ?? "";
   browserMockCodexVerbosity = verbosity ?? "";
+  if (permissionMode) browserMockCodexPermissionMode = permissionMode;
   return browserMockCodexCliPreferences();
 }
 
@@ -425,7 +429,7 @@ export function browserMockSubagentMessages(taskId: string, subagentId: string):
     output_json: JSON.stringify(data),
   });
   return [
-    system(1, "subagent_lifecycle", { state: "running", detail: "Codex CLI 已开始只读调查" }),
+    system(1, "subagent_lifecycle", { state: "running", detail: "Codex CLI 已开始处理工作区" }),
     system(2, "subagent_activity", { phase: "requesting", detail: "已连接 Codex CLI，正在准备工作区" }),
     {
       id: `${storage}:3`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",

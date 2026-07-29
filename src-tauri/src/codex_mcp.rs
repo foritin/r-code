@@ -16,8 +16,11 @@ use tokio::sync::Mutex;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
+use crate::codex_permissions::CodexDelegationPermissions;
+
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_START_TIMEOUT: Duration = Duration::from_secs(12);
+const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_MCP_LINE_BYTES: usize = 512 * 1024;
 
 /// 一个完成的 Codex MCP 调用中可以安全投影到产品状态的字段。
@@ -46,19 +49,29 @@ pub struct CodexMcpRegistry {
 }
 
 impl CodexMcpRegistry {
-    /// 在指定工作区内启动一轮只读 Codex MCP 会话。
-    pub async fn run_readonly(
+    /// 在指定工作区内启动一轮采用已验证权限快照的 Codex MCP 会话。
+    pub(crate) async fn run(
         &self,
         cli_path: Option<PathBuf>,
         workspace: &Path,
         prompt: &str,
+        permissions: CodexDelegationPermissions,
         cancellation: CancellationToken,
     ) -> Result<CodexMcpCallOutcome, CodexMcpError> {
         if cancellation.is_cancelled() {
             return Ok(CodexMcpCallOutcome::Cancelled);
         }
 
-        let mut slot = self.connection.lock().await;
+        // MCP 协议不会把 Codex 的 on-request 审批回传为 R-Code 的可交互卡片。
+        // 上层会改走 App Server；这里显式拒绝，避免静默卡在无 stdin 的子进程中。
+        if permissions.requests_r_code_approval() {
+            return Err(CodexMcpError::ApprovalBridgeRequired);
+        }
+
+        let mut slot = tokio::select! {
+            _ = cancellation.cancelled() => return Ok(CodexMcpCallOutcome::Cancelled),
+            slot = self.connection.lock() => slot,
+        };
         if slot.is_none() {
             let connection = timeout(
                 MCP_START_TIMEOUT,
@@ -75,7 +88,9 @@ impl CodexMcpRegistry {
                 .expect("Codex MCP connection must exist after successful startup");
             tokio::select! {
                 _ = cancellation.cancelled() => None,
-                result = connection.call_codex(prompt, workspace) => Some(result),
+                result = timeout(MCP_CALL_TIMEOUT, connection.call_codex(prompt, workspace, permissions)) => {
+                    Some(result.unwrap_or(Err(CodexMcpError::CallTimeout)))
+                },
             }
         };
 
@@ -114,7 +129,10 @@ impl CodexMcpRegistry {
             return Ok(CodexMcpCallOutcome::Cancelled);
         }
 
-        let mut slot = self.connection.lock().await;
+        let mut slot = tokio::select! {
+            _ = cancellation.cancelled() => return Ok(CodexMcpCallOutcome::Cancelled),
+            slot = self.connection.lock() => slot,
+        };
         if slot.is_none() {
             let connection = timeout(
                 MCP_START_TIMEOUT,
@@ -130,7 +148,9 @@ impl CodexMcpRegistry {
                 .expect("Codex MCP connection must exist after successful startup");
             tokio::select! {
                 _ = cancellation.cancelled() => None,
-                result = connection.reply(thread_id, prompt) => Some(result),
+                result = timeout(MCP_CALL_TIMEOUT, connection.reply(thread_id, prompt)) => {
+                    Some(result.unwrap_or(Err(CodexMcpError::CallTimeout)))
+                },
             }
         };
         match request {
@@ -156,6 +176,8 @@ impl CodexMcpRegistry {
 pub enum CodexMcpError {
     Launch,
     StartupTimeout,
+    CallTimeout,
+    ApprovalBridgeRequired,
     Disconnected,
     Protocol,
     RemoteFailure,
@@ -166,6 +188,10 @@ impl std::fmt::Display for CodexMcpError {
         let message = match self {
             Self::Launch => "无法启动 Codex MCP 服务。",
             Self::StartupTimeout => "Codex MCP 服务启动超时。",
+            Self::CallTimeout => "Codex MCP 连续 15 分钟没有完成本次委派，R-Code 已停止该会话。",
+            Self::ApprovalBridgeRequired => {
+                "“请求批准”模式需要 R-Code 的 Codex 审批桥，不能通过 MCP 直连运行。"
+            }
             Self::Disconnected => "Codex MCP 服务已断开。",
             Self::Protocol => "Codex MCP 服务返回了无法识别的协议数据。",
             Self::RemoteFailure => "Codex MCP 服务未能完成本次委派。",
@@ -253,19 +279,30 @@ impl CodexMcpConnection {
         &mut self,
         prompt: &str,
         workspace: &Path,
+        permissions: CodexDelegationPermissions,
     ) -> Result<CodexMcpResponse, CodexMcpError> {
         let workspace = workspace.to_str().ok_or(CodexMcpError::Protocol)?;
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("prompt".into(), Value::String(prompt.to_string()));
+        arguments.insert("cwd".into(), Value::String(workspace.to_string()));
+        arguments.insert(
+            "sandbox".into(),
+            Value::String(permissions.sandbox().as_str().to_string()),
+        );
+        arguments.insert(
+            "approval-policy".into(),
+            Value::String(permissions.approval_policy().as_str().to_string()),
+        );
+        arguments.insert(
+            "config".into(),
+            json!({ "approvals_reviewer": permissions.approvals_reviewer().as_str() }),
+        );
         let result = self
             .request(
                 "tools/call",
                 Some(json!({
                     "name": "codex",
-                    "arguments": {
-                        "prompt": prompt,
-                        "cwd": workspace,
-                        "sandbox": "read-only",
-                        "approval-policy": "never",
-                    }
+                    "arguments": arguments,
                 })),
             )
             .await?;

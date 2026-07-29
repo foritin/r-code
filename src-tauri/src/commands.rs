@@ -26,14 +26,14 @@ use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use hermes_core::{CompletionRequest, Message, Role, SessionEvent, SessionMeta};
 use hermes_store::SessionStore;
 use r_code_agent_worker::{
-    AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRunner,
-    MockAgentRuntime, SteerResult,
+    AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
+    CodexSubagentRunner, MockAgentRuntime, SteerResult,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRun, AgentRunRuntimeKind,
@@ -45,7 +45,7 @@ use r_code_core::dto::{
 use r_code_core::error::ProductError;
 use r_code_core::secret::redact_text;
 use r_code_core::security::PathGuard;
-use r_code_gateway::permission::PermissionEngine;
+use r_code_gateway::permission::{PermissionCheckResult, PermissionEngine};
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
@@ -62,6 +62,7 @@ use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
+use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
 use crate::project_memory::ProjectMemory;
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
@@ -1228,6 +1229,66 @@ pub async fn task_archive(state: &CommandState, task_id: &str) -> Result<Task, S
         .ok_or_else(|| format!("task not found after archive: {task_id}"))
 }
 
+/// 永久删除一个已经停止的会话及其 R-Code 审计数据。
+///
+/// 工作区和其中的文件不属于会话存储，永远不会在这里删除。运行中的会话必须先停止，
+/// 防止后台进程继续向已经被级联清理的记录写入。
+pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), String> {
+    let repo = TaskRepository::new(&state.db);
+    let task = repo
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if matches!(task.state, TaskState::Exploring | TaskState::InProgress) {
+        return Err("会话仍在运行，请先停止后删除".to_string());
+    }
+
+    let storage_ids = SessionBranchRepository::new(&state.db)
+        .list_by_task(task_id)
+        .map_err(err_str)?
+        .into_iter()
+        .map(|branch| branch.storage_id)
+        .collect::<HashSet<_>>();
+
+    let mut bridge = state.agent.lock().await;
+    if bridge
+        .active
+        .as_ref()
+        .is_some_and(|active| active.task_id == task_id)
+    {
+        return Err("会话仍在运行，请先停止后删除".to_string());
+    }
+    if !repo.delete(task_id).map_err(err_str)? {
+        return Err(format!("task not found: {task_id}"));
+    }
+    bridge.sessions.remove(task_id);
+    drop(bridge);
+
+    // JSONL 不在 SQLite 事务中；数据库删除成功后做幂等的最佳努力清理。
+    // 同时按 task 前缀覆盖旧主分支和外部子代理日志，绝不触碰工作区目录。
+    if let Ok(entries) = std::fs::read_dir(&state.sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            let storage_match = storage_ids
+                .iter()
+                .any(|storage_id| file_name == format!("{storage_id}.jsonl"));
+            let task_prefix_match = file_name.ends_with(".jsonl")
+                && (file_name == format!("{task_id}.jsonl")
+                    || file_name.starts_with(&format!("{task_id}--")));
+            if (storage_match || task_prefix_match) && path.is_file() {
+                if let Err(error) = std::fs::remove_file(&path) {
+                    tracing::warn!(task_id, file = %path.display(), %error, "failed to remove deleted task session log");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 将既有会话附加到已打开的工作区，或移除其工作区作用域。
 ///
 /// 工作区一旦附加即可公开受 PathGuard 限制的本地工具；工具调用的审批策略来自
@@ -2084,7 +2145,9 @@ async fn ensure_real_runtime(
         max_tokens,
         pcfg.temperature,
     )
-    .with_codex_subagent_runner(Arc::new(RCodeCodexSubagentRunner));
+    .with_codex_subagent_runner(Arc::new(RCodeCodexSubagentRunner {
+        permission_engine: tool_gateway.permission_engine().clone(),
+    }));
 
     bridge.kind = AgentRuntimeKind::Real(runtime);
     bridge.sessions.clear(); // provider 配置变了，旧会话随旧 runtime 一起失效
@@ -5435,6 +5498,8 @@ pub struct CodexCliPreferences {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub verbosity: Option<String>,
+    /// 由 Codex config.toml 解析出的子代理权限预设。
+    pub permission_mode: CodexPermissionMode,
     pub models: Vec<CodexModelOption>,
     pub config_path: String,
 }
@@ -5967,17 +6032,55 @@ fn read_codex_preference_values(
     Ok((source, model, reasoning_effort, verbosity))
 }
 
+/// 读取当前 Codex 子代理权限。这里故意只接受 Codex 已知枚举；手写的未知值不会
+/// 被拼进子进程参数，而会作为 `custom` 展示并安全降级为只读。
+fn read_codex_delegation_permissions(
+    config_path: &Path,
+) -> Result<CodexDelegationPermissions, String> {
+    let source = match std::fs::read_to_string(config_path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(format!("读取 Codex 配置失败：{error}")),
+    };
+    read_codex_delegation_permissions_from_source(&source)
+}
+
+fn read_codex_delegation_permissions_from_source(
+    source: &str,
+) -> Result<CodexDelegationPermissions, String> {
+    let document = source
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("Codex config.toml 格式有误：{error}"))?;
+    let sandbox = codex_config_string(&document, "sandbox_mode")?;
+    let approval_policy = codex_config_string(&document, "approval_policy")?;
+    let approvals_reviewer = codex_config_string(&document, "approvals_reviewer")?;
+    let permissions = CodexDelegationPermissions::from_config(
+        sandbox.as_deref(),
+        approval_policy.as_deref(),
+        approvals_reviewer.as_deref(),
+    );
+    // Codex profile selection can resolve permission fields outside the top level. We neither
+    // flatten nor overwrite it; show it as custom and retain our safe executable fallback.
+    if document.get("default_permissions").is_some() {
+        Ok(permissions.as_custom())
+    } else {
+        Ok(permissions)
+    }
+}
+
 fn codex_preferences_payload(
     config_path: &Path,
     model: Option<String>,
     reasoning_effort: Option<String>,
     verbosity: Option<String>,
+    permission_mode: CodexPermissionMode,
     models: Vec<CodexModelOption>,
 ) -> CodexCliPreferences {
     CodexCliPreferences {
         model,
         reasoning_effort,
         verbosity,
+        permission_mode,
         models,
         config_path: config_path.to_string_lossy().to_string(),
     }
@@ -5992,11 +6095,13 @@ pub async fn codex_cli_preferences() -> Result<CodexCliPreferences, String> {
     let models = load_codex_model_catalog(cli_path).await?;
     let config_path = codex_home_dir().join("config.toml");
     let (_, model, reasoning_effort, verbosity) = read_codex_preference_values(&config_path)?;
+    let permission_mode = read_codex_delegation_permissions(&config_path)?.mode();
     Ok(codex_preferences_payload(
         &config_path,
         model,
         reasoning_effort,
         verbosity,
+        permission_mode,
         models,
     ))
 }
@@ -6073,10 +6178,39 @@ fn render_codex_preferences(
     Ok(document.to_string())
 }
 
+/// 把一个设置页预设写入 Codex 的全局 config.toml。
+///
+/// `default_permissions` 是 Codex 的另一套 profile 选择机制，不能和直接的 sandbox
+/// 设置混用。遇到该项时拒绝修改，而不是悄悄删除用户的自定义 profile。
+fn render_codex_permission_mode(source: &str, mode: CodexPermissionMode) -> Result<String, String> {
+    if mode == CodexPermissionMode::Custom {
+        // 当前 UI 仅把它作为“保持手写 config.toml”的展示态；不能反向生成未知组合。
+        return Ok(source.to_string());
+    }
+    let profile = CodexDelegationPermissions::from_mode(mode).ok_or_else(|| {
+        "“自定义 config.toml”由你直接维护；请选择一个预设后再保存，或在 Codex 配置中修改。"
+            .to_string()
+    })?;
+    let mut document = source
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| format!("Codex config.toml 格式有误：{error}"))?;
+    if document.get("default_permissions").is_some() {
+        return Err(
+            "当前 Codex config.toml 使用了 default_permissions profile；请在该文件中调整权限，R-Code 不会覆盖它。"
+                .to_string(),
+        );
+    }
+    document["sandbox_mode"] = toml_edit::value(profile.sandbox().as_str());
+    document["approval_policy"] = toml_edit::value(profile.approval_policy().as_str());
+    document["approvals_reviewer"] = toml_edit::value(profile.approvals_reviewer().as_str());
+    Ok(document.to_string())
+}
+
 pub async fn codex_save_cli_preferences(
     model: Option<&str>,
     reasoning_effort: Option<&str>,
     verbosity: Option<&str>,
+    permission_mode: Option<&str>,
 ) -> Result<CodexCliPreferences, String> {
     let _guard = CODEX_PREFERENCES_LOCK.lock().await;
     let cli = require_authenticated_codex_cli().await?;
@@ -6103,17 +6237,30 @@ pub async fn codex_save_cli_preferences(
         reasoning_effort.as_deref(),
         verbosity.as_deref(),
     )?;
+    let permission_mode = match permission_mode {
+        Some(value) => Some(
+            CodexPermissionMode::parse(value)
+                .ok_or_else(|| "Codex 子代理权限不是受支持的预设。".to_string())?,
+        ),
+        None => None,
+    };
+    let rendered = match permission_mode {
+        Some(mode) => render_codex_permission_mode(&rendered, mode)?,
+        None => rendered,
+    };
     let parent = config_path
         .parent()
         .ok_or_else(|| "无法定位 Codex 配置目录。".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| format!("创建 Codex 配置目录失败：{error}"))?;
     std::fs::write(&config_path, rendered)
         .map_err(|error| format!("保存 Codex 配置失败：{error}"))?;
+    let effective_permission_mode = read_codex_delegation_permissions(&config_path)?.mode();
     Ok(codex_preferences_payload(
         &config_path,
         model,
         reasoning_effort,
         verbosity,
+        effective_permission_mode,
         models,
     ))
 }
@@ -6676,7 +6823,7 @@ enum CodexExecJsonEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexExecFailure {
     Launch,
-    Input,
+    ApprovalBridge,
     Stream,
     Reported,
     IdleTimeout,
@@ -6688,6 +6835,7 @@ enum CodexExecFailure {
 struct CodexExecCompletion {
     cancelled: bool,
     succeeded: bool,
+    thread_id: Option<String>,
     summary: Option<String>,
     usage_json: Option<String>,
     failure: Option<CodexExecFailure>,
@@ -6696,18 +6844,26 @@ struct CodexExecCompletion {
 /// Codex CLI backend exposed to the native R-Code agent's `delegate_task` tool.
 ///
 /// Tool orchestration and lifecycle events stay in `r-code-agent-worker`; this adapter only owns
-/// official CLI discovery, authentication gating and the read-only child process.
-struct RCodeCodexSubagentRunner;
+/// official CLI discovery, authentication gating and the configured-permission child process.
+struct RCodeCodexSubagentRunner {
+    permission_engine: Arc<PermissionEngine>,
+}
 
 #[async_trait::async_trait]
 impl CodexSubagentRunner for RCodeCodexSubagentRunner {
-    async fn run_readonly(
+    async fn run(
         &self,
-        workspace: PathBuf,
-        goal: String,
-        abort: Arc<AtomicBool>,
-        event_sink: CodexSubagentEventSink,
+        request: CodexSubagentRequest,
     ) -> Result<CodexSubagentOutcome, ProductError> {
+        let CodexSubagentRequest {
+            workspace,
+            goal,
+            task_id,
+            run_id,
+            caller,
+            abort,
+            event_sink,
+        } = request;
         let goal = bounded_text(&goal, CODEX_EXEC_MAX_GOAL_CHARS);
         if goal.is_empty() || goal.contains('\0') {
             return Err(ProductError::Other(
@@ -6715,6 +6871,8 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
             ));
         }
         let workspace = PathGuard::new(workspace)?.root().to_path_buf();
+        let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))
+            .map_err(ProductError::Other)?;
         let cli = probe_codex_cli().await;
         if !cli.available {
             return Err(ProductError::Other(
@@ -6747,14 +6905,20 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
                 cancellation.cancel();
             })
         };
-        let completion = run_codex_exec_process_with_options(
+        let completion = run_codex_delegation_process(
             &workspace,
-            &build_codex_delegation_prompt(&goal),
+            &build_codex_delegation_prompt(&goal, permissions),
             cli.path,
             cancellation,
             None,
             Some(&event_sink),
-            CodexExecLimits::default(),
+            permissions,
+            CodexAppServerApprovalContext {
+                permission_engine: self.permission_engine.clone(),
+                task_id,
+                run_id,
+                caller,
+            },
         )
         .await;
         cancellation_monitor.abort();
@@ -6932,8 +7096,9 @@ fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
         Some(CodexExecFailure::Launch) => {
             "Codex CLI 子代理未能启动。请在设置中刷新安装与登录状态后重试。".to_string()
         }
-        Some(CodexExecFailure::Input) => {
-            "R-Code 无法把委派任务发送给 Codex CLI，请重试。".to_string()
+        Some(CodexExecFailure::ApprovalBridge) => {
+            "Codex 的审批桥未能建立。请升级本机 Codex CLI，或在设置中改用“替我审批”或“完全访问权限”。"
+                .to_string()
         }
         Some(CodexExecFailure::Stream) => {
             "Codex CLI 的进度通道意外中断，请重试。".to_string()
@@ -6944,11 +7109,28 @@ fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
     }
 }
 
-fn build_codex_delegation_prompt(goal: &str) -> String {
+fn build_codex_delegation_prompt(goal: &str, permissions: CodexDelegationPermissions) -> String {
+    let capability = match permissions.mode() {
+        CodexPermissionMode::ReadOnly => {
+            "Your configured permission profile is read-only. Do not edit files, do not create commits, and do not change configuration."
+        }
+        CodexPermissionMode::RequestApproval => {
+            "Your configured permission profile can edit the attached workspace after required approvals. Request only the minimum additional permissions needed for the assignment."
+        }
+        CodexPermissionMode::AutoReview => {
+            "Your configured permission profile can edit the attached workspace and uses Codex auto-review for additional permissions. Use only the minimum access needed for the assignment."
+        }
+        CodexPermissionMode::FullAccess => {
+            "Your configured permission profile has full access. Stay within the attached workspace unless the assignment explicitly requires otherwise, and use only the minimum access needed."
+        }
+        CodexPermissionMode::Custom => {
+            "Your configured permission profile comes from the user's custom Codex config.toml. Respect its sandbox and approval policy, and use only the minimum access needed."
+        }
+    };
     format!(
-        "You are a read-only delegated subagent inside R-Code. Work only within the current repository. \
-Do not edit files, do not create commits, do not change configuration, and do not start more agents. \
-Investigate the assignment and return a concise factual summary for the parent agent. Do not expose private chain-of-thought.\n\nAssignment:\n{goal}"
+        "You are a delegated subagent inside R-Code. {capability} \
+Do not create commits, do not alter global Codex or R-Code configuration, and do not start more agents. \
+Return a concise factual summary for the parent agent. Do not expose private chain-of-thought.\n\nAssignment:\n{goal}"
     )
 }
 
@@ -7009,37 +7191,107 @@ async fn persist_and_emit_external_event(
     }
 }
 
-/// 构造 Codex 非交互进程。任务文本统一走 stdin（`codex exec -`），绝不进入 shell
-/// 命令串；Windows 因而可以安全支持 npm 的 `.cmd` shim，同时绕开同名 Store 别名。
-fn codex_exec_command(cli_path: Option<PathBuf>, workspace: &Path) -> Result<TokioCommand, String> {
+/// 将已探测到的 Codex CLI 转为可安全承载位置参数的子进程。
+///
+/// Windows 的 npm 安装暴露的是 `codex.cmd`。Tokio 向 `codex exec -` 关闭 stdin 时，
+/// Node CLI 有时不会收到 EOF，因而会在没有任何 JSONL 进度的状态下永久等待。对于
+/// 该受信任的 npm shim，直接执行其固定的 `node_modules/@openai/codex/bin/codex.js`
+/// 入口，既绕开 cmd 的输入管道问题，也能把任务作为普通 argv 传入而不是 shell 文本。
+#[cfg(windows)]
+fn codex_npm_node_command(cli_path: &Path) -> Result<TokioCommand, String> {
+    let Some(directory) = cli_path.parent() else {
+        return Err("Codex npm 命令路径无效，无法定位运行时。".to_string());
+    };
+    let entrypoint = directory
+        .join("node_modules")
+        .join("@openai")
+        .join("codex")
+        .join("bin")
+        .join("codex.js");
+    if !entrypoint.is_file() {
+        return Err(
+            "检测到 Codex .cmd 命令，但未找到其 npm 运行入口。请在设置中重新安装 Codex CLI。"
+                .to_string(),
+        );
+    }
+    let local_node = directory.join("node.exe");
+    let node = if local_node.is_file() {
+        local_node
+    } else {
+        executable_paths(&["node.exe"])
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                "检测到 Codex npm 命令，但未找到可执行的 Node.js。请安装 Node.js 后重试。"
+                    .to_string()
+            })?
+    };
+    let mut command = TokioCommand::new(node);
+    command.arg(entrypoint);
+    Ok(command)
+}
+
+fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String> {
     #[cfg(windows)]
-    let mut command = match cli_path {
-        Some(path)
-            if path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) =>
-        {
-            let mut command = TokioCommand::new(path);
-            command.args(["exec", "--json", "--sandbox", "read-only", "-"]);
-            command
-        }
-        path => {
-            let executable = path.unwrap_or_else(|| PathBuf::from("codex"));
-            windows_cmd_safe_path(&executable)?;
-            let mut command = TokioCommand::new("cmd.exe");
-            command
-                .args(["/D", "/S", "/C", "call"])
-                .arg(executable)
-                .args(["exec", "--json", "--sandbox", "read-only", "-"]);
-            command
-        }
-    };
+    {
+        return match cli_path {
+            Some(path)
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) =>
+            {
+                Ok(TokioCommand::new(path))
+            }
+            Some(path)
+                if path.extension().is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+                }) =>
+            {
+                codex_npm_node_command(&path)
+            }
+            Some(_) => Err("R-Code 只能启动已验证的 Codex .exe 或 npm .cmd 命令。".to_string()),
+            // 正常委派始终先经 `probe_codex_cli`，因此这里不允许把任务文本交给 PATH
+            // 中未知的 cmd shim。这样即使探测结果意外丢失，也不会退回 shell 解析。
+            None => Ok(TokioCommand::new("codex.exe")),
+        };
+    }
     #[cfg(not(windows))]
-    let mut command = {
-        let mut command = TokioCommand::new(cli_path.unwrap_or_else(|| PathBuf::from("codex")));
-        command.args(["exec", "--json", "--sandbox", "read-only", "-"]);
-        command
-    };
+    {
+        Ok(TokioCommand::new(
+            cli_path.unwrap_or_else(|| PathBuf::from("codex")),
+        ))
+    }
+}
+
+/// 构造 Codex 非交互进程。任务文本作为位置参数直接传给已验证的 CLI，绝不进入
+/// shell 命令串。权限参数只会来自 [`CodexDelegationPermissions`] 的受限枚举，绝不
+/// 接受 WebView 或 config.toml 的原始命令片段。
+fn codex_exec_command_with_permissions(
+    cli_path: Option<PathBuf>,
+    workspace: &Path,
+    permissions: CodexDelegationPermissions,
+    prompt: &str,
+) -> Result<TokioCommand, String> {
+    if prompt.contains('\0') {
+        return Err("Codex 委派任务不能包含 NUL 字符。".to_string());
+    }
+    // R-Code already treats the user-selected, PathGuard-validated workspace as the
+    // delegation boundary. Codex otherwise refuses a perfectly valid non-Git folder
+    // before it can emit JSONL, which makes folder-based projects fail instantly.
+    // This is a fixed CLI flag, never derived from WebView input or config.toml.
+    let exec_args = [
+        "exec",
+        "--json",
+        "--skip-git-repo-check",
+        "--sandbox",
+        permissions.sandbox().as_str(),
+        "-c",
+        permissions.approval_policy().config_override(),
+        "-c",
+        permissions.approvals_reviewer().config_override(),
+    ];
+    let mut command = codex_child_command(cli_path)?;
+    command.args(exec_args).arg(prompt);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -7050,7 +7302,7 @@ fn codex_exec_command(cli_path: Option<PathBuf>, workspace: &Path) -> Result<Tok
     }
     command
         .current_dir(workspace)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -7104,6 +7356,7 @@ async fn terminate_codex_child(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn run_codex_exec_process(
     workspace: &Path,
     prompt: &str,
@@ -7123,6 +7376,7 @@ async fn run_codex_exec_process(
     .await
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 async fn run_codex_exec_process_with_options(
     workspace: &Path,
     prompt: &str,
@@ -7130,6 +7384,29 @@ async fn run_codex_exec_process_with_options(
     cancellation: CancellationToken,
     observer: Option<CodexExecObserver<'_>>,
     event_sink: Option<&CodexSubagentEventSink>,
+    limits: CodexExecLimits,
+) -> CodexExecCompletion {
+    run_codex_exec_process_with_options_and_permissions(
+        workspace,
+        prompt,
+        cli_path,
+        cancellation,
+        observer,
+        event_sink,
+        CodexDelegationPermissions::read_only(),
+        limits,
+    )
+    .await
+}
+
+async fn run_codex_exec_process_with_options_and_permissions(
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    permissions: CodexDelegationPermissions,
     limits: CodexExecLimits,
 ) -> CodexExecCompletion {
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -7141,22 +7418,23 @@ async fn run_codex_exec_process_with_options(
         };
     }
 
-    let mut child = match codex_exec_command(cli_path, workspace)
-        .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
-    {
-        Ok(child) => child,
-        Err(error) => {
-            let run_id = observer
-                .as_ref()
-                .map(|value| value.run.id.as_str())
-                .unwrap_or("agent-tool");
-            tracing::warn!(run_id, error = %error, "failed to launch Codex exec child");
-            return CodexExecCompletion {
-                failure: Some(CodexExecFailure::Launch),
-                ..Default::default()
-            };
-        }
-    };
+    let mut child =
+        match codex_exec_command_with_permissions(cli_path, workspace, permissions, prompt)
+            .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
+        {
+            Ok(child) => child,
+            Err(error) => {
+                let run_id = observer
+                    .as_ref()
+                    .map(|value| value.run.id.as_str())
+                    .unwrap_or("agent-tool");
+                tracing::warn!(run_id, error = %error, "failed to launch Codex exec child");
+                return CodexExecCompletion {
+                    failure: Some(CodexExecFailure::Launch),
+                    ..Default::default()
+                };
+            }
+        };
     emit_codex_observable_event(
         observer.as_ref(),
         event_sink,
@@ -7167,20 +7445,6 @@ async fn run_codex_exec_process_with_options(
     )
     .await;
 
-    let Some(mut stdin) = child.stdin.take() else {
-        terminate_codex_child(&mut child).await;
-        return CodexExecCompletion {
-            failure: Some(CodexExecFailure::Input),
-            ..Default::default()
-        };
-    };
-    if stdin.write_all(prompt.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
-        terminate_codex_child(&mut child).await;
-        return CodexExecCompletion {
-            failure: Some(CodexExecFailure::Input),
-            ..Default::default()
-        };
-    }
     let Some(stdout) = child.stdout.take() else {
         terminate_codex_child(&mut child).await;
         return CodexExecCompletion {
@@ -7199,6 +7463,7 @@ async fn run_codex_exec_process_with_options(
     let mut lines = BufReader::new(stdout).lines();
     let mut cancelled = false;
     let mut failure = None;
+    let mut thread_id = None;
     let mut summary = None;
     let mut usage_json = None;
     let idle_timer = tokio::time::sleep(limits.idle_timeout);
@@ -7245,10 +7510,11 @@ async fn run_codex_exec_process_with_options(
                     idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
                     if let Some(event) = parse_codex_exec_json_line(&line) {
                         match event {
-                            CodexExecJsonEvent::ThreadStarted(thread_id) => {
+                            CodexExecJsonEvent::ThreadStarted(external_thread_id) => {
+                                thread_id = Some(external_thread_id.clone());
                                 if let Some(observer) = observer.as_ref() {
                                     let _ = AgentRunRepository::new(observer.db)
-                                        .set_external_session_id(&observer.run.id, Some(&thread_id));
+                                        .set_external_session_id(&observer.run.id, Some(&external_thread_id));
                                 }
                                 emit_codex_observable_event(
                                     observer.as_ref(),
@@ -7391,8 +7657,595 @@ async fn run_codex_exec_process_with_options(
     CodexExecCompletion {
         cancelled,
         succeeded: !cancelled && failure.is_none(),
+        thread_id,
         summary,
         usage_json,
+        failure,
+    }
+}
+
+const CODEX_APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(15);
+const CODEX_APP_SERVER_MAX_LINE_BYTES: usize = 512 * 1024;
+const CODEX_APP_SERVER_APPROVAL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+
+/// R-Code 对 Codex App Server 审批请求的归属。它只引用既有权限引擎，因此审批卡
+/// 会自然出现在当前任务的 Room / Inbox，而不是让 `codex exec` 在无终端环境中等待。
+#[derive(Clone)]
+struct CodexAppServerApprovalContext {
+    permission_engine: Arc<PermissionEngine>,
+    task_id: String,
+    run_id: String,
+    caller: String,
+}
+
+enum CodexAppServerRequestHandling {
+    Ignored,
+    Handled,
+    Cancelled,
+    Failed,
+}
+
+/// 启动官方 Codex App Server。该协议是用于 `on-request` 审批的双向 JSON-RPC
+/// 通道：R-Code 始终作为客户端，任务文本不会进入 shell 命令串。
+fn codex_app_server_command(
+    cli_path: Option<PathBuf>,
+    workspace: &Path,
+) -> Result<TokioCommand, String> {
+    #[cfg(windows)]
+    let mut command = match cli_path {
+        Some(path)
+            if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe")) =>
+        {
+            let mut command = TokioCommand::new(path);
+            command.arg("app-server");
+            command
+        }
+        path => {
+            let executable = path.unwrap_or_else(|| PathBuf::from("codex"));
+            windows_cmd_safe_path(&executable)?;
+            let mut command = TokioCommand::new("cmd.exe");
+            command
+                .args(["/D", "/S", "/C", "call"])
+                .arg(executable)
+                .arg("app-server");
+            command
+        }
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = TokioCommand::new(cli_path.unwrap_or_else(|| PathBuf::from("codex")));
+        command.arg("app-server");
+        command
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        command.as_std_mut().process_group(0);
+    }
+    command
+        .current_dir(workspace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    Ok(command)
+}
+
+async fn write_codex_app_server_value(
+    stdin: &mut tokio::process::ChildStdin,
+    value: &serde_json::Value,
+) -> Result<(), ()> {
+    let payload = serde_json::to_vec(value).map_err(|_| ())?;
+    stdin.write_all(&payload).await.map_err(|_| ())?;
+    stdin.write_all(b"\n").await.map_err(|_| ())?;
+    stdin.flush().await.map_err(|_| ())
+}
+
+async fn wait_for_codex_app_server_response(
+    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    expected_id: u64,
+) -> Result<serde_json::Value, CodexExecFailure> {
+    loop {
+        let next = timeout(CODEX_APP_SERVER_START_TIMEOUT, lines.next_line())
+            .await
+            .map_err(|_| CodexExecFailure::ApprovalBridge)?
+            .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let Some(line) = next else {
+            return Err(CodexExecFailure::ApprovalBridge);
+        };
+        if line.len() > CODEX_APP_SERVER_MAX_LINE_BYTES {
+            return Err(CodexExecFailure::ApprovalBridge);
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(line.trim()).map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        if value.get("id").and_then(serde_json::Value::as_u64) != Some(expected_id) {
+            // 初始化期间的通知不携带用户可见内容；后续主循环会处理运行期事件。
+            continue;
+        }
+        if value.get("error").is_some() {
+            return Err(CodexExecFailure::ApprovalBridge);
+        }
+        return value
+            .get("result")
+            .cloned()
+            .ok_or(CodexExecFailure::ApprovalBridge);
+    }
+}
+
+fn codex_app_server_thread_id(result: &serde_json::Value) -> Option<String> {
+    result
+        .pointer("/thread/id")
+        .or_else(|| result.get("threadId"))
+        .or_else(|| result.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| bounded_text(value, 160))
+}
+
+fn codex_app_server_approval_summary(method: &str, params: &serde_json::Value) -> (String, String) {
+    let detail = match method {
+        "item/commandExecution/requestApproval" => params
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| params.get("reason").and_then(serde_json::Value::as_str))
+            .unwrap_or("Codex 请求执行一条命令"),
+        "item/fileChange/requestApproval" => params
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| params.get("fileChange").and_then(serde_json::Value::as_str))
+            .unwrap_or("Codex 请求修改工作区文件"),
+        "item/permissions/requestApproval" => params
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Codex 请求扩大访问范围"),
+        _ => "Codex 请求额外权限",
+    };
+    let tool_name = match method {
+        "item/commandExecution/requestApproval" => "Codex 命令",
+        "item/fileChange/requestApproval" => "Codex 文件修改",
+        "item/permissions/requestApproval" => "Codex 访问权限",
+        _ => "Codex 权限请求",
+    };
+    (
+        tool_name.to_string(),
+        safe_codex_action(detail, "Codex 请求额外权限"),
+    )
+}
+
+async fn handle_codex_app_server_request(
+    value: &serde_json::Value,
+    stdin: &mut tokio::process::ChildStdin,
+    approval: &CodexAppServerApprovalContext,
+    cancellation: &CancellationToken,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+) -> CodexAppServerRequestHandling {
+    let Some(method) = value.get("method").and_then(serde_json::Value::as_str) else {
+        return CodexAppServerRequestHandling::Ignored;
+    };
+    if !matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+    ) {
+        return CodexAppServerRequestHandling::Ignored;
+    }
+    let Some(request_id) = value.get("id") else {
+        return CodexAppServerRequestHandling::Failed;
+    };
+    let params = value.get("params").cloned().unwrap_or_default();
+    let item_id = params
+        .get("itemId")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| bounded_text(value, 160))
+        .unwrap_or_else(|| {
+            let source = request_id
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| request_id.to_string());
+            format!("codex-approval-{}", bounded_text(&source, 80))
+        });
+    let (tool_name, summary) = codex_app_server_approval_summary(method, &params);
+    let permission = match approval
+        .permission_engine
+        .check_detailed_with_access_mode(
+            &approval.task_id,
+            &item_id,
+            Some(&approval.run_id),
+            Some(&approval.caller),
+            &tool_name,
+            RiskLevel::R2,
+            &summary,
+            None,
+            ProjectAccessMode::RequestApproval,
+        )
+        .await
+    {
+        PermissionCheckResult::NeedsApproval(request) => Some(request),
+        PermissionCheckResult::Allowed => None,
+        PermissionCheckResult::Denied(_) => {
+            if write_codex_app_server_value(
+                stdin,
+                &serde_json::json!({ "id": request_id, "result": { "decision": "decline" } }),
+            )
+            .await
+            .is_err()
+            {
+                return CodexAppServerRequestHandling::Failed;
+            }
+            return CodexAppServerRequestHandling::Handled;
+        }
+    };
+
+    let decision = if let Some(permission) = permission {
+        emit_codex_observable_event(
+            observer,
+            event_sink,
+            AgentEvent::Activity {
+                phase: AgentActivityPhase::Tool,
+                detail: Some("Codex 正在等待你的权限批准".to_string()),
+            },
+        )
+        .await;
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                let _ = approval
+                    .permission_engine
+                    .decide(&permission.id, PermissionDecision::Deny)
+                    .await;
+                ("cancel", true)
+            }
+            result = approval.permission_engine.wait_decision(&permission.id, CODEX_APP_SERVER_APPROVAL_TIMEOUT) => {
+                match result {
+                    Some(PermissionDecision::Allow) => ("accept", false),
+                    Some(PermissionDecision::AllowAlways) => ("acceptForSession", false),
+                    Some(PermissionDecision::Deny) | Some(PermissionDecision::Pending) => ("decline", false),
+                    None => {
+                        let _ = approval
+                            .permission_engine
+                            .decide(&permission.id, PermissionDecision::Deny)
+                            .await;
+                        ("cancel", false)
+                    }
+                }
+            }
+        }
+    } else {
+        ("accept", false)
+    };
+
+    if write_codex_app_server_value(
+        stdin,
+        &serde_json::json!({ "id": request_id, "result": { "decision": decision.0 } }),
+    )
+    .await
+    .is_err()
+    {
+        return CodexAppServerRequestHandling::Failed;
+    }
+    if decision.1 {
+        return CodexAppServerRequestHandling::Cancelled;
+    }
+    if decision.0 == "accept" || decision.0 == "acceptForSession" {
+        emit_codex_observable_event(
+            observer,
+            event_sink,
+            AgentEvent::Activity {
+                phase: AgentActivityPhase::Tool,
+                detail: Some("已将权限决定发送给 Codex".to_string()),
+            },
+        )
+        .await;
+    }
+    CodexAppServerRequestHandling::Handled
+}
+
+async fn observe_codex_app_server_event(
+    value: &serde_json::Value,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    summary: &mut Option<String>,
+) -> Option<CodexExecFailure> {
+    let Some(method) = value.get("method").and_then(serde_json::Value::as_str) else {
+        return None;
+    };
+    let params = value.get("params").cloned().unwrap_or_default();
+    match method {
+        "item/started" => {
+            emit_codex_observable_event(
+                observer,
+                event_sink,
+                AgentEvent::Activity {
+                    phase: AgentActivityPhase::Requesting,
+                    detail: Some("Codex 正在处理委派任务".to_string()),
+                },
+            )
+            .await;
+        }
+        "item/completed" => {
+            let item = params.get("item").unwrap_or(&params);
+            let item_type = item.get("type").and_then(serde_json::Value::as_str);
+            if matches!(item_type, Some("agentMessage") | Some("agent_message")) {
+                if let Some(text) = item
+                    .get("text")
+                    .or_else(|| item.get("content"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|text| bounded_text(text, CODEX_EXEC_MAX_SUMMARY_CHARS))
+                    .filter(|text| !text.trim().is_empty())
+                {
+                    *summary = Some(text.clone());
+                    emit_codex_observable_event(
+                        observer,
+                        event_sink,
+                        AgentEvent::Message { text, delta: false },
+                    )
+                    .await;
+                }
+            }
+        }
+        "turn/completed" => {
+            let turn = params.get("turn").unwrap_or(&params);
+            if turn
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|status| matches!(status, "failed" | "error" | "cancelled"))
+            {
+                return Some(CodexExecFailure::Reported);
+            }
+        }
+        "turn/failed" | "error" => return Some(CodexExecFailure::Reported),
+        _ => {}
+    }
+    None
+}
+
+/// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
+/// 继续走轻量的 `codex exec --json` 路径。
+async fn run_codex_app_server_process(
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    permissions: CodexDelegationPermissions,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    approval: CodexAppServerApprovalContext,
+    limits: CodexExecLimits,
+) -> CodexExecCompletion {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    if cancellation.is_cancelled() {
+        return CodexExecCompletion {
+            cancelled: true,
+            ..Default::default()
+        };
+    }
+    let mut child = match codex_app_server_command(cli_path, workspace)
+        .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
+    {
+        Ok(child) => child,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to launch Codex App Server");
+            return CodexExecCompletion {
+                failure: Some(CodexExecFailure::ApprovalBridge),
+                ..Default::default()
+            };
+        }
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        terminate_codex_child(&mut child).await;
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::ApprovalBridge),
+            ..Default::default()
+        };
+    };
+    let Some(stdout) = child.stdout.take() else {
+        terminate_codex_child(&mut child).await;
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::ApprovalBridge),
+            ..Default::default()
+        };
+    };
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        })
+    });
+    let mut lines = BufReader::new(stdout).lines();
+
+    let setup = async {
+        write_codex_app_server_value(
+            &mut stdin,
+            &serde_json::json!({
+                "id": 0,
+                "method": "initialize",
+                "params": { "clientInfo": { "name": "r-code", "version": env!("CARGO_PKG_VERSION") } }
+            }),
+        )
+        .await
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let _ = wait_for_codex_app_server_response(&mut lines, 0).await?;
+        write_codex_app_server_value(
+            &mut stdin,
+            &serde_json::json!({ "method": "initialized", "params": {} }),
+        )
+        .await
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let cwd = workspace.to_str().ok_or(CodexExecFailure::ApprovalBridge)?;
+        write_codex_app_server_value(
+            &mut stdin,
+            &serde_json::json!({
+                "id": 1,
+                "method": "thread/start",
+                "params": {
+                    "cwd": cwd,
+                    "sandbox": permissions.sandbox().as_str(),
+                    "approvalPolicy": permissions.approval_policy().as_str(),
+                    "approvalsReviewer": permissions.approvals_reviewer().as_str(),
+                }
+            }),
+        )
+        .await
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let thread = wait_for_codex_app_server_response(&mut lines, 1).await?;
+        let thread_id = codex_app_server_thread_id(&thread).ok_or(CodexExecFailure::ApprovalBridge)?;
+        write_codex_app_server_value(
+            &mut stdin,
+            &serde_json::json!({
+                "id": 2,
+                "method": "turn/start",
+                "params": {
+                    "threadId": thread_id,
+                    "input": [{ "type": "text", "text": prompt }],
+                }
+            }),
+        )
+        .await
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let _ = wait_for_codex_app_server_response(&mut lines, 2).await?;
+        Ok::<String, CodexExecFailure>(thread_id)
+    }
+    .await;
+
+    let thread_id = match setup {
+        Ok(thread_id) => thread_id,
+        Err(failure) => {
+            terminate_codex_child(&mut child).await;
+            if let Some(stderr_task) = stderr_task {
+                let _ = timeout(Duration::from_secs(2), stderr_task).await;
+            }
+            return CodexExecCompletion {
+                failure: Some(failure),
+                ..Default::default()
+            };
+        }
+    };
+    if let Some(observer) = observer.as_ref() {
+        let _ = AgentRunRepository::new(observer.db)
+            .set_external_session_id(&observer.run.id, Some(&thread_id));
+    }
+    emit_codex_observable_event(
+        observer.as_ref(),
+        event_sink,
+        AgentEvent::Activity {
+            phase: AgentActivityPhase::Requesting,
+            detail: Some("已连接 Codex 审批桥，正在准备工作区".to_string()),
+        },
+    )
+    .await;
+
+    let mut cancelled = false;
+    let mut failure = None;
+    let mut summary = None;
+    let mut completed = false;
+    let idle_timer = tokio::time::sleep(limits.idle_timeout);
+    let deadline_timer = tokio::time::sleep(limits.hard_timeout);
+    tokio::pin!(idle_timer);
+    tokio::pin!(deadline_timer);
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                cancelled = true;
+                break;
+            }
+            _ = &mut idle_timer => {
+                failure = Some(CodexExecFailure::IdleTimeout);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("连续 5 分钟没有进度，正在自动停止 Codex".to_string()),
+                    },
+                ).await;
+                break;
+            }
+            _ = &mut deadline_timer => {
+                failure = Some(CodexExecFailure::Deadline);
+                emit_codex_observable_event(
+                    observer.as_ref(),
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("已达到 30 分钟运行上限，正在自动停止 Codex".to_string()),
+                    },
+                ).await;
+                break;
+            }
+            next = lines.next_line() => match next {
+                Ok(Some(line)) => {
+                    if line.len() > CODEX_APP_SERVER_MAX_LINE_BYTES {
+                        failure = Some(CodexExecFailure::ApprovalBridge);
+                        break;
+                    }
+                    idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+                    let value: serde_json::Value = match serde_json::from_str(line.trim()) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            failure = Some(CodexExecFailure::ApprovalBridge);
+                            break;
+                        }
+                    };
+                    match handle_codex_app_server_request(
+                        &value,
+                        &mut stdin,
+                        &approval,
+                        &cancellation,
+                        observer.as_ref(),
+                        event_sink,
+                    ).await {
+                        CodexAppServerRequestHandling::Cancelled => {
+                            cancelled = true;
+                            break;
+                        }
+                        CodexAppServerRequestHandling::Failed => {
+                            failure = Some(CodexExecFailure::ApprovalBridge);
+                            break;
+                        }
+                        CodexAppServerRequestHandling::Handled | CodexAppServerRequestHandling::Ignored => {}
+                    }
+                    if let Some(event_failure) = observe_codex_app_server_event(
+                        &value,
+                        observer.as_ref(),
+                        event_sink,
+                        &mut summary,
+                    ).await {
+                        failure = Some(event_failure);
+                        break;
+                    }
+                    if value.get("method").and_then(serde_json::Value::as_str) == Some("turn/completed") {
+                        completed = failure.is_none();
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    failure = Some(CodexExecFailure::Stream);
+                    break;
+                }
+                Err(_) => {
+                    failure = Some(CodexExecFailure::Stream);
+                    break;
+                }
+            }
+        }
+    }
+    terminate_codex_child(&mut child).await;
+    let _ = child.wait().await;
+    if let Some(stderr_task) = stderr_task {
+        let _ = timeout(Duration::from_secs(2), stderr_task).await;
+    }
+    CodexExecCompletion {
+        cancelled,
+        succeeded: completed && !cancelled && failure.is_none(),
+        thread_id: Some(thread_id),
+        summary,
+        usage_json: None,
         failure,
     }
 }
@@ -7406,10 +8259,12 @@ async fn run_codex_exec_subagent(
     workspace: &Path,
     prompt: &str,
     cli_path: Option<PathBuf>,
+    permissions: CodexDelegationPermissions,
+    permission_engine: Arc<PermissionEngine>,
     cancellation: CancellationToken,
     sink: &Option<AgentEventSink>,
 ) -> CodexExecCompletion {
-    run_codex_exec_process(
+    run_codex_delegation_process(
         workspace,
         prompt,
         cli_path,
@@ -7422,8 +8277,56 @@ async fn run_codex_exec_subagent(
             run,
             sink,
         }),
+        None,
+        permissions,
+        CodexAppServerApprovalContext {
+            permission_engine,
+            task_id: run.task_id.clone(),
+            run_id: run.id.clone(),
+            caller: format!("subagent:{}", run.id),
+        },
     )
     .await
+}
+
+/// 根据每次启动时读取到的 profile 选择轻量 exec 或可交互 App Server。调用方传入
+/// 的 `permissions` 已经是安全解析后的快照，运行中不受后续配置修改影响。
+async fn run_codex_delegation_process(
+    workspace: &Path,
+    prompt: &str,
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    permissions: CodexDelegationPermissions,
+    approval: CodexAppServerApprovalContext,
+) -> CodexExecCompletion {
+    if permissions.requests_r_code_approval() {
+        run_codex_app_server_process(
+            workspace,
+            prompt,
+            cli_path,
+            permissions,
+            cancellation,
+            observer,
+            event_sink,
+            approval,
+            CodexExecLimits::default(),
+        )
+        .await
+    } else {
+        run_codex_exec_process_with_options_and_permissions(
+            workspace,
+            prompt,
+            cli_path,
+            cancellation,
+            observer,
+            event_sink,
+            permissions,
+            CodexExecLimits::default(),
+        )
+        .await
+    }
 }
 
 fn spawn_codex_exec_subagent(
@@ -7435,6 +8338,8 @@ fn spawn_codex_exec_subagent(
     workspace: PathBuf,
     prompt: String,
     cli_path: Option<PathBuf>,
+    permissions: CodexDelegationPermissions,
+    permission_engine: Arc<PermissionEngine>,
     cancellation: CancellationToken,
     sink: Option<AgentEventSink>,
 ) {
@@ -7450,7 +8355,10 @@ fn spawn_codex_exec_subagent(
                 &run,
                 AgentEvent::SubagentLifecycle {
                     state: SubagentState::Running,
-                    detail: Some("Codex CLI 正在以只读模式检查工作区".to_string()),
+                    detail: Some(format!(
+                        "Codex CLI 正在以{}模式处理工作区",
+                        permissions.mode().display_name()
+                    )),
                 },
             ),
             &sink,
@@ -7466,6 +8374,8 @@ fn spawn_codex_exec_subagent(
             &workspace,
             &prompt,
             cli_path,
+            permissions,
+            permission_engine,
             cancellation,
             &sink,
         )
@@ -7496,6 +8406,9 @@ fn spawn_codex_exec_subagent(
         let lifecycle_detail = bounded_text(&summary, CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS);
 
         let repository = AgentRunRepository::new(&db);
+        if let Some(thread_id) = completion.thread_id.as_deref() {
+            let _ = repository.set_external_session_id(&run.id, Some(thread_id));
+        }
         if let Some(usage_json) = completion.usage_json.as_deref() {
             let _ = repository.set_usage(&run.id, usage_json);
         }
@@ -7527,7 +8440,7 @@ fn spawn_codex_exec_subagent(
     });
 }
 
-/// 启动由官方 `codex mcp-server` 驱动的只读子代理。
+/// 启动由官方 `codex mcp-server` 驱动的、采用已配置权限的子代理。
 ///
 /// 与 `codex exec` 路径共享同一份运行树、取消注册和安全投影规则；差异仅在于
 /// MCP 会话返回的 thread ID 会被保存，以便后续可显式续接。
@@ -7541,6 +8454,7 @@ fn spawn_codex_mcp_subagent(
     workspace: PathBuf,
     prompt: String,
     cli_path: Option<PathBuf>,
+    permissions: CodexDelegationPermissions,
     cancellation: CancellationToken,
     sink: Option<AgentEventSink>,
 ) {
@@ -7556,7 +8470,10 @@ fn spawn_codex_mcp_subagent(
                 &run,
                 AgentEvent::SubagentLifecycle {
                     state: SubagentState::Running,
-                    detail: Some("Codex MCP 会话正在以只读模式检查工作区".to_string()),
+                    detail: Some(format!(
+                        "Codex MCP 会话正在以{}模式处理工作区",
+                        permissions.mode().display_name()
+                    )),
                 },
             ),
             &sink,
@@ -7564,7 +8481,7 @@ fn spawn_codex_mcp_subagent(
         .await;
 
         let outcome = codex_mcp
-            .run_readonly(cli_path, &workspace, &prompt, cancellation)
+            .run(cli_path, &workspace, &prompt, permissions, cancellation)
             .await;
         let (state, review_state, summary) = match outcome {
             Ok(CodexMcpCallOutcome::Cancelled) => (
@@ -7613,8 +8530,7 @@ fn spawn_codex_mcp_subagent(
                 (
                     SubagentState::Failed,
                     ReviewState::Failed,
-                    "Codex MCP 子代理未能完成。请在设置中检查 Codex CLI 的安装与登录状态后重试。"
-                        .to_string(),
+                    format!("Codex MCP 子代理未能完成：{error}"),
                 )
             }
         };
@@ -7651,8 +8567,8 @@ fn spawn_codex_mcp_subagent(
 
 /// 将一项工作委派给本机已登录的 Codex CLI。
 ///
-/// 首版只允许作为正在运行的 R-Code 主运行的**只读子代理**启动：它不会编辑工作区、
-/// 不会读取/复制 Codex 凭据，也不会把外部工具活动伪装成 R-Code 网关审计。
+/// 每次启动都会读取 Codex config.toml 的权限预设；外部工具活动仍不会伪装成
+/// R-Code 网关审计，只有 App Server 公开的审批事件会投影为 R-Code 权限卡。
 pub async fn agent_delegate_codex(
     state: &CommandState,
     task_id: &str,
@@ -7703,6 +8619,7 @@ pub async fn agent_delegate_codex(
     if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
         return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
     }
+    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
 
     let user_label = label
         .map(str::trim)
@@ -7710,7 +8627,7 @@ pub async fn agent_delegate_codex(
         .map(|value| bounded_text(value, 100));
     let agent_label = user_label
         .map(|value| format!("Codex CLI · {value}"))
-        .unwrap_or_else(|| "Codex CLI · 只读调查".to_string());
+        .unwrap_or_else(|| format!("Codex CLI · {}任务", permissions.mode().display_name()));
     let run = AgentRun::new_subagent_for_branch(
         task_id,
         &branch.id,
@@ -7752,7 +8669,10 @@ pub async fn agent_delegate_codex(
             &run,
             AgentEvent::SubagentLifecycle {
                 state: SubagentState::Queued,
-                detail: Some("已加入 Codex CLI 只读子代理队列".to_string()),
+                detail: Some(format!(
+                    "已加入 Codex CLI {}子代理队列",
+                    permissions.mode().display_name()
+                )),
             },
         ),
         &sink,
@@ -7766,19 +8686,22 @@ pub async fn agent_delegate_codex(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(&goal),
+        build_codex_delegation_prompt(&goal, permissions),
         cli.path,
+        permissions,
+        state.permission_engine.clone(),
         cancellation,
         sink,
     );
     Ok(run)
 }
 
-/// 以可续接的官方 `codex mcp-server` 会话委派一项只读子任务。
+/// 以可续接的官方 `codex mcp-server` 会话委派一项任务。
 ///
 /// 这条路径与 `agent_delegate_codex` 的非交互式 `exec` 保持并存：前者更适合一次
-/// 性快速调查，MCP 版本则保留 Codex thread ID，供 R-Code 及未来的外部编排器继续
-/// 对话。两条路径都只能从正在运行的原生 R-Code 主 Agent 发起。
+/// 性快速任务，MCP 版本则保留 Codex thread ID，供 R-Code 及未来的外部编排器继续
+/// 对话。`请求批准` 必须使用 App Server 才能回传审批卡，因此该预设会自动转到同
+/// 一条 App Server 委派路径。两条路径都只能从正在运行的原生 R-Code 主 Agent 发起。
 pub async fn agent_delegate_codex_mcp(
     state: &CommandState,
     task_id: &str,
@@ -7829,6 +8752,12 @@ pub async fn agent_delegate_codex_mcp(
     if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
         return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
     }
+    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
+    if permissions.requests_r_code_approval() {
+        // `codex mcp-server` 不会向 MCP client 暴露可答复的批准请求；复用 exec
+        // 委派的 App Server 桥，确保“请求批准”不会表现为无进度卡住。
+        return agent_delegate_codex(state, task_id, &goal, label).await;
+    }
 
     let user_label = label
         .map(str::trim)
@@ -7836,7 +8765,7 @@ pub async fn agent_delegate_codex_mcp(
         .map(|value| bounded_text(value, 100));
     let agent_label = user_label
         .map(|value| format!("Codex MCP · {value}"))
-        .unwrap_or_else(|| "Codex MCP · 只读调查".to_string());
+        .unwrap_or_else(|| format!("Codex MCP · {}任务", permissions.mode().display_name()));
     let run = AgentRun::new_subagent_for_branch(
         task_id,
         &branch.id,
@@ -7878,7 +8807,10 @@ pub async fn agent_delegate_codex_mcp(
             &run,
             AgentEvent::SubagentLifecycle {
                 state: SubagentState::Queued,
-                detail: Some("已加入 Codex MCP 只读子代理队列".to_string()),
+                detail: Some(format!(
+                    "已加入 Codex MCP {}子代理队列",
+                    permissions.mode().display_name()
+                )),
             },
         ),
         &sink,
@@ -7892,8 +8824,9 @@ pub async fn agent_delegate_codex_mcp(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(&goal),
+        build_codex_delegation_prompt(&goal, permissions),
         cli.path,
+        permissions,
         cancellation,
         sink,
     );
@@ -7908,7 +8841,7 @@ pub async fn codex_install_skill() -> Result<(), String> {
 /// 一次完成 R-Code 与 Codex 的协作配置。
 ///
 /// 调用方必须已通过安装和登录门禁。本命令会更新 R-Code 协作 Skill，并注册固定名称
-/// 的只读 MCP server；旧版直连构建产物的配置会自动迁移，当前配置不会重复写入。
+/// 的 Codex MCP server；旧版直连构建产物的配置会自动迁移，当前配置不会重复写入。
 pub async fn codex_setup_collaboration(state: &CommandState) -> Result<serde_json::Value, String> {
     let _guard = CODEX_COLLAB_SETUP_LOCK.lock().await;
     let cli = probe_codex_cli().await;
@@ -9778,6 +10711,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delete_rejects_running_tasks_then_removes_records_and_session_logs() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "删除测试", "验证永久删除边界", "ask")
+            .await
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let session_path = state
+            .sessions_dir
+            .join(format!("{}.jsonl", branch.storage_id));
+        std::fs::write(&session_path, "{}\n").unwrap();
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+        assert!(task_delete(&state, &task.id).await.is_err());
+        assert!(TaskRepository::new(&state.db)
+            .get(&task.id)
+            .unwrap()
+            .is_some());
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::Idle)
+            .unwrap();
+        task_delete(&state, &task.id).await.unwrap();
+        assert!(TaskRepository::new(&state.db)
+            .get(&task.id)
+            .unwrap()
+            .is_none());
+        assert!(!session_path.exists());
+    }
+
+    #[tokio::test]
     async fn verification_output_roundtrip() {
         let (_dir, state) = setup_state();
         let workspace_path = scoped_test_workspace(&state).await;
@@ -10012,6 +10979,37 @@ command = "r-code-host"
     }
 
     #[test]
+    fn codex_permission_preset_rendering_preserves_unrelated_configuration() {
+        let rendered = render_codex_permission_mode(
+            "# keep this note\n[mcp_servers.r-code]\ncommand = \"r-code-host\"\n",
+            CodexPermissionMode::AutoReview,
+        )
+        .unwrap();
+        assert!(rendered.contains("# keep this note"));
+        assert!(rendered.contains("[mcp_servers.r-code]"));
+        let document = rendered.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(document["sandbox_mode"].as_str(), Some("workspace-write"));
+        assert_eq!(document["approval_policy"].as_str(), Some("on-request"));
+        assert_eq!(document["approvals_reviewer"].as_str(), Some("auto_review"));
+        assert_eq!(
+            read_codex_delegation_permissions_from_source(&rendered)
+                .unwrap()
+                .mode(),
+            CodexPermissionMode::AutoReview
+        );
+    }
+
+    #[test]
+    fn codex_permission_preset_refuses_to_overwrite_a_profile_selector() {
+        let error = render_codex_permission_mode(
+            "default_permissions = \"safe\"\n[permissions.safe]\nsandbox_mode = \"read-only\"\n",
+            CodexPermissionMode::FullAccess,
+        )
+        .unwrap_err();
+        assert!(error.contains("default_permissions"));
+    }
+
+    #[test]
     fn codex_setup_state_follows_prerequisite_order() {
         assert_eq!(
             CodexSetupState::from_components(
@@ -10233,17 +11231,25 @@ command = "r-code-host"
     #[cfg(windows)]
     #[tokio::test]
     async fn codex_subagent_process_collects_a_safe_summary_from_the_cli_stream() {
+        if executable_paths(&["node.exe"]).is_empty() {
+            return;
+        }
         let directory = TempDir::new().unwrap();
-        let shim_dir = directory.path().join("Codex Test");
-        std::fs::create_dir_all(&shim_dir).unwrap();
-        let shim = shim_dir.join("codex.cmd");
+        let shim = directory.path().join("codex.cmd");
+        let entrypoint = directory
+            .path()
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        std::fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
         std::fs::write(
-            &shim,
-            "@echo off\r\n\
-echo {\"type\":\"thread.started\",\"thread_id\":\"thread-test\"}\r\n\
-echo {\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Codex child summary\"}}\r\n\
-echo {\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}\r\n\
-exit /b 0\r\n",
+            &entrypoint,
+            r#"process.stdout.write('{"type":"thread.started","thread_id":"thread-test"}\n');
+process.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"Codex child summary"}}\n');
+process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}\n');"#,
         )
         .unwrap();
 
@@ -10267,10 +11273,158 @@ exit /b 0\r\n",
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn codex_subagent_process_stops_an_idle_process_tree() {
+    async fn codex_app_server_process_returns_a_visible_summary_without_an_interactive_terminal() {
         let directory = TempDir::new().unwrap();
-        let shim = directory.path().join("codex-idle.cmd");
-        std::fs::write(&shim, "@echo off\r\n:idle\r\ngoto idle\r\n").unwrap();
+        let shim = directory.path().join("codex-app-server.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\
+setlocal\r\n\
+set /p line=\r\n\
+echo {\"id\":0,\"result\":{}}\r\n\
+set /p line=\r\n\
+set /p line=\r\n\
+echo {\"id\":1,\"result\":{\"thread\":{\"id\":\"thread-app-server\"}}}\r\n\
+set /p line=\r\n\
+echo {\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-app-server\"}}}\r\n\
+echo {\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"App Server child summary\"}}}\r\n\
+echo {\"method\":\"turn/completed\",\"params\":{\"turn\":{\"status\":\"completed\"}}}\r\n\
+exit /b 0\r\n",
+        )
+        .unwrap();
+        let permissions =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request-approval must be a built-in preset");
+        let completion = run_codex_app_server_process(
+            directory.path(),
+            "inspect only",
+            Some(shim),
+            permissions,
+            CancellationToken::new(),
+            None,
+            None,
+            CodexAppServerApprovalContext {
+                permission_engine: Arc::new(PermissionEngine::new()),
+                task_id: "task-app-server".to_string(),
+                run_id: "run-app-server".to_string(),
+                caller: "subagent:run-app-server".to_string(),
+            },
+            CodexExecLimits {
+                idle_timeout: Duration::from_secs(2),
+                hard_timeout: Duration::from_secs(5),
+            },
+        )
+        .await;
+        assert!(completion.succeeded);
+        assert!(!completion.cancelled);
+        assert_eq!(completion.thread_id.as_deref(), Some("thread-app-server"));
+        assert_eq!(
+            completion.summary.as_deref(),
+            Some("App Server child summary")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_turn_waits_for_an_r_code_permission_decision() {
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex-app-server-approval.cmd");
+        std::fs::write(
+            &shim,
+            "@echo off\r\n\
+setlocal\r\n\
+set /p line=\r\n\
+echo {\"id\":0,\"result\":{}}\r\n\
+set /p line=\r\n\
+set /p line=\r\n\
+echo {\"id\":1,\"result\":{\"thread\":{\"id\":\"thread-approval\"}}}\r\n\
+set /p line=\r\n\
+echo {\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-approval\"}}}\r\n\
+echo {\"id\":3,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"itemId\":\"change-approval\",\"reason\":\"modify approval.txt\"}}\r\n\
+set /p line=\r\n\
+echo {\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"Approved change completed\"}}}\r\n\
+echo {\"method\":\"turn/completed\",\"params\":{\"turn\":{\"status\":\"completed\"}}}\r\n\
+exit /b 0\r\n",
+        )
+        .unwrap();
+        let permission_engine = Arc::new(PermissionEngine::new());
+        let engine_for_run = permission_engine.clone();
+        let permissions =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request-approval must be a built-in preset");
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process(
+                &workspace,
+                "make one approved change",
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine: engine_for_run,
+                    task_id: "task-approval".to_string(),
+                    run_id: "run-approval".to_string(),
+                    caller: "subagent:run-approval".to_string(),
+                },
+                CodexExecLimits {
+                    idle_timeout: Duration::from_secs(2),
+                    hard_timeout: Duration::from_secs(5),
+                },
+            )
+            .await
+        });
+        let request = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = permission_engine
+                    .pending_for_task("task-approval")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Codex App Server must surface an approval request");
+        assert_eq!(request.run_id.as_deref(), Some("run-approval"));
+        assert_eq!(request.tool_name, "Codex 文件修改");
+        permission_engine
+            .decide(&request.id, PermissionDecision::Allow)
+            .await
+            .unwrap();
+        let completion = timeout(Duration::from_secs(5), run)
+            .await
+            .expect("Codex App Server turn must finish after approval")
+            .unwrap();
+        assert!(completion.succeeded);
+        assert_eq!(
+            completion.summary.as_deref(),
+            Some("Approved change completed")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_subagent_process_stops_an_idle_process_tree() {
+        if executable_paths(&["node.exe"]).is_empty() {
+            return;
+        }
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex.cmd");
+        let entrypoint = directory
+            .path()
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        std::fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        std::fs::write(&entrypoint, "setInterval(() => {}, 1000);\n").unwrap();
         let observed = Arc::new(Mutex::new(Vec::<AgentEvent>::new()));
         let observed_for_sink = observed.clone();
         let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
@@ -10380,21 +11534,107 @@ exit /b 0\r\n",
 
     #[cfg(windows)]
     #[test]
-    fn codex_exec_routes_cmd_shim_through_stdin_mode() {
-        let command = codex_exec_command(
-            Some(PathBuf::from(r"C:\Program Files\Codex\codex.cmd")),
-            Path::new(r"C:\repo"),
+    fn codex_exec_routes_npm_cmd_shim_through_node_and_permits_non_git_workspace() {
+        let directory = TempDir::new().unwrap();
+        let npm_dir = directory.path().join("npm");
+        let shim = npm_dir.join("codex.cmd");
+        let node = npm_dir.join("node.exe");
+        let entrypoint = npm_dir
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("bin")
+            .join("codex.js");
+        std::fs::create_dir_all(entrypoint.parent().unwrap()).unwrap();
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+        std::fs::write(&node, []).unwrap();
+        std::fs::write(&entrypoint, "// test entrypoint\n").unwrap();
+
+        let prompt = "inspect only";
+        let command = codex_exec_command_with_permissions(
+            Some(shim),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            prompt,
         )
         .unwrap();
         let command = command.as_std();
-        assert_eq!(command.get_program(), "cmd.exe");
+        assert_eq!(command.get_program(), node.as_os_str());
         let args = command
             .get_args()
             .map(|value| value.to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        assert_eq!(args[0..4], ["/D", "/S", "/C", "call"]);
-        assert_eq!(args[4], r"C:\Program Files\Codex\codex.cmd");
-        assert_eq!(args[5..], ["exec", "--json", "--sandbox", "read-only", "-"]);
+        assert_eq!(args[0], entrypoint.to_string_lossy());
+        assert_eq!(
+            args[1..],
+            [
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "-c",
+                "approval_policy=\"never\"",
+                "-c",
+                "approvals_reviewer=\"user\"",
+                prompt,
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_exec_uses_only_validated_permission_preset_arguments() {
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::AutoReview)
+            .expect("auto review must be a built-in preset");
+        let command = codex_exec_command_with_permissions(
+            Some(PathBuf::from(r"C:\Program Files\Codex\codex.exe")),
+            Path::new(r"C:\repo"),
+            permissions,
+            "validated prompt",
+        )
+        .unwrap();
+        assert_eq!(
+            command.as_std().get_program(),
+            Path::new(r"C:\Program Files\Codex\codex.exe")
+        );
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            [
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "-c",
+                "approval_policy=\"on-request\"",
+                "-c",
+                "approvals_reviewer=\"auto_review\"",
+                "validated prompt",
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_exec_rejects_a_cmd_shim_without_the_expected_npm_entrypoint() {
+        let directory = TempDir::new().unwrap();
+        let shim = directory.path().join("codex.cmd");
+        std::fs::write(&shim, "@echo off\r\n").unwrap();
+
+        let error = codex_exec_command_with_permissions(
+            Some(shim),
+            directory.path(),
+            CodexDelegationPermissions::read_only(),
+            "inspect only",
+        )
+        .expect_err("an unknown cmd shim must not receive a delegated prompt");
+        assert!(error.contains("npm"));
     }
 
     #[test]

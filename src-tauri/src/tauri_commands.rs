@@ -59,6 +59,15 @@ pub async fn cmd_task_archive(
     r_code_host::commands::task_archive(&state, &task_id).await
 }
 
+/// 永久删除已停止的会话；项目目录和工作区文件不在删除范围内。
+#[tauri::command]
+pub async fn cmd_task_delete(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::task_delete(&state, &task_id).await
+}
+
 /// 为一个既有会话附加/移除工作区。未授信工作区不会开放本地工具。
 #[tauri::command]
 pub async fn cmd_task_set_workspace(
@@ -741,17 +750,19 @@ pub async fn cmd_codex_cli_preferences() -> Result<CodexCliPreferences, String> 
     r_code_host::commands::codex_cli_preferences().await
 }
 
-/// 保存 Codex CLI 的模型、推理强度与回复详细度；空值恢复 Codex 默认。
+/// 保存 Codex CLI 的模型、推理强度、回复详细度与子代理权限；空模型字段恢复默认。
 #[tauri::command]
 pub async fn cmd_codex_save_cli_preferences(
     model: Option<String>,
     reasoning_effort: Option<String>,
     verbosity: Option<String>,
+    permission_mode: Option<String>,
 ) -> Result<CodexCliPreferences, String> {
     r_code_host::commands::codex_save_cli_preferences(
         model.as_deref(),
         reasoning_effort.as_deref(),
         verbosity.as_deref(),
+        permission_mode.as_deref(),
     )
     .await
 }

@@ -433,7 +433,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   {
     name: "codex",
     title: "委派给 Codex",
-    description: "把独立的只读调查交给本机 Codex CLI。",
+    description: "把独立任务交给本机 Codex CLI，并使用已配置的权限。",
     category: "integration",
     kind: "local",
     locations: ["room"],

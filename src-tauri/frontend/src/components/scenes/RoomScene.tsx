@@ -21,6 +21,7 @@ import { PendingPermissions } from "../room/Permissions";
 import { Canvas } from "../room/Canvas";
 import { ActivityStrip } from "../room/ActivityStrip";
 import { SubagentPanel } from "../room/SubagentPanel";
+import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
@@ -83,6 +84,7 @@ export function RoomScene() {
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
   const workspaces = useTasksStore((s) => s.workspaces);
+  const listedTask = useTasksStore((s) => currentTaskId ? s.tasks.find((task) => task.id === currentTaskId) : undefined);
 
   const [scopeBusy, setScopeBusy] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
@@ -253,7 +255,16 @@ export function RoomScene() {
     );
   }
 
-  const task = detail?.task;
+  // 先用列表快照立即画出任务壳，detail IPC 返回后再补齐运行信息，避免点击后整页空等。
+  const task = detail?.task ?? listedTask;
+  if (!task) {
+    return (
+      <section className="scene scene-room workbench-hidden" data-testid="workbench-root" data-workbench-mode="hidden">
+        <div className="convo room-loading" role="status">正在打开对话…</div>
+      </section>
+    );
+  }
+  const archived = task.state === "archived";
   const workspacePath = task?.workspace_path ?? null;
   const workspace = workspaces.find((item) => item.canonical_path === workspacePath);
   const workspaceAttached = Boolean(workspacePath);
@@ -332,8 +343,9 @@ export function RoomScene() {
           <IconProjects width={16} height={16} />
           <div className="room-conversation-title">
             <strong>{task?.title || "任务会话"}</strong>
-            <span>{workspace?.display_name ?? "未附加项目"} · {running ? "正在运行" : "会话就绪"}</span>
+            <span>{workspace?.display_name ?? "未附加项目"} · {archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
           </div>
+          {task && <TaskActionsMenu task={task} detail={detail} className="room-task-actions" />}
           <button
             type="button"
             className="room-workbench-toggle"
@@ -364,9 +376,11 @@ export function RoomScene() {
               {detail?.active_branch.id && detail.active_branch.id !== "main" && (
                 <span className="room-scope-state">编辑分支</span>
               )}
-              <button className="quiet-link" disabled={scopeBusy} onClick={() => void attachFolder()}>
-                <IconAttach width={13} height={13} /> {scopeBusy ? "正在选择…" : "附加文件夹"}
-              </button>
+              {!archived && (
+                <button className="quiet-link" disabled={scopeBusy} onClick={() => void attachFolder()}>
+                  <IconAttach width={13} height={13} /> {scopeBusy ? "正在选择…" : "附加文件夹"}
+                </button>
+              )}
             </>
           )}
         </div>
@@ -382,40 +396,43 @@ export function RoomScene() {
           running={running}
           onAgentEvent={observeAgentEvent}
         />
-        <ActivityStrip
-          state={activity}
-          running={running}
-        />
-        <SubagentPanel
-          key={currentTaskId}
-          state={activity}
-          selectedSubagentId={selectedSubagentId}
-          onInspectSubagent={selectSubagent}
-          onAbortSubagent={abortSubagent}
-          openRequest={subagentPanelRequest}
-        />
-        <PendingPermissions taskId={currentTaskId} />
-        <Composer
-          taskId={currentTaskId}
-          workspacePath={workspacePath}
-          workspaceAttached={workspaceAttached}
-          workspaceName={workspace?.display_name ?? null}
-          workspaceAccessMode={workspaceAccessMode}
-          onAccessModeChange={setWorkspaceAccessMode}
-          scopeBusy={scopeBusy}
-          providerName={task?.provider_name ?? null}
-          model={task?.model ?? null}
-          providerChoices={providers.choices}
-          providerFallback={providers.fallback}
-          onProviderChanged={() => void refreshDetail(currentTaskId)}
-          running={running}
-          queuedMessages={queuedMessages}
-          onAbort={abortRun}
-          onSent={(text, mode) => tlRef.current?.onSent(text, mode)}
-          onSendFailed={() => tlRef.current?.reload()}
-          onActivitySent={observeSend}
-          onShowSubagents={() => setSubagentPanelRequest((value) => value + 1)}
-        />
+        {archived ? (
+          <div className="room-archived-note">此对话已归档，只能查看历史。可通过右上角对话选项永久删除。</div>
+        ) : (
+          <>
+            <ActivityStrip state={activity} running={running} />
+            <SubagentPanel
+              key={currentTaskId}
+              state={activity}
+              selectedSubagentId={selectedSubagentId}
+              onInspectSubagent={selectSubagent}
+              onAbortSubagent={abortSubagent}
+              openRequest={subagentPanelRequest}
+            />
+            <PendingPermissions taskId={currentTaskId} />
+            <Composer
+              taskId={currentTaskId}
+              workspacePath={workspacePath}
+              workspaceAttached={workspaceAttached}
+              workspaceName={workspace?.display_name ?? null}
+              workspaceAccessMode={workspaceAccessMode}
+              onAccessModeChange={setWorkspaceAccessMode}
+              scopeBusy={scopeBusy}
+              providerName={task.provider_name ?? null}
+              model={task.model ?? null}
+              providerChoices={providers.choices}
+              providerFallback={providers.fallback}
+              onProviderChanged={() => void refreshDetail(currentTaskId)}
+              running={running}
+              queuedMessages={queuedMessages}
+              onAbort={abortRun}
+              onSent={(text, mode) => tlRef.current?.onSent(text, mode)}
+              onSendFailed={() => tlRef.current?.reload()}
+              onActivitySent={observeSend}
+              onShowSubagents={() => setSubagentPanelRequest((value) => value + 1)}
+            />
+          </>
+        )}
       </div>
       {workbenchMode === "docked" && (
         <div
