@@ -160,8 +160,9 @@ mod tests {
         let content = SkillManager::skill_content();
         assert!(!content.is_empty());
         assert!(content.contains("R-Code Collaboration"));
-        assert!(content.contains("r_code_delegate_readonly"));
-        assert!(content.contains("cannot edit files"));
+        assert!(content.contains("r_code_delegate"));
+        assert!(content.contains("read-only task by default"));
+        assert!(content.contains("full_access"));
     }
 
     #[test]

@@ -1,33 +1,29 @@
-/**
- * 会话的「模型服务 → 具体模型」二级选择。
- *
- * 原先只能切 provider，模型固定取自设置里的 `providers[name].model`，想换
- * deepseek-v4-flash / -pro 必须去设置页改全局值（会影响所有绑定该服务的会话）。
- *
- * 后端本来就支持会话级模型覆盖（SessionState.model → CompletionRequest.model），
- * 只是 commands.rs 恒传 model: None 且 tasks 表没有列。补上之后这里就能直接选。
- *
- * 交互取舍：不用 hover 展开子菜单（键盘与触控都难用），而是把模型平铺在各自
- * 服务的分组下。同服务内换模型即时生效（下次运行），跨服务切换保留二次确认，
- * 与原有的 ProviderSwitcher 行为一致。
- */
-import { useState } from "react";
-import { taskSetModel, taskSetProvider } from "../../lib/ipc";
+/** 会话级 Provider、模型与模型专属推理参数的紧凑配置入口。 */
+import { useMemo, useState } from "react";
+import { taskSetInference, taskSetModel, taskSetProvider } from "../../lib/ipc";
 import { useAsyncAction } from "../../lib/hooks";
 import { rememberModel, resolveActive, type ProviderChoice } from "../../lib/provider";
-import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
+import type { InferenceOptions } from "../../lib/types";
+import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
 import { IconChevronDown, IconPlus } from "../icons";
+import {
+  capabilitiesFor,
+  inferenceSummary,
+  normalizeInference,
+  optionLabel,
+  type CapabilityControl,
+} from "./model-capabilities";
 
 interface Props {
   taskId: string;
   providerName: string | null;
   model: string | null;
+  inference: InferenceOptions;
   choices: ProviderChoice[];
   fallback: string;
   running: boolean;
   onChanged: () => void;
-  /** bar：会话顶栏的紧凑样式；pill：输入区的胶囊样式 */
   variant?: "bar" | "pill";
   openRequest?: number;
 }
@@ -37,10 +33,20 @@ interface PendingSwitch {
   model: string;
 }
 
+type View = "root" | "models" | "thinking" | "reasoning" | "verbosity";
+
+const VIEW_TITLES: Record<Exclude<View, "root">, string> = {
+  models: "模型",
+  thinking: "思考模式",
+  reasoning: "推理强度",
+  verbosity: "输出详略",
+};
+
 export function ModelSwitcher({
   taskId,
   providerName,
   model,
+  inference,
   choices,
   fallback,
   running,
@@ -48,30 +54,42 @@ export function ModelSwitcher({
   variant = "bar",
   openRequest,
 }: Props) {
+  const [view, setView] = useState<View>("root");
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [customFor, setCustomFor] = useState<string | null>(null);
   const [customValue, setCustomValue] = useState("");
-
   const active = resolveActive(choices, fallback, providerName, model);
+  const capabilities = useMemo(
+    () => capabilitiesFor(active.provider, active.model),
+    [active.provider, active.model],
+  );
+  const normalized = normalizeInference(inference, capabilities);
 
-  const apply = useAsyncAction(async (provider: ProviderChoice, nextModel: string) => {
-    // 换服务会在后端清掉旧的模型覆盖，所以顺序必须是先 provider 后 model。
-    if (provider.name !== active.name) {
-      await taskSetProvider(taskId, provider.name);
-    }
+  const applyModel = useAsyncAction(async (provider: ProviderChoice, nextModel: string) => {
+    if (provider.name !== active.name) await taskSetProvider(taskId, provider.name);
     await taskSetModel(taskId, nextModel === provider.model ? null : nextModel);
     rememberModel(provider.name, nextModel);
     setPending(null);
+    setView("root");
     onChanged();
   }, { label: "切换模型" });
 
-  const choose = (provider: ProviderChoice, nextModel: string) => {
+  const saveInference = useAsyncAction(async (next: InferenceOptions) => {
+    await taskSetInference(taskId, next);
+    onChanged();
+  }, { label: "保存模型配置" });
+
+  const chooseModel = (provider: ProviderChoice, nextModel: string) => {
     if (running || !provider.ready) return;
-    if (provider.name === active.name) {
-      void apply.run(provider, nextModel);   // 同服务内换模型，无需确认
+    if (provider.name === active.name && nextModel === active.model) {
+      setView("root");
       return;
     }
-    setPending({ provider, model: nextModel });  // 跨服务：保留二次确认
+    if (provider.name === active.name) {
+      void applyModel.run(provider, nextModel);
+      return;
+    }
+    setPending({ provider, model: nextModel });
   };
 
   const submitCustom = (provider: ProviderChoice) => {
@@ -79,42 +97,139 @@ export function ModelSwitcher({
     if (!value) return;
     setCustomFor(null);
     setCustomValue("");
-    choose(provider, value);
+    chooseModel(provider, value);
   };
 
-  const title = running
-    ? "当前运行结束后可切换模型"
-    : `本会话使用：${active.provider?.label ?? "未选择"} / ${active.model || "未配置"}`;
+  const chooseOption = (
+    field: "thinking" | "reasoning_effort" | "verbosity",
+    value: string | null,
+  ) => {
+    const next = { ...normalized };
+    if (value) next[field] = value;
+    else delete next[field];
+    void saveInference.run(next);
+    setView("root");
+  };
 
-  const trigger =
-    variant === "pill" ? (
-      <button type="button" className="provider-pill ready" title={title} disabled={running}>
-        <span>{active.provider?.label ?? "选择模型"}</span>
-        {active.model && <small>{active.model}</small>}
-        <IconChevronDown width={12} height={12} />
-      </button>
-    ) : (
-      <button type="button" className="room-provider-trigger" title={title} disabled={running}>
-        <span>模型</span>
-        <b>{active.provider?.label ?? "未选择"}</b>
-        {active.model && <small>{active.model}</small>}
-      </button>
-    );
+  const summary = inferenceSummary(capabilities, normalized);
+  const title = running
+    ? "当前运行结束后可修改模型配置"
+    : `${active.provider?.label ?? "未选择"} / ${active.model || "未配置"} / ${summary}`;
+  const trigger = variant === "pill" ? (
+    <button type="button" className="provider-pill ready model-config-trigger" title={title} disabled={running}>
+      <span>{active.provider?.label ?? "模型配置"}</span>
+      <small>{active.model || "未配置"} · {summary}</small>
+      <IconChevronDown width={12} height={12} />
+    </button>
+  ) : (
+    <button type="button" className="room-provider-trigger" title={title} disabled={running}>
+      <span>模型</span>
+      <b>{active.provider?.label ?? "未选择"}</b>
+      <small>{active.model || "未配置"} · {summary}</small>
+    </button>
+  );
+
+  const renderOptionView = (
+    control: CapabilityControl | undefined,
+    field: "thinking" | "reasoning_effort" | "verbosity",
+    current: string | null | undefined,
+  ) => (
+    <>
+      <ConfigBack title={VIEW_TITLES[view as Exclude<View, "root">]} onBack={() => setView("root")} />
+      {!control ? (
+        <MenuEmpty>当前模型没有声明这项能力</MenuEmpty>
+      ) : (
+        <>
+          <MenuItem closeOnSelect={false} checked={!current} onSelect={() => chooseOption(field, null)}>
+            {control.defaultLabel}
+          </MenuItem>
+          {control.options.map((option) => (
+            <MenuItem
+              key={option.value}
+              closeOnSelect={false}
+              checked={current === option.value}
+              hint={option.description}
+              onSelect={() => chooseOption(field, option.value)}
+            >
+              {option.label}
+            </MenuItem>
+          ))}
+        </>
+      )}
+    </>
+  );
 
   return (
-    <div className="room-provider">
+    <div className="room-provider model-config-root">
       <Menu
         trigger={trigger}
-        label="选择模型服务与模型"
+        role="dialog"
+        label="模型与推理配置"
         placement={variant === "pill" ? "up" : "down"}
         align={variant === "pill" ? "left" : "right"}
-        disabled={running || apply.busy}
-        menuClassName="model-menu"
+        disabled={running || applyModel.busy || saveInference.busy}
+        menuClassName="model-menu model-config-menu"
         scroll
         openRequest={openRequest}
+        onOpenChange={(open) => {
+          if (!open) {
+            setView("root");
+            setCustomFor(null);
+          }
+        }}
       >
-        {({ close }) => (
+        {view === "root" ? (
           <>
+            <div className="model-config-head">
+              <div><strong>{active.provider?.label ?? "模型配置"}</strong><small>仅作用于当前会话</small></div>
+              {saveInference.busy && <span>保存中…</span>}
+            </div>
+            <ConfigRow label="模型" value={active.model || "未配置"} onSelect={() => setView("models")} />
+            {capabilities.thinking && (
+              <ConfigRow
+                label={capabilities.thinking.label}
+                value={optionLabel(capabilities.thinking, normalized.thinking)}
+                onSelect={() => setView("thinking")}
+              />
+            )}
+            {capabilities.reasoning && (
+              <ConfigRow
+                label={capabilities.reasoning.label}
+                value={optionLabel(capabilities.reasoning, normalized.reasoning_effort)}
+                onSelect={() => setView("reasoning")}
+              />
+            )}
+            {capabilities.verbosity && (
+              <ConfigRow
+                label={capabilities.verbosity.label}
+                value={optionLabel(capabilities.verbosity, normalized.verbosity)}
+                onSelect={() => setView("verbosity")}
+              />
+            )}
+            <p className="model-config-note">{capabilities.note}</p>
+            {!normalized.thinking && !normalized.reasoning_effort && !normalized.verbosity ? null : (
+              <>
+                <MenuSeparator />
+                <button className="model-config-reset" type="button" onClick={() => void saveInference.run({})}>
+                  重置为服务默认
+                </button>
+              </>
+            )}
+          </>
+        ) : view === "models" ? (
+          <>
+            <ConfigBack title="模型" onBack={() => setView("root")} />
+            {pending && (
+              <div className="model-switch-confirm" role="status">
+                <span>切换到 {pending.provider.label}<small>{pending.model}</small></span>
+                <div>
+                  <button type="button" className="quiet-link" disabled={applyModel.busy} onClick={() => setPending(null)}>取消</button>
+                  <button type="button" className="btn accent sm" disabled={applyModel.busy} onClick={() => void applyModel.run(pending.provider, pending.model)}>
+                    {applyModel.busy ? "切换中…" : "确认"}
+                  </button>
+                </div>
+              </div>
+            )}
             {choices.length === 0 && <MenuEmpty>没有可用模型服务</MenuEmpty>}
             {choices.map((choice) => (
               <div className="model-group" key={choice.name}>
@@ -122,83 +237,79 @@ export function ModelSwitcher({
                   <span>{choice.label}</span>
                   {!choice.ready && <small>尚未完成配置</small>}
                 </div>
-                {choice.ready &&
-                  choice.models.map((candidate) => (
-                    <MenuItem
-                      key={candidate}
-                      close={close}
-                      checked={choice.name === active.name && candidate === active.model}
-                      hint={candidate === choice.model ? "服务默认" : undefined}
-                      onSelect={() => choose(choice, candidate)}
-                    >
-                      <span className="model-name" title={candidate}>{candidate}</span>
-                    </MenuItem>
-                  ))}
-                {choice.ready &&
-                  (customFor === choice.name ? (
-                    <div className="model-custom">
-                      <input
-                        className="input"
-                        autoFocus
-                        value={customValue}
-                        aria-label={`${choice.label} 的自定义模型名`}
-                        placeholder="输入模型名…"
-                        onChange={(event) => setCustomValue(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            submitCustom(choice);
-                            close();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            setCustomFor(null);
-                          }
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <MenuItem
-                      close={close}
-                      closeOnSelect={false}
-                      className="model-custom-open"
-                      onSelect={() => {
-                        setCustomFor(choice.name);
-                        setCustomValue("");
+                {choice.ready && choice.models.map((candidate) => (
+                  <MenuItem
+                    key={candidate}
+                    closeOnSelect={false}
+                    checked={choice.name === active.name && candidate === active.model}
+                    hint={candidate === choice.model ? "服务默认" : undefined}
+                    onSelect={() => chooseModel(choice, candidate)}
+                  >
+                    <span className="model-name" title={candidate}>{candidate}</span>
+                  </MenuItem>
+                ))}
+                {choice.ready && (customFor === choice.name ? (
+                  <div className="model-custom">
+                    <input
+                      className="input"
+                      autoFocus
+                      value={customValue}
+                      aria-label={`${choice.label} 的自定义模型名`}
+                      placeholder="输入模型名…"
+                      onChange={(event) => setCustomValue(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          submitCustom(choice);
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          setCustomFor(null);
+                        }
                       }}
-                    >
-                      <IconPlus width={12} height={12} /> 自定义模型…
-                    </MenuItem>
-                  ))}
+                    />
+                  </div>
+                ) : (
+                  <MenuItem closeOnSelect={false} className="model-custom-open" onSelect={() => {
+                    setCustomFor(choice.name);
+                    setCustomValue("");
+                  }}>
+                    <IconPlus width={12} height={12} /> 自定义模型…
+                  </MenuItem>
+                ))}
               </div>
             ))}
           </>
+        ) : view === "thinking" ? (
+          renderOptionView(capabilities.thinking, "thinking", normalized.thinking)
+        ) : view === "reasoning" ? (
+          renderOptionView(capabilities.reasoning, "reasoning_effort", normalized.reasoning_effort)
+        ) : (
+          renderOptionView(capabilities.verbosity, "verbosity", normalized.verbosity)
         )}
       </Menu>
 
-      {pending && (
-        <div className="room-provider-confirm" role="status">
-          <span>
-            下次运行将使用 {pending.provider.label} / {pending.model}
-          </span>
-          <button type="button" className="quiet-link" disabled={apply.busy} onClick={() => setPending(null)}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="btn accent sm"
-            disabled={apply.busy}
-            onClick={() => void apply.run(pending.provider, pending.model)}
-          >
-            {apply.busy ? "切换中…" : "确认切换"}
-          </button>
-        </div>
-      )}
-      {apply.error && (
-        <StatusBar kind="error" compact onDismiss={apply.clearError}>
-          {apply.error}
+      {(applyModel.error || saveInference.error) && (
+        <StatusBar kind="error" compact onDismiss={() => { applyModel.clearError(); saveInference.clearError(); }}>
+          {applyModel.error ?? saveInference.error}
         </StatusBar>
       )}
     </div>
+  );
+}
+
+function ConfigRow({ label, value, onSelect }: { label: string; value: string; onSelect: () => void }) {
+  return (
+    <button className="model-config-row ring-inset" type="button" onClick={onSelect}>
+      <span>{label}</span><strong title={value}>{value}</strong><span aria-hidden="true">›</span>
+    </button>
+  );
+}
+
+function ConfigBack({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <button className="model-config-back ring-inset" type="button" onClick={onBack}>
+      <span aria-hidden="true">←</span><strong>{title}</strong>
+    </button>
   );
 }

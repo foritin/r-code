@@ -6,7 +6,8 @@ export const SUBAGENT_COLORS = ["#58c7a4", "#d86e68", "#45a8b7", "#dca35f", "#9a
 type SubagentAvatarSize = "xs" | "sm" | "md";
 
 interface SubagentAvatarProps {
-  index: number;
+  index?: number;
+  identity?: string;
   size?: SubagentAvatarSize;
   className?: string;
 }
@@ -15,8 +16,9 @@ interface SubagentAvatarProps {
  * 统一的子智能体身份标记。
  * 色彩只承担“区分不同实例”的辅助作用，真正的语义由协作节点图标提供。
  */
-export function SubagentAvatar({ index, size = "md", className = "" }: SubagentAvatarProps) {
-  const color = SUBAGENT_COLORS[Math.abs(index) % SUBAGENT_COLORS.length];
+export function SubagentAvatar({ index = 0, identity, size = "md", className = "" }: SubagentAvatarProps) {
+  const colorIndex = identity ? stableIdentityIndex(identity) : Math.abs(index);
+  const color = SUBAGENT_COLORS[colorIndex % SUBAGENT_COLORS.length];
   return (
     <span
       className={`subagent-avatar size-${size}${className ? ` ${className}` : ""}`}
@@ -26,4 +28,12 @@ export function SubagentAvatar({ index, size = "md", className = "" }: SubagentA
       <IconSubagent />
     </span>
   );
+}
+
+function stableIdentityIndex(identity: string): number {
+  let hash = 0;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash = Math.imul(hash, 31) + identity.charCodeAt(index);
+  }
+  return Math.abs(hash);
 }

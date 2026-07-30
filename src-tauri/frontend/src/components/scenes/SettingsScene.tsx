@@ -25,6 +25,7 @@ import type {
   CodexIntegrationStatus,
   CodexModelOption,
   LogEntry,
+  OrchestrationConfig,
   ProviderCategory,
   ProviderConfig,
   ProviderPreset,
@@ -50,6 +51,7 @@ const SETTINGS_PANES: Array<{
   description: string;
 }> = [
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
+  { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
   { key: "preferences", label: "应用偏好", description: "调整外观、缩放和辅助阅读方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
   { key: "codex", label: "Codex CLI", description: "连接本机 Codex，并管理它的运行偏好。" },
@@ -220,7 +222,7 @@ export function SettingsScene() {
               <p>{pane.description}</p>
             </header>
 
-            {configErr && (activePane === "providers" || activePane === "diagnostics") && (
+            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics") && (
               <div className="errbar" role="alert">
                 读取配置失败：{configErr}
                 <span className="spacer" />
@@ -250,6 +252,16 @@ export function SettingsScene() {
               <div className="settings-sheet">
                 <AppearanceSection />
                 <AccessibilitySection />
+              </div>
+            )}
+
+            {activePane === "agents" && (
+              <div className="settings-sheet">
+                {config ? (
+                  <OrchestrationSection config={config} reload={loadConfig} />
+                ) : (
+                  !configErr && <div className="settings-loading">正在读取 Agent 编排策略…</div>
+                )}
               </div>
             )}
 
@@ -785,6 +797,171 @@ function ProviderSection({
 }
 
 // ---------- 通用 ----------
+
+const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
+  default_agent_engine: "r_code",
+  delegation_router: "balanced",
+  allow_cross_engine_delegation: true,
+  quality_loop: "auto",
+  quality_reviewer: "auto",
+  max_review_rounds: 1,
+};
+
+function OrchestrationSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
+  const policy = config.orchestration ?? DEFAULT_ORCHESTRATION;
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const save = async (field: keyof OrchestrationConfig, value: unknown) => {
+    setBusy(field);
+    setErr(null);
+    try {
+      await settingsSet(`orchestration.${field}`, value);
+      await reload();
+    } catch (cause) {
+      setErr(errText(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const skills = [
+    {
+      title: "任务拆解与路由",
+      state: policy.delegation_router === "manual" ? "手动" : "已开启",
+      detail: policy.delegation_router === "balanced"
+        ? "简单任务留给 R-Code；复杂任务优先 Codex，不可用时会显示回退原因。"
+        : "每次委派会记录执行器选择和路由原因，并显示在子智能体详情中。",
+    },
+    {
+      title: "最小权限委派",
+      state: policy.allow_cross_engine_delegation ? "跨引擎" : "同引擎",
+      detail: "子智能体默认只读；只有父任务明确授权时才能提升到完整访问，项目审批策略仍然生效。",
+    },
+    {
+      title: "质量复核循环",
+      state: policy.quality_loop === "off" ? "已关闭" : `${policy.max_review_rounds} 轮上限`,
+      detail: policy.quality_loop === "off"
+        ? "主结果直接交付，不启动额外复核。"
+        : "R-Code 主 Agent 完成后由宿主启动可见复核；需要修订时再进入下一轮。Codex 主 Agent 保留其自身执行循环。",
+    },
+  ];
+
+  return (
+    <>
+      <section className="settings-block">
+        <h3>主 Agent</h3>
+        <p className="desc">默认值只影响新会话。每个会话都能在输入区单独切换，运行中不会静默换引擎。</p>
+        {err && <div className="errbar" role="alert">保存编排策略失败：{err}</div>}
+        <div className="field">
+          <label htmlFor="set-default-agent">新会话默认</label>
+          <select
+            id="set-default-agent"
+            className="input"
+            value={policy.default_agent_engine}
+            disabled={busy != null}
+            onChange={(event) => void save("default_agent_engine", event.target.value)}
+          >
+            <option value="r_code">R-Code · 自定义 Provider</option>
+            <option value="codex">Codex CLI · 本机登录</option>
+          </select>
+          <span className="hint">Codex 主 Agent 需要已登录 CLI 和已附加工作区。</span>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>委派路由</h3>
+        <div className="field">
+          <label htmlFor="set-delegation-router">复杂度策略</label>
+          <select
+            id="set-delegation-router"
+            className="input"
+            value={policy.delegation_router}
+            disabled={busy != null}
+            onChange={(event) => void save("delegation_router", event.target.value)}
+          >
+            <option value="balanced">均衡 · 复杂任务优先 Codex</option>
+            <option value="r_code_first">R-Code 优先</option>
+            <option value="codex_first">Codex 优先</option>
+            <option value="manual">仅显式选择</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="set-cross-agent">跨引擎委派</label>
+          <input
+            id="set-cross-agent"
+            className="switch"
+            type="checkbox"
+            role="switch"
+            checked={policy.allow_cross_engine_delegation}
+            disabled={busy != null}
+            onChange={(event) => void save("allow_cross_engine_delegation", event.target.checked)}
+          />
+          <span className="hint">允许 R-Code 调用 Codex，也允许 Codex 通过本机 MCP 调用 R-Code。</span>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>质量复核</h3>
+        <p className="desc">复核循环是宿主编排能力，不是隐藏提示词 Skill；运行阶段、复核者和轮次都会显示。</p>
+        <div className="field">
+          <label htmlFor="set-quality-loop">触发方式</label>
+          <select
+            id="set-quality-loop"
+            className="input"
+            value={policy.quality_loop}
+            disabled={busy != null}
+            onChange={(event) => void save("quality_loop", event.target.value)}
+          >
+            <option value="off">关闭</option>
+            <option value="auto">自动 · 仅工具型任务</option>
+            <option value="always">始终复核</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="set-quality-reviewer">复核者</label>
+          <select
+            id="set-quality-reviewer"
+            className="input"
+            value={policy.quality_reviewer}
+            disabled={busy != null || policy.quality_loop === "off"}
+            onChange={(event) => void save("quality_reviewer", event.target.value)}
+          >
+            <option value="auto">自动交叉复核</option>
+            <option value="r_code">R-Code</option>
+            <option value="codex">Codex</option>
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="set-review-rounds">修订上限</label>
+          <select
+            id="set-review-rounds"
+            className="input"
+            value={policy.max_review_rounds}
+            disabled={busy != null || policy.quality_loop === "off"}
+            onChange={(event) => void save("max_review_rounds", Number(event.target.value))}
+          >
+            <option value={1}>1 轮</option>
+            <option value={2}>2 轮</option>
+            <option value={3}>3 轮</option>
+          </select>
+        </div>
+      </section>
+
+      <section className="settings-block">
+        <h3>内置编排能力</h3>
+        <div className="orchestration-cards">
+          {skills.map((skill) => (
+            <article className="orchestration-card" key={skill.title}>
+              <div><strong>{skill.title}</strong><span>{skill.state}</span></div>
+              <p>{skill.detail}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
 
 function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
   const [err, setErr] = useState<string | null>(null);

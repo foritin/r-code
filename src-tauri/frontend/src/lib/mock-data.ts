@@ -42,8 +42,10 @@ export const browserMockTasks: Task[] = [
   {
     id: "mock-task-queue",
     workspace_path: "D:/project/rust/r-code",
-    provider_name: "codex",
-    model: "gpt-5.6",
+    provider_name: "openai",
+    agent_engine: "r_code",
+    model: "gpt-5.6-sol",
+    inference: { reasoning_effort: "high", verbosity: "medium" },
     title: "修复任务队列并发问题",
     goal: "梳理任务队列执行路径并修复并发状态竞争。",
     mode: "edit",
@@ -55,8 +57,10 @@ export const browserMockTasks: Task[] = [
   {
     id: "mock-task-review",
     workspace_path: "D:/project/rust/r-code",
-    provider_name: "codex",
-    model: "gpt-5.6",
+    provider_name: "deepseek",
+    agent_engine: "r_code",
+    model: "deepseek-v4-pro",
+    inference: { thinking: "enabled", reasoning_effort: "high" },
     title: "统一错误处理规范",
     goal: "补齐 API 与任务层的错误上下文。",
     mode: "edit",
@@ -68,8 +72,10 @@ export const browserMockTasks: Task[] = [
   {
     id: "mock-task-permission",
     workspace_path: "D:/project/rust/r-code",
-    provider_name: "codex",
-    model: "gpt-5.6",
+    provider_name: "openai",
+    agent_engine: "r_code",
+    model: "gpt-5.6-sol",
+    inference: {},
     title: "优化 Rust 编译性能",
     goal: "定位 workspace 构建的瓶颈。",
     mode: "edit",
@@ -81,8 +87,10 @@ export const browserMockTasks: Task[] = [
   {
     id: "mock-task-api",
     workspace_path: "D:/project/rust/api-server",
-    provider_name: "codex",
-    model: "gpt-5.6",
+    provider_name: "openai",
+    agent_engine: "r_code",
+    model: "gpt-5.6-sol",
+    inference: { reasoning_effort: "high" },
     title: "添加请求限流中间件",
     goal: "在 API 请求路径增加服务端限流。",
     mode: "edit",
@@ -94,8 +102,10 @@ export const browserMockTasks: Task[] = [
   {
     id: "mock-task-complete",
     workspace_path: "D:/project/rust/r-code",
-    provider_name: "codex",
-    model: "gpt-5.6",
+    provider_name: "openai",
+    agent_engine: "codex",
+    model: "gpt-5.6-sol",
+    inference: {},
     title: "更新依赖并修复告警",
     goal: "升级工作区依赖并处理编译告警。",
     mode: "edit",
@@ -130,6 +140,8 @@ function detail(task: Task): TaskDetail {
         delegated_by_tool_call_id: null,
         model: "gpt-5.6",
         runtime_kind: "native",
+        access_mode: "read_only",
+        routing_reason: "会话已选择 R-Code 主 Agent",
         external_session_id: null,
         review_state: isReview ? "pending" : isLive ? "answered" : "accepted",
         started_at: task.created_at,
@@ -148,6 +160,8 @@ function detail(task: Task): TaskDetail {
           delegated_by_tool_call_id: "delegate-codex-active",
           model: "gpt-5.6-sol",
           runtime_kind: "codex_exec" as const,
+          access_mode: "read_only" as const,
+          routing_reason: "复杂并发检查由均衡路由交给 Codex",
           external_session_id: "mock-codex-thread",
           review_state: "pending" as const,
           started_at: at(3),
@@ -165,6 +179,8 @@ function detail(task: Task): TaskDetail {
           delegated_by_tool_call_id: "delegate-codex-done",
           model: "gpt-5.6-sol",
           runtime_kind: "codex_exec" as const,
+          access_mode: "read_only" as const,
+          routing_reason: "复杂锁顺序核对由均衡路由交给 Codex",
           external_session_id: "mock-codex-thread-done",
           review_state: "answered" as const,
           started_at: at(11),
@@ -199,9 +215,13 @@ export const browserMockDetails: Record<string, TaskDetail> = Object.fromEntries
 
 export const browserMockSettings: SettingsResponse = {
   config: {
-    default_provider: "codex",
+    default_provider: "openai",
     providers: {
-      codex: { base_url: "https://api.openai.com/v1", model: "gpt-5.6" },
+      openai: {
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-5.6-sol",
+        protocol: "openai_responses",
+      },
       // 第二个就绪服务既让完整 Demo 覆盖跨 Provider/模型选择，也防止常见的
       // DeepSeek 模型名在首页胶囊中重新退化为省略号。
       deepseek: {
@@ -211,10 +231,23 @@ export const browserMockSettings: SettingsResponse = {
       },
     },
     log_level: "info",
+    orchestration: {
+      default_agent_engine: "r_code",
+      delegation_router: "balanced",
+      allow_cross_engine_delegation: true,
+      quality_loop: "auto",
+      quality_reviewer: "auto",
+      max_review_rounds: 1,
+    },
   },
   validation: null,
   provider_status: {
-    codex: { configured: true, ready: true, source: "environment" },
+    openai: {
+      configured: true,
+      ready: true,
+      source: "environment",
+      effective_protocol: "openai_responses",
+    },
     deepseek: {
       configured: true,
       ready: true,
@@ -340,15 +373,15 @@ export function browserMockSaveCodexCliPreferences(
 export const browserMockProviderCatalog: ProviderCatalog = {
   presets: [
     {
-      id: "codex",
-      label: "Codex",
+      id: "openai",
+      label: "OpenAI",
       protocol: "openai_responses",
       native: ["openai_responses"],
       auth: "bearer",
       base_url: "https://api.openai.com/v1",
       reasoning_replay: true,
-      model: "gpt-5.6",
-      models: ["gpt-5.6"],
+      model: "gpt-5.6-sol",
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
       category: "official",
       website_url: "https://openai.com",
       api_key_url: null,
@@ -516,39 +549,61 @@ export function browserMockSubagentMessages(taskId: string, subagentId: string):
     output_json: JSON.stringify(data),
   });
   return [
-    system(1, "subagent_lifecycle", { state: "running", detail: "Codex CLI 已开始处理工作区" }),
+    system(1, "subagent_lifecycle", {
+      scope: { run_id: subagentId, agent_kind: "subagent", access_mode: "read_only" },
+      state: "running",
+      detail: "Codex CLI 已开始只读检查工作区",
+    }),
     system(2, "subagent_activity", { phase: "requesting", detail: "已连接 Codex CLI，正在准备工作区" }),
     {
       id: `${storage}:3`, branch_id: "main", kind: "message", role: "assistant",
       text: active
         ? "我先核对任务队列的调度入口，再沿取消信号检查共享状态何时释放。"
-        : "我先沿共享状态的获取顺序做只读检查，再用定向测试确认哪些跨 `await` 的持锁点会形成竞争窗口。",
+        : "我先沿共享状态的获取顺序",
     },
+    ...(!active ? [
+      { id: `${storage}:4`, branch_id: "main", kind: "message", role: "assistant", text: "做只读检查，再用定向测试确认" } as SessionMessage,
+      { id: `${storage}:5`, branch_id: "main", kind: "message", role: "assistant", text: "哪些跨 `await` 的持锁点会形成竞争窗口。" } as SessionMessage,
+    ] : []),
     {
-      id: `${storage}:4`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
+      id: `${storage}:6`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
       call_id: "mock-call-1", input_json: JSON.stringify({ summary: "rg -n 'Mutex|RwLock|await' crates" }),
     },
     {
-      id: `${storage}:5`, branch_id: "main", kind: "tool_result", call_id: "mock-call-1",
+      id: `${storage}:7`, branch_id: "main", kind: "tool_result", call_id: "mock-call-1",
       output_json: JSON.stringify({ status: "completed", output: "crates/r-code-agent-worker/src/supervisor.rs:188\ncrates/r-code-agent-worker/src/llm_runtime.rs:1472" }), is_error: false,
     },
     ...(active ? [
-      system(6, "subagent_activity", { phase: "requesting", detail: "Codex CLI 正在分析工作区" }),
+      system(8, "subagent_activity", { phase: "requesting", detail: "Codex CLI 正在分析工作区" }),
     ] : [
-      { id: `${storage}:6`, branch_id: "main", kind: "message", role: "assistant", text: "第一处发生在调度器持有写锁后等待 worker 回执；第二处发生在取消分支更新状态时。两者都可以先复制必要字段，再释放锁进入异步等待。" } as SessionMessage,
+      { id: `${storage}:8`, branch_id: "main", kind: "message", role: "assistant", text: "第一处发生在调度器持有写锁后等待 worker 回执；" } as SessionMessage,
+      { id: `${storage}:9`, branch_id: "main", kind: "message", role: "assistant", text: "第二处发生在取消分支更新状态时。" } as SessionMessage,
+      { id: `${storage}:10`, branch_id: "main", kind: "message", role: "assistant", text: "两者都可以先复制必要字段，再释放锁进入异步等待。" } as SessionMessage,
       {
-        id: `${storage}:7`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
+        id: `${storage}:11`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
         call_id: "mock-call-2", input_json: JSON.stringify({ summary: "cargo test -p r-code-agent-worker supervisor" }),
       } as SessionMessage,
       {
-        id: `${storage}:8`, branch_id: "main", kind: "tool_result", call_id: "mock-call-2",
+        id: `${storage}:12`, branch_id: "main", kind: "tool_result", call_id: "mock-call-2",
+        output_json: JSON.stringify({ status: "failed", output: "error: transient lock timeout" }), is_error: true,
+      } as SessionMessage,
+      {
+        id: `${storage}:13`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
+        call_id: "mock-call-3", input_json: JSON.stringify({ summary: "cargo test -p r-code-agent-worker --lib supervisor" }),
+      } as SessionMessage,
+      {
+        id: `${storage}:14`, branch_id: "main", kind: "tool_result", call_id: "mock-call-3",
         output_json: JSON.stringify({ status: "completed", output: "test result: ok. 8 passed; 0 failed" }), is_error: false,
       } as SessionMessage,
       {
-        id: `${storage}:9`, branch_id: "main", kind: "message", role: "assistant",
+        id: `${storage}:15`, branch_id: "main", kind: "message", role: "assistant",
         text: "只读核对已完成：\n\n- 两处竞争窗口都来自持锁跨 `await`。\n- 现有定向测试全部通过。\n- 建议把状态快照移出临界区，并保留取消状态的原子更新。",
       } as SessionMessage,
-      system(10, "subagent_lifecycle", { state: "completed", detail: "锁顺序核对完成" }),
+      system(16, "subagent_lifecycle", {
+        scope: { run_id: subagentId, agent_kind: "subagent", access_mode: "read_only" },
+        state: "completed",
+        detail: "锁顺序核对完成",
+      }),
     ]),
   ];
 }
@@ -744,6 +799,7 @@ export function browserMockChangeRequest(taskId: string): void {
     id: `${taskId}-revision-run`, task_id: taskId, branch_id: "main", parent_run_id: null,
     agent_kind: "main", agent_label: "主代理", summary: "根据审核反馈继续修改", delegated_by_tool_call_id: null,
     model: "gpt-5.6", runtime_kind: "native", external_session_id: null, review_state: "pending", started_at: updatedAt, ended_at: null, usage_json: null,
+    access_mode: "read_only", routing_reason: "会话已选择 R-Code 主 Agent",
   });
   detail.events.push({ id: detail.events.length + 1, task_id: taskId, branch_id: "main", event_type: "change_requested", created_at: updatedAt });
   const reviewNotification = browserMockNotifications.find((item) => item.task_id === taskId && item.kind === "review_ready");

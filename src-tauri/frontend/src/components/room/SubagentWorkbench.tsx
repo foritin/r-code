@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { subagentSessionMessages } from "../../lib/ipc";
-import type { AgentRun, SessionMessage } from "../../lib/types";
+import type { AgentRun, SessionMessage, SubagentAccessMode } from "../../lib/types";
 import {
   IconActivity,
   IconCheck,
   IconChevronDown,
   IconChevronLeft,
+  IconClose,
+  IconMaximize,
+  IconMinimize,
+  IconPlus,
   IconSidebar,
   IconStop,
   IconTerminal,
@@ -29,6 +33,10 @@ interface Props {
   onSelect: (subagentId: string) => void;
   onBack: () => void;
   onClose: () => void;
+  onOpenLauncher: () => void;
+  onHide: () => void;
+  onToggleFocus: () => void;
+  focused: boolean;
   onAbort: (subagentId: string) => Promise<void>;
 }
 
@@ -58,6 +66,14 @@ interface SessionStatusEntry {
 
 type SessionEntry = SessionMessageEntry | SessionToolEntry | SessionStatusEntry;
 
+interface SessionToolGroupEntry {
+  id: string;
+  kind: "tool_group";
+  tools: SessionToolEntry[];
+}
+
+type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroupEntry;
+
 /**
  * 子智能体是工作台内的一条完整导航链，而不是一个覆盖其他工具的临时详情：
  * 列表负责总览，详情负责单个会话，返回键始终回列表。
@@ -70,6 +86,10 @@ export function SubagentWorkbench({
   onSelect,
   onBack,
   onClose,
+  onOpenLauncher,
+  onHide,
+  onToggleFocus,
+  focused,
   onAbort,
 }: Props) {
   const children = useMemo(
@@ -92,7 +112,13 @@ export function SubagentWorkbench({
         </>
       ) : (
         <>
-          <SubagentListHeader onClose={onClose} />
+          <SubagentListHeader
+            onClose={onClose}
+            onOpenLauncher={onOpenLauncher}
+            onHide={onHide}
+            onToggleFocus={onToggleFocus}
+            focused={focused}
+          />
           <SubagentList children={children} onSelect={onSelect} />
         </>
       )}
@@ -100,13 +126,45 @@ export function SubagentWorkbench({
   );
 }
 
-function SubagentListHeader({ onClose }: { onClose: () => void }) {
+function SubagentListHeader({
+  onClose,
+  onOpenLauncher,
+  onHide,
+  onToggleFocus,
+  focused,
+}: {
+  onClose: () => void;
+  onOpenLauncher: () => void;
+  onHide: () => void;
+  onToggleFocus: () => void;
+  focused: boolean;
+}) {
   return (
-    <header className="subagent-page-header">
-      <SubagentAvatar index={0} />
-      <strong>子智能体</strong>
+    <header className="subagent-page-header workbench-head subagent-list-header">
+      <div className="workbench-tabs" role="tablist" aria-label="子智能体工作台">
+        <div className="workbench-tab workbench-active-tab" role="tab" aria-selected="true">
+          <SubagentAvatar index={0} size="xs" />
+          <strong>子智能体</strong>
+          <button
+            type="button"
+            className="workbench-tab-close"
+            data-testid="subagent-tab-close"
+            onClick={onClose}
+            aria-label="关闭子智能体标签页"
+            title="关闭子智能体"
+          >
+            <IconClose width={13} height={13} />
+          </button>
+        </div>
+      </div>
+      <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开工具启动器" title="新增扩展">
+        <IconPlus width={16} height={16} />
+      </button>
       <span className="subagent-page-header-spacer" />
-      <button type="button" className="subagent-page-icon-button" onClick={onClose} aria-label="返回运行与子代理" title="返回运行与子代理">
+      <button type="button" className="subagent-page-icon-button" onClick={onToggleFocus} aria-label={focused ? "退出专注模式" : "专注工作台"} aria-pressed={focused}>
+        {focused ? <IconMinimize width={16} height={16} /> : <IconMaximize width={16} height={16} />}
+      </button>
+      <button type="button" className="subagent-page-icon-button" onClick={onHide} aria-label="隐藏工作台" title="隐藏工作台">
         <IconSidebar width={16} height={16} />
       </button>
     </header>
@@ -127,7 +185,7 @@ function SubagentDetailHeader({
       <button type="button" className="subagent-page-icon-button" onClick={onBack} aria-label="返回子智能体列表" title="返回子智能体列表">
         <IconChevronLeft width={17} height={17} />
       </button>
-      <SubagentAvatar index={index} />
+      <SubagentAvatar index={index} identity={child.id} />
       <strong title={child.label}>{child.label}</strong>
       <span className="subagent-page-header-spacer" />
       <span className={`subagent-page-status status-${child.status}`}>
@@ -145,17 +203,24 @@ function SubagentList({
   children: readonly ActivitySubagent[];
   onSelect: (subagentId: string) => void;
 }) {
-  const active = children.filter((child) => isActive(child.status));
-  const completed = children.filter((child) => child.status === "completed").reverse();
-  const incomplete = children.filter((child) => child.status === "failed" || child.status === "cancelled").reverse();
+  const attention = children.filter((child) => child.status === "waiting_permission");
+  const active = children
+    .filter((child) => child.status === "queued" || child.status === "running")
+    .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
+  const completed = children
+    .filter((child) => child.status === "completed")
+    .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt));
+  const incomplete = children
+    .filter((child) => child.status === "failed" || child.status === "cancelled")
+    .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt));
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (active.length === 0) return;
+    const live = active.length + attention.length > 0;
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    const timer = window.setInterval(() => setNow(Date.now()), live ? 1000 : 60_000);
     return () => window.clearInterval(timer);
-  }, [active.length]);
+  }, [active.length, attention.length]);
 
   if (children.length === 0) {
     return (
@@ -168,6 +233,9 @@ function SubagentList({
 
   return (
     <div className="subagent-workbench-list" aria-label="子智能体列表">
+      {attention.length > 0 && (
+        <SubagentListSection title="需要处理" children={attention} allChildren={children} now={now} onSelect={onSelect} />
+      )}
       {active.length > 0 && (
         <SubagentListSection title="进行中" children={active} allChildren={children} now={now} onSelect={onSelect} />
       )}
@@ -196,7 +264,7 @@ function SubagentListSection({
 }) {
   return (
     <section className="subagent-list-section" aria-label={title}>
-      <h3><span>{title}</span><span>{children.length}</span></h3>
+      <h3><span>{title}<b> · {String(children.length).padStart(2, "0")}</b></span></h3>
       <div className="subagent-list-rows">
         {children.map((child) => {
           const index = Math.max(0, allChildren.findIndex((item) => item.id === child.id));
@@ -208,14 +276,17 @@ function SubagentListSection({
               onClick={() => onSelect(child.id)}
               aria-label={`${child.label}，${statusLabel(child.status)}`}
             >
-              <SubagentAvatar index={index} />
+              <SubagentAvatar
+                index={index}
+                identity={child.id}
+                className={`subagent-list-avatar status-${child.status}`}
+              />
               <span className="subagent-list-row-copy">
                 <strong title={child.label}>{child.label}</strong>
-                <small title={observation(child)}>{observation(child)}</small>
+                <small title={listObservation(child)}>{listObservation(child)}</small>
               </span>
-              <span className="subagent-list-row-meta">
-                <SubagentStateMark status={child.status} />
-                <span>{elapsedCompact(child.startedAt, child.endedAt ?? now)}</span>
+              <span className="subagent-list-row-meta" title={listTimeTitle(child)}>
+                <time>{listTime(child, now)}</time>
               </span>
             </button>
           );
@@ -289,6 +360,9 @@ function SubagentInspector({
   );
   const runtimeEntries = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
   const transcriptEntries = entries.filter((entry): entry is SessionMessageEntry | SessionToolEntry => entry.kind !== "status");
+  const transcriptBlocks = useMemo(() => groupTranscriptEntries(transcriptEntries), [transcriptEntries]);
+  const failedToolCount = transcriptEntries.filter((entry) => entry.kind === "tool" && entry.state === "fail").length;
+  const accessMode = resolveSessionAccessMode(messages, child.accessMode);
 
   const stop = async () => {
     if (stopping || !active) return;
@@ -314,11 +388,17 @@ function SubagentInspector({
           onClick={() => setExpanded((value) => !value)}
         >
           <span>已处理 {elapsedCompact(child.startedAt, child.endedAt ?? now)}</span>
+          <span className={`subagent-session-permission mode-${accessMode}`}>{accessModeLabel(accessMode)}</span>
           <IconChevronDown width={13} height={13} />
         </button>
 
         {expanded && (
           <div className="subagent-session-body" id={`subagent-session-${child.id}`}>
+            <div className="subagent-session-meta" aria-label="子智能体编排信息">
+              <span><b>执行器</b>{child.runtimeKind === "codex_exec" ? "Codex CLI" : "R-Code"}</span>
+              <span><b>权限</b>{accessModeLabel(accessMode)}</span>
+              {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
+            </div>
             {error && <div className="subagent-session-error">读取子智能体记录失败：{error}</div>}
             {runtimeEntries.length > 0 && <SubagentRuntimeLog entries={runtimeEntries} />}
             {loading && transcriptEntries.length === 0 ? (
@@ -327,12 +407,14 @@ function SubagentInspector({
               <p className="subagent-session-placeholder">{active ? "Codex 正在运行；公开回复和工具输出会实时出现在这里。" : "运行已经结束，没有保存可见回复。"}</p>
             ) : (
               <div className="subagent-transcript" aria-label="子智能体公开输出">
-                {transcriptEntries.map((entry) => entry.kind === "tool" ? (
+                {transcriptBlocks.map((entry) => entry.kind === "tool_group" ? (
+                  <SubagentToolGroup entry={entry} key={entry.id} />
+                ) : entry.kind === "tool" ? (
                   <SubagentToolEvent entry={entry} key={entry.id} />
                 ) : (
                   <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
                     <div className="subagent-transcript-speaker">
-                      <SubagentAvatar index={index} size="xs" />
+                      <SubagentAvatar index={index} identity={child.id} size="xs" />
                       <span>子智能体</span>
                     </div>
                     <Markdown text={entry.text} />
@@ -340,9 +422,9 @@ function SubagentInspector({
                 ))}
               </div>
             )}
-            <div className={`subagent-session-state status-${child.status}`} role="status" aria-live="polite">
+            <div className={`subagent-session-state status-${child.status}${failedToolCount > 0 ? " has-tool-failures" : ""}`} role="status" aria-live="polite">
               <SubagentStateMark status={child.status} />
-              <span>{liveStateLabel(child.status)}</span>
+              <span>{liveStateLabel(child.status, failedToolCount)}</span>
               {active && (
                 <button type="button" disabled={stopping} onClick={() => void stop()}>
                   <IconStop width={11} height={11} /> {stopping ? "停止中…" : "停止"}
@@ -376,6 +458,45 @@ function SubagentRuntimeLog({ entries }: { entries: readonly SessionStatusEntry[
         ))}
       </ol>
     </details>
+  );
+}
+
+function SubagentToolGroup({ entry }: { entry: SessionToolGroupEntry }) {
+  const activeCount = entry.tools.filter((tool) => tool.state === "active").length;
+  const failedCount = entry.tools.filter((tool) => tool.state === "fail").length;
+  const [open, setOpen] = useState(activeCount > 0);
+
+  useEffect(() => {
+    if (activeCount > 0) setOpen(true);
+  }, [activeCount]);
+
+  const state = activeCount > 0 ? "active" : failedCount > 0 ? "fail" : "ok";
+  const stateText = activeCount > 0
+    ? `${activeCount} 项运行中`
+    : failedCount > 0
+      ? `${failedCount} 项失败`
+      : "全部完成";
+  const names = [...new Set(entry.tools.map((tool) => tool.toolName))].join("、");
+  return (
+    <section className={`subagent-tool-group state-${state}${open ? " open" : ""}`}>
+      <button
+        type="button"
+        className="subagent-tool-group-head ring-inset"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="subagent-transcript-tool-icon"><IconTerminal width={13} height={13} /></span>
+        <span className="subagent-tool-group-title">运行了 {entry.tools.length} 项操作</span>
+        <code title={names}>{names}</code>
+        <span className={`subagent-transcript-tool-state state-${state}`}>{stateText}</span>
+        <IconChevronDown width={13} height={13} />
+      </button>
+      {open && (
+        <div className="subagent-tool-group-list">
+          {entry.tools.map((tool) => <SubagentToolEvent entry={tool} key={tool.id} />)}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -425,6 +546,8 @@ function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly Age
       label: run.agent_label?.trim() || "子智能体",
       runtimeKind: run.runtime_kind,
       model: run.model || null,
+      accessMode: run.access_mode ?? "read_only",
+      routingReason: compactText(run.routing_reason),
       status: runStatus(run),
       phase: run.ended_at ? "idle" : "requesting",
       detail: compactText(run.summary),
@@ -459,7 +582,12 @@ function buildLiveEntries(events: readonly ActivitySubagentEvent[]): SessionEntr
     }
     if (event.kind === "message") {
       const text = visibleText(event.detail);
-      if (text) entries.push({ id: event.id, kind: "message", text, tone: event.isError ? "danger" : "normal" });
+      if (text) appendMessageEntry(entries, {
+        id: event.id,
+        kind: "message",
+        text,
+        tone: event.isError ? "danger" : "normal",
+      });
       continue;
     }
     const text = compactText(event.detail) ?? compactText(event.label);
@@ -516,7 +644,12 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
     }
     if (message.kind === "message" && message.role === "assistant") {
       const text = visibleText(message.text);
-      if (text) entries.push({ id, kind: "message", text, tone: text.startsWith("[error]") ? "danger" : "normal" });
+      if (text) appendMessageEntry(entries, {
+        id,
+        kind: "message",
+        text,
+        tone: text.startsWith("[error]") ? "danger" : "normal",
+      });
       continue;
     }
     if (message.kind !== "system" || (message.text !== "subagent_activity" && message.text !== "subagent_lifecycle")) continue;
@@ -540,11 +673,72 @@ function mergeSessionEntries(
   liveEntries: readonly SessionEntry[],
 ): SessionEntry[] {
   const entries = [...persistedEntries];
+  const matchedPersisted = new Set<number>();
   for (const live of liveEntries) {
-    if (entries.some((entry) => sessionEntriesEquivalent(entry, live))) continue;
+    const existingIndex = entries.findIndex((entry, index) => (
+      !matchedPersisted.has(index) && sessionEntriesEquivalent(entry, live)
+    ));
+    if (existingIndex >= 0) {
+      matchedPersisted.add(existingIndex);
+      const existing = entries[existingIndex];
+      if (existing.kind === "message" && live.kind === "message" && live.text.length > existing.text.length) {
+        entries[existingIndex] = live;
+      }
+      continue;
+    }
     entries.push(live);
   }
   return entries.slice(-80);
+}
+
+function appendMessageEntry(entries: SessionEntry[], entry: SessionMessageEntry) {
+  const previous = entries[entries.length - 1];
+  if (previous?.kind === "message" && previous.tone === entry.tone) {
+    entries[entries.length - 1] = {
+      ...previous,
+      text: joinVisibleMessageText(previous.text, entry.text),
+    };
+    return;
+  }
+  entries.push(entry);
+}
+
+function joinVisibleMessageText(left: string, right: string): string {
+  if (!left) return right;
+  if (!right) return left;
+  if (/\s$/.test(left) || /^\s/.test(right)) return `${left}${right}`.trim();
+  const leftChar = left[left.length - 1] ?? "";
+  const rightChar = right[0] ?? "";
+  const cjk = /[\u3400-\u9fff]/;
+  const punctuation = /[，。！？；：、,.!?;:)}\]》」』]/;
+  if ((cjk.test(leftChar) && cjk.test(rightChar)) || punctuation.test(rightChar)) {
+    return `${left}${right}`;
+  }
+  return `${left} ${right}`;
+}
+
+function groupTranscriptEntries(
+  entries: readonly (SessionMessageEntry | SessionToolEntry)[],
+): TranscriptBlock[] {
+  const blocks: TranscriptBlock[] = [];
+  let pendingTools: SessionToolEntry[] = [];
+  const flushTools = () => {
+    if (pendingTools.length === 1) blocks.push(pendingTools[0]);
+    else if (pendingTools.length > 1) {
+      blocks.push({ id: `tool-group-${pendingTools[0].id}`, kind: "tool_group", tools: pendingTools });
+    }
+    pendingTools = [];
+  };
+  for (const entry of entries) {
+    if (entry.kind === "tool") {
+      pendingTools.push(entry);
+    } else {
+      flushTools();
+      blocks.push(entry);
+    }
+  }
+  flushTools();
+  return blocks;
 }
 
 function sessionEntriesEquivalent(left: SessionEntry, right: SessionEntry): boolean {
@@ -594,6 +788,29 @@ function visibleText(value: string | null | undefined, limit = 20_000): string |
   const normalized = value?.trim();
   if (!normalized) return null;
   return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+function resolveSessionAccessMode(
+  messages: readonly SessionMessage[],
+  fallback: SubagentAccessMode,
+): SubagentAccessMode {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.kind !== "system" || message.text !== "subagent_lifecycle") continue;
+    const data = parseObject(message.output_json);
+    const scope = data?.scope;
+    const value = typeof data?.access_mode === "string"
+      ? data.access_mode
+      : scope && typeof scope === "object" && !Array.isArray(scope)
+        ? (scope as Record<string, unknown>).access_mode
+        : null;
+    if (value === "full_access" || value === "read_only") return value;
+  }
+  return fallback;
+}
+
+function accessModeLabel(mode: SubagentAccessMode): string {
+  return mode === "full_access" ? "完全访问" : "只读";
 }
 
 function toolStateLabel(state: ToolState): string {
@@ -658,12 +875,14 @@ function statusLabel(status: SubagentStatus): string {
   }
 }
 
-function liveStateLabel(status: SubagentStatus): string {
+function liveStateLabel(status: SubagentStatus, failedToolCount = 0): string {
   switch (status) {
     case "queued": return "正在等待调度";
     case "running": return "正在继续运行";
     case "waiting_permission": return "正在等待权限";
-    case "completed": return "运行已完成";
+    case "completed": return failedToolCount > 0
+      ? `运行已完成 · ${failedToolCount} 项操作失败`
+      : "运行已完成";
     case "failed": return "运行失败";
     case "cancelled": return "运行已停止";
   }
@@ -679,6 +898,37 @@ function observation(child: ActivitySubagent): string {
     case "failed": return "运行未完成";
     case "cancelled": return "已由用户停止";
   }
+}
+
+function listObservation(child: ActivitySubagent): string {
+  const value = observation(child).replace(/\s+/g, " ").trim();
+  if (value.startsWith("{") || value.startsWith("[")) return `${statusLabel(child.status)}，打开详情查看结构化结果`;
+  return value.length > 180 ? `${value.slice(0, 179).trimEnd()}…` : value;
+}
+
+function listTime(child: ActivitySubagent, now: number): string {
+  if (isActive(child.status)) return elapsedCompact(child.startedAt, now);
+  return relativeCompact(child.endedAt ?? child.lastEventAt, now);
+}
+
+function listTimeTitle(child: ActivitySubagent): string {
+  const endedAt = child.endedAt ?? child.lastEventAt;
+  const duration = elapsedCompact(child.startedAt, endedAt);
+  if (isActive(child.status)) return `已运行 ${duration}`;
+  return `${statusLabel(child.status)}于 ${new Date(endedAt).toLocaleString("zh-CN")} · 总耗时 ${duration}`;
+}
+
+function relativeCompact(timestamp: number, now: number): string {
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return "刚刚";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days}天前`;
+  const months = Math.floor(days / 30);
+  return months < 12 ? `${months}个月前` : `${Math.floor(months / 12)}年前`;
 }
 
 function elapsedCompact(startedAt: number, endedAt: number): string {

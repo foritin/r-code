@@ -7,6 +7,13 @@
 
 // ---------- 任务 ----------
 export type TaskMode = "ask" | "edit" | "auto";
+export type TaskAgentEngine = "r_code" | "codex";
+export interface InferenceOptions {
+  /** 未设置表示沿用当前模型服务默认。 */
+  thinking?: "enabled" | "disabled" | "adaptive" | string | null;
+  reasoning_effort?: string | null;
+  verbosity?: "low" | "medium" | "high" | string | null;
+}
 export type TaskState =
   | "idle"
   | "exploring"
@@ -23,6 +30,10 @@ export interface Task {
   provider_name: string | null;
   /** 会话绑定的具体模型；null 表示沿用该服务在设置里配置的默认模型。 */
   model: string | null;
+  /** 会话级模型专属参数；空对象表示服务默认。 */
+  inference: InferenceOptions;
+  /** 当前会话实际使用的主 Agent；与全局默认解耦。 */
+  agent_engine: TaskAgentEngine;
   title: string;
   goal: string;
   mode: TaskMode;
@@ -66,6 +77,8 @@ export interface AgentRun {
   started_at: string;
   ended_at: string | null;
   usage_json: string | null;
+  access_mode: SubagentAccessMode;
+  routing_reason: string | null;
 }
 
 export type TaskEventType =
@@ -347,13 +360,15 @@ export interface ReplayEntry {
 // ---------- Agent 流式事件（serde tag="type"） ----------
 /** 仅描述可观察的运行活动；不包含模型私有推理。 */
 export type AgentActivityPhase =
+  | "routing"
   | "requesting"
   | "streaming"
   | "tool"
   | "waiting_permission"
   | "steer_accepted"
   | "steer_applied"
-  | "finalizing";
+  | "finalizing"
+  | "reviewing";
 
 export type SubagentState =
   | "queued"
@@ -362,6 +377,8 @@ export type SubagentState =
   | "completed"
   | "failed"
   | "cancelled";
+
+export type SubagentAccessMode = "read_only" | "full_access";
 
 export interface AgentEventScope {
   run_id: string;
@@ -372,6 +389,8 @@ export interface AgentEventScope {
   delegated_by_tool_call_id?: string;
   runtime_kind?: AgentRunRuntimeKind;
   model?: string;
+  access_mode?: SubagentAccessMode;
+  routing_reason?: string;
 }
 
 export type AgentEvent =
@@ -597,8 +616,18 @@ export interface AppConfig {
   mcp_servers?: Record<string, unknown>;
   storage?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
+  orchestration?: OrchestrationConfig;
   tauri?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface OrchestrationConfig {
+  default_agent_engine: TaskAgentEngine;
+  delegation_router: "manual" | "balanced" | "r_code_first" | "codex_first";
+  allow_cross_engine_delegation: boolean;
+  quality_loop: "off" | "auto" | "always";
+  quality_reviewer: "auto" | "r_code" | "codex";
+  max_review_rounds: number;
 }
 
 /** cmd_settings_get 返回：宽松加载，validation 为软提示（未配置 provider 等）。 */

@@ -395,6 +395,9 @@ export function RoomScene() {
               <span className="room-scope-state scoped">
                 {projectAccessModeLabel(workspaceAccessMode)}
               </span>
+              <span className="room-scope-state agent-engine-state">
+                主 Agent · {task?.agent_engine === "codex" ? "Codex CLI" : "R-Code"}
+              </span>
               {detail?.active_branch.id && detail.active_branch.id !== "main" && (
                 <span className="room-scope-state" title={`从 ${detail?.active_branch.parent_branch_id ?? "主分支"} 分叉`}>
                   编辑分支
@@ -444,7 +447,9 @@ export function RoomScene() {
               onAccessModeChange={setWorkspaceAccessMode}
               scopeBusy={scopeBusy}
               providerName={task.provider_name ?? null}
+              agentEngine={task.agent_engine}
               model={task.model ?? null}
+              inference={task.inference ?? {}}
               providerChoices={providers.choices}
               providerFallback={providers.fallback}
               onProviderChanged={() => void refreshDetail(currentTaskId)}

@@ -3,6 +3,7 @@ import { useAppStore } from "../../store/app";
 import { useTasksStore, selectNeedsYou } from "../../store/tasks";
 import {
   agentSend,
+  codexIntegrationStatus,
   recoveryCleanup,
   recoveryData,
   settingsGet,
@@ -12,7 +13,12 @@ import {
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { errText } from "../../lib/format";
-import type { ProjectAccessMode, RecoveryPageData } from "../../lib/types";
+import type {
+  CodexIntegrationStatus,
+  ProjectAccessMode,
+  RecoveryPageData,
+  TaskAgentEngine,
+} from "../../lib/types";
 import {
   ProjectAccessSelector,
   projectAccessModeLabel,
@@ -39,6 +45,7 @@ import {
   IconProjects,
   IconSend,
   IconShield,
+  IconSubagent,
   IconTerminal,
 } from "../icons";
 
@@ -65,6 +72,8 @@ export function HomeScene() {
 
   const [goal, setGoal] = useState("");
   const [provider, setProvider] = useState<ProviderChoice | null>(null);
+  const [agentEngine, setAgentEngine] = useState<TaskAgentEngine>("r_code");
+  const [codexStatus, setCodexStatus] = useState<CodexIntegrationStatus | null>(null);
   const [launching, setLaunching] = useState(false);
   const [selectingFolder, setSelectingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +93,10 @@ export function HomeScene() {
   const activeProvider = provider ?? providerChoices.find((choice) => choice.name === fallback) ?? null;
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
   const providerReady = activeProvider?.ready ?? false;
+  const codexReady = Boolean(codexStatus?.integration_ready);
+  const engineReady = agentEngine === "r_code"
+    ? providerReady
+    : Boolean(currentWorkspace && codexReady);
   const slashContext = {
     location: "home" as const,
     workspaceAttached: Boolean(currentWorkspace),
@@ -91,7 +104,7 @@ export function HomeScene() {
   };
   const slashItems = slashDismissed ? [] : matchingSlashCommands(goal, slashContext);
   const slashOpen = slashItems.length > 0;
-  const canSend = goal.trim().length > 0 && !launching && (providerReady || goal.trim().startsWith("/"));
+  const canSend = goal.trim().length > 0 && !launching && (engineReady || goal.trim().startsWith("/"));
 
   usePoll(async () => {
     await refreshTasks();
@@ -109,6 +122,18 @@ export function HomeScene() {
       return providerChoices.find((choice) => choice.name === fallback) ?? null;
     });
   }, [providerChoices, fallback]);
+
+  useEffect(() => {
+    let alive = true;
+    void Promise.all([settingsGet(), codexIntegrationStatus()]).then(([settings, status]) => {
+      if (!alive) return;
+      setAgentEngine(settings.config.orchestration?.default_agent_engine ?? "r_code");
+      setCodexStatus(status);
+    }).catch(() => {
+      // Provider/Codex readiness already has its own visible error and setup entry.
+    });
+    return () => { alive = false; };
+  }, []);
 
   useEffect(() => {
     if (slashActive < slashItems.length) return;
@@ -168,8 +193,16 @@ export function HomeScene() {
   };
 
   const launchConversation = async (message: string, title: string) => {
-    if (!providerReady) {
+    if (agentEngine === "r_code" && !providerReady) {
       setError("先连接并保存一个模型服务，随后即可直接开始聊天。");
+      return;
+    }
+    if (agentEngine === "codex" && !currentWorkspace) {
+      setError("Codex 主 Agent 需要先附加一个本地工作区。");
+      return;
+    }
+    if (agentEngine === "codex" && !codexReady) {
+      setError("Codex CLI 尚未完成安装、登录或 R-Code 协作配置。请先前往设置完成连接。");
       return;
     }
     setLaunching(true);
@@ -181,7 +214,8 @@ export function HomeScene() {
         title.slice(0, 48),
         message,
         currentWorkspacePath ? "edit" : "ask",
-        activeProvider?.name ?? null
+        activeProvider?.name ?? null,
+        agentEngine,
       );
       stage = "发送消息";
       await agentSend(task.id, message);
@@ -239,12 +273,15 @@ export function HomeScene() {
         setGoal("");
         setCommandNotice(
           `${currentWorkspace ? `将附加 ${currentWorkspace.display_name} · ${projectAccessModeLabel(currentWorkspace.access_mode)}` : "将以纯聊天开始"}；` +
-          `模型 ${activeProvider?.label ?? "尚未选择"} / ${activeProvider?.model ?? "—"}。`,
+          (agentEngine === "codex"
+            ? "主 Agent Codex CLI；子任务可按编排策略委派给 R-Code。"
+            : `主 Agent R-Code；模型 ${activeProvider?.label ?? "尚未选择"} / ${activeProvider?.model ?? "—"}。`),
         );
         return;
       case "model":
         setGoal("");
-        setProviderMenuRequest((value) => value + 1);
+        if (agentEngine === "codex") setSettingsPane("codex");
+        else setProviderMenuRequest((value) => value + 1);
         return;
       case "search":
         setGoal("");
@@ -344,8 +381,8 @@ export function HomeScene() {
       <div className="home-stage">
         <div className="home-intro">
           <div className="home-eyebrow">
-            <span className={`status-dot${providerReady ? " ready" : ""}`} />
-            {providerReady ? "NEW TASK" : "CONNECT MODEL"}
+            <span className={`status-dot${engineReady ? " ready" : ""}`} />
+            {engineReady ? `NEW TASK · ${agentEngine === "codex" ? "CODEX" : "R-CODE"}` : "CONNECT AGENT"}
             {needsYou.length > 0 && (
               <button className="quiet-link" onClick={() => setScene("inbox")}>
                 {needsYou.length} 项待处理
@@ -355,12 +392,14 @@ export function HomeScene() {
 
           <h1>从结果开始，而不是从工具开始。</h1>
           <p className="home-subtitle">
-            {providerReady
-              ? "描述你要完成的事情。R-Code 会读取当前工作区、按需执行命令，并把每一处改动留给你审核。"
-              : "连接任意兼容模型服务后，直接描述目标；工作区仍可在需要读取或修改代码时再附加。"}
+            {engineReady
+              ? `描述你要完成的事情。${agentEngine === "codex" ? "Codex CLI" : "R-Code"} 会在可见权限边界内执行，并把路由、子智能体与复核过程留给你查看。`
+              : agentEngine === "codex"
+                ? "Codex 主 Agent 需要本机 CLI、登录状态和一个已附加的工作区。"
+                : "连接任意兼容模型服务后，直接描述目标；工作区仍可在需要读取或修改代码时再附加。"}
           </p>
 
-          {providerReady && (
+          {engineReady && (
             <div className="home-suggestions" aria-label="任务示例">
               <button className="home-suggestion" type="button" onClick={() => setGoal("定位失败的测试，说明根因并修复。")}>
                 <IconTerminal width={15} height={15} />
@@ -414,7 +453,7 @@ export function HomeScene() {
             aria-label="描述新任务"
             aria-controls={slashOpen ? "slash-command-menu" : undefined}
             aria-activedescendant={slashOpen ? `slash-command-option-${slashActive}` : undefined}
-            placeholder={providerReady ? "描述你想完成的事…" : "先在设置中连接模型服务…"}
+            placeholder={engineReady ? "描述你想完成的事…" : agentEngine === "codex" ? "先连接 Codex 并附加工作区…" : "先在设置中连接模型服务…"}
             onChange={(event) => {
               setGoal(event.target.value);
               setSlashActive(0);
@@ -519,6 +558,46 @@ export function HomeScene() {
               </Menu>
 
               <Menu
+                className="agent-engine-control"
+                label="选择主 Agent"
+                placement="up"
+                align="left"
+                trigger={
+                  <button className={`provider-pill ready agent-engine-pill engine-${agentEngine}`}>
+                    <IconSubagent width={14} height={14} />
+                    <span>{agentEngine === "codex" ? "Codex CLI" : "R-Code"}</span>
+                    <small>主 Agent</small>
+                    <IconChevronDown width={12} height={12} />
+                  </button>
+                }
+              >
+                {({ close }) => (
+                  <>
+                    <MenuItem
+                      close={close}
+                      checked={agentEngine === "r_code"}
+                      hint="使用自定义 Provider；支持宿主路由与质量复核"
+                      onSelect={() => setAgentEngine("r_code")}
+                    >
+                      R-Code
+                    </MenuItem>
+                    <MenuItem
+                      close={close}
+                      checked={agentEngine === "codex"}
+                      disabled={!codexReady || !currentWorkspace}
+                      hint={!codexReady ? "先完成 Codex CLI 协作配置" : !currentWorkspace ? "先附加工作区" : "使用本机登录的 Codex CLI"}
+                      onSelect={() => setAgentEngine("codex")}
+                    >
+                      Codex CLI
+                    </MenuItem>
+                    <MenuSeparator />
+                    <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>管理 Agent 编排</MenuItem>
+                    {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>连接 Codex CLI</MenuItem>}
+                  </>
+                )}
+              </Menu>
+
+              {agentEngine === "r_code" && <Menu
                 className="provider-control"
                 label="选择模型服务"
                 placement="up"
@@ -561,7 +640,7 @@ export function HomeScene() {
                     </MenuItem>
                   </>
                 )}
-              </Menu>
+              </Menu>}
 
               {currentWorkspace && (
                 <ProjectAccessSelector
@@ -574,9 +653,9 @@ export function HomeScene() {
             </div>
 
             <div className="composer-actions">
-              {!providerReady && (
-                <button className="provider-link" onClick={() => setScene("settings")}>
-                  连接模型服务
+              {!engineReady && (
+                <button className="provider-link" onClick={() => setSettingsPane(agentEngine === "codex" ? "codex" : "providers")}>
+                  {agentEngine === "codex" ? "连接 Codex CLI" : "连接模型服务"}
                 </button>
               )}
               <span className="send-hint">{keyLabel("new").replace(/ .*/, "")} + Enter</span>

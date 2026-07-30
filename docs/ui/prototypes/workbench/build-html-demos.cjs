@@ -35,10 +35,15 @@ const scenarioCopy = {
   "event-multi-command-expanded": ["运行过程", "展开多个命令"],
   "event-shell-expanded": ["运行过程", "展开 Shell 输出"],
   "event-single-file-diff-expanded": ["运行过程", "展开单文件 Diff"],
+  "workbench-multi-tabs": ["右侧栏", "多标签与关闭"],
+  "workbench-tab-fallback": ["右侧栏", "关闭后回到前一页"],
+  "workbench-launcher-restored": ["右侧栏", "关闭末页后重开"],
   "approval-required": ["恢复与许可", "等待人工许可"],
   "command-failed": ["恢复与许可", "命令失败与重试"],
   "new-task": ["开始任务", "新任务空态"],
   "context-picker": ["开始任务", "引用上下文文件"],
+  "model-configuration": ["模型配置", "模型专属参数"],
+  "codex-configuration": ["模型配置", "Codex 运行偏好"],
 };
 
 const demoScenarios = [
@@ -46,6 +51,7 @@ const demoScenarios = [
     id: scenario.slug,
     number: scenario.dark,
     query: scenario.query,
+    prepare: scenario.prepare,
   })),
   { id: "conversation-actions", number: "14", query: "scene=room&task=complete&state=hidden", prepare: "actions" },
   { id: "conversation-pinned", number: "16", query: "scene=room&task=complete&state=hidden", prepare: "pinned" },
@@ -346,6 +352,12 @@ async function bootWorkbenchDemo({ config, scenarios, installers }) {
       return;
     }
 
+    if (scenario.prepare === "model-config") {
+      document.querySelector(".model-config-trigger")?.click();
+      await waitFor(() => document.querySelector(".model-config-menu"));
+      return;
+    }
+
     if (scenario.prepare === "archived") {
       const visibleConversationRow = () => [...document.querySelectorAll(".conversation-row")]
         .find((candidate) => {
@@ -393,7 +405,7 @@ async function bootWorkbenchDemo({ config, scenarios, installers }) {
     panel.setAttribute("aria-label", "原型场景导航");
     panel.innerHTML = `
       <header class="prototype-demo-panel-head">
-        <div><strong>${config.title}</strong><small>21 个真实状态；使用 [ 和 ] 快速切换。</small></div>
+        <div><strong>${config.title}</strong><small>${scenarios.length} 个真实状态；使用 [ 和 ] 快速切换。</small></div>
         <button type="button" class="prototype-demo-panel-close" aria-label="关闭场景导航">×</button>
       </header>
       <div class="prototype-demo-groups">

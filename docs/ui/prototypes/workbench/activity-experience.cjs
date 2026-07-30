@@ -114,11 +114,18 @@ const activityExperienceCss = String.raw`
 
   .prototype-activity-command-list {
     display: grid;
-    gap: 9px;
+    max-height: 252px;
+    gap: 5px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: 7px;
+    scrollbar-gutter: stable;
   }
 
   .prototype-activity-child-command {
     grid-template-columns: 20px minmax(0, 1fr) auto;
+    min-height: 30px;
+    padding-block: 4px;
     color: var(--prototype-activity-muted);
     font-family: var(--font-ui);
   }
@@ -406,9 +413,15 @@ rendered dark/36-approval-required-dark.png
 rendered dark/38-command-failed-dark.png
 rendered dark/40-new-task-dark.png
 rendered dark/42-context-picker-dark.png
-TOTAL=38
-LIGHT=17
-DARK=21
+rendered light/35-workbench-multi-tabs-light.png
+rendered dark/44-workbench-multi-tabs-dark.png
+rendered light/37-workbench-tab-fallback-light.png
+rendered dark/46-workbench-tab-fallback-dark.png
+rendered light/39-workbench-launcher-restored-light.png
+rendered dark/48-workbench-launcher-restored-dark.png
+TOTAL=44
+LIGHT=20
+DARK=24
 TEMP_ARTIFACTS=0</pre>
       </div>`;
 
@@ -426,6 +439,24 @@ TEMP_ARTIFACTS=0</pre>
           <span class="prototype-diff-line is-add"><span class="prototype-diff-number">902</span><span class="prototype-diff-source">+ }</span></span>
         </div>
       </div>`;
+
+    const multiCommands = [
+      "Ran rg -n \"workbench-active-tab|workbench-tab-close\" src-tauri/frontend/src",
+      "Ran Get-Content src-tauri/frontend/src/components/room/Canvas.tsx",
+      "Ran Get-Content src-tauri/frontend/src/store/app.ts",
+      "Ran rg -n \"prototypePanel|workbench-close\" docs/ui/prototypes/workbench",
+      "Ran node --check docs/ui/prototypes/workbench/activity-experience.cjs",
+      "Ran node --check docs/ui/prototypes/workbench/sidebar-experience.cjs",
+      "Ran npm run build:demo",
+      "Ran node docs/ui/prototypes/workbench/render-workbench.cjs",
+    ];
+    const multiCommandRows = multiCommands.map((command) => `
+      <div data-prototype-child-command>
+        <button type="button" class="prototype-activity-child-command" aria-expanded="false">
+          <span class="prototype-activity-icon">${terminalIcon}</span><code>${command}</code>${chevronIcon}
+        </button>
+        <div class="prototype-activity-details" hidden>${shellCard}</div>
+      </div>`).join("");
 
     const traceHtml = `
       <div class="prototype-activity-trace">
@@ -460,18 +491,7 @@ TEMP_ARTIFACTS=0</pre>
             <span class="prototype-activity-icon">${terminalIcon}</span><span class="prototype-activity-title">运行了多个命令</span>${chevronIcon}
           </button>
           <div class="prototype-activity-details prototype-activity-command-list" id="prototype-multi-command-detail" ${multiOpen ? "" : "hidden"}>
-            <div data-prototype-child-command>
-              <button type="button" class="prototype-activity-child-command" aria-expanded="false">
-                <span class="prototype-activity-icon">${terminalIcon}</span><code>Ran node --check docs/ui/prototypes/workbench/activity-experience.cjs</code>${chevronIcon}
-              </button>
-              <div class="prototype-activity-details" hidden>${shellCard}</div>
-            </div>
-            <div data-prototype-child-command>
-              <button type="button" class="prototype-activity-child-command" aria-expanded="false">
-                <span class="prototype-activity-icon">${terminalIcon}</span><code>Ran node docs/ui/prototypes/workbench/render-workbench.cjs</code>${chevronIcon}
-              </button>
-              <div class="prototype-activity-details" hidden>${shellCard}</div>
-            </div>
+            ${multiCommandRows}
           </div>
         </div>
 

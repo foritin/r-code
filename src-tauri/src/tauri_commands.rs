@@ -7,6 +7,7 @@
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use hermes_core::InferenceOptions;
 use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, VerificationRecord, Workspace,
@@ -28,14 +29,16 @@ pub async fn cmd_task_create(
     goal: String,
     mode: String,
     provider_name: Option<String>,
+    agent_engine: Option<String>,
 ) -> Result<Task, String> {
-    r_code_host::commands::task_create_with_provider(
+    r_code_host::commands::task_create_with_agent(
         &state,
         workspace_path.as_deref(),
         &title,
         &goal,
         &mode,
         provider_name.as_deref(),
+        agent_engine.as_deref(),
     )
     .await
 }
@@ -57,6 +60,16 @@ pub async fn cmd_task_archive(
     task_id: String,
 ) -> Result<Task, String> {
     r_code_host::commands::task_archive(&state, &task_id).await
+}
+
+/// 切换空闲会话的主 Agent；下一次运行使用 R-Code provider 或 Codex CLI。
+#[tauri::command]
+pub async fn cmd_task_set_agent_engine(
+    state: State<'_, CommandState>,
+    task_id: String,
+    agent_engine: String,
+) -> Result<Task, String> {
+    r_code_host::commands::task_set_agent_engine(&state, &task_id, &agent_engine).await
 }
 
 /// 永久删除已停止的会话；项目目录和工作区文件不在删除范围内。
@@ -96,6 +109,16 @@ pub async fn cmd_task_set_model(
     model: Option<String>,
 ) -> Result<Task, String> {
     r_code_host::commands::task_set_model(&state, &task_id, model.as_deref()).await
+}
+
+/// 修改空闲会话的模型专属推理参数；空字段沿用服务默认值。
+#[tauri::command]
+pub async fn cmd_task_set_inference(
+    state: State<'_, CommandState>,
+    task_id: String,
+    inference: InferenceOptions,
+) -> Result<Task, String> {
+    r_code_host::commands::task_set_inference(&state, &task_id, inference).await
 }
 
 /// 修改会话在列表中显示的名称。

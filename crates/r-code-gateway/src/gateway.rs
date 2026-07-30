@@ -220,7 +220,10 @@ impl ToolGateway {
 
         // 2. 获取风险等级（按本次输入动态定级；非命令类工具回落到静态等级）
         let risk_level = tool.risk_for(&input);
-        if is_subagent_caller(caller) && !subagent_read_only_tool_allowed(tool_name) {
+        if is_subagent_caller(caller)
+            && access_mode != ProjectAccessMode::FullAccess
+            && !subagent_read_only_tool_allowed(tool_name)
+        {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
             let mut audit =
                 ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
@@ -350,7 +353,10 @@ impl ToolGateway {
             audit.id = call_id.to_string();
         }
         audit.caller = caller.map(|s| s.to_string());
-        if is_subagent_caller(caller) && !subagent_read_only_tool_allowed(tool_name) {
+        if is_subagent_caller(caller)
+            && access_mode != ProjectAccessMode::FullAccess
+            && !subagent_read_only_tool_allowed(tool_name)
+        {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
             audit.deny(&reason);
             self.ledger.write().await.push(audit);
@@ -756,6 +762,30 @@ mod tests {
         assert!(ledger
             .iter()
             .all(|entry| entry.caller.as_deref() == Some("subagent:child-1")));
+    }
+
+    #[tokio::test]
+    async fn explicitly_elevated_subagent_can_use_workspace_write_tools() {
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(WriteTool));
+
+        let outcome = gw
+            .execute_call_with_access_mode(
+                "t1",
+                "child-full",
+                "write_file",
+                serde_json::json!({ "path": "foo.txt", "content": "bar" }),
+                Some("subagent:child-full"),
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.content, "wrote to foo.txt");
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].status, ToolCallStatus::Ok);
+        assert_eq!(ledger[0].caller.as_deref(), Some("subagent:child-full"));
     }
 
     #[tokio::test]

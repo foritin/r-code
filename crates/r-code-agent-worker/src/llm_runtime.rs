@@ -18,12 +18,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
 use hermes_core::{
-    CompletionRequest, LlmProvider, Message, Session, SessionMeta, ToolCallOutcome, ToolHost,
-    ToolSource, ToolSpec,
+    CompletionRequest, InferenceOptions, LlmProvider, Message, Session, SessionMeta,
+    ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
-    CreateSessionInput, ProjectAccessMode, SubagentState, TaskMode, TaskState,
+    CreateSessionInput, ProjectAccessMode, SubagentAccessMode, SubagentState, TaskMode, TaskState,
 };
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
@@ -48,6 +48,55 @@ const MAX_SUBAGENTS_PER_RUN: usize = 8;
 const MAX_SUBAGENT_ITERATIONS: usize = 12;
 /// 进入主 Agent 上下文的单个子代理摘要上限。
 const MAX_SUBAGENT_SUMMARY_CHARS: usize = 3_000;
+
+/// `delegate_task(agent="auto")` 的宿主路由策略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DelegationRouterMode {
+    Manual,
+    #[default]
+    Balanced,
+    RCodeFirst,
+    CodexFirst,
+}
+
+/// 完成主回复后是否启动显式、可观察的质量复核。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QualityLoopMode {
+    Off,
+    #[default]
+    Auto,
+    Always,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QualityReviewer {
+    #[default]
+    Auto,
+    RCode,
+    Codex,
+}
+
+/// 运行时编排策略快照。设置在每次重建 provider runtime 时读取，运行中保持稳定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrchestrationPolicy {
+    pub delegation_router: DelegationRouterMode,
+    pub allow_cross_engine_delegation: bool,
+    pub quality_loop: QualityLoopMode,
+    pub quality_reviewer: QualityReviewer,
+    pub max_review_rounds: u8,
+}
+
+impl Default for OrchestrationPolicy {
+    fn default() -> Self {
+        Self {
+            delegation_router: DelegationRouterMode::Balanced,
+            allow_cross_engine_delegation: true,
+            quality_loop: QualityLoopMode::Auto,
+            quality_reviewer: QualityReviewer::Auto,
+            max_review_rounds: 1,
+        }
+    }
+}
 
 /// 系统提示（v1：紧凑通用；项目记忆/rules 注入后续里程碑）。
 const CHAT_SYSTEM_PROMPT: &str = "You are R-Code, a helpful desktop coding assistant.\n\
@@ -91,22 +140,30 @@ fn build_system_prompt(has_workspace_tools: bool) -> String {
     build_system_prompt_at(has_workspace_tools, Local::now().fixed_offset())
 }
 
-fn build_subagent_system_prompt(has_workspace_tools: bool) -> String {
+fn build_subagent_system_prompt(
+    has_workspace_tools: bool,
+    access_mode: SubagentAccessMode,
+) -> String {
     let base = if has_workspace_tools {
         WORKSPACE_SYSTEM_PROMPT
     } else {
         CHAT_SYSTEM_PROMPT
     };
+    let capability = match access_mode {
+        SubagentAccessMode::ReadOnly => "You are a read-only delegated subagent. Investigate the assigned question and use only the provided read-only tools. Do not edit files or run terminal commands.",
+        SubagentAccessMode::FullAccess => "The parent agent explicitly delegated this task with full workspace access. You may edit files and run commands when they are necessary for the assignment, but stay inside the attached workspace and make only task-scoped changes.",
+    };
     format!(
-        "{base}\n\nYou are a read-only delegated subagent. Investigate the assigned question, \
-use only the provided read-only tools, and return a concise factual summary for the parent agent. \
-Do not edit files, run terminal commands, create further subagents, or expose private chain-of-thought."
+        "{base}\n\n{capability} Return a concise factual summary for the parent agent. \
+Do not create further subagents or expose private chain-of-thought."
     )
 }
 
 const DELEGATION_PROMPT_HINT: &str = "\n\nFor independent investigation, you may call \
-`delegate_task` to start up to three read-only subagents in parallel. Call `collect_subagents` \
-before your final answer to obtain their concise findings. Do not delegate write operations.";
+`delegate_task` to start up to three subagents in parallel. Subagents default to `access='read_only'`. \
+Use `access='full_access'` only when the user conversation or your explicit parent plan delegates \
+workspace edits or command execution to that child. Call `collect_subagents` before your final answer \
+to obtain their concise findings.";
 
 const CODEX_DELEGATION_PROMPT_HINT: &str = " When the user explicitly asks for Codex, call \
 `delegate_task` with `agent` set to `codex`; do not substitute an internal R-Code subagent and do \
@@ -141,6 +198,7 @@ pub struct CodexSubagentRequest {
     pub task_id: String,
     pub run_id: String,
     pub caller: String,
+    pub access_mode: SubagentAccessMode,
     pub abort: Arc<AtomicBool>,
     pub event_sink: CodexSubagentEventSink,
 }
@@ -170,6 +228,7 @@ pub struct LlmAgentRuntime {
     running: Arc<AtomicBool>,
     aborted: Arc<AtomicBool>,
     codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
+    orchestration: OrchestrationPolicy,
 }
 
 struct SessionState {
@@ -177,6 +236,8 @@ struct SessionState {
     task_id: String,
     /// 会话级模型覆盖（None = runtime 默认）
     model: Option<String>,
+    /// 会话级模型推理参数。
+    inference: InferenceOptions,
     /// 任务模式决定主运行的可用工具能力；`Ask` 在附加工作区后仍保持只读。
     mode: TaskMode,
     /// 消息历史（多轮 loop 的工作集）
@@ -241,12 +302,20 @@ impl LlmAgentRuntime {
             running: Arc::new(AtomicBool::new(false)),
             aborted: Arc::new(AtomicBool::new(false)),
             codex_subagent_runner: None,
+            orchestration: OrchestrationPolicy::default(),
         }
     }
 
     /// Attach the desktop host's Codex CLI bridge.
     pub fn with_codex_subagent_runner(mut self, runner: Arc<dyn CodexSubagentRunner>) -> Self {
         self.codex_subagent_runner = Some(runner);
+        self
+    }
+
+    /// 应用用户在设置页保存的编排策略。轮数在这里再次收紧，避免损坏配置失控。
+    pub fn with_orchestration_policy(mut self, mut policy: OrchestrationPolicy) -> Self {
+        policy.max_review_rounds = policy.max_review_rounds.clamp(1, 3);
+        self.orchestration = policy;
         self
     }
 
@@ -276,6 +345,7 @@ impl AgentRuntime for LlmAgentRuntime {
             SessionState {
                 task_id: input.task_id,
                 model: input.model,
+                inference: input.inference,
                 mode: input.mode,
                 messages: Vec::new(),
                 steer_queue: VecDeque::new(),
@@ -291,7 +361,7 @@ impl AgentRuntime for LlmAgentRuntime {
 
     async fn start_run(&mut self, session_id: &str, goal: &str) -> Result<String, ProductError> {
         let run_id = Uuid::new_v4();
-        let (task_id, model, mode, abort, workspace_scope) = {
+        let (task_id, model, inference, mode, abort, workspace_scope) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
                 .get_mut(session_id)
@@ -302,6 +372,7 @@ impl AgentRuntime for LlmAgentRuntime {
             (
                 session.task_id.clone(),
                 session.model.clone().unwrap_or_else(|| self.model.clone()),
+                session.inference.clone(),
                 session.mode,
                 session.abort.clone(),
                 session.workspace_scope.clone(),
@@ -324,9 +395,11 @@ impl AgentRuntime for LlmAgentRuntime {
             model.clone(),
             self.max_tokens,
             self.temperature,
+            inference.clone(),
             abort.clone(),
             workspace_scope.clone(),
             self.codex_subagent_runner.clone(),
+            self.orchestration,
         ));
         {
             let mut sessions = self.sessions.lock().await;
@@ -352,11 +425,13 @@ impl AgentRuntime for LlmAgentRuntime {
             model,
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            inference,
             abort,
             workspace_scope,
             supervisor,
             policy,
             allows_delegation,
+            orchestration: self.orchestration,
         }));
 
         Ok(run_id_text)
@@ -502,11 +577,13 @@ struct RunLoopCtx {
     model: String,
     max_tokens: u32,
     temperature: Option<f32>,
+    inference: InferenceOptions,
     abort: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
     policy: ToolPolicy,
     allows_delegation: bool,
+    orchestration: OrchestrationPolicy,
 }
 
 /// 将常见的服务端参数错误转换为可操作的界面提示；原始错误仍会写入 tracing 日志，
@@ -538,6 +615,7 @@ fn emit_activity(
 async fn run_loop(ctx: RunLoopCtx) {
     let mut terminal_err: Option<String> = None;
     let mut tool_iterations = 0usize;
+    let mut quality_rounds = 0u8;
 
     loop {
         if ctx.abort.load(Ordering::Relaxed) {
@@ -600,6 +678,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             // 纯聊天没有长系统提示或工具定义可复用，关闭缓存可避免部分兼容接口
             // 对 cache_control 的不支持错误；工作区工具回合继续允许 provider 缓存。
             enable_caching: !tools.is_empty(),
+            inference: ctx.inference.clone(),
         };
 
         let result = run_agent_loop_iteration_streaming_with_abort(
@@ -623,7 +702,10 @@ async fn run_loop(ctx: RunLoopCtx) {
                         terminal_err = Some(format!("session lost: {}", ctx.session_id));
                         break;
                     };
-                    session.messages = messages;
+                    // Keep the local snapshot available for the host-managed quality review
+                    // below. The session owns the authoritative copy; the local clone is only
+                    // used to derive the visible draft after this iteration has settled.
+                    session.messages = messages.clone();
 
                     if ctx.abort.load(Ordering::Relaxed) {
                         session.accepting_steer = false;
@@ -678,6 +760,63 @@ Please summarize and present these results.\n\n{}",
                         terminal_err = Some(format!(
                             "达到 {MAX_ITERATIONS} 轮工具调用上限，已停止继续执行。"
                         ));
+                    }
+                    if terminal_err.is_none()
+                        && !ctx.abort.load(Ordering::Relaxed)
+                        && quality_rounds < ctx.orchestration.max_review_rounds
+                        && should_run_quality_review(
+                            ctx.orchestration.quality_loop,
+                            ctx.workspace_scope.is_some(),
+                            tool_iterations > 0,
+                        )
+                    {
+                        let draft = final_visible_response(&messages);
+                        if !draft.is_empty() {
+                            quality_rounds += 1;
+                            emit_activity(
+                                &ctx.event_tx,
+                                AgentActivityPhase::Reviewing,
+                                Some(format!(
+                                    "质量复核 {quality_rounds}/{}",
+                                    ctx.orchestration.max_review_rounds
+                                )),
+                            );
+                            match ctx.supervisor.quality_review(quality_rounds, &draft).await {
+                                Ok(QualityReviewResult::Passed(summary)) => {
+                                    emit_activity(
+                                        &ctx.event_tx,
+                                        AgentActivityPhase::Reviewing,
+                                        Some(format!(
+                                            "质量复核已通过 · {}",
+                                            short_summary(&summary, 96)
+                                        )),
+                                    );
+                                }
+                                Ok(QualityReviewResult::Revise(findings)) => {
+                                    let mut sessions = ctx.sessions.lock().await;
+                                    if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                                        session.messages.push(Message::user_text(format!(
+                                            "[system] Quality review round {quality_rounds} found issues in the visible draft. \
+Address the concrete findings below, re-check any relevant workspace evidence, and then provide a corrected final answer. \
+Do not mention private reasoning.\n\n{}",
+                                            short_summary(&findings, MAX_SUBAGENT_SUMMARY_CHARS)
+                                        )));
+                                        session.accepting_steer = true;
+                                    }
+                                    continue;
+                                }
+                                Err(error) => {
+                                    emit_activity(
+                                        &ctx.event_tx,
+                                        AgentActivityPhase::Reviewing,
+                                        Some(format!(
+                                            "质量复核未完成，本轮保留主结果 · {}",
+                                            short_summary(&error.to_string(), 96)
+                                        )),
+                                    );
+                                }
+                            }
+                        }
                     }
                     break;
                 }
@@ -754,17 +893,43 @@ struct SessionToolHost {
     delegation: Option<Arc<SubagentSupervisor>>,
 }
 
-/// Agent 可见工具的能力边界。子代理只使用只读策略，且不能再次委派。
+/// Agent 可见工具的能力边界。子代理不能再次委派；默认只读，显式提权后才开放写工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPolicy {
     Main,
     ReadOnly,
+    FullAccess,
+}
+
+fn should_run_quality_review(mode: QualityLoopMode, has_workspace: bool, used_tools: bool) -> bool {
+    match mode {
+        QualityLoopMode::Off => false,
+        QualityLoopMode::Auto => has_workspace && used_tools,
+        QualityLoopMode::Always => true,
+    }
+}
+
+fn final_visible_response(messages: &[Message]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == hermes_core::Role::Assistant)
+        .map(Message::text_content)
+        .filter(|text| !text.trim().is_empty())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SubagentBackend {
     RCode,
     Codex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TaskComplexity {
+    Simple,
+    Standard,
+    Complex,
 }
 
 /// 将持久化任务模式映射为运行时能力边界。
@@ -798,7 +963,7 @@ impl SessionToolHost {
 
     fn tool_allowed(&self, name: &str) -> bool {
         match self.policy {
-            ToolPolicy::Main => workspace_tool_allowed(name),
+            ToolPolicy::Main | ToolPolicy::FullAccess => workspace_tool_allowed(name),
             ToolPolicy::ReadOnly => subagent_read_only_tool_allowed(name),
         }
     }
@@ -850,16 +1015,38 @@ impl SessionToolHost {
                 .get("label")
                 .and_then(|value| value.as_str())
                 .map(ToOwned::to_owned);
-            let backend = match args
+            let requested_agent = args
                 .get("agent")
                 .and_then(|value| value.as_str())
-                .unwrap_or("r_code")
+                .unwrap_or("auto");
+            let complexity = match args
+                .get("complexity")
+                .and_then(|value| value.as_str())
+                .unwrap_or("standard")
             {
-                "r_code" | "native" => SubagentBackend::RCode,
-                "codex" | "codex_cli" => SubagentBackend::Codex,
+                "simple" => TaskComplexity::Simple,
+                "standard" => TaskComplexity::Standard,
+                "complex" => TaskComplexity::Complex,
                 value => {
                     return Err(hermes_error::Error::ToolHost(format!(
-                        "delegate_task received unsupported agent '{value}'"
+                        "delegate_task received unsupported complexity '{value}'"
+                    )))
+                }
+            };
+            let (backend, routing_reason) =
+                supervisor
+                    .route_backend(requested_agent, complexity)
+                    .map_err(|e| hermes_error::Error::ToolHost(e.to_string()))?;
+            let access_mode = match args
+                .get("access")
+                .and_then(|value| value.as_str())
+                .unwrap_or("read_only")
+            {
+                "read_only" => SubagentAccessMode::ReadOnly,
+                "full_access" => SubagentAccessMode::FullAccess,
+                value => {
+                    return Err(hermes_error::Error::ToolHost(format!(
+                        "delegate_task received unsupported access mode '{value}'"
                     )))
                 }
             };
@@ -868,7 +1055,9 @@ impl SessionToolHost {
                     backend,
                     label,
                     goal.to_string(),
+                    access_mode,
                     call_id.map(ToOwned::to_owned),
+                    routing_reason,
                 )
                 .await
                 .map_err(|e| hermes_error::Error::ToolHost(e.to_string()));
@@ -893,11 +1082,14 @@ impl SessionToolHost {
                 .await
                 .map_err(|e| hermes_error::Error::ToolHost(e.to_string()));
         }
-        let access_mode = self
-            .workspace_scope
-            .as_ref()
-            .map(|scope| scope.access_mode)
-            .unwrap_or(ProjectAccessMode::RequestApproval);
+        let access_mode = if self.policy == ToolPolicy::FullAccess {
+            ProjectAccessMode::FullAccess
+        } else {
+            self.workspace_scope
+                .as_ref()
+                .map(|scope| scope.access_mode)
+                .unwrap_or(ProjectAccessMode::RequestApproval)
+        };
         let args = match self.scoped_input(name, args) {
             Ok(args) => args,
             Err(ProductError::PathNotFound(msg)) => {
@@ -1047,12 +1239,15 @@ impl ToolHost for SessionToolHost {
 
 fn delegation_tool_specs(codex_available: bool) -> Vec<ToolSpec> {
     let delegate_description = if codex_available {
-        "Start an independent read-only subagent for investigation. Use agent='r_code' for the \
-current provider or agent='codex' for the user's installed Codex CLI. Use Codex when the user \
-explicitly requests it. Call collect_subagents before your final answer to read its summary."
+        "Start an independent subagent. It is read-only by default; choose access='full_access' \
+only when the user conversation or the parent plan explicitly assigns workspace edits or commands. \
+Use agent='auto' to apply the visible routing policy, 'r_code' for the current provider, or \
+agent='codex' for the user's installed Codex CLI. Always set complexity. Use Codex when the user \
+explicitly requests it. Call collect_subagents before your final answer."
     } else {
-        "Start an independent read-only R-Code subagent for parallel investigation. It cannot edit \
-files or run commands. Call collect_subagents before your final answer to read its summary."
+        "Start an independent R-Code subagent. It is read-only by default; choose \
+access='full_access' only when the user conversation or the parent plan explicitly assigns \
+workspace edits or commands. Call collect_subagents before your final answer."
     };
     vec![
         ToolSpec {
@@ -1063,7 +1258,7 @@ files or run commands. Call collect_subagents before your final answer to read i
                 "properties": {
                     "goal": {
                         "type": "string",
-                        "description": "A focused investigation task for the read-only subagent."
+                        "description": "A focused task for the delegated subagent."
                     },
                     "label": {
                         "type": "string",
@@ -1071,9 +1266,21 @@ files or run commands. Call collect_subagents before your final answer to read i
                     },
                     "agent": {
                         "type": "string",
-                        "enum": if codex_available { vec!["r_code", "codex"] } else { vec!["r_code"] },
-                        "default": "r_code",
-                        "description": "Execution backend. Select codex when the user asks for Codex CLI."
+                        "enum": if codex_available { vec!["auto", "r_code", "codex"] } else { vec!["auto", "r_code"] },
+                        "default": "auto",
+                        "description": "Execution backend. Auto applies the configured, user-visible router."
+                    },
+                    "complexity": {
+                        "type": "string",
+                        "enum": ["simple", "standard", "complex"],
+                        "default": "standard",
+                        "description": "Task complexity used by the configured routing policy."
+                    },
+                    "access": {
+                        "type": "string",
+                        "enum": ["read_only", "full_access"],
+                        "default": "read_only",
+                        "description": "Workspace capability. Keep read_only unless the conversation or parent plan explicitly delegates edits or commands."
                     }
                 },
                 "required": ["goal"]
@@ -1159,11 +1366,13 @@ struct SubagentSupervisor {
     model: String,
     max_tokens: u32,
     temperature: Option<f32>,
+    inference: InferenceOptions,
     parent_abort: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
     semaphore: Arc<Semaphore>,
     children: Arc<Mutex<HashMap<String, SubagentHandle>>>,
+    orchestration: OrchestrationPolicy,
 }
 
 #[derive(Clone)]
@@ -1179,6 +1388,11 @@ struct SubagentResult {
     summary: String,
 }
 
+enum QualityReviewResult {
+    Passed(String),
+    Revise(String),
+}
+
 impl SubagentSupervisor {
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -1190,9 +1404,11 @@ impl SubagentSupervisor {
         model: String,
         max_tokens: u32,
         temperature: Option<f32>,
+        inference: InferenceOptions,
         parent_abort: Arc<AtomicBool>,
         workspace_scope: Option<WorkspaceScope>,
         codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
+        orchestration: OrchestrationPolicy,
     ) -> Self {
         Self {
             provider,
@@ -1203,20 +1419,156 @@ impl SubagentSupervisor {
             model,
             max_tokens,
             temperature,
+            inference,
             parent_abort,
             workspace_scope,
             codex_subagent_runner,
             semaphore: Arc::new(Semaphore::new(MAX_PARALLEL_SUBAGENTS)),
             children: Arc::new(Mutex::new(HashMap::new())),
+            orchestration,
         }
     }
 
     fn codex_available(&self) -> bool {
-        self.codex_configured() && self.workspace_scope.is_some()
+        self.orchestration.allow_cross_engine_delegation
+            && self.codex_configured()
+            && self.workspace_scope.is_some()
     }
 
     fn codex_configured(&self) -> bool {
         self.codex_subagent_runner.is_some()
+    }
+
+    fn route_backend(
+        &self,
+        requested: &str,
+        complexity: TaskComplexity,
+    ) -> Result<(SubagentBackend, String), ProductError> {
+        match requested {
+            "r_code" | "native" => Ok((
+                SubagentBackend::RCode,
+                "主智能体显式选择 R-Code 子智能体".to_string(),
+            )),
+            "codex" | "codex_cli" => {
+                if !self.orchestration.allow_cross_engine_delegation {
+                    return Err(ProductError::Other(
+                        "设置中已关闭跨引擎委派，不能启动 Codex 子智能体".to_string(),
+                    ));
+                }
+                Ok((
+                    SubagentBackend::Codex,
+                    "主智能体显式选择 Codex CLI 子智能体".to_string(),
+                ))
+            }
+            "auto" => {
+                let prefer_codex = match self.orchestration.delegation_router {
+                    DelegationRouterMode::Manual | DelegationRouterMode::RCodeFirst => false,
+                    DelegationRouterMode::Balanced => complexity == TaskComplexity::Complex,
+                    DelegationRouterMode::CodexFirst => complexity != TaskComplexity::Simple,
+                };
+                if prefer_codex && self.codex_available() {
+                    let reason = match self.orchestration.delegation_router {
+                        DelegationRouterMode::Balanced => "均衡路由：复杂任务优先 Codex CLI",
+                        DelegationRouterMode::CodexFirst => {
+                            "Codex 优先路由：标准或复杂任务使用 Codex CLI"
+                        }
+                        _ => unreachable!("only Codex-preferring policies reach this branch"),
+                    };
+                    Ok((SubagentBackend::Codex, reason.to_string()))
+                } else {
+                    let reason = if prefer_codex {
+                        "自动路由原计划使用 Codex，但当前不可用，已回退 R-Code"
+                    } else {
+                        match self.orchestration.delegation_router {
+                            DelegationRouterMode::Manual => "手动路由：auto 安全回退 R-Code",
+                            DelegationRouterMode::Balanced => "均衡路由：简单或标准任务使用 R-Code",
+                            DelegationRouterMode::RCodeFirst => "R-Code 优先路由",
+                            DelegationRouterMode::CodexFirst => {
+                                "Codex 优先路由：简单任务使用 R-Code"
+                            }
+                        }
+                    };
+                    Ok((SubagentBackend::RCode, reason.to_string()))
+                }
+            }
+            value => Err(ProductError::Other(format!(
+                "delegate_task received unsupported agent '{value}'"
+            ))),
+        }
+    }
+
+    fn quality_backend(&self) -> (SubagentBackend, String) {
+        match self.orchestration.quality_reviewer {
+            QualityReviewer::RCode => (
+                SubagentBackend::RCode,
+                "质量循环设置指定 R-Code 复核".to_string(),
+            ),
+            QualityReviewer::Codex if self.codex_available() => (
+                SubagentBackend::Codex,
+                "质量循环设置指定 Codex CLI 复核".to_string(),
+            ),
+            QualityReviewer::Codex => (
+                SubagentBackend::RCode,
+                "质量循环原计划使用 Codex，但当前不可用，已回退 R-Code".to_string(),
+            ),
+            QualityReviewer::Auto if self.codex_available() => (
+                SubagentBackend::Codex,
+                "质量循环自动交叉选择 Codex CLI 复核 R-Code 主结果".to_string(),
+            ),
+            QualityReviewer::Auto => (
+                SubagentBackend::RCode,
+                "质量循环自动选择当前可用的 R-Code 复核器".to_string(),
+            ),
+        }
+    }
+
+    async fn quality_review(
+        &self,
+        round: u8,
+        draft: &str,
+    ) -> Result<QualityReviewResult, ProductError> {
+        let (backend, routing_reason) = self.quality_backend();
+        let draft = short_summary(draft, 6_000);
+        let goal = format!(
+            "Review the main agent's visible draft against the user's task and any available workspace evidence. \
+Check correctness, completeness, unsupported claims, missed validation, and unsafe changes. Do not edit files. \
+Return `PASS` on the first line when no correction is needed; otherwise return `REVISE` followed by concise, actionable findings. \
+Do not expose private chain-of-thought.\n\nVisible draft:\n{draft}"
+        );
+        let queued = self
+            .spawn(
+                backend,
+                Some(format!("质量复核 {round}")),
+                goal,
+                SubagentAccessMode::ReadOnly,
+                None,
+                routing_reason,
+            )
+            .await?;
+        let payload: serde_json::Value = serde_json::from_str(&queued.content)
+            .map_err(|error| ProductError::Other(format!("无法读取质量复核任务：{error}")))?;
+        let id = payload
+            .get("subagent_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| ProductError::Other("质量复核任务缺少运行 ID".to_string()))?;
+        let collected = self.collect(Some(vec![id.to_string()])).await?;
+        let value: serde_json::Value = serde_json::from_str(&collected.content)
+            .map_err(|error| ProductError::Other(format!("无法读取质量复核结果：{error}")))?;
+        let summary = value
+            .pointer("/subagents/0/summary")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("质量复核没有返回可见摘要")
+            .trim()
+            .to_string();
+        let first_line = summary.lines().next().unwrap_or_default().trim();
+        if first_line.eq_ignore_ascii_case("pass")
+            || first_line.eq_ignore_ascii_case("[pass]")
+            || first_line == "通过"
+        {
+            Ok(QualityReviewResult::Passed(summary))
+        } else {
+            Ok(QualityReviewResult::Revise(summary))
+        }
     }
 
     async fn spawn(
@@ -1224,7 +1576,9 @@ impl SubagentSupervisor {
         backend: SubagentBackend,
         label: Option<String>,
         goal: String,
+        access_mode: SubagentAccessMode,
         delegated_by_tool_call_id: Option<String>,
+        routing_reason: String,
     ) -> Result<ToolCallOutcome, ProductError> {
         if self.parent_abort.load(Ordering::Relaxed) {
             return Err(ProductError::Other(
@@ -1262,6 +1616,8 @@ impl SubagentSupervisor {
                 SubagentBackend::RCode => self.model.clone(),
                 SubagentBackend::Codex => "codex-cli".to_string(),
             }),
+            access_mode,
+            routing_reason: Some(routing_reason.clone()),
         };
         let abort = Arc::new(AtomicBool::new(false));
         let (result_tx, result_rx) = watch::channel(None);
@@ -1287,10 +1643,14 @@ impl SubagentSupervisor {
             &scope,
             AgentEvent::SubagentLifecycle {
                 state: SubagentState::Queued,
-                detail: Some(match backend {
-                    SubagentBackend::RCode => "已加入 R-Code 子代理队列".to_string(),
-                    SubagentBackend::Codex => "已加入 Codex CLI 子代理队列".to_string(),
-                }),
+                detail: Some(format!(
+                    "{} · {}",
+                    match backend {
+                        SubagentBackend::RCode => "已加入 R-Code 子代理队列",
+                        SubagentBackend::Codex => "已加入 Codex CLI 子代理队列",
+                    },
+                    routing_reason
+                )),
             },
         );
 
@@ -1316,6 +1676,8 @@ impl SubagentSupervisor {
                     SubagentBackend::RCode => "r_code",
                     SubagentBackend::Codex => "codex",
                 },
+                "access": access_mode.to_string(),
+                "routing_reason": routing_reason,
                 "status": "queued"
             })
             .to_string(),
@@ -1349,6 +1711,7 @@ impl SubagentSupervisor {
             summaries.push(serde_json::json!({
                 "subagent_id": handle.scope.run_id,
                 "label": handle.scope.agent_label,
+                "access": handle.scope.access_mode.to_string(),
                 "status": result.state.to_string(),
                 "summary": result.summary,
             }));
@@ -1466,9 +1829,19 @@ impl SubagentSupervisor {
             &scope,
             AgentEvent::SubagentLifecycle {
                 state: SubagentState::Running,
-                detail: Some(match backend {
-                    SubagentBackend::RCode => "R-Code 子代理正在进行只读调查".to_string(),
-                    SubagentBackend::Codex => "Codex CLI 正在按已配置权限处理工作区".to_string(),
+                detail: Some(match (backend, scope.access_mode) {
+                    (SubagentBackend::RCode, SubagentAccessMode::ReadOnly) => {
+                        "R-Code 子智能体正在进行只读调查".to_string()
+                    }
+                    (SubagentBackend::RCode, SubagentAccessMode::FullAccess) => {
+                        "R-Code 子智能体已获完全访问权限".to_string()
+                    }
+                    (SubagentBackend::Codex, SubagentAccessMode::ReadOnly) => {
+                        "Codex CLI 子智能体正在进行只读调查".to_string()
+                    }
+                    (SubagentBackend::Codex, SubagentAccessMode::FullAccess) => {
+                        "Codex CLI 子智能体已获完全访问权限".to_string()
+                    }
                 }),
             },
         );
@@ -1504,6 +1877,7 @@ impl SubagentSupervisor {
                     task_id: self.task_id.clone(),
                     run_id: scope.run_id.clone(),
                     caller: format!("subagent:{}", scope.agent_id),
+                    access_mode: scope.access_mode,
                     abort: abort.clone(),
                     event_sink,
                 })
@@ -1550,7 +1924,10 @@ impl SubagentSupervisor {
             run_id: scope.run_id.clone(),
             abort: abort.clone(),
             workspace_scope: self.workspace_scope.clone(),
-            policy: ToolPolicy::ReadOnly,
+            policy: match scope.access_mode {
+                SubagentAccessMode::ReadOnly => ToolPolicy::ReadOnly,
+                SubagentAccessMode::FullAccess => ToolPolicy::FullAccess,
+            },
             caller: format!("subagent:{}", scope.agent_id),
             delegation: None,
         };
@@ -1572,12 +1949,16 @@ impl SubagentSupervisor {
             );
             let request = CompletionRequest {
                 model: self.model.clone(),
-                system: Some(build_subagent_system_prompt(!tools.is_empty())),
+                system: Some(build_subagent_system_prompt(
+                    !tools.is_empty(),
+                    scope.access_mode,
+                )),
                 messages: Vec::new(),
                 tools: Vec::new(),
                 max_tokens: self.max_tokens,
                 temperature: self.temperature,
                 enable_caching: !tools.is_empty(),
+                inference: self.inference.clone(),
             };
             let event_tx = self.event_tx.clone();
             let event_scope = scope.clone();
@@ -1760,6 +2141,7 @@ mod tests {
             assert_eq!(request.goal, "请 Codex 检查边界");
             assert_eq!(request.task_id, "task-1");
             assert!(!request.run_id.is_empty());
+            assert_eq!(request.access_mode, SubagentAccessMode::ReadOnly);
             self.calls.fetch_add(1, Ordering::Relaxed);
             (request.event_sink)(AgentEvent::Activity {
                 phase: AgentActivityPhase::Tool,
@@ -1779,6 +2161,7 @@ mod tests {
             goal: "do thing".into(),
             mode: TaskMode::Ask,
             model: None,
+            inference: Default::default(),
             context: vec![],
         }
     }
@@ -1907,9 +2290,11 @@ mod tests {
             "mock-model".to_string(),
             512,
             None,
+            InferenceOptions::default(),
             Arc::new(AtomicBool::new(false)),
             None,
             None,
+            OrchestrationPolicy::default(),
         )
     }
 
@@ -2095,9 +2480,11 @@ mod tests {
             "mock-model".to_string(),
             512,
             None,
+            InferenceOptions::default(),
             Arc::new(AtomicBool::new(false)),
             None,
             Some(runner.clone()),
+            OrchestrationPolicy::default(),
         );
 
         let error = supervisor
@@ -2105,7 +2492,9 @@ mod tests {
                 SubagentBackend::Codex,
                 None,
                 "检查代码".to_string(),
+                SubagentAccessMode::ReadOnly,
                 Some("call-codex".to_string()),
+                "测试显式选择 Codex".to_string(),
             )
             .await
             .unwrap_err();
@@ -2297,9 +2686,11 @@ mod tests {
             "mock-model".to_string(),
             512,
             None,
+            InferenceOptions::default(),
             Arc::new(AtomicBool::new(false)),
             Some(workspace_scope.clone()),
             Some(runner.clone()),
+            OrchestrationPolicy::default(),
         ));
         let tool_host = SessionToolHost {
             gateway: test_gateway(),
@@ -2323,6 +2714,10 @@ mod tests {
             .unwrap()
             .iter()
             .any(|value| value == "codex"));
+        assert_eq!(
+            delegate_spec.input_schema["properties"]["access"]["default"],
+            "read_only"
+        );
 
         let started = tool_host
             .call_inner(
@@ -2393,7 +2788,9 @@ mod tests {
                 SubagentBackend::RCode,
                 Some("检查现状".to_string()),
                 "只读调查".to_string(),
+                SubagentAccessMode::ReadOnly,
                 Some("call-delegate-1".to_string()),
+                "测试显式选择 R-Code".to_string(),
             )
             .await
             .unwrap();
@@ -2446,7 +2843,9 @@ mod tests {
                     SubagentBackend::RCode,
                     Some(format!("调查 {index}")),
                     format!("只读任务 {index}"),
+                    SubagentAccessMode::ReadOnly,
                     None,
+                    "测试并发子任务".to_string(),
                 )
                 .await
                 .unwrap();

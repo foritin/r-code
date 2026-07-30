@@ -20,7 +20,7 @@ import {
   taskRename,
   taskSetModel,
 } from "../../lib/ipc";
-import type { AgentSendMode, ProjectAccessMode, QueuedMessage } from "../../lib/types";
+import type { AgentSendMode, InferenceOptions, ProjectAccessMode, QueuedMessage, TaskAgentEngine } from "../../lib/types";
 import type { ProviderChoice } from "../../lib/provider";
 import { useArmedAction, useAsyncAction } from "../../lib/hooks";
 import { useTasksStore } from "../../store/tasks";
@@ -29,6 +29,8 @@ import { Menu, MenuItem } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
 import { ProjectAccessSelector, projectAccessModeLabel } from "../ProjectAccessSelector";
 import { ModelSwitcher } from "./ModelSwitcher";
+import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
+import { CodexModelConfiguration } from "./CodexModelConfiguration";
 import { IconChevronDown, IconSend, IconStop } from "../icons";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { SlashCommandMenu } from "../SlashCommandMenu";
@@ -53,7 +55,9 @@ interface Props {
   onAccessModeChange: (mode: ProjectAccessMode) => Promise<void> | void;
   scopeBusy: boolean;
   providerName: string | null;
+  agentEngine: TaskAgentEngine;
   model: string | null;
+  inference: InferenceOptions;
   providerChoices: ProviderChoice[];
   providerFallback: string;
   onProviderChanged: () => void;
@@ -83,7 +87,9 @@ export function Composer({
   onAccessModeChange,
   scopeBusy,
   providerName,
+  agentEngine,
   model,
+  inference,
   providerChoices,
   providerFallback,
   onProviderChanged,
@@ -242,6 +248,7 @@ export function Composer({
           "",
           task?.mode ?? (workspaceAttached ? "edit" : "ask"),
           providerName,
+          agentEngine,
         );
         if (model) await taskSetModel(next.id, model);
         await refreshTasks();
@@ -282,7 +289,8 @@ export function Composer({
           .filter((run) => run.ended_at == null).length;
         setNotice(
           `${workspaceAttached ? `项目 ${workspaceName ?? "已附加"} · ${projectAccessModeLabel(workspaceAccessMode)}` : "纯聊天 · 未附加项目"}；` +
-          `模型 ${providerName ?? "默认服务"} / ${model ?? "服务默认"}；` +
+          `主 Agent ${agentEngine === "codex" ? "Codex CLI" : "R-Code"}；` +
+          (agentEngine === "r_code" ? `模型 ${providerName ?? "默认服务"} / ${model ?? "服务默认"}；` : "模型使用 Codex CLI 设置；") +
           `${messageCount} 条消息 · ${activeAgents} 个运行中 Agent · ${queuedMessages.length} 条排队。`,
         );
         return;
@@ -679,17 +687,29 @@ export function Composer({
 
         {/* 输入区脚下的控件：与新对话页同构的「模型」「权限」入口 */}
         <div className="comp-meta">
-          <ModelSwitcher
+          <AgentEngineSwitcher
             taskId={taskId}
-            providerName={providerName}
-            model={model}
-            choices={providerChoices}
-            fallback={providerFallback}
+            value={agentEngine}
+            workspaceAttached={workspaceAttached}
             running={running}
             onChanged={onProviderChanged}
-            variant="pill"
-            openRequest={modelMenuRequest}
           />
+          {agentEngine === "r_code" ? (
+            <ModelSwitcher
+              taskId={taskId}
+              providerName={providerName}
+              model={model}
+              inference={inference}
+              choices={providerChoices}
+              fallback={providerFallback}
+              running={running}
+              onChanged={onProviderChanged}
+              variant="pill"
+              openRequest={modelMenuRequest}
+            />
+          ) : (
+            <CodexModelConfiguration running={running} />
+          )}
           {workspaceAttached && (
             <ProjectAccessSelector
               value={workspaceAccessMode}

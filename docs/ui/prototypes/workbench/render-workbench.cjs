@@ -34,6 +34,11 @@ const pairedScenarios = [
   { slug: "review", query: "task=review&state=review", light: "09", dark: "10" },
   { slug: "review-collapsed", query: "task=review&state=review-collapsed&prototypePanel=context", light: "11", dark: "12" },
   { slug: "subagent-detail", query: "task=queue&state=run&prototypePanel=subagent-detail", light: "21", dark: "22" },
+  { slug: "workbench-multi-tabs", query: "task=review&state=files&prototypePanel=workbench-tabs", light: "35", dark: "44" },
+  { slug: "workbench-tab-fallback", query: "task=review&state=files&prototypePanel=workbench-tab-fallback", light: "37", dark: "46" },
+  { slug: "workbench-launcher-restored", query: "task=review&state=files&prototypePanel=workbench-launcher-restored", light: "39", dark: "48" },
+  { slug: "model-configuration", query: "task=review&state=hidden", light: "41", dark: "50", prepare: "model-config" },
+  { slug: "codex-configuration", query: "task=complete&state=hidden", light: "43", dark: "52", prepare: "model-config" },
 ];
 
 const activityScenarios = [
@@ -141,7 +146,7 @@ const prototypeCss = `
     --border: #302e2a;
     --border-strong: #48423d;
     --prototype-sidebar: #211d1e;
-    --prototype-sidebar-glow: rgba(106, 34, 50, .16);
+    --prototype-sidebar-glow: rgba(106, 34, 50, .08);
     --prototype-link: #8bc3ff;
     --prototype-command: #8d8984;
     --prototype-user: #242321;
@@ -739,7 +744,15 @@ async function installPrototypeDesktopChrome(page) {
   await page.evaluate(() => {
     const topbar = document.querySelector(".app-topbar");
     const sidebarToggle = topbar?.querySelector(".desktop-sidebar-toggle");
-    if (!topbar || !sidebarToggle || topbar.querySelector(".prototype-desktop-nav")) return;
+    if (!topbar || !sidebarToggle) return;
+
+    const nativeNav = topbar.querySelector(".desktop-navigation");
+    if (nativeNav) {
+      topbar.querySelector(".prototype-desktop-nav")?.remove();
+      document.documentElement.dataset.prototypeDesktopChrome = "native";
+      return;
+    }
+    if (topbar.querySelector(".prototype-desktop-nav")) return;
 
     const backIcon = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1250,9 +1263,9 @@ async function assertDesktopShell(page, label) {
     const sidebarStyle = sidebar ? getComputedStyle(sidebar) : null;
     const topbarStyle = topbar ? getComputedStyle(topbar) : null;
     return {
-      historyLabels: [...document.querySelectorAll(".prototype-history-button")]
+      historyLabels: [...document.querySelectorAll(".desktop-history-button, .prototype-history-button")]
         .map((button) => button.getAttribute("aria-label")),
-      menuLabels: [...document.querySelectorAll(".prototype-menu-button")]
+      menuLabels: [...document.querySelectorAll(".desktop-menu-trigger, .prototype-menu-button")]
         .map((button) => button.textContent?.trim()),
       mainRadius: mainStyle?.borderTopLeftRadius || null,
       mainOtherRadii: mainStyle
@@ -1343,8 +1356,12 @@ async function auditSidebarExperience(page) {
       environmentRows: context?.querySelectorAll(".prototype-env-row").length || 0,
       sourceRows: context?.querySelectorAll("[data-source]").length || 0,
       listVisible: Boolean(list),
+      listHeadings: list ? [...list.querySelectorAll(".prototype-agent-section-heading")]
+        .map((heading) => heading.textContent?.trim()) : [],
+      listRows: list?.querySelectorAll(".prototype-agent-row").length || 0,
       runningRows: list?.querySelectorAll(".prototype-agent-row.is-running").length || 0,
-      completedRows: list?.querySelectorAll(".prototype-agent-complete-mark").length || 0,
+      completedRows: list?.querySelectorAll('[data-agent-state="complete"]').length || 0,
+      listSpinnerCount: list?.querySelectorAll(".prototype-agent-spinner").length || 0,
       detailVisible: Boolean(detail),
       detailBackButtons: detail?.querySelectorAll(".prototype-agent-back").length || 0,
       detailCommands: detail?.querySelectorAll(".prototype-agent-command").length || 0,
@@ -1370,8 +1387,12 @@ async function assertSidebarView(page, expected, label) {
   }
   if (expected === "list") {
     assert(audit.listVisible, `${label}: subagent list is not visible`);
-    assert(audit.runningRows === 1 && audit.completedRows === 2, `${label}: subagent state groups are incorrect`);
-    assert(audit.spinnerCount >= 1 && audit.spinnerHasOpenRing, `${label}: running subagent indicator is missing`);
+    assert(audit.listRows === 3 && audit.runningRows === 1 && audit.completedRows === 2, `${label}: subagent state groups are incorrect`);
+    assert(
+      JSON.stringify(audit.listHeadings) === JSON.stringify(["进行中 · 01", "已完成 · 02"]),
+      `${label}: subagent group headings are incorrect`,
+    );
+    assert(audit.listSpinnerCount === 0, `${label}: list duplicated status beside relative time`);
   }
   if (expected === "detail") {
     assert(audit.detailVisible, `${label}: subagent detail is not visible`);
@@ -1390,6 +1411,14 @@ async function assertRunningIndicatorAnimates(page, label) {
   assert(animationName === "prototype-agent-spin", `${label}: running indicator is not animated`);
 }
 
+async function assertRunningAvatarAnimates(page, label) {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await settlePrototype(page);
+  const animationName = await page.locator(".prototype-agent-row .prototype-agent-avatar.is-running").first()
+    .evaluate((element) => getComputedStyle(element, "::after").animationName);
+  assert(animationName === "prototype-agent-spin", `${label}: running avatar indicator is not animated`);
+}
+
 async function verifySidebarExperience(page, scenario, label) {
   if (scenario.slug === "review-collapsed") {
     await assertSidebarView(page, "context", label);
@@ -1398,7 +1427,7 @@ async function verifySidebarExperience(page, scenario, label) {
       document.querySelector("#main-content > .scene-room")?.dataset.prototypeSidebarState === "list"
     ));
     await assertSidebarView(page, "list", label);
-    await assertRunningIndicatorAnimates(page, label);
+    await assertRunningAvatarAnimates(page, label);
     await page.locator('[data-agent-id="interaction"]').click();
     await assertSidebarView(page, "detail", label);
     await page.locator(".prototype-agent-back").click();
@@ -1409,7 +1438,7 @@ async function verifySidebarExperience(page, scenario, label) {
 
   if (scenario.slug === "subagents") {
     await assertSidebarView(page, "list", label);
-    await assertRunningIndicatorAnimates(page, label);
+    await assertRunningAvatarAnimates(page, label);
     await page.locator('[data-agent-id="interaction"]').click();
     await assertSidebarView(page, "detail", label);
     await page.locator(".prototype-agent-back").click();
@@ -1419,6 +1448,13 @@ async function verifySidebarExperience(page, scenario, label) {
   if (scenario.slug === "subagent-detail") {
     await assertSidebarView(page, "detail", label);
     await assertRunningIndicatorAnimates(page, label);
+    assert((await page.locator(".prototype-agent-permission").innerText()).trim() === "完全访问", `${label}: explicit subagent elevation is missing`);
+    const toolGroup = page.locator(".prototype-agent-tool-group-head");
+    assert((await toolGroup.innerText()).includes("运行了 2 项操作"), `${label}: grouped subagent tools are missing`);
+    await toolGroup.click();
+    assert(await page.locator(".prototype-agent-tool-group-list").isHidden(), `${label}: grouped subagent tools did not collapse`);
+    await toolGroup.click();
+    assert(await page.locator(".prototype-agent-tool-group-list").isVisible(), `${label}: grouped subagent tools did not expand`);
     const summary = page.locator(".prototype-agent-session-summary");
     const body = page.locator(".prototype-agent-session-body");
     await summary.click();
@@ -1428,6 +1464,72 @@ async function verifySidebarExperience(page, scenario, label) {
     await page.locator(".prototype-agent-back").click();
     await assertSidebarView(page, "list", label);
   }
+}
+
+async function assertWorkbenchTabState(page, expected, label) {
+  const audit = await page.evaluate(() => {
+    const root = document.querySelector('[data-testid="workbench-root"]');
+    const panel = document.querySelector('[data-testid="workbench-panel"]');
+    const tabs = [...document.querySelectorAll(".workbench-tab")];
+    return {
+      mode: root?.dataset.workbenchMode || null,
+      kind: panel?.dataset.workbenchKind || null,
+      tabs: tabs.map((tab) => tab.querySelector("strong")?.textContent?.trim() || ""),
+      active: document.querySelector(".workbench-active-tab strong")?.textContent?.trim() || null,
+      closeButtons: tabs.filter((tab) => tab.querySelector('.workbench-tab-close[aria-label^="关闭"]')).length,
+      launcherRows: document.querySelectorAll(".workbench-launcher-row").length,
+      shortcuts: [...document.querySelectorAll(".workbench-launcher-row kbd")]
+        .map((kbd) => kbd.textContent?.trim() || ""),
+    };
+  });
+
+  if (expected === "tabs") {
+    assert(audit.mode === "docked" && audit.kind === "review", `${label}: multi-tab workbench is not docked on review`);
+    assert(JSON.stringify(audit.tabs) === JSON.stringify(["文件", "审核"]), `${label}: multi-tab order is incorrect`);
+    assert(audit.active === "审核" && audit.closeButtons === 2, `${label}: active review tab or close controls are missing`);
+    return;
+  }
+  if (expected === "fallback") {
+    assert(audit.mode === "docked" && audit.kind === "files", `${label}: closing review did not keep the workbench docked on files`);
+    assert(JSON.stringify(audit.tabs) === JSON.stringify(["文件"]) && audit.active === "文件",
+      `${label}: previous tab did not occupy the workbench`);
+    return;
+  }
+  if (expected === "launcher") {
+    assert(audit.mode === "docked" && audit.kind === "launcher", `${label}: empty workbench did not reopen at the launcher`);
+    assert(audit.tabs.length === 0, `${label}: launcher revived a closed tool tab`);
+    assert(audit.launcherRows === 4, `${label}: launcher tool choices are incomplete`);
+    for (const shortcut of ["Ctrl+Alt+S", "Ctrl+`", "Ctrl+P", "Ctrl+Shift+G"]) {
+      assert(audit.shortcuts.includes(shortcut), `${label}: launcher shortcut ${shortcut} is missing`);
+    }
+  }
+}
+
+async function verifyWorkbenchTabExperience(page, scenario, label) {
+  const expected = scenario.slug === "workbench-multi-tabs"
+    ? "tabs"
+    : scenario.slug === "workbench-tab-fallback"
+      ? "fallback"
+      : "launcher";
+  await assertWorkbenchTabState(page, expected, label);
+  if (scenario.slug !== "workbench-multi-tabs") return;
+
+  await page.getByTestId("workbench-close").click();
+  await assertWorkbenchTabState(page, "fallback", label);
+  await page.getByTestId("workbench-close").click();
+  assert(await page.getByTestId("workbench-root").getAttribute("data-workbench-mode") === "hidden",
+    `${label}: closing the final tab did not hide the workbench`);
+  await page.locator(".room-workbench-toggle").click();
+  await assertWorkbenchTabState(page, "launcher", label);
+
+  await page.keyboard.press("Control+P");
+  assert(await page.getByTestId("workbench-panel").getAttribute("data-workbench-kind") === "files", `${label}: Ctrl+P failed`);
+  await page.keyboard.press("Control+Shift+G");
+  assert(await page.getByTestId("workbench-panel").getAttribute("data-workbench-kind") === "review", `${label}: Ctrl+Shift+G failed`);
+  await page.keyboard.press("Control+Alt+S");
+  assert(await page.getByTestId("workbench-panel").getAttribute("data-workbench-kind") === "summary", `${label}: Ctrl+Alt+S failed`);
+  await page.keyboard.press("Control+Backquote");
+  assert(await page.getByTestId("workbench-panel").getAttribute("data-workbench-kind") === "terminal", `${label}: Ctrl+\` failed`);
 }
 
 async function setSidebarCollapsed(page, collapsed, label) {
@@ -1451,18 +1553,32 @@ async function setSidebarCollapsed(page, collapsed, label) {
 }
 
 async function verifyDesktopChromeInteractions(page, label) {
-  await page.locator('[data-prototype-history="back"]').click();
-  assert(
-    await page.evaluate(() => document.documentElement.dataset.prototypeHistoryAction) === "back",
-    `${label}: back control is inert`,
-  );
+  const nativeNav = page.locator(".desktop-navigation");
+  if (await nativeNav.count()) {
+    assert(await nativeNav.locator(".desktop-history-button").count() === 2, `${label}: native history controls are incomplete`);
+    const labels = await nativeNav.locator(".desktop-menu-trigger").allTextContents();
+    assert(JSON.stringify(labels.map((value) => value.trim())) === JSON.stringify(["文件", "编辑", "视图", "帮助"]),
+      `${label}: native desktop menus are incomplete`);
+    await nativeNav.locator(".desktop-menu-trigger", { hasText: "文件" }).click();
+    const menu = page.locator('.desktop-menu-popover[role="menu"]');
+    await menu.waitFor({ state: "visible" });
+    assert(await menu.getByRole("menuitem").count() >= 3, `${label}: native file menu did not open`);
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+  } else {
+    await page.locator('[data-prototype-history="back"]').click();
+    assert(
+      await page.evaluate(() => document.documentElement.dataset.prototypeHistoryAction) === "back",
+      `${label}: back control is inert`,
+    );
 
-  await page.locator('[data-prototype-menu="文件"]').click();
-  const menu = page.locator('.prototype-desktop-menu-popover[aria-label="文件菜单"]');
-  await menu.waitFor({ state: "visible" });
-  assert(await menu.getByRole("menuitem").count() === 3, `${label}: file menu did not open`);
-  await page.keyboard.press("Escape");
-  assert(await page.locator(".prototype-desktop-menu-popover").count() === 0, `${label}: desktop menu did not close`);
+    await page.locator('[data-prototype-menu="文件"]').click();
+    const menu = page.locator('.prototype-desktop-menu-popover[aria-label="文件菜单"]');
+    await menu.waitFor({ state: "visible" });
+    assert(await menu.getByRole("menuitem").count() === 3, `${label}: file menu did not open`);
+    await page.keyboard.press("Escape");
+    assert(await page.locator(".prototype-desktop-menu-popover").count() === 0, `${label}: desktop menu did not close`);
+  }
 
   const expandedWidth = await setSidebarCollapsed(page, false, label);
   const collapsedWidth = await setSidebarCollapsed(page, true, label);
@@ -1632,7 +1748,14 @@ async function assertActivityScenario(page, scenario, label) {
     const event = session.locator('[data-prototype-event="multi-command"]');
     const details = event.locator(":scope > .prototype-activity-details");
     const children = details.locator("[data-prototype-child-command]");
-    assert(await details.isVisible() && await children.count() === 2, `${label}: multiple-command list is incomplete`);
+    assert(await details.isVisible() && await children.count() === 8, `${label}: multiple-command list is incomplete`);
+    const overflow = await details.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      overflowY: getComputedStyle(element).overflowY,
+    }));
+    assert(overflow.scrollHeight > overflow.clientHeight && overflow.overflowY === "auto",
+      `${label}: long command list does not use bounded internal scrolling`);
     assert(await session.locator(".prototype-shell-card:visible").count() === 0, `${label}: nested Shell opened before selection`);
     const first = children.first().locator(".prototype-activity-child-command");
     await first.click();
@@ -1727,9 +1850,30 @@ async function renderPairedScenario(browser, theme, scenario, browserErrors) {
         : scenario.slug === "subagent-detail"
           ? "detail"
           : null;
+    const isWorkbenchTabScenario = scenario.slug.startsWith("workbench-");
     if (expectedSidebarState) await assertSidebarView(page, expectedSidebarState, label);
+    if (isWorkbenchTabScenario) {
+      const expected = scenario.slug === "workbench-multi-tabs"
+        ? "tabs"
+        : scenario.slug === "workbench-tab-fallback"
+          ? "fallback"
+          : "launcher";
+      await assertWorkbenchTabState(page, expected, label);
+    }
+    if (scenario.slug === "model-configuration" || scenario.slug === "codex-configuration") {
+      await page.locator(".model-config-trigger").click();
+      await page.locator(".model-config-menu").waitFor({ state: "visible" });
+      const labels = await page.locator(".model-config-row > span:first-child").allTextContents();
+      const expectedRows = scenario.slug === "model-configuration"
+        ? ["模型", "思考模式", "推理强度"]
+        : ["模型", "推理强度", "输出详略"];
+      for (const expected of expectedRows) {
+        assert(labels.map((value) => value.trim()).includes(expected), `${label}: ${expected} config is missing`);
+      }
+    }
     await capture(page, theme, `${scenario[theme.key]}-${scenario.slug}-${theme.key}.png`);
     if (expectedSidebarState) await verifySidebarExperience(page, scenario, label);
+    if (isWorkbenchTabScenario) await verifyWorkbenchTabExperience(page, scenario, label);
     if (scenario.slug === "launcher") {
       await verifyCompletionInteractions(page, label);
       await verifyDesktopChromeInteractions(page, label);
