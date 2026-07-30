@@ -214,12 +214,45 @@ async function runInteractions(browser, errors) {
   progress('interaction create conversation');
   await page.locator('.sidebar-brand').click();
   await page.waitForSelector('.scene-home', { state: 'visible' });
+  const homeComposerContract = await page.locator('.home-composer').evaluate((shell) => {
+    const textarea = shell.querySelector('textarea');
+    const send = shell.querySelector('.send-button');
+    return {
+      radius: getComputedStyle(shell).borderRadius,
+      inputHeight: getComputedStyle(textarea).minHeight,
+      sendHeight: getComputedStyle(send).height,
+      sendBackground: getComputedStyle(send).backgroundColor,
+    };
+  });
   await page.locator('.home-composer textarea').fill('把浏览器 Demo 的主流程补完整');
   const send = page.locator('.home-composer .send-button');
   assert(await send.isEnabled(), 'new conversation send button is disabled');
   await send.click();
   await page.waitForSelector('.scene-room', { state: 'visible' });
   assert((await page.locator('.timeline').innerText()).includes('完整会话回复'), 'new conversation did not receive demo reply');
+  assert(
+    await page.locator('.toast-title').filter({ hasText: '已结束：' }).count() === 0,
+    'normal conversation completion should not show a toast'
+  );
+  await page.locator('.comp-box textarea').focus();
+  const roomComposerContract = await page.locator('.comp-box').evaluate((shell) => {
+    const textarea = shell.querySelector('textarea');
+    const send = shell.querySelector('.send');
+    return {
+      radius: getComputedStyle(shell).borderRadius,
+      inputHeight: getComputedStyle(textarea).minHeight,
+      sendHeight: getComputedStyle(send).height,
+      sendBackground: getComputedStyle(send).backgroundColor,
+      textareaOutline: getComputedStyle(textarea).outlineStyle,
+      sendText: send.textContent.trim(),
+    };
+  });
+  assert(roomComposerContract.radius === homeComposerContract.radius, 'room composer radius drifted from home');
+  assert(roomComposerContract.inputHeight === homeComposerContract.inputHeight, 'room composer input height drifted from home');
+  assert(roomComposerContract.sendHeight === homeComposerContract.sendHeight, 'room composer send height drifted from home');
+  assert(roomComposerContract.sendBackground === homeComposerContract.sendBackground, 'room composer send color drifted from home');
+  assert(roomComposerContract.textareaOutline === 'none', 'room composer rendered an inner textarea focus ring');
+  assert(roomComposerContract.sendText === '发送', 'room composer send label missing');
 
   const workbenchRoot = page.getByTestId('workbench-root');
   progress('interaction launcher keyboard and reopen');
@@ -236,10 +269,93 @@ async function runInteractions(browser, errors) {
   assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'hidden', 'terminal hide did not close workbench');
   await page.locator('.room-workbench-toggle').click();
   assert((await page.locator('.term-row.sel').first().innerText()) === selectedTerminalBefore, 'terminal selection was not restored');
+  const headerGap = await page.locator('.workbench-head').evaluate((header) => {
+    const tab = header.querySelector('.workbench-active-tab')?.getBoundingClientRect();
+    const add = header.querySelector('.workbench-add-button')?.getBoundingClientRect();
+    return tab && add ? add.left - tab.right : -1;
+  });
+  assert(headerGap >= 6, 'new extension action is visually glued to the active tab');
+  await page.locator('.workbench-head').screenshot({
+    path: path.join(outputDir, 'room-workbench-head-light.png'),
+    animations: 'disabled',
+  });
 
   progress('interaction files draft persistence');
   await page.locator('.sidebar-task').filter({ hasText: '修复任务队列并发问题' }).click();
-  await page.locator('.room-workbench-toggle').click();
+
+  progress('interaction timeline progressive disclosure');
+  const timeline = page.locator('.timeline');
+  const timelineText = await timeline.innerText();
+  for (const protocol of ['delegate_task', 'collect_subagents', 'subagent_lifecycle']) {
+    assert(!timelineText.includes(protocol), `timeline exposed internal protocol ${protocol}`);
+  }
+  const inheritedTurn = timeline.locator('.timeline-turn').filter({ hasText: '编辑历史消息后' });
+  const activeBranchTurn = timeline.locator('.timeline-turn').filter({ hasText: '梳理任务队列执行路径' });
+  assert(await inheritedTurn.locator('.run-summary, .timeline-subagent-chip').count() === 0, 'active-branch runs leaked into inherited history');
+  assert(await activeBranchTurn.locator('.run-summary').count() === 1, 'main run was not attached to the active branch turn');
+  assert(await activeBranchTurn.locator('.timeline-subagent-chip').count() === 2, 'subagents were not attached to their delegating turn');
+  assert(await timeline.locator('.timeline-subagent-chip').count() === 2, 'timeline subagent chips were not grouped');
+  const commandGroup = timeline.locator('.timeline-activity-event.kind-command').filter({ hasText: '运行了多个命令' });
+  assert(await commandGroup.count() === 1, 'timeline multi-command group missing');
+  await commandGroup.locator('.timeline-activity-toggle').click();
+  assert(await commandGroup.locator('.timeline-command-list .tcard').count() === 2, 'multi-command group did not reveal child commands');
+  const firstCommand = commandGroup.locator('.timeline-command-list .tcard').first();
+  await firstCommand.locator('.tcard-head').click();
+  assert(await firstCommand.locator('.tcard-body').isVisible(), 'child command output did not expand');
+  const completedSubagent = timeline.locator('.timeline-subagent-chip.status-completed').first();
+  await completedSubagent.click();
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'subagent-detail', 'subagent chip did not open the dedicated detail page');
+  assert(await page.getByTestId('subagent-detail').count() === 1, 'subagent detail view missing');
+  assert(await page.locator('.subagent-page-status.status-completed').count() === 1, 'completed subagent status missing from detail header');
+  assert(await page.locator('.subagent-page-header .subagent-avatar svg').count() === 1, 'subagent identity icon missing from detail header');
+  assert(await page.locator('.subagent-runtime-log').count() === 1, 'subagent runtime telemetry disclosure missing');
+  assert(await page.locator('.subagent-transcript-message').count() >= 2, 'persisted Codex replies were not rendered as a transcript');
+  assert(await page.locator('.subagent-transcript-tool').count() === 2, 'Codex tool activity was not rendered in the detail transcript');
+  const completedTool = page.locator('.subagent-transcript-tool.state-ok').last();
+  await completedTool.locator('.subagent-transcript-tool-head').click();
+  assert(await completedTool.locator('.subagent-transcript-tool-body').isVisible(), 'Codex command output did not expand');
+  assert((await completedTool.locator('.subagent-transcript-tool-body').innerText()).includes('8 passed'), 'real Codex command output was not exposed in the detail');
+  await page.locator('#app').screenshot({
+    path: path.join(outputDir, 'room-subagent-detail-light.png'),
+    animations: 'disabled',
+  });
+  const subagentSession = page.locator('.subagent-session-summary');
+  await subagentSession.click();
+  assert(!(await page.locator('.subagent-session-body').isVisible()), 'subagent session did not collapse');
+  await subagentSession.click();
+  assert(await page.locator('.subagent-session-body').isVisible(), 'subagent session did not expand');
+  await page.getByRole('button', { name: '返回子智能体列表' }).click();
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'subagents', 'subagent detail did not return to list');
+  assert(await page.locator('.subagent-list-row').count() === 2, 'subagent list did not contain every run');
+  assert(await page.locator('.subagent-list-section').count() === 2, 'subagent list did not separate active and completed runs');
+  await page.locator('#app').screenshot({
+    path: path.join(outputDir, 'room-subagents-light.png'),
+    animations: 'disabled',
+  });
+  const darkDetailPage = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
+  darkDetailPage.setDefaultTimeout(10000);
+  darkDetailPage.on('pageerror', (error) => errors.push(String(error)));
+  darkDetailPage.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+  await darkDetailPage.goto(`${sourceUrl}?state=run&task=queue&theme=dark&reset=1`, { waitUntil: 'load' });
+  await waitReady(darkDetailPage, scenarios.find((scenario) => scenario.name === 'room-run'));
+  await darkDetailPage.locator('.timeline-subagent-chip.status-completed').first().click();
+  await darkDetailPage.locator('.subagent-transcript-tool.state-ok').last().locator('.subagent-transcript-tool-head').click();
+  await darkDetailPage.locator('#app').screenshot({
+    path: path.join(outputDir, 'room-subagent-detail-dark.png'),
+    animations: 'disabled',
+  });
+  await darkDetailPage.close();
+  await page.locator('.subagent-list-row.status-running').click();
+  await page.keyboard.press('Alt+3');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'files', 'tool shortcut remained trapped behind subagent detail');
+  assert(await page.getByTestId('subagent-detail').count() === 0, 'subagent detail still overrode the selected tool');
+  await page.keyboard.press('Alt+1');
+  const auditText = await page.locator('.audit-list').innerText();
+  assert(!auditText.includes('delegate_task') && !auditText.includes('collect_subagents'), 'workbench audit duplicated subagent protocol tools');
+  await page.locator('.sum-subagents-button').click();
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'subagents', 'summary subagent entry did not open the list');
+  await page.getByRole('button', { name: '返回运行与子代理' }).click();
+  await page.getByRole('button', { name: '打开工具启动器' }).click();
   await page.locator('.workbench-launcher-row').filter({ hasText: '文件' }).click();
   await page.locator('.files-tree-row[title="README.md"]').click();
   const filesEditor = page.locator('.files-textarea');

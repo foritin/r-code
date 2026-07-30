@@ -77,7 +77,7 @@ export default function App() {
   return (
     <div
       id="app"
-      className={`app-shell scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}`}
+      className={`app-shell r-code-signature scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}`}
       style={{
         zoom: appScale,
         width: `${100 / appScale}%`,

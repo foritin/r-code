@@ -20,7 +20,6 @@ import { Composer } from "../room/Composer";
 import { PendingPermissions } from "../room/Permissions";
 import { Canvas } from "../room/Canvas";
 import { ActivityStrip } from "../room/ActivityStrip";
-import { SubagentPanel } from "../room/SubagentPanel";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
@@ -31,7 +30,11 @@ const DEFAULT_ROOM_SPLIT_PCT = 55;
 const ROOM_SPLITTER_WIDTH = 11;
 const MIN_CONVERSATION_WIDTH = 360;
 const MIN_CANVAS_WIDTH = 300;
-const taskSubagentSelections = new Map<string, string | null>();
+interface TaskSubagentView {
+  open: boolean;
+  selectedId: string | null;
+}
+const taskSubagentViews = new Map<string, TaskSubagentView>();
 
 interface RoomSplitBounds {
   min: number;
@@ -76,6 +79,7 @@ export function RoomScene() {
   const goHome = useAppStore((s) => s.goHome);
   const workbenchMode = useAppStore((s) => s.workbenchMode);
   const canvasTab = useAppStore((s) => s.canvasTab);
+  const workbenchLauncherOpen = useAppStore((s) => s.workbenchLauncherOpen);
   const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const hideWorkbench = useAppStore((s) => s.hideWorkbench);
   const restoreWorkbench = useAppStore((s) => s.restoreWorkbench);
@@ -93,8 +97,8 @@ export function RoomScene() {
   );
   const providers = useProviders([currentTaskId, boundProvider]);
   const [activity, dispatchActivity] = useReducer(activityTraceReducer, createActivityTraceState());
+  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
-  const [subagentPanelRequest, setSubagentPanelRequest] = useState(0);
   const tlRef = useRef<TimelineHandle>(null);
   const roomRef = useRef<HTMLElement>(null);
   const convoRef = useRef<HTMLDivElement>(null);
@@ -115,16 +119,42 @@ export function RoomScene() {
     )
     .join("|");
 
-  const selectSubagent = useCallback((subagentId: string | null) => {
-    if (currentTaskId) taskSubagentSelections.set(currentTaskId, subagentId);
-    setSelectedSubagentId(subagentId);
-    if (subagentId) setCanvasTab("summary");
-  }, [currentTaskId, setCanvasTab]);
+  const saveSubagentView = useCallback((open: boolean, selectedId: string | null) => {
+    if (currentTaskId) taskSubagentViews.set(currentTaskId, { open, selectedId });
+    setSubagentPanelOpen(open);
+    setSelectedSubagentId(selectedId);
+  }, [currentTaskId]);
+
+  const inspectSubagent = useCallback((subagentId: string) => {
+    saveSubagentView(true, subagentId);
+    setCanvasTab("summary");
+  }, [saveSubagentView, setCanvasTab]);
+
+  const showSubagentList = useCallback(() => {
+    saveSubagentView(true, null);
+    setCanvasTab("summary");
+  }, [saveSubagentView, setCanvasTab]);
+
+  const closeSubagentView = useCallback(() => {
+    saveSubagentView(false, null);
+  }, [saveSubagentView]);
+
+  const backToSubagentList = useCallback(() => {
+    saveSubagentView(true, null);
+  }, [saveSubagentView]);
 
   useEffect(() => {
     dispatchActivity({ type: "reset" });
-    setSelectedSubagentId(currentTaskId ? taskSubagentSelections.get(currentTaskId) ?? null : null);
+    const saved = currentTaskId ? taskSubagentViews.get(currentTaskId) : undefined;
+    setSubagentPanelOpen(saved?.open ?? false);
+    setSelectedSubagentId(saved?.selectedId ?? null);
   }, [currentTaskId]);
+
+  useEffect(() => {
+    const workbenchVisible = workbenchMode === "docked" || workbenchMode === "focus";
+    if (!subagentPanelOpen || (canvasTab === "summary" && !workbenchLauncherOpen && workbenchVisible)) return;
+    closeSubagentView();
+  }, [canvasTab, closeSubagentView, subagentPanelOpen, workbenchLauncherOpen, workbenchMode]);
 
   useEffect(() => {
     if (workbenchMode === "focus") convoRef.current?.setAttribute("inert", "");
@@ -281,6 +311,7 @@ export function RoomScene() {
           ? "compact"
           : "wide";
   const dismissWorkbench = () => {
+    closeSubagentView();
     hideWorkbench(task?.state === "review_ready" && (canvasTab === "review" || canvasTab === "changes"));
   };
 
@@ -395,20 +426,14 @@ export function RoomScene() {
           cur={null}
           running={running}
           onAgentEvent={observeAgentEvent}
+          selectedSubagentId={selectedSubagentId}
+          onInspectSubagent={inspectSubagent}
         />
         {archived ? (
           <div className="room-archived-note">此对话已归档，只能查看历史。可通过右上角对话选项永久删除。</div>
         ) : (
           <>
             <ActivityStrip state={activity} running={running} />
-            <SubagentPanel
-              key={currentTaskId}
-              state={activity}
-              selectedSubagentId={selectedSubagentId}
-              onInspectSubagent={selectSubagent}
-              onAbortSubagent={abortSubagent}
-              openRequest={subagentPanelRequest}
-            />
             <PendingPermissions taskId={currentTaskId} />
             <Composer
               taskId={currentTaskId}
@@ -429,7 +454,7 @@ export function RoomScene() {
               onSent={(text, mode) => tlRef.current?.onSent(text, mode)}
               onSendFailed={() => tlRef.current?.reload()}
               onActivitySent={observeSend}
-              onShowSubagents={() => setSubagentPanelRequest((value) => value + 1)}
+              onShowSubagents={showSubagentList}
             />
           </>
         )}
@@ -464,8 +489,11 @@ export function RoomScene() {
         activity={activity}
         workspacePath={workspacePath}
         workspaceAttached={workspaceAttached}
+        subagentPanelOpen={subagentPanelOpen}
         selectedSubagentId={selectedSubagentId}
-        onCloseSubagent={() => selectSubagent(null)}
+        onInspectSubagent={inspectSubagent}
+        onBackToSubagents={backToSubagentList}
+        onCloseSubagents={closeSubagentView}
         onAbortSubagent={abortSubagent}
       />
     </section>

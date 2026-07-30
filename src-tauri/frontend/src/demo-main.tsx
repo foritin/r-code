@@ -15,6 +15,7 @@ import "./styles/scenes.css";
 import "./styles/r-code-ui.css";
 import "./styles/product-ui.css";
 import "./styles/workbench.css";
+import "./styles/signature.css";
 
 const SCENES = new Set<Scene>([
   "home",
@@ -78,7 +79,7 @@ function parseDemoRoute() {
   const settingsPane = SETTINGS_PANES.has(requestedSettingsPane as SettingsPane)
     ? requestedSettingsPane as SettingsPane
     : "providers";
-  const requestedTheme = params.get("theme") ?? "light";
+  const requestedTheme = params.get("theme") ?? "dark";
   const themeMode = THEMES.has(requestedTheme as ThemeMode) ? requestedTheme as ThemeMode : "light";
   const requestedProject = params.get("project");
   const defaultProject = scene === "dashboard" || scene === "editor" ? "D:/project/rust/r-code" : null;

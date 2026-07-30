@@ -52,6 +52,7 @@ export function runPresentation(run: AgentRun): RunPresentation {
 
 export type TimelineItem =
   | { kind: "ms"; id: string; t: number; ok: boolean | null; label: string }
+  | { kind: "context"; id: string; t: number; label: string; detail: string | null }
   | {
       kind: "you";
       id: string;
@@ -67,11 +68,14 @@ export type TimelineItem =
   | {
       kind: "run";
       id: string;
+      runId: string;
       t: number;
       model: string;
       agentKind: AgentRun["agent_kind"];
       agentLabel: string | null;
       agentSummary: string | null;
+      parentRunId: string | null;
+      delegatedByToolCallId: string | null;
       runtimeKind: AgentRun["runtime_kind"];
       startedAt: string;
       endedAt: string | null;
@@ -336,6 +340,18 @@ export function buildTimeline(
           } catch {
             /* 无法解析的 plan 负载直接跳过 */
           }
+        } else if (m.text === "r_code_context_compacted") {
+          items.push({
+            kind: "context",
+            id: m.id ? `context-${m.id}` : nid("context"),
+            t: lastT,
+            label: "上下文已自动压缩",
+            detail: contextCompactionDetail(m.output_json),
+          });
+        } else if (m.text && isInternalTimelineProtocol(m.text)) {
+          // 子代理生命周期由 AgentRun 运行树呈现。协议名和载荷只属于审计视图，
+          // 普通对话里不能再出现 subagent_lifecycle 等内部记录。
+          break;
         } else if (m.text) {
           items.push({ kind: "ms", id: nid("ms"), t: lastT, ok: null, label: m.text });
         }
@@ -444,17 +460,14 @@ function queueSendMode(message: QueuedMessage): AgentSendMode {
 /**
  * 把 AgentRun 合并进时间线。
  *
- * 这里不能按时间戳排序。会话消息**没有**时间戳 —— `session_messages`
- * （commands.rs）把 `SessionEvent::Message` 转成 `SessionMessage` 时固定写
- * `timestamp: None`，只有 Meta 有值。所以 buildTimeline 里条目的 `t` 只是
- * 一个"被工具调用推进的序号"，而 `run.started_at` 是真实墙钟时间。
+ * 会话消息没有可用的墙钟时间，而分支 JSONL 又会复制父分支的历史前缀。
+ * `task_detail.runs` 只返回当前分支的运行：如果从第 N 轮重发，消息有 1..N，
+ * 运行却从 N 开始。因此不能把运行从第一轮向后填，否则子代理会整体串到上一轮。
  *
- * 旧实现按 `t` 大小插入，两个不同量纲混在一起：纯问答（无工具调用）的会话里
- * 所有消息 `t === 0`、所有 run `t > 0`，于是每一条 run 行都被推到列表末尾，
- * N 条"运行 X 已完成"连成一片堆在底部，看起来像重复记录。
- *
- * 正确的锚点是**轮次边界**：一轮 = 一条用户消息 + 其后的 agent 输出，
- * 一次运行收尾于该轮末尾。轮次边界可以直接从条目序列里读出来，不需要时间戳。
+ * 归组规则：
+ * - 主运行与可执行的用户轮次尾部对齐，自然跳过分支复制进来的历史前缀；
+ * - 子代理优先用 `delegated_by_tool_call_id` 精确跟随委派工具所在轮次；
+ * - 旧数据没有调用 ID 时，才回退到父运行的轮次。
  */
 export function mergeRunItems(
   items: TimelineItem[],
@@ -465,39 +478,38 @@ export function mergeRunItems(
   const ordered = orderedUniqueRuns(runs);
   if (ordered.length === 0) return withoutRuns;
 
-  // 轮次边界：一条用户消息，且它前面已经出现过非用户条目 → 新一轮开始。
-  // 末尾再补一个边界，承载最后一轮（以及所有溢出的 run）。
-  const boundaries: number[] = [];
-  let sawResponse = false;
-  withoutRuns.forEach((item, index) => {
-    if (item.kind === "you") {
-      if (sawResponse) {
-        boundaries.push(index);
-        sawResponse = false;
-      }
-    } else {
-      sawResponse = true;
+  const turns = timelineTurnRanges(withoutRuns);
+  const lastSlot = Math.max(0, turns.length - 1);
+  const eligibleSlots = turns
+    .map((turn, slot) => ({ turn, slot }))
+    .filter(({ turn }) => turn.user != null && turn.user.queuedState == null)
+    .map(({ slot }) => slot);
+  const toolSlotByCallId = new Map<string, number>();
+  turns.forEach((turn, slot) => {
+    for (let index = turn.start; index < turn.end; index += 1) {
+      const item = withoutRuns[index];
+      if (item.kind === "tool" && item.callId) toolSlotByCallId.set(item.callId, slot);
     }
   });
-  boundaries.push(withoutRuns.length);
-  const lastSlot = boundaries.length - 1;
 
-  // 主 run 按顺序落到各轮边界；运行中的那条永远在末尾（spinner 必须跟着最新内容）。
-  // run 数多于轮数时（例如 send_now 打断产生的"已中止 + 已完成"）多出来的堆到末尾，
-  // 这与旧行为一致，不会更糟。
+  // 分支会把旧消息前缀复制进新 JSONL，但旧 run 不属于新分支。
+  // 主 run 必须与轮次尾部对齐，而不是从第一轮开始对齐。
   const slotOf = new Map<string, number>();
-  let mainIndex = 0;
-  for (const run of ordered) {
-    if (run.agent_kind === "subagent") continue;
-    const slot = run.ended_at == null ? lastSlot : Math.min(mainIndex, lastSlot);
+  const mainRuns = ordered.filter((run) => run.agent_kind !== "subagent");
+  const slotOffset = Math.max(0, eligibleSlots.length - mainRuns.length);
+  mainRuns.forEach((run, index) => {
+    const eligibleIndex = Math.min(slotOffset + index, eligibleSlots.length - 1);
+    const slot = eligibleIndex >= 0 ? eligibleSlots[eligibleIndex] : lastSlot;
     slotOf.set(run.id, slot);
-    mainIndex++;
-  }
-  // 子代理跟随父 run 所在的轮次；找不到父就归到末尾。
+  });
+  // 子代理先跟随精确的委派工具；旧日志才回退到父 run。
   for (const run of ordered) {
     if (run.agent_kind !== "subagent") continue;
+    const delegatedSlot = run.delegated_by_tool_call_id
+      ? toolSlotByCallId.get(run.delegated_by_tool_call_id)
+      : undefined;
     const parentSlot = run.parent_run_id ? slotOf.get(run.parent_run_id) : undefined;
-    slotOf.set(run.id, parentSlot ?? lastSlot);
+    slotOf.set(run.id, delegatedSlot ?? parentSlot ?? lastSlot);
   }
 
   const buckets = new Map<number, AgentRun[]>();
@@ -519,7 +531,7 @@ export function mergeRunItems(
   const merged: TimelineItem[] = [...withoutRuns];
   // 从后往前插入，前面的下标才不会被位移。
   for (const slot of [...buckets.keys()].sort((a, b) => b - a)) {
-    const at = boundaries[slot];
+    const at = turns[slot]?.end ?? withoutRuns.length;
     const list = buckets.get(slot) ?? [];
     // t 沿用前一条的值：它只服务于回放游标的 dim() 比较，
     // 用 run 的墙钟秒数会让同一轮里的条目 t 跳变。
@@ -530,11 +542,14 @@ export function mergeRunItems(
       ...list.map((run) => ({
         kind: "run" as const,
         id: `run-${run.id}`,
+        runId: run.id,
         t: anchorT,
         model: run.model,
         agentKind: run.agent_kind,
         agentLabel: run.agent_label,
         agentSummary: run.summary,
+        parentRunId: run.parent_run_id,
+        delegatedByToolCallId: run.delegated_by_tool_call_id,
         runtimeKind: run.runtime_kind,
         startedAt: run.started_at,
         endedAt: run.ended_at,
@@ -544,6 +559,47 @@ export function mergeRunItems(
     );
   }
   return merged;
+}
+
+interface TimelineTurnRange {
+  start: number;
+  end: number;
+  user: Extract<TimelineItem, { kind: "you" }> | null;
+}
+
+/** 与 `buildTimelineTurns` 相同的轮次切分，但保留原数组下标供 run 插入。 */
+function timelineTurnRanges(items: readonly TimelineItem[]): TimelineTurnRange[] {
+  const turns: TimelineTurnRange[] = [];
+  let start = 0;
+  let user: TimelineTurnRange["user"] = null;
+
+  items.forEach((item, index) => {
+    if (item.kind !== "you") return;
+    if (user != null || index > start) turns.push({ start, end: index, user });
+    start = index;
+    user = item;
+  });
+  if (user != null || start < items.length) turns.push({ start, end: items.length, user });
+  return turns.length > 0 ? turns : [{ start: 0, end: items.length, user: null }];
+}
+
+function isInternalTimelineProtocol(event: string): boolean {
+  return event === "subagent_lifecycle"
+    || event === "subagent_activity"
+    || event === "subagent_tool_audit";
+}
+
+function contextCompactionDetail(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const payload = JSON.parse(value) as Record<string, unknown>;
+    const before = typeof payload.before_messages === "number" ? payload.before_messages : null;
+    const after = typeof payload.after_messages === "number" ? payload.after_messages : null;
+    if (before == null || after == null) return null;
+    return `${before.toLocaleString()} 条消息整理为 ${after.toLocaleString()} 条工作上下文`;
+  } catch {
+    return null;
+  }
 }
 
 function orderedUniqueRuns(runs: AgentRun[]): AgentRun[] {

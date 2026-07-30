@@ -49,16 +49,6 @@ export const ToolCard = memo(function ToolCard({
   // 否则会出现「按钮可展开、展开后写着没有载荷」。
   const hasPayload = Boolean(inputJson?.trim() || outputJson?.trim());
 
-  // 载荷解析推迟到真正展开之后：折叠态不做任何 JSON.parse / 正则扫描。
-  const input = useMemo(
-    () => (open ? formatToolPayload(inputJson, "input") : null),
-    [open, inputJson]
-  );
-  const output = useMemo(
-    () => (open ? formatToolPayload(outputJson, "output") : null),
-    [open, outputJson]
-  );
-
   return (
     <div
       className={
@@ -95,14 +85,37 @@ export const ToolCard = memo(function ToolCard({
 
       {open && (
         <div className="tcard-body">
-          {input && <Payload label="输入" view={input} />}
-          {output && (
-            <Payload label={state === "fail" ? "错误输出" : "输出"} view={output} tone={state} />
-          )}
-          {!input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
+          <ToolPayloadDetails
+            inputJson={inputJson}
+            outputJson={outputJson}
+            state={state}
+          />
         </div>
       )}
     </div>
+  );
+});
+
+/**
+ * 已展开工具的公开载荷。活动分组和独立 ToolCard 共用这一出口，避免单命令展开后
+ * 再套一层重复标题。组件只在父级真正展开时挂载，因此解析成本仍然按需发生。
+ */
+export const ToolPayloadDetails = memo(function ToolPayloadDetails({
+  inputJson,
+  outputJson,
+  state,
+}: Pick<ToolCardProps, "inputJson" | "outputJson" | "state">) {
+  const input = useMemo(() => formatToolPayload(inputJson, "input"), [inputJson]);
+  const output = useMemo(() => formatToolPayload(outputJson, "output"), [outputJson]);
+
+  return (
+    <>
+      {input && <Payload label="输入" view={input} />}
+      {output && (
+        <Payload label={state === "fail" ? "错误输出" : "输出"} view={output} tone={state} />
+      )}
+      {!input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
+    </>
   );
 });
 

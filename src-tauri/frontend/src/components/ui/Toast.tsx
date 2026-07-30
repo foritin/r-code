@@ -1,5 +1,5 @@
 /**
- * 全局 toast 通知：右下角容器 + 后台任务完成的自动播报。
+ * 全局 toast 通知：右下角容器 + 需要用户注意的后台状态播报。
  *
  * 视觉与 StatusBar 同源（同一套 tint/edge 语义色、同一套图标），区别只在于
  * StatusBar 是内联的、贴在它所解释的那块 UI 旁边；toast 是全局的、用来把
@@ -165,8 +165,8 @@ const ACTIVE_STATES: ReadonlySet<TaskState> = new Set<TaskState>(["exploring", "
 
 /**
  * 终结态：本轮已经停下来了。
- * archived 也算终结，但它是用户自己点归档造成的，不需要再回声一次，
- * 所以只进这个集合用于"已结束"的判定，不产出 toast（见 completionToast）。
+ * idle 是普通问答结束，archived 是用户主动归档；两者都只用于状态流转判定，
+ * 不产出 toast（见 completionToast），避免每轮对话结束都打断用户。
  */
 const TERMINAL_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   "review_ready",
@@ -187,7 +187,7 @@ function completionToast(task: Task): { kind: ToastKind; title: string; body: st
     case "review_ready":
       return { kind: "success", title: `待审阅：${label}`, body: "任务已跑完，改动等你确认。" };
     case "idle":
-      return { kind: "info", title: `已结束：${label}`, body: "本轮结束，没有留下待审阅的改动。" };
+      return null;
     case "interrupted":
       return { kind: "error", title: `已中止：${label}`, body: "运行被打断，回到会话可以看最后一步。" };
     default:

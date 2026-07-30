@@ -18,7 +18,7 @@ import type {
   TaskEventType,
   VerificationRecord,
 } from "../../lib/types";
-import { permissionRiskLabel, toolTarget } from "../../lib/format";
+import { permissionRiskLabel, toolTarget, toolVerb } from "../../lib/format";
 import { summarizeOutput } from "./model";
 
 export type AuditKind = "tool" | "file" | "verify" | "permission" | "agent" | "session";
@@ -100,6 +100,7 @@ function toolRows(messages: readonly SessionMessage[], events: readonly TaskEven
   const rows: AuditRow[] = [];
   const indexByCallId = new Map<string, number>();
   const startedByCallId = new Map<string, number | null>();
+  const hiddenCallIds = new Set<string>();
   let callIdx = 0;
   let resultIdx = 0;
   let seq = 0;
@@ -109,14 +110,19 @@ function toolRows(messages: readonly SessionMessage[], events: readonly TaskEven
       const iso = callTs[callIdx++] ?? message.timestamp ?? null;
       const at = parseMs(iso);
       const name = (message.tool_name ?? "").trim() || "工具";
+      if (isCoordinationTool(name)) {
+        if (message.call_id) hiddenCallIds.add(message.call_id);
+        continue;
+      }
       const target = toolTarget(message.input_json);
+      const presentation = auditToolPresentation(name);
       const row: AuditRow = {
         id: `tool-${seq++}`,
         at,
         atIso: iso,
         kind: "tool",
-        tag: "工具",
-        text: target ? `${name} · ${shortTarget(target)}` : name,
+        tag: presentation.tag,
+        text: target ? shortTarget(target) : presentation.label,
         result: "进行中",
         state: "wait",
         title: target ? `${name}\n${target}` : name,
@@ -133,6 +139,7 @@ function toolRows(messages: readonly SessionMessage[], events: readonly TaskEven
 
     const iso = resultTs[resultIdx++] ?? message.timestamp ?? null;
     const at = parseMs(iso);
+    if (message.call_id && hiddenCallIds.has(message.call_id)) continue;
     const failed = message.is_error === true;
     const summary = summarizeOutput(message.output_json, failed);
     const index = message.call_id ? indexByCallId.get(message.call_id) : undefined;
@@ -161,6 +168,26 @@ function toolRows(messages: readonly SessionMessage[], events: readonly TaskEven
   }
 
   return rows;
+}
+
+function isCoordinationTool(name: string): boolean {
+  const normalized = name.trim().toLowerCase().replace(/[.\-\s]+/g, "_");
+  return normalized.endsWith("delegate_task")
+    || normalized.endsWith("collect_subagents")
+    || normalized.endsWith("spawn_agent")
+    || normalized.endsWith("wait_agent")
+    || normalized.endsWith("wait_agents");
+}
+
+function auditToolPresentation(name: string): { tag: string; label: string } {
+  switch (toolVerb(name)) {
+    case "run": return { tag: "命令", label: "命令行" };
+    case "read": return { tag: "读取", label: "读取内容" };
+    case "search": return { tag: "检索", label: "搜索内容" };
+    case "edit": return { tag: "编辑", label: "编辑文件" };
+    case "write": return { tag: "写入", label: "写入文件" };
+    default: return { tag: "工具", label: "工具调用" };
+  }
 }
 
 // ---------- 文件变更 ----------
