@@ -4393,9 +4393,10 @@ pub async fn session_messages(
 
 fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> Vec<SessionMessage> {
     let mut out: Vec<SessionMessage> = Vec::new();
-    // JSONL 的 ToolCall 不存 call_id → 按顺序给 tool_call 分配占位 ID，
-    // tool_result 的 call_id 映射回最近一条未配对的 tool_call
-    let mut pending_calls: Vec<String> = Vec::new();
+    // JSONL 的 ToolCall 不存 call_id；ToolResult 却保留 provider 生成的真实 ID。
+    // 先记住待配对的输出下标，结果到达时回填真实 ID，让子代理
+    // delegated_by_tool_call_id 能精确锚定到发起它的对话轮次。
+    let mut pending_calls: Vec<(String, usize)> = Vec::new();
 
     for (line_index, line) in content.lines().enumerate() {
         if line.trim().is_empty() {
@@ -4459,7 +4460,7 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
             }
             SessionEvent::ToolCall { name, input } => {
                 let call_id = format!("call-{}", out.len());
-                pending_calls.push(call_id.clone());
+                pending_calls.push((call_id.clone(), out.len()));
                 out.push(SessionMessage {
                     id: message_id,
                     branch_id: branch_id.to_string(),
@@ -4479,13 +4480,26 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 output,
                 is_error,
             } => {
-                // call_id 对不上占位时取最近一条未配对 tool_call
-                let resolved = if pending_calls.contains(&call_id) {
-                    call_id
+                // ToolCall 无 ID 时无法对并发结果做更强的完美匹配；当前 provider
+                // 按调用顺序回传结果，因此沿用最近未配对调用，但不再丢弃真实 ID。
+                let pending_index = pending_calls
+                    .iter()
+                    .rposition(|(placeholder, _)| placeholder == &call_id)
+                    .or_else(|| (!pending_calls.is_empty()).then_some(pending_calls.len() - 1));
+                let pending = pending_index.map(|index| pending_calls.remove(index));
+                let resolved = if call_id.trim().is_empty() {
+                    pending
+                        .as_ref()
+                        .map(|(placeholder, _)| placeholder.clone())
+                        .unwrap_or(call_id)
                 } else {
-                    pending_calls.pop().unwrap_or(call_id)
+                    call_id
                 };
-                pending_calls.retain(|c| c != &resolved);
+                if let Some((_, call_message_index)) = pending {
+                    if let Some(call_message) = out.get_mut(call_message_index) {
+                        call_message.call_id = Some(resolved.clone());
+                    }
+                }
                 out.push(SessionMessage {
                     id: message_id,
                     branch_id: branch_id.to_string(),
@@ -6776,6 +6790,7 @@ pub async fn codex_start_device_login() -> Result<(), String> {
 
 const CODEX_EXEC_MAX_GOAL_CHARS: usize = 12_000;
 const CODEX_EXEC_MAX_SUMMARY_CHARS: usize = 8_000;
+const CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS: usize = 12_000;
 const CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS: usize = 320;
 const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CODEX_EXEC_HARD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -6797,8 +6812,8 @@ impl Default for CodexExecLimits {
 
 /// Codex `--json` 输出里可安全进入 R-Code 状态机的事件。
 ///
-/// reasoning 只映射为阶段，不保留正文；命令/MCP 只保留经脱敏、截断后的动作标签，
-/// 原始输出永不进入 UI 或持久化存储。
+/// reasoning 只映射为阶段，不保留正文；命令/MCP 只保留经脱敏、截断后的动作标签。
+/// 命令完成后可保留同样经过脱敏、截断的聚合输出，供子代理详情按需展开。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CodexExecJsonEvent {
     ThreadStarted(String),
@@ -6814,6 +6829,7 @@ enum CodexExecJsonEvent {
     ToolCompleted {
         call_id: String,
         is_error: bool,
+        output: Option<String>,
     },
     AssistantMessage(String),
     Usage(String),
@@ -6975,6 +6991,45 @@ fn safe_codex_action(value: &str, fallback: &str) -> String {
     }
 }
 
+fn safe_codex_tool_output(item: &serde_json::Value) -> Option<String> {
+    let item_type = item.get("type").and_then(serde_json::Value::as_str)?;
+    if !matches!(item_type, "command_execution" | "commandExecution") {
+        return None;
+    }
+    let output = item
+        .get("aggregated_output")
+        .or_else(|| item.get("aggregatedOutput"))
+        .or_else(|| item.get("output"))
+        .and_then(serde_json::Value::as_str)?;
+    let safe = bounded_text(&redact_text(output), CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS);
+    (!safe.is_empty()).then_some(safe)
+}
+
+fn codex_item_failed(item: &serde_json::Value) -> bool {
+    let failed_status = item
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|status| matches!(status, "failed" | "error" | "cancelled" | "declined"));
+    let failed_exit = item
+        .get("exit_code")
+        .or_else(|| item.get("exitCode"))
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|code| code != 0);
+    failed_status || failed_exit
+}
+
+fn codex_tool_result_payload(is_error: bool, output: Option<String>) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert(
+        "status".to_string(),
+        serde_json::Value::String(if is_error { "failed" } else { "completed" }.to_string()),
+    );
+    if let Some(output) = output {
+        payload.insert("output".to_string(), serde_json::Value::String(output));
+    }
+    serde_json::Value::Object(payload)
+}
+
 fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)> {
     let item_type = item.get("type")?.as_str()?;
     let call_id = item
@@ -6983,14 +7038,14 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
         .filter(|value| !value.trim().is_empty())
         .map(|value| bounded_text(value, 160))?;
     let (name, summary) = match item_type {
-        "command_execution" => {
+        "command_execution" | "commandExecution" => {
             let command = item
                 .get("command")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("读取工作区");
             ("Codex 命令", safe_codex_action(command, "读取工作区"))
         }
-        "mcp_tool_call" => {
+        "mcp_tool_call" | "mcpToolCall" => {
             let server = item
                 .get("server")
                 .or_else(|| item.get("server_name"))
@@ -7006,12 +7061,45 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
                 safe_codex_action(&format!("{server} · {tool}"), "MCP 工具"),
             )
         }
-        "web_search" => {
+        "file_change" | "fileChange" => {
+            let paths = item
+                .get("changes")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|change| change.get("path").and_then(serde_json::Value::as_str))
+                .take(3)
+                .collect::<Vec<_>>();
+            let summary = if paths.is_empty() {
+                "更新工作区文件".to_string()
+            } else {
+                format!("更新 {}", paths.join("、"))
+            };
+            (
+                "Codex 文件修改",
+                safe_codex_action(&summary, "更新工作区文件"),
+            )
+        }
+        "web_search" | "webSearch" => {
             let query = item
                 .get("query")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("搜索资料");
             ("Codex 搜索", safe_codex_action(query, "搜索资料"))
+        }
+        "dynamic_tool_call" | "dynamicToolCall" => {
+            let namespace = item
+                .get("namespace")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            let tool = item
+                .get("tool")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("工具");
+            let label = namespace
+                .map(|value| format!("{value} · {tool}"))
+                .unwrap_or_else(|| tool.to_string());
+            ("Codex 工具", safe_codex_action(&label, "工具"))
         }
         _ => return None,
     };
@@ -7064,13 +7152,11 @@ fn parse_codex_exec_json_line(line: &str) -> Option<CodexExecJsonEvent> {
                     detail: "Codex CLI 已完成一轮分析".to_string(),
                 }),
                 _ => codex_item_tool(item).map(|(call_id, _, _)| {
-                    let is_error = item
-                        .get("status")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|status| {
-                            matches!(status, "failed" | "error" | "cancelled")
-                        });
-                    CodexExecJsonEvent::ToolCompleted { call_id, is_error }
+                    CodexExecJsonEvent::ToolCompleted {
+                        call_id,
+                        is_error: codex_item_failed(item),
+                        output: safe_codex_tool_output(item),
+                    }
                 }),
             }
         }
@@ -7543,15 +7629,13 @@ async fn run_codex_exec_process_with_options_and_permissions(
                                     },
                                 ).await;
                             }
-                            CodexExecJsonEvent::ToolCompleted { call_id, is_error } => {
+                            CodexExecJsonEvent::ToolCompleted { call_id, is_error, output } => {
                                 emit_codex_observable_event(
                                     observer.as_ref(),
                                     event_sink,
                                     AgentEvent::ToolResult {
                                         call_id,
-                                        output: serde_json::json!({
-                                            "status": if is_error { "failed" } else { "completed" }
-                                        }),
+                                        output: codex_tool_result_payload(is_error, output),
                                         is_error,
                                     },
                                 ).await;
@@ -7958,15 +8042,43 @@ async fn observe_codex_app_server_event(
     let params = value.get("params").cloned().unwrap_or_default();
     match method {
         "item/started" => {
-            emit_codex_observable_event(
-                observer,
-                event_sink,
-                AgentEvent::Activity {
-                    phase: AgentActivityPhase::Requesting,
-                    detail: Some("Codex 正在处理委派任务".to_string()),
-                },
-            )
-            .await;
+            let item = params.get("item").unwrap_or(&params);
+            if item
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| matches!(kind, "reasoning"))
+            {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Requesting,
+                        detail: Some("Codex 正在分析工作区".to_string()),
+                    },
+                )
+                .await;
+            } else if let Some((call_id, name, action)) = codex_item_tool(item) {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::ToolCall {
+                        name,
+                        input: serde_json::json!({ "summary": action }),
+                        call_id,
+                    },
+                )
+                .await;
+            } else {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Requesting,
+                        detail: Some("Codex 正在处理委派任务".to_string()),
+                    },
+                )
+                .await;
+            }
         }
         "item/completed" => {
             let item = params.get("item").unwrap_or(&params);
@@ -7987,6 +8099,28 @@ async fn observe_codex_app_server_event(
                     )
                     .await;
                 }
+            } else if item_type == Some("reasoning") {
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::Activity {
+                        phase: AgentActivityPhase::Finalizing,
+                        detail: Some("Codex 已完成一轮分析".to_string()),
+                    },
+                )
+                .await;
+            } else if let Some((call_id, _, _)) = codex_item_tool(item) {
+                let is_error = codex_item_failed(item);
+                emit_codex_observable_event(
+                    observer,
+                    event_sink,
+                    AgentEvent::ToolResult {
+                        call_id,
+                        output: codex_tool_result_payload(is_error, safe_codex_tool_output(item)),
+                        is_error,
+                    },
+                )
+                .await;
             }
         }
         "turn/completed" => {
@@ -9670,6 +9804,28 @@ mod tests {
         assert!(msgs.iter().any(|m| m.kind == "system"));
     }
 
+    #[test]
+    fn session_message_parser_backfills_the_provider_tool_call_id() {
+        let content = concat!(
+            r#"{"tool_call":{"name":"delegate_task","input":{"agent":"codex"}}}"#,
+            "\n",
+            r#"{"tool_result":{"call_id":"provider-delegate-42","output":{"status":"queued"},"is_error":false}}"#,
+        );
+
+        let messages = parse_session_messages(content, "branch", "storage");
+        let call = messages
+            .iter()
+            .find(|message| message.kind == "tool_call")
+            .expect("tool call");
+        let result = messages
+            .iter()
+            .find(|message| message.kind == "tool_result")
+            .expect("tool result");
+
+        assert_eq!(call.call_id.as_deref(), Some("provider-delegate-42"));
+        assert_eq!(result.call_id.as_deref(), Some("provider-delegate-42"));
+    }
+
     #[tokio::test]
     async fn agent_abort_updates_state() {
         let (_dir, state) = setup_state();
@@ -11153,6 +11309,28 @@ command = "r-code-host"
                     && name == "Codex 命令"
                     && summary.contains("Authorization: ***")
                     && !summary.contains("secret-token")
+        ));
+        let completed = parse_codex_exec_json_line(
+            r#"{"type":"item.completed","item":{"id":"item-7","type":"command_execution","command":"cargo test","status":"completed","aggregated_output":"ok\nAuthorization: Bearer secret-token"}}"#,
+        );
+        assert!(matches!(
+            completed,
+            Some(CodexExecJsonEvent::ToolCompleted { call_id, is_error: false, output: Some(output) })
+                if call_id == "item-7"
+                    && output.contains("ok")
+                    && output.contains("Authorization: ***")
+                    && !output.contains("secret-token")
+        ));
+        let app_server_command = serde_json::json!({
+            "type": "commandExecution",
+            "id": "item-app",
+            "command": "rg --files",
+            "status": "inProgress"
+        });
+        assert!(matches!(
+            codex_item_tool(&app_server_command),
+            Some((call_id, name, summary))
+                if call_id == "item-app" && name == "Codex 命令" && summary == "rg --files"
         ));
     }
 

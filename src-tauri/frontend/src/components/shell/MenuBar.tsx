@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
 import { notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
 import type { Notification, NotificationPage } from "../../lib/types";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import {
   IconBell,
   IconClose,
@@ -20,11 +21,15 @@ import {
  * 项目内才出现的活动流由 DashboardScene 自己持有，避免跨页面残留错误的右栏。
  */
 export function MenuBar() {
+  const scene = useAppStore((s) => s.scene);
   const setScene = useAppStore((s) => s.setScene);
+  const goHome = useAppStore((s) => s.goHome);
+  const setSettingsPane = useAppStore((s) => s.setSettingsPane);
   const openRoom = useAppStore((s) => s.openRoom);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
   const toggleRail = useAppStore((s) => s.toggleRail);
   const toggleSearch = useAppStore((s) => s.toggleSearch);
+  const zoomReset = useAppStore((s) => s.zoomReset);
   const needsYou = useTasksStore(selectNeedsYou);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notificationPage, setNotificationPage] = useState<NotificationPage | null>(null);
@@ -89,11 +94,78 @@ export function MenuBar() {
 
   const unreadNotifications = notificationPage?.unread_count ?? needsYou.length;
 
+  const goBack = () => {
+    if (scene === "room") setScene("conversations");
+    else if (scene !== "home") goHome();
+  };
+
+  const showShortcuts = () => window.dispatchEvent(new Event("r-code:shortcuts"));
+
   return (
     <header className="menubar app-topbar">
       <button className="top-icon desktop-sidebar-toggle" onClick={toggleRail} aria-label={railCollapsed ? "展开侧边栏" : "收起侧边栏"} title={railCollapsed ? "展开侧边栏" : "收起侧边栏"}>
         <IconSidebar width={16} height={16} />
       </button>
+      <nav className="desktop-navigation" aria-label="桌面导航">
+        <div className="desktop-history-actions" aria-label="浏览历史">
+          <button className="desktop-nav-button desktop-history-button" type="button" onClick={goBack} disabled={scene === "home"} aria-label="后退" title="后退">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
+          </button>
+          <button className="desktop-nav-button desktop-history-button" type="button" disabled aria-label="前进" title="前进">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+        </div>
+        <div className="desktop-app-menus">
+          <Menu
+            label="文件"
+            menuClassName="desktop-menu-popover"
+            trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">文件</button>}
+          >
+            {({ close }) => <>
+              <MenuItem close={close} shortcut="Ctrl N" onSelect={goHome}>新建任务</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("projects")}>打开项目…</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("editor")}>项目文件</MenuItem>
+              <MenuSeparator />
+              <MenuItem close={close} onSelect={() => void getCurrentWindow().close().catch(() => {})}>关闭窗口</MenuItem>
+            </>}
+          </Menu>
+          <Menu
+            label="编辑"
+            menuClassName="desktop-menu-popover"
+            trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">编辑</button>}
+          >
+            {({ close }) => <>
+              <MenuItem close={close} shortcut="Ctrl K" onSelect={toggleSearch}>查找</MenuItem>
+              <MenuItem close={close} shortcut="Ctrl B" onSelect={toggleRail}>切换左侧边栏</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("editor")}>编辑当前项目文件</MenuItem>
+            </>}
+          </Menu>
+          <Menu
+            label="视图"
+            menuClassName="desktop-menu-popover"
+            trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">视图</button>}
+          >
+            {({ close }) => <>
+              <MenuItem close={close} onSelect={() => setScene("conversations")}>对话</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("inbox")}>待处理</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("deck")}>活动</MenuItem>
+              <MenuSeparator />
+              <MenuItem close={close} shortcut="Ctrl 0" onSelect={zoomReset}>重置缩放</MenuItem>
+            </>}
+          </Menu>
+          <Menu
+            label="帮助"
+            menuClassName="desktop-menu-popover"
+            trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">帮助</button>}
+          >
+            {({ close }) => <>
+              <MenuItem close={close} shortcut="Ctrl /" onSelect={showShortcuts}>快捷键</MenuItem>
+              <MenuItem close={close} onSelect={() => setSettingsPane("diagnostics")}>诊断与支持</MenuItem>
+              <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>Codex 协作</MenuItem>
+            </>}
+          </Menu>
+        </div>
+      </nav>
       <button className="top-icon compact-search-toggle" onClick={toggleSearch} aria-label="搜索任务、文件和对话" title="搜索">
         <IconSearch width={16} height={16} />
       </button>
@@ -122,7 +194,7 @@ export function MenuBar() {
             </section>
           )}
         </div>
-        <button className="top-icon top-action-help" onClick={() => window.dispatchEvent(new Event("r-code:shortcuts"))} title="快捷键与帮助">
+        <button className="top-icon top-action-help" onClick={showShortcuts} title="快捷键与帮助">
           <IconHelp />
         </button>
       </div>

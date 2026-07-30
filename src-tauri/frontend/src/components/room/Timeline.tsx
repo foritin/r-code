@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -18,7 +19,17 @@ import { IconChevronDown, IconChevronRight } from "../icons";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
 import { Markdown } from "./Markdown";
-import { ToolCard } from "./ToolCard";
+import {
+  TimelineContextEvent,
+  TimelineSubagentGroup,
+  TimelineToolGroup,
+} from "./TimelineActivity";
+import {
+  buildTimelineTurns,
+  type TimelineDisplayItem,
+  type TimelineRunItem,
+  type TimelineUserItem,
+} from "./timeline-presentation";
 
 export interface TimelineHandle {
   /** 发送失败（消息可能已落盘）→ 以持久化历史重建。 */
@@ -35,6 +46,9 @@ interface Props {
   running: boolean;
   /** 透传流式事件给 Room 的可观察活动 reducer。 */
   onAgentEvent?: (event: AgentEvent) => void;
+  /** 点击内联子代理芯片后在任务工作台打开公开运行详情。 */
+  onInspectSubagent?: (runId: string) => void;
+  selectedSubagentId?: string | null;
 }
 
 /** 工具调用先于网关建立待审批记录到达，故立刻刷新并做两次短延迟兜底。 */
@@ -100,8 +114,21 @@ function runUsageLabel(value: string | null): string | null {
   }
 }
 
+function runDurationLabel(startedAt: string, endedAt: string | null): string {
+  const start = Date.parse(startedAt);
+  const end = endedAt ? Date.parse(endedAt) : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end)) return "";
+  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${String(rest).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
-  { taskId, cur, running, onAgentEvent },
+  { taskId, cur, running, onAgentEvent, onInspectSubagent, selectedSubagentId },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -314,10 +341,209 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       setResending(false);
     }
   }, [editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
-  // 子代理运行树由紧邻输入区的可展开概览统一承载；时间线不再重复一套 run 卡片。
-  const visibleItems = items.filter(
-    (item) => item.kind !== "run" || item.agentKind !== "subagent"
-  );
+  const turns = useMemo(() => buildTimelineTurns(items), [items]);
+  type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
+
+  const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
+    switch (it.kind) {
+      case "ms":
+        return (
+          <div className={"ms" + dim(it.t)} data-t={it.t} key={it.id}>
+            {it.ok === true && <span className="ok">✓</span>}
+            {it.ok === false && <span className="bad">✗</span>}
+            {it.label}
+          </div>
+        );
+      case "context":
+        return (
+          <TimelineContextEvent
+            key={it.id}
+            t={it.t}
+            label={it.label}
+            detail={it.detail}
+            dim={dim(it.t)}
+          />
+        );
+      case "you": {
+        const workflow = parseWorkflowInvocation(it.text);
+        const modeLabel = userSendModeLabel(it.sendMode);
+        const queueState =
+          it.queuedState === "queued" ||
+          it.queuedState === "dispatching" ||
+          it.queuedState === "failed"
+            ? it.queuedState
+            : null;
+        const editing = Boolean(it.messageId && editingMessageId === it.messageId);
+        return (
+          <div
+            className={
+              "you" +
+              (modeLabel ? ` user-mode-${it.sendMode}` : "") +
+              (queueState ? " user-message-queued" : "") +
+              (editing ? " editing" : "") +
+              dim(it.t)
+            }
+            data-t={it.t}
+            key={it.id}
+          >
+            <div className="who">
+              <span className="message-author">YOU</span>
+              {modeLabel && <span className="user-send-mode">{modeLabel}</span>}
+              {it.messageId && !running && !editing && !workflow && (
+                <button
+                  type="button"
+                  className="message-edit"
+                  aria-label="编辑此消息"
+                  title="编辑此消息"
+                  onClick={() => beginEdit(it.messageId!, it.text)}
+                >
+                  ✎
+                </button>
+              )}
+            </div>
+            {editing ? (
+              <div className="message-inline-edit">
+                <textarea
+                  ref={editRef}
+                  value={editingText}
+                  disabled={resending}
+                  aria-label="编辑历史消息"
+                  onChange={(event) => setEditingText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelEdit();
+                    } else if (
+                      event.key === "Enter" &&
+                      !event.shiftKey &&
+                      (event.ctrlKey || event.metaKey)
+                    ) {
+                      event.preventDefault();
+                      void resendEdited();
+                    }
+                  }}
+                />
+                <div className="message-inline-actions">
+                  <span>Ctrl/⌘+Enter 发送 · Esc 取消</span>
+                  <button type="button" className="quiet-link" disabled={resending} onClick={cancelEdit}>
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn accent sm"
+                    disabled={resending || !editingText.trim()}
+                    onClick={() => void resendEdited()}
+                  >
+                    {resending ? "重发中…" : "发送"}
+                  </button>
+                </div>
+                {editError && <div className="message-inline-error" role="alert">重发失败：{editError}</div>}
+              </div>
+            ) : workflow ? (
+              <div className="workflow-invocation">
+                <span>内置工作流</span>
+                <strong>/{workflow.name}</strong>
+                {workflow.args && <small>{workflow.args}</small>}
+              </div>
+            ) : (
+              it.text
+            )}
+            {queueState && <div className={`user-queue-state state-${queueState}`}>{queuedStateLabel(queueState)}</div>}
+          </div>
+        );
+      }
+      case "agent":
+        return (
+          <div
+            className={`agent${finalResponse ? " timeline-final-response" : ""}${dim(it.t)}`}
+            data-t={it.t}
+            key={it.id}
+          >
+            <div className="who">R-CODE</div>
+            <Markdown text={it.text} streaming={it.streaming} />
+          </div>
+        );
+      case "plan": {
+        const firstTodo = it.steps.findIndex((step) => !step.completed);
+        return (
+          <div className={"plan-card" + dim(it.t)} data-t={it.t} key={it.id}>
+            <div className="head">
+              计划 · {it.steps.length} 步
+              {firstTodo === -1 && <span className="ok">✓ 全部完成</span>}
+            </div>
+            <ol>
+              {it.steps.map((step, index) => (
+                <li key={index} className={step.completed ? "done" : index === firstTodo ? "now" : ""}>
+                  <b>{step.completed ? "✓" : index + 1}</b>
+                  {step.description}
+                </li>
+              ))}
+            </ol>
+          </div>
+        );
+      }
+      case "run": {
+        const expanded = expandedRunIds.has(it.id);
+        const detailId = `${it.id}-details`;
+        const usage = runUsageLabel(it.usageJson);
+        const duration = runDurationLabel(it.startedAt, it.endedAt);
+        const abnormal = it.state === "failed" || it.state === "aborted";
+        return (
+          <div
+            className={`run-disclosure run-summary ${it.state}${dim(it.t)}`}
+            data-t={it.t}
+            key={it.id}
+          >
+            <button
+              type="button"
+              className="run-row ring-inset"
+              aria-expanded={expanded}
+              aria-controls={detailId}
+              title={expanded ? "收起本轮运行详情" : "展开本轮运行详情"}
+              onClick={() => toggleRun(it.id)}
+            >
+              <span className={`run-summary-mark${it.state === "active" ? " active" : ""}`} aria-hidden="true" />
+              <span className="run-name">{it.state === "active" ? "处理中" : "已处理"}</span>
+              {duration && <span className="run-duration">{duration}</span>}
+              {abnormal && <span className="run-status">{it.label}</span>}
+              <span className="run-chevron" aria-hidden="true">
+                {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+              </span>
+            </button>
+            {expanded && (
+              <div className="run-detail" id={detailId}>
+                <div className="run-detail-meta">
+                  <span><b>模型</b>{it.model || "默认"}</span>
+                  <span><b>运行时</b>{runRuntimeLabel(it.runtimeKind)}</span>
+                  <span><b>开始</b>{runTimeLabel(it.startedAt)}</span>
+                  {it.endedAt && <span><b>结束</b>{runTimeLabel(it.endedAt)}</span>}
+                  {usage && <span><b>用量</b>{usage} tokens</span>}
+                </div>
+                {it.agentSummary && (
+                  <div className="run-detail-summary">
+                    <b>{it.state === "active" ? "当前工作" : "结果摘要"}</b>
+                    <p>{it.agentSummary}</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
+      case "tool_group":
+        return <TimelineToolGroup key={it.id} item={it} dim={dim(it.t)} />;
+      case "subagent_group":
+        return (
+          <TimelineSubagentGroup
+            key={it.id}
+            item={it}
+            selectedSubagentId={selectedSubagentId}
+            onInspectSubagent={onInspectSubagent}
+            dim={dim(it.t)}
+          />
+        );
+    }
+  };
 
   return (
     <div
@@ -336,194 +562,32 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           在下方输入第一句话,运行中再发即为 steer。
         </div>
       )}
-      {visibleItems.map((it) => {
-        switch (it.kind) {
-          case "ms":
-            return (
-              <div className={"ms" + dim(it.t)} data-t={it.t} key={it.id}>
-                {it.ok === true && <span className="ok">✓</span>}
-                {it.ok === false && <span className="bad">✗</span>}
-                {it.label}
+      {turns.map((turn) => {
+        const lastActivity = turn.items.reduce(
+          (last, item, index) =>
+            item.kind === "tool_group" || item.kind === "subagent_group" || item.kind === "context"
+              ? index
+              : last,
+          -1
+        );
+        const finalResponseIndex = turn.hasActivity
+          ? turn.items.findIndex((item, index) => index > lastActivity && item.kind === "agent")
+          : -1;
+        return (
+          <section className={`timeline-turn${turn.hasActivity ? " has-activity" : ""}`} key={turn.id}>
+            {turn.user && renderTimelineItem(turn.user)}
+            {turn.runs.length > 0 && (
+              <div className="timeline-run-summaries">
+                {turn.runs.map((run) => renderTimelineItem(run))}
               </div>
-            );
-          case "you":
-            {
-              const workflow = parseWorkflowInvocation(it.text);
-              const modeLabel = userSendModeLabel(it.sendMode);
-              const queueState =
-                it.queuedState === "queued" ||
-                it.queuedState === "dispatching" ||
-                it.queuedState === "failed"
-                  ? it.queuedState
-                  : null;
-              const editing = Boolean(it.messageId && editingMessageId === it.messageId);
-            return (
-              <div
-                className={
-                  "you" +
-                  (modeLabel ? ` user-mode-${it.sendMode}` : "") +
-                  (queueState ? " user-message-queued" : "") +
-                  (editing ? " editing" : "") +
-                  dim(it.t)
-                }
-                data-t={it.t}
-                key={it.id}
-              >
-                <div className="who">
-                  YOU
-                  {modeLabel && <span className="user-send-mode">{modeLabel}</span>}
-                  {it.messageId && !running && !editing && !workflow && (
-                    <button
-                      type="button"
-                      className="message-edit"
-                      aria-label="编辑此消息"
-                      title="编辑此消息"
-                      onClick={() => beginEdit(it.messageId!, it.text)}
-                    >
-                      ✎
-                    </button>
-                  )}
-                </div>
-                {editing ? (
-                  <div className="message-inline-edit">
-                    <textarea
-                      ref={editRef}
-                      value={editingText}
-                      disabled={resending}
-                      aria-label="编辑历史消息"
-                      onChange={(event) => setEditingText(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          cancelEdit();
-                        } else if (
-                          event.key === "Enter" &&
-                          !event.shiftKey &&
-                          (event.ctrlKey || event.metaKey)
-                        ) {
-                          event.preventDefault();
-                          void resendEdited();
-                        }
-                      }}
-                    />
-                    <div className="message-inline-actions">
-                      <span>Ctrl/⌘+Enter 发送 · Esc 取消</span>
-                      <button type="button" className="quiet-link" disabled={resending} onClick={cancelEdit}>
-                        取消
-                      </button>
-                      <button
-                        type="button"
-                        className="btn accent sm"
-                        disabled={resending || !editingText.trim()}
-                        onClick={() => void resendEdited()}
-                      >
-                        {resending ? "重发中…" : "发送"}
-                      </button>
-                    </div>
-                    {editError && <div className="message-inline-error" role="alert">重发失败：{editError}</div>}
-                  </div>
-                ) : workflow ? (
-                  <div className="workflow-invocation">
-                    <span>内置工作流</span>
-                    <strong>/{workflow.name}</strong>
-                    {workflow.args && <small>{workflow.args}</small>}
-                  </div>
-                ) : (
-                  it.text
-                )}
-                {queueState && <div className={`user-queue-state state-${queueState}`}>{queuedStateLabel(queueState)}</div>}
-              </div>
-            );
-            }
-          case "agent":
-            return (
-              <div className={"agent" + dim(it.t)} data-t={it.t} key={it.id}>
-                <div className="who">R-CODE</div>
-                <Markdown text={it.text} streaming={it.streaming} />
-              </div>
-            );
-          case "plan": {
-            const firstTodo = it.steps.findIndex((s) => !s.completed);
-            return (
-              <div className={"plan-card" + dim(it.t)} data-t={it.t} key={it.id}>
-                <div className="head">
-                  Plan — {it.steps.length} steps
-                  {firstTodo === -1 && <span className="ok">✓ all done</span>}
-                </div>
-                <ol>
-                  {it.steps.map((s, i) => (
-                    <li key={i} className={s.completed ? "done" : i === firstTodo ? "now" : ""}>
-                      <b>{s.completed ? "✓" : i + 1}</b>
-                      {s.description}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            );
-          }
-          case "run": {
-            const expanded = expandedRunIds.has(it.id);
-            const detailId = `${it.id}-details`;
-            const usage = runUsageLabel(it.usageJson);
-            return (
-              <div
-                className={"run-disclosure " + it.state + (it.agentKind === "subagent" ? " subagent" : "") + dim(it.t)}
-                data-t={it.t}
-                key={it.id}
-              >
-                <button
-                  type="button"
-                  className="run-row ring-inset"
-                  aria-expanded={expanded}
-                  aria-controls={detailId}
-                  title={expanded ? "收起运行详情" : "展开运行详情"}
-                  onClick={() => toggleRun(it.id)}
-                >
-                  {it.state === "active" && <span className="spin" />}
-                  <span className="run-name">{it.agentKind === "subagent" ? "子代理" : "主运行"}</span>
-                  <span className="run-model">
-                    {it.agentLabel || (it.agentKind === "subagent" ? "只读调查" : "主代理")}
-                  </span>
-                  <span className="run-status">{it.label}</span>
-                  <span className="run-chevron" aria-hidden="true">
-                    {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
-                  </span>
-                </button>
-                {expanded && (
-                  <div className="run-detail" id={detailId}>
-                    <div className="run-detail-meta">
-                      <span><b>模型</b>{it.model || "默认"}</span>
-                      <span><b>运行时</b>{runRuntimeLabel(it.runtimeKind)}</span>
-                      <span><b>开始</b>{runTimeLabel(it.startedAt)}</span>
-                      {it.endedAt && <span><b>结束</b>{runTimeLabel(it.endedAt)}</span>}
-                      {usage && <span><b>用量</b>{usage} tokens</span>}
-                    </div>
-                    {it.agentSummary && (
-                      <div className="run-detail-summary">
-                        <b>{it.state === "active" ? "当前工作" : "结果摘要"}</b>
-                        <p>{it.agentSummary}</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          }
-          case "tool":
-            return (
-              <ToolCard
-                key={it.id}
-                t={it.t}
-                dim={dim(it.t)}
-                name={it.name}
-                target={it.target}
-                state={it.state}
-                summary={it.summary}
-                inputJson={it.inputJson}
-                outputJson={it.outputJson}
-              />
-            );
-        }
+            )}
+            <div className={`timeline-turn-trace${turn.hasActivity ? " has-activity" : ""}`}>
+              {turn.items.map((item, index) =>
+                renderTimelineItem(item, index === finalResponseIndex)
+              )}
+            </div>
+          </section>
+        );
       })}
     </div>
   );

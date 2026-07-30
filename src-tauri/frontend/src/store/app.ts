@@ -135,7 +135,7 @@ function readThemeMode(): ThemeMode {
   } catch {
     // 受限环境下使用产品默认值
   }
-  return "light";
+  return "dark";
 }
 
 export const useAppStore = create<AppState>((set) => ({

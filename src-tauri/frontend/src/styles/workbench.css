@@ -156,9 +156,20 @@
   min-width: 132px;
   max-width: 260px;
   padding: 0 5px 0 10px;
-  border-right: 1px solid var(--border);
   border-bottom: 2px solid var(--accent);
   color: var(--fg);
+}
+
+.workbench-add-button {
+  margin-left: 8px;
+  border-color: color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-chip) 76%, transparent);
+}
+
+.workbench-add-button:hover,
+.workbench-add-button[aria-pressed="true"] {
+  border-color: var(--border-strong);
+  background: var(--bg-chip);
 }
 
 .workbench-active-tab > svg {

@@ -111,15 +111,18 @@ function detail(task: Task): TaskDetail {
   const isReview = task.id === "mock-task-review";
   const isLive = task.state === "in_progress" || task.state === "exploring";
   const runId = `${task.id}-run`;
+  const branchId = task.id === "mock-task-queue" ? "branch-queue-fix" : "main";
   return {
     task,
-    active_branch: { id: "main", task_id: task.id, parent_branch_id: null, forked_from_message_id: null, storage_id: "main", is_active: true, created_at: task.created_at },
+    active_branch: task.id === "mock-task-queue"
+      ? { id: branchId, task_id: task.id, parent_branch_id: "main", forked_from_message_id: "main:7", storage_id: branchId, is_active: true, created_at: at(35) }
+      : { id: "main", task_id: task.id, parent_branch_id: null, forked_from_message_id: null, storage_id: "main", is_active: true, created_at: task.created_at },
     branches: [],
     runs: [
       {
         id: runId,
         task_id: task.id,
-        branch_id: "main",
+        branch_id: branchId,
         parent_run_id: null,
         agent_kind: "main",
         agent_label: "主代理",
@@ -137,7 +140,7 @@ function detail(task: Task): TaskDetail {
         {
           id: `${task.id}-codex-active`,
           task_id: task.id,
-          branch_id: "main",
+          branch_id: branchId,
           parent_run_id: runId,
           agent_kind: "subagent" as const,
           agent_label: "Codex CLI · 检查并发边界",
@@ -154,7 +157,7 @@ function detail(task: Task): TaskDetail {
         {
           id: `${task.id}-codex-done`,
           task_id: task.id,
-          branch_id: "main",
+          branch_id: branchId,
           parent_run_id: runId,
           agent_kind: "subagent" as const,
           agent_label: "Codex CLI · 核对锁顺序",
@@ -171,8 +174,8 @@ function detail(task: Task): TaskDetail {
       ] : []),
     ],
     events: [
-      { id: 1, task_id: task.id, branch_id: "main", event_type: "task_created", created_at: task.created_at },
-      { id: 2, task_id: task.id, branch_id: "main", event_type: isLive ? "tool_call" : "run_ended", created_at: task.updated_at },
+      { id: 1, task_id: task.id, branch_id: branchId, event_type: "task_created", created_at: task.created_at },
+      { id: 2, task_id: task.id, branch_id: branchId, event_type: isLive ? "tool_call" : "run_ended", created_at: task.updated_at },
     ],
     changes: isReview || task.id === "mock-task-queue"
       ? [
@@ -405,6 +408,90 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
   if (browserMockMessageStore[taskId]) return browserMockMessageStore[taskId];
   const task = browserMockTasks.find((item) => item.id === taskId);
   if (!task) return [];
+  if (taskId === "mock-task-queue") {
+    const message = (line: number, role: "user" | "assistant", text: string): SessionMessage => ({
+      id: `${taskId}-message-${line}`,
+      branch_id: "main",
+      kind: "message",
+      role,
+      text,
+    });
+    const call = (line: number, callId: string, toolName: string, input: unknown): SessionMessage => ({
+      id: `${taskId}-message-${line}`,
+      branch_id: "main",
+      kind: "tool_call",
+      tool_name: toolName,
+      call_id: callId,
+      input_json: JSON.stringify(input),
+    });
+    const result = (line: number, callId: string, output: unknown, isError = false): SessionMessage => ({
+      id: `${taskId}-message-${line}`,
+      branch_id: "main",
+      kind: "tool_result",
+      call_id: callId,
+      output_json: JSON.stringify(output),
+      is_error: isError,
+    });
+    const system = (line: number, event: string, data: unknown): SessionMessage => ({
+      id: `${taskId}-message-${line}`,
+      branch_id: "main",
+      kind: "system",
+      text: event,
+      output_json: JSON.stringify(data),
+    });
+    browserMockMessageStore[taskId] = [
+      // 分支会复制父分支的历史前缀，但 TaskDetail 只返回当前分支的 runs。
+      // 这两条专门覆盖“run 不能从第一轮向后硬填”的回归场景。
+      message(-2, "user", "编辑历史消息后，原分支的上下文还会保留吗？"),
+      message(-1, "assistant", "会保留已确认的历史上下文，新的执行从当前分支继续。"),
+      message(1, "user", task.goal),
+      message(2, "assistant", "我会先核对任务队列和调度器的共享状态，再把验证工作拆给 Codex 子代理并行检查。"),
+      call(3, "mock-shell-single", "shell_command", { command: "rg -n \"Mutex|RwLock|await\" src-tauri/src" }),
+      result(4, "mock-shell-single", { stdout: "src-tauri/src/commands.rs:241: state.write().await\n", exit_code: 0 }),
+      message(5, "assistant", "现有实现把持锁范围和异步等待混在一起；我会保留关键上下文，再继续核对并发边界。"),
+      system(6, "r_code_context_compacted", { before_messages: 28, after_messages: 7 }),
+      message(7, "assistant", "上下文已经整理。下面让两个子代理分别检查调度路径与锁顺序，主流程继续准备验证命令。"),
+      call(8, "delegate-codex-active", "delegate_task", {
+        agent: "codex",
+        label: "Codex CLI · 检查并发边界",
+        goal: "只读检查任务队列的调度与取消边界。",
+      }),
+      result(9, "delegate-codex-active", { agent: "codex", label: "Codex CLI · 检查并发边界", status: "running" }),
+      system(10, "subagent_lifecycle", {
+        scope: { run_id: `${taskId}-codex-active`, agent_kind: "subagent", agent_label: "Codex CLI · 检查并发边界" },
+        state: "running",
+        detail: "正在读取任务队列与调度器实现",
+      }),
+      call(11, "delegate-codex-done", "delegate_task", {
+        agent: "codex",
+        label: "Codex CLI · 核对锁顺序",
+        goal: "只读核对共享状态的锁顺序。",
+      }),
+      result(12, "delegate-codex-done", { agent: "codex", label: "Codex CLI · 核对锁顺序", status: "completed" }),
+      system(13, "subagent_lifecycle", {
+        scope: { run_id: `${taskId}-codex-done`, agent_kind: "subagent", agent_label: "Codex CLI · 核对锁顺序" },
+        state: "completed",
+        detail: "锁顺序核对完成",
+      }),
+      call(14, "collect-codex", "collect_subagents", { ids: [`${taskId}-codex-active`, `${taskId}-codex-done`] }),
+      result(15, "collect-codex", {
+        subagents: [
+          { label: "Codex CLI · 检查并发边界", status: "running" },
+          { label: "Codex CLI · 核对锁顺序", status: "completed" },
+        ],
+      }),
+      message(16, "assistant", "并行检查已经定位到两个竞争窗口；我会运行定向检查并确认修改没有破坏现有调度语义。"),
+      call(17, "mock-shell-check", "shell_command", { command: "cargo check -p r-code-agent-worker" }),
+      result(18, "mock-shell-check", { stdout: "Finished `dev` profile", exit_code: 0 }),
+      call(19, "mock-shell-test", "shell_command", { command: "cargo test -p r-code-agent-worker supervisor" }),
+      result(20, "mock-shell-test", { stdout: "test result: ok. 8 passed", exit_code: 0 }),
+      message(21, "assistant", "定向检查通过。最后把锁范围收紧，并保留必要的取消状态更新。"),
+      call(22, "mock-file-edit", "apply_patch", { path: "crates/r-code-agent-worker/src/llm_runtime.rs", patch: "缩短共享状态的持锁范围" }),
+      result(23, "mock-file-edit", { content: "Done!", changed_files: 1 }),
+      message(24, "assistant", "任务队列的竞争窗口已收紧，定向检查通过；正在运行的 Codex 子代理会继续在右侧详情中更新。"),
+    ];
+    return browserMockMessageStore[taskId];
+  }
   browserMockMessageStore[taskId] = [
     { id: `${taskId}-message-1`, branch_id: "main", kind: "message", role: "user", text: task.goal, timestamp: task.created_at },
     { id: `${taskId}-message-2`, branch_id: "main", kind: "message", role: "assistant", text: `我会先检查相关实现，然后推进「${task.title}」。`, timestamp: at(12) },
@@ -432,18 +519,36 @@ export function browserMockSubagentMessages(taskId: string, subagentId: string):
     system(1, "subagent_lifecycle", { state: "running", detail: "Codex CLI 已开始处理工作区" }),
     system(2, "subagent_activity", { phase: "requesting", detail: "已连接 Codex CLI，正在准备工作区" }),
     {
-      id: `${storage}:3`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
+      id: `${storage}:3`, branch_id: "main", kind: "message", role: "assistant",
+      text: active
+        ? "我先核对任务队列的调度入口，再沿取消信号检查共享状态何时释放。"
+        : "我先沿共享状态的获取顺序做只读检查，再用定向测试确认哪些跨 `await` 的持锁点会形成竞争窗口。",
+    },
+    {
+      id: `${storage}:4`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
       call_id: "mock-call-1", input_json: JSON.stringify({ summary: "rg -n 'Mutex|RwLock|await' crates" }),
     },
     {
-      id: `${storage}:4`, branch_id: "main", kind: "tool_result", call_id: "mock-call-1",
-      output_json: JSON.stringify({ status: "completed" }), is_error: false,
+      id: `${storage}:5`, branch_id: "main", kind: "tool_result", call_id: "mock-call-1",
+      output_json: JSON.stringify({ status: "completed", output: "crates/r-code-agent-worker/src/supervisor.rs:188\ncrates/r-code-agent-worker/src/llm_runtime.rs:1472" }), is_error: false,
     },
     ...(active ? [
-      system(5, "subagent_activity", { phase: "requesting", detail: "Codex CLI 正在分析工作区" }),
+      system(6, "subagent_activity", { phase: "requesting", detail: "Codex CLI 正在分析工作区" }),
     ] : [
-      { id: `${storage}:5`, branch_id: "main", kind: "message", role: "assistant", text: "发现两处共享状态在持锁期间跨 await，建议缩短临界区。" } as SessionMessage,
-      system(6, "subagent_lifecycle", { state: "completed", detail: "锁顺序核对完成" }),
+      { id: `${storage}:6`, branch_id: "main", kind: "message", role: "assistant", text: "第一处发生在调度器持有写锁后等待 worker 回执；第二处发生在取消分支更新状态时。两者都可以先复制必要字段，再释放锁进入异步等待。" } as SessionMessage,
+      {
+        id: `${storage}:7`, branch_id: "main", kind: "tool_call", tool_name: "Codex 命令",
+        call_id: "mock-call-2", input_json: JSON.stringify({ summary: "cargo test -p r-code-agent-worker supervisor" }),
+      } as SessionMessage,
+      {
+        id: `${storage}:8`, branch_id: "main", kind: "tool_result", call_id: "mock-call-2",
+        output_json: JSON.stringify({ status: "completed", output: "test result: ok. 8 passed; 0 failed" }), is_error: false,
+      } as SessionMessage,
+      {
+        id: `${storage}:9`, branch_id: "main", kind: "message", role: "assistant",
+        text: "只读核对已完成：\n\n- 两处竞争窗口都来自持锁跨 `await`。\n- 现有定向测试全部通过。\n- 建议把状态快照移出临界区，并保留取消状态的原子更新。",
+      } as SessionMessage,
+      system(10, "subagent_lifecycle", { state: "completed", detail: "锁顺序核对完成" }),
     ]),
   ];
 }

@@ -33,10 +33,13 @@ import {
 } from "../../lib/slash-commands";
 import {
   IconAlert,
+  IconArrowRight,
   IconAttach,
   IconChevronDown,
   IconProjects,
   IconSend,
+  IconShield,
+  IconTerminal,
 } from "../icons";
 
 /**
@@ -76,8 +79,11 @@ export function HomeScene() {
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
+  // provider 列表可能在 HomeScene 重新挂载后的下一拍才写回本地选择；直接从
+  // fallback 派生当前项，避免用户已输入目标但发送按钮短暂保持禁用。
+  const activeProvider = provider ?? providerChoices.find((choice) => choice.name === fallback) ?? null;
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
-  const providerReady = provider?.ready ?? false;
+  const providerReady = activeProvider?.ready ?? false;
   const slashContext = {
     location: "home" as const,
     workspaceAttached: Boolean(currentWorkspace),
@@ -175,7 +181,7 @@ export function HomeScene() {
         title.slice(0, 48),
         message,
         currentWorkspacePath ? "edit" : "ask",
-        provider?.name ?? null
+        activeProvider?.name ?? null
       );
       stage = "发送消息";
       await agentSend(task.id, message);
@@ -233,7 +239,7 @@ export function HomeScene() {
         setGoal("");
         setCommandNotice(
           `${currentWorkspace ? `将附加 ${currentWorkspace.display_name} · ${projectAccessModeLabel(currentWorkspace.access_mode)}` : "将以纯聊天开始"}；` +
-          `模型 ${provider?.label ?? "尚未选择"} / ${provider?.model ?? "—"}。`,
+          `模型 ${activeProvider?.label ?? "尚未选择"} / ${activeProvider?.model ?? "—"}。`,
         );
         return;
       case "model":
@@ -336,22 +342,44 @@ export function HomeScene() {
   return (
     <div className="scene scene-home">
       <div className="home-stage">
-        <div className="home-eyebrow">
-          <span className={`status-dot${providerReady ? " ready" : ""}`} />
-          {providerReady ? `${provider?.model ?? "模型服务"} 已就绪` : "需要连接模型服务"}
-          {needsYou.length > 0 && (
-            <button className="quiet-link" onClick={() => setScene("inbox")}>
-              {needsYou.length} 项待处理
-            </button>
+        <div className="home-intro">
+          <div className="home-eyebrow">
+            <span className={`status-dot${providerReady ? " ready" : ""}`} />
+            {providerReady ? "NEW TASK" : "CONNECT MODEL"}
+            {needsYou.length > 0 && (
+              <button className="quiet-link" onClick={() => setScene("inbox")}>
+                {needsYou.length} 项待处理
+              </button>
+            )}
+          </div>
+
+          <h1>从结果开始，而不是从工具开始。</h1>
+          <p className="home-subtitle">
+            {providerReady
+              ? "描述你要完成的事情。R-Code 会读取当前工作区、按需执行命令，并把每一处改动留给你审核。"
+              : "连接任意兼容模型服务后，直接描述目标；工作区仍可在需要读取或修改代码时再附加。"}
+          </p>
+
+          {providerReady && (
+            <div className="home-suggestions" aria-label="任务示例">
+              <button className="home-suggestion" type="button" onClick={() => setGoal("定位失败的测试，说明根因并修复。")}>
+                <IconTerminal width={15} height={15} />
+                <span>定位失败的测试，说明根因并修复</span>
+                <IconArrowRight width={15} height={15} />
+              </button>
+              <button className="home-suggestion" type="button" onClick={() => setGoal("解释模块调用路径并标出关键文件。")}>
+                <IconProjects width={15} height={15} />
+                <span>解释模块调用路径并标出关键文件</span>
+                <IconArrowRight width={15} height={15} />
+              </button>
+              <button className="home-suggestion" type="button" onClick={() => setGoal("审核未提交变更并指出行为回归。")}>
+                <IconShield width={15} height={15} />
+                <span>审核未提交变更并指出行为回归</span>
+                <IconArrowRight width={15} height={15} />
+              </button>
+            </div>
           )}
         </div>
-
-        <h1>从一句话开始。</h1>
-        <p className="home-subtitle">
-          {providerReady
-            ? "先聊想法；需要读取或修改代码时，再附加一个文件夹。"
-            : "连接任意兼容模型服务后即可聊天，无需先设置工作区。"}
-        </p>
 
         {hasRecovery && recovery && (
           <StatusBar
@@ -502,12 +530,12 @@ export function HomeScene() {
                     className={`provider-pill${providerReady ? " ready" : ""}`}
                     title={
                       providerReady
-                        ? `当前使用：${provider?.label} / ${provider?.model}`
+                        ? `当前使用：${activeProvider?.label} / ${activeProvider?.model}`
                         : "选择模型服务"
                     }
                   >
-                    <span>{providerReady ? provider?.label : "选择模型服务"}</span>
-                    {providerReady && <small>{provider?.model}</small>}
+                    <span>{providerReady ? activeProvider?.label : "选择模型服务"}</span>
+                    {providerReady && <small>{activeProvider?.model}</small>}
                     <IconChevronDown width={12} height={12} />
                   </button>
                 }
@@ -519,7 +547,7 @@ export function HomeScene() {
                       <MenuItem
                         key={choice.name}
                         close={close}
-                        checked={choice.name === provider?.name}
+                        checked={choice.name === activeProvider?.name}
                         hint={choice.ready ? choice.model : "尚未完成配置"}
                         disabled={!choice.ready}
                         onSelect={() => chooseProvider(choice)}

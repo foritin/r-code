@@ -1,0 +1,1080 @@
+/* R-Code Signature
+   --------------------------------------------------------------------------
+   Production translation of docs/ui/prototypes/workbench/dark/r-code-signature.
+   It is intentionally loaded last: existing components keep their behavior while
+   the application shell, hierarchy and finish share one visual language. */
+
+:root {
+  --signature-workspace-radius: 28px;
+  --signature-sidebar: #1c1918;
+  --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.14);
+  --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.28);
+  --signature-sidebar-wash: rgba(244, 116, 43, 0.065);
+  --signature-corner-glow-hot: rgba(255, 139, 72, 0.38);
+  --signature-corner-glow-soft: rgba(216, 67, 33, 0.18);
+  --signature-send-bg: var(--accent);
+  --signature-send-bg-hover: #ff8642;
+  --signature-keyline: color-mix(in srgb, var(--accent) 34%, var(--border));
+  --signature-accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --signature-accent-faint: color-mix(in srgb, var(--accent) 7%, transparent);
+  --signature-divider: #32312c;
+  --signature-panel-edge: #37362f;
+  --signature-elevated: #171815;
+  --signature-control: #23231f;
+  --signature-chrome-fg: #aaa49b;
+  --signature-sidebar-muted: #aaa59c;
+  --signature-sidebar-section: #817b72;
+  --signature-sidebar-project: #d8d4cc;
+  --signature-composer-shadow: 0 -10px 34px rgba(0, 0, 0, 0.12), 0 10px 24px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme="obsidian"] {
+  color-scheme: dark;
+  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+
+  --bg-app: #10110f;
+  --bg-sidebar: #1c1918;
+  --bg-panel: #151614;
+  --bg-card: #1b1c19;
+  --bg-chip: #25241f;
+  --bg-inset: #0b0c0a;
+  --bg-hover: #20211e;
+  --bg-active: #29261f;
+  --border: #2b2b27;
+  --border-strong: #4b463d;
+  --fg: #f1efe9;
+  --fg-muted: #a49f95;
+  --fg-faint: #817b72;
+  --accent: #f4742b;
+  --accent-2: #c49a61;
+  --accent-fg: #17100b;
+  --warning: #e5a15b;
+  --success: #69c798;
+  --danger: #df6b62;
+  --on-solid: #17100b;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 28px rgba(0, 0, 0, 0.17);
+  --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.34), 0 24px 70px rgba(0, 0, 0, 0.46);
+  --scrim: rgba(4, 4, 3, 0.62);
+}
+
+:root[data-theme="studio-light"] {
+  --font-ui: "Segoe UI Variable Text", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  --font-display: Bahnschrift, "Segoe UI Variable Display", "Microsoft YaHei UI", sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --signature-sidebar: #f5f0ea;
+  --signature-sidebar-glow-hot: rgba(191, 91, 73, 0.08);
+  --signature-sidebar-glow-deep: rgba(191, 91, 73, 0.11);
+  --signature-sidebar-wash: rgba(191, 91, 73, 0.035);
+  --signature-corner-glow-hot: rgba(210, 105, 75, 0.13);
+  --signature-corner-glow-soft: rgba(191, 91, 73, 0.055);
+  --signature-send-bg: #f47b37;
+  --signature-send-bg-hover: #ff8d4b;
+  --signature-divider: var(--border);
+  --signature-panel-edge: var(--border);
+  --signature-elevated: var(--bg-panel);
+  --signature-control: var(--bg-chip);
+  --signature-chrome-fg: var(--fg-muted);
+  --signature-sidebar-muted: var(--fg-muted);
+  --signature-sidebar-section: var(--fg-faint);
+  --signature-sidebar-project: var(--fg);
+  --signature-composer-shadow: 0 -8px 28px rgba(70, 45, 28, 0.045), 0 10px 28px rgba(70, 45, 28, 0.075);
+}
+
+/* ---------- Integrated desktop shell ---------- */
+#app.r-code-signature {
+  position: relative;
+  isolation: isolate;
+  background-color: var(--signature-sidebar);
+  background-image:
+    radial-gradient(210px 172px at var(--rc-current-rail) var(--rc-topbar-h), var(--signature-corner-glow-hot) 0%, var(--signature-corner-glow-soft) 34%, transparent 74%),
+    radial-gradient(112% 72% at 18% 112%, var(--signature-sidebar-glow-deep) 0%, rgba(176, 53, 34, 0.13) 34%, transparent 72%),
+    radial-gradient(82% 58% at -14% 28%, var(--signature-sidebar-glow-hot) 0%, transparent 73%),
+    linear-gradient(90deg, var(--signature-sidebar-wash), transparent 78%);
+}
+
+#app.r-code-signature .app-topbar,
+#app.r-code-signature .app-sidebar {
+  border: 0;
+  background: transparent;
+}
+
+#app.r-code-signature .app-topbar {
+  gap: 3px;
+  padding-inline: 12px 0;
+}
+
+#app.r-code-signature .main {
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  overflow: hidden;
+  border-top: 1px solid var(--signature-divider);
+  border-left: 1px solid var(--signature-divider);
+  border-radius: var(--signature-workspace-radius) 0 0 0;
+  background: var(--bg-app);
+  box-shadow: -18px -18px 46px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="studio-light"] #app.r-code-signature .main {
+  border-color: var(--border);
+  box-shadow: -12px -12px 36px rgba(70, 45, 28, 0.04);
+}
+
+#app.r-code-signature .main::before,
+#app.r-code-signature .main::after {
+  content: "";
+  position: absolute;
+  z-index: 40;
+  pointer-events: none;
+}
+
+#app.r-code-signature .main::before {
+  top: -1px;
+  left: 32px;
+  width: 62px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(244, 116, 43, 0.76), rgba(244, 116, 43, 0));
+}
+
+#app.r-code-signature .main::after {
+  top: 32px;
+  left: -1px;
+  width: 1px;
+  height: 48px;
+  background: linear-gradient(180deg, rgba(244, 116, 43, 0.62), rgba(244, 116, 43, 0));
+}
+
+/* ---------- Desktop navigation ---------- */
+.desktop-navigation,
+.desktop-history-actions,
+.desktop-app-menus {
+  display: flex;
+  align-items: center;
+}
+
+.desktop-navigation {
+  align-self: stretch;
+  gap: 10px;
+  margin-left: 2px;
+}
+
+.desktop-history-actions {
+  gap: 3px;
+  padding-right: 9px;
+  border-right: 1px solid color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+.desktop-app-menus {
+  gap: 1px;
+}
+
+.desktop-app-menus > .menu-root {
+  display: contents;
+}
+
+.desktop-nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 27px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--signature-chrome-fg);
+  font: 500 11px/1 var(--font-display);
+  letter-spacing: 0.055em;
+  white-space: nowrap;
+}
+
+.desktop-nav-button:hover,
+.desktop-nav-button:focus-visible,
+.desktop-nav-button[aria-expanded="true"] {
+  outline: 0;
+  background: var(--signature-accent-faint);
+  color: var(--fg);
+}
+
+.desktop-nav-button:disabled {
+  opacity: 0.34;
+  background: transparent;
+}
+
+.desktop-history-button {
+  width: 27px;
+  padding: 0;
+}
+
+.desktop-menu-popover {
+  min-width: 184px;
+  padding: 5px;
+  border-color: var(--border-strong);
+  border-radius: 10px 4px 10px 4px;
+  background: color-mix(in srgb, var(--bg-panel) 97%, transparent);
+}
+
+.desktop-menu-popover .menu-item {
+  min-height: 30px;
+  border-radius: 5px 2px 5px 2px;
+  font-size: 12px;
+}
+
+#app.r-code-signature .compact-search-toggle,
+#app.r-code-signature .top-action-help {
+  display: none;
+}
+
+#app.r-code-signature .top-actions {
+  gap: 2px;
+}
+
+#app.r-code-signature .top-icon,
+#app.r-code-signature .desktop-sidebar-toggle {
+  border-radius: 4px;
+  color: var(--signature-chrome-fg);
+}
+
+#app.r-code-signature .top-icon:hover,
+#app.r-code-signature .desktop-sidebar-toggle:hover {
+  background: var(--signature-accent-faint);
+  color: var(--fg);
+}
+
+#app.r-code-signature .app-window-controls {
+  margin-left: 4px;
+}
+
+/* ---------- Sidebar ---------- */
+#app.r-code-signature .app-sidebar {
+  position: relative;
+  z-index: 2;
+}
+
+#app.r-code-signature .sidebar-brand-row {
+  padding-bottom: 5px;
+}
+
+#app.r-code-signature .sidebar-brand {
+  gap: 10px;
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+}
+
+#app.r-code-signature .sidebar-brand-mark {
+  width: 27px;
+  height: 27px;
+  border: 0;
+  border-radius: 9px 9px 3px 9px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 154, 91, 0.24), 0 8px 22px rgba(116, 45, 13, 0.24);
+  color: #1b110a;
+  font: 720 13px/1 var(--font-display);
+}
+
+#app.r-code-signature .sidebar-new,
+#app.r-code-signature .sidebar-collapse,
+#app.r-code-signature .sidebar-search,
+#app.r-code-signature .sidebar-settings,
+#app.r-code-signature .sidebar-project-manage,
+#app.r-code-signature .sidebar-footer-action {
+  border-radius: 5px;
+}
+
+#app.r-code-signature .sidebar-new {
+  font-family: var(--font-display);
+  font-weight: 560;
+}
+
+#app.r-code-signature .sidebar-nav {
+  gap: 2px;
+  padding-block: 5px 12px;
+  border-bottom-color: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+#app.r-code-signature .sidebar-nav-item {
+  position: relative;
+  min-height: 34px;
+  border-radius: 3px 9px 9px 3px;
+  color: var(--signature-sidebar-muted);
+}
+
+#app.r-code-signature .sidebar-nav-item:hover {
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  color: var(--fg);
+}
+
+#app.r-code-signature .sidebar-nav-item.active {
+  background: linear-gradient(90deg, rgba(244, 116, 43, 0.14), rgba(244, 116, 43, 0.025) 62%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--fg);
+}
+
+#app.r-code-signature .sidebar-nav-item.active svg {
+  color: #ff9b5d;
+}
+
+#app.r-code-signature .sidebar-section-head {
+  min-height: 28px;
+  color: var(--signature-sidebar-section);
+  font: 600 10px/1 var(--font-display);
+  letter-spacing: 0.13em;
+}
+
+#app.r-code-signature .sidebar-project-head {
+  border-radius: 5px;
+  color: var(--signature-sidebar-project);
+  font-family: var(--font-display);
+}
+
+#app.r-code-signature .sidebar-project-head:hover,
+#app.r-code-signature .sidebar-project.selected .sidebar-project-head {
+  background: color-mix(in srgb, var(--fg) 3.5%, transparent);
+}
+
+#app.r-code-signature .sidebar-task-row,
+#app.r-code-signature .sidebar-task {
+  border-radius: 3px 8px 8px 3px;
+}
+
+#app.r-code-signature .sidebar-task:hover {
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+
+#app.r-code-signature .sidebar-task.active {
+  background: linear-gradient(90deg, rgba(244, 116, 43, 0.115), rgba(244, 116, 43, 0.02) 70%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+#app.r-code-signature .app-sidebar .task-state-dot,
+#app.r-code-signature .sidebar-live {
+  width: 3px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+#app.r-code-signature .sidebar-footer {
+  border-top-color: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+
+/* ---------- Home / new task ---------- */
+#app.r-code-signature .scene-home {
+  align-items: stretch;
+  padding: 0 28px 12px;
+}
+
+#app.r-code-signature .scene-home .home-stage {
+  display: flex;
+  width: min(760px, 100%);
+  max-width: 760px;
+  height: 100%;
+  min-height: 0;
+  padding: clamp(46px, 14vh, 136px) 0 0;
+  flex-direction: column;
+}
+
+#app.r-code-signature .home-intro {
+  display: flex;
+  flex-direction: column;
+}
+
+#app.r-code-signature .home-eyebrow {
+  color: var(--accent);
+  font: 680 10px/1.2 var(--font-mono);
+  letter-spacing: 0.105em;
+  text-transform: uppercase;
+}
+
+#app.r-code-signature .home-eyebrow .status-dot {
+  display: none;
+}
+
+#app.r-code-signature .scene-home h1 {
+  margin: 10px 0 8px;
+  color: var(--fg);
+  font: 640 clamp(27px, 2.35vw, 35px)/1.15 var(--font-display);
+  letter-spacing: -0.035em;
+  text-wrap: balance;
+}
+
+#app.r-code-signature .scene-home .home-subtitle {
+  max-width: 700px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.home-suggestions {
+  display: grid;
+  margin-top: 26px;
+  border-top: 1px solid var(--border);
+}
+
+.home-suggestion {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 0 4px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font: 13px/1.45 var(--font-ui);
+  text-align: left;
+}
+
+.home-suggestion > svg:first-child {
+  color: var(--fg-faint);
+}
+
+.home-suggestion > svg:last-child {
+  color: var(--fg-faint);
+  transition: transform var(--dur-2) var(--ease), color var(--dur-2) var(--ease);
+}
+
+.home-suggestion:hover,
+.home-suggestion:focus-visible {
+  outline: 0;
+  color: var(--fg);
+  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 70%);
+}
+
+.home-suggestion:hover > svg:last-child,
+.home-suggestion:focus-visible > svg:last-child {
+  color: var(--accent);
+  transform: translateX(2px);
+}
+
+#app.r-code-signature .scene-home .home-composer,
+#app.r-code-signature .scene-room .comp-box {
+  position: relative;
+  border: 1px solid var(--signature-panel-edge);
+  border-radius: 16px 16px 5px 16px;
+  background: var(--bg-card);
+  box-shadow: var(--signature-composer-shadow);
+}
+
+#app.r-code-signature .scene-home .home-composer {
+  margin-top: auto;
+}
+
+#app.r-code-signature .scene-home .home-composer:focus-within,
+#app.r-code-signature .scene-room .comp-box:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--signature-panel-edge));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--signature-send-bg) 12%, transparent),
+    var(--signature-composer-shadow);
+}
+
+/* The composer shell owns the focus ring; a textarea outline would be square. */
+#app.r-code-signature .scene-home .home-composer > textarea:focus-visible,
+#app.r-code-signature .scene-room .comp-box > textarea:focus-visible {
+  outline: 0;
+}
+
+#app.r-code-signature .home-composer textarea {
+  min-height: 92px;
+  color: var(--fg);
+}
+
+#app.r-code-signature .scope-pill,
+#app.r-code-signature .provider-pill,
+#app.r-code-signature .project-access-trigger {
+  border-radius: 5px;
+  background: var(--signature-control);
+}
+
+#app.r-code-signature .provider-pill > span {
+  color: #ffa268;
+  font-family: var(--font-display);
+  letter-spacing: 0.035em;
+}
+
+#app.r-code-signature .send-button,
+#app.r-code-signature .send {
+  min-width: 74px;
+  width: auto;
+  min-height: 34px;
+  height: 34px;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: 9px 9px 3px 9px;
+  background: var(--signature-send-bg);
+  color: #1a1009;
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+#app.r-code-signature .send-button:not(:disabled):hover,
+#app.r-code-signature .send:not(:disabled):hover {
+  background: var(--signature-send-bg-hover);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--signature-send-bg-hover) 36%, transparent);
+}
+
+/* ---------- Room: single reading stream + task workbench ---------- */
+#app.r-code-signature.scene-room .scene-room,
+#app.r-code-signature.scene-room .convo,
+#app.r-code-signature.scene-room .canvas,
+#app.r-code-signature.scene-room .canvas-body,
+#app.r-code-signature.scene-room .timeline,
+#app.r-code-signature.scene-room .workbench,
+#app.r-code-signature.scene-room .workbench-body,
+#app.r-code-signature.scene-room .file-preview,
+#app.r-code-signature.scene-room .file-code,
+#app.r-code-signature.scene-room .file-code-editor {
+  background: var(--bg-app);
+}
+
+#app.r-code-signature.scene-room .convo,
+#app.r-code-signature.scene-room .workbench {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+#app.r-code-signature.scene-room .room-scopebar {
+  display: none;
+}
+
+#app.r-code-signature .room-conversation-head,
+#app.r-code-signature .workbench-head {
+  border-bottom-color: color-mix(in srgb, var(--fg) 7%, transparent);
+  background: var(--bg-panel);
+}
+
+#app.r-code-signature .room-conversation-head {
+  min-height: 48px;
+  padding-inline: 18px 14px;
+}
+
+#app.r-code-signature .room-conversation-head > svg {
+  color: #7f7b73;
+}
+
+#app.r-code-signature .room-conversation-title {
+  position: relative;
+  padding-left: 12px;
+}
+
+#app.r-code-signature .room-conversation-title::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent), rgba(244, 116, 43, 0.18));
+}
+
+#app.r-code-signature .room-conversation-title strong {
+  font-family: var(--font-display);
+  font-weight: 620;
+  letter-spacing: 0.015em;
+}
+
+#app.r-code-signature.scene-room .timeline {
+  padding: 24px max(28px, calc((100% - 930px) / 2)) 32px;
+  scrollbar-gutter: stable;
+}
+
+#app.r-code-signature .you {
+  max-width: min(74%, 620px);
+  margin: 0 0 30px auto;
+  padding: 11px 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+  border-radius: 14px 14px 4px 14px;
+  background: var(--bg-hover);
+  box-shadow: 0 9px 24px rgba(0, 0, 0, 0.12);
+  font-size: 14px;
+}
+
+#app.r-code-signature .you > .who {
+  min-height: 0;
+  margin: 0;
+}
+
+#app.r-code-signature .you > .who:has(.message-edit, .user-send-mode) {
+  margin-bottom: 5px;
+}
+
+#app.r-code-signature .message-author {
+  display: none;
+}
+
+#app.r-code-signature .agent {
+  max-width: min(100%, 930px);
+  margin: 0 0 22px;
+  color: var(--fg);
+  font-size: 14px;
+  line-height: 1.72;
+}
+
+#app.r-code-signature .agent > .who {
+  display: none;
+}
+
+#app.r-code-signature .ms {
+  justify-content: flex-start;
+  gap: 7px;
+  margin: 4px 0 26px;
+  font-family: var(--font-display);
+  letter-spacing: 0.035em;
+}
+
+#app.r-code-signature .ms::before {
+  width: 18px;
+  flex: none;
+  background: linear-gradient(90deg, var(--accent), rgba(244, 116, 43, 0.06));
+}
+
+#app.r-code-signature .ms::after {
+  background: var(--border);
+}
+
+#app.r-code-signature .tcard,
+#app.r-code-signature .run-disclosure {
+  position: relative;
+  max-width: 100%;
+  margin: 4px 0;
+  border-left: 0;
+}
+
+#app.r-code-signature .tcard::before,
+#app.r-code-signature .run-disclosure::before {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: -20px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid #625b50;
+  border-radius: 2px;
+  background: var(--bg-app);
+  transform: rotate(45deg);
+}
+
+#app.r-code-signature .tcard.active::before,
+#app.r-code-signature .run-disclosure.active::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--signature-accent-faint);
+}
+
+#app.r-code-signature .tcard-head,
+#app.r-code-signature .run-row {
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+
+#app.r-code-signature .tcard.active,
+#app.r-code-signature .run-disclosure.active {
+  overflow: visible;
+  background: transparent;
+}
+
+#app.r-code-signature .tcard-head:not(:disabled):hover,
+#app.r-code-signature .run-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+#app.r-code-signature .plan-card,
+#app.r-code-signature .tcard.open,
+#app.r-code-signature .run-disclosure:has(.run-detail) {
+  border-color: var(--signature-panel-edge);
+  border-radius: 10px 10px 4px 10px;
+  background: var(--signature-elevated);
+  box-shadow: none;
+}
+
+#app.r-code-signature .timeline-turn + .timeline-turn {
+  margin-top: 34px;
+}
+
+#app.r-code-signature .timeline-run-summaries,
+#app.r-code-signature .timeline-turn-trace {
+  max-width: 930px;
+}
+
+#app.r-code-signature .timeline-turn-trace.has-activity {
+  padding-left: 28px;
+}
+
+#app.r-code-signature .timeline-turn-trace.has-activity::before {
+  left: 7px;
+  background: linear-gradient(180deg, rgba(244, 116, 43, 0.48), #aaa29a 18%, #c9c1b8 84%, rgba(244, 116, 43, 0.1));
+}
+
+:root[data-theme="obsidian"] #app.r-code-signature .timeline-turn-trace.has-activity::before {
+  background: linear-gradient(180deg, rgba(244, 116, 43, 0.48), #35342f 18%, #292925 84%, rgba(244, 116, 43, 0.12));
+}
+
+#app.r-code-signature .timeline-activity-event::before,
+#app.r-code-signature .timeline-context-event::before,
+#app.r-code-signature .timeline-subagent-event::before {
+  border-color: color-mix(in srgb, var(--fg) 30%, transparent);
+  background: var(--bg-app);
+}
+
+#app.r-code-signature .timeline-activity-event.state-active::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--signature-accent-faint);
+}
+
+#app.r-code-signature .timeline-activity-toggle {
+  min-height: 32px;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+#app.r-code-signature .timeline-activity-toggle:hover:not(:disabled),
+#app.r-code-signature .timeline-activity-toggle:focus-visible {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+
+#app.r-code-signature .timeline-activity-details {
+  margin-top: 10px;
+}
+
+#app.r-code-signature .timeline-activity-single-detail {
+  border-color: var(--signature-panel-edge);
+  border-radius: 8px 8px 3px 8px;
+  background: var(--signature-elevated);
+}
+
+#app.r-code-signature .timeline-subagent-chip {
+  border-radius: 5px 5px 2px 5px;
+}
+
+#app.r-code-signature .timeline-final-response {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top-color: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+#app.r-code-signature .run-disclosure.run-summary,
+#app.r-code-signature .run-disclosure.run-summary.active,
+#app.r-code-signature .run-disclosure.run-summary:has(.run-detail) {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+#app.r-code-signature .run-disclosure.run-summary::before {
+  display: none;
+}
+
+#app.r-code-signature .run-summary .run-row {
+  min-height: 28px;
+  padding: 2px 0;
+  border-radius: 0;
+}
+
+#app.r-code-signature .run-summary .run-detail {
+  border-color: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: transparent;
+}
+
+#app.r-code-signature .activity-strip {
+  min-height: 32px;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+  background: transparent;
+}
+
+#app.r-code-signature .subagent-panel {
+  margin-inline: 16px;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+#app.r-code-signature .subagent-row.selected {
+  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 72%);
+}
+
+#app.r-code-signature .subagent-page-header {
+  border-bottom-color: var(--signature-divider);
+  background: var(--bg-panel);
+}
+
+#app.r-code-signature .subagent-page-header > strong,
+#app.r-code-signature .subagent-list-section > h3 {
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+#app.r-code-signature .subagent-avatar {
+  border-radius: 7px 7px 3px 7px;
+  background: color-mix(in srgb, var(--subagent-color) 7%, var(--bg-card));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg) 3%, transparent);
+}
+
+#app.r-code-signature .subagent-list-row,
+#app.r-code-signature .sum-subagents-button {
+  border-radius: 6px 6px 2px 6px;
+}
+
+#app.r-code-signature .subagent-list-row.status-running,
+#app.r-code-signature .subagent-list-row.status-queued,
+#app.r-code-signature .subagent-list-row.status-waiting_permission {
+  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 72%);
+}
+
+#app.r-code-signature .subagent-list-row + .subagent-list-row {
+  border-top-color: var(--signature-divider);
+}
+
+#app.r-code-signature .subagent-page-status,
+#app.r-code-signature .subagent-complete-mark,
+#app.r-code-signature .subagent-incomplete-mark,
+#app.r-code-signature .subagent-transcript-tool-icon {
+  border-radius: 5px;
+}
+
+#app.r-code-signature .subagent-session-summary,
+#app.r-code-signature .subagent-session-state {
+  border-color: var(--signature-divider);
+}
+
+#app.r-code-signature .subagent-runtime-log,
+#app.r-code-signature .subagent-transcript-tool {
+  border-color: var(--signature-divider);
+}
+
+#app.r-code-signature .composer {
+  padding: 8px 12px 12px;
+}
+
+#app.r-code-signature .scene-room .comp-box {
+  padding: 0;
+}
+
+#app.r-code-signature .scene-room .comp-box textarea {
+  display: block;
+  min-height: 92px;
+  padding: 18px 19px 14px;
+  color: var(--fg);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+#app.r-code-signature .scene-room .comp-meta {
+  margin-top: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+
+#app.r-code-signature .scene-room .comp-box .run-command-bar {
+  margin: 0 12px;
+  padding: 10px 0 12px;
+}
+
+#app.r-code-signature .provider-pill,
+#app.r-code-signature .project-access-trigger {
+  border-radius: 5px;
+  background: var(--signature-control);
+}
+
+#app.r-code-signature .room-splitter {
+  background: transparent;
+}
+
+#app.r-code-signature .room-splitter::before {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--signature-divider);
+}
+
+#app.r-code-signature .room-splitter > span {
+  display: none;
+}
+
+#app.r-code-signature .workbench-active-tab {
+  font-family: var(--font-display);
+  letter-spacing: 0.035em;
+}
+
+#app.r-code-signature .workbench-active-tab strong {
+  font-weight: 620;
+}
+
+#app.r-code-signature .workbench-launcher {
+  width: min(560px, calc(100% - 56px));
+}
+
+#app.r-code-signature .workbench-launcher-intro > span {
+  font-weight: 680;
+  letter-spacing: 0.1em;
+}
+
+#app.r-code-signature .workbench-launcher-intro strong {
+  font: 620 clamp(21px, 2vw, 27px)/1.18 var(--font-display);
+  letter-spacing: -0.025em;
+}
+
+#app.r-code-signature .workbench-launcher-list {
+  border-radius: 10px 10px 4px 10px;
+  border-color: var(--signature-panel-edge);
+  background: var(--signature-elevated);
+}
+
+#app.r-code-signature .workbench-launcher-row:hover,
+#app.r-code-signature .workbench-launcher-row:focus-visible {
+  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 78%);
+}
+
+#app.r-code-signature .workbench-launcher-glyph {
+  border-radius: 4px 8px 4px 8px;
+  background: var(--bg-card);
+}
+
+#app.r-code-signature .workbench-live {
+  border-radius: 5px 9px 5px 9px;
+}
+
+#app.r-code-signature .workbench-review-switch button[aria-selected="true"],
+#app.r-code-signature .workbench-active-tab > svg {
+  color: #ffac73;
+}
+
+#app.r-code-signature .workbench-review-panel,
+#app.r-code-signature .review-files,
+#app.r-code-signature .review-diff,
+#app.r-code-signature .terminal-panel {
+  border-radius: 10px 10px 4px 10px;
+  border-color: var(--signature-panel-edge);
+  background: var(--signature-elevated);
+  box-shadow: none;
+}
+
+/* ---------- Shared product pages ---------- */
+#app.r-code-signature .page-kicker,
+#app.r-code-signature .dashboard-kicker,
+#app.r-code-signature .activity-kicker,
+#app.r-code-signature .workspace-kicker,
+#app.r-code-signature .inbox-kicker {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.09em;
+}
+
+#app.r-code-signature .dashboard-header h1,
+#app.r-code-signature .list-page-header h1,
+#app.r-code-signature .inbox-header h1,
+#app.r-code-signature .activity-header h1,
+#app.r-code-signature.scene-projects .workspace-hero h1,
+#app.r-code-signature.scene-settings .page-head h1,
+#app.r-code-signature .file-gate h1,
+#app.r-code-signature .dashboard-empty h1 {
+  font-family: var(--font-display);
+  font-weight: 620;
+}
+
+#app.r-code-signature .dashboard-project-mark,
+#app.r-code-signature .attention-icon,
+#app.r-code-signature .inbox-row-icon,
+#app.r-code-signature .activity-need-row > span {
+  border-radius: 5px 9px 5px 9px;
+}
+
+#app.r-code-signature .conversation-row:hover,
+#app.r-code-signature .activity-work-row:hover,
+#app.r-code-signature .activity-need-row:hover,
+#app.r-code-signature .activity-recent-row:hover,
+#app.r-code-signature .inbox-row:hover {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--fg) 4%, transparent), transparent 82%);
+}
+
+#app.r-code-signature .conversation-row.active,
+#app.r-code-signature .inbox-row.selected {
+  background: linear-gradient(90deg, var(--signature-accent-soft), var(--signature-accent-faint) 68%, transparent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+#app.r-code-signature .btn,
+#app.r-code-signature .iconbtn,
+#app.r-code-signature .input,
+#app.r-code-signature .menu-item,
+#app.r-code-signature .popover,
+#app.r-code-signature .rc-button {
+  border-radius: 6px;
+}
+
+#app.r-code-signature .btn.accent,
+#app.r-code-signature .rc-button.primary {
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1359px) {
+  #app.r-code-signature .main > .scene-inbox {
+    grid-template-columns: minmax(0, 1fr) 318px;
+  }
+
+  #app.r-code-signature .main > .scene-inbox.inspector-collapsed {
+    grid-template-columns: minmax(0, 1fr) 42px;
+  }
+}
+
+@media (max-width: 1119px) {
+  #app.r-code-signature .desktop-navigation {
+    display: none;
+  }
+
+  #app.r-code-signature .compact-search-toggle {
+    display: grid;
+  }
+}
+
+@media (max-width: 759px) {
+  :root {
+    --signature-workspace-radius: 20px;
+  }
+
+  #app.r-code-signature .main::before {
+    left: 24px;
+  }
+
+  #app.r-code-signature .scene-home {
+    padding: 0 16px 10px;
+  }
+
+  #app.r-code-signature .scene-home .home-stage {
+    min-height: 640px;
+    padding-top: 36px;
+  }
+
+  #app.r-code-signature .home-suggestions {
+    margin-top: 18px;
+  }
+
+  #app.r-code-signature.scene-room .timeline {
+    padding-inline: 18px;
+  }
+
+  #app.r-code-signature .you {
+    max-width: 88%;
+  }
+
+  #app.r-code-signature .tcard::before,
+  #app.r-code-signature .run-disclosure::before {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #app.r-code-signature .home-suggestion > svg:last-child {
+    transition: none;
+  }
+}

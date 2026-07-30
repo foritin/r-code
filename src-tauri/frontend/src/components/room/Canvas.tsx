@@ -18,7 +18,6 @@ import {
   rollbackTask,
   runVerification,
   sessionMessages,
-  subagentSessionMessages,
   terminalCreate,
   terminalCreateCodex,
   terminalKill,
@@ -35,7 +34,6 @@ import {
 import type {
   ChangeDiff,
   ChangeDiffLine,
-  AgentRun,
   FileChange,
   ProjectAccessMode,
   SessionMessage,
@@ -57,12 +55,15 @@ import {
   modeShortLabel,
 } from "../../lib/format";
 import { buildAuditFeed } from "./audit";
-import type { ActivitySubagent, ActivityTraceState } from "./activity";
+import type { ActivityTraceState } from "./activity";
+import { SubagentAvatar } from "./SubagentIdentity";
+import { SubagentWorkbench } from "./SubagentWorkbench";
 import {
   IconActivity,
   IconCheck,
   IconChevronDown,
   IconChevronLeft,
+  IconChevronRight,
   IconClose,
   IconEditor,
   IconFile,
@@ -71,7 +72,6 @@ import {
   IconProjects,
   IconShield,
   IconSidebar,
-  IconStop,
   IconTerminal,
 } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
@@ -83,8 +83,11 @@ interface Props {
   activity: ActivityTraceState;
   workspacePath: string | null;
   workspaceAttached: boolean;
+  subagentPanelOpen: boolean;
   selectedSubagentId: string | null;
-  onCloseSubagent: () => void;
+  onInspectSubagent: (subagentId: string) => void;
+  onBackToSubagents: () => void;
+  onCloseSubagents: () => void;
   onAbortSubagent: (subagentId: string) => Promise<void>;
 }
 
@@ -185,8 +188,11 @@ export function Canvas({
   activity,
   workspacePath,
   workspaceAttached,
+  subagentPanelOpen,
   selectedSubagentId,
-  onCloseSubagent,
+  onInspectSubagent,
+  onBackToSubagents,
+  onCloseSubagents,
   onAbortSubagent,
 }: Props) {
   const tab = useAppStore((s) => s.canvasTab);
@@ -215,6 +221,7 @@ export function Canvas({
     const target = TABS[index];
     if (!target) return;
     event.preventDefault();
+    onCloseSubagents();
     setTab(target.openTab);
   };
 
@@ -248,10 +255,13 @@ export function Canvas({
   const activeToolId = tab === "changes" ? "review" : tab;
   const activeTool = TABS.find((item) => item.id === activeToolId) ?? TABS[0];
   const reviewIsPending = detail?.task.state === "review_ready";
+  const subagentPageOpen = subagentPanelOpen && tab === "summary" && !launcherOpen;
   const dismissWorkbench = () => {
+    onCloseSubagents();
     hideWorkbench(!launcherOpen && reviewIsPending && (tab === "review" || tab === "changes"));
   };
   const openLauncher = () => {
+    onCloseSubagents();
     showLauncher();
     setLauncherIndex(0);
     requestAnimationFrame(() => launcherButtonsRef.current[0]?.focus());
@@ -261,6 +271,7 @@ export function Canvas({
     requestAnimationFrame(() => launcherTriggerRef.current?.focus());
   };
   const openTool = (tool: CanvasTab) => {
+    onCloseSubagents();
     setTab(tool);
     requestAnimationFrame(() => workbenchBodyRef.current?.focus());
   };
@@ -286,12 +297,25 @@ export function Canvas({
     <aside
       className={`canvas workbench pane pane-lit${mode === "focus" ? " is-focus" : ""}`}
       data-testid="workbench-panel"
-      data-workbench-kind={launcherOpen ? "launcher" : activeToolId}
+      data-workbench-kind={subagentPageOpen ? (selectedSubagentId ? "subagent-detail" : "subagents") : launcherOpen ? "launcher" : activeToolId}
       data-workbench-section={tab}
       data-workbench-mode={mode}
       aria-label="任务工作台"
     >
-      <header className="workbench-head">
+      {subagentPageOpen ? (
+        <SubagentWorkbench
+          taskId={taskId}
+          activity={activity}
+          runs={detail?.runs ?? []}
+          selectedSubagentId={selectedSubagentId}
+          onSelect={onInspectSubagent}
+          onBack={onBackToSubagents}
+          onClose={onCloseSubagents}
+          onAbort={onAbortSubagent}
+        />
+      ) : (
+        <>
+        <header className="workbench-head">
         <div className="workbench-active-tab">
           {launcherOpen ? <IconSidebar width={15} height={15} /> : <ToolIcon tab={tab} width={15} height={15} />}
           <strong>{launcherOpen ? "工具启动器" : activeTool.label}</strong>
@@ -305,7 +329,7 @@ export function Canvas({
             <IconClose width={13} height={13} />
           </button>
         </div>
-        <button ref={launcherTriggerRef} type="button" className="workbench-head-action" onClick={openLauncher} aria-label="打开工具启动器" aria-pressed={launcherOpen}>
+        <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开工具启动器" title="新增扩展" aria-pressed={launcherOpen}>
           <IconPlus width={16} height={16} />
         </button>
         <span className="workbench-head-spacer" />
@@ -320,8 +344,8 @@ export function Canvas({
         <button type="button" className="workbench-head-action" onClick={dismissWorkbench} aria-label="隐藏工作台">
           <IconSidebar width={16} height={16} />
         </button>
-      </header>
-      <div ref={workbenchBodyRef} className="canvas-body workbench-body" id="workbench-panel" tabIndex={-1}>
+        </header>
+        <div ref={workbenchBodyRef} className="canvas-body workbench-body" id="workbench-panel" tabIndex={-1}>
         {launcherOpen ? (
           <section className="workbench-launcher" role="dialog" aria-label="工作台工具启动器" onKeyDown={onLauncherKeyDown}>
             <div className="workbench-launcher-intro">
@@ -348,14 +372,6 @@ export function Canvas({
               ))}
             </ul>
           </section>
-        ) : selectedSubagentId ? (
-          <SubagentInspector
-            taskId={taskId}
-            child={activity.subagents.find((item) => item.id === selectedSubagentId)}
-            run={detail?.runs.find((item) => item.id === selectedSubagentId)}
-            onBack={onCloseSubagent}
-            onAbort={onAbortSubagent}
-          />
         ) : tab === "summary" ? (
           <SummaryPanel
             detail={detail}
@@ -365,6 +381,11 @@ export function Canvas({
             workspaceName={workspace?.display_name ?? null}
             workspaceAttached={workspaceAttached}
             workspaceAccessMode={workspace?.access_mode ?? null}
+            onShowSubagents={() => {
+              if (activity.subagents.length > 0 || detail?.runs.some((run) => run.agent_kind === "subagent")) {
+                onBackToSubagents();
+              }
+            }}
           />
         ) : tab === "files" ? (
           <FilesPanel key={`${taskId}:${workspacePath ?? "none"}:files`} taskId={taskId} workspacePath={workspacePath} workspaceAttached={workspaceAttached} running={running} />
@@ -394,281 +415,11 @@ export function Canvas({
             </div>
           </div>
         )}
-      </div>
+        </div>
+        </>
+      )}
     </aside>
   );
-}
-
-// ---------- Subagent inspector ----------
-
-interface SubagentHistoryRow {
-  id: string;
-  label: string;
-  detail: string | null;
-  tone: "normal" | "success" | "danger" | "muted";
-  at?: number;
-}
-
-function SubagentInspector({
-  taskId,
-  child,
-  run,
-  onBack,
-  onAbort,
-}: {
-  taskId: string;
-  child?: ActivitySubagent;
-  run?: AgentRun;
-  onBack: () => void;
-  onAbort: (subagentId: string) => Promise<void>;
-}) {
-  const id = child?.id ?? run?.id ?? null;
-  const [messages, setMessages] = useState<SessionMessage[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [stopping, setStopping] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
-  const active = child
-    ? child.status === "queued" || child.status === "running" || child.status === "waiting_permission"
-    : run?.ended_at == null;
-
-  useEffect(() => {
-    if (!id) {
-      setLoading(false);
-      return;
-    }
-    let dead = false;
-    const load = () => {
-      subagentSessionMessages(taskId, id)
-        .then((items) => {
-          if (!dead) {
-            setMessages(items);
-            setError(null);
-            setLoading(false);
-          }
-        })
-        .catch((cause) => {
-          if (!dead) {
-            setError(String(cause));
-            setLoading(false);
-          }
-        });
-    };
-    load();
-    const timer = active ? window.setInterval(load, 1600) : null;
-    return () => {
-      dead = true;
-      if (timer != null) window.clearInterval(timer);
-    };
-  }, [active, id, taskId]);
-
-  useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [active]);
-
-  const persistedRows = useMemo(() => buildPersistedSubagentHistory(messages), [messages]);
-  const liveRows = child?.events.map<SubagentHistoryRow>((event) => ({
-    id: event.id,
-    label: event.label,
-    detail: event.detail,
-    tone: event.isError ? "danger" : event.kind === "lifecycle" && child.status === "completed" ? "success" : "normal",
-    at: event.at,
-  })) ?? [];
-  const rows = liveRows.length > 0 ? liveRows : persistedRows;
-  const label = child?.label ?? run?.agent_label ?? "子代理";
-  const runtimeKind = child?.runtimeKind ?? run?.runtime_kind ?? "native";
-  const model = child?.model ?? run?.model ?? null;
-  const startedAt = child?.startedAt ?? (run ? Date.parse(run.started_at) : now);
-  const endedAt = child?.endedAt ?? (run?.ended_at ? Date.parse(run.ended_at) : null);
-  const summary = child?.detail ?? run?.summary ?? null;
-  const lastEventAt = child?.lastEventAt ?? endedAt ?? startedAt;
-  const progressIsStale = active && now - lastEventAt >= 120_000;
-
-  const stop = async () => {
-    if (!id || stopping || !active) return;
-    setStopping(true);
-    setError(null);
-    try {
-      await onAbort(id);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setStopping(false);
-    }
-  };
-
-  return (
-    <div className="subagent-inspector">
-      <div className="subagent-inspector-nav">
-        <button type="button" onClick={onBack}>
-          <IconChevronLeft width={15} height={15} /> 子代理
-        </button>
-        <span>{elapsedCompact(startedAt, endedAt ?? now)}</span>
-      </div>
-
-      <header className="subagent-inspector-hero">
-        <div className="subagent-inspector-kicker">
-          <span className={`subagent-state-dot${active ? " active" : ""}`} />
-          {subagentRuntimeLabel(runtimeKind)}
-          {model ? ` · ${model}` : ""}
-        </div>
-        <h2>{label}</h2>
-        <p>{summary ?? (active ? "已启动，等待第一条公开进度。" : "没有保存结果摘要。")}</p>
-        <div className="subagent-inspector-meta">
-          <span className={progressIsStale ? "is-stale" : undefined}>
-            {active
-              ? progressIsStale
-                ? `${relativeActivity(lastEventAt, now)}没有可见进度；持续 5 分钟会自动停止`
-                : `最近更新 ${relativeActivity(lastEventAt, now)}`
-              : statusText(child, run)}
-          </span>
-          <span>只读工作区</span>
-          {active && (
-            <button type="button" disabled={stopping} onClick={() => void stop()}>
-              <IconStop width={11} height={11} /> {stopping ? "停止中…" : "停止"}
-            </button>
-          )}
-        </div>
-      </header>
-
-      <div className="subagent-inspector-section-head">
-        <strong>公开活动</strong>
-        <span>不显示私有推理与原始命令输出</span>
-      </div>
-      {error && <div className="subagent-inspector-error">{error}</div>}
-      {loading && rows.length === 0 ? (
-        <div className="subagent-inspector-empty">正在读取子代理日志…</div>
-      ) : rows.length === 0 ? (
-        <div className="subagent-inspector-empty">还没有可显示的活动。</div>
-      ) : (
-        <div className="subagent-history">
-          {rows.map((row) => (
-            <div className={`subagent-history-row tone-${row.tone}`} key={row.id}>
-              <span className="subagent-history-dot" />
-              <strong>{row.label}</strong>
-              {row.detail && <span title={row.detail}>{row.detail}</span>}
-              {row.at && <time>{clockFromMillis(row.at)}</time>}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function buildPersistedSubagentHistory(messages: SessionMessage[]): SubagentHistoryRow[] {
-  const rows: SubagentHistoryRow[] = [];
-  for (const [index, message] of messages.entries()) {
-    const id = message.id ?? `persisted-${index}`;
-    if (message.kind === "tool_call") {
-      const input = parseObject(message.input_json);
-      rows.push({
-        id,
-        label: message.tool_name || "工具",
-        detail: safePreview(typeof input?.summary === "string" ? input.summary : null),
-        tone: "normal",
-      });
-    } else if (message.kind === "tool_result") {
-      rows.push({
-        id,
-        label: message.is_error ? "工具失败" : "工具完成",
-        detail: null,
-        tone: message.is_error ? "danger" : "success",
-      });
-    } else if (message.kind === "message" && message.role === "assistant") {
-      rows.push({ id, label: "可见结果", detail: safePreview(message.text), tone: "normal" });
-    } else if (message.kind === "system" && message.text === "subagent_activity") {
-      const data = parseObject(message.output_json);
-      rows.push({
-        id,
-        label: persistedPhaseLabel(typeof data?.phase === "string" ? data.phase : null),
-        detail: safePreview(typeof data?.detail === "string" ? data.detail : null),
-        tone: "normal",
-      });
-    } else if (message.kind === "system" && message.text === "subagent_lifecycle") {
-      const data = parseObject(message.output_json);
-      const state = typeof data?.state === "string" ? data.state : "running";
-      rows.push({
-        id,
-        label: persistedStateLabel(state),
-        detail: safePreview(typeof data?.detail === "string" ? data.detail : null),
-        tone: state === "completed" ? "success" : state === "failed" || state === "cancelled" ? "danger" : "normal",
-      });
-    }
-  }
-  return rows.slice(-60);
-}
-
-function parseObject(value: string | null | undefined): Record<string, unknown> | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
-  } catch {
-    return null;
-  }
-}
-
-function safePreview(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized ? normalized.slice(0, 180) : null;
-}
-
-function subagentRuntimeLabel(kind: AgentRun["runtime_kind"]): string {
-  if (kind === "codex_exec") return "Codex CLI";
-  if (kind === "codex_mcp") return "Codex MCP";
-  return "R-Code 子代理";
-}
-
-function statusText(child: ActivitySubagent | undefined, run: AgentRun | undefined): string {
-  const status = child?.status;
-  if (status === "completed" || run?.review_state === "answered") return "已完成";
-  if (status === "failed" || run?.review_state === "failed") return "运行失败";
-  if (status === "cancelled" || run?.review_state === "aborted") return "已停止";
-  return "已结束";
-}
-
-function persistedPhaseLabel(phase: string | null): string {
-  switch (phase) {
-    case "tool": return "工具";
-    case "streaming": return "生成结果";
-    case "finalizing": return "整理结果";
-    case "waiting_permission": return "等待权限";
-    default: return "进度";
-  }
-}
-
-function persistedStateLabel(state: string): string {
-  switch (state) {
-    case "queued": return "已加入队列";
-    case "running": return "已开始";
-    case "waiting_permission": return "等待权限";
-    case "completed": return "已完成";
-    case "failed": return "运行失败";
-    case "cancelled": return "已停止";
-    default: return "状态更新";
-  }
-}
-
-function elapsedCompact(startedAt: number, endedAt: number): string {
-  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-  const minutes = Math.floor(seconds / 60);
-  return minutes > 0 ? `${minutes}分${String(seconds % 60).padStart(2, "0")}秒` : `${seconds}秒`;
-}
-
-function relativeActivity(at: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - at) / 1000));
-  if (seconds < 5) return "刚刚";
-  if (seconds < 60) return `${seconds} 秒前`;
-  return `${Math.floor(seconds / 60)} 分钟前`;
-}
-
-function clockFromMillis(value: number): string {
-  return new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 // ---------- Summary ----------
@@ -693,6 +444,7 @@ function SummaryPanel({
   workspaceName,
   workspaceAttached,
   workspaceAccessMode,
+  onShowSubagents,
 }: {
   detail: TaskDetail | undefined;
   running: boolean;
@@ -701,6 +453,7 @@ function SummaryPanel({
   workspaceName: string | null;
   workspaceAttached: boolean;
   workspaceAccessMode: ProjectAccessMode | null;
+  onShowSubagents: () => void;
 }) {
   const setTab = useAppStore((s) => s.setCanvasTab);
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -755,6 +508,14 @@ function SummaryPanel({
   const passed = verifications.filter((v) => v.status === "passed").length;
   const queued = queuedMessages.filter((message) => message.state === "queued" || message.state === "dispatching").length;
   const activeMainRun = runs.find((run) => run.agent_kind === "main" && run.ended_at == null);
+  const subagentRuns = runs.filter((run) => run.agent_kind === "subagent");
+  const activeSubagents = activity.subagents.length > 0
+    ? activity.subagents.filter((child) => child.status === "queued" || child.status === "running" || child.status === "waiting_permission").length
+    : subagentRuns.filter((run) => run.ended_at == null).length;
+  const completedSubagents = activity.subagents.length > 0
+    ? activity.subagents.filter((child) => child.status === "completed").length
+    : subagentRuns.filter((run) => run.ended_at != null && run.review_state !== "failed" && run.review_state !== "aborted").length;
+  const subagentCount = Math.max(activity.subagents.length, subagentRuns.length);
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
   const hasDistinctGoal = Boolean(task.goal.trim() && task.goal.trim() !== title);
   const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "纯聊天");
@@ -788,6 +549,23 @@ function SummaryPanel({
           {policyLabel}
         </span>
       </div>
+      {subagentCount > 0 && (
+        <button type="button" className="sum-subagents-button" onClick={onShowSubagents} aria-label="打开子智能体列表">
+          <span className="sum-subagent-stack" aria-hidden="true">
+            {Array.from({ length: Math.min(3, subagentCount) }, (_, index) => (
+              <SubagentAvatar index={index} size="sm" key={index} />
+            ))}
+          </span>
+          <span className="sum-subagent-copy">
+            <strong>
+              {activeSubagents > 0 ? `${activeSubagents} 运行中` : "没有运行中的子智能体"}
+              {completedSubagents > 0 ? ` · ${completedSubagents} 已完成` : ""}
+            </strong>
+            <small>查看各自的运行过程</small>
+          </span>
+          <IconChevronRight width={14} height={14} />
+        </button>
+      )}
       {running && (
         <div className="sum-live">
           <div className="sum-live-head">

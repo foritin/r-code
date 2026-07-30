@@ -709,7 +709,8 @@ export function Composer({
               aria-label="发送消息"
               title="发送（Enter）"
             >
-              <IconSend width={12} height={12} />
+              <IconSend width={15} height={15} />
+              <span>{sending ? "发送中" : "发送"}</span>
             </button>
           )}
         </div>
