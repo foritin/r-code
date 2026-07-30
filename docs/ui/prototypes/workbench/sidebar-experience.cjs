@@ -226,6 +226,51 @@ const sidebarExperienceCss = String.raw`
     background: var(--bg-panel);
   }
 
+  .prototype-agent-page-header.is-list {
+    gap: 6px;
+    padding-inline: 8px;
+  }
+
+  .prototype-agent-tab {
+    display: flex;
+    align-items: center;
+    align-self: stretch;
+    min-width: 134px;
+    max-width: 220px;
+    gap: 8px;
+    padding: 0 5px 0 10px;
+    border-bottom: 2px solid var(--accent);
+    color: var(--fg);
+  }
+
+  .prototype-agent-tab .prototype-agent-avatar {
+    width: 18px;
+    height: 18px;
+    border: 0;
+    border-radius: 5px 5px 2px 5px;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .prototype-agent-tab-close {
+    display: inline-grid;
+    place-items: center;
+    width: 25px;
+    height: 25px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--fg-faint);
+  }
+
+  .prototype-agent-tab-close:hover,
+  .prototype-agent-tab-close:focus-visible {
+    background: var(--bg-hover);
+    color: var(--fg);
+  }
+
   .prototype-agent-page-header strong {
     min-width: 0;
     overflow: hidden;
@@ -264,37 +309,43 @@ const sidebarExperienceCss = String.raw`
   }
 
   .prototype-agent-list-body {
-    padding: 16px 14px 24px;
+    padding: 20px 18px 28px;
   }
 
   .prototype-agent-list-section + .prototype-agent-list-section {
-    margin-top: 23px;
+    margin-top: 26px;
+  }
+
+  .prototype-agent-list-section .prototype-agent-section-heading {
+    justify-content: flex-start;
+    min-height: 26px;
+    margin: 0;
+    padding: 0 8px 7px;
+    font-size: 11px;
+    letter-spacing: .04em;
   }
 
   .prototype-agent-row {
     display: grid;
-    grid-template-columns: 34px minmax(0, 1fr) auto;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
     align-items: center;
     width: 100%;
-    min-height: 64px;
-    gap: 10px;
+    min-height: 68px;
+    gap: 12px;
     padding: 9px 10px;
     border: 0;
-    border-radius: 9px;
+    border-radius: 7px;
     background: transparent;
     color: var(--fg);
     text-align: left;
   }
 
   .prototype-agent-row + .prototype-agent-row {
-    border-top: 1px solid var(--border);
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
+    border-top: 0;
   }
 
   .prototype-agent-row:hover,
-  .prototype-agent-row:focus-visible,
-  .prototype-agent-row.is-running {
+  .prototype-agent-row:focus-visible {
     background: var(--bg-hover);
   }
 
@@ -302,16 +353,31 @@ const sidebarExperienceCss = String.raw`
     position: relative;
     display: inline-grid;
     place-items: center;
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     flex: none;
-    overflow: hidden;
     border: 1px solid color-mix(in srgb, var(--prototype-agent-color, var(--accent)) 72%, var(--border));
-    border-radius: 50%;
+    border-radius: 9px 9px 3px 9px;
     background:
       radial-gradient(circle at 42% 38%, color-mix(in srgb, var(--prototype-agent-color, var(--accent)) 72%, white) 0 22%, transparent 23%),
       conic-gradient(from 22deg, var(--prototype-agent-color, var(--accent)), transparent 44%, var(--prototype-agent-color, var(--accent)) 76%, transparent);
     box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--bg-card) 88%, transparent);
+  }
+
+  .prototype-agent-row .prototype-agent-avatar::after {
+    content: "";
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    width: 7px;
+    height: 7px;
+    border: 2px solid var(--bg-card);
+    border-radius: 3px;
+    background: var(--success);
+  }
+
+  .prototype-agent-row .prototype-agent-avatar.is-running::after {
+    background: var(--accent);
   }
 
   .prototype-agent-avatar--mint { --prototype-agent-color: #58c7a4; }
@@ -342,12 +408,11 @@ const sidebarExperienceCss = String.raw`
   }
 
   .prototype-agent-row-meta {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    margin-left: 8px;
+    align-self: start;
+    margin: 10px 2px 0 10px;
     color: var(--fg-faint);
     font-size: 10px;
+    font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
 
@@ -361,7 +426,8 @@ const sidebarExperienceCss = String.raw`
   }
 
   @media (prefers-reduced-motion: no-preference) {
-    .prototype-agent-spinner {
+    .prototype-agent-spinner,
+    .prototype-agent-row .prototype-agent-avatar.is-running::after {
       animation: prototype-agent-spin .8s linear infinite;
     }
   }
@@ -415,7 +481,21 @@ const sidebarExperienceCss = String.raw`
   }
 
   .prototype-agent-session-summary svg {
+    margin-left: auto;
     transition: transform var(--dur-2) var(--ease);
+  }
+
+  .prototype-agent-permission {
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--fg-faint);
+    font: 9px var(--font-mono);
+  }
+
+  .prototype-agent-permission.is-full {
+    border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+    color: var(--accent);
   }
 
   .prototype-agent-session-summary[aria-expanded="false"] svg {
@@ -460,6 +540,34 @@ const sidebarExperienceCss = String.raw`
     white-space: nowrap;
   }
 
+  .prototype-agent-tool-group {
+    margin: 16px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .prototype-agent-tool-group-head {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr) auto 14px;
+    align-items: center;
+    width: 100%;
+    min-height: 40px;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: 11px;
+    text-align: left;
+  }
+
+  .prototype-agent-tool-group-head small { color: var(--fg-faint); }
+  .prototype-agent-tool-group-head svg { transition: transform var(--dur-2) var(--ease); }
+  .prototype-agent-tool-group:not(.is-open) .prototype-agent-tool-group-head svg { transform: rotate(-90deg); }
+  .prototype-agent-tool-group-list { padding-left: 28px; border-top: 1px solid var(--border); }
+  .prototype-agent-tool-group-list .prototype-agent-command { margin: 0; min-height: 38px; border-bottom: 1px solid var(--border); }
+  .prototype-agent-tool-group-list .prototype-agent-command:last-child { border-bottom: 0; }
+
   .prototype-agent-live-state {
     display: flex;
     align-items: center;
@@ -488,12 +596,56 @@ const sidebarExperienceCss = String.raw`
 `;
 
 async function installPrototypeSidebarExperience(page) {
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     const mode = new URL(window.location.href).searchParams.get("prototypePanel");
     if (!mode) return;
 
     const scene = document.querySelector("#main-content > .scene-room");
     if (!scene || scene.querySelector(".prototype-context-panel")) return;
+
+    const workbenchTabModes = new Set([
+      "workbench-tabs",
+      "workbench-tab-fallback",
+      "workbench-launcher-restored",
+    ]);
+    if (workbenchTabModes.has(mode)) {
+      const root = document.documentElement;
+      if (root.dataset.prototypeWorkbenchTabsPrepared === mode
+        || root.dataset.prototypeWorkbenchTabsPrepared === `preparing:${mode}`) return;
+      root.dataset.prototypeWorkbenchTabsPrepared = `preparing:${mode}`;
+      const settle = () => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+      const panelKind = () => document.querySelector('[data-testid="workbench-panel"]')?.dataset.workbenchKind;
+      const activeClose = () => document.querySelector('[data-testid="workbench-close"]');
+
+      if (mode === "workbench-tabs" || mode === "workbench-tab-fallback") {
+        document.querySelector('[aria-label="打开工具启动器"]')?.click();
+        await settle();
+        const reviewRow = [...document.querySelectorAll(".workbench-launcher-row")]
+          .find((row) => row.textContent?.includes("审核"));
+        if (!(reviewRow instanceof HTMLElement)) throw new Error("Review launcher row is missing");
+        reviewRow.click();
+        await settle();
+        if (panelKind() !== "review") throw new Error("Review tab did not open");
+        if (mode === "workbench-tab-fallback") {
+          activeClose()?.click();
+          await settle();
+          if (panelKind() !== "files") throw new Error("Closing review did not activate files");
+        }
+      } else {
+        activeClose()?.click();
+        await settle();
+        document.querySelector(".room-workbench-toggle")?.click();
+        await settle();
+        if (panelKind() !== "launcher") throw new Error("Empty workbench did not reopen at launcher");
+      }
+
+      scene.dataset.prototypeSidebarState = mode;
+      root.dataset.prototypeWorkbenchTabsPrepared = mode;
+      root.dataset.prototypeSidebarExperience = "installed";
+      return;
+    }
 
     [...scene.children].forEach((child) => {
       if (
@@ -526,6 +678,16 @@ async function installPrototypeSidebarExperience(page) {
         stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="4" y="4" width="16" height="16" rx="2"></rect><path d="M14 4v16"></path>
       </svg>`;
+    const closeIcon = `
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m7 7 10 10M17 7 7 17"></path>
+      </svg>`;
+    const plusIcon = `
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 5v14M5 12h14"></path>
+      </svg>`;
     const branchIcon = `
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
         stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -553,7 +715,7 @@ async function installPrototypeSidebarExperience(page) {
         <path d="m7 12 3 3 7-7"></path>
       </svg>`;
 
-    const avatar = (tone) => `<span class="prototype-agent-avatar prototype-agent-avatar--${tone}" aria-hidden="true"></span>`;
+    const avatar = (tone, state = "") => `<span class="prototype-agent-avatar prototype-agent-avatar--${tone}${state ? ` is-${state}` : ""}" aria-hidden="true"></span>`;
     const contextPanel = document.createElement("aside");
     contextPanel.className = "prototype-context-panel";
     contextPanel.setAttribute("aria-label", "当前会话上下文");
@@ -593,6 +755,7 @@ async function installPrototypeSidebarExperience(page) {
         title: "交互规格",
         tone: "coral",
         state: "running",
+        access: "full_access",
         elapsed: "1m",
         description: "正在整理右栏状态与返回路径",
         duration: "已处理 1m 12s",
@@ -606,7 +769,9 @@ async function installPrototypeSidebarExperience(page) {
         title: "原型渲染",
         tone: "mint",
         state: "complete",
+        access: "read_only",
         elapsed: "4m",
+        age: "7分钟前",
         description: "已生成明暗主题并通过点击验证",
         duration: "已处理 4m 08s",
         intro: "我核对了渲染入口与输出目录，确认所有状态都能按主题成对生成。",
@@ -619,7 +784,9 @@ async function installPrototypeSidebarExperience(page) {
         title: "配色审计",
         tone: "cyan",
         state: "complete",
+        access: "read_only",
         elapsed: "6m",
+        age: "12分钟前",
         description: "已核对主区、侧栏和输入层级",
         duration: "已处理 6m 21s",
         intro: "我检查了深黑主画布、浅黑侧栏与输入面的对比关系。",
@@ -663,13 +830,13 @@ async function installPrototypeSidebarExperience(page) {
       const agent = agents[id];
       const running = agent.state === "running";
       return `
-        <button type="button" class="prototype-agent-row${running ? " is-running" : ""}" data-agent-id="${id}">
-          ${avatar(agent.tone)}
+        <button type="button" class="prototype-agent-row${running ? " is-running" : ""}" data-agent-id="${id}" data-agent-state="${agent.state}">
+          ${avatar(agent.tone, running ? "running" : "complete")}
           <span class="prototype-agent-row-copy">
             <span class="prototype-agent-row-title">${agent.title}</span>
             <span class="prototype-agent-row-description">${agent.description}</span>
           </span>
-          <span class="prototype-agent-row-meta">${running ? runningMark : completeMark}<span>${agent.elapsed}</span></span>
+          <span class="prototype-agent-row-meta"><time>${running ? agent.elapsed : agent.age}</time><span class="sr-only">${running ? "正在运行" : "已完成"}</span></span>
         </button>`;
     };
 
@@ -685,22 +852,34 @@ async function installPrototypeSidebarExperience(page) {
       const sidebar = ensureDocked();
       sidebar.innerHTML = `
         <div class="prototype-agent-page" data-prototype-agent-view="list">
-          <header class="prototype-agent-page-header">
-            ${avatar("mint")}<strong>子智能体</strong><span class="prototype-agent-header-spacer"></span>
+          <header class="prototype-agent-page-header is-list">
+            <div class="prototype-agent-tab" role="tab" aria-selected="true">
+              ${avatar("mint")}<strong>子智能体</strong>
+              <button type="button" class="prototype-agent-tab-close prototype-close-agent-tab" aria-label="关闭子智能体标签页" title="关闭子智能体">${closeIcon}</button>
+            </div>
+            <button type="button" class="prototype-agent-icon-button prototype-add-tool" aria-label="打开工具启动器" title="新增扩展">${plusIcon}</button>
+            <span class="prototype-agent-header-spacer"></span>
             <button type="button" class="prototype-agent-icon-button prototype-collapse-agents" aria-label="收起右侧边栏" title="收起右侧边栏">${panelIcon}</button>
           </header>
           <div class="prototype-agent-list-body">
             <section class="prototype-agent-list-section" aria-labelledby="prototype-running-heading">
-              <h3 class="prototype-agent-section-heading" id="prototype-running-heading"><span>进行中</span><span>1</span></h3>
+              <h3 class="prototype-agent-section-heading" id="prototype-running-heading"><span>进行中 · 01</span></h3>
               ${agentRow("interaction")}
             </section>
             <section class="prototype-agent-list-section" aria-labelledby="prototype-complete-heading">
-              <h3 class="prototype-agent-section-heading" id="prototype-complete-heading"><span>已完成</span><span>2</span></h3>
+              <h3 class="prototype-agent-section-heading" id="prototype-complete-heading"><span>已完成 · 02</span></h3>
               ${agentRow("pipeline")}${agentRow("palette")}
             </section>
           </div>
         </div>`;
       scene.dataset.prototypeSidebarState = "list";
+      sidebar.querySelector(".prototype-close-agent-tab")?.addEventListener("click", renderContext);
+      sidebar.querySelector(".prototype-add-tool")?.addEventListener("click", () => {
+        const target = new URL(window.location.href);
+        target.searchParams.delete("prototypePanel");
+        target.searchParams.set("state", "launcher");
+        window.location.assign(target.href);
+      });
       sidebar.querySelector(".prototype-collapse-agents")?.addEventListener("click", renderContext);
       sidebar.querySelectorAll("[data-agent-id]").forEach((row) => {
         row.addEventListener("click", () => renderDetail(row.dataset.agentId));
@@ -721,13 +900,20 @@ async function installPrototypeSidebarExperience(page) {
           <div class="prototype-agent-detail-body">
             <article class="prototype-agent-session">
               <button type="button" class="prototype-agent-session-summary" aria-expanded="true" aria-controls="prototype-agent-session-body">
-                <span>${agent.duration}</span>${chevronDown}
+                <span>${agent.duration}</span><span class="prototype-agent-permission${agent.access === "full_access" ? " is-full" : ""}">${agent.access === "full_access" ? "完全访问" : "只读"}</span>${chevronDown}
               </button>
               <div class="prototype-agent-session-body" id="prototype-agent-session-body">
                 <p class="prototype-agent-copy">${agent.intro}</p>
-                <div class="prototype-agent-command" aria-label="已执行操作"><span class="prototype-agent-command-icon">${terminalIcon}</span><code>${agent.commandOne}</code></div>
+                <section class="prototype-agent-tool-group is-open">
+                  <button type="button" class="prototype-agent-tool-group-head" aria-expanded="true">
+                    <span class="prototype-agent-command-icon">${terminalIcon}</span><span>运行了 2 项操作</span><small>${isRunning ? "1 项运行中" : "全部完成"}</small>${chevronDown}
+                  </button>
+                  <div class="prototype-agent-tool-group-list">
+                    <div class="prototype-agent-command" aria-label="已执行操作"><span class="prototype-agent-command-icon">${terminalIcon}</span><code>${agent.commandOne}</code></div>
+                    <div class="prototype-agent-command" aria-label="已执行操作"><span class="prototype-agent-command-icon">${terminalIcon}</span><code>${agent.commandTwo}</code></div>
+                  </div>
+                </section>
                 <p class="prototype-agent-copy">${agent.detail}</p>
-                <div class="prototype-agent-command" aria-label="已执行操作"><span class="prototype-agent-command-icon">${terminalIcon}</span><code>${agent.commandTwo}</code></div>
                 <p class="prototype-agent-copy">${agent.result}</p>
                 <div class="prototype-agent-live-state" role="status" aria-live="polite">
                   ${isRunning ? runningMark : completeMark}<span>${isRunning ? "正在继续运行" : "运行已完成"}</span>
@@ -744,6 +930,15 @@ async function installPrototypeSidebarExperience(page) {
         const expanded = summary.getAttribute("aria-expanded") === "true";
         summary.setAttribute("aria-expanded", String(!expanded));
         if (body) body.hidden = expanded;
+      });
+      const toolGroup = sidebar.querySelector(".prototype-agent-tool-group");
+      const toolGroupHead = sidebar.querySelector(".prototype-agent-tool-group-head");
+      const toolGroupList = sidebar.querySelector(".prototype-agent-tool-group-list");
+      toolGroupHead?.addEventListener("click", () => {
+        const expanded = toolGroupHead.getAttribute("aria-expanded") === "true";
+        toolGroupHead.setAttribute("aria-expanded", String(!expanded));
+        toolGroup?.classList.toggle("is-open", !expanded);
+        if (toolGroupList) toolGroupList.hidden = expanded;
       });
     };
 

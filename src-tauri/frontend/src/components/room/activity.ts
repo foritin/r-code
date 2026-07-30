@@ -10,6 +10,7 @@ import type {
   AgentSendMode,
   PermissionRequest,
   QueuedMessage,
+  SubagentAccessMode,
 } from "../../lib/types";
 
 export type ActivityPhase = AgentActivityPhase | "idle";
@@ -51,6 +52,8 @@ export interface ActivitySubagent {
   label: string;
   runtimeKind: AgentRun["runtime_kind"];
   model: string | null;
+  accessMode: SubagentAccessMode;
+  routingReason: string | null;
   status: SubagentStatus;
   phase: ActivityPhase;
   detail: string | null;
@@ -211,6 +214,8 @@ function applyScopedEvent(
     label: scope.agent_label?.trim() || prior?.label || "子代理",
     runtimeKind: scope.runtime_kind ?? prior?.runtimeKind ?? "native",
     model: scope.model?.trim() || prior?.model || null,
+    accessMode: scope.access_mode ?? prior?.accessMode ?? "read_only",
+    routingReason: safeChildDetail(scope.routing_reason) ?? prior?.routingReason ?? null,
     status: prior?.status ?? "queued",
     phase: prior?.phase ?? "requesting",
     detail: prior?.detail ?? null,
@@ -253,7 +258,7 @@ function applyScopedEvent(
       child.phase = "streaming";
       child.status = "running";
       child.detail = event.delta ? "正在生成可见结果" : "已生成一条可见结果";
-      appendChildEvent(child, "message", "可见结果", safeChildDetail(event.text), at);
+      appendChildMessage(child, event.text, event.delta, at);
       break;
     case "plan":
       child.phase = "finalizing";
@@ -334,6 +339,53 @@ function appendChildEvent(
       ...(isError ? { isError: true } : {}),
     },
   ].slice(-60);
+}
+
+/**
+ * provider 的 message 事件通常是 token/chunk 增量。它们属于同一条公开回复，
+ * 不能在右栏按 token 生成几十张“子智能体”消息卡。
+ */
+function appendChildMessage(
+  child: ActivitySubagent,
+  text: string,
+  delta: boolean,
+  at: number,
+) {
+  if (!text) return;
+  const previous = child.events[child.events.length - 1];
+  const isError = text.trimStart().startsWith("[error]");
+  if (previous?.kind === "message") {
+    const current = previous.detail ?? "";
+    let combined: string;
+    if (delta) {
+      combined = current + text;
+    } else if (!current || text.startsWith(current)) {
+      combined = text;
+    } else if (current.startsWith(text)) {
+      combined = current;
+    } else {
+      combined = `${current}${text}`;
+    }
+    child.events = [
+      ...child.events.slice(0, -1),
+      {
+        ...previous,
+        detail: combined.slice(0, 12_000),
+        at,
+        ...(previous.isError || isError ? { isError: true } : {}),
+      },
+    ];
+    return;
+  }
+  const messageEvent: ActivitySubagentEvent = {
+    id: `${child.id}:${at}:${child.events.length}`,
+    kind: "message",
+    label: "可见结果",
+    detail: text.slice(0, 12_000),
+    at,
+    ...(isError ? { isError: true } : {}),
+  };
+  child.events = [...child.events, messageEvent].slice(-60);
 }
 
 function childStatusEventLabel(status: SubagentStatus): string {
@@ -427,6 +479,8 @@ function mergePersistedSubagents(
       label: run.agent_label?.trim() || "子代理",
       runtimeKind: run.runtime_kind,
       model: run.model || null,
+      accessMode: run.access_mode ?? prior?.accessMode ?? "read_only",
+      routingReason: safeChildDetail(run.routing_reason ?? undefined) ?? prior?.routingReason ?? null,
       status: persistedSubagentStatus(run),
       phase: prior?.phase ?? (run.ended_at ? "idle" : "requesting"),
       detail: safeChildDetail(run.summary ?? undefined) ?? prior?.detail ?? null,
@@ -454,6 +508,8 @@ function parseTimestamp(value: string): number {
 
 function activityLabel(phase: AgentActivityPhase, detail?: string): string {
   switch (phase) {
+    case "routing":
+      return detail ? `正在路由：${observableToolDetail(detail)}` : "正在选择执行器";
     case "requesting":
       return "等待模型响应";
     case "streaming":
@@ -468,6 +524,8 @@ function activityLabel(phase: AgentActivityPhase, detail?: string): string {
       return "已纳入下一次请求";
     case "finalizing":
       return "正在整理结果";
+    case "reviewing":
+      return detail ? observableToolDetail(detail) : "正在质量复核";
   }
 }
 

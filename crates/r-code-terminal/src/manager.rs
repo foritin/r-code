@@ -193,7 +193,9 @@ impl TerminalManager {
                 let _ = child.kill();
                 let _ = child.wait();
                 cleanup_integration_dir(integration.cleanup_dir.as_deref());
-                return Err(ProductError::TerminalError(format!("take_writer failed: {err}")));
+                return Err(ProductError::TerminalError(format!(
+                    "take_writer failed: {err}"
+                )));
             }
         };
 
@@ -203,7 +205,9 @@ impl TerminalManager {
                 let _ = child.kill();
                 let _ = child.wait();
                 cleanup_integration_dir(integration.cleanup_dir.as_deref());
-                return Err(ProductError::TerminalError(format!("try_clone_reader failed: {err}")));
+                return Err(ProductError::TerminalError(format!(
+                    "try_clone_reader failed: {err}"
+                )));
             }
         };
 
@@ -321,11 +325,7 @@ impl TerminalManager {
     /// 由于 agent 读取和 UI 读取共用 PTY，增量不能直接依赖 receiver 的“谁先读到”
     /// 语义。这里以滚动缓冲区和绝对游标为真源，因此即使 agent 先消费了输出，UI
     /// 仍能补回缺失内容；缓冲区滚出时返回 `reset = true` 让模拟器安全重放快照。
-    pub async fn raw_since(
-        &self,
-        id: &str,
-        cursor: u64,
-    ) -> Result<TerminalRawBatch, ProductError> {
+    pub async fn raw_since(&self, id: &str, cursor: u64) -> Result<TerminalRawBatch, ProductError> {
         let mut terminals = self.terminals.lock().await;
         let handle = terminals
             .get_mut(id)
@@ -427,7 +427,10 @@ impl TerminalManager {
 
         handle.state = match handle.block_parser.running_command() {
             Some(command)
-                if matches!(CliDetector::detect(command), ExternalCli::Claude | ExternalCli::Codex) =>
+                if matches!(
+                    CliDetector::detect(command),
+                    ExternalCli::Claude | ExternalCli::Codex
+                ) =>
             {
                 TerminalState::Agent
             }
@@ -922,7 +925,10 @@ mod tests {
             .create(shell, &std::env::temp_dir(), vec![])
             .await
             .expect("create should succeed");
-        let initial = manager.raw_snapshot(&id).await.expect("initial raw snapshot");
+        let initial = manager
+            .raw_snapshot(&id)
+            .await
+            .expect("initial raw snapshot");
 
         #[cfg(windows)]
         let input = "echo r_code_raw_cursor\r";

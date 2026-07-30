@@ -1,8 +1,9 @@
 //! R-Code 的本地 stdio MCP server。
 //!
 //! 它让 Codex 或其他 MCP 编排器把 R-Code 自己的 Agent 当作受限子代理使用。服务
-//! 只暴露「已经在 R-Code 中打开的工作区」上的只读任务；不会开放文件写入、终端、
-//! 任意路径浏览或凭据读取能力。
+//! 默认只暴露「已经在 R-Code 中打开的工作区」上的只读任务。调用方只有在父任务
+//! 明确授权写入/命令时，才能为单个任务请求 `full_access`；任意路径浏览和凭据读取
+//! 始终不会开放。
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use tokio::sync::Mutex;
 use tokio::time::{sleep, Duration, Instant};
 
 use crate::commands::{
-    agent_abort, agent_send, session_messages, task_create_with_provider, task_detail, CommandState,
+    agent_abort, agent_send, session_messages, task_create_with_agent, task_detail, CommandState,
 };
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
@@ -133,7 +134,7 @@ impl McpService {
                 "protocolVersion": negotiated_protocol(request.params.as_ref()),
                 "capabilities": { "tools": { "listChanged": false } },
                 "serverInfo": { "name": "r-code", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "R-Code delegates only read-only work in projects already opened in R-Code. Call r_code_delegate_readonly, then r_code_wait_for_result or r_code_task_status."
+                "instructions": "R-Code delegates work only inside projects already opened in R-Code. Use r_code_delegate (read_only by default). full_access requires an explicit authorization statement derived from the user or parent task. Then use r_code_wait_for_result or r_code_task_status."
             })),
             "notifications/initialized" => None,
             "ping" => respond(json!({})),
@@ -156,6 +157,7 @@ impl McpService {
             .cloned()
             .unwrap_or_else(|| json!({}));
         let result = match name {
+            "r_code_delegate" => self.delegate(&arguments, false).await,
             "r_code_delegate_readonly" => self.delegate_readonly(&arguments).await,
             "r_code_task_status" => self.task_status(&arguments).await,
             "r_code_wait_for_result" => self.wait_for_result(&arguments).await,
@@ -169,6 +171,14 @@ impl McpService {
     }
 
     async fn delegate_readonly(&self, arguments: &Value) -> Result<Value, &'static str> {
+        self.delegate(arguments, true).await
+    }
+
+    async fn delegate(
+        &self,
+        arguments: &Value,
+        force_read_only: bool,
+    ) -> Result<Value, &'static str> {
         let goal = required_text(arguments, "goal", MAX_GOAL_CHARS)?;
         let workspace_path = required_text(arguments, "workspace_path", 4_096)?;
         let workspace = PathBuf::from(workspace_path)
@@ -193,18 +203,40 @@ impl McpService {
         let title = optional_text(arguments, "title", MAX_TITLE_CHARS)
             .unwrap_or_else(|| format!("MCP · {}", compact(&goal, 54)));
         let provider_name = optional_text(arguments, "provider_name", 100);
-        // Ask mode is enforced by LlmAgentRuntime as a read-only capability policy. This is not
-        // merely a prompt request: write tools, shell, and recursive delegation are unavailable.
-        let task = task_create_with_provider(
+        let requested_access = if force_read_only {
+            "read_only"
+        } else {
+            arguments
+                .get("access")
+                .and_then(Value::as_str)
+                .unwrap_or("read_only")
+                .trim()
+        };
+        let mode = match requested_access {
+            "read_only" => "ask",
+            "full_access" => {
+                // The extra field is deliberately required at the trust boundary. It is persisted
+                // indirectly in the visible task goal/title and prevents a model from escalating
+                // merely because it prefers broader tools.
+                let _authorization = required_text(arguments, "authorization", 1_000)
+                    .map_err(|_| "full_access requires an explicit authorization statement from the user or parent task")?;
+                "edit"
+            }
+            _ => return Err("access must be read_only or full_access"),
+        };
+        // Ask is a hard read-only capability policy; Edit exposes the normal project-scoped tools
+        // and still respects the workspace's persisted approval policy.
+        let task = task_create_with_agent(
             &self.state,
             Some(&workspace),
             &title,
             &goal,
-            "ask",
+            mode,
             provider_name.as_deref(),
+            Some("r_code"),
         )
         .await
-        .map_err(|_| "R-Code could not create a read-only task")?;
+        .map_err(|_| "R-Code could not create the delegated task")?;
         self.owned_tasks.lock().await.insert(task.id.clone());
         if let Err(error) = agent_send(&self.state, &task.id, &goal).await {
             tracing::warn!(task_id = %task.id, "MCP native delegate could not start: {error}");
@@ -214,7 +246,11 @@ impl McpService {
         }
 
         let wait_seconds = wait_seconds(arguments)?;
-        self.wait_task(&task.id, wait_seconds).await
+        let mut result = self.wait_task(&task.id, wait_seconds).await?;
+        if let Some(object) = result.as_object_mut() {
+            object.insert("access_mode".to_string(), json!(requested_access));
+        }
+        Ok(result)
     }
 
     async fn task_status(&self, arguments: &Value) -> Result<Value, &'static str> {
@@ -405,8 +441,26 @@ fn compact(text: &str, max_chars: usize) -> String {
 fn tool_catalog() -> Vec<Value> {
     vec![
         json!({
+            "name": "r_code_delegate",
+            "description": "Start an R-Code child-agent task in a workspace already opened by the user. Defaults to a hard read-only capability boundary. Use full_access only when the user or parent task explicitly authorizes file edits or commands; the authorization string is mandatory and the workspace approval policy still applies.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "workspace_path": { "type": "string", "description": "Canonical path of a workspace already opened in R-Code." },
+                    "goal": { "type": "string", "description": "Concrete bounded task for the R-Code child agent." },
+                    "title": { "type": "string", "description": "Optional short task label." },
+                    "provider_name": { "type": "string", "description": "Optional R-Code provider profile." },
+                    "access": { "type": "string", "enum": ["read_only", "full_access"], "default": "read_only" },
+                    "authorization": { "type": "string", "description": "Required for full_access: cite the explicit user or parent-task authorization for edits/commands." },
+                    "wait_seconds": { "type": "integer", "minimum": 0, "maximum": 55, "description": "How long to wait for a result; defaults to 45." }
+                },
+                "required": ["workspace_path", "goal"]
+            }
+        }),
+        json!({
             "name": "r_code_delegate_readonly",
-            "description": "Start a read-only R-Code Agent task in a workspace already opened by the user in R-Code. The task cannot edit files, run shell commands, or create further agents. Returns a task id and, when it finishes within wait_seconds, its concise result.",
+            "description": "Compatibility alias for r_code_delegate with access=read_only. The task cannot edit files, run shell commands, or create further agents.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -461,12 +515,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_exposes_only_the_readonly_delegation_surface() {
+    fn catalog_exposes_default_readonly_and_explicit_elevation() {
         let tools = tool_catalog();
-        assert_eq!(tools.len(), 4);
+        assert_eq!(tools.len(), 5);
         let delegate = tools
             .iter()
-            .find(|tool| tool["name"] == "r_code_delegate_readonly")
+            .find(|tool| tool["name"] == "r_code_delegate")
             .unwrap();
         let required = delegate["inputSchema"]["required"].as_array().unwrap();
         assert!(required.contains(&Value::String("workspace_path".to_string())));
@@ -474,7 +528,14 @@ mod tests {
         assert!(delegate["description"]
             .as_str()
             .unwrap()
-            .contains("cannot edit"));
+            .contains("read-only"));
+        assert!(delegate["inputSchema"]["properties"]["access"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("full_access".to_string())));
+        assert!(tools
+            .iter()
+            .any(|tool| tool["name"] == "r_code_delegate_readonly"));
     }
 
     #[test]
@@ -524,6 +585,6 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 5);
     }
 }

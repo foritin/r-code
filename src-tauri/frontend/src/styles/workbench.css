@@ -17,6 +17,28 @@
   grid-template-areas: "convo splitter canvas";
 }
 
+/* 8px remains an easy drag target; only the centered 1px rule is visible. */
+#app.scene-room .scene-room.workbench-docked .convo {
+  border-right: 0;
+}
+
+#app.scene-room .scene-room.workbench-docked .workbench {
+  border-left: 0;
+}
+
+#app.scene-room .scene-room.workbench-docked .room-splitter {
+  background: transparent;
+}
+
+#app.scene-room .scene-room.workbench-docked .room-splitter::before,
+#app.scene-room .scene-room.workbench-docked .room-splitter:hover::before,
+#app.scene-room .scene-room.workbench-docked .room-splitter:focus-visible::before,
+#app.scene-room .scene-room.workbench-docked.is-split-dragging .room-splitter::before {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
 #app.scene-room .scene-room.workbench-hidden {
   grid-template-columns: minmax(0, 1fr);
   grid-template-areas: "convo";
@@ -148,15 +170,42 @@
   background: var(--bg-panel);
 }
 
-.workbench-active-tab {
+.workbench-tabs {
+  display: flex;
+  align-self: stretch;
+  min-width: 0;
+  max-width: min(62%, 620px);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.workbench-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.workbench-tab {
   display: flex;
   align-items: center;
   align-self: stretch;
   gap: 8px;
-  min-width: 132px;
-  max-width: 260px;
+  min-width: 118px;
+  max-width: 220px;
+  flex: 0 1 190px;
   padding: 0 5px 0 10px;
-  border-bottom: 2px solid var(--accent);
+  border-bottom: 2px solid transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.workbench-tab:hover,
+.workbench-tab:focus-visible {
+  background: var(--bg-chip);
+  color: var(--fg);
+  outline: none;
+}
+
+.workbench-active-tab {
+  border-bottom-color: var(--accent);
   color: var(--fg);
 }
 
@@ -172,12 +221,16 @@
   background: var(--bg-chip);
 }
 
-.workbench-active-tab > svg {
+.workbench-tab > svg {
   flex: none;
+  color: var(--fg-faint);
+}
+
+.workbench-active-tab > svg {
   color: var(--accent);
 }
 
-.workbench-active-tab strong {
+.workbench-tab strong {
   min-width: 0;
   overflow: hidden;
   flex: 1;

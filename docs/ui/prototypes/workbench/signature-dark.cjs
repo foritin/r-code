@@ -27,7 +27,7 @@ const signatureDarkCss = String.raw`
     --danger: #df6b62;
 
     --prototype-sidebar: #1c1918;
-    --prototype-sidebar-glow: rgba(244, 116, 43, .10);
+    --prototype-sidebar-glow: rgba(244, 116, 43, .045);
     --prototype-link: #f0a262;
     --prototype-command: #92928b;
     --prototype-user: #20211e;
@@ -39,8 +39,8 @@ const signatureDarkCss = String.raw`
   :root[data-prototype-signature="r-code"] #app.app-shell {
     background-color: var(--prototype-sidebar) !important;
     background-image:
-      linear-gradient(90deg, rgba(244, 116, 43, .045), transparent 72%),
-      radial-gradient(72% 76% at 2% 100%, rgba(196, 74, 35, .16), transparent 67%) !important;
+      linear-gradient(90deg, rgba(244, 116, 43, .018), transparent 72%),
+      radial-gradient(72% 76% at 2% 100%, rgba(196, 74, 35, .065), transparent 67%) !important;
   }
 
   :root[data-prototype-signature="r-code"] #app.app-shell .main {
@@ -83,17 +83,20 @@ const signatureDarkCss = String.raw`
     padding-inline: 12px 9px;
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-desktop-nav {
+  :root[data-prototype-signature="r-code"] .prototype-desktop-nav,
+  :root[data-prototype-signature="r-code"] .desktop-navigation {
     gap: 10px;
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-history-actions {
+  :root[data-prototype-signature="r-code"] .prototype-history-actions,
+  :root[data-prototype-signature="r-code"] .desktop-history-actions {
     gap: 4px;
     padding-right: 9px;
     border-right: 1px solid rgba(255, 255, 255, .055);
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-desktop-button {
+  :root[data-prototype-signature="r-code"] .prototype-desktop-button,
+  :root[data-prototype-signature="r-code"] .desktop-nav-button {
     height: 27px;
     padding-inline: 7px;
     border-radius: 4px;
@@ -104,14 +107,18 @@ const signatureDarkCss = String.raw`
     letter-spacing: .055em;
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-history-button {
+  :root[data-prototype-signature="r-code"] .prototype-history-button,
+  :root[data-prototype-signature="r-code"] .desktop-history-button {
     width: 27px;
     padding: 0;
   }
 
   :root[data-prototype-signature="r-code"] .prototype-desktop-button:hover,
   :root[data-prototype-signature="r-code"] .prototype-desktop-button:focus-visible,
-  :root[data-prototype-signature="r-code"] .prototype-desktop-button[aria-expanded="true"] {
+  :root[data-prototype-signature="r-code"] .prototype-desktop-button[aria-expanded="true"],
+  :root[data-prototype-signature="r-code"] .desktop-nav-button:hover,
+  :root[data-prototype-signature="r-code"] .desktop-nav-button:focus-visible,
+  :root[data-prototype-signature="r-code"] .desktop-nav-button[aria-expanded="true"] {
     background: rgba(244, 116, 43, .08);
     color: var(--fg);
   }
@@ -515,11 +522,12 @@ const signatureDarkCss = String.raw`
     background: transparent;
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-agent-row + .prototype-agent-row {
-    border-top-color: rgba(255, 255, 255, .06);
+  :root[data-prototype-signature="r-code"] .prototype-agent-row.is-running {
+    background: transparent;
   }
 
-  :root[data-prototype-signature="r-code"] .prototype-agent-row.is-running {
+  :root[data-prototype-signature="r-code"] .prototype-agent-row:hover,
+  :root[data-prototype-signature="r-code"] .prototype-agent-row:focus-visible {
     background: linear-gradient(90deg, rgba(244, 116, 43, .075), transparent 72%);
   }
 

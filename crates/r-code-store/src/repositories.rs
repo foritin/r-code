@@ -8,9 +8,10 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{
-    AgentKind, AgentRun, AgentRunRuntimeKind, Notification, NotificationKind, ProjectAccessMode,
-    QueuedMessage, QueuedMessageState, ReviewState, SessionBranch, Task, TaskEvent, TaskEventType,
-    TaskMode, TaskState, ToolCall, ToolCallStatus, Workspace,
+    AgentEngine, AgentKind, AgentRun, AgentRunRuntimeKind, Notification, NotificationKind,
+    ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState, SessionBranch,
+    SubagentAccessMode, Task, TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall,
+    ToolCallStatus, Workspace,
 };
 use r_code_core::error::ProductError;
 use rusqlite::params;
@@ -114,8 +115,8 @@ fn parse_access_mode(s: &str) -> Result<ProjectAccessMode, ProductError> {
 
 /// 将数据库行映射为 `Task`。
 ///
-/// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model
-/// 注意：model 追加在末尾（索引 10），以免位移既有列索引。
+/// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path,
+/// created_at, updated_at, model, agent_engine, inference_json。
 fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
     let mode_str: String = row.get(5).map_err(db_err)?;
     let mode = parse_task_mode(&mode_str)?;
@@ -126,6 +127,14 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
     let created_at = parse_ts(&created_str)?;
     let updated_str: String = row.get(9).map_err(db_err)?;
     let updated_at = parse_ts(&updated_str)?;
+    let engine_str: String = row.get(11).map_err(db_err)?;
+    let agent_engine = AgentEngine::try_from_str(&engine_str).ok_or_else(|| {
+        ProductError::DatabaseError(format!("invalid task agent engine: {engine_str}"))
+    })?;
+    let inference_json: String = row.get(12).map_err(db_err)?;
+    let inference = serde_json::from_str(&inference_json).map_err(|error| {
+        ProductError::DatabaseError(format!("invalid task inference_json: {error}"))
+    })?;
 
     Ok(Task {
         id: row.get(0).map_err(db_err)?,
@@ -139,6 +148,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
         created_at,
         updated_at,
         model: row.get(10).map_err(db_err)?,
+        agent_engine,
+        inference,
     })
 }
 
@@ -146,7 +157,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
 ///
 /// 列顺序：id, task_id, branch_id, parent_run_id, agent_kind, agent_label,
 /// delegated_by_tool_call_id, model, runtime_kind, external_session_id, review_state,
-/// started_at, ended_at, usage_json, summary
+/// started_at, ended_at, usage_json, summary, access_mode, routing_reason
 fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
     let agent_kind_str: String = row.get(4).map_err(db_err)?;
     let agent_kind = parse_agent_kind(&agent_kind_str)?;
@@ -167,6 +178,16 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
         Some(s) => Some(parse_ts(&s)?),
         None => None,
     };
+    let access_mode_str: String = row.get(15).map_err(db_err)?;
+    let access_mode = match access_mode_str.as_str() {
+        "read_only" => SubagentAccessMode::ReadOnly,
+        "full_access" => SubagentAccessMode::FullAccess,
+        value => {
+            return Err(ProductError::DatabaseError(format!(
+                "invalid subagent access mode: {value}"
+            )))
+        }
+    };
 
     Ok(AgentRun {
         id: row.get(0).map_err(db_err)?,
@@ -178,6 +199,8 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
         delegated_by_tool_call_id: row.get(6).map_err(db_err)?,
         model: row.get(7).map_err(db_err)?,
         runtime_kind,
+        access_mode,
+        routing_reason: row.get(16).map_err(db_err)?,
         external_session_id: row.get(9).map_err(db_err)?,
         review_state,
         started_at,
@@ -275,8 +298,8 @@ impl<'a> TaskRepository<'a> {
     pub fn create(&self, task: &Task) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 task.id,
                 task.workspace_path,
@@ -289,6 +312,10 @@ impl<'a> TaskRepository<'a> {
                 task.created_at.to_rfc3339(),
                 task.updated_at.to_rfc3339(),
                 task.model,
+                task.agent_engine.to_string(),
+                serde_json::to_string(&task.inference).map_err(|error| {
+                    ProductError::DatabaseError(format!("serialize task inference: {error}"))
+                })?,
             ],
         )
         .map_err(db_err)?;
@@ -300,7 +327,7 @@ impl<'a> TaskRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model \
+                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json \
                  FROM tasks WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -320,7 +347,7 @@ impl<'a> TaskRepository<'a> {
     ) -> Result<Vec<Task>, ProductError> {
         let conn = self.db.conn()?;
         let mut sql = String::from(
-            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model \
+            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json \
              FROM tasks WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -386,6 +413,24 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
+    /// 保存会话级模型推理参数。空对象表示完全沿用服务默认值。
+    pub fn set_inference(
+        &self,
+        id: &str,
+        inference: &hermes_core::InferenceOptions,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        let inference_json = serde_json::to_string(inference).map_err(|error| {
+            ProductError::DatabaseError(format!("serialize task inference: {error}"))
+        })?;
+        conn.execute(
+            "UPDATE tasks SET inference_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![inference_json, Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     /// 绑定会话在后续运行中使用的模型服务。`None` 仅用于兼容旧会话回退全局默认。
     pub fn set_provider_name(
         &self,
@@ -396,6 +441,21 @@ impl<'a> TaskRepository<'a> {
         conn.execute(
             "UPDATE tasks SET provider_name = ?1, updated_at = ?2 WHERE id = ?3",
             params![provider_name, Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// 切换会话的主 Agent 引擎；调用方负责确保任务当前没有活跃运行。
+    pub fn set_agent_engine(
+        &self,
+        id: &str,
+        agent_engine: AgentEngine,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET agent_engine = ?1, updated_at = ?2 WHERE id = ?3",
+            params![agent_engine.to_string(), Utc::now().to_rfc3339(), id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -479,8 +539,8 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "INSERT INTO agent_runs \
              (id, task_id, branch_id, parent_run_id, agent_kind, agent_label, summary, delegated_by_tool_call_id, \
-              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, access_mode, routing_reason) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 run.id,
                 run.task_id,
@@ -497,6 +557,8 @@ impl<'a> AgentRunRepository<'a> {
                 run.started_at.to_rfc3339(),
                 run.ended_at.map(|dt| dt.to_rfc3339()),
                 run.usage_json,
+                run.access_mode.to_string(),
+                run.routing_reason,
             ],
         )
         .map_err(db_err)?;
@@ -509,7 +571,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -526,7 +588,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -547,7 +609,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
             )
             .map_err(db_err)?;
@@ -569,7 +631,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -587,7 +649,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
             )
@@ -609,7 +671,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 \
                    AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
@@ -639,7 +701,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' \
                    AND model <> ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
@@ -666,7 +728,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND model = ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
             )
@@ -1607,6 +1669,24 @@ mod tests {
         assert!(fetched.worktree_path.is_none());
         assert_eq!(fetched.created_at, task.created_at);
         assert_eq!(fetched.updated_at, task.updated_at);
+    }
+
+    #[test]
+    fn test_task_inference_round_trip() {
+        let db = setup_db();
+        let repo = TaskRepository::new(&db);
+        let task = Task::new(Some("/proj".into()), "Inference", "Run", TaskMode::Auto);
+        repo.create(&task).unwrap();
+        let inference = hermes_core::InferenceOptions {
+            thinking: Some("enabled".into()),
+            reasoning_effort: Some("high".into()),
+            verbosity: Some("low".into()),
+        };
+
+        repo.set_inference(&task.id, &inference).unwrap();
+
+        let fetched = repo.get(&task.id).unwrap().unwrap();
+        assert_eq!(fetched.inference, inference);
     }
 
     #[test]

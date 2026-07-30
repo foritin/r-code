@@ -11,7 +11,7 @@ use rusqlite::Connection;
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 11;
+pub const LATEST_SCHEMA_VERSION: u32 = 13;
 
 /// 运行所有待执行的 migration。
 pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
@@ -46,6 +46,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
         (9, MIGRATION_009),
         (10, MIGRATION_010),
         (11, MIGRATION_011),
+        (12, MIGRATION_012),
+        (13, MIGRATION_013),
     ];
 
     for (version, sql) in migrations {
@@ -408,6 +410,27 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_runtime_kind
 CREATE INDEX IF NOT EXISTS idx_agent_runs_external_session
     ON agent_runs(external_session_id)
     WHERE external_session_id IS NOT NULL;
+"#;
+
+/// Migration 012: 会话级主 Agent 引擎与可审计的委派策略元数据。
+///
+/// 旧会话仍由 R-Code 执行；旧子运行按最小权限显示为只读。路由理由只保存策略
+/// 结论（例如“复杂任务优先 Codex”），不保存任何模型私有推理。
+const MIGRATION_012: &str = r#"
+ALTER TABLE tasks ADD COLUMN agent_engine TEXT NOT NULL DEFAULT 'r_code';
+CREATE INDEX IF NOT EXISTS idx_tasks_agent_engine
+    ON tasks(agent_engine, updated_at DESC);
+
+ALTER TABLE agent_runs ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'read_only';
+ALTER TABLE agent_runs ADD COLUMN routing_reason TEXT;
+"#;
+
+/// Migration 013: 会话级模型推理参数。
+///
+/// JSON 只保存用户显式覆盖的 thinking / reasoning_effort / verbosity；空对象表示
+/// 完全沿用模型服务默认值，确保旧会话与未知兼容网关不会收到额外参数。
+const MIGRATION_013: &str = r#"
+ALTER TABLE tasks ADD COLUMN inference_json TEXT NOT NULL DEFAULT '{}';
 "#;
 
 #[cfg(test)]

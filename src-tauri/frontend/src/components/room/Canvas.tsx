@@ -41,11 +41,16 @@ import type {
   TerminalInfo,
   VerificationRecord,
 } from "../../lib/types";
-import { useAppStore, type CanvasTab } from "../../store/app";
+import {
+  useAppStore,
+  workbenchToolTab,
+  type CanvasTab,
+  type WorkbenchToolTab,
+} from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
 import { useArmedAction } from "../../lib/hooks";
-import { isTypingTarget, useSceneKeys } from "../../lib/keys";
+import { isTypingTarget, keyLabel, useGlobalKeys, useSceneKeys } from "../../lib/keys";
 import {
   clockSeconds,
   clockTime,
@@ -91,12 +96,16 @@ interface Props {
   onAbortSubagent: (subagentId: string) => Promise<void>;
 }
 
-const TABS: { id: Exclude<CanvasTab, "changes">; openTab: CanvasTab; label: string; description: string; shortcut: string }[] = [
-  { id: "summary", openTab: "summary", label: "运行与子代理", description: "查看运行状态、会话记录和子代理进度", shortcut: "Alt 1" },
-  { id: "terminal", openTab: "terminal", label: "终端", description: "打开任务级持久终端会话", shortcut: "Alt 2" },
-  { id: "files", openTab: "files", label: "文件", description: "浏览并编辑当前工作区文件", shortcut: "Alt 3" },
-  { id: "review", openTab: "changes", label: "审核", description: "检查差异、运行验证并决定是否接受", shortcut: "Alt 4" },
+const shortcutLabel = (action: Parameters<typeof keyLabel>[0]) => keyLabel(action).split(" ").join("+");
+
+const TABS: { id: WorkbenchToolTab; openTab: CanvasTab; label: string; description: string; shortcut: string }[] = [
+  { id: "summary", openTab: "summary", label: "运行与子代理", description: "查看运行状态、会话记录和子代理进度", shortcut: shortcutLabel("workbenchSummary") },
+  { id: "terminal", openTab: "terminal", label: "终端", description: "打开任务级持久终端会话", shortcut: shortcutLabel("workbenchTerminal") },
+  { id: "files", openTab: "files", label: "文件", description: "浏览并编辑当前工作区文件", shortcut: shortcutLabel("workbenchFiles") },
+  { id: "review", openTab: "changes", label: "审核", description: "检查差异、运行验证并决定是否接受", shortcut: shortcutLabel("workbenchReview") },
 ];
+
+const EMPTY_WORKBENCH_TABS: readonly WorkbenchToolTab[] = [];
 
 // 仅保存纯 UI 会话状态；任务数据和终端进程仍由现有 store / IPC 持有。
 // 面板切走会卸载，因此在应用生命周期内按 task + tool 恢复选择和未保存草稿。
@@ -197,6 +206,8 @@ export function Canvas({
 }: Props) {
   const tab = useAppStore((s) => s.canvasTab);
   const setTab = useAppStore((s) => s.setCanvasTab);
+  const closeTab = useAppStore((s) => s.closeWorkbenchTab);
+  const openTabs = useAppStore((s) => s.workbenches[taskId]?.openTabs ?? EMPTY_WORKBENCH_TABS);
   const mode = useAppStore((s) => s.workbenchMode);
   const launcherOpen = useAppStore((s) => s.workbenchLauncherOpen);
   const showLauncher = useAppStore((s) => s.showWorkbenchLauncher);
@@ -216,14 +227,26 @@ export function Canvas({
   const workbenchBodyRef = useRef<HTMLDivElement>(null);
   const [launcherIndex, setLauncherIndex] = useState(0);
 
+  const activateTool = (tool: CanvasTab) => {
+    onCloseSubagents();
+    setTab(tool);
+    requestAnimationFrame(() => workbenchBodyRef.current?.focus());
+  };
+
   const openByShortcut = (event: KeyboardEvent, index: number) => {
     if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     const target = TABS[index];
     if (!target) return;
     event.preventDefault();
-    onCloseSubagents();
-    setTab(target.openTab);
+    activateTool(target.openTab);
   };
+
+  useGlobalKeys({
+    workbenchSummary: () => activateTool("summary"),
+    workbenchTerminal: () => activateTool("terminal"),
+    workbenchFiles: () => activateTool("files"),
+    workbenchReview: () => activateTool("changes"),
+  });
 
   useSceneKeys({
     Escape: (event) => {
@@ -252,13 +275,16 @@ export function Canvas({
     );
   }
 
-  const activeToolId = tab === "changes" ? "review" : tab;
-  const activeTool = TABS.find((item) => item.id === activeToolId) ?? TABS[0];
+  const activeToolId = workbenchToolTab(tab);
   const reviewIsPending = detail?.task.state === "review_ready";
   const subagentPageOpen = subagentPanelOpen && tab === "summary" && !launcherOpen;
-  const dismissWorkbench = () => {
+  const hideWorkbenchPanel = () => {
     onCloseSubagents();
     hideWorkbench(!launcherOpen && reviewIsPending && (tab === "review" || tab === "changes"));
+  };
+  const closeTool = (tool: WorkbenchToolTab) => {
+    if (tool === "summary") onCloseSubagents();
+    closeTab(tool);
   };
   const openLauncher = () => {
     onCloseSubagents();
@@ -269,11 +295,6 @@ export function Canvas({
   const dismissLauncher = () => {
     closeLauncher();
     requestAnimationFrame(() => launcherTriggerRef.current?.focus());
-  };
-  const openTool = (tool: CanvasTab) => {
-    onCloseSubagents();
-    setTab(tool);
-    requestAnimationFrame(() => workbenchBodyRef.current?.focus());
   };
   const onLauncherKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key === "Escape") {
@@ -311,23 +332,53 @@ export function Canvas({
           onSelect={onInspectSubagent}
           onBack={onBackToSubagents}
           onClose={onCloseSubagents}
+          onOpenLauncher={openLauncher}
+          onHide={hideWorkbenchPanel}
+          onToggleFocus={toggleFocus}
+          focused={mode === "focus"}
           onAbort={onAbortSubagent}
         />
       ) : (
         <>
         <header className="workbench-head">
-        <div className="workbench-active-tab">
-          {launcherOpen ? <IconSidebar width={15} height={15} /> : <ToolIcon tab={tab} width={15} height={15} />}
-          <strong>{launcherOpen ? "工具启动器" : activeTool.label}</strong>
-          <button
-            type="button"
-            className="workbench-tab-close"
-            data-testid="workbench-close"
-            onClick={dismissWorkbench}
-            aria-label={launcherOpen ? "关闭工具启动器" : `关闭${activeTool.label}`}
-          >
-            <IconClose width={13} height={13} />
-          </button>
+        <div className="workbench-tabs" role="tablist" aria-label="已打开的工作台工具">
+          {openTabs.map((toolId) => {
+            const tool = TABS.find((item) => item.id === toolId);
+            if (!tool) return null;
+            const selected = !launcherOpen && activeToolId === tool.id;
+            return (
+              <div
+                key={tool.id}
+                className={`workbench-tab${selected ? " workbench-active-tab" : ""}`}
+                role="tab"
+                tabIndex={selected ? 0 : -1}
+                aria-selected={selected}
+                aria-controls="workbench-panel"
+                onClick={() => activateTool(tool.openTab)}
+                onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                  event.preventDefault();
+                  activateTool(tool.openTab);
+                }}
+              >
+                <ToolIcon tab={tool.id} width={15} height={15} />
+                <strong>{tool.label}</strong>
+                <button
+                  type="button"
+                  className="workbench-tab-close"
+                  data-testid={selected ? "workbench-close" : undefined}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    closeTool(tool.id);
+                  }}
+                  aria-label={`关闭${tool.label}标签页`}
+                  title={`关闭${tool.label}`}
+                >
+                  <IconClose width={13} height={13} />
+                </button>
+              </div>
+            );
+          })}
         </div>
         <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开工具启动器" title="新增扩展" aria-pressed={launcherOpen}>
           <IconPlus width={16} height={16} />
@@ -341,7 +392,7 @@ export function Canvas({
         <button type="button" className="workbench-head-action" onClick={toggleFocus} aria-label={mode === "focus" ? "退出专注模式" : "专注工作台"} aria-pressed={mode === "focus"}>
           {mode === "focus" ? <IconChevronLeft width={15} height={15} /> : <IconMaximize width={15} height={15} />}
         </button>
-        <button type="button" className="workbench-head-action" onClick={dismissWorkbench} aria-label="隐藏工作台">
+        <button type="button" className="workbench-head-action" onClick={hideWorkbenchPanel} aria-label="隐藏工作台">
           <IconSidebar width={16} height={16} />
         </button>
         </header>
@@ -361,7 +412,7 @@ export function Canvas({
                     type="button"
                     className="workbench-launcher-row"
                     onFocus={() => setLauncherIndex(index)}
-                    onClick={() => openTool(tool.openTab)}
+                    onClick={() => activateTool(tool.openTab)}
                   >
                     <span className="workbench-launcher-glyph"><ToolIcon tab={tool.id} width={17} height={17} /></span>
                     <span><strong>{tool.label}</strong><small>{tool.description}</small></span>

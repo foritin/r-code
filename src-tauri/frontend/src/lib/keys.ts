@@ -20,7 +20,11 @@ export type KeyAction =
   | "shortcuts"
   | "zoomIn"
   | "zoomOut"
-  | "zoomReset";
+  | "zoomReset"
+  | "workbenchSummary"
+  | "workbenchTerminal"
+  | "workbenchFiles"
+  | "workbenchReview";
 
 interface KeyBinding {
   /** e.key.toLowerCase() 的匹配集合 */
@@ -31,6 +35,7 @@ interface KeyBinding {
   /** 是否需要 Ctrl/Cmd */
   mod: boolean;
   shift?: boolean;
+  alt?: boolean;
 }
 
 export const KEYMAP: Record<KeyAction, KeyBinding> = {
@@ -43,6 +48,10 @@ export const KEYMAP: Record<KeyAction, KeyBinding> = {
   zoomIn: { keys: ["=", "+"], label: "+", description: "放大", mod: true },
   zoomOut: { keys: ["-"], label: "−", description: "缩小", mod: true },
   zoomReset: { keys: ["0"], label: "0", description: "重置缩放", mod: true },
+  workbenchSummary: { keys: ["s"], label: "S", description: "运行与子代理", mod: true, alt: true },
+  workbenchTerminal: { keys: ["`"], label: "`", description: "任务终端", mod: true },
+  workbenchFiles: { keys: ["p"], label: "P", description: "任务文件", mod: true },
+  workbenchReview: { keys: ["g"], label: "G", description: "审核变更", mod: true, shift: true },
 };
 
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform || navigator.userAgent);
@@ -57,6 +66,7 @@ export function keyLabel(action: KeyAction): string {
   const binding = KEYMAP[action];
   const parts: string[] = [];
   if (binding.mod) parts.push(modLabel());
+  if (binding.alt) parts.push(IS_MAC ? "⌥" : "Alt");
   if (binding.shift) parts.push("Shift");
   parts.push(binding.label);
   return parts.join(" ");
@@ -78,6 +88,7 @@ export function useGlobalKeys(handlers: GlobalKeyHandlers): void {
 
       for (const [action, binding] of Object.entries(KEYMAP) as [KeyAction, KeyBinding][]) {
         if (!binding.keys.includes(key)) continue;
+        if (Boolean(binding.alt) !== e.altKey) continue;
         if (binding.shift && !e.shiftKey) continue;
         if (!binding.shift && e.shiftKey) continue;
         const isZoom = action === "zoomIn" || action === "zoomOut" || action === "zoomReset";

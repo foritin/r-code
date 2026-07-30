@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { providerCatalog, settingsGet } from "./ipc";
 import { errText } from "./format";
-import type { ProviderPreset } from "./types";
+import type { ProviderPreset, ProviderProtocol } from "./types";
 
 export interface ProviderChoice {
   name: string;
@@ -19,6 +19,8 @@ export interface ProviderChoice {
   /** 该服务下可选的模型（预设候选 + 配置值 + 用户自定义历史） */
   models: string[];
   ready: boolean;
+  /** 实际请求协议，用于只展示该线路真正支持的模型参数。 */
+  protocol?: ProviderProtocol;
 }
 
 /**
@@ -128,6 +130,7 @@ export function useProviders(deps: unknown[] = []): ProvidersState {
           model: model || preset?.model || name,
           models,
           ready: Boolean(response.provider_status?.[name]?.ready),
+          protocol: response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol,
         };
       });
       setChoices(next);

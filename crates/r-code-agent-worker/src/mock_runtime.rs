@@ -165,6 +165,7 @@ mod tests {
             goal: "do thing".to_string(),
             mode: TaskMode::Ask,
             model: model.map(|s| s.to_string()),
+            inference: Default::default(),
             context: vec![],
         }
     }

@@ -317,6 +317,20 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 11,
+            to_version: 12,
+            description: "Task agent engine and observable delegation routing metadata".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 12,
+            to_version: 13,
+            description: "Task-scoped model inference configuration".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

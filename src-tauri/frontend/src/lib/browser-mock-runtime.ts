@@ -8,6 +8,7 @@
 import type {
   AgentRun,
   ChangeDiff,
+  InferenceOptions,
   LogEntry,
   ProjectAccessMode,
   ProviderModelsInput,
@@ -18,6 +19,7 @@ import type {
   SessionMessage,
   Task,
   TaskDetail,
+  TaskAgentEngine,
   TaskMode,
   TerminalInfo,
   VerificationRecord,
@@ -138,13 +140,18 @@ function markTaskNotificationsRead(taskId: string): void {
 function createTask(args: MockArgs): Task {
   const createdAt = nowIso();
   const workspacePath = optionalStringArg(args, "workspacePath");
-  const providerName = optionalStringArg(args, "providerName") ?? browserMockSettings.config.default_provider ?? "codex";
+  const providerName = optionalStringArg(args, "providerName") ?? browserMockSettings.config.default_provider ?? "openai";
   const provider = browserMockSettings.config.providers?.[providerName];
+  const agentEngine = (optionalStringArg(args, "agentEngine") ??
+    browserMockSettings.config.orchestration?.default_agent_engine ??
+    "r_code") as TaskAgentEngine;
   const task: Task = {
     id: nextId("task"),
     workspace_path: workspacePath,
     provider_name: providerName,
+    agent_engine: agentEngine,
     model: provider?.model ?? null,
+    inference: {},
     title: stringArg(args, "title") || "新对话",
     goal: stringArg(args, "goal"),
     mode: (args.mode as TaskMode | undefined) ?? (workspacePath ? "edit" : "ask"),
@@ -221,7 +228,11 @@ function sendMessage(args: MockArgs): void {
     summary: task.workspace_path ? "已完成代码检查并准备变更" : "已完成本轮回答",
     delegated_by_tool_call_id: null,
     model: task.model ?? "gpt-5.6",
-    runtime_kind: "native",
+    runtime_kind: task.agent_engine === "codex" ? "codex_exec" : "native",
+    access_mode: "read_only",
+    routing_reason: task.agent_engine === "codex"
+      ? "该会话已选择 Codex 主 Agent"
+      : "该会话已选择 R-Code 主 Agent",
     external_session_id: null,
     review_state: task.workspace_path ? "pending" : "answered",
     started_at: timestamp,
@@ -261,10 +272,11 @@ function sendMessage(args: MockArgs): void {
   addEvent(detail, "run_ended");
 }
 
-function setTaskField(args: MockArgs, field: "workspace_path" | "provider_name" | "model" | "title"): Task {
+function setTaskField(args: MockArgs, field: "workspace_path" | "provider_name" | "agent_engine" | "model" | "title"): Task {
   const task = taskById(stringArg(args, "taskId"));
   if (field === "workspace_path") task.workspace_path = optionalStringArg(args, "workspacePath");
   if (field === "provider_name") task.provider_name = stringArg(args, "providerName");
+  if (field === "agent_engine") task.agent_engine = stringArg(args, "agentEngine") as TaskAgentEngine;
   if (field === "model") task.model = optionalStringArg(args, "model");
   if (field === "title") task.title = stringArg(args, "title").trim() || task.title;
   touchTask(task);
@@ -320,6 +332,8 @@ function delegateTask(args: MockArgs, runtime: AgentRun["runtime_kind"]): AgentR
     delegated_by_tool_call_id: nextId("delegate"),
     model: "gpt-5.6-sol",
     runtime_kind: runtime,
+    access_mode: "read_only",
+    routing_reason: "浏览器 Demo 中显式委派给 Codex",
     external_session_id: nextId("session"),
     review_state: "answered",
     started_at: timestamp,
@@ -523,8 +537,15 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return undefined;
     }
     case "cmd_task_set_workspace": return copy(setTaskField(args, "workspace_path"));
+    case "cmd_task_set_agent_engine": return copy(setTaskField(args, "agent_engine"));
     case "cmd_task_set_provider": return copy(setTaskField(args, "provider_name"));
     case "cmd_task_set_model": return copy(setTaskField(args, "model"));
+    case "cmd_task_set_inference": {
+      const task = taskById(stringArg(args, "taskId"));
+      task.inference = copy((args.inference as InferenceOptions | undefined) ?? {});
+      touchTask(task);
+      return copy(task);
+    }
     case "cmd_task_rename": return copy(setTaskField(args, "title"));
     case "cmd_task_fork_context": return copy(forkTask(stringArg(args, "taskId")));
     case "cmd_task_compact_context": {

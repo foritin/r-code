@@ -4,6 +4,7 @@
 //! 所有类型实现 `Serialize`/`Deserialize`，用于 SQLite 存储和 IPC 传输。
 
 use chrono::{DateTime, Utc};
+use hermes_core::InferenceOptions;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -32,6 +33,12 @@ pub struct Task {
     /// 本会话绑定的具体模型。为空时使用该服务在设置里配置的默认模型。
     #[serde(default)]
     pub model: Option<String>,
+    /// 本会话绑定的模型专属推理参数；空对象表示沿用模型服务默认值。
+    #[serde(default)]
+    pub inference: InferenceOptions,
+    /// 本会话的主 Agent 执行引擎。旧会话安全地回退到 R-Code 内置 Agent。
+    #[serde(default)]
+    pub agent_engine: AgentEngine,
     /// 用户可见标题
     pub title: String,
     /// 用户输入的目标描述
@@ -62,6 +69,8 @@ impl Task {
             workspace_path,
             provider_name: None,
             model: None,
+            inference: InferenceOptions::default(),
+            agent_engine: AgentEngine::RCode,
             title: title.into(),
             goal: goal.into(),
             mode,
@@ -69,6 +78,39 @@ impl Task {
             worktree_path: None,
             created_at: now,
             updated_at: now,
+        }
+    }
+}
+
+/// 会话级主 Agent 引擎。
+///
+/// 该选择只决定谁负责主循环；两种引擎都可通过显式、可审计的委派调用另一种
+/// Agent 作为子智能体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEngine {
+    /// R-Code 自研 provider runtime。
+    #[default]
+    RCode,
+    /// 本机已登录的官方 Codex CLI。
+    Codex,
+}
+
+impl std::fmt::Display for AgentEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RCode => write!(f, "r_code"),
+            Self::Codex => write!(f, "codex"),
+        }
+    }
+}
+
+impl AgentEngine {
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "r_code" | "native" => Some(Self::RCode),
+            "codex" | "codex_cli" => Some(Self::Codex),
+            _ => None,
         }
     }
 }
@@ -223,6 +265,27 @@ impl AgentRunRuntimeKind {
     }
 }
 
+/// 子智能体在一次委派中获得的工作区能力。
+///
+/// 委派默认只读；只有主智能体根据用户对话或明确的父任务要求传入
+/// `full_access` 时，子智能体才可使用写入与命令工具。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentAccessMode {
+    #[default]
+    ReadOnly,
+    FullAccess,
+}
+
+impl std::fmt::Display for SubagentAccessMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ReadOnly => write!(f, "read_only"),
+            Self::FullAccess => write!(f, "full_access"),
+        }
+    }
+}
+
 /// Agent Run DTO —— 一次 Agent 执行的生命周期记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
@@ -253,6 +316,12 @@ pub struct AgentRun {
     /// 实际执行此运行的驱动；历史记录缺省为 R-Code 内置 runtime。
     #[serde(default)]
     pub runtime_kind: AgentRunRuntimeKind,
+    /// 子智能体工作区能力；主运行保留默认值，仅用于统一 IPC 形状。
+    #[serde(default)]
+    pub access_mode: SubagentAccessMode,
+    /// 自动路由或显式选择该执行器的可见原因，不包含模型私有推理。
+    #[serde(default)]
+    pub routing_reason: Option<String>,
     /// 外部 Agent 的可恢复会话标识（例如 Codex thread ID）。
     ///
     /// 它不是凭据，也不会保存外部 Agent 的完整转录。
@@ -291,6 +360,8 @@ impl AgentRun {
             delegated_by_tool_call_id: None,
             model: model.into(),
             runtime_kind: AgentRunRuntimeKind::Native,
+            access_mode: SubagentAccessMode::ReadOnly,
+            routing_reason: None,
             external_session_id: None,
             review_state: ReviewState::Pending,
             started_at: Utc::now(),
@@ -1313,6 +1384,12 @@ pub struct AgentEventScope {
     /// 此子运行使用的模型或执行器标签；旧事件可能没有。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 本次委派的能力边界；旧事件安全地按只读处理。
+    #[serde(default)]
+    pub access_mode: SubagentAccessMode,
+    /// 为什么选择此子智能体执行器。仅记录策略结论，不记录思维链。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_reason: Option<String>,
 }
 
 /// 子代理的可观察生命周期状态。
@@ -1346,6 +1423,8 @@ impl std::fmt::Display for SubagentState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentActivityPhase {
+    /// 正在根据用户可见策略选择执行器或子智能体。
+    Routing,
     /// 正在准备或发送下一次模型请求。
     Requesting,
     /// 已开始向用户流式生成可见文本。
@@ -1358,6 +1437,8 @@ pub enum AgentActivityPhase {
     SteerAccepted,
     /// 已将引导合并到下一次模型请求。
     SteerApplied,
+    /// 正在进行显式配置的结果复核轮次。
+    Reviewing,
     /// 正在结束本次运行并持久化已可见输出。
     Finalizing,
 }
@@ -1393,6 +1474,9 @@ pub struct CreateSessionInput {
     pub mode: TaskMode,
     /// 模型名称（可选，使用默认）
     pub model: Option<String>,
+    /// 模型专属推理参数；空对象表示沿用 Provider 默认值。
+    #[serde(default)]
+    pub inference: InferenceOptions,
     /// 上下文引用（可选）
     pub context: Vec<ContextRef>,
 }
@@ -1406,6 +1490,7 @@ impl Default for CreateSessionInput {
             goal: String::new(),
             mode: TaskMode::Ask,
             model: None,
+            inference: InferenceOptions::default(),
             context: Vec::new(),
         }
     }
@@ -1692,15 +1777,18 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.runtime_kind, AgentRunRuntimeKind::Native);
         assert!(legacy.model.is_none());
+        assert_eq!(legacy.access_mode, SubagentAccessMode::ReadOnly);
 
         let codex = AgentEventScope {
             runtime_kind: AgentRunRuntimeKind::CodexExec,
             model: Some("codex-cli".to_string()),
+            access_mode: SubagentAccessMode::FullAccess,
             ..legacy
         };
         let encoded = serde_json::to_value(codex).unwrap();
         assert_eq!(encoded["runtime_kind"], "codex_exec");
         assert_eq!(encoded["model"], "codex-cli");
+        assert_eq!(encoded["access_mode"], "full_access");
     }
 
     #[test]

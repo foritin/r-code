@@ -147,7 +147,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       .sort((a, b) => a.started_at.localeCompare(b.started_at) || a.id.localeCompare(b.id))
       .map(
         (run) =>
-          `${run.id}:${run.started_at}:${run.ended_at ?? ""}:${run.review_state}:${run.model}:${run.agent_kind}:${run.agent_label ?? ""}:${run.summary ?? ""}`
+          `${run.id}:${run.started_at}:${run.ended_at ?? ""}:${run.review_state}:${run.model}:${run.agent_kind}:${run.agent_label ?? ""}:${run.access_mode}:${run.routing_reason ?? ""}:${run.summary ?? ""}`
       )
       .join("|")
   );

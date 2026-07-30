@@ -7,11 +7,11 @@
 :root {
   --signature-workspace-radius: 28px;
   --signature-sidebar: #1c1918;
-  --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.14);
-  --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.28);
-  --signature-sidebar-wash: rgba(244, 116, 43, 0.065);
-  --signature-corner-glow-hot: rgba(255, 139, 72, 0.38);
-  --signature-corner-glow-soft: rgba(216, 67, 33, 0.18);
+  --signature-sidebar-glow-hot: rgba(244, 116, 43, 0.06);
+  --signature-sidebar-glow-deep: rgba(176, 53, 34, 0.12);
+  --signature-sidebar-wash: rgba(244, 116, 43, 0.025);
+  --signature-corner-glow-hot: rgba(255, 139, 72, 0.18);
+  --signature-corner-glow-soft: rgba(216, 67, 33, 0.07);
   --signature-send-bg: var(--accent);
   --signature-send-bg-hover: #ff8642;
   --signature-keyline: color-mix(in srgb, var(--accent) 34%, var(--border));
@@ -89,7 +89,7 @@
   background-color: var(--signature-sidebar);
   background-image:
     radial-gradient(210px 172px at var(--rc-current-rail) var(--rc-topbar-h), var(--signature-corner-glow-hot) 0%, var(--signature-corner-glow-soft) 34%, transparent 74%),
-    radial-gradient(112% 72% at 18% 112%, var(--signature-sidebar-glow-deep) 0%, rgba(176, 53, 34, 0.13) 34%, transparent 72%),
+    radial-gradient(112% 72% at 18% 112%, var(--signature-sidebar-glow-deep) 0%, rgba(176, 53, 34, 0.05) 34%, transparent 72%),
     radial-gradient(82% 58% at -14% 28%, var(--signature-sidebar-glow-hot) 0%, transparent 73%),
     linear-gradient(90deg, var(--signature-sidebar-wash), transparent 78%);
 }
@@ -825,16 +825,18 @@
 #app.r-code-signature .subagent-list-row.status-running,
 #app.r-code-signature .subagent-list-row.status-queued,
 #app.r-code-signature .subagent-list-row.status-waiting_permission {
-  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 72%);
+  background: transparent;
 }
 
-#app.r-code-signature .subagent-list-row + .subagent-list-row {
-  border-top-color: var(--signature-divider);
+#app.r-code-signature .subagent-list-row:hover,
+#app.r-code-signature .subagent-list-row:focus-visible {
+  background: linear-gradient(90deg, var(--signature-accent-faint), transparent 72%);
 }
 
 #app.r-code-signature .subagent-page-status,
 #app.r-code-signature .subagent-complete-mark,
 #app.r-code-signature .subagent-incomplete-mark,
+#app.r-code-signature .subagent-session-permission,
 #app.r-code-signature .subagent-transcript-tool-icon {
   border-radius: 5px;
 }
@@ -845,6 +847,7 @@
 }
 
 #app.r-code-signature .subagent-runtime-log,
+#app.r-code-signature .subagent-tool-group,
 #app.r-code-signature .subagent-transcript-tool {
   border-color: var(--signature-divider);
 }
@@ -898,12 +901,12 @@
   display: none;
 }
 
-#app.r-code-signature .workbench-active-tab {
+#app.r-code-signature .workbench-tab {
   font-family: var(--font-display);
   letter-spacing: 0.035em;
 }
 
-#app.r-code-signature .workbench-active-tab strong {
+#app.r-code-signature .workbench-tab strong {
   font-weight: 620;
 }
 

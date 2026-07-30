@@ -88,11 +88,9 @@ impl PathGuard {
                     )))
                 }
             }
-            Err(err) if err.kind() == ErrorKind::NotFound => {
-                Err(ProductError::PathNotFound(format!(
-                    "path does not exist: {path:?}"
-                )))
-            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Err(ProductError::PathNotFound(
+                format!("path does not exist: {path:?}"),
+            )),
             Err(err) => Err(ProductError::PathEscape(format!(
                 "cannot canonicalize {path:?}: {err} (fail-closed)"
             ))),
@@ -356,10 +354,7 @@ mod tests {
         let target = root.path().join("does_not_exist.txt");
         assert!(!target.exists());
         let err = guard.resolve_existing(&target).unwrap_err();
-        assert!(
-            matches!(err, ProductError::PathNotFound(_)),
-            "got: {err:?}"
-        );
+        assert!(matches!(err, ProductError::PathNotFound(_)), "got: {err:?}");
     }
 
     #[test]

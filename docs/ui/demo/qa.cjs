@@ -46,6 +46,7 @@ const scenarios = [
   { name: 'room-review', query: 'state=review&task=review', selector: '.scene-room', workbench: { kind: 'review', mode: 'docked', section: 'review' } },
   { name: 'room-review-collapsed', query: 'state=review-collapsed&task=review', selector: '.scene-room', workbench: { mode: 'collapsed' } },
   { name: 'settings-providers', query: 'scene=settings&settings=providers', selector: '.settings-layout' },
+  { name: 'settings-agents', query: 'scene=settings&settings=agents', selector: '.settings-layout' },
   { name: 'settings-preferences', query: 'scene=settings&settings=preferences', selector: '.settings-layout' },
   { name: 'settings-diagnostics', query: 'scene=settings&settings=diagnostics', selector: '.settings-layout' },
   { name: 'settings-codex', query: 'scene=settings&settings=codex', selector: '.settings-layout' },
@@ -82,6 +83,8 @@ async function auditLayout(page, scenario, theme) {
     const workbenchRoot = document.querySelector('[data-testid="workbench-root"]');
     const workbenchPanel = document.querySelector('[data-testid="workbench-panel"]');
     const reviewRail = document.querySelector('[data-testid="review-collapsed"]');
+    const splitter = document.querySelector('.room-splitter');
+    const conversation = document.querySelector('.convo');
     const visibleControls = [...document.querySelectorAll('button, input, textarea, select, [tabindex]:not([tabindex="-1"])')]
       .filter((element) => {
         const style = getComputedStyle(element);
@@ -112,6 +115,10 @@ async function auditLayout(page, scenario, theme) {
         layout: workbenchRoot.dataset.workbenchLayout ?? null,
         panelCount: document.querySelectorAll('[data-testid="workbench-panel"]').length,
         railCount: document.querySelectorAll('[data-testid="review-collapsed"]').length,
+        splitterLineWidth: splitter ? getComputedStyle(splitter, '::before').width : null,
+        splitterHitWidth: splitter ? getComputedStyle(splitter).width : null,
+        conversationBorderRight: conversation ? getComputedStyle(conversation).borderRightWidth : null,
+        panelBorderLeft: workbenchPanel ? getComputedStyle(workbenchPanel).borderLeftWidth : null,
       } : null,
       outside,
       overflow: [
@@ -137,6 +144,10 @@ async function auditLayout(page, scenario, theme) {
       assert(audit.workbench.panelCount === 0 && audit.workbench.railCount === 1, `${scenario.name}: collapsed surface count`);
     } else {
       assert(audit.workbench.panelCount === 1 && audit.workbench.railCount === 0, `${scenario.name}: workbench surface count`);
+      assert(audit.workbench.splitterLineWidth === '1px', `${scenario.name}: visible splitter is ${audit.workbench.splitterLineWidth}`);
+      assert(Number.parseFloat(audit.workbench.splitterHitWidth) >= 8, `${scenario.name}: splitter hit target is ${audit.workbench.splitterHitWidth}`);
+      assert(audit.workbench.conversationBorderRight === '0px', `${scenario.name}: conversation keeps a duplicate divider`);
+      assert(audit.workbench.panelBorderLeft === '0px', `${scenario.name}: workbench keeps a duplicate divider`);
     }
   }
 }
@@ -269,6 +280,14 @@ async function runInteractions(browser, errors) {
   assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'hidden', 'terminal hide did not close workbench');
   await page.locator('.room-workbench-toggle').click();
   assert((await page.locator('.term-row.sel').first().innerText()) === selectedTerminalBefore, 'terminal selection was not restored');
+  await page.keyboard.press('Control+P');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'files', 'Ctrl+P did not open task files');
+  await page.keyboard.press('Control+Shift+G');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'review', 'Ctrl+Shift+G did not open review');
+  await page.keyboard.press('Control+Alt+S');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'summary', 'Ctrl+Alt+S did not open run summary');
+  await page.keyboard.press('Control+Backquote');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'terminal', 'Ctrl+` did not open terminal');
   const headerGap = await page.locator('.workbench-head').evaluate((header) => {
     const tab = header.querySelector('.workbench-active-tab')?.getBoundingClientRect();
     const add = header.querySelector('.workbench-add-button')?.getBoundingClientRect();
@@ -309,12 +328,22 @@ async function runInteractions(browser, errors) {
   assert(await page.locator('.subagent-page-status.status-completed').count() === 1, 'completed subagent status missing from detail header');
   assert(await page.locator('.subagent-page-header .subagent-avatar svg').count() === 1, 'subagent identity icon missing from detail header');
   assert(await page.locator('.subagent-runtime-log').count() === 1, 'subagent runtime telemetry disclosure missing');
-  assert(await page.locator('.subagent-transcript-message').count() >= 2, 'persisted Codex replies were not rendered as a transcript');
-  assert(await page.locator('.subagent-transcript-tool').count() === 2, 'Codex tool activity was not rendered in the detail transcript');
+  assert((await page.locator('.subagent-session-permission').innerText()).trim() === '只读', 'default subagent permission was not rendered as read-only');
+  assert(await page.locator('.subagent-transcript-message').count() === 3, 'streamed Codex reply fragments were not coalesced into coherent transcript blocks');
+  assert(await page.locator('.subagent-transcript-speaker').count() === 3, 'subagent identity was repeated for token fragments');
+  const transcriptText = await page.locator('.subagent-transcript').innerText();
+  assert(transcriptText.includes('我先沿共享状态的获取顺序做只读检查'), 'coalesced subagent response lost streamed text');
+  const subagentToolGroup = page.locator('.subagent-tool-group');
+  assert(await subagentToolGroup.count() === 1, 'consecutive subagent tools were not grouped');
+  assert((await subagentToolGroup.locator('.subagent-tool-group-head').innerText()).includes('运行了 2 项操作'), 'subagent tool group count missing');
+  assert((await subagentToolGroup.locator('.subagent-tool-group-head').innerText()).includes('1 项失败'), 'subagent tool failure summary missing');
+  await subagentToolGroup.locator('.subagent-tool-group-head').click();
+  assert(await page.locator('.subagent-transcript-tool').count() === 3, 'Codex tool activity was not rendered after group expansion');
   const completedTool = page.locator('.subagent-transcript-tool.state-ok').last();
   await completedTool.locator('.subagent-transcript-tool-head').click();
   assert(await completedTool.locator('.subagent-transcript-tool-body').isVisible(), 'Codex command output did not expand');
   assert((await completedTool.locator('.subagent-transcript-tool-body').innerText()).includes('8 passed'), 'real Codex command output was not exposed in the detail');
+  assert((await page.locator('.subagent-session-state').innerText()).includes('1 项操作失败'), 'completed run concealed partial tool failures');
   await page.locator('#app').screenshot({
     path: path.join(outputDir, 'room-subagent-detail-light.png'),
     animations: 'disabled',
@@ -328,6 +357,16 @@ async function runInteractions(browser, errors) {
   assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'subagents', 'subagent detail did not return to list');
   assert(await page.locator('.subagent-list-row').count() === 2, 'subagent list did not contain every run');
   assert(await page.locator('.subagent-list-section').count() === 2, 'subagent list did not separate active and completed runs');
+  assert(
+    JSON.stringify(await page.locator('.subagent-list-section > h3').allTextContents()) === JSON.stringify(['进行中 · 01', '已完成 · 01']),
+    'subagent group counts are not adjacent to their labels',
+  );
+  assert(await page.locator('.subagent-list-row .subagent-spinner, .subagent-list-row .subagent-complete-mark').count() === 0, 'subagent rows duplicated status beside time');
+  assert(/^\d+(?:m \d{2}s|s)$/.test((await page.locator('.subagent-list-row.status-running time').innerText()).trim()), 'running subagent did not show live elapsed time');
+  assert(/^(?:刚刚|\d+(?:分钟|小时|天|个月|年)前)$/.test((await page.locator('.subagent-list-row.status-completed time').innerText()).trim()), 'completed subagent did not show relative completion time');
+  assert(await page.getByTestId('subagent-tab-close').count() === 1, 'subagent workbench tab has no close action');
+  assert(await page.getByRole('button', { name: '打开工具启动器' }).count() === 1, 'subagent workbench header has no extension action');
+  assert(await page.getByRole('button', { name: '隐藏工作台' }).count() === 1, 'subagent workbench header has no hide action');
   await page.locator('#app').screenshot({
     path: path.join(outputDir, 'room-subagents-light.png'),
     animations: 'disabled',
@@ -338,7 +377,13 @@ async function runInteractions(browser, errors) {
   darkDetailPage.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
   await darkDetailPage.goto(`${sourceUrl}?state=run&task=queue&theme=dark&reset=1`, { waitUntil: 'load' });
   await waitReady(darkDetailPage, scenarios.find((scenario) => scenario.name === 'room-run'));
-  await darkDetailPage.locator('.timeline-subagent-chip.status-completed').first().click();
+  await darkDetailPage.locator('.sum-subagents-button').click();
+  await darkDetailPage.locator('#app').screenshot({
+    path: path.join(outputDir, 'room-subagents-dark.png'),
+    animations: 'disabled',
+  });
+  await darkDetailPage.locator('.subagent-list-row.status-completed').click();
+  await darkDetailPage.locator('.subagent-tool-group-head').click();
   await darkDetailPage.locator('.subagent-transcript-tool.state-ok').last().locator('.subagent-transcript-tool-head').click();
   await darkDetailPage.locator('#app').screenshot({
     path: path.join(outputDir, 'room-subagent-detail-dark.png'),
@@ -354,7 +399,8 @@ async function runInteractions(browser, errors) {
   assert(!auditText.includes('delegate_task') && !auditText.includes('collect_subagents'), 'workbench audit duplicated subagent protocol tools');
   await page.locator('.sum-subagents-button').click();
   assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'subagents', 'summary subagent entry did not open the list');
-  await page.getByRole('button', { name: '返回运行与子代理' }).click();
+  await page.getByTestId('subagent-tab-close').click();
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'summary', 'closing the subagent tab did not restore run summary');
   await page.getByRole('button', { name: '打开工具启动器' }).click();
   await page.locator('.workbench-launcher-row').filter({ hasText: '文件' }).click();
   await page.locator('.files-tree-row[title="README.md"]').click();
@@ -378,7 +424,7 @@ async function runInteractions(browser, errors) {
   await page.locator('.files-textarea').waitFor({ state: 'visible' });
   assert((await page.locator('.files-textarea').inputValue()).includes('任务 A 的未保存草稿'), 'returning task lost its draft');
 
-  progress('interaction review collapse and selection');
+  progress('interaction tab close fallback, launcher restore, and review collapse');
   await page.locator('.sidebar-task').filter({ hasText: '统一错误处理规范' }).click();
   await page.getByRole('button', { name: '打开工具启动器' }).click();
   await page.locator('.workbench-launcher-row').filter({ hasText: '审核' }).click();
@@ -389,7 +435,16 @@ async function runInteractions(browser, errors) {
   await page.getByRole('tab', { name: /变更/ }).click();
   assert((await page.locator('.chg-row.sel .chg-path').innerText()) === selectedChange, 'review selection did not survive section switch');
   await page.getByTestId('workbench-close').click();
-  assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'collapsed', 'pending review did not collapse');
+  assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'docked', 'closing one of multiple tabs hid the workbench');
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'files', 'closing the active tab did not select its left neighbor');
+  await page.getByTestId('workbench-close').click();
+  assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'hidden', 'closing the final tab did not hide the workbench');
+  await page.locator('.room-workbench-toggle').click();
+  assert(await page.getByTestId('workbench-panel').getAttribute('data-workbench-kind') === 'launcher', 'reopening an empty workbench revived a closed tool');
+  await page.locator('.workbench-launcher-row').filter({ hasText: '审核' }).click();
+  assert((await page.locator('.chg-row.sel .chg-path').innerText()) === selectedChange, 'reopened review did not restore its selection');
+  await page.getByRole('button', { name: '隐藏工作台' }).click();
+  assert(await workbenchRoot.getAttribute('data-workbench-mode') === 'collapsed', 'hiding a pending review did not collapse it');
   await page.getByRole('button', { name: '展开审核工作台' }).click();
   assert((await page.locator('.chg-row.sel .chg-path').innerText()) === selectedChange, 'collapsed review did not restore selection');
 
@@ -411,6 +466,33 @@ async function runInteractions(browser, errors) {
   const allowOnce = page.getByRole('button', { name: '允许一次', exact: true });
   await allowOnce.click();
   assert((await page.locator('.inbox-count').innerText()).trim() === '1 项', 'permission decision did not update inbox');
+
+  progress('interaction provider-specific model configuration');
+  await page.goto(`${sourceUrl}?state=run&task=review&theme=dark&reset=1`, { waitUntil: 'load' });
+  await waitReady(page, scenarios.find((scenario) => scenario.name === 'room-run'));
+  await page.locator('.model-config-trigger').click();
+  const providerConfig = page.getByRole('dialog', { name: '模型与推理配置' });
+  await providerConfig.waitFor({ state: 'visible' });
+  const providerConfigText = await providerConfig.innerText();
+  assert(providerConfigText.includes('DeepSeek'), 'DeepSeek provider label missing from task config');
+  assert(providerConfigText.includes('思考模式'), 'DeepSeek thinking control missing');
+  assert(providerConfigText.includes('推理强度'), 'DeepSeek reasoning control missing');
+  await providerConfig.locator('.model-config-row').filter({ hasText: '思考模式' }).click();
+  await providerConfig.locator('.menu-item').filter({ hasText: '关闭' }).click();
+  await page.waitForFunction(() => document.querySelector('.model-config-trigger')?.textContent?.includes('思考关闭'));
+
+  progress('interaction Codex model configuration');
+  await page.goto(`${sourceUrl}?state=run&task=complete&theme=dark&reset=1`, { waitUntil: 'load' });
+  await waitReady(page, scenarios.find((scenario) => scenario.name === 'room-run'));
+  await page.locator('.model-config-trigger').click();
+  const codexConfig = page.getByRole('dialog', { name: 'Codex 模型与推理配置' });
+  await codexConfig.waitFor({ state: 'visible' });
+  await codexConfig.locator('.model-config-row').filter({ hasText: '输出详略' }).click();
+  await codexConfig.locator('.menu-item').filter({ hasText: '详细' }).click();
+  await page.waitForFunction(() => {
+    const dialog = document.querySelector('[role="dialog"][aria-label="Codex 模型与推理配置"]');
+    return dialog?.textContent?.includes('输出详略') && dialog?.textContent?.includes('详细');
+  });
 
   await page.close();
 }

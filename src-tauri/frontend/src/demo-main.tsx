@@ -3,7 +3,15 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { CodexCliGateProvider } from "./components/codex/CodexCliGate";
-import { useAppStore, type CanvasTab, type Scene, type SettingsPane, type ThemeMode, type WorkbenchMode } from "./store/app";
+import {
+  useAppStore,
+  workbenchToolTab,
+  type CanvasTab,
+  type Scene,
+  type SettingsPane,
+  type ThemeMode,
+  type WorkbenchMode,
+} from "./store/app";
 import { useTasksStore } from "./store/tasks";
 import { browserMockDetails, browserMockTasks, browserMockWorkspaces } from "./lib/mock-data";
 import "./styles/tokens.css";
@@ -29,7 +37,7 @@ const SCENES = new Set<Scene>([
   "settings",
 ]);
 const TABS = new Set<CanvasTab>(["summary", "changes", "files", "terminal", "review"]);
-const SETTINGS_PANES = new Set<SettingsPane>(["providers", "preferences", "diagnostics", "codex"]);
+const SETTINGS_PANES = new Set<SettingsPane>(["providers", "agents", "preferences", "diagnostics", "codex"]);
 const THEMES = new Set<ThemeMode>(["light", "dark", "system"]);
 
 const TASK_ALIASES: Record<string, string> = {
@@ -135,6 +143,7 @@ useAppStore.setState({
     [route.currentTaskId]: {
       tab: route.canvasTab,
       lastTab: route.canvasTab,
+      openTabs: route.workbenchLauncherOpen ? [] : [workbenchToolTab(route.canvasTab)],
       mode: route.workbenchMode,
       launcherOpen: route.workbenchLauncherOpen,
     },

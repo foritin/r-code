@@ -29,6 +29,7 @@ import type {
   SettingsResponse,
   SupportBundlePreview,
   Task,
+  TaskAgentEngine,
   TaskDetail,
   TaskMode,
   TerminalInfo,
@@ -43,6 +44,7 @@ import type {
   CodexCliPreferences,
   CodexIntegrationStatus,
   ContextCompactionResult,
+  InferenceOptions,
 } from "./types";
 import {
   browserMockDetails,
@@ -87,8 +89,9 @@ export const taskCreate = (
   title: string,
   goal: string,
   mode: TaskMode,
-  providerName: string | null = null
-) => ipc<Task>("cmd_task_create", { workspacePath, title, goal, mode, providerName });
+  providerName: string | null = null,
+  agentEngine: TaskAgentEngine | null = null
+) => ipc<Task>("cmd_task_create", { workspacePath, title, goal, mode, providerName, agentEngine });
 
 export const taskList = (workspacePath?: string, includeArchived = false) =>
   ipc<Task[]>("cmd_task_list", { workspacePath, includeArchived });
@@ -105,9 +108,16 @@ export const taskSetWorkspace = (taskId: string, workspacePath: string | null) =
 export const taskSetProvider = (taskId: string, providerName: string) =>
   ipc<Task>("cmd_task_set_provider", { taskId, providerName });
 
+export const taskSetAgentEngine = (taskId: string, agentEngine: TaskAgentEngine) =>
+  ipc<Task>("cmd_task_set_agent_engine", { taskId, agentEngine });
+
 /** 切换会话使用的具体模型；传 null 回退到该服务的默认模型。 */
 export const taskSetModel = (taskId: string, model: string | null) =>
   ipc<Task>("cmd_task_set_model", { taskId, model });
+
+/** 修改会话的模型专属推理参数；省略字段时使用 Provider 默认值。 */
+export const taskSetInference = (taskId: string, inference: InferenceOptions) =>
+  ipc<Task>("cmd_task_set_inference", { taskId, inference });
 
 export const taskRename = (taskId: string, title: string) =>
   ipc<Task>("cmd_task_rename", { taskId, title });

@@ -41,6 +41,59 @@
 .model-menu.popover--scroll {  }
 .menu-item.model-custom-open { color: var(--fg-muted); }
 
+/* 一个紧凑入口承载模型及其专属参数；二级页替代横向级联，窄窗口也不会溢出。 */
+.model-config-menu { width: min(340px, calc(100vw - var(--sp-10))); }
+.model-config-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-5);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+.model-config-head > div { display: grid; min-width: 0; gap: var(--sp-1); }
+.model-config-head strong { color: var(--fg); font-size: var(--text-sm); }
+.model-config-head small,
+.model-config-head > span { color: var(--fg-faint); font-size: var(--text-meta); }
+.model-config-row,
+.model-config-back,
+.model-config-reset {
+  width: 100%; border: 0; background: transparent; color: var(--fg); cursor: pointer;
+  font: inherit; text-align: left;
+}
+.model-config-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto) auto;
+  align-items: center; gap: var(--sp-3); min-height: var(--control-h-lg);
+  padding: 0 var(--sp-4); border-radius: var(--radius-xs);
+}
+.model-config-row:hover,
+.model-config-back:hover,
+.model-config-reset:hover { background: var(--bg-chip); }
+.model-config-row > span:first-child { color: var(--fg); }
+.model-config-row strong {
+  max-width: 190px; overflow: hidden; color: var(--fg-muted); font-weight: var(--weight-normal);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.model-config-row > span:last-child { color: var(--fg-faint); font-size: var(--text-lg); }
+.model-config-note,
+.model-config-inline-error {
+  margin: var(--sp-3) var(--sp-4); color: var(--fg-faint); font-size: var(--text-meta);
+  line-height: var(--lh-normal);
+}
+.model-config-inline-error { color: var(--danger); }
+.model-config-back {
+  display: flex; align-items: center; gap: var(--sp-3); min-height: var(--control-h-lg);
+  margin-bottom: var(--sp-2); padding: 0 var(--sp-4); border-radius: var(--radius-xs);
+}
+.model-config-back > span { color: var(--fg-muted); }
+.model-config-reset { min-height: var(--control-h); padding: 0 var(--sp-4); border-radius: var(--radius-xs); color: var(--fg-muted); }
+.model-config-error { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); color: var(--danger); font-size: var(--text-sm); }
+.model-config-error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.model-switch-confirm {
+  display: flex; align-items: center; gap: var(--sp-4); margin: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4); border: 1px solid var(--edge-accent);
+  border-radius: var(--radius-sm); background: var(--tint-accent); font-size: var(--text-sm);
+}
+.model-switch-confirm > span { display: grid; min-width: 0; flex: 1; }
+.model-switch-confirm small { overflow: hidden; color: var(--fg-faint); text-overflow: ellipsis; white-space: nowrap; }
+.model-switch-confirm > div { display: flex; align-items: center; gap: var(--sp-3); }
+
 /* ---------- 输入区控件行 ----------
    与新对话页 .chat-composer-foot 同构：模型 / 权限 / 弹性空隙 / 发送。 */
 .comp-meta {
@@ -216,6 +269,10 @@
   width: 28px; height: 28px; padding: 0;
   border: 1px solid transparent; border-radius: var(--radius-xs);
   background: transparent; color: var(--fg-faint);
+}
+.comp-meta .model-config-trigger { max-width: min(330px, 100%); }
+.comp-meta .model-config-trigger small {
+  max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .task-actions-trigger:hover,
 .task-actions-trigger[aria-expanded="true"] { color: var(--fg); border-color: var(--border); background: var(--bg-chip); }
