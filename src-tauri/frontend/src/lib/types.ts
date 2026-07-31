@@ -14,6 +14,21 @@ export interface InferenceOptions {
   reasoning_effort?: string | null;
   verbosity?: "low" | "medium" | "high" | string | null;
 }
+
+export type AttachmentKind = "image" | "text" | "pdf";
+
+/** 发送给模型的内联附件；data 是不含 data: 前缀的标准 Base64。 */
+export interface AttachmentInput {
+  name: string;
+  mediaType: string;
+  data: string;
+}
+
+export interface SessionAttachmentMeta {
+  name: string;
+  media_type: string;
+  kind: AttachmentKind;
+}
 export type TaskState =
   | "idle"
   | "exploring"
@@ -427,6 +442,11 @@ export interface SessionMessage {
   role?: "user" | "assistant" | "system";
   /** message 的文本内容 */
   text?: string;
+  /** 图片正文仅返回元数据，绝不把 Base64 放进时间线 DTO。 */
+  image_count?: number;
+  image_media_types?: string[];
+  /** 附件只返回名称、类型和分类，不返回正文或 Base64。 */
+  attachments?: SessionAttachmentMeta[];
   /** tool_call：工具名与输入 */
   tool_name?: string;
   call_id?: string;
@@ -595,6 +615,9 @@ export interface CodexModelOption {
   description: string;
   default_reasoning_effort: string;
   supported_reasoning_efforts: CodexReasoningOption[];
+  /** 来自当前 Codex CLI 模型目录的 input_modalities，而不是前端猜测。 */
+  /** null 表示旧版 Codex CLI 没有提供 input_modalities。 */
+  supports_images: boolean | null;
 }
 
 export interface CodexCliPreferences {

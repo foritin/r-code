@@ -16,14 +16,20 @@ import {
 } from "./model-capabilities";
 
 interface Props {
-  taskId: string;
+  taskId: string | null;
   providerName: string | null;
   model: string | null;
   inference: InferenceOptions;
   choices: ProviderChoice[];
   fallback: string;
   running: boolean;
-  onChanged: () => void;
+  onChanged?: () => void;
+  onDraftChanged?: (selection: {
+    providerName: string;
+    model: string;
+    inference: InferenceOptions;
+  }) => void;
+  scopeLabel?: string;
   variant?: "bar" | "pill";
   openRequest?: number;
 }
@@ -51,6 +57,8 @@ export function ModelSwitcher({
   fallback,
   running,
   onChanged,
+  onDraftChanged,
+  scopeLabel,
   variant = "bar",
   openRequest,
 }: Props) {
@@ -66,17 +74,22 @@ export function ModelSwitcher({
   const normalized = normalizeInference(inference, capabilities);
 
   const applyModel = useAsyncAction(async (provider: ProviderChoice, nextModel: string) => {
-    if (provider.name !== active.name) await taskSetProvider(taskId, provider.name);
-    await taskSetModel(taskId, nextModel === provider.model ? null : nextModel);
+    if (taskId) {
+      if (provider.name !== active.name) await taskSetProvider(taskId, provider.name);
+      await taskSetModel(taskId, nextModel === provider.model ? null : nextModel);
+    } else {
+      onDraftChanged?.({ providerName: provider.name, model: nextModel, inference: {} });
+    }
     rememberModel(provider.name, nextModel);
     setPending(null);
     setView("root");
-    onChanged();
+    onChanged?.();
   }, { label: "切换模型" });
 
   const saveInference = useAsyncAction(async (next: InferenceOptions) => {
-    await taskSetInference(taskId, next);
-    onChanged();
+    if (taskId) await taskSetInference(taskId, next);
+    else onDraftChanged?.({ providerName: active.name, model: active.model, inference: next });
+    onChanged?.();
   }, { label: "保存模型配置" });
 
   const chooseModel = (provider: ProviderChoice, nextModel: string) => {
@@ -181,7 +194,7 @@ export function ModelSwitcher({
         {view === "root" ? (
           <>
             <div className="model-config-head">
-              <div><strong>{active.provider?.label ?? "模型配置"}</strong><small>仅作用于当前会话</small></div>
+              <div><strong>{active.provider?.label ?? "模型配置"}</strong><small>{scopeLabel ?? (taskId ? "仅作用于当前会话" : "仅作用于新对话")}</small></div>
               {saveInference.busy && <span>保存中…</span>}
             </div>
             <ConfigRow label="模型" value={active.model || "未配置"} onSelect={() => setView("models")} />

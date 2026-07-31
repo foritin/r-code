@@ -137,13 +137,13 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .top-icon { position: relative; display: grid; place-items: center; width: 32px; height: 32px; color: var(--fg-muted); border-radius: 7px; }
 .top-icon:hover, .top-icon.active { background: var(--bg-hover); color: var(--fg); }
 .top-icon.has-badge b { position: absolute; top: 2px; right: 0; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 8px; background: var(--accent); color: #fff; font: 700 9px/14px var(--font-ui); text-align: center; }
-.notification-menu { position: absolute; z-index: var(--z-popover); top: calc(100% + 8px); right: 0; width: min(360px, calc(100vw - 28px)); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-card); box-shadow: var(--shadow-popover); }
+.notification-menu { display: flex; width: min(360px, calc(100vw - 28px)); padding: 0; flex-direction: column; overflow: hidden; border-radius: 10px; }
 .notification-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 14px; border-bottom: 1px solid var(--border); }
 .notification-menu-head > div { display: grid; gap: 2px; }
 .notification-menu-head strong { color: var(--fg); font-size: 13px; }
 .notification-menu-head span { color: var(--fg-faint); font-size: 11px; }
 .notification-menu-head .text-link[disabled] { color: var(--fg-faint); cursor: default; }
-.notification-menu-list { display: grid; max-height: min(420px, 55vh); overflow: auto; }
+.notification-menu-list { display: grid; min-height: 0; flex: 1; overflow: auto; }
 .notification-menu-list > p { padding: 25px 15px; color: var(--fg-faint); font-size: 12px; text-align: center; }
 .notification-menu-item { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: start; gap: 9px; width: 100%; padding: 12px 14px; border-bottom: 1px solid var(--border); color: var(--fg-muted); text-align: left; }
 .notification-menu-item:hover { background: var(--bg-hover); }
@@ -527,7 +527,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .file-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font-size: 13px; }
 .file-search input::placeholder { color: var(--fg-faint); }
 .file-search kbd { color: var(--fg-faint); font-size: 10px; white-space: nowrap; }
-.file-search-results { position: absolute; z-index: var(--z-popover); top: calc(100% - 18px); right: 0; display: grid; width: min(360px, 100%); padding: 5px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-card); }
+.file-search-results { position: fixed; z-index: var(--z-popover); display: grid; padding: 5px; overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-card); box-shadow: var(--shadow-popover); }
 .file-search-results button { display: flex; align-items: center; min-height: 31px; gap: 8px; padding: 0 8px; border-radius: 5px; color: var(--fg-muted); font: 12px var(--font-mono); text-align: left; }
 .file-search-results button:hover { color: var(--fg); background: var(--bg-hover); }
 .file-search-results span { padding: 9px; color: var(--fg-faint); font-size: 12px; }
@@ -583,6 +583,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 
 /* Codex CLI 缺失时的全局门禁：固定命令、明确范围、一次确认。 */
 .codex-gate-backdrop {
+  --codex-gate-viewport-inset: 56px;
   position: fixed;
   inset: 0;
   z-index: var(--z-modal);
@@ -593,7 +594,10 @@ button, input, textarea, select { font-family: var(--font-ui); }
   backdrop-filter: blur(6px);
 }
 .codex-gate-dialog {
+  display: flex;
   width: min(520px, 100%);
+  max-height: calc(100dvh - var(--codex-gate-viewport-inset));
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 10px;
@@ -604,6 +608,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .codex-gate-head {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 12px;
   min-height: 72px;
   padding: 14px 18px;
@@ -625,7 +630,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .codex-gate-head h2 { margin-top: 3px; font: 600 19px/1.2 var(--font-display); letter-spacing: -.015em; }
 .codex-gate-close { display: grid; place-items: center; flex: none; width: 30px; height: 30px; margin-left: auto; border-radius: 6px; color: var(--fg-faint); }
 .codex-gate-close:hover { color: var(--fg); background: var(--bg-hover); }
-.codex-gate-body { display: grid; gap: 16px; padding: 20px 20px 18px; }
+.codex-gate-body { display: grid; min-height: 0; gap: 16px; padding: 20px 20px 18px; overflow-y: auto; }
 .codex-gate-body > p { max-width: 56ch; color: var(--fg-muted); font-size: 13px; line-height: 1.65; }
 .codex-install-command { display: flex; align-items: center; min-height: 42px; gap: 10px; padding: 0 7px 0 12px; border: 1px solid var(--border-strong); border-radius: 7px; background: var(--bg-inset); }
 .codex-install-command code { min-width: 0; flex: 1; overflow-x: auto; color: var(--fg); font: 12px var(--font-mono); white-space: nowrap; scrollbar-width: thin; }
@@ -643,7 +648,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .codex-gate-progress > span { position: relative; height: 2px; overflow: hidden; background: var(--border); }
 .codex-gate-progress > span i { position: absolute; inset: 0 auto 0 0; width: 38%; background: var(--accent); animation: codex-install-progress 1.2s var(--ease) infinite alternate; }
 .codex-gate-progress small { color: var(--fg-faint); font-size: 11px; }
-.codex-gate-actions { display: flex; justify-content: flex-end; min-height: 60px; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--bg-panel) 90%, var(--bg-inset)); }
+.codex-gate-actions { display: flex; justify-content: flex-end; min-height: 60px; flex: none; gap: 8px; padding: 13px 18px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--bg-panel) 90%, var(--bg-inset)); }
 .codex-gate-actions:empty { display: none; }
 .codex-gate-actions .btn { min-width: 92px; }
 @keyframes codex-install-progress { from { transform: translateX(-105%); } to { transform: translateX(265%); } }
@@ -669,7 +674,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 }
 
 @media (max-width: 760px) {
-  .codex-gate-backdrop { align-items: end; padding: 12px; }
+  .codex-gate-backdrop { --codex-gate-viewport-inset: 24px; align-items: end; padding: 12px; }
   .codex-gate-dialog { border-radius: 10px; }
   .codex-gate-actions { flex-wrap: wrap; }
   .codex-gate-actions .btn { flex: 1; min-width: 120px; }

@@ -42,6 +42,7 @@ reqwest = { workspace = true }
 # 序列化
 serde = { workspace = true }
 serde_json = { workspace = true }
+url = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 
@@ -53,6 +54,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs = { workspace = true }
 blake3 = { workspace = true }
+base64 = { workspace = true }
+tempfile = { workspace = true }
 
 # Tauri 桌面应用壳
 tauri = { workspace = true }
@@ -62,9 +65,6 @@ anyhow = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
-
-[dev-dependencies]
-tempfile = "3"
 
 [build-dependencies]
 tauri-build = { workspace = true }

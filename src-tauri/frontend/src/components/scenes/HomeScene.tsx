@@ -8,13 +8,18 @@ import {
   recoveryData,
   settingsGet,
   taskCreate,
+  taskSetInference,
+  taskSetModel,
   workspaceChoose,
   workspaceSetAccessMode,
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { errText } from "../../lib/format";
 import type {
+  CodexCliPreferences,
   CodexIntegrationStatus,
+  InferenceOptions,
+  AttachmentInput,
   ProjectAccessMode,
   RecoveryPageData,
   TaskAgentEngine,
@@ -24,7 +29,7 @@ import {
   projectAccessModeLabel,
 } from "../ProjectAccessSelector";
 import { useProviders, type ProviderChoice } from "../../lib/provider";
-import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
+import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
 import { SlashCommandMenu } from "../SlashCommandMenu";
 import { keyLabel } from "../../lib/keys";
@@ -48,6 +53,21 @@ import {
   IconSubagent,
   IconTerminal,
 } from "../icons";
+import { ModelSwitcher } from "../room/ModelSwitcher";
+import { CodexModelConfiguration } from "../room/CodexModelConfiguration";
+import {
+  AttachmentButton,
+  AttachmentTray,
+  firstBlockedAttachmentReason,
+  sendableAttachmentInputs,
+  useAttachments,
+  type DraftAttachment,
+} from "../Attachments";
+import {
+  attachmentCapabilityFor,
+  codexImageCapability,
+  imageCapabilityFor,
+} from "../room/model-capabilities";
 
 /**
  * 新对话页：Provider-first。
@@ -72,6 +92,9 @@ export function HomeScene() {
 
   const [goal, setGoal] = useState("");
   const [provider, setProvider] = useState<ProviderChoice | null>(null);
+  const [draftModel, setDraftModel] = useState<string | null>(null);
+  const [draftInference, setDraftInference] = useState<InferenceOptions>({});
+  const [codexPreferences, setCodexPreferences] = useState<CodexCliPreferences | null>(null);
   const [agentEngine, setAgentEngine] = useState<TaskAgentEngine>("r_code");
   const [codexStatus, setCodexStatus] = useState<CodexIntegrationStatus | null>(null);
   const [launching, setLaunching] = useState(false);
@@ -83,14 +106,37 @@ export function HomeScene() {
   const [commandNotice, setCommandNotice] = useState<string | null>(null);
   const [slashActive, setSlashActive] = useState(0);
   const [slashDismissed, setSlashDismissed] = useState(false);
-  const [providerMenuRequest, setProviderMenuRequest] = useState(0);
+  const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const attachments = useAttachments();
   const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
   // provider 列表可能在 HomeScene 重新挂载后的下一拍才写回本地选择；直接从
   // fallback 派生当前项，避免用户已输入目标但发送按钮短暂保持禁用。
   const activeProvider = provider ?? providerChoices.find((choice) => choice.name === fallback) ?? null;
+  const activeModel = draftModel ?? activeProvider?.model ?? "";
+  const imageCapability = agentEngine === "codex"
+    ? codexImageCapability(codexPreferences)
+    : imageCapabilityFor(activeProvider ?? undefined, activeModel);
+  const capabilityForAttachment = useCallback(
+    (attachment: DraftAttachment) => attachmentCapabilityFor(
+      attachment.kind,
+      imageCapability,
+      agentEngine,
+      activeProvider ?? undefined,
+    ),
+    [activeProvider, agentEngine, imageCapability],
+  );
+  const sendableAttachments = sendableAttachmentInputs(
+    attachments.attachments,
+    capabilityForAttachment,
+  );
+  const attachmentBlockedReason = firstBlockedAttachmentReason(
+    attachments.attachments,
+    capabilityForAttachment,
+  );
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
   const providerReady = activeProvider?.ready ?? false;
   const codexReady = Boolean(codexStatus?.integration_ready);
@@ -104,7 +150,10 @@ export function HomeScene() {
   };
   const slashItems = slashDismissed ? [] : matchingSlashCommands(goal, slashContext);
   const slashOpen = slashItems.length > 0;
-  const canSend = goal.trim().length > 0 && !launching && (engineReady || goal.trim().startsWith("/"));
+  const canSend = (goal.trim().length > 0 || sendableAttachments.length > 0)
+    && !launching
+    && !attachmentBlockedReason
+    && (engineReady || goal.trim().startsWith("/"));
 
   usePoll(async () => {
     await refreshTasks();
@@ -185,14 +234,11 @@ export function HomeScene() {
     }
   };
 
-  const chooseProvider = (choice: ProviderChoice) => {
-    if (!choice.ready) return;
-    setError(null);
-    // 新对话页的选择只作用于即将创建的会话，不能悄悄改写全局默认服务。
-    setProvider(choice);
-  };
-
-  const launchConversation = async (message: string, title: string) => {
+  const launchConversation = async (
+    message: string,
+    title: string,
+    files: AttachmentInput[] = [],
+  ) => {
     if (agentEngine === "r_code" && !providerReady) {
       setError("先连接并保存一个模型服务，随后即可直接开始聊天。");
       return;
@@ -212,15 +258,20 @@ export function HomeScene() {
       const task = await taskCreate(
         currentWorkspacePath,
         title.slice(0, 48),
-        message,
+        message || "分析附加文件",
         currentWorkspacePath ? "edit" : "ask",
         activeProvider?.name ?? null,
         agentEngine,
       );
+      if (agentEngine === "r_code" && activeProvider) {
+        if (activeModel && activeModel !== activeProvider.model) await taskSetModel(task.id, activeModel);
+        if (Object.keys(draftInference).length > 0) await taskSetInference(task.id, draftInference);
+      }
       stage = "发送消息";
-      await agentSend(task.id, message);
+      await agentSend(task.id, message, "auto", files);
       await refreshTasks().catch(() => {});
       setGoal("");
+      attachments.clear();
       openRoom(task.id);
     } catch (cause) {
       setError(`${stage}失败：${errText(cause)}`);
@@ -231,10 +282,15 @@ export function HomeScene() {
 
   const send = async () => {
     const text = goal.trim();
-    if (!text || launching) return;
-    const parsed = parseSlashCommand(text);
+    if (attachmentBlockedReason) {
+      setError(attachmentBlockedReason);
+      return;
+    }
+    if ((!text && sendableAttachments.length === 0) || launching) return;
+    const parsed = text ? parseSlashCommand(text) : null;
     if (!parsed) {
-      await launchConversation(text, text);
+      const title = text || `分析 ${sendableAttachments[0]?.name ?? "附加文件"}`;
+      await launchConversation(text, title, sendableAttachments);
       return;
     }
 
@@ -280,8 +336,7 @@ export function HomeScene() {
         return;
       case "model":
         setGoal("");
-        if (agentEngine === "codex") setSettingsPane("codex");
-        else setProviderMenuRequest((value) => value + 1);
+        setModelMenuRequest((value) => value + 1);
         return;
       case "search":
         setGoal("");
@@ -436,14 +491,16 @@ export function HomeScene() {
           </StatusBar>
         )}
 
-        <div className="chat-composer home-composer">
+        <div className="chat-composer home-composer" ref={composerRef}>
           {slashOpen && (
             <SlashCommandMenu
+              anchorRef={composerRef}
               value={goal}
               context={slashContext}
               activeIndex={slashActive}
               onActiveIndexChange={setSlashActive}
               onPick={pickSlash}
+              onDismiss={() => setSlashDismissed(true)}
             />
           )}
           <textarea
@@ -459,6 +516,7 @@ export function HomeScene() {
               setSlashActive(0);
               setSlashDismissed(false);
             }}
+            onPaste={attachments.onPaste}
             onKeyDown={(event) => {
               if (slashOpen) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -504,8 +562,14 @@ export function HomeScene() {
               }
             }}
           />
+          <AttachmentTray
+            attachments={attachments.attachments}
+            capabilityFor={capabilityForAttachment}
+            onRemove={attachments.remove}
+          />
           <div className="chat-composer-foot">
             <div className="composer-context">
+              <AttachmentButton onFiles={attachments.addFiles} disabled={launching} />
               <Menu
                 className="scope-control"
                 label="会话可访问的文件夹"
@@ -566,7 +630,6 @@ export function HomeScene() {
                   <button className={`provider-pill ready agent-engine-pill engine-${agentEngine}`}>
                     <IconSubagent width={14} height={14} />
                     <span>{agentEngine === "codex" ? "Codex CLI" : "R-Code"}</span>
-                    <small>主 Agent</small>
                     <IconChevronDown width={12} height={12} />
                   </button>
                 }
@@ -597,50 +660,33 @@ export function HomeScene() {
                 )}
               </Menu>
 
-              {agentEngine === "r_code" && <Menu
-                className="provider-control"
-                label="选择模型服务"
-                placement="up"
-                align="left"
-                menuClassName="provider-menu"
-                openRequest={providerMenuRequest}
-                trigger={
-                  <button
-                    className={`provider-pill${providerReady ? " ready" : ""}`}
-                    title={
-                      providerReady
-                        ? `当前使用：${activeProvider?.label} / ${activeProvider?.model}`
-                        : "选择模型服务"
-                    }
-                  >
-                    <span>{providerReady ? activeProvider?.label : "选择模型服务"}</span>
-                    {providerReady && <small>{activeProvider?.model}</small>}
-                    <IconChevronDown width={12} height={12} />
-                  </button>
-                }
-              >
-                {({ close }) => (
-                  <>
-                    {providerChoices.length === 0 && <MenuEmpty>还没有可用的模型服务。</MenuEmpty>}
-                    {providerChoices.map((choice) => (
-                      <MenuItem
-                        key={choice.name}
-                        close={close}
-                        checked={choice.name === activeProvider?.name}
-                        hint={choice.ready ? choice.model : "尚未完成配置"}
-                        disabled={!choice.ready}
-                        onSelect={() => chooseProvider(choice)}
-                      >
-                        {choice.label}
-                      </MenuItem>
-                    ))}
-                    <MenuSeparator />
-                    <MenuItem close={close} onSelect={() => setScene("settings")}>
-                      管理模型服务
-                    </MenuItem>
-                  </>
-                )}
-              </Menu>}
+              {agentEngine === "r_code" ? (
+                <ModelSwitcher
+                  taskId={null}
+                  providerName={activeProvider?.name ?? null}
+                  model={activeModel || null}
+                  inference={draftInference}
+                  choices={providerChoices}
+                  fallback={fallback}
+                  running={launching}
+                  scopeLabel="仅作用于即将创建的对话"
+                  variant="pill"
+                  openRequest={modelMenuRequest}
+                  onDraftChanged={(selection) => {
+                    setError(null);
+                    setProvider(providerChoices.find((choice) => choice.name === selection.providerName) ?? null);
+                    setDraftModel(selection.model);
+                    setDraftInference(selection.inference);
+                  }}
+                />
+              ) : (
+                <CodexModelConfiguration
+                  running={launching}
+                  openRequest={modelMenuRequest}
+                  preload
+                  onPreferencesChange={setCodexPreferences}
+                />
+              )}
 
               {currentWorkspace && (
                 <ProjectAccessSelector
@@ -659,7 +705,13 @@ export function HomeScene() {
                 </button>
               )}
               <span className="send-hint">{keyLabel("new").replace(/ .*/, "")} + Enter</span>
-              <button className="send-button" disabled={!canSend} onClick={() => void send()} aria-label="发送">
+              <button
+                className="send-button"
+                disabled={!canSend}
+                title={attachmentBlockedReason ?? "发送（Ctrl/⌘ + Enter）"}
+                onClick={() => void send()}
+                aria-label="发送"
+              >
                 <IconSend width={15} height={15} />
                 <span>{launching ? "发送中" : "发送"}</span>
               </button>
@@ -667,6 +719,9 @@ export function HomeScene() {
           </div>
         </div>
 
+        {attachments.error && (
+          <StatusBar kind="error" onDismiss={attachments.clearError}>{attachments.error}</StatusBar>
+        )}
         {(error || providerError) && (
           <StatusBar kind="error" onDismiss={error ? () => setError(null) : undefined}>
             {error ?? providerError}

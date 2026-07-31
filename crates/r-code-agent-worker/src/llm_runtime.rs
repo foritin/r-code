@@ -360,13 +360,22 @@ impl AgentRuntime for LlmAgentRuntime {
     }
 
     async fn start_run(&mut self, session_id: &str, goal: &str) -> Result<String, ProductError> {
+        self.start_run_with_message(session_id, Message::user_text(goal))
+            .await
+    }
+
+    async fn start_run_with_message(
+        &mut self,
+        session_id: &str,
+        message: Message,
+    ) -> Result<String, ProductError> {
         let run_id = Uuid::new_v4();
         let (task_id, model, inference, mode, abort, workspace_scope) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
-            session.messages.push(Message::user_text(goal));
+            session.messages.push(message);
             session.abort.store(false, Ordering::Relaxed);
             session.accepting_steer = true;
             (

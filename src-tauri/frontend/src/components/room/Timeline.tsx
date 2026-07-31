@@ -13,9 +13,9 @@ import {
   useState,
 } from "react";
 import { agentResend, onAgentEvent as listenAgentEvent, sessionMessages } from "../../lib/ipc";
-import type { AgentEvent, AgentSendMode } from "../../lib/types";
+import type { AgentEvent, AgentSendMode, SessionAttachmentMeta } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
-import { IconChevronDown, IconChevronRight } from "../icons";
+import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
 import { Markdown } from "./Markdown";
@@ -35,11 +35,12 @@ export interface TimelineHandle {
   /** 发送失败（消息可能已落盘）→ 以持久化历史重建。 */
   reload: () => void;
   /** 发送成功：立即本地追加用户气泡，稍后由持久化历史收敛。 */
-  onSent: (text: string, mode: AgentSendMode) => void;
+  onSent: (text: string, mode: AgentSendMode, attachments?: SessionAttachmentMeta[]) => void;
 }
 
 interface Props {
   taskId: string;
+  workspacePath: string | null;
   /** 播放头秒数；null = live */
   cur: number | null;
   /** 运行期间不能改写历史分支，避免上下文竞争。 */
@@ -128,7 +129,7 @@ function runDurationLabel(startedAt: string, endedAt: string | null): string {
 }
 
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
-  { taskId, cur, running, onAgentEvent, onInspectSubagent, selectedSubagentId },
+  { taskId, workspacePath, cur, running, onAgentEvent, onInspectSubagent, selectedSubagentId },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -279,7 +280,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     ref,
     () => ({
       reload: () => void reload(),
-      onSent: (text, mode) => {
+      onSent: (text, mode, attachments = []) => {
         setItems((prev) => [
           ...prev,
           {
@@ -287,6 +288,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             id: nid(),
             t: nowSec(),
             text,
+            imageCount: 0,
+            imageMediaTypes: [],
+            attachments,
             sendMode: mode,
             queuedState: mode === "queue" || mode === "send_now" ? "queued" : undefined,
           },
@@ -389,7 +393,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             <div className="who">
               <span className="message-author">YOU</span>
               {modeLabel && <span className="user-send-mode">{modeLabel}</span>}
-              {it.messageId && !running && !editing && !workflow && (
+              {it.messageId && !running && !editing && !workflow && it.imageCount === 0 && (
                 <button
                   type="button"
                   className="message-edit"
@@ -445,8 +449,22 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                 <strong>/{workflow.name}</strong>
                 {workflow.args && <small>{workflow.args}</small>}
               </div>
-            ) : (
+            ) : it.text ? (
               it.text
+            ) : null}
+            {it.attachments.length > 0 && (
+              <div className="message-attachment-summary" aria-label={`${it.attachments.length} 个附件`}>
+                {it.attachments.map((attachment, index) => (
+                  <span
+                    className={`message-attachment-item kind-${attachment.kind}`}
+                    title={`${attachment.name} · ${attachment.media_type}`}
+                    key={`${attachment.name}-${index}`}
+                  >
+                    <IconAttach width={13} height={13} aria-hidden="true" />
+                    {attachment.name}
+                  </span>
+                ))}
+              </div>
             )}
             {queueState && <div className={`user-queue-state state-${queueState}`}>{queuedStateLabel(queueState)}</div>}
           </div>
@@ -460,7 +478,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             key={it.id}
           >
             <div className="who">R-CODE</div>
-            <Markdown text={it.text} streaming={it.streaming} />
+            <Markdown text={it.text} streaming={it.streaming} taskId={taskId} workspacePath={workspacePath} />
           </div>
         );
       case "plan": {

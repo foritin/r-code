@@ -1,31 +1,47 @@
+import type { RefObject } from "react";
 import type { SlashCommandDefinition, SlashCommandContext } from "../lib/slash-commands";
 import {
   CATEGORY_LABELS,
   commandUnavailableReason,
   matchingSlashCommands,
 } from "../lib/slash-commands";
+import { AnchoredSurface } from "./ui/AnchoredSurface";
 
 interface Props {
+  anchorRef: RefObject<HTMLElement | null>;
   value: string;
   context: SlashCommandContext;
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
   onPick: (command: SlashCommandDefinition) => void;
+  onDismiss: () => void;
 }
 
 export function SlashCommandMenu({
+  anchorRef,
   value,
   context,
   activeIndex,
   onActiveIndexChange,
   onPick,
+  onDismiss,
 }: Props) {
   const commands = matchingSlashCommands(value, context);
   if (commands.length === 0) return null;
 
   let lastCategory: SlashCommandDefinition["category"] | null = null;
   return (
-    <div id="slash-command-menu" className="slash-menu" role="listbox" aria-label="斜杠命令">
+    <AnchoredSurface
+      id="slash-command-menu"
+      anchorRef={anchorRef}
+      className="slash-menu"
+      role="listbox"
+      label="斜杠命令"
+      placement="up"
+      align="left"
+      matchAnchorWidth
+      onDismiss={onDismiss}
+    >
       <div className="slash-menu-head">
         <span>命令</span>
         <span>↑↓ 选择 · Tab 补全 · Enter 确认</span>
@@ -63,6 +79,6 @@ export function SlashCommandMenu({
           );
         })}
       </div>
-    </div>
+    </AnchoredSurface>
   );
 }

@@ -153,12 +153,243 @@
 .md .md-link:hover {
   text-decoration-color: var(--accent);
 }
-/* 图片降级成的链接：给一个可辨认的框，提示它指向外部资源 */
+/* Local file links are buttons: WebView never navigates to model-provided file:// URLs. */
+.md .md-file-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.md .md-file-link > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.md .md-file-link.is-error { color: var(--danger); }
+
+/* Unsupported/remote images remain links and never trigger a pixel request. */
 .md .md-image {
   padding: 0 var(--sp-2);
   border: 1px dashed var(--edge-accent);
   border-radius: var(--radius-xs);
   text-decoration: none;
+}
+
+/* ------------------------------------------------------- Local image artifact */
+
+.md .md-image-artifact,
+.md .md-artifact-fallback {
+  display: block;
+  width: min(100%, 760px);
+  margin: var(--sp-4) 0 var(--sp-6);
+}
+.md .md-image-artifact {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-card);
+}
+.md .md-image-thumb {
+  position: relative;
+  display: grid;
+  width: 100%;
+  max-height: min(52vh, 520px);
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-inset);
+  cursor: zoom-in;
+}
+.md .md-image-thumb img {
+  display: block;
+  width: 100%;
+  max-height: min(52vh, 520px);
+  object-fit: contain;
+}
+.md .md-image-thumb > span {
+  position: absolute;
+  right: var(--sp-4);
+  bottom: var(--sp-4);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  color: var(--fg);
+  box-shadow: var(--shadow-card);
+  font-size: var(--text-meta);
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity var(--dur-2) var(--ease), transform var(--dur-2) var(--ease);
+}
+.md .md-image-thumb:hover > span,
+.md .md-image-thumb:focus-visible > span {
+  opacity: 1;
+  transform: translateY(0);
+}
+.md .md-image-loading {
+  display: flex;
+  min-height: 180px;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-faint);
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+}
+.md .md-image-loading > span {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: md-image-spin 900ms linear infinite;
+}
+@keyframes md-image-spin { to { transform: rotate(360deg); } }
+.md .md-image-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-5);
+}
+.md .md-image-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+}
+.md .md-image-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+}
+.md .md-image-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+}
+.md .md-image-actions {
+  display: flex;
+  flex: none;
+  gap: var(--sp-2);
+}
+.md .md-image-actions button,
+.image-preview-dialog button {
+  display: inline-flex;
+  min-height: var(--control-h-sm);
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-chip);
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-meta);
+}
+.md .md-image-actions button:hover,
+.image-preview-dialog button:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+/* Portal-backed preview is viewport-bound, so it cannot be clipped by timeline/workbench panes. */
+.image-preview-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  padding: clamp(14px, 3vw, 40px);
+  background: color-mix(in srgb, #000 72%, transparent);
+  backdrop-filter: blur(8px);
+}
+.image-preview-dialog {
+  display: flex;
+  width: min(1180px, 94vw);
+  height: min(880px, 92vh);
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-popover);
+}
+.image-preview-dialog > header,
+.image-preview-dialog > footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--sp-5);
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--border);
+}
+.image-preview-dialog > header > span {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.image-preview-dialog > header strong,
+.image-preview-dialog > header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-preview-dialog > header small {
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+}
+.image-preview-dialog > header > button {
+  width: var(--control-h-sm);
+  padding: 0;
+}
+.image-preview-stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  place-items: center;
+  overflow: auto;
+  padding: var(--sp-6);
+  background: var(--bg-inset);
+}
+.image-preview-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  box-shadow: var(--shadow-card);
+}
+.image-preview-dialog > footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+@media (max-width: 680px) {
+  .md .md-image-meta { align-items: stretch; flex-direction: column; }
+  .md .md-image-actions { flex-wrap: wrap; }
+  .md .md-image-actions button { flex: 1; }
+  .image-preview-backdrop { padding: var(--sp-3); }
+  .image-preview-dialog { width: 100%; height: 100%; border-radius: var(--radius-md); }
 }
 
 /* ------------------------------------------------------------ 行内强调 */
@@ -404,7 +635,12 @@
 @media (prefers-reduced-motion: reduce) {
   .md .md-link,
   .md .md-code-copy,
-  .md .md-code-toggle {
+  .md .md-code-toggle,
+  .md .md-image-thumb > span {
     transition: none;
+  }
+
+  .md .md-image-loading > span {
+    animation: none;
   }
 }

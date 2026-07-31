@@ -85,6 +85,157 @@
 .model-config-reset { min-height: var(--control-h); padding: 0 var(--sp-4); border-radius: var(--radius-xs); color: var(--fg-muted); }
 .model-config-error { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); color: var(--danger); font-size: var(--text-sm); }
 .model-config-error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+
+/* Composer attachments: picker accepts readable files; paste intentionally accepts images only. */
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 var(--sp-6) var(--sp-5);
+}
+.composer-attachment-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--fg-muted);
+  background: transparent;
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.composer-attachment-add:hover:not(:disabled) { color: var(--fg); border-color: var(--border); background: var(--bg-hover); }
+.composer-attachment-add:disabled { opacity: .45; }
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(310px, 100%);
+  min-height: 38px;
+  padding: 4px 7px;
+  border: 1px solid var(--edge-success);
+  border-radius: 9px;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--success) 6%, var(--bg-chip));
+  font-size: var(--text-sm);
+}
+.attachment-thumbnail {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--bg-active);
+}
+.attachment-thumbnail > img { width: 100%; height: 100%; object-fit: cover; }
+.attachment-file-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--fg-faint);
+  background: var(--bg-card);
+}
+.attachment-copy { display: grid; min-width: 0; line-height: 1.15; }
+.attachment-copy small { margin-top: 2px; color: var(--fg-faint); font-size: 10px; letter-spacing: .04em; }
+.attachment-chip .attachment-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip.is-unknown { border-style: dashed; border-color: var(--border-strong); background: var(--bg-chip); }
+.message-attachment-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.message-attachment-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-raised) 82%, transparent);
+  font-size: 12px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip.is-unsupported {
+  border-color: var(--edge-warning);
+  color: var(--warning);
+  background: var(--tint-warning);
+}
+.attachment-chip.is-unsupported .attachment-thumbnail,
+.attachment-chip.is-unsupported .attachment-file-icon { opacity: .45; filter: grayscale(.7); }
+.attachment-chip.is-unsupported .attachment-label {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+.attachment-warning { flex: none; }
+.attachment-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border-radius: var(--radius-xs);
+  color: currentColor;
+}
+.attachment-remove:hover { background: var(--bg-active); }
+.comp-box .composer-attachments { padding-inline: 0; }
+
+.attachment-preview-backdrop {
+  position: fixed;
+  z-index: var(--z-modal);
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: color-mix(in srgb, #000 72%, transparent);
+  backdrop-filter: blur(5px);
+}
+.attachment-preview {
+  display: flex;
+  flex-direction: column;
+  width: min(980px, calc(100vw - 64px));
+  max-height: calc(100dvh - 64px);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--bg-card);
+  box-shadow: var(--shadow-popover);
+}
+.attachment-preview > header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.attachment-preview > header > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-preview > header > button { display: inline-grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; }
+.attachment-preview > header > button:hover { background: var(--bg-hover); }
+.attachment-preview > img { min-height: 0; max-width: 100%; max-height: calc(100dvh - 110px); object-fit: contain; background: var(--bg-app); }
+
+@media (max-width: 700px) {
+  .composer-attachment-add > span { display: none; }
+  .attachment-chip { max-width: 100%; }
+  .attachment-preview-backdrop { padding: 12px; }
+  .attachment-preview { width: calc(100vw - 24px); max-height: calc(100dvh - 24px); }
+}
 .model-switch-confirm {
   display: flex; align-items: center; gap: var(--sp-4); margin: var(--sp-2);
   padding: var(--sp-3) var(--sp-4); border: 1px solid var(--edge-accent);
@@ -97,9 +248,20 @@
 /* ---------- 输入区控件行 ----------
    与新对话页 .chat-composer-foot 同构：模型 / 权限 / 弹性空隙 / 发送。 */
 .comp-meta {
-  display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px;
   margin-top: var(--sp-4); padding-top: var(--sp-3);
   border-top: 1px solid var(--border);
+}
+.comp-meta-context {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  overflow-x: auto; overscroll-behavior-inline: contain; scrollbar-width: none;
+}
+.comp-meta-context::-webkit-scrollbar { display: none; }
+.comp-meta-context > * { flex: 0 0 auto; }
+.comp-meta > .spacer { flex: 1; min-width: 0; }
+.comp-meta .composer-attachment-add { width: 34px; padding: 0; border-color: var(--border); background: var(--bg-chip); }
+.comp-meta .composer-attachment-add > span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
 }
 .comp-meta .project-access-trigger { max-width: 170px; }
 /* 服务名不参与压缩；模型名在空间不足时换行，不能把真实名称静默裁掉。 */
@@ -109,16 +271,16 @@
 /* 输入区里的 provider 胶囊与新对话页共用外观 */
 .comp-meta .provider-pill {
   display: inline-flex; align-items: center; gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-4);
-  border: 1px solid var(--border); border-radius: var(--radius-xs);
+  min-height: 34px; height: 34px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-chip); color: var(--fg-muted);
-  font-size: var(--text-sm);
+  font-size: var(--text-sm); white-space: nowrap;
 }
 .comp-meta .provider-pill:hover:not(:disabled) { color: var(--fg); border-color: var(--border-strong); }
 .comp-meta .provider-pill:disabled { opacity: 0.55; }
 .comp-meta .provider-pill.ready { color: var(--accent); }
 .comp-meta .provider-pill small {
-  max-width: 240px; overflow-wrap: anywhere; white-space: normal; line-height: var(--lh-tight);
+  max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1;
   color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-meta);
 }
 
@@ -128,22 +290,16 @@
 /* ---------- 斜杠命令 ----------
    扁平列表而不是“弹层里再堆卡片”：命令、说明和参数在一条清晰基线上。 */
 .slash-menu {
-  position: absolute;
+  position: fixed;
   z-index: var(--z-popover);
-  right: 0;
-  bottom: calc(100% + var(--sp-4));
-  left: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   box-shadow: var(--shadow-popover);
   animation: popIn var(--dur-2) var(--ease-out);
-}
-.composer > .slash-menu {
-  right: var(--sp-6);
-  bottom: calc(100% - var(--sp-1));
-  left: var(--sp-6);
 }
 .slash-menu-head {
   display: flex;
@@ -157,7 +313,7 @@
   font-size: var(--text-meta);
 }
 .slash-menu-head > span:first-child { color: var(--fg-muted); font-weight: var(--weight-strong); }
-.slash-menu-list { max-height: min(356px, 48vh); overflow-y: auto; padding: var(--sp-2); }
+.slash-menu-list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-2); }
 .slash-menu-category {
   padding: var(--sp-4) var(--sp-4) var(--sp-2);
   color: var(--fg-faint);
@@ -288,6 +444,8 @@
 }
 .confirm-dialog {
   width: min(420px, calc(100vw - var(--sp-10)));
+  max-height: calc(100dvh - var(--sp-9) - var(--sp-9));
+  overflow-y: auto;
   padding: var(--sp-8);
   border: 1px solid var(--border-strong); border-radius: var(--radius-lg);
   background: var(--bg-card); box-shadow: var(--shadow-popover);

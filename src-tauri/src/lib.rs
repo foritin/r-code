@@ -28,6 +28,7 @@ pub mod security_config;
 pub mod settings;
 pub mod skills;
 pub mod support_bundle;
+pub mod system_integration;
 pub mod work_card;
 
 // 重新导出核心类型

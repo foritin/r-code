@@ -273,6 +273,7 @@ const browserMockCodexModels: CodexCliPreferences["models"] = [
     description: "Latest frontier agentic coding model.",
     default_reasoning_effort: "low",
     supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({ effort, description: "" })),
+    supports_images: true,
   },
   {
     slug: "gpt-5.6-terra",
@@ -280,6 +281,7 @@ const browserMockCodexModels: CodexCliPreferences["models"] = [
     description: "Balanced agentic coding model for everyday work.",
     default_reasoning_effort: "medium",
     supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"].map((effort) => ({ effort, description: "" })),
+    supports_images: true,
   },
   {
     slug: "gpt-5.6-luna",
@@ -287,6 +289,15 @@ const browserMockCodexModels: CodexCliPreferences["models"] = [
     description: "Fast coding model for lightweight work.",
     default_reasoning_effort: "medium",
     supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max"].map((effort) => ({ effort, description: "" })),
+    supports_images: true,
+  },
+  {
+    slug: "gpt-5.3-codex-spark",
+    display_name: "GPT-5.3-Codex-Spark",
+    description: "Fast text-only coding model.",
+    default_reasoning_effort: "medium",
+    supported_reasoning_efforts: ["low", "medium", "high"].map((effort) => ({ effort, description: "" })),
+    supports_images: false,
   },
 ];
 
@@ -424,6 +435,7 @@ export const browserMockFiles: Record<string, { content: string; revision: strin
 export const browserMockFileEntries = (path: string | null) => {
   if (!path) return [
     { path: "src", name: "src", is_directory: true },
+    { path: "assets", name: "assets", is_directory: true },
     { path: "Cargo.toml", name: "Cargo.toml", is_directory: false },
     { path: "README.md", name: "README.md", is_directory: false },
   ];
@@ -431,6 +443,9 @@ export const browserMockFileEntries = (path: string | null) => {
     { path: "src/main.rs", name: "main.rs", is_directory: false },
     { path: "src/error.rs", name: "error.rs", is_directory: false },
     { path: "src/api.rs", name: "api.rs", is_directory: false },
+  ];
+  if (path === "assets") return [
+    { path: "assets/demo-sky.png", name: "demo-sky.png", is_directory: false },
   ];
   return [];
 };
@@ -527,7 +542,16 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
   }
   browserMockMessageStore[taskId] = [
     { id: `${taskId}-message-1`, branch_id: "main", kind: "message", role: "user", text: task.goal, timestamp: task.created_at },
-    { id: `${taskId}-message-2`, branch_id: "main", kind: "message", role: "assistant", text: `我会先检查相关实现，然后推进「${task.title}」。`, timestamp: at(12) },
+    {
+      id: `${taskId}-message-2`,
+      branch_id: "main",
+      kind: "message",
+      role: "assistant",
+      text: taskId === "mock-task-complete"
+        ? `任务已完成，并生成了可预览的本地产物。浏览器 Demo 使用占位图验证预览交互。\n\n[预览图片产物](C:/Users/demo/.codex/generated_images/r-code-preview.png)\n\n[打开实现文件](src/main.rs#L12C3)`
+        : `我会先检查相关实现，然后推进「${task.title}」。`,
+      timestamp: at(12),
+    },
     { id: `${taskId}-message-3`, branch_id: "main", kind: "tool_call", tool_name: "read_file", call_id: "mock-read", input_json: '{"path":"src/error.rs"}', timestamp: task.updated_at },
   ];
   return browserMockMessageStore[taskId];

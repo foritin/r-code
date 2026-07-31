@@ -23,7 +23,7 @@ pub mod testing;
 
 // 重新导出公共合同类型，方便产品 crate 统一引用
 pub use hermes_core::{
-    ContentBlock, ImageSource, InferenceOptions, Message, Role, Session, SessionEvent, SessionMeta,
-    SessionStatus, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
+    ContentBlock, FileSource, ImageSource, InferenceOptions, Message, Role, Session, SessionEvent,
+    SessionMeta, SessionStatus, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
 pub use hermes_error::{Error, Result, ResultExt};

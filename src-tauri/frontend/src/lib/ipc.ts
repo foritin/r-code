@@ -26,6 +26,7 @@ import type {
   SearchMatch,
   SessionBranch,
   SessionMessage,
+  AttachmentInput,
   SettingsResponse,
   SupportBundlePreview,
   Task,
@@ -144,8 +145,12 @@ export const taskDetailBatch = async (taskIds: string[]) => {
 };
 
 // ---------- Agent ----------
-export const agentSend = (taskId: string, message: string, mode: AgentSendMode = "auto") =>
-  ipc<void>("cmd_agent_send", { taskId, message, mode });
+export const agentSend = (
+  taskId: string,
+  message: string,
+  mode: AgentSendMode = "auto",
+  attachments: AttachmentInput[] = [],
+) => ipc<void>("cmd_agent_send", { taskId, message, mode, attachments });
 
 export const agentAbort = (taskId: string) => ipc<void>("cmd_agent_abort", { taskId });
 
@@ -271,6 +276,17 @@ export interface FileTreeListing {
   truncated: boolean;
 }
 
+export interface LocalFileTarget {
+  scope: "workspace" | "external";
+  absolute_path: string;
+  relative_path: string | null;
+  is_directory: boolean;
+  mime_type: string | null;
+  size_bytes: number | null;
+  line: number | null;
+  column: number | null;
+}
+
 export const fileList = async (workspacePath: string, path: string | null = null) => {
   try {
     return await ipc<FileTreeListing>("cmd_file_list", { workspacePath, path });
@@ -296,6 +312,38 @@ export const fileWrite = (
   content: string,
   expectedRevision: string,
 ) => ipc<FileContent>("cmd_file_write", { workspacePath, path, content, expectedRevision });
+
+/** Resolve a model-provided local path in the host before deciding how the UI should navigate. */
+export const localFileTarget = (workspacePath: string | null, reference: string) =>
+  ipc<LocalFileTarget>("cmd_local_file_target", { workspacePath, reference });
+
+/** Binary raster preview; the caller owns any Blob URL created from this buffer. */
+export const localImagePreview = async (
+  workspacePath: string | null,
+  reference: string,
+): Promise<ArrayBuffer> => {
+  if (shouldUseBrowserMock()) {
+    return browserMockInvoke("cmd_local_image_preview", { workspacePath, reference }) as Promise<ArrayBuffer>;
+  }
+  const response = await invoke<ArrayBuffer | Uint8Array | number[]>("cmd_local_image_preview", {
+    workspacePath,
+    reference,
+  });
+  if (response instanceof ArrayBuffer) return response;
+  if (response instanceof Uint8Array) {
+    return Uint8Array.from(response).buffer;
+  }
+  return Uint8Array.from(response).buffer;
+};
+
+export const revealLocalPath = (path: string) =>
+  ipc<void>("cmd_reveal_local_path", { path });
+
+/** Idempotently make room for the right-hand workbench; browser demos simply keep their size. */
+export const prepareWorkbenchWindow = async () => {
+  if (shouldUseBrowserMock()) return false;
+  return invoke<boolean>("cmd_prepare_workbench_window");
+};
 
 // ---------- Workspace ----------
 export const workspaceList = () => ipc<Workspace[]>("cmd_workspace_list");

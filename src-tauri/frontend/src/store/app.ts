@@ -36,6 +36,12 @@ export interface TaskWorkbenchState {
   mode: WorkbenchMode;
   launcherOpen: boolean;
 }
+export interface WorkbenchFileNavigation {
+  path: string;
+  line: number | null;
+  column: number | null;
+  requestId: number;
+}
 export type SettingsPane = "providers" | "agents" | "preferences" | "diagnostics" | "codex";
 
 interface AppState {
@@ -48,6 +54,8 @@ interface AppState {
   workbenchMode: WorkbenchMode;
   workbenchLauncherOpen: boolean;
   workbenches: Record<string, TaskWorkbenchState>;
+  /** Model/file-link navigation requests, isolated by task just like the workbench itself. */
+  workbenchFiles: Record<string, WorkbenchFileNavigation>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
   /** Ctrl K 搜索 overlay */
@@ -72,6 +80,7 @@ interface AppState {
   openDeck: () => void;
   openRoom: (taskId: string, tab?: CanvasTab) => void;
   setCanvasTab: (tab: CanvasTab) => void;
+  openWorkbenchFile: (taskId: string, path: string, line?: number | null, column?: number | null) => void;
   closeWorkbenchTab: (tab?: CanvasTab) => void;
   showWorkbenchLauncher: () => void;
   closeWorkbenchLauncher: () => void;
@@ -95,6 +104,7 @@ interface AppState {
 
 const RAIL_KEY = "r-code.rail.collapsed";
 const THEME_KEY = "r-code.theme.mode";
+let fileNavigationSequence = 0;
 
 function createWorkbenchState(tab: CanvasTab = "summary"): TaskWorkbenchState {
   return {
@@ -160,6 +170,7 @@ export const useAppStore = create<AppState>((set) => ({
   workbenchMode: "docked",
   workbenchLauncherOpen: true,
   workbenches: {},
+  workbenchFiles: {},
   settingsPane: "providers",
   searchOpen: false,
   editorFile: null,
@@ -205,6 +216,35 @@ export const useAppStore = create<AppState>((set) => ({
       mode: current.mode === "hidden" || current.mode === "collapsed" ? "docked" : current.mode,
       launcherOpen: false,
     }))),
+  openWorkbenchFile: (taskId, path, line = null, column = null) =>
+    set((state) => {
+      const saved = state.workbenches[taskId] ?? createWorkbenchState("files");
+      const next: TaskWorkbenchState = {
+        ...saved,
+        tab: "files",
+        lastTab: "files",
+        openTabs: appendWorkbenchTab(saved.openTabs, "files"),
+        mode: "docked",
+        launcherOpen: false,
+      };
+      return {
+        scene: "room",
+        currentTaskId: taskId,
+        canvasTab: "files",
+        workbenchMode: "docked",
+        workbenchLauncherOpen: false,
+        workbenches: { ...state.workbenches, [taskId]: next },
+        workbenchFiles: {
+          ...state.workbenchFiles,
+          [taskId]: {
+            path,
+            line,
+            column,
+            requestId: ++fileNavigationSequence,
+          },
+        },
+      };
+    }),
   closeWorkbenchTab: (requestedTab) =>
     set((state) => withCurrentWorkbench(state, (current) => {
       const closing = workbenchToolTab(requestedTab ?? current.tab);

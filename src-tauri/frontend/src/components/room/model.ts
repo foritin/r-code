@@ -10,6 +10,7 @@ import type {
   AgentRun,
   QueuedMessage,
   QueuedMessageState,
+  SessionAttachmentMeta,
   SessionMessage,
   TaskEvent,
 } from "../../lib/types";
@@ -58,6 +59,9 @@ export type TimelineItem =
       id: string;
       t: number;
       text: string;
+      imageCount: number;
+      imageMediaTypes: string[];
+      attachments: SessionAttachmentMeta[];
       messageId?: string;
       sendMode: AgentSendMode;
       queuedState?: QueuedMessageState;
@@ -306,18 +310,31 @@ export function buildTimeline(
         break; // 会话元信息不进时间线（胶片 meta 行展示）
       case "message": {
         const text = (m.text ?? "").trim();
-        if (!text) break;
         if (m.role === "user") {
+          const imageCount = m.image_count ?? 0;
+          const attachments = m.attachments ?? Array.from(
+            { length: imageCount },
+            (_, index): SessionAttachmentMeta => ({
+              name: `图片 ${index + 1}`,
+              media_type: m.image_media_types?.[index] ?? "image/*",
+              kind: "image",
+            }),
+          );
+          if (!text && attachments.length === 0) break;
           items.push({
             kind: "you",
             id: m.id ? `msg-${m.id}` : nid("you"),
             t: lastT,
             text,
+            imageCount,
+            imageMediaTypes: m.image_media_types ?? [],
+            attachments,
             messageId: m.id,
             sendMode: nextUserSendMode ?? "auto",
           });
           nextUserSendMode = null;
         } else {
+          if (!text) break;
           items.push({
             kind: "agent",
             id: m.id ? `msg-${m.id}` : nid("ag"),
@@ -425,6 +442,9 @@ export function buildTimeline(
       id: `queued-${queued.id}`,
       t,
       text: queued.message,
+      imageCount: 0,
+      imageMediaTypes: [],
+      attachments: [],
       sendMode,
       queuedState: queued.state,
       queueId: queued.id,

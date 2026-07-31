@@ -8,6 +8,7 @@
 import type {
   AgentRun,
   ChangeDiff,
+  AttachmentInput,
   InferenceOptions,
   LogEntry,
   ProjectAccessMode,
@@ -188,8 +189,13 @@ function createTask(args: MockArgs): Task {
 function sendMessage(args: MockArgs): void {
   const taskId = stringArg(args, "taskId");
   const message = stringArg(args, "message").trim();
+  const attachments = Array.isArray(args.attachments)
+    ? args.attachments.filter((item): item is AttachmentInput => Boolean(
+        item && typeof item === "object" && typeof (item as AttachmentInput).mediaType === "string",
+      ))
+    : [];
   const mode = typeof args.mode === "string" ? args.mode : "auto";
-  if (!message) return;
+  if (!message && attachments.length === 0) return;
   const task = taskById(taskId);
   const detail = detailById(taskId);
   const timestamp = nowIso();
@@ -241,7 +247,27 @@ function sendMessage(args: MockArgs): void {
   };
   detail.runs.unshift(run);
   messages.push(
-    { id: nextId("message"), branch_id: detail.active_branch.id, kind: "message", role: "user", text: message, timestamp },
+    {
+      id: nextId("message"),
+      branch_id: detail.active_branch.id,
+      kind: "message",
+      role: "user",
+      text: message || undefined,
+      image_count: attachments.filter((attachment) => attachment.mediaType.startsWith("image/")).length,
+      image_media_types: attachments
+        .filter((attachment) => attachment.mediaType.startsWith("image/"))
+        .map((attachment) => attachment.mediaType),
+      attachments: attachments.map((attachment) => ({
+        name: attachment.name,
+        media_type: attachment.mediaType,
+        kind: attachment.mediaType.startsWith("image/")
+          ? "image"
+          : attachment.mediaType === "application/pdf"
+            ? "pdf"
+            : "text",
+      })),
+      timestamp,
+    },
     {
       id: nextId("message"),
       branch_id: detail.active_branch.id,
@@ -505,6 +531,47 @@ function providerModels(request: ProviderModelsInput): ProviderModelsResponse {
   };
 }
 
+async function browserMockImagePreview(): Promise<ArrayBuffer> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 960;
+  canvas.height = 540;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("浏览器无法创建图片预览占位图");
+
+  const sky = context.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, "#4f9fe8");
+  sky.addColorStop(0.58, "#91caef");
+  sky.addColorStop(1, "#e8f2ef");
+  context.fillStyle = sky;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const drawCloud = (x: number, y: number, scale: number) => {
+    context.save();
+    context.translate(x, y);
+    context.scale(scale, scale);
+    context.fillStyle = "rgba(255, 255, 255, .9)";
+    context.beginPath();
+    context.arc(0, 24, 36, 0, Math.PI * 2);
+    context.arc(44, 0, 54, 0, Math.PI * 2);
+    context.arc(103, 23, 40, 0, Math.PI * 2);
+    context.rect(0, 22, 103, 42);
+    context.fill();
+    context.restore();
+  };
+  drawCloud(155, 140, 1);
+  drawCloud(650, 245, 0.72);
+  drawCloud(410, 82, 0.5);
+
+  context.fillStyle = "rgba(255, 255, 255, .88)";
+  context.font = "600 22px system-ui, sans-serif";
+  context.fillText("浏览器 Demo · 图片预览占位", 34, 500);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => value ? resolve(value) : reject(new Error("无法编码图片预览占位图")), "image/png");
+  });
+  return blob.arrayBuffer();
+}
+
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
   switch (command) {
@@ -622,6 +689,39 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return { path, content: file.content, total_lines: file.content.split("\n").length, truncated: false, revision: file.revision, is_editable: true };
     }
     case "cmd_file_write": return copy(writeFile(args));
+    case "cmd_local_file_target": {
+      const rawReference = stringArg(args, "reference");
+      const hashLocation = rawReference.match(/#L(\d+)(?:C(\d+))?$/i);
+      const reference = rawReference.replace(/#L\d+(?:C\d+)?$/i, "");
+      const workspacePath = optionalStringArg(args, "workspacePath");
+      const relative = !/^(?:file:|[A-Za-z]:[\\/]|\/)/i.test(reference)
+        ? reference.replace(/\\/g, "/")
+        : null;
+      const image = /\.(?:png|jpe?g|gif|webp|bmp|avif)$/i.test(reference);
+      return {
+        scope: relative && workspacePath ? "workspace" : "external",
+        absolute_path: relative && workspacePath ? `${workspacePath}/${relative}` : reference,
+        relative_path: relative && workspacePath ? relative : null,
+        is_directory: false,
+        mime_type: image ? "image/png" : null,
+        size_bytes: image ? 68 : null,
+        line: hashLocation ? Number(hashLocation[1]) : null,
+        column: hashLocation?.[2] ? Number(hashLocation[2]) : null,
+      };
+    }
+    case "cmd_local_image_preview": {
+      const reference = stringArg(args, "reference");
+      const isExternal = /^(?:file:|[A-Za-z]:[\\/]|\/)/i.test(reference);
+      if (isExternal && !/[\\/]\.codex[\\/]generated_images[\\/]/i.test(reference)) {
+        throw new Error("外部图片预览仅限 Codex generated_images 产物");
+      }
+      return browserMockImagePreview();
+    }
+    case "cmd_reveal_local_path": {
+      document.documentElement.dataset.demoRevealedPath = stringArg(args, "path");
+      return undefined;
+    }
+    case "cmd_prepare_workbench_window": return false;
 
     case "cmd_workspace_list": return copy(browserMockWorkspaces);
     case "cmd_workspace_open": {

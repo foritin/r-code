@@ -63,6 +63,7 @@ import { buildAuditFeed } from "./audit";
 import type { ActivityTraceState } from "./activity";
 import { SubagentAvatar } from "./SubagentIdentity";
 import { SubagentWorkbench } from "./SubagentWorkbench";
+import { isLocalRasterReference, LocalImageArtifact } from "./LocalResource";
 import {
   IconActivity,
   IconCheck,
@@ -79,6 +80,7 @@ import {
   IconSidebar,
   IconTerminal,
 } from "../icons";
+import { Menu, MenuItem } from "../ui/Menu";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 
@@ -326,6 +328,7 @@ export function Canvas({
       {subagentPageOpen ? (
         <SubagentWorkbench
           taskId={taskId}
+          workspacePath={workspacePath}
           activity={activity}
           runs={detail?.runs ?? []}
           selectedSubagentId={selectedSubagentId}
@@ -1163,6 +1166,10 @@ function FilesPanel({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const navigation = useAppStore((state) => state.workbenchFiles[taskId] ?? null);
+  const handledNavigationRef = useRef(0);
+  const selectedRowRef = useRef<HTMLButtonElement | null>(null);
+  const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const restoredSessionRef = useRef(Boolean(session && session.workspacePath === workspacePath));
   const preserveDirtyDraftRef = useRef(Boolean(session?.dirty && session.file && session.selectedPath));
   useRememberPanelSession<FilesPanelSession>(sessionKey, {
@@ -1183,6 +1190,7 @@ function FilesPanel({
     setPendingPath(null);
   });
   const reloadGuard = useArmedAction(() => setReloadToken((value) => value + 1));
+  const selectedIsImage = Boolean(selectedPath && isLocalRasterReference(selectedPath));
 
   const loadDirectory = useCallback(
     async (path: string) => {
@@ -1240,6 +1248,14 @@ function FilesPanel({
       setFile(null);
       return;
     }
+    if (selectedIsImage) {
+      setFile(null);
+      setDraft("");
+      setDirty(false);
+      setFileError(null);
+      setSaveError(null);
+      return;
+    }
     if (preserveDirtyDraftRef.current) {
       preserveDirtyDraftRef.current = false;
       return;
@@ -1261,7 +1277,61 @@ function FilesPanel({
     return () => {
       disposed = true;
     };
-  }, [workspacePath, workspaceAttached, selectedPath, reloadToken]);
+  }, [workspacePath, workspaceAttached, selectedPath, selectedIsImage, reloadToken]);
+
+  useEffect(() => {
+    if (!navigation || navigation.requestId === handledNavigationRef.current) return;
+    handledNavigationRef.current = navigation.requestId;
+    const path = navigation.path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+    if (!path) return;
+
+    const pieces = path.split("/");
+    const parents = pieces.slice(0, -1).map((_, index) => pieces.slice(0, index + 1).join("/"));
+    setExpanded((current) => {
+      const next = new Set(current);
+      parents.forEach((parent) => next.add(parent));
+      return next;
+    });
+    void Promise.all(["", ...parents].map((parent) => loadDirectory(parent)));
+
+    if (dirty && selectedPath && selectedPath !== path) {
+      switchGuard.disarm();
+      setPendingPath(path);
+      switchGuard.trigger();
+      return;
+    }
+    switchGuard.disarm();
+    setPendingPath(null);
+    setSelectedPath(path);
+  }, [dirty, loadDirectory, navigation, selectedPath, switchGuard]);
+
+  useEffect(() => {
+    if (!selectedPath) return;
+    const frame = requestAnimationFrame(() => {
+      selectedRowRef.current?.scrollIntoView({ block: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [directories, expanded, selectedPath]);
+
+  useEffect(() => {
+    if (
+      !file?.is_editable
+      || !navigation
+      || navigation.path.replace(/\\/g, "/") !== selectedPath
+      || !navigation.line
+    ) return;
+    const textarea = textAreaRef.current;
+    if (!textarea) return;
+    const lines = file.content.split("\n");
+    const lineIndex = Math.min(Math.max(navigation.line - 1, 0), Math.max(lines.length - 1, 0));
+    let offset = 0;
+    for (let index = 0; index < lineIndex; index++) offset += lines[index].length + 1;
+    offset += Math.min(Math.max((navigation.column ?? 1) - 1, 0), lines[lineIndex]?.length ?? 0);
+    textarea.focus();
+    textarea.setSelectionRange(offset, offset);
+    const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 20;
+    textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight / 3);
+  }, [file, navigation, selectedPath]);
 
   const toggleDirectory = (path: string) => {
     const willOpen = !expanded.has(path);
@@ -1340,6 +1410,7 @@ function FilesPanel({
           return (
             <div className="files-tree-node" key={entry.path}>
               <button
+                ref={selectedPath === entry.path ? selectedRowRef : undefined}
                 type="button"
                 className={`files-tree-row${selectedPath === entry.path ? " selected" : ""}`}
                 style={{ paddingInlineStart: 8 + depth * 14 }}
@@ -1393,9 +1464,10 @@ function FilesPanel({
                   {file.total_lines} 行{file.truncated ? " · 已截断" : ""}{file.is_editable ? "" : " · 只读"}
                 </span>
               )}
+              {selectedIsImage && <span className="files-meta">图片预览</span>}
               <button
                 className={"btn ghost sm" + (reloadGuard.armed ? " confirm" : "")}
-                disabled={!file || saving}
+                disabled={(!file && !selectedIsImage) || saving}
                 onClick={reloadFile}
               >
                 {reloadGuard.armed ? "确认放弃修改?" : "重新加载"}
@@ -1427,7 +1499,19 @@ function FilesPanel({
             {running && <div className="files-running">智能体正在运行；保存时会检测磁盘是否已被改动。</div>}
             {fileError && <div className="panel-error">{fileError}</div>}
             {saveError && <div className="panel-error">{saveError}</div>}
-            {!file && !fileError && <div className="empty">读取文件…</div>}
+            {!file && !fileError && !selectedIsImage && <div className="empty">读取文件…</div>}
+            {selectedIsImage && selectedPath && (
+              <div className="files-image-preview md">
+                <LocalImageArtifact
+                  key={`${selectedPath}:${reloadToken}`}
+                  href={selectedPath}
+                  alt={selectedPath.split("/").pop() ?? "图片"}
+                  label={selectedPath.split("/").pop() ?? "图片"}
+                  taskId={taskId}
+                  workspacePath={workspacePath}
+                />
+              </div>
+            )}
             {file && !file.is_editable && (
               <div className="files-readonly">
                 <IconFile width={17} height={17} />
@@ -1437,6 +1521,7 @@ function FilesPanel({
             )}
             {file?.is_editable && (
               <textarea
+                ref={textAreaRef}
                 className="files-textarea"
                 value={draft}
                 spellCheck={false}
@@ -1692,7 +1777,6 @@ function TerminalPanel({
   const [selId, setSelId] = useState<string | null>(session?.selectedTerminalId ?? null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [launcherOpen, setLauncherOpen] = useState(false);
   const [rowFocus, setRowFocus] = useState(-1);
   useRememberPanelSession(sessionKey, { selectedTerminalId: selId });
 
@@ -1729,7 +1813,6 @@ function TerminalPanel({
       return;
     }
     setCreating(true);
-    setLauncherOpen(false);
     setError(null);
     try {
       const id = await terminalCreate(shell, workspacePath);
@@ -1748,7 +1831,6 @@ function TerminalPanel({
       return;
     }
     setCreating(true);
-    setLauncherOpen(false);
     setError(null);
     try {
       await runWithCodexCli({ feature: "Codex CLI 终端" }, async () => {
@@ -1784,28 +1866,24 @@ function TerminalPanel({
           <button className="btn sm term-new" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
             <IconPlus width={11} height={11} /> 新建终端
           </button>
-          <button
-            className="btn sm term-new-more"
+          <Menu
+            className="term-launcher-root"
+            label="新建终端类型"
+            placement="down"
+            align="left"
+            menuClassName="term-launcher"
             disabled={creating || !workspacePath || !workspaceAttached}
-            aria-label="选择终端类型"
-            aria-expanded={launcherOpen}
-            aria-haspopup="menu"
-            onClick={() => setLauncherOpen((open) => !open)}
+            trigger={
+              <button className="btn sm term-new-more" aria-label="选择终端类型">
+                <IconChevronDown width={11} height={11} />
+              </button>
+            }
           >
-            <IconChevronDown width={11} height={11} />
-          </button>
-          {launcherOpen && (
-            <div className="term-launcher" role="menu" aria-label="新建终端类型">
-              <button role="menuitem" onClick={() => void create(defaultShell())}>
-                <span>系统 Shell</span>
-                <small>工作区根目录</small>
-              </button>
-              <button role="menuitem" onClick={() => void createCodex()}>
-                <span>Codex CLI</span>
-                <small>使用它自己的登录与权限</small>
-              </button>
-            </div>
-          )}
+            {({ close }) => <>
+              <MenuItem close={close} hint="工作区根目录" onSelect={() => void create(defaultShell())}>系统 Shell</MenuItem>
+              <MenuItem close={close} hint="使用它自己的登录与权限" onSelect={() => void createCodex()}>Codex CLI</MenuItem>
+            </>}
+          </Menu>
         </div>
         {terms.length > 0 && (
           <div className="term-options" role="grid" aria-label="终端列表">

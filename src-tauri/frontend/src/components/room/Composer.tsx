@@ -20,18 +20,41 @@ import {
   taskRename,
   taskSetModel,
 } from "../../lib/ipc";
-import type { AgentSendMode, InferenceOptions, ProjectAccessMode, QueuedMessage, TaskAgentEngine } from "../../lib/types";
-import type { ProviderChoice } from "../../lib/provider";
+import type {
+  AgentSendMode,
+  AttachmentInput,
+  CodexCliPreferences,
+  InferenceOptions,
+  ProjectAccessMode,
+  QueuedMessage,
+  SessionAttachmentMeta,
+  TaskAgentEngine,
+} from "../../lib/types";
+import { resolveActive, type ProviderChoice } from "../../lib/provider";
 import { useArmedAction, useAsyncAction } from "../../lib/hooks";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import { Menu, MenuItem } from "../ui/Menu";
+import { AnchoredSurface } from "../ui/AnchoredSurface";
 import { StatusBar } from "../ui/StatusBar";
 import { ProjectAccessSelector, projectAccessModeLabel } from "../ProjectAccessSelector";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
 import { CodexModelConfiguration } from "./CodexModelConfiguration";
 import { IconChevronDown, IconSend, IconStop } from "../icons";
+import {
+  AttachmentButton,
+  AttachmentTray,
+  firstBlockedAttachmentReason,
+  sendableAttachmentInputs,
+  useAttachments,
+  type DraftAttachment,
+} from "../Attachments";
+import {
+  attachmentCapabilityFor,
+  codexImageCapability,
+  imageCapabilityFor,
+} from "./model-capabilities";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { SlashCommandMenu } from "../SlashCommandMenu";
 import {
@@ -64,7 +87,7 @@ interface Props {
   running: boolean;
   queuedMessages: QueuedMessage[];
   onAbort: () => Promise<void>;
-  onSent: (text: string, mode: AgentSendMode) => void;
+  onSent: (text: string, mode: AgentSendMode, attachments?: SessionAttachmentMeta[]) => void;
   onSendFailed: () => void;
   onActivitySent: (mode: AgentSendMode) => void;
   onShowSubagents: () => void;
@@ -111,7 +134,9 @@ export function Composer({
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
+  const [codexPreferences, setCodexPreferences] = useState<CodexCliPreferences | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const compBoxRef = useRef<HTMLDivElement>(null);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
@@ -126,6 +151,32 @@ export function Composer({
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
   const { runWithCodexCli } = useCodexCliGate();
+  const attachments = useAttachments();
+  const activeModel = resolveActive(providerChoices, providerFallback, providerName, model);
+  const imageCapability = agentEngine === "codex"
+    ? codexImageCapability(codexPreferences)
+    : imageCapabilityFor(activeModel.provider, activeModel.model);
+  const capabilityForAttachment = useCallback(
+    (attachment: DraftAttachment) => attachmentCapabilityFor(
+      attachment.kind,
+      imageCapability,
+      agentEngine,
+      activeModel.provider,
+    ),
+    [activeModel.provider, agentEngine, imageCapability],
+  );
+  const sendableAttachments = sendableAttachmentInputs(
+    attachments.attachments,
+    capabilityForAttachment,
+  );
+  const capabilityBlockedReason = firstBlockedAttachmentReason(
+    attachments.attachments,
+    capabilityForAttachment,
+  );
+  const runBlockedReason = running && attachments.attachments.length > 0
+    ? "当前运行结束后才能把附件作为新一轮消息发送。"
+    : null;
+  const attachmentBlockedReason = runBlockedReason ?? capabilityBlockedReason;
 
   const slashContext = {
     location: "room" as const,
@@ -146,7 +197,8 @@ export function Composer({
     setAt(null);
     setSlashActive(0);
     setSlashDismissed(false);
-  }, [taskId]);
+    attachments.clear();
+  }, [taskId, attachments.clear]);
 
   useEffect(() => {
     if (slashActive < slashItems.length) return;
@@ -193,15 +245,31 @@ export function Composer({
     [text, at]
   );
 
-  const transmit = useCallback(async (message: string, mode: AgentSendMode) => {
-    if (!message.trim() || sending) return false;
+  const transmit = useCallback(async (
+    message: string,
+    mode: AgentSendMode,
+    files: AttachmentInput[] = [],
+  ) => {
+    if ((!message.trim() && files.length === 0) || sending) return false;
     setSending(true);
     setError(null);
     setNotice(null);
     try {
       // 不等待 IPC 往返：运行中的引导、排队和立即发送都应立即可见。
-      onSent(message, mode);
-      await agentSend(taskId, message, mode);
+      onSent(
+        message || `已附加 ${files.length} 个文件`,
+        mode,
+        files.map((file) => ({
+          name: file.name,
+          media_type: file.mediaType,
+          kind: file.mediaType.startsWith("image/")
+            ? "image"
+            : file.mediaType === "application/pdf"
+              ? "pdf"
+              : "text",
+        })),
+      );
+      await agentSend(taskId, message, mode, files);
       // IPC 成功后才把引导标为"已接纳"，失败时由下方 catch 回滚时间线。
       onActivitySent(mode);
       setText("");
@@ -460,10 +528,15 @@ export function Composer({
 
   const send = useCallback(async (mode: AgentSendMode = "auto") => {
     const msg = text.trim();
-    if (!msg || sending || commandBusy) return;
-    const parsed = parseSlashCommand(msg);
+    if (attachmentBlockedReason) {
+      setError(attachmentBlockedReason);
+      return;
+    }
+    if ((!msg && sendableAttachments.length === 0) || sending || commandBusy) return;
+    const parsed = msg ? parseSlashCommand(msg) : null;
     if (!parsed) {
-      await transmit(msg, mode);
+      const sent = await transmit(msg, mode, sendableAttachments);
+      if (sent && attachments.attachments.length > 0) attachments.clear();
       return;
     }
 
@@ -480,7 +553,17 @@ export function Composer({
     } finally {
       setCommandBusy(false);
     }
-  }, [commandBusy, executeSlash, sending, text, transmit]);
+  }, [
+    attachmentBlockedReason,
+    attachments.attachments.length,
+    attachments.clear,
+    commandBusy,
+    executeSlash,
+    sendableAttachments,
+    sending,
+    text,
+    transmit,
+  ]);
 
   // 立即发送会打断当前运行，保留二次确认（原先是本地手写的 4s 计时器）
   const sendNow = useArmedAction(() => void send("send_now"));
@@ -629,15 +712,29 @@ export function Composer({
       )}
       {slashOpen && (
         <SlashCommandMenu
+          anchorRef={compBoxRef}
           value={text}
           context={slashContext}
           activeIndex={slashActive}
           onActiveIndexChange={setSlashActive}
           onPick={pickSlash}
+          onDismiss={() => setSlashDismissed(true)}
         />
       )}
+      {attachments.error && (
+        <StatusBar kind="error" compact onDismiss={attachments.clearError}>{attachments.error}</StatusBar>
+      )}
       {at && (
-        <div className="at-menu popover popover--up" role="listbox" aria-label="引用文件">
+        <AnchoredSurface
+          anchorRef={compBoxRef}
+          className="at-menu popover popover--up"
+          role="listbox"
+          label="引用文件"
+          placement="up"
+          align="left"
+          matchAnchorWidth
+          onDismiss={() => setAt(null)}
+        >
           {at.error ? (
             <div className="popover-empty">文件搜索失败：{at.error}</div>
           ) : at.items.length === 0 ? (
@@ -660,9 +757,9 @@ export function Composer({
               </button>
             ))
           )}
-        </div>
+        </AnchoredSurface>
       )}
-      <div className="comp-box">
+      <div className="comp-box" ref={compBoxRef}>
         <textarea
           ref={taRef}
           rows={2}
@@ -682,52 +779,73 @@ export function Composer({
             if (e.target.value.startsWith("/")) setAt(null);
             else detectAt(e.target.value, e.target.selectionStart ?? e.target.value.length);
           }}
+          onPaste={attachments.onPaste}
           onKeyDown={onKeyDown}
+        />
+
+        <AttachmentTray
+          attachments={attachments.attachments}
+          capabilityFor={capabilityForAttachment}
+          blockedReason={runBlockedReason}
+          onRemove={attachments.remove}
         />
 
         {/* 输入区脚下的控件：与新对话页同构的「模型」「权限」入口 */}
         <div className="comp-meta">
-          <AgentEngineSwitcher
-            taskId={taskId}
-            value={agentEngine}
-            workspaceAttached={workspaceAttached}
-            running={running}
-            onChanged={onProviderChanged}
-          />
-          {agentEngine === "r_code" ? (
-            <ModelSwitcher
+          <div className="comp-meta-context">
+            <AttachmentButton onFiles={attachments.addFiles} disabled={sending || commandBusy} />
+            <AgentEngineSwitcher
               taskId={taskId}
-              providerName={providerName}
-              model={model}
-              inference={inference}
-              choices={providerChoices}
-              fallback={providerFallback}
+              value={agentEngine}
+              workspaceAttached={workspaceAttached}
               running={running}
               onChanged={onProviderChanged}
-              variant="pill"
-              openRequest={modelMenuRequest}
             />
-          ) : (
-            <CodexModelConfiguration running={running} />
-          )}
-          {workspaceAttached && (
-            <ProjectAccessSelector
-              value={workspaceAccessMode}
-              workspaceName={workspaceName ?? "当前工作区"}
-              placement="up"
-              disabled={scopeBusy || running}
-              onChange={onAccessModeChange}
-              openRequest={permissionMenuRequest}
-            />
-          )}
+            {agentEngine === "r_code" ? (
+              <ModelSwitcher
+                taskId={taskId}
+                providerName={providerName}
+                model={model}
+                inference={inference}
+                choices={providerChoices}
+                fallback={providerFallback}
+                running={running}
+                onChanged={onProviderChanged}
+                variant="pill"
+                openRequest={modelMenuRequest}
+              />
+            ) : (
+              <CodexModelConfiguration
+                running={running}
+                openRequest={modelMenuRequest}
+                preload
+                onPreferencesChange={setCodexPreferences}
+              />
+            )}
+            {workspaceAttached && (
+              <ProjectAccessSelector
+                value={workspaceAccessMode}
+                workspaceName={workspaceName ?? "当前工作区"}
+                placement="up"
+                disabled={scopeBusy || running}
+                onChange={onAccessModeChange}
+                openRequest={permissionMenuRequest}
+              />
+            )}
+          </div>
           <span className="spacer" />
           {!running && (
             <button
               className="send"
-              disabled={!text.trim() || sending || commandBusy}
+              disabled={
+                (!text.trim() && sendableAttachments.length === 0)
+                || Boolean(attachmentBlockedReason)
+                || sending
+                || commandBusy
+              }
               onClick={() => void send("auto")}
               aria-label="发送消息"
-              title="发送（Enter）"
+              title={attachmentBlockedReason ?? "发送（Enter）"}
             >
               <IconSend width={15} height={15} />
               <span>{sending ? "发送中" : "发送"}</span>
@@ -740,7 +858,7 @@ export function Composer({
             <button
               className="run-command-action primary"
               type="button"
-              disabled={!text.trim() || sending || commandBusy}
+              disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
               onClick={() => void send("steer")}
               title="作为引导注入当前运行（Enter）"
             >
@@ -750,7 +868,7 @@ export function Composer({
             <button
               className="run-command-action"
               type="button"
-              disabled={!text.trim() || sending || commandBusy}
+              disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
               onClick={() => void send("queue")}
               title="当前消息将在本轮结束后发送（Alt+Enter）"
             >
