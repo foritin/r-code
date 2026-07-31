@@ -536,13 +536,28 @@ export const settingsSelectProvider = (name: string) =>
 export const settingsDeleteProvider = (name: string) =>
   ipc<void>("cmd_settings_delete_provider", { name });
 
-export const codexIntegrationStatus = async () => {
+let codexIntegrationStatusRequest: Promise<CodexIntegrationStatus> | null = null;
+
+const loadCodexIntegrationStatus = async () => {
   try {
     return await ipc<CodexIntegrationStatus>("cmd_codex_integration_status");
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     return browserMockCodexIntegrationStatus();
   }
+};
+
+/** Coalesce startup consumers so Home and the Codex gate do not launch the same CLI probes twice. */
+export const codexIntegrationStatus = () => {
+  if (codexIntegrationStatusRequest) return codexIntegrationStatusRequest;
+
+  const request = loadCodexIntegrationStatus();
+  codexIntegrationStatusRequest = request;
+  const clear = () => {
+    if (codexIntegrationStatusRequest === request) codexIntegrationStatusRequest = null;
+  };
+  void request.then(clear, clear);
+  return request;
 };
 
 /** 用户在确认弹窗授权后，通过 npm 安装官方 Codex CLI，并返回最新状态。 */

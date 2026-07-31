@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 
 /// GitService -- 封装 `git` CLI 进行仓库操作。
 pub struct GitService {
@@ -76,10 +77,13 @@ impl GitService {
         if !path.exists() {
             return Ok(false);
         }
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .current_dir(path)
             .args(["rev-parse", "--git-dir"])
-            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_TERMINAL_PROMPT", "0");
+        hide_background_console(&mut command);
+        let output = command
             .output()
             .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
         Ok(output.status.success())
@@ -266,6 +270,7 @@ impl GitService {
         cmd.current_dir(&self.repo_path);
         cmd.args(args);
         cmd.env("GIT_TERMINAL_PROMPT", "0");
+        hide_background_console(&mut cmd);
         cmd
     }
 

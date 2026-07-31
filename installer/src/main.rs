@@ -16,6 +16,11 @@ use tauri::{Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 const APP_BINARY: &str = "r-code-host.exe";
+// Keep this option away from Tauri's short NSIS switches. In particular,
+// `${GetOptions} $CMDLINE "/R"` treats any `/R...` option as the post-install
+// launch switch, so a progress option named `/RC_PROGRESS` started R-Code
+// before the branded completion page was acknowledged.
+const INNER_PROGRESS_OPTION: &str = "/BRANDED_PROGRESS=";
 #[cfg(windows)]
 const PRODUCT_REGISTRY_KEY: &str = r"Software\R-Code Team\R-Code";
 const LICENSE_TEXT: &str = include_str!("../../LICENSE");
@@ -223,6 +228,11 @@ fn minimize_window(window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn start_window_drag(window: WebviewWindow) -> Result<(), String> {
+    window.start_dragging().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn close_window(window: WebviewWindow, state: State<'_, InstallerState>) -> Result<bool, String> {
     if state.0.active.load(Ordering::Acquire) {
         window
@@ -343,7 +353,7 @@ fn perform_install(
     let marker_path = temporary.path().join("progress.txt");
     let mut command = Command::new(&payload_path);
     command.arg("/S");
-    command.arg(format!("/RC_PROGRESS={}", marker_path.display()));
+    command.arg(format!("{INNER_PROGRESS_OPTION}{}", marker_path.display()));
     if !create_shortcuts {
         command.arg("/NS");
     }
@@ -586,6 +596,7 @@ fn main() {
             start_install,
             cancel_install,
             minimize_window,
+            start_window_drag,
             close_window,
             launch_installed_app,
         ])
@@ -635,5 +646,15 @@ mod tests {
         assert!(!is_passthrough_invocation(&[OsString::from(
             "/D=C:\\R-Code"
         )]));
+    }
+
+    #[test]
+    fn progress_option_cannot_alias_tauri_nsis_switches() {
+        for reserved in ["/R", "/P", "/NS", "/UPDATE", "/ARGS"] {
+            assert!(
+                !INNER_PROGRESS_OPTION.starts_with(reserved),
+                "{INNER_PROGRESS_OPTION} must not start with reserved NSIS switch {reserved}"
+            );
+        }
     }
 }

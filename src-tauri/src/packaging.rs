@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 
 /// Packaging configuration for R-Code.
 /// [doc-14 阶段8] [doc-18 M12-01]
@@ -198,11 +199,14 @@ impl SbomGenerator {
 
     /// Run `cargo metadata --format-version 1` and return parsed JSON.
     fn cargo_metadata(&self) -> Result<serde_json::Value, ProductError> {
-        let output = std::process::Command::new("cargo")
+        let mut command = std::process::Command::new("cargo");
+        command
             .arg("metadata")
             .arg("--format-version")
             .arg("1")
-            .current_dir(&self.workspace_path)
+            .current_dir(&self.workspace_path);
+        hide_background_console(&mut command);
+        let output = command
             .output()
             .map_err(|e| ProductError::Other(format!("failed to run cargo metadata: {e}")))?;
 

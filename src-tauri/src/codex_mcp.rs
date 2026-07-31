@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use r_code_core::process::hide_background_console;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -449,6 +450,7 @@ fn codex_mcp_server_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     Ok(command)
 }
 

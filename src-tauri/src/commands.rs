@@ -50,6 +50,7 @@ use r_code_core::dto::{
     ToolCall, VerificationRecord, Workspace,
 };
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
 use r_code_core::security::PathGuard;
 use r_code_gateway::permission::{PermissionCheckResult, PermissionEngine};
@@ -6685,6 +6686,7 @@ async fn run_codex_cli_at_with_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     match timeout(deadline, command.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
@@ -6725,6 +6727,7 @@ async fn run_npm_at(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     match timeout(deadline, command.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(error)) => Err(CodexCommandError::Launch(error.kind())),
@@ -6907,18 +6910,19 @@ pub async fn codex_integration_status() -> Result<serde_json::Value, String> {
     } else {
         probe_npm_cli().await
     };
-    let auth = if cli.available {
-        probe_codex_login(cli.path.as_deref()).await
+    let (auth, mcp_server_configured) = if cli.available {
+        tokio::join!(
+            probe_codex_login(cli.path.as_deref()),
+            codex_mcp_server_configured(cli.path.as_deref())
+        )
     } else {
-        CodexAuthProbe {
-            state: CodexAuthState::Unknown,
-            method: None,
-        }
-    };
-    let mcp_server_configured = if cli.available {
-        codex_mcp_server_configured(cli.path.as_deref()).await
-    } else {
-        false
+        (
+            CodexAuthProbe {
+                state: CodexAuthState::Unknown,
+                method: None,
+            },
+            false,
+        )
     };
     let setup_state = CodexSetupState::from_components(
         cli.available,
@@ -7742,6 +7746,7 @@ async fn run_codex_mcp_add(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     match timeout(CODEX_MCP_CONFIG_TIMEOUT, command.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(_)) => Err("无法启动 Codex MCP 配置命令。".to_string()),
@@ -8805,6 +8810,7 @@ fn codex_exec_command_with_permissions_and_images(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     Ok(command)
 }
 
@@ -8844,6 +8850,7 @@ async fn terminate_codex_child(child: &mut tokio::process::Child) {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        hide_background_console(terminate_tree.as_std_mut());
         let _ = timeout(Duration::from_secs(5), terminate_tree.status()).await;
     }
     #[cfg(unix)]
@@ -9263,6 +9270,7 @@ fn codex_app_server_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    hide_background_console(command.as_std_mut());
     Ok(command)
 }
 

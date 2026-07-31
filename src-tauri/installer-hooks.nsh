@@ -1,9 +1,9 @@
 ; Progress bridge used by the branded R-Code bootstrapper.
-; The normal NSIS UI and updater remain fully functional when /RC_PROGRESS is absent.
+; The normal NSIS UI and updater remain fully functional when /BRANDED_PROGRESS is absent.
 
 !macro RCodeWriteProgress VALUE
   ClearErrors
-  ${GetOptions} $CMDLINE "/RC_PROGRESS=" $R8
+  ${GetOptions} $CMDLINE "/BRANDED_PROGRESS=" $R8
   ${IfNot} ${Errors}
     FileOpen $R9 "$R8" w
     ${IfNot} ${Errors}

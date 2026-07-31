@@ -14,6 +14,7 @@
 pub mod dto;
 pub mod error;
 pub mod ids;
+pub mod process;
 pub mod secret;
 pub mod security;
 pub mod state;

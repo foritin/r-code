@@ -31,7 +31,20 @@ if (!indexSource.includes('<script src="watchdog.js" defer></script>')) {
 if (!/<button[^>]+id="install-now"[^>]+disabled/.test(indexSource)) {
   throw new Error("install action must remain disabled until runtime initialization completes");
 }
-for (const permission of ["core:event:allow-listen", "core:event:allow-unlisten"]) {
+if (!indexSource.includes('class="titlebar" id="titlebar"')) {
+  throw new Error("installer titlebar must expose the native drag handle");
+}
+if (!appSource.includes('bridge.invoke("start_window_drag")')) {
+  throw new Error("installer titlebar must invoke the native window drag command");
+}
+if (indexSource.includes("READY TO INSTALL") || !indexSource.includes('class="completion-seal"')) {
+  throw new Error("installer must use the branded orange setup/completion status treatment");
+}
+for (const permission of [
+  "core:event:allow-listen",
+  "core:event:allow-unlisten",
+  "core:window:allow-start-dragging",
+]) {
   if (!capability.permissions?.includes(permission)) {
     throw new Error(`installer capability is missing ${permission}`);
   }

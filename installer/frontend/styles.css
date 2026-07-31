@@ -8,7 +8,6 @@
   --line-strong: rgba(255, 255, 255, 0.15);
   --orange: #ff781f;
   --amber: #ffae2b;
-  --green: #54d39a;
   --red: #ff6e61;
   font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
 }
@@ -256,6 +255,22 @@ button:disabled {
   letter-spacing: 0.16em;
 }
 
+.brand-kicker {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #9a7760;
+}
+
+.brand-kicker::before {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--orange), var(--amber));
+  box-shadow: 0 0 12px rgba(255, 122, 31, 0.32);
+  content: "";
+}
+
 .view h2 {
   margin: 0;
   font-size: 30px;
@@ -274,25 +289,17 @@ button:disabled {
 .version {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-left: 7px;
+  margin-left: 2px;
+  padding-left: 9px;
+  border-left: 1px solid rgba(255, 157, 72, 0.28);
   color: #d3cec8;
   font: 600 11px/1 ui-monospace, "Cascadia Code", monospace;
-}
-
-.version::before {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--green);
-  box-shadow: 0 0 10px rgba(84, 211, 154, 0.6);
-  content: "";
 }
 
 .existing-note {
   display: none;
   margin: 10px 0 -10px;
-  color: #8cc7aa;
+  color: #c49a7a;
   font-size: 10px;
   line-height: 1.5;
 }
@@ -567,9 +574,9 @@ button:disabled {
 }
 
 .phase.done .phase-dot {
-  border-color: rgba(84, 211, 154, 0.35);
-  background: rgba(84, 211, 154, 0.08);
-  color: var(--green);
+  border-color: rgba(255, 151, 58, 0.32);
+  background: rgba(255, 122, 31, 0.08);
+  color: #ff9d48;
 }
 
 .phase-state {
@@ -648,7 +655,6 @@ button:disabled {
   padding-top: 4px;
 }
 
-.success-mark,
 .error-mark {
   width: 58px;
   height: 58px;
@@ -659,11 +665,48 @@ button:disabled {
   font: 650 25px/1 "Segoe UI", sans-serif;
 }
 
-.success-mark {
-  border: 1px solid rgba(84, 211, 154, 0.38);
-  background: rgba(84, 211, 154, 0.08);
-  box-shadow: 0 16px 42px rgba(84, 211, 154, 0.08);
-  color: var(--green);
+.completion-seal {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 13px;
+  min-height: 58px;
+  margin-bottom: 27px;
+  padding: 8px 17px 8px 8px;
+  border: 1px solid rgba(255, 139, 45, 0.3);
+  border-radius: 16px;
+  background: linear-gradient(110deg, rgba(255, 122, 31, 0.11), rgba(255, 174, 43, 0.025));
+  box-shadow: 0 16px 42px rgba(255, 104, 20, 0.08);
+}
+
+.completion-seal-logo {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 158, 72, 0.42);
+  border-radius: 11px;
+  background: #17130f;
+  color: #ff8b2e;
+  font: 750 21px/1 "Segoe UI Variable", "Segoe UI", sans-serif;
+  box-shadow: inset 0 0 18px rgba(255, 122, 31, 0.08);
+}
+
+.completion-seal-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.completion-seal-copy small {
+  color: #8e6f5a;
+  font: 650 8px/1 ui-monospace, "Cascadia Code", monospace;
+  letter-spacing: 0.16em;
+}
+
+.completion-seal-copy strong {
+  color: #ff9b52;
+  font: 700 10px/1 ui-monospace, "Cascadia Code", monospace;
+  letter-spacing: 0.11em;
 }
 
 .error-mark {
