@@ -11,10 +11,10 @@
   </head>
   <body>
     <main class="installer" aria-label="R-Code 安装程序">
-      <header class="titlebar" data-tauri-drag-region>
-        <img src="icon.png" alt="" draggable="false" data-tauri-drag-region />
-        <strong data-tauri-drag-region>R-Code 安装程序</strong>
-        <span class="title-version" id="title-version" data-tauri-drag-region>v0.1.0</span>
+      <header class="titlebar" id="titlebar">
+        <img src="icon.png" alt="" draggable="false" />
+        <strong>R-Code 安装程序</strong>
+        <span class="title-version" id="title-version">v0.1.0</span>
         <div class="window-actions" aria-label="窗口操作">
           <button class="window-action" id="minimize-window" type="button" aria-label="最小化">—</button>
           <button class="window-action close" id="close-window" type="button" aria-label="关闭">×</button>
@@ -38,7 +38,7 @@
         <section class="panel">
           <section class="view active" data-view="welcome" aria-labelledby="welcome-title">
             <div>
-              <p class="view-kicker">READY TO INSTALL <span class="version" id="welcome-version">v0.1.0</span></p>
+              <p class="view-kicker brand-kicker">R-CODE / INSTALL <span class="version" id="welcome-version">v0.1.0</span></p>
               <h2 id="welcome-title">安装 R-Code</h2>
               <p class="lede" id="welcome-lede">默认安装到当前用户目录，不需要管理员权限。</p>
               <p class="existing-note" id="existing-note">检测到已安装版本，将安全更新应用文件并保留本地数据。</p>
@@ -76,11 +76,11 @@
               <div class="install-row">
                 <span class="row-icon" aria-hidden="true">▷</span>
                 <span class="row-copy">
-                  <strong>安装完成后启动</strong>
-                  <small>在完成页一键打开 R-Code</small>
+                  <strong>完成页快捷启动</strong>
+                  <small>安装完成后，由你点击按钮启动 R-Code</small>
                 </span>
                 <label class="switch">
-                  <span class="sr-only">安装完成后启动 R-Code</span>
+                  <span class="sr-only">在完成页显示启动 R-Code 按钮</span>
                   <input id="launch-after" type="checkbox" checked />
                   <span aria-hidden="true"></span>
                 </label>
@@ -136,9 +136,11 @@
           </section>
 
           <section class="view result-view" data-view="complete" aria-labelledby="complete-title">
-            <div class="success-mark" aria-hidden="true">✓</div>
-            <p class="view-kicker">INSTALLATION COMPLETE</p>
-            <h2 id="complete-title">R-Code 已准备就绪</h2>
+            <div class="completion-seal" aria-hidden="true">
+              <span class="completion-seal-logo">R</span>
+              <span class="completion-seal-copy"><small>SETUP STATUS</small><strong>INSTALL COMPLETE</strong></span>
+            </div>
+            <h2 id="complete-title">R-Code 安装完成</h2>
             <p class="lede">应用已安装到你的电脑，可以马上开始一个新的编程任务。</p>
             <div class="summary">
               <div class="summary-row"><span>版本</span><strong id="complete-version">0.1.0</strong></div>

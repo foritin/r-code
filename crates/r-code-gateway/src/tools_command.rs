@@ -35,6 +35,7 @@ use std::process::Stdio;
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
@@ -391,6 +392,7 @@ cwd defaults to the workspace root and cannot escape it."
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        hide_background_console(cmd.as_std_mut());
 
         let mut child = match cmd.spawn() {
             Ok(child) => child,
@@ -461,10 +463,10 @@ async fn kill_tree(child: &mut tokio::process::Child) {
     #[cfg(windows)]
     {
         if let Some(pid) = child.id() {
-            let killed = Command::new("taskkill")
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .output()
-                .await;
+            let mut terminate_tree = Command::new("taskkill");
+            terminate_tree.args(["/PID", &pid.to_string(), "/T", "/F"]);
+            hide_background_console(terminate_tree.as_std_mut());
+            let killed = terminate_tree.output().await;
             if killed.is_ok() {
                 return;
             }

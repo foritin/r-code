@@ -18,6 +18,7 @@ use std::path::{Component, Path};
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 
 use crate::gateway::Tool;
 
@@ -231,8 +232,10 @@ impl Tool for GitStatusTool {
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
-        let output = std::process::Command::new("git")
-            .args(["-C", path, "status", "--porcelain=v1"])
+        let mut command = std::process::Command::new("git");
+        command.args(["-C", path, "status", "--porcelain=v1"]);
+        hide_background_console(&mut command);
+        let output = command
             .output()
             .map_err(|e| ProductError::GitError(format!("failed to run git: {e}")))?;
         if !output.status.success() {

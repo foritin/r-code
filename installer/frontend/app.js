@@ -45,6 +45,7 @@ const bridge = {
 
 const elements = {
   views: [...document.querySelectorAll(".view")],
+  titlebar: document.querySelector("#titlebar"),
   titleVersion: document.querySelector("#title-version"),
   welcomeVersion: document.querySelector("#welcome-version"),
   sharedVersions: [...document.querySelectorAll(".shared-version")],
@@ -97,6 +98,14 @@ let cancelable = true;
 let closeAfterCancel = false;
 let modalReturnFocus = null;
 let toastTimer = null;
+
+elements.titlebar.addEventListener("mousedown", (event) => {
+  if (event.button !== 0 || event.target.closest(".window-actions")) return;
+  event.preventDefault();
+  void bridge.invoke("start_window_drag").catch(() => {
+    showToast("暂时无法拖动安装窗口，请重试");
+  });
+});
 
 function setView(name) {
   currentView = name;

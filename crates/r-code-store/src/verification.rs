@@ -16,6 +16,7 @@ use std::process::Stdio;
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{VerificationRecord, VerificationStatus};
 use r_code_core::error::ProductError;
+use r_code_core::process::hide_background_console;
 use rusqlite::params;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -297,6 +298,7 @@ async fn execute_command(
         command.arg("-lc").arg(&config.command);
         command
     };
+    hide_background_console(cmd.as_std_mut());
     cmd.current_dir(working_dir);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -350,10 +352,10 @@ async fn execute_command(
             Err(_) => {
                 #[cfg(windows)]
                 if let Some(pid) = pid {
-                    let _ = Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T", "/F"])
-                        .output()
-                        .await;
+                    let mut terminate_tree = Command::new("taskkill");
+                    terminate_tree.args(["/PID", &pid.to_string(), "/T", "/F"]);
+                    hide_background_console(terminate_tree.as_std_mut());
+                    let _ = terminate_tree.output().await;
                 }
                 #[cfg(not(windows))]
                 {
