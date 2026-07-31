@@ -188,8 +188,8 @@ security policy, tool permissions, or the user's current explicit request.
 - 每次 run 前从 rules/settings 构建；不能只在 session 创建时读取。
 - 公共 build 自行取得 workspace guard；run-start 使用 `build_snapshot_locked`，在同一 guard 内重新读取 task/workspace/branch、恢复 applying 并构建最终快照。固定锁顺序为 `memory workspace -> AgentBridge -> ExternalAgentRegistry`，registry 方法不得反向调用 AgentBridge。
 - 来源选择矩阵被冻结：`inject_rules=false` 时无论文件 ready/unverified/invalid 都返回 `snapshot=None`，不渲染、不计算 memory hash、不新增 injection ledger；`inject_rules=true` 时才要求 `current file revision == latest local-user approved revision` 且 parser 无 error，并选择 enabled rules；ready 但没有 enabled rule 也返回 `None`。
-- 默认字符预算 12000，可配置 1000–50000。
-- 用 Rust `chars().count()` 按文件顺序放入完整规则；一条规则放不下就整条省略，记录 `omitted_rule_count`。
+- 默认字符预算 12000，可配置 1000–50000；预算约束最终渲染后的整个 memory block（固定 wrapper、标签和 XML-escaped text），不是转义前原文。
+- 先渲染每条完整 rule fragment，再用 Rust `chars().count()` 按文件顺序选择；放不下就整条省略并继续尝试后续规则，最终 prompt 绝不超过预算，记录全部未选择 enabled rules 的 `omitted_rule_count`。
 - 用有 schema tag 的长度前缀字段流计算 BLAKE3，不依赖未定义的“canonical JSON”。
 - native run 启动时 clone 到 `RunContext` 和 host `ActiveRun`；该 native parent 支持的 children 继承同一 hash。
 - run 启动后的编辑只影响下一次 run。
@@ -319,6 +319,7 @@ npm run build
 - secret 在进入 DB 前脱敏，支持包不出现 sentinel 正文。
 - 两个不同 candidate 同 revision 并发批准不会丢规则；外部编辑使 expected revision 失效且不覆盖。
 - pending->applying 后重建第二个 `MemoryService`，分别由 overview/build_snapshot 触发 expected、intended、第三种 revision 恢复，验证前两者自动完成、第三种只进入显式 reconcile。
+- 不经过 overview，直接在旧 applying 后调用第二个 approve、rule update、acknowledge：expected/intended 先恢复，第三种 revision 全部 `invalid_state` 且批准 revision 不变。
 - 文件写成功/DB finalize 失败时 revision 未被授权，重试不产生重复 rule。
 - `r-code-core` renderer 逐字稳定；`r-code-agent-worker` 不依赖 host。
 - session 重用时第二个 run 刷新 memory；第一个 run 的子代理仍使用旧 hash。
@@ -327,6 +328,8 @@ npm run build
 - Codex main、runtime Codex child、host exec child、host MCP child 分别走真实入口；native parent children 使用 ActiveRun 同一 hash，external parent 仍禁止委派。
 - barrier 精确交错 parent 最后一次 idle 检查与 child reserve：child 要么已登记并被 drain 等待，要么因 gate 已关闭而被拒绝。
 - sequence 分页覆盖相同 timestamp 和两页之间新增记录；CI 用 Playwright 自带 Chromium 路径启动/关闭，不依赖系统 Chrome。
+- barrier 覆盖 forget 与等待中的 rule mutation/native start/Codex main：forget 先赢则不写文件、不启动 provider；另一方先赢则 event/active state 在 guard 释放前可见。native start 后持久化故障必须 abort/drain。
+- Node 20 的 `memory-mock.test.mjs` 只加载 JS；它用 Vite `createServer`，再由浏览器动态 import 生产 `browser-mock-runtime.ts`，不得复制 mock 状态机。
 - 直接 SQL sentinel 证明 task delete 后 proposed/normalized/excerpt/apply intent 全部清空；forget 不删真实文件且重开为 unverified。
 - legacy `.r-code/memory.md` 在升级、编辑和删除路径中保持兼容。
 
@@ -341,6 +344,7 @@ npm run build
 | session 复用导致旧记忆 | 用户以为规则没生效 | 每个 run 前 refresh，不只 create_session |
 | run 中编辑造成父子不一致 | 不可重现 | run context 冻结；children 继承同一 hash |
 | parent 收尾与 Codex child 注册竞态 | 已接受 child 被父 run 提前清理 | registry 内原子 close/reserve gate；barrier 测试冻结两种合法结果 |
+| workspace forget 与文件写/run start 竞态 | forget 后仍改真实文件或启动孤儿 provider | 共享 lifecycle guard；锁内重查 workspace；start active 持久化后才释放；故障 abort/drain |
 | 自动捕获敏感反馈 | 隐私泄露 | 推荐默认关闭；落盘前复用 redact_text；日志不写正文 |
 | 模糊去重误合并 | 丢规则/错误替换 | fuzzy 只提示 related；只有 exact 自动记 observation；替换需用户明确选择 |
 | 规则增长挤占上下文 | 成本和效果下降 | 完整规则字符预算、omitted 可见、启停/删除管理 |
