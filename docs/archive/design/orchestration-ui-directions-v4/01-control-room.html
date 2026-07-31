@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>方向 01 · 独立指挥舱</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">R-Code · 编队 UI</a>
+        <a class="nav-link active" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">点击左侧 worker 切换直播</span>
+      </div>
+    </header>
+
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">Direction 01 / Separate destination</p>
+        <h1>独立指挥舱</h1>
+      </div>
+      <p>
+        当编队本身就是工作对象，就不该附着在聊天底部。这个方向新增一级“指挥舱”页面：worker、直播、审批各占一个稳定区域，聊天只通过面包屑返回。
+      </p>
+    </section>
+
+    <main class="canvas-wrap">
+      <div class="prototype">
+        <div class="window-bar">
+          <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+          <span class="window-title">R-Code — pay-service / 编队指挥舱</span>
+        </div>
+        <div class="control-app">
+          <aside class="app-rail">
+            <div class="brandmark">C</div>
+            <button class="icon-button" title="Sessions">▤</button>
+            <button class="icon-button active" title="Fleet">⌁</button>
+            <button class="icon-button" title="Files">⌘</button>
+            <button class="icon-button" title="Memory">◇</button>
+            <span class="spacer"></span>
+            <button class="icon-button" title="Settings">⚙</button>
+          </aside>
+
+          <section class="control-main">
+            <header class="control-head">
+              <span style="color: var(--faint)">支付超时排查 /</span>
+              <h2>编队指挥舱</h2>
+              <span class="pill"><span class="live-dot live"></span>3 live</span>
+              <span class="pill">1 个决策</span>
+              <span class="spacer"></span>
+              <button class="btn">暂停全部</button>
+              <button class="btn">返回主会话 ↗</button>
+            </header>
+
+            <div class="control-grid">
+              <aside class="roster">
+                <p class="section-label">Workers · 3</p>
+                <button class="worker-row active" data-worker="claude-test">
+                  <span class="live-dot wait"></span>
+                  <span><strong>Claude · 跑测试</strong><small>等待安装依赖 · 02:14</small></span>
+                  <span class="status wait">决策</span>
+                </button>
+                <button class="worker-row" data-worker="codex-review">
+                  <span class="live-dot live"></span>
+                  <span><strong>Codex · 方案评审</strong><small>正在检查并发边界 · 01:48</small></span>
+                  <span class="status live">输出中</span>
+                </button>
+                <button class="worker-row" data-worker="claude-docs">
+                  <span class="live-dot"></span>
+                  <span><strong>Claude · 文档同步</strong><small>完成 4 个文件 · 00:36</small></span>
+                  <span class="status done">完成</span>
+                </button>
+
+                <p class="section-label" style="margin-top: 22px">Commander</p>
+                <div class="worker-row" style="cursor: default">
+                  <span class="live-dot live"></span>
+                  <span><strong>Claude · 主会话</strong><small>正在等待 worker 返回</small></span>
+                </div>
+              </aside>
+
+              <section class="stage-column">
+                <header class="stage-tabs">
+                  <span class="live-dot wait" id="stageDot"></span>
+                  <strong id="stageTitle">Claude · 跑测试</strong>
+                  <span class="status wait" id="stageStatus">等待决策</span>
+                  <span class="spacer"></span>
+                  <span class="pill">只看，不接管</span>
+                  <button class="btn">打开原终端</button>
+                </header>
+
+                <pre class="terminal control-terminal" data-worker-view="claude-test"><span class="dim">╭─ Claude Code · test runner ─────────────────────────────╮</span>
+
+已完成单元测试：<span class="ok">829 passed</span>
+正在运行 Electron E2E，Playwright 缺少浏览器依赖。
+
+准备执行：
+  npm install @playwright/test@latest
+
+<span class="warn">等待指挥官批准 R3 操作…</span>
+
+<span class="dim">当前目录  /Users/me/git/bullpen
+上下文    M13 orchestration</span></pre>
+
+                <pre class="terminal control-terminal" data-worker-view="codex-review" hidden><span class="dim">╭─ Codex · reviewer ─────────────────────────────────────╮</span>
+
+Reviewing terminal-control-service.ts
+
+<span class="ok">✓</span> direct spawn does not wait for shell readiness
+<span class="ok">✓</span> initial prompt is passed after the option terminator
+<span class="accent">→</span> checking takeover races around xterm protocol replies
+
+Finding 1/3
+The known-agent edge should be emitted after session registration.
+
+<span class="dim">Analyzed 14 files · 8,401 weighted tokens</span></pre>
+
+                <pre class="terminal control-terminal" data-worker-view="claude-docs" hidden><span class="dim">╭─ Claude Code · docs ───────────────────────────────────╮</span>
+
+Documentation synchronization complete.
+
+<span class="ok">✓ README.zh-CN.md</span>
+<span class="ok">✓ docs/IMPLEMENTATION_STATUS.html</span>
+<span class="ok">✓ docs/IMPLEMENTATION_BACKLOG.html</span>
+<span class="ok">✓ docs/R_CODE_TERMINAL_AGENTS_SNIPPET.html</span>
+
+No commit created, as requested.
+
+<span class="dim">Exited 0 · 36 seconds</span></pre>
+
+                <div class="command-line">
+                  <span style="color: var(--orange)">↳</span>
+                  <input id="controlCommand" value="批准后继续测试，并只汇报失败项" aria-label="发送给当前 worker" />
+                  <button class="btn primary" id="controlSend">发送给当前 worker</button>
+                </div>
+              </section>
+
+              <aside class="decisions">
+                <p class="section-label">Needs you · 1</p>
+                <article class="decision-card" id="installDecision">
+                  <h3>Claude · 跑测试</h3>
+                  <p>请求执行 <code>npm install</code>。这会修改 lockfile 和 node_modules。</p>
+                  <div class="decision-actions">
+                    <button class="btn primary" id="allowInstall">允许一次</button>
+                    <button class="btn">拒绝</button>
+                  </div>
+                </article>
+
+                <p class="section-label" style="margin-top: 19px">Recent signals</p>
+                <div style="padding: 9px 3px; border-bottom: 1px solid var(--line-soft)">
+                  <strong style="font-size: 10.5px">Codex 发现 1 个竞态</strong>
+                  <div style="color: var(--faint); font-size: 9.5px; margin-top: 3px">22:18 · 建议切入查看</div>
+                </div>
+                <div style="padding: 9px 3px; border-bottom: 1px solid var(--line-soft)">
+                  <strong style="font-size: 10.5px">文档 worker 已完成</strong>
+                  <div style="color: var(--faint); font-size: 9.5px; margin-top: 3px">22:17 · 修改 4 个文件</div>
+                </div>
+              </aside>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <section class="mock-caption">
+      <article class="caption-card"><strong>解决什么</strong><span>给多 worker 足够空间，审批不会和聊天、终端、监视墙争夺同一列宽。</span></article>
+      <article class="caption-card"><strong>关键代价</strong><span>新增一级导航；用户需要在“主会话”和“指挥舱”之间切换，轻任务显得偏重。</span></article>
+      <article class="caption-card"><strong>适用边界</strong><span>4–8 个并行 worker、长任务、经常需要跨 worker 比较和审批的用户。</span></article>
+    </section>
+
+    <script>
+      const meta = {
+        'claude-test': ['Claude · 跑测试', '等待决策', 'wait'],
+        'codex-review': ['Codex · 方案评审', '输出中', 'live'],
+        'claude-docs': ['Claude · 文档同步', '已完成', 'done'],
+      };
+      document.querySelectorAll('[data-worker]').forEach((button) => {
+        button.addEventListener('click', () => {
+          document.querySelectorAll('[data-worker]').forEach((item) => item.classList.remove('active'));
+          button.classList.add('active');
+          const id = button.dataset.worker;
+          document.querySelectorAll('[data-worker-view]').forEach((view) => {
+            view.hidden = view.dataset.workerView !== id;
+          });
+          document.getElementById('stageTitle').textContent = meta[id][0];
+          document.getElementById('stageStatus').textContent = meta[id][1];
+          document.getElementById('stageStatus').className = `status ${meta[id][2]}`;
+          document.getElementById('stageDot').className = `live-dot ${meta[id][2]}`;
+        });
+      });
+      document.getElementById('allowInstall').addEventListener('click', () => {
+        document.getElementById('installDecision').innerHTML = '<h3>已允许一次</h3><p>指令已交还 Claude · 跑测试，等待新的终端输出。</p>';
+      });
+      document.getElementById('controlSend').addEventListener('click', () => {
+        const button = document.getElementById('controlSend');
+        button.textContent = '已发送 ✓';
+        setTimeout(() => (button.textContent = '发送给当前 worker'), 1300);
+      });
+    </script>
+  </body>
+</html>

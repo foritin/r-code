@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>UI/UX 设计系统 · r-code</title>
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="ui-ux-设计系统">UI/UX 设计系统</h1>
+<h2 id="1-概述">1. 概述</h2>
+<p>R-Code 的 UI/UX 设计遵循 <strong>Studio</strong> 视觉语言，暖纸浅色主题 + 匹配深色主题，<br>衬线显示字体用于 Home 标题，12-14px 圆角卡片，柔和阴影。<br>两个表面共享相同的设计 tokens。</p>
+<h2 id="2-设计-tokens">2. 设计 Tokens</h2>
+<h3 id="2-1-颜色系统">2.1 颜色系统</h3>
+<div class="code-block"><span class="code-block__lang">css</span><button class="copy-code" type="button">复制</button><pre><code class="language-css">/* Light Theme (Studio) */
+--bg-app: #eceae5;          /* 应用背景 */
+--bg-titlebar: #f6f5f1;     /* 标题栏 */
+--bg-sidebar: #f6f5f1;      /* 侧边栏 */
+--bg-editor: #fbfaf7;       /* 编辑器 */
+--bg-input: #ffffff;        /* 输入框 */
+--bg-card: #ffffff;         /* 卡片 */
+--bg-chip: #edeae3;         /* 标签芯片 */
+--bg-hover: #e8e5de;        /* 悬停 */
+--bg-active: #e2dfd7;       /* 激活 */
+--bg-selected: #e9e6df;     /* 选中 */
+
+--border: #e5e1d8;          /* 边框 */
+--border-soft: #edeae3;     /* 柔和边框 */
+--border-strong: #cfcabf;   /* 强调边框 */
+
+--fg: #201e1a;              /* 前景文字 */
+--fg-muted: #6e6a61;        /* 次要文字 */
+--fg-faint: #a39e94;        /* 弱化文字 */
+--fg-inverse: #fbfaf7;      /* 反转文字 */
+
+--accent: #1b1a16;          /* 强调色 */
+--accent-fg: #ffffff;       /* 强调文字 */
+
+--danger: #c4453d;          /* 危险 */
+--danger-bg: #fdecea;
+--warning: #b06f10;         /* 警告 */
+--warning-bg: #faf0dc;
+--success: #2f9e63;         /* 成功 */
+--success-bg: #e7f5ec;
+--info: #3f7bd9;            /* 信息 */
+--info-bg: #e9f1fd;</code></pre></div>
+<h3 id="2-2-字体">2.2 字体</h3>
+<div class="code-block"><span class="code-block__lang">css</span><button class="copy-code" type="button">复制</button><pre><code class="language-css">--font-ui: -apple-system, BlinkMacSystemFont, &#39;Segoe UI&#39;, system-ui, 
+           &#39;PingFang SC&#39;, &#39;Microsoft YaHei&#39;, sans-serif;
+--font-display: &#39;Iowan Old Style&#39;, Georgia, &#39;Times New Roman&#39;, serif;
+--font-mono: Menlo, Monaco, &#39;SF Mono&#39;, Consolas, &#39;Courier New&#39;, monospace;</code></pre></div>
+<h3 id="2-3-字号">2.3 字号</h3>
+<div class="code-block"><span class="code-block__lang">css</span><button class="copy-code" type="button">复制</button><pre><code class="language-css">--fs-body: 13px;       /* 正文 */
+--fs-secondary: 12px;  /* 次要 */
+--fs-min: 11px;        /* 最小 */
+--fs-title: 15px;      /* 标题 */
+--fs-display: 20px;    /* 显示 */</code></pre></div>
+<h3 id="2-4-圆角与阴影">2.4 圆角与阴影</h3>
+<div class="code-block"><span class="code-block__lang">css</span><button class="copy-code" type="button">复制</button><pre><code class="language-css">--radius: 12px;        /* 卡片圆角 */
+--shadow-card: 0 1px 2px rgba(30, 26, 18, 0.05), 
+               0 14px 40px rgba(30, 26, 18, 0.08);</code></pre></div>
+<h2 id="3-信息架构">3. 信息架构</h2>
+<h3 id="3-1-三层结构">3.1 三层结构</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">┌─────────────────────────────────────────────────────────┐
+│  Home (启动器 + 任务控制台)                              │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  左侧边栏 (New Task, Reviews, Projects, Tasks)    │ │
+│  │  底部 (Open IDE workspace / Settings)             │ │
+│  ├───────────────────────────────────────────────────┤ │
+│  │  底部 composer                                    │ │
+│  │  [📁 project] [approval] [model] [attach] [send]  │ │
+│  ├───────────────────────────────────────────────────┤ │
+│  │  Mission Control                                  │ │
+│  │  Running tasks + Needs You group                  │ │
+│  └───────────────────────────────────────────────────┘ │
+│                          ↓ 点击任务                     │
+│  Task Room (每任务页)                                    │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  对话时间线                                        │ │
+│  │  计划/权限/问题卡片                                │ │
+│  │  变更 + 验证轨道                                   │ │
+│  │  决策面板 (Review / Accept / Rollback)            │ │
+│  │  Reply composer                                   │ │
+│  └───────────────────────────────────────────────────┘ │
+│                          ↓ 点击 &quot;Open in editor&quot;        │
+│  Editor (按需完整 IDE)                                   │
+│  ┌───────────────────────────────────────────────────┐ │
+│  │  Activity bar · Editor · Agent panel              │ │
+│  │  · Terminals · Git · Search                       │ │
+│  └───────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────┘</code></pre></div>
+<h2 id="4-设计-mockup-索引">4. 设计 Mockup 索引</h2>
+<h3 id="4-1-核心界面">4.1 核心界面</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Home v2</td><td>启动器主界面</td><td><a href="design/home-v2-mockup.html">docs/design/home-v2-mockup.html</a></td></tr><tr><td>Direction Picker</td><td>IA 方向选择</td><td><a href="design/direction-picker.html">docs/design/direction-picker.html</a></td></tr><tr><td>Session 4b</td><td>连续对话房间</td><td><a href="design/session-4b-continuous-room.html">docs/design/session-4b-continuous-room.html</a></td></tr><tr><td>External CLI Final</td><td>外部 CLI 最终形态</td><td><a href="design/external-cli-final-mock.html">docs/design/external-cli-final-mock.html</a></td></tr></tbody></table>
+<h3 id="4-2-会话编排">4.2 会话编排</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Fusion Mockup</td><td>融合稿（家谱 + 指挥室）</td><td><a href="design/agent-orchestration-fusion-mockup.html">docs/design/agent-orchestration-fusion-mockup.html</a></td></tr><tr><td>V2 Mockup</td><td>第二版编排 mockup</td><td><a href="design/agent-orchestration-v2-mockup.html">docs/design/agent-orchestration-v2-mockup.html</a></td></tr><tr><td>V3 Director Stage</td><td>导播位叠加</td><td><a href="design/agent-orchestration-v3-director-stage.html">docs/design/agent-orchestration-v3-director-stage.html</a></td></tr><tr><td>Terminal Parallel</td><td>终端并行用户故事</td><td><a href="design/terminal-parallel-vnext.html">docs/design/terminal-parallel-vnext.html</a></td></tr></tbody></table>
+<h3 id="4-3-终端系统">4.3 终端系统</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Terminal File Link</td><td>终端文件链接</td><td><a href="design/terminal-file-link-mock.html">docs/design/terminal-file-link-mock.html</a></td></tr><tr><td>Terminal Placement</td><td>终端放置方向</td><td><a href="design/terminal-placement-directions.html">docs/design/terminal-placement-directions.html</a></td></tr><tr><td>Terminal Directions</td><td>终端方向</td><td><a href="design/external-cli-terminal-directions.html">docs/design/external-cli-terminal-directions.html</a></td></tr><tr><td>Inspiration Ghostty</td><td>Ghostty 灵感</td><td><a href="design/inspo-ghostty-legible-terminal.html">docs/design/inspo-ghostty-legible-terminal.html</a></td></tr></tbody></table>
+<h3 id="4-4-skills-系统">4.4 Skills 系统</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Skills Manager</td><td>Skills 管理器</td><td><a href="design/skills-manager-mockup.html">docs/design/skills-manager-mockup.html</a></td></tr><tr><td>Skills Insight</td><td>Skills 使用洞察</td><td><a href="design/skills-insight-mock.html">docs/design/skills-insight-mock.html</a></td></tr><tr><td>Skills Usage</td><td>Skills 使用统计</td><td><a href="design/skills-main-usage-mockup.html">docs/design/skills-main-usage-mockup.html</a></td></tr></tbody></table>
+<h3 id="4-5-会话与历史">4.5 会话与历史</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Session Archaeology</td><td>会话考古</td><td><a href="design/session-archaeology-mock.html">docs/design/session-archaeology-mock.html</a></td></tr><tr><td>Session Rail</td><td>Session Rail 推荐</td><td><a href="design/session-rail-recommended-mock.html">docs/design/session-rail-recommended-mock.html</a></td></tr><tr><td>Session Replay</td><td>会话回放</td><td><a href="design/session-replay-directions.html">docs/design/session-replay-directions.html</a></td></tr><tr><td>Session History External</td><td>外部历史</td><td><a href="design/session-history-external.html">docs/design/session-history-external.html</a></td></tr></tbody></table>
+<h3 id="4-6-会话回放-replay">4.6 会话回放 (Replay)</h3>
+<table><thead><tr><th>文档</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>V3 产品决策</td><td>三层深度（Recap/Explore/Verify）</td><td><a href="design/session-replay-unified-experience-v3.html">docs/design/session-replay-unified-experience-v3.html</a></td></tr><tr><td>V3 实现交接</td><td>实现接手文档</td><td><a href="design/session-replay-v3-implementation-handoff.html">docs/design/session-replay-v3-implementation-handoff.html</a></td></tr><tr><td>V3 Prototype</td><td>交互原型</td><td><a href="design/session-replay-v3-prototype/index.html">docs/design/session-replay-v3-prototype/</a></td></tr><tr><td>回放方向</td><td>五方向概念</td><td><a href="design/session-replay-directions.html">docs/design/session-replay-directions.html</a></td></tr><tr><td>回放原则</td><td>三镜头/调查台</td><td><a href="design/replay-first-principles/index.html">docs/design/replay-first-principles/</a></td></tr></tbody></table>
+<h3 id="4-7-编排-ui-v4">4.7 编排 UI V4</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Control Room</td><td>控制室</td><td><a href="design/orchestration-ui-directions-v4/01-control-room.html">docs/design/orchestration-ui-directions-v4/01-control-room.html</a></td></tr><tr><td>Command Drawer</td><td>命令抽屉</td><td><a href="design/orchestration-ui-directions-v4/02-command-drawer.html">docs/design/orchestration-ui-directions-v4/02-command-drawer.html</a></td></tr><tr><td>Focus Theater</td><td>焦点剧场</td><td><a href="design/orchestration-ui-directions-v4/03-focus-theater.html">docs/design/orchestration-ui-directions-v4/03-focus-theater.html</a></td></tr><tr><td>Activity Inbox</td><td>活动收件箱</td><td><a href="design/orchestration-ui-directions-v4/04-activity-inbox.html">docs/design/orchestration-ui-directions-v4/04-activity-inbox.html</a></td></tr><tr><td>Hybrid Command Center</td><td>混合指挥中心</td><td><a href="design/orchestration-ui-directions-v4/05-hybrid-command-center.html">docs/design/orchestration-ui-directions-v4/05-hybrid-command-center.html</a></td></tr></tbody></table>
+<h3 id="4-8-ui-方向">4.8 UI 方向</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Task Room V3 参考</td><td>从零重构讨论的参考：对话优先、内联命令、按需检查器</td><td><a href="design/ui-vnext/r-code-task-room-vnext-v3.html">docs/design/ui-vnext/r-code-task-room-vnext-v3.html</a></td></tr><tr><td>Task Room V3 参考合同</td><td>已有状态与交互假设；新设计定稿后将重写</td><td><a href="design/ui-vnext/R-CODE-UI-VNEXT-DESIGN.md">docs/design/ui-vnext/R-CODE-UI-VNEXT-DESIGN.md</a></td></tr><tr><td>历史 UI vNext 探索</td><td>保留作决策溯源，不再作为实现依据</td><td><a href="archive/ui-vnext-pre-task-room-v3-2026-07-27/README.md">docs/archive/ui-vnext-pre-task-room-v3-2026-07-27/</a></td></tr></tbody></table>
+<h3 id="4-9-其他功能">4.9 其他功能</h3>
+<table><thead><tr><th>Mockup</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>Screenshot Quick Card</td><td>截屏浮卡</td><td><a href="design/screenshot-quickcard-mock.html">docs/design/screenshot-quickcard-mock.html</a></td></tr><tr><td>Memory IA v3</td><td>记忆 IA v3</td><td><a href="design/memory-ia-v3.html">docs/design/memory-ia-v3.html</a></td></tr><tr><td>Code Context Ref</td><td>代码上下文引用</td><td><a href="design/code-context-ref-mockups/index.html">docs/design/code-context-ref-mockups/</a></td></tr><tr><td>Context Attach</td><td>上下文附着</td><td><a href="design/context-attach-mockups/index.html">docs/design/context-attach-mockups/</a></td></tr><tr><td>Compressed Workspace</td><td>压缩工作区</td><td><a href="design/compressed-workspace-walkthrough.html">docs/design/compressed-workspace-walkthrough.html</a></td></tr><tr><td>Rail Quick Spawn</td><td>Rail 快速创建</td><td><a href="design/rail-quick-spawn-mockup.html">docs/design/rail-quick-spawn-mockup.html</a></td></tr><tr><td>Follow Mode</td><td>跟随模式</td><td><a href="design/follow-mode-mock.html">docs/design/follow-mode-mock.html</a></td></tr><tr><td>Persistent Shell</td><td>持久化 shell</td><td><a href="design/persistent-shell.html">docs/design/persistent-shell.html</a></td></tr></tbody></table>
+<h2 id="5-ui-验证截图">5. UI 验证截图</h2>
+<h3 id="5-1-终端布局演进">5.1 终端布局演进</h3>
+<table><thead><tr><th>截图</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>当前状态 01</td><td>底部终端</td><td><a href="design/audit/terminal-current-01-both-bottom.png">docs/design/audit/terminal-current-01-both-bottom.png</a></td></tr><tr><td>当前状态 02</td><td>Codex 侧 + Claude 底部</td><td><a href="design/audit/terminal-current-02-codex-side-claude-bottom.jpg">docs/design/audit/terminal-current-02-codex-side-claude-bottom.jpg</a></td></tr><tr><td>当前状态 03</td><td>返回 dock</td><td><a href="design/audit/terminal-current-03-returned-to-dock.png">docs/design/audit/terminal-current-03-returned-to-dock.png</a></td></tr><tr><td>下一代 01</td><td>底部</td><td><a href="design/audit/terminal-vnext-01-bottom.png">docs/design/audit/terminal-vnext-01-bottom.png</a></td></tr><tr><td>下一代 02</td><td>Codex 侧</td><td><a href="design/audit/terminal-vnext-02-codex-side.png">docs/design/audit/terminal-vnext-02-codex-side.png</a></td></tr><tr><td>下一代 03</td><td>新终端</td><td><a href="design/audit/terminal-vnext-03-new-terminal.png">docs/design/audit/terminal-vnext-03-new-terminal.png</a></td></tr></tbody></table>
+<h3 id="5-2-实现验证">5.2 实现验证</h3>
+<table><thead><tr><th>截图</th><th>说明</th><th>路径</th></tr></thead><tbody><tr><td>实现 01</td><td>底部</td><td><a href="design/audit/terminal-vnext-implementation-01-bottom.png">docs/design/audit/terminal-vnext-implementation-01-bottom.png</a></td></tr><tr><td>实现 02</td><td>Codex 侧</td><td><a href="design/audit/terminal-vnext-implementation-02-codex-side.png">docs/design/audit/terminal-vnext-implementation-02-codex-side.png</a></td></tr><tr><td>实现 03</td><td>新终端</td><td><a href="design/audit/terminal-vnext-implementation-03-new-terminal.png">docs/design/audit/terminal-vnext-implementation-03-new-terminal.png</a></td></tr></tbody></table>
+<h2 id="6-组件规范">6. 组件规范</h2>
+<h3 id="6-1-通用组件">6.1 通用组件</h3>
+<table><thead><tr><th>组件</th><th>圆角</th><th>用途</th></tr></thead><tbody><tr><td>Card</td><td>12px</td><td>内容容器</td></tr><tr><td>Chip</td><td>全圆角</td><td>标签、状态</td></tr><tr><td>Button</td><td>8px</td><td>操作按钮</td></tr><tr><td>Input</td><td>8px</td><td>输入框</td></tr><tr><td>Modal</td><td>14px</td><td>弹窗</td></tr></tbody></table>
+<h3 id="6-2-状态色">6.2 状态色</h3>
+<table><thead><tr><th>状态</th><th>颜色</th><th>背景</th></tr></thead><tbody><tr><td>运行中</td><td><code>--info</code> (#3f7bd9)</td><td><code>--info-bg</code></td></tr><tr><td>成功</td><td><code>--success</code> (#2f9e63)</td><td><code>--success-bg</code></td></tr><tr><td>警告</td><td><code>--warning</code> (#b06f10)</td><td><code>--warning-bg</code></td></tr><tr><td>危险</td><td><code>--danger</code> (#c4453d)</td><td><code>--danger-bg</code></td></tr></tbody></table>
+<h3 id="6-3-任务状态">6.3 任务状态</h3>
+<table><thead><tr><th>状态</th><th>标签</th><th>颜色</th></tr></thead><tbody><tr><td>IDLE</td><td>空闲</td><td>灰色</td></tr><tr><td>EXPLORING</td><td>探索中</td><td>蓝色</td></tr><tr><td>IN_PROGRESS</td><td>执行中</td><td>蓝色</td></tr><tr><td>REVIEW_READY</td><td>待审查</td><td>绿色</td></tr><tr><td>AWAITING<em>PLAN</em>APPROVAL</td><td>等待计划审批</td><td>橙色</td></tr><tr><td>ARCHIVED</td><td>已归档</td><td>灰色</td></tr></tbody></table>
+<h2 id="7-交互模式">7. 交互模式</h2>
+<h3 id="7-1-拖拽">7.1 拖拽</h3>
+<ul><li>文件/文件夹 → 路径引用 chips</li><li><code>@</code> 打开文件选择器</li><li>项目外条目跳过并 toast 说明</li></ul>
+<h3 id="7-2-键盘导航">7.2 键盘导航</h3>
+<ul><li>⌘E: 切换到 Editor</li><li>⌘K: 全局搜索</li><li>Tab 顺序遵循视觉顺序</li></ul>
+<h3 id="7-3-快捷键">7.3 快捷键</h3>
+<table><thead><tr><th>快捷键</th><th>操作</th></tr></thead><tbody><tr><td>⌘E</td><td>切换 Editor</td></tr><tr><td>⌘K</td><td>快速打开</td></tr><tr><td>⌘⇧P</td><td>命令面板</td></tr><tr><td>⌘W</td><td>关闭标签</td></tr><tr><td>⌘,</td><td>设置</td></tr></tbody></table>
+<h2 id="8-响应式设计">8. 响应式设计</h2>
+<h3 id="8-1-断点">8.1 断点</h3>
+<ul><li>桌面: ≥1280px</li><li>平板: 768-1279px</li><li>移动端: &lt;768px (未来)</li></ul>
+<h3 id="8-2-窗口缩放">8.2 窗口缩放</h3>
+<ul><li>Session Canvas 断点改容器查询</li><li>窄窗错位修复</li></ul>
+<h2 id="9-rust-实现要点">9. Rust 实现要点</h2>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// 设计 Tokens
+struct DesignTokens {
+    bg_app: Color,
+    bg_card: Color,
+    fg: Color,
+    fg_muted: Color,
+    accent: Color,
+    radius: f32,
+    shadow: Shadow,
+}
+
+// 主题切换
+enum Theme {
+    Light,
+    Dark,
+    System,
+}
+
+// 组件状态
+enum ComponentState {
+    Default,
+    Hover,
+    Active,
+    Selected,
+    Disabled,
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

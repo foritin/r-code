@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0018 — Room conversation presentation: preset E「手记工作台」 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0018-room-conversation-presentation-preset-e-手记工作台">ADR-0018 — Room conversation presentation: preset E「手记工作台」</h1>
+<p>Date: 2026-07-15 · Status: ACCEPTED (product owner reviewed seven animated<br>directions in <code>docs/design/room-conversation-directions.html</code>, picked preset E<br>1:1, and asked for real end-to-end verification against the live gateway)<br>Amends: ADR-0014 room presentation (mockup-A timeline language); keeps<br>ADR-0016 (review bar as state) untouched.</p>
+<h2 id="context">Context</h2>
+<p>Two frictions in the Task Room conversation layer:</p>
+<ol><li><strong>The reply textarea grew a near-black 2px box on focus.</strong> Root cause:<br><code>theme.css</code>&#39;s global <code>:focus-visible { outline: 2px solid var(--focus-ring) }</code> wins over <code>room.css</code>&#39;s <code>.tr-cinput { outline: none }</code> — <code>main.tsx</code> lists its CSS imports <em>after</em> the component imports, ESM hoisting evaluates <code>theme.css</code> last, and at equal specificity the later rule takes the <code>outline</code> property. Home&#39;s <code>.hm-ta:focus-visible</code> (higher specificity) was immune, which is why only the room composer showed the box.</li></ol>
+<ol><li><strong>The conversation read as visually flat</strong> — every element (user input,<br>agent prose, tool rows, milestones) carried the same visual weight; no reading hierarchy, weak evidence presentation.</li></ol>
+<p>Seven directions (A–D pure, E–G hybrids, all animated over the same 37s<br>scripted run, mixable via a Tweaks panel across five skin dimensions) were<br>mocked in <code>docs/design/room-conversation-directions.html</code>. The owner picked<br><strong>preset E = spine frame × serif prose × chip user bubble × console worklog ×<br>card composer</strong>.</p>
+<h2 id="decision">Decision</h2>
+<p>Port preset E 1:1 into the product room (<code>room.css</code> + <code>RoomTimeline.tsx</code>):</p>
+<ol><li><strong>Spine frame.</strong> The timeline renders inside one centered 640px column<br>(<code>.rt-col</code>, <code>padding-left: 30px</code>) carrying a 1px vertical time spine. Milestones anchor their glyph (✓ / pulsing dot / ✕) onto the spine with a <code>--bg-editor</code> mask; labels run mono 10px uppercase with the existing trailing hairline and elapsed meta.</li></ol>
+<ol><li><strong>Serif agent prose.</strong> Agent bubbles set <code>font-family: var(--font-display)</code><br>(Iowan Old Style; CJK falls back to the system serif) at 15px/1.9, max-width 96%. The user bubble stays a quiet sans chip on the right (<code>--bg-hover</code>, 15/15/5/15 radius, 13.5px). Inline code inside serif prose is pinned to 11.5px so chips stay at worklog scale.</li></ol>
+<ol><li><strong>Console worklog.</strong> Contiguous evidence rows — <code>tool.call</code> (except the<br>plan channel and version-conflict cards), <code>verification.completed</code>, <code>worktree.setup</code> — collapse into one recessed block (<code>.rt-worklog</code>, <code>color-mix(fg 4%)</code>, testid <code>tl-worklog</code>). Rows are mono 11.5px prefixed with a <code>mm:ss.d</code> clock counted from the room&#39;s first event; new rows flash in (<code>rt-login</code>, reduced-motion aware). Null-rendering events never break a group; milestones/bubbles/cards close it. Row testids (<code>tl-tool-*</code>, <code>tl-path-*</code>, <code>tl-verification-*</code>, <code>tl-worktree-setup</code>) are unchanged, so existing E2E flows hold.</li></ol>
+<ol><li><strong>Card composer, focus on the card.</strong> `.tr-cinput:focus-visible { outline:<br>none }<code> kills the global outline; </code>.tr-ccard:focus-within<code> (and the follow-up </code>.hm-card`) carries focus as a border tint + soft 3px ring. The reply card rounds to 16px; review bar and composer ride the same centered 640 column. The activity strip becomes a mono console ticker with a faint ink tint.</li></ol>
+<h2 id="alternatives-considered">Alternatives considered</h2>
+<p>A (polish-only), B (pure手记 — evidence rows too soft for an agent IDE&#39;s<br>trust needs), C (pure工作台 — ink bubbles + mono prose too heavy for long<br>reads), D/G (窄栏留白 — evidence density too low for engineering tasks),<br>F (A + console worklog only — kept as fallback if serif reads poorly in the<br>field). E keeps B&#39;s reading hierarchy where prose lives and C&#39;s log fidelity<br>where evidence lives.</p>
+<h2 id="consequences">Consequences</h2>
+<ul><li>ADR-0014&#39;s &quot;side carries the speaker&quot; and ADR-0016&#39;s review-bar state model<br>are preserved; only the presentation layer moved.</li><li>The Editor agent panel is untouched (dense evidence remains its job).</li><li>Verification: 345 unit tests, <code>npm run check</code>, room/agent E2E<br>(m6-agent-ask, room-peek, room-reviewbar) green. Real end-to-end run against the live gateway (<code>tests/e2e/real-room-e.spec.ts</code>, credential-gated like real-gateway.spec): a real write task + follow-up run on anthropic/claude-haiku-4-5 with plan/permission gates auto-decided, writes asserted <strong>on disk</strong>, spine/serif/worklog/focus asserted from computed styles, screenshots in <code>/tmp/ui-shots/e-*.png</code>.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

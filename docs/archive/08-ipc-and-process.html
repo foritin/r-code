@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>IPC 与进程通信 · r-code</title>
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="ipc-与进程通信">IPC 与进程通信</h1>
+<h2 id="1-概述">1. 概述</h2>
+<p>R-Code 的进程间通信连接 Main、Agent Worker 和 Renderer。<br>Rust 重构使用 Unix Socket（macOS/Linux）和 Named Pipe（Windows）<br>替代 Electron 的 MessagePort。</p>
+<h2 id="2-通信拓扑">2. 通信拓扑</h2>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">┌─────────────────────────────────────────────┐
+│  Main (Tauri Rust)                          │
+│  ┌─────────────────────────────────────┐   │
+│  │  IPC Server                          │   │
+│  │  - Unix Socket / Named Pipe          │   │
+│  │  - JSON-RPC 2.0 协议                 │   │
+│  │  - 请求/响应 + 事件推送              │   │
+│  └─────────────────────────────────────┘   │
+│           ▲                    ▲            │
+│           │                    │            │
+│     Agent Worker         Renderer           │
+│     (独立进程)           (WebView)          │
+└─────────────────────────────────────────────┘</code></pre></div>
+<h2 id="3-协议设计">3. 协议设计</h2>
+<h3 id="3-1-json-rpc-2-0">3.1 JSON-RPC 2.0</h3>
+<div class="code-block"><span class="code-block__lang">jsonc</span><button class="copy-code" type="button">复制</button><pre><code class="language-jsonc">// 请求
+{
+  &quot;jsonrpc&quot;: &quot;2.0&quot;,
+  &quot;id&quot;: &quot;req-1&quot;,
+  &quot;method&quot;: &quot;task.create&quot;,
+  &quot;params&quot;: { &quot;goal&quot;: &quot;Fix the bug&quot; }
+}
+
+// 响应
+{
+  &quot;jsonrpc&quot;: &quot;2.0&quot;,
+  &quot;id&quot;: &quot;req-1&quot;,
+  &quot;result&quot;: { &quot;taskId&quot;: &quot;task-123&quot; }
+}
+
+// 事件（无 id）
+{
+  &quot;jsonrpc&quot;: &quot;2.0&quot;,
+  &quot;method&quot;: &quot;agent.event&quot;,
+  &quot;params&quot;: { &quot;taskId&quot;: &quot;task-123&quot;, &quot;event&quot;: {...} }
+}</code></pre></div>
+<h3 id="3-2-消息类型">3.2 消息类型</h3>
+<ul><li><strong>请求</strong>：需要响应的调用。</li><li><strong>响应</strong>：请求的结果。</li><li><strong>事件</strong>：单向推送，无需响应。</li></ul>
+<h2 id="4-通道划分">4. 通道划分</h2>
+<h3 id="4-1-main-agent-worker">4.1 Main ↔ Agent Worker</h3>
+<ul><li>任务创建/恢复/中止。</li><li>工具调用/结果。</li><li>事件流。</li></ul>
+<h3 id="4-2-main-renderer">4.2 Main ↔ Renderer</h3>
+<ul><li>状态同步。</li><li>UI 事件。</li><li>投影数据。</li></ul>
+<h3 id="4-3-外部-cli-main">4.3 外部 CLI ↔ Main</h3>
+<ul><li>终端控制门（Unix Socket）。</li><li>HTTP 协议。</li></ul>
+<h2 id="5-schema-校验">5. Schema 校验</h2>
+<h3 id="5-1-请求校验">5.1 请求校验</h3>
+<ul><li>所有请求必须符合 JSON Schema。</li><li>无效请求返回 ParseError。</li></ul>
+<h3 id="5-2-响应校验">5.2 响应校验</h3>
+<ul><li>成功响应包含 <code>result</code>。</li><li>错误响应包含 <code>error</code>。</li></ul>
+<h2 id="6-错误处理">6. 错误处理</h2>
+<h3 id="6-1-错误码">6.1 错误码</h3>
+<table><thead><tr><th>码</th><th>含义</th></tr></thead><tbody><tr><td>-32700</td><td>Parse error</td></tr><tr><td>-32600</td><td>Invalid request</td></tr><tr><td>-32601</td><td>Method not found</td></tr><tr><td>-32602</td><td>Invalid params</td></tr><tr><td>-32603</td><td>Internal error</td></tr></tbody></table>
+<h3 id="6-2-应用错误">6.2 应用错误</h3>
+<div class="code-block"><span class="code-block__lang">jsonc</span><button class="copy-code" type="button">复制</button><pre><code class="language-jsonc">{
+  &quot;code&quot;: 1001,
+  &quot;message&quot;: &quot;Task not found&quot;,
+  &quot;data&quot;: { &quot;taskId&quot;: &quot;task-123&quot; }
+}</code></pre></div>
+<h2 id="7-事件流">7. 事件流</h2>
+<h3 id="7-1-agent-事件">7.1 Agent 事件</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">Worker → Main → Renderer</code></pre></div>
+<ul><li>事件持久化到 task_events。</li><li>投影到 Timeline。</li></ul>
+<h3 id="7-2-终端事件">7.2 终端事件</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">PTY → Main → Renderer</code></pre></div>
+<ul><li>输出缓冲。</li><li>块模型解析。</li></ul>
+<h2 id="8-序列化">8. 序列化</h2>
+<h3 id="8-1-serde">8.1 serde</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">#[derive(Serialize, Deserialize)]
+struct IpcRequest {
+    jsonrpc: String,
+    id: Option&lt;String&gt;,
+    method: String,
+    params: Option&lt;Value&gt;,
+}
+
+#[derive(Serialize, Deserialize)]
+struct IpcResponse {
+    jsonrpc: String,
+    id: Option&lt;String&gt;,
+    result: Option&lt;Value&gt;,
+    error: Option&lt;IpcError&gt;,
+}</code></pre></div>
+<h3 id="8-2-schema-定义">8.2 Schema 定义</h3>
+<ul><li>使用 JSON Schema 文件。</li><li>代码生成（<code>serde</code> + <code>schemars</code>）。</li></ul>
+<h2 id="9-传输层">9. 传输层</h2>
+<h3 id="9-1-unix-socket-macos-linux">9.1 Unix Socket（macOS/Linux）</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">use tokio::net::UnixListener;
+
+let listener = UnixListener::bind(&quot;/tmp/r-code.sock&quot;)?;
+let (stream, _addr) = listener.accept().await?;</code></pre></div>
+<h3 id="9-2-named-pipe-windows">9.2 Named Pipe（Windows）</h3>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">use tokio::net::windows::named_pipe::ServerOptions;
+
+let pipe = ServerOptions::new().create(r&quot;\\.\pipe\r-code&quot;)?;
+pipe.connect().await?;</code></pre></div>
+<h3 id="9-3-序列化帧">9.3 序列化帧</h3>
+<div class="code-block"><span class="code-block__lang">text</span><button class="copy-code" type="button">复制</button><pre><code class="language-text">[4 bytes length][JSON payload]</code></pre></div>
+<h2 id="10-安全考虑">10. 安全考虑</h2>
+<h3 id="10-1-认证">10.1 认证</h3>
+<ul><li>外部 CLI 使用 per-terminal token。</li><li>Renderer 使用 session cookie。</li></ul>
+<h3 id="10-2-授权">10.2 授权</h3>
+<ul><li>每个调用检查权限。</li><li>高风险调用需审批。</li></ul>
+<h2 id="11-rust-实现要点">11. Rust 实现要点</h2>
+<div class="code-block"><span class="code-block__lang">rust</span><button class="copy-code" type="button">复制</button><pre><code class="language-rust">// IPC Server
+struct IpcServer {
+    listener: UnixListener,
+    handlers: HashMap&lt;String, Box&lt;dyn IpcHandler&gt;&gt;,
+}
+
+#[async_trait]
+trait IpcHandler {
+    async fn handle(&amp;self, params: Value, ctx: &amp;IpcContext) -&gt; Result&lt;Value, IpcError&gt;;
+}
+
+// IPC Client
+struct IpcClient {
+    stream: UnixStream,
+    pending: HashMap&lt;String, oneshot::Sender&lt;IpcResponse&gt;&gt;,
+}
+
+impl IpcClient {
+    async fn call(&amp;mut self, method: &amp;str, params: Value) -&gt; Result&lt;Value, IpcError&gt; {
+        let request = IpcRequest::new(method, params);
+        self.send(&amp;request).await?;
+        // wait for response with matching id
+    }
+    
+    async fn send(&amp;mut self, request: &amp;IpcRequest) -&gt; Result&lt;(), IpcError&gt; {
+        let json = serde_json::to_vec(request)?;
+        let len = json.len() as u32;
+        self.stream.write_all(&amp;len.to_be_bytes()).await?;
+        self.stream.write_all(&amp;json).await?;
+        Ok(())
+    }
+}</code></pre></div></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../assets/site.js"></script>
+</body>
+</html>

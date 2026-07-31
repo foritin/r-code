@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0043: Zero-cost unsigned public beta, signed Stable remains blocked · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0043-zero-cost-unsigned-public-beta-signed-stable-remains-blocked">ADR-0043: Zero-cost unsigned public beta, signed Stable remains blocked</h1>
+<ul><li>Status: Accepted (product owner decision, 2026-07-21: no budget for signing certificates; proceed<br>with the proposed unsigned GitHub prerelease)</li><li>Date: 2026-07-21</li><li>Related: M12-01..07, §12.2 update supply chain, §14 M12, §16 Release Gates, §18.2/18.3</li></ul>
+<h2 id="context">Context</h2>
+<p>The original V1.0 Stable gate requires Apple Developer ID signing/notarization and a trusted Windows<br>code-signing identity. The product owner cannot fund those external credentials. GitHub Releases do<br>not require them, but an unsigned binary cannot honestly claim the trust properties of Stable.</p>
+<h2 id="decision">Decision</h2>
+<ol><li>Ship <code>1.0.0-beta.1</code> as a GitHub <strong>prerelease</strong> named “Unsigned Preview”.</li><li>Build native artifacts on macOS, Windows and Linux runners. Run the real packaged executable from<br>a clean isolated profile on every platform before publication.</li><li>Keep <code>electron-builder publish: null</code>; only the tag-gated GitHub workflow may publish. Local builds<br>never create or mutate a Release.</li><li>Make the signing path conditional, not deleted. <code>R_CODE_SIGNING_MODE=signed</code> re-enables identity<br>discovery when future certificate secrets are present. Hardened Runtime is enabled now.</li><li>Enforce policy in code: an unsigned stable SemVer is a build error; the release tag must exactly<br>match <code>package.json</code>.</li><li>Attach SHA-256 checksums, an artifact manifest, SPDX SBOM and license inventory. These provide<br>traceability and integrity checking but are never described as publisher authentication.</li><li>Use manual beta updates. Database backup/restore and the E2E-023 upgrade rehearsal protect local<br>state. Automatic application replacement is deferred until the artifacts can be signed.</li><li>Keep signed/notarized Stable, the real-provider fixed 20-task evaluation, and automatic update<br>delivery as open Stable gates. M12 may be preview-complete without relabeling those gates as passed.</li></ol>
+<h2 id="release-metadata-correction-2026-07-22">Release metadata correction (2026-07-22)</h2>
+<p><code>v1.0.0-beta.2</code> was temporarily changed after publication to <code>prerelease:false</code> / <code>Latest</code> so the<br>repository sidebar would feature it. That metadata contradicts decisions 1 and 5: a SemVer Beta<br>with unsigned artifacts must not occupy the GitHub Stable/Latest channel, regardless of its title or<br>release-note caveats. The workflow therefore retains <code>--prerelease --latest=false</code>. The live Beta 2<br>metadata was corrected independently without replacing the tag or assets. At 2026-07-22 23:27 CST,<br>the public API and <code>gh release view</code> were reverified as <code>prerelease:true</code>, <code>draft:false</code>, with the<br>“Unsigned Preview” title and all 13 assets unchanged.</p>
+<h2 id="alternatives">Alternatives</h2>
+<ul><li>Self-signed certificates: rejected for public distribution because consumer operating systems do<br>not trust them by default.</li><li>Calling an unsigned build Stable: rejected because it contradicts the product&#39;s release checklist<br>and would mislead users.</li><li>No binaries until certificates can be purchased: rejected because it prevents useful public beta<br>feedback and does not improve the eventual signing implementation.</li></ul>
+<h2 id="security-and-data-impact">Security and data impact</h2>
+<p>Users receive explicit warning text and verifiable hashes. OS trust warnings remain expected. No<br>auto-update code downloads or executes unsigned replacement binaries. Migration backup/restore stays<br>inside the existing SQLite boundary and no repository file is deleted during install or update.</p>
+<h2 id="migration-and-rollback">Migration and rollback</h2>
+<p>This decision changes product version/release policy, not the database schema. Rollback is to delete<br>the prerelease/tag or publish a newer prerelease; already downloaded artifacts remain untrusted and<br>must be treated according to their recorded hash. A future signed release supplies credentials and<br>uses the existing conditional workflow rather than reverting this ADR.</p>
+<h2 id="verification">Verification</h2>
+<ul><li><code>scripts/release-policy.mjs</code> unit coverage, including unsigned Stable refusal and tag mismatch.</li><li><code>tests/e2e/m12-release.spec.ts</code> old-schema upgrade and retained readable Session.</li><li><code>packages/persistence/src/database.test.ts</code> byte-identical restore on injected migration failure.</li><li><code>tests/release/packaged.spec.ts</code> actual packaged app, clean profile, production protocol, renderer<br>isolation and ad-hoc macOS signature integrity.</li><li><code>.github/workflows/release.yml</code> credential-free full gates, three-platform package matrix, metadata<br>generation and prerelease publication.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0020 — Coordinated application skins · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0020-coordinated-application-skins">ADR-0020 — Coordinated application skins</h1>
+<p>Date: 2026-07-15 · Status: ACCEPTED<br>Relates to: APP-006, ED-015, TERM-002, PIVOT-024</p>
+<h2 id="context">Context</h2>
+<p>R-Code previously had one Studio visual language with light, dark and system<br>brightness choices. Changing brightness recolored the shell, but typography,<br>icon geometry, Monaco syntax colors, rich-editor code and xterm remained one<br>design. The product now keeps Studio and adds three recognizable skins:</p>
+<ul><li>Studio — the original warm-gray and ink visual language;</li><li>Terminal — phosphor green on charcoal;</li><li>Archive — cream paper with terracotta;</li><li>Index — black and white with signal red.</li></ul>
+<p>The existing APP-006 brightness preference and user settings must remain valid.</p>
+<h2 id="decision">Decision</h2>
+<ol><li>Persist <code>general.skin = studio | terminal | archive | index</code> independently from<br><code>general.theme = light | dark | system</code>. This produces four coordinated skins with light and dark variants instead of replacing APP-006. Existing settings without <code>skin</code> resolve to <code>studio</code>, preserving the previous visual language exactly; no database migration is required.</li><li>One <code>data-skin</code> + <code>data-theme</code> pair on the document root selects the token<br>contract. Each skin owns application/surface/state colors, UI/display/mono font stacks, radii, shadows, focus color and icon stroke geometry.</li><li>Icons keep one accessible SVG metaphor inventory. CSS changes their weight,<br>caps, joins and glow as a family, avoiding three divergent icon component trees.</li><li>Monaco has eight named themes. Studio retains the original native VS token<br>language while the other skins use per-token rules and editor chrome colors. The rich Markdown Prism surface follows the same semantic syntax palette. xterm has six ANSI palettes and updates existing terminal instances live.</li><li>A custom editor font remains an explicit user override. The historical<br>default font value follows the selected skin so code typography participates in the switch without discarding user preferences.</li><li>Settings exposes code-native miniature previews; command palette and native<br>application menu expose direct skin commands. Switching is immediate and persisted through the existing validated SettingsService path.</li></ol>
+<h2 id="alternatives-considered">Alternatives considered</h2>
+<ul><li>Replace light/dark/system with three fixed themes: rejected because it breaks<br>APP-006 and removes system-following behavior.</li><li>Color tokens only: rejected because it does not satisfy the requested type,<br>icon, Monaco, Prism and terminal changes.</li><li>Four separate component trees or raster mockups: rejected because behavior<br>and accessibility would drift between skins.</li><li>Download web fonts: rejected to preserve offline startup, CSP simplicity and<br>package size. The stacks use platform fonts with deterministic fallbacks.</li></ul>
+<h2 id="data-security-and-rollback">Data, security and rollback</h2>
+<p>The new setting is non-sensitive and stays in <code>settings.json</code>. It adds no IPC<br>surface, dependency, remote asset or executable capability. Rollback is the<br>removal of <code>general.skin</code> plus the coordinated theme definitions; older setting<br>files remain readable because parsing is lenient and defaulted.</p>
+<h2 id="verification">Verification</h2>
+<ul><li>Settings resolution unit tests cover all four values, defaulting and invalid<br>fallback.</li><li>Electron E2E covers live switching and restart persistence.</li><li>Production build and TypeScript/boundary checks pass.</li><li>1440×900 editor screenshots cover each natural skin; a 1024×640 Settings<br>screenshot verifies all preview cards fit with no horizontal overflow.</li><li>Renderer console/page errors are empty in the isolated visual QA fixture.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

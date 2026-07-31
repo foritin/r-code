@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>「离不开」功能提案 mock — 双视角调研</title>
+<style>
+  :root {
+    --font-ui: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Georgia, 'Songti SC', serif;
+    --font-display: 'Iowan Old Style', Georgia, 'Songti SC', serif;
+    --font-mono: 'SF Mono', ui-monospace, 'JetBrains Mono', Menlo, monospace;
+    --bg-app: #ded2bc;
+    --bg-sidebar: #f5ead5;
+    --bg-input: #fffaf0;
+    --bg-card: #fff8e9;
+    --bg-chip: #eadbc2;
+    --bg-hover: #eee0c8;
+    --bg-active: #e3d0b0;
+    --border: #d8c4a3;
+    --border-soft: #e9d9bd;
+    --border-strong: #b99d78;
+    --fg: #392a21;
+    --fg-muted: #795f4f;
+    --fg-faint: #a48570;
+    --accent: #b94e32;
+    --accent-fg: #fffaf0;
+    --success: #4f754d;
+    --warn: #8a6a1f;
+    --danger: #a03426;
+    --info: #4a6d8c;
+    --shadow-card: 0 1px 1px rgba(62,40,25,.06), 0 12px 32px rgba(62,40,25,.1);
+    --shadow-menu: 0 28px 80px rgba(55,36,23,.28);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { padding: 40px 48px 90px; background: var(--bg-app); color: var(--fg); font: 14px/1.6 var(--font-ui); }
+  h1 { font: 650 26px/1.3 var(--font-display); letter-spacing: .01em; }
+  h2 { font: 640 19px/1.3 var(--font-display); margin: 0 0 2px; }
+  .sub { max-width: 860px; margin: 10px 0 4px; color: var(--fg-muted); }
+  .hint { margin-bottom: 26px; color: var(--fg-faint); font-size: 12.5px; }
+  .toc { display: flex; gap: 8px; margin: 0 0 12px; flex-wrap: wrap; }
+  .toc a { padding: 5px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); color: var(--fg-muted); text-decoration: none; font-size: 12.5px; }
+  .toc a:hover { background: var(--bg-hover); color: var(--fg); }
+  .toc a b { color: var(--accent); font-weight: 640; margin-right: 5px; }
+  section { margin: 0 0 64px; }
+  .sec-head { max-width: 900px; margin-bottom: 6px; }
+  .sec-head p { color: var(--fg-muted); margin: 6px 0 0; max-width: 820px; }
+  .prov { display: flex; gap: 7px; flex-wrap: wrap; margin: 8px 0 2px; font-size: 11.5px; }
+  .prov span { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; color: var(--fg-muted); background: var(--bg-card); }
+  .prov .both { border-color: var(--accent); color: var(--accent); font-weight: 640; }
+  .prov .freq { border-color: var(--border-strong); }
+  .stage { display: flex; gap: 34px; align-items: flex-start; flex-wrap: wrap; margin-top: 18px; }
+  .notes { width: 285px; flex: none; display: grid; gap: 9px; padding-top: 4px; }
+  .note { padding: 10px 13px; border: 1px solid var(--border-soft); border-left: 3px solid var(--border-strong); border-radius: 8px; background: var(--bg-card); font-size: 12.5px; color: var(--fg-muted); }
+  .note b { color: var(--fg); font-weight: 640; }
+  .note.q { border-left-color: var(--accent); }
+  .note.q::before { content: '待确认 · '; color: var(--accent); font-weight: 640; }
+  .note.ev { border-left-color: var(--info); }
+  .note.ev::before { content: '竞品实证 · '; color: var(--info); font-weight: 640; }
+  footer { margin-top: 44px; color: var(--fg-faint); font-size: 12px; }
+
+  /* ───────────── app window frame ───────────── */
+  .win { position: relative; width: 880px; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-sidebar); box-shadow: var(--shadow-card); overflow: hidden; }
+  .win.wide { width: 1080px; }
+  .win-title { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border-soft); color: var(--fg-muted); font-size: 12.5px; }
+  .dots { display: flex; gap: 6px; margin-right: 6px; }
+  .dots i { width: 11px; height: 11px; border-radius: 50%; background: var(--bg-chip); border: 1px solid var(--border); }
+
+  /* full shell: activity bar + rail panel + main */
+  .app-body { display: flex; min-height: 540px; align-items: stretch; }
+  .abar { width: 46px; flex: none; border-right: 1px solid var(--border-soft); background: var(--bg-sidebar); display: flex; flex-direction: column; align-items: center; padding: 10px 0; gap: 4px; }
+  .abar i { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-style: normal; font-size: 15px; color: var(--fg-faint); cursor: pointer; position: relative; }
+  .abar i.on { background: var(--bg-active); color: var(--fg); }
+  .abar i .bdg { position: absolute; top: -1px; right: -1px; min-width: 15px; height: 15px; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font: 640 9.5px/15px var(--font-mono); text-align: center; padding: 0 3px; }
+  .abar .sp { flex: 1; }
+  .rail { width: 234px; flex: none; border-right: 1px solid var(--border-soft); background: var(--bg-sidebar); padding: 12px 8px; display: grid; gap: 2px; align-content: start; overflow: hidden; }
+  .rail .grp { display: flex; align-items: center; gap: 6px; padding: 7px 8px 3px; color: var(--fg-faint); font: 640 10.5px/1 var(--font-display); letter-spacing: .07em; text-transform: uppercase; }
+  .rail .grp .n { margin-left: auto; font: 600 10px/1 var(--font-mono); color: var(--warn); }
+  .rail .row { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 8px; font-size: 12.5px; color: var(--fg-muted); cursor: pointer; position: relative; }
+  .rail .row:hover { background: var(--bg-hover); }
+  .rail .row.sel { background: var(--bg-active); color: var(--fg); }
+  .rail .row.sel::before { content: ''; position: absolute; left: 0; top: 6px; bottom: 6px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .rail .row .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .rail .row .st.run { background: var(--success); animation: pulse 1.6s infinite; }
+  .rail .row .st.need { background: var(--warn); }
+  .rail .row .st.done { background: var(--border-strong); }
+  .rail .row .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rail .row small { font: 600 10px/1 var(--font-mono); color: var(--fg-faint); }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .main { flex: 1; min-width: 0; background: var(--bg-input); display: flex; flex-direction: column; }
+
+  /* room: head + conv + canvas */
+  .room-head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; color: var(--fg-muted); background: var(--bg-input); }
+  .room-head b { color: var(--fg); font: 640 13.5px/1.3 var(--font-display); }
+  .chip { border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; font-size: 11px; color: var(--fg-muted); background: var(--bg-card); white-space: nowrap; }
+  .chip.state { color: var(--success); border-color: #b6c6a8; }
+  .chip.state.need { color: var(--warn); border-color: #d3bd82; }
+  .room-cols { display: flex; flex: 1; min-height: 0; }
+  .conv { flex: 56; min-width: 0; padding: 16px 20px 14px; display: flex; flex-direction: column; gap: 0; overflow: hidden; }
+  .tl { flex: 1; display: grid; gap: 12px; align-content: start; overflow: hidden; padding-left: 18px; position: relative; }
+  .tl::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 1px; background: var(--border-soft); }
+  .tl-ms { position: relative; font: 640 10.5px/1.6 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); display: flex; align-items: center; gap: 10px; }
+  .tl-ms::before { content: ''; position: absolute; left: -17px; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--border-strong); }
+  .tl-ms::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
+  .tl-you { margin-left: 44px; border: 1px solid var(--border-soft); background: var(--bg-chip); border-radius: 11px; padding: 9px 13px; font-size: 13px; line-height: 1.65; }
+  .tl-agent { font: 15px/1.85 var(--font-display); color: var(--fg); max-width: 560px; }
+  .tl-agent code { font: 11.5px/1 var(--font-mono); background: var(--bg-chip); border-radius: 4px; padding: 1px 5px; }
+  .tl-worklog { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--bg-card); padding: 8px 12px; display: grid; gap: 3px; font: 11.5px/1.7 var(--font-mono); color: var(--fg-muted); }
+  .tl-worklog .wl { display: flex; gap: 9px; }
+  .tl-worklog .wl .clk { color: var(--fg-faint); flex: none; }
+  .tl-worklog .wl .ok { color: var(--success); }
+  .tl-worklog .wl .warnc { color: var(--warn); }
+  .composer { margin-top: 12px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--bg-input); padding: 10px 12px 9px; box-shadow: 0 1px 0 rgba(62,40,25,.04); }
+  .composer .cx { color: var(--fg-faint); font-size: 13px; }
+  .composer .c-row { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+  .composer .c-row .sp { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); padding: 3px 11px; font-size: 11.5px; color: var(--fg-muted); cursor: pointer; }
+  .pill:hover { background: var(--bg-hover); }
+  .send { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-fg); font-size: 14px; cursor: pointer; }
+
+  /* tool canvas */
+  .canvas { flex: 44; min-width: 0; border-left: 1px solid var(--border-soft); background: var(--bg-card); display: flex; flex-direction: column; }
+  .c-tabs { display: flex; gap: 4px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border-soft); font-size: 11.5px; color: var(--fg-faint); flex-wrap: wrap; }
+  .c-tabs i { padding: 4px 9px; border-radius: 7px; font-style: normal; cursor: pointer; }
+  .c-tabs i.on { background: var(--bg-active); color: var(--fg); font-weight: 640; }
+  .c-body { flex: 1; padding: 12px 14px; overflow: hidden; font-size: 12.5px; }
+
+  /* settings window */
+  .win-body { display: flex; min-height: 520px; }
+  .st-nav { width: 172px; flex: none; padding: 14px 10px; border-right: 1px solid var(--border-soft); display: grid; gap: 2px; align-content: start; }
+  .st-nav a { padding: 7px 12px; border-radius: 8px; color: var(--fg-muted); font-size: 13px; text-decoration: none; }
+  .st-nav a.on { background: var(--bg-active); color: var(--fg); font-weight: 640; }
+  .st-main { flex: 1; padding: 20px 26px 30px; background: var(--bg-input); display: grid; gap: 16px; align-content: start; }
+  .st-card { border: 1px solid var(--border-soft); border-radius: 12px; background: var(--bg-card); padding: 6px 18px; }
+  .st-card > .card-title { font: 640 13px/1 var(--font-display); letter-spacing: .04em; color: var(--fg-muted); text-transform: uppercase; padding: 13px 0 9px; border-bottom: 1px solid var(--border-soft); }
+  .row2 { display: flex; align-items: center; gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--border-soft); }
+  .row2:last-child { border-bottom: 0; }
+  .row2 .lab { flex: 1; }
+  .row2 .lab b { display: block; font-weight: 640; font-size: 13.5px; }
+  .row2 .lab small { color: var(--fg-faint); font-size: 12px; line-height: 1.5; display: block; margin-top: 2px; max-width: 430px; }
+  .toggle { position: relative; width: 40px; height: 23px; flex: none; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-chip); cursor: pointer; transition: background .18s, border-color .18s; }
+  .toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px; border-radius: 50%; background: var(--bg-input); border: 1px solid var(--border-strong); transition: left .18s; }
+  .toggle.on { background: var(--success); border-color: var(--success); }
+  .toggle.on::after { left: 19px; border-color: #fff; }
+
+  /* shared bits */
+  .btn { padding: 6px 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--fg); font: 600 12.5px/1.4 var(--font-ui); cursor: pointer; }
+  .btn:hover { background: var(--bg-hover); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+  .btn.ghost { border-color: var(--border); color: var(--fg-muted); }
+  .btn.sm { padding: 3px 10px; font-size: 11.5px; }
+  .kbd { font: 600 11px/1 var(--font-mono); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px; padding: 2px 6px; background: var(--bg-input); color: var(--fg-muted); }
+  .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; background: var(--bg-input); padding: 5px 12px; font: 600 12px/1.4 var(--font-ui); color: var(--fg-muted); cursor: pointer; border-right: 1px solid var(--border-soft); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--bg-active); color: var(--fg); }
+  .mono { font-family: var(--font-mono); }
+  .veil { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(57,42,33,.34); z-index: 30; }
+  .veil.open { display: flex; }
+  .modal { width: 500px; max-height: 88%; overflow: auto; border-radius: 14px; border: 1px solid var(--border); background: var(--bg-input); box-shadow: var(--shadow-menu); padding: 20px 22px 18px; }
+  .modal h3 { font: 640 16px/1.35 var(--font-display); margin-bottom: 4px; }
+  .modal .m-sub { color: var(--fg-muted); font-size: 12.5px; margin-bottom: 14px; }
+  .m-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+</style>
+</head>
+<body>
+
+<h1>「离不开」功能提案 mock</h1>
+<p class="sub">两个联网调研代理独立跑完后交叉汇总:<b>产品经理视角</b>(Cursor / Windsurf / Claude Code / Cline / Zed / Warp / Amp / Devin / CodeRabbit 等竞品的留存功能与用户实证)× <b>重度用户视角</b>(每天 3-5 个并行任务的一天走查 + Reddit/HN 真实声音)。两边独立提出、彼此重合的三项(①②③)排最前——其中①②正好补上此前业界对照自评的「沉淀环 + AI critic 层」两个缺口。共 7 项,页内界面全部可点。</p>
+<p class="hint">右侧卡片:<span style="color:var(--info)">蓝 = 竞品实证</span> · 褐 = 机制与接驳点 · <span style="color:var(--accent)">橙 = 待确认开放点</span>。样式按 Archive 皮肤 token 手写,实现时走既有 theme 变量。逐项决定采纳/否决即可,互相独立。</p>
+<nav class="toc">
+  <a href="#f1"><b>①</b> 项目记忆 · 审查即学习 ⭐⭐</a>
+  <a href="#f2"><b>②</b> 复核官 · 门前第二意见 ⭐⭐</a>
+  <a href="#f3"><b>③</b> 成本账本 · 每任务归因 ⭐⭐</a>
+  <a href="#f4"><b>④</b> 范围小票 · 越界与依赖护栏</a>
+  <a href="#f5"><b>⑤</b> 恢复条 · 上下文切换复位</a>
+  <a href="#f6"><b>⑥</b> 任务配方 · 发射参数模板</a>
+  <a href="#f7"><b>⑦</b> 选区改写 · Editor 内 ⌘K</a>
+</nav>
+
+<style>
+  .veto { max-width: 1120px; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--bg-sidebar); padding: 14px 18px 15px; margin: 0 0 46px; }
+  .veto h3 { font: 640 13.5px/1 var(--font-display); letter-spacing: .03em; color: var(--fg-muted); margin-bottom: 10px; }
+  .veto ul { list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; font-size: 12.5px; color: var(--fg-muted); }
+  .veto li { padding-left: 16px; position: relative; }
+  .veto li::before { content: '✕'; position: absolute; left: 0; color: var(--danger); font-size: 10.5px; top: 3px; }
+  .veto li b { color: var(--fg); font-weight: 640; }
+</style>
+<div class="veto">
+  <h3>我们主动不做的(两视角共识否决,回应"别加没人用的功能")</h3>
+  <ul>
+    <li><b>幽灵补全军备赛</b> — Cursor Tab 日均 4 亿次请求靠自研低延迟模型;BYO-API 架构结构性打不赢,做了必然二流。</li>
+    <li><b>语音输入</b> — PM 提议、重度用户实证否决(Cursor 加了又删,"我干嘛对着终端说话")。两视角冲突,弃。</li>
+    <li><b>云端后台 agent</b> — 需要自家云,违背单机+零遥测定位;社区口碑"completely unusable"。本地 worktree 并行才是诚实答案。</li>
+    <li><b>自动 PR 评论机器人</b> — CodeRabbit 式逐条评论 60-80% 是噪音、70-90% 被忽略;正确形态是门控复核官(见②)。</li>
+    <li><b>团队协作后端 / 排行榜</b> — 需自建服务端;对单机开发者是伪激励。receipt 本地导出已够分享。</li>
+    <li><b>MCP 目录 / 市场</b> — 用户装十几个两周后只剩 3-4 个常用,长尾接近零使用,还烧上下文。</li>
+    <li><b>重量级 spec 三件套</b> — Fowler 实测小任务太啰嗦且 agent 并不遵守;保持现有轻量计划门。</li>
+    <li><b>代码库语义索引</b> — PM 单方提名但规模 M-L 且用户无感知诉求;列为观察项,本批不做。</li>
+  </ul>
+</div>
+
+<!-- ═══════════════════════ ① 项目记忆 · 审查即学习 ═══════════════════════ -->
+<style>
+  .distill { border: 1px solid #d3bd82; border-left: 4px solid var(--warn); border-radius: 11px; background: #fdf4dd; padding: 11px 14px; }
+  .distill .d-head { font: 640 12px/1.5 var(--font-ui); color: var(--warn); margin-bottom: 7px; }
+  .distill .d-rule { border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--bg-input); padding: 8px 11px; font-size: 13px; line-height: 1.6; }
+  .distill .d-src { font-size: 11px; color: var(--fg-faint); margin: 7px 0 9px; }
+  .distill .d-actions { display: flex; gap: 8px; }
+  .distill.done { border-color: #b6c6a8; border-left-color: var(--success); background: #f0f3e8; }
+  .distill.done .d-head { color: var(--success); }
+  .mem-stats { display: flex; gap: 18px; padding: 12px 18px; border-bottom: 1px solid var(--border-soft); background: var(--bg-input); font-size: 12px; color: var(--fg-muted); }
+  .mem-stats b { color: var(--fg); font: 640 15px/1.2 var(--font-display); display: block; }
+  .mem-body { display: flex; min-height: 430px; }
+  .mem-nav { width: 150px; flex: none; border-right: 1px solid var(--border-soft); padding: 12px 8px; display: grid; gap: 2px; align-content: start; background: var(--bg-sidebar); }
+  .mem-nav a { padding: 6px 11px; border-radius: 8px; color: var(--fg-muted); font-size: 12.5px; text-decoration: none; display: flex; }
+  .mem-nav a small { margin-left: auto; color: var(--fg-faint); font: 600 10.5px/1.6 var(--font-mono); }
+  .mem-nav a.on { background: var(--bg-active); color: var(--fg); font-weight: 640; }
+  .mem-list { flex: 1; background: var(--bg-input); padding: 14px 18px; display: grid; gap: 9px; align-content: start; }
+  .mem-rule { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--bg-card); padding: 10px 13px; display: flex; gap: 12px; align-items: flex-start; }
+  .mem-rule .rt { flex: 1; font-size: 13px; line-height: 1.55; }
+  .mem-rule .rt .meta { display: flex; gap: 7px; margin-top: 5px; flex-wrap: wrap; font-size: 10.5px; color: var(--fg-faint); }
+  .mem-rule .rt .meta .src { border: 1px solid var(--border-soft); border-radius: 999px; padding: 1px 8px; background: var(--bg-input); }
+  .mem-rule .rt .meta .hit { color: var(--success); font-weight: 640; }
+  .mem-rule.off .rt { color: var(--fg-faint); }
+  .mem-rule.cand { border-color: #d3bd82; border-left: 4px solid var(--warn); }
+  .mem-rule.cand .cand-tag { font: 640 10px/1 var(--font-mono); color: var(--warn); letter-spacing: .06em; }
+  .proj { border: 1px solid var(--border-soft); border-radius: 11px; background: var(--bg-card); padding: 10px 13px; }
+  .proj.drift { border-left: 4px solid var(--warn); }
+  .proj .p-head { display: flex; align-items: center; gap: 10px; }
+  .proj .p-logo { width: 26px; height: 26px; border-radius: 8px; border: 1px solid var(--border); display: grid; place-items: center; font-size: 13px; flex: none; background: var(--bg-input); }
+  .proj .p-name { flex: 1; }
+  .proj .p-name b { font: 640 13px/1.4 var(--font-display); display: block; }
+  .proj .p-name small { color: var(--fg-faint); font-size: 11px; line-height: 1.5; display: block; }
+  .proj .p-state { font: 600 10.5px/1 var(--font-mono); border-radius: 999px; padding: 3px 9px; flex: none; }
+  .proj .p-state.ok { color: var(--success); background: #e9efe4; }
+  .proj .p-state.warn { color: var(--warn); background: #f6ecd2; }
+  .proj .p-block { margin: 9px 0 0 36px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--bg-input); padding: 7px 11px; font: 10.5px/1.75 var(--font-mono); color: var(--fg-muted); white-space: pre-wrap; }
+  .proj .p-block mark { background: #f3e6c3; color: var(--warn); border-radius: 3px; padding: 0 3px; }
+  .proj .p-foot { margin: 8px 0 0 36px; font-size: 11px; color: var(--fg-faint); display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+</style>
+<section id="f1">
+  <div class="sec-head">
+    <h2>① 项目记忆 · 审查即学习</h2>
+    <div class="prov"><span class="both">⭐⭐ 双提名 · PM #1 + 用户 #5</span><span class="freq">全部任务自动受益 · 用户纠正 3-8 次/天</span><span>规模 M(1-2 周)</span></div>
+    <p>「agent 第三次给我写 default export——我们项目一律具名导出。前两次我都在审查里让它改了,可下个任务它又忘。」你在审查门里的每次驳回、每条批注、每个被拒的计划,都是决策级高信号:一键沉淀成项目规则,之后每个任务自动带上;每条规则可溯源、可停用、能看到这周挡下几次。同一个错误,不教第二遍。<b>Ⓒ 视图</b>展示多 agent 规划:同一份规则源如何分发给 R-Code/Pi、Claude Code 与 Codex——统一「项目约定层」;<b>Ⓑ 视图</b>同时升格为 Session Rail 的第五个 Tab「记忆」:共享规则之外,把 Claude Code / Codex 的私有记忆文件也收进同一个地方查看、编辑、清理、升格——管理但不合并。</p>
+  </div>
+  <div class="stage">
+    <div>
+      <div class="seg" id="f1seg" style="margin-bottom:12px">
+        <button class="on" data-v="a">Ⓐ 捕获时刻 — 审查返工中</button>
+        <button data-v="b">Ⓑ 记忆 Tab — 共享规则 + 各家私有</button>
+        <button data-v="c">Ⓒ 分发与同步 — 多 agent</button>
+      </div>
+
+      <!-- A: capture moment in review -->
+      <div class="win" id="f1a">
+        <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Session — 修复登录重定向 · r-code-app</div>
+        <div class="app-body" style="min-height:500px">
+          <div class="main">
+            <div class="room-head"><b>修复登录重定向</b><span class="chip">r-code-app · main</span><span class="chip state need">等你审查</span></div>
+            <div class="room-cols">
+              <div class="conv">
+                <div class="tl">
+                  <div class="tl-ms">Review</div>
+                  <div class="tl-agent">改动已就绪:2 个文件 +9 −3,验证 <code>vitest run</code> 通过。</div>
+                  <div class="tl-you">Request fix · Diff #2:不要 default export,项目一律具名导出。</div>
+                  <div class="tl-worklog">
+                    <div class="wl"><span class="clk">14:32</span><span>↩ 已回流返工 · 重跑中</span></div>
+                  </div>
+                  <div class="distill" id="distill">
+                    <div class="d-head" id="dHead">这条纠正似乎可以复用 — 沉淀为项目规则?</div>
+                    <div class="d-rule" id="dRule" contenteditable="true" spellcheck="false">导出一律使用具名导出;禁止 <b>default export</b>。</div>
+                    <div class="d-src">依据:这是你第 3 次做同类纠正(修复登录重定向 · 补充 API 文档 · 重构 util 模块)· 规则文本可直接改</div>
+                    <div class="d-actions" id="dActions">
+                      <button class="btn primary sm" id="dOk">沉淀为规则</button>
+                      <button class="btn ghost sm" id="dNo">仅此次</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="canvas">
+                <div class="c-tabs"><i>Summary</i><i>File</i><i>Diff</i><i>Preview</i><i>Terminal</i><i class="on">Review</i></div>
+                <div class="c-body">
+                  <div style="border:1px solid var(--border-soft);border-radius:9px;overflow:hidden">
+                    <div style="display:flex;gap:8px;padding:5px 10px;background:var(--bg-input);border-bottom:1px solid var(--border-soft);font:600 11px/1.6 var(--font-mono);color:var(--fg-muted)"><span>src/auth/redirect.ts</span><span style="margin-left:auto">Diff #2</span></div>
+                    <div style="padding:7px 10px;font:11.5px/1.8 var(--font-mono);background:var(--bg-input)">
+                      <span style="display:block;background:#f3d9cf">− export default function redirect(to) {</span>
+                      <span style="display:block;background:#dfe8d8">+ export const redirect = (to: string) => {</span>
+                    </div>
+                    <div style="padding:6px 10px;border-top:1px solid var(--border-soft);font-size:11px;color:var(--warn);background:#fdf4dd">✎ 你的批注:不要 default export,项目一律具名导出。</div>
+                  </div>
+                  <div style="margin-top:10px;font-size:11px;color:var(--fg-faint)">批注已随 Request fix 回流给 agent —— 沉淀卡出现在左侧对话流,不打断你继续审查。</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- B: memory tab (rail 5th icon) -->
+      <div class="win" id="f1b" style="display:none;width:1020px">
+        <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> R-Code — 「记忆」· Session Rail 新增的第五个 Tab</div>
+        <div class="app-body" style="min-height:520px">
+          <div class="abar">
+            <i title="Sessions">▤</i>
+            <i title="Inbox">◎<span class="bdg">2</span></i>
+            <i title="Projects">▦</i>
+            <i title="Search ⌘K">⌕</i>
+            <i class="on" title="记忆">◈</i>
+            <span class="sp"></span>
+            <i title="Editor">⌨</i>
+            <i title="Settings">⚙</i>
+          </div>
+          <div class="rail" style="width:206px">
+            <div class="grp">共享 — R-Code 分发</div>
+            <div class="row sel" data-mv="shared"><span class="t">项目规则 · r-code-app</span><small>13</small></div>
+            <div class="grp">各家私有 — 只管理不合并</div>
+            <div class="row" data-mv="claude"><span class="t">✳ Claude Code</span><small>9</small></div>
+            <div class="row" data-mv="codex"><span class="t">▣ Codex</span><small>1</small></div>
+            <div class="row" data-mv="r-code"><span class="t">◆ R-Code 任务台账</span><small>→</small></div>
+          </div>
+          <div class="main">
+
+          <!-- shared rules view -->
+          <div id="memShared">
+          <div class="mem-stats">
+            <span><b>13</b>条启用规则</span>
+            <span><b>41</b>本周注入任务</span>
+            <span><b>9</b>本周挡下的返工</span>
+            <span style="margin-left:auto;align-self:center"><button class="btn sm">新建规则…</button></span>
+          </div>
+          <div style="display:flex;gap:6px;padding:10px 18px 0;background:var(--bg-input);font-size:11px">
+            <span class="chip" style="background:var(--bg-active);color:var(--fg)">全部 13</span><span class="chip">代码约定 6</span><span class="chip">命令与验证 4</span><span class="chip">边界 3</span><span class="chip" style="color:var(--warn);border-color:#d3bd82">候选待批 2</span>
+          </div>
+          <div class="mem-list">
+            <div class="mem-rule cand">
+              <div class="rt"><span class="cand-tag">候选 · 来自昨天的返工批注</span><br>PR 描述里必须引用 issue 号(如 <code style="font:11px var(--font-mono)">#142</code>)。
+                <div class="meta"><span class="src">来源:整理发布说明 · 你的批注</span></div>
+              </div>
+              <div style="display:flex;gap:6px;flex:none"><button class="btn primary sm">批准</button><button class="btn ghost sm">忽略</button></div>
+            </div>
+            <div class="mem-rule" id="newRule" style="display:none">
+              <div class="rt">导出一律使用具名导出;禁止 default export。
+                <div class="meta"><span class="src">来源:修复登录重定向 · Request fix</span><span class="hit">刚刚沉淀</span></div>
+              </div>
+              <div class="toggle on" style="transform:scale(.86)"></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt">测试一律用 vitest,不引入 jest;断言用 <code style="font:11px var(--font-mono)">expect</code> 风格。
+                <div class="meta"><span class="src">来源:补边界测试 · Request fix</span><span class="hit">本周生效 6 次</span></div>
+              </div>
+              <div class="toggle on" style="transform:scale(.86)"></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt">不要改动 <code style="font:11px var(--font-mono)">src/legacy/**</code>——迁移完成前只读。
+                <div class="meta"><span class="src">来源:重构 util 模块 · 计划驳回</span><span class="hit">挡下 2 次越界</span></div>
+              </div>
+              <div class="toggle on" style="transform:scale(.86)"></div>
+            </div>
+            <div class="mem-rule off">
+              <div class="rt">commit message 用中文。
+                <div class="meta"><span class="src">来源:手动添加</span><span>本周 0 次命中 · 已停用</span></div>
+              </div>
+              <div class="toggle" style="transform:scale(.86)"></div>
+            </div>
+            <div style="font-size:11px;color:var(--fg-faint);padding:2px 4px">规则存于项目内 <code style="font:10.5px var(--font-mono)">.r-code/rules.md</code>,可随 git 提交与队友共享;每条规则的出处链接回原任务,在 Replay 里可回答「agent 为什么相信这条约定」。</div>
+          </div>
+          </div><!-- /memShared -->
+
+          <!-- claude private memory view -->
+          <div id="memClaude" style="display:none">
+          <div class="mem-stats"><span style="align-self:center;font-size:11.5px;color:var(--fg-muted)">按 Claude Code 已知路径约定<b style="font-size:11.5px;display:inline">只读发现</b>;仅在你显式操作时写入,删除前自动备份。</span><span style="margin-left:auto;align-self:center"><button class="btn sm">在 Finder 中显示</button></span></div>
+          <div class="mem-list">
+            <div class="mem-rule">
+              <div class="rt"><code style="font:11px var(--font-mono)">~/.claude/CLAUDE.md</code> — 你的手写全局说明,对所有项目生效。
+                <div class="meta"><span class="src">全局</span><span>更新 12 天前</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">查看</button><button class="btn ghost sm">编辑</button></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt"><code style="font:11px var(--font-mono)">memory/MEMORY.md</code> — Claude 自动记忆的索引页(本项目)。
+                <div class="meta"><span class="src">本项目 · 自动记忆</span><span>更新 昨天</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">查看</button></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt">「部署前要先跑 release:verify,产物只认 dist/……」<code style="font:10.5px var(--font-mono)">memory/deploy-process.md</code>
+                <div class="meta"><span class="src">本项目 · 自动记忆</span><span>更新 2 天前</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none" id="promoteA"><button class="btn ghost sm">编辑</button><button class="btn ghost sm">删除</button><button class="btn primary sm" data-promote>↑ 升格为共享规则</button></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt">「REST 错误统一走 AppError 包装,不裸抛……」<code style="font:10.5px var(--font-mono)">memory/api-conventions.md</code>
+                <div class="meta"><span class="src">本项目 · 自动记忆</span><span>更新 5 天前</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">编辑</button><button class="btn ghost sm">删除</button><button class="btn primary sm" data-promote>↑ 升格为共享规则</button></div>
+            </div>
+            <div style="font-size:11px;color:var(--fg-faint);padding:2px 4px">升格 = 把这条<b style="font-size:11px;display:inline">复制</b>进共享规则候选区(原文件不动,单向);会话转录(jsonl)是对话记录不是记忆,不在此管理。R-Code 永不后台改写这些文件。</div>
+          </div>
+          </div><!-- /memClaude -->
+
+          <!-- codex private memory view -->
+          <div id="memCodex" style="display:none">
+          <div class="mem-list" style="padding-top:14px">
+            <div class="mem-rule">
+              <div class="rt"><code style="font:11px var(--font-mono)">~/.codex/AGENTS.md</code> — 你的手写全局说明,对所有项目生效。
+                <div class="meta"><span class="src">全局</span><span>更新 20 天前</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">查看</button><button class="btn ghost sm">编辑</button></div>
+            </div>
+            <div class="mem-rule">
+              <div class="rt"><code style="font:11px var(--font-mono)">AGENTS.md</code>(本项目)— 含 R-Code 托管区块,由 Ⓒ 的同步维护。
+                <div class="meta"><span class="src">本项目</span><span class="hit">✓ 与规则源一致</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">查看</button></div>
+            </div>
+            <div style="border:1px dashed var(--border-strong);border-radius:10px;padding:10px 13px;font-size:12px;color:var(--fg-muted);background:var(--bg-card)">此版本的 Codex 没有自动记忆目录——诚实空态:只发现以上两个文件。若未来版本引入记忆存储,按同样的「只读发现」规则接入。</div>
+          </div>
+          </div><!-- /memCodex -->
+
+          <!-- r-code memory view -->
+          <div id="memRCode" style="display:none">
+          <div class="mem-list" style="padding-top:14px">
+            <div style="border:1px solid var(--border-soft);border-radius:10px;background:var(--bg-card);padding:11px 14px;font-size:12.5px;line-height:1.65;color:var(--fg-muted)"><b style="color:var(--fg)">R-Code/Pi 没有暗藏的私有记忆。</b>它的长期记忆就是左侧的「共享项目规则」(每次任务注入);过程记忆是任务台账——时间线、证据、回放,本来就在产品里,这里只是给个入口。</div>
+            <div class="mem-rule">
+              <div class="rt">任务台账 · 128 个任务 · 42 MB
+                <div class="meta"><span class="src">时间线 + 证据 + 回放</span></div>
+              </div>
+              <div style="display:flex;gap:5px;flex:none"><button class="btn ghost sm">打开 History</button><button class="btn ghost sm">Replay 检索</button></div>
+            </div>
+            <div style="font-size:11px;color:var(--fg-faint);padding:2px 4px">⌘K 的搜索域随本 Tab 扩展:共享规则、各家私有记忆文件、任务台账——「我记得让 Claude 记过一个部署口令」一搜即达。</div>
+          </div>
+          </div><!-- /memRCode -->
+
+          </div><!-- /main -->
+        </div><!-- /app-body -->
+      </div>
+
+      <!-- C: distribution & sync -->
+      <div class="win" id="f1c" style="display:none">
+        <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> 项目记忆 — 分发与同步 · r-code-app</div>
+        <div style="background:var(--bg-input);padding:16px 18px;display:grid;gap:11px">
+          <div style="display:flex;align-items:center;gap:11px;border:1px solid var(--border-strong);border-radius:11px;background:var(--bg-card);padding:10px 14px">
+            <span style="font-size:15px">◉</span>
+            <div style="flex:1">
+              <b style="font:640 13px/1.4 var(--font-display)">唯一事实源 · <code class="mono" style="font-size:11.5px">.r-code/rules.md</code></b>
+              <div style="font-size:11px;color:var(--fg-faint);margin-top:2px">13 条启用规则,规则文本+启用状态随 git 共享;命中计数与出处链接存本地,不进仓库</div>
+            </div>
+            <button class="btn sm">在 Editor 打开</button>
+          </div>
+          <div style="text-align:center;color:var(--fg-faint);font-size:11px">│ 同一份规则,三个投影 ▼</div>
+
+          <div class="proj">
+            <div class="p-head">
+              <span class="p-logo">◆</span>
+              <div class="p-name"><b>R-Code · Pi 任务</b><small>每次任务启动注入 preamble 的 <code style="font:10px var(--font-mono)">&lt;project_rules&gt;</code> 区块 — 与技能注入同一条内建通道</small></div>
+              <span class="p-state ok">始终开启</span>
+            </div>
+            <div class="p-foot">近 7 天注入 41 个任务 · 规则变更对下一次运行立即生效 · 不落任何项目文件</div>
+          </div>
+
+          <div class="proj">
+            <div class="p-head">
+              <span class="p-logo">✳</span>
+              <div class="p-name"><b>Claude Code · CLAUDE.md</b><small>托管区块只写一行 import(Claude Code 原生 @ 引用),正文永不触碰</small></div>
+              <span class="p-state ok">✓ 已同步 · 2 分钟前</span>
+              <div class="toggle on" style="transform:scale(.86)"></div>
+            </div>
+            <div class="p-block">&lt;!-- rcode:rules:begin — R-Code 托管,勿手改 --&gt;
+@.r-code/rules.md
+&lt;!-- rcode:rules:end --&gt;</div>
+            <div class="p-foot">区块外你手写的 CLAUDE.md 内容 R-Code 只读不写 · 每次写入原子落盘,git diff 可见</div>
+          </div>
+
+          <div class="proj drift" id="codexProj">
+            <div class="p-head">
+              <span class="p-logo">▣</span>
+              <div class="p-name"><b>Codex · AGENTS.md</b><small>AGENTS.md 无 import 语义 — 托管区块内渲染规则全文</small></div>
+              <span class="p-state warn" id="codexState">⚠ 托管区块被手改</span>
+              <div class="toggle on" style="transform:scale(.86)"></div>
+            </div>
+            <div class="p-block" id="codexBlock">&lt;!-- rcode:rules:begin --&gt;
+- 导出一律使用具名导出;禁止 default export。
+- 测试一律用 vitest,不引入 jest。
+<mark>- 提交前先跑 npm run check ← 手改新增,规则源里没有</mark>
+…(其余 10 条)
+&lt;!-- rcode:rules:end --&gt;</div>
+            <div class="p-foot" id="codexActions"><span>上次同步后区块被手改(hash 不符),不会静默覆盖:</span>
+              <button class="btn primary sm" id="driftImport">导入手改为候选规则</button>
+              <button class="btn ghost sm">用规则源覆盖</button>
+              <button class="btn ghost sm">停止托管此文件</button>
+            </div>
+          </div>
+
+          <div style="border:1px dashed var(--border-strong);border-radius:10px;padding:9px 13px;font-size:12px;color:var(--fg-muted);display:flex;gap:9px;align-items:center">
+            <span>⇄</span><span style="flex:1"><b style="color:var(--fg)">反向导入(首次启用):</b>扫描到现有 CLAUDE.md 含 6 条约定、AGENTS.md 含 4 条(重合 3)——解析进候选区人工确认,避免出现第四套记忆。</span><button class="btn sm">查看并导入…</button>
+          </div>
+          <div style="font-size:11px;color:var(--fg-faint)">边界:只统一「项目约定」这一层;各 CLI 的私有记忆(<code style="font:10px var(--font-mono)">~/.claude</code> 自动记忆、<code style="font:10px var(--font-mono)">~/.codex/sessions</code>)R-Code 不读不写。</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>Cursor Rules/Memories、Windsurf Memories(「10-12 个 session 后不用说明也符合我的风格」)、Cline Memory Bank、Devin Knowledge、CodeRabbit Learnings(2M+ 仓库从审查反馈学偏好)。</b>RedMonk 2025 把持久记忆单独标注为 "absolutely strategic"。</div>
+      <div class="note"><b>为什么竞品抄不走。</b>竞品从聊天流里抓记忆,信号噪杂;R-Code 的捕获点长在审查门上——驳回 hunk / request-fix 批注 / 计划拒绝是决策级信号,规则质量一个量级;且每条带出处进证据台账与 Replay receipt,可溯源、可撤销。</div>
+      <div class="note"><b>粘性 · 数据沉淀型。</b>规则库随使用增值,换工具即归零——这是留存曲线拉平后仍不流失的根因;同时直接补掉业界对照自评的「沉淀环」缺口。</div>
+      <div class="note"><b>防 drift 设计。</b>「本周生效 N 次 / 0 次命中」让每条规则的价值可观测——比手写 CLAUDE.md 强的正是这点;0 命中规则可提示归档。</div>
+      <div class="note"><b>多 agent 一环(Ⓒ)。</b>单源三投影:R-Code/Pi 走 preamble;CLAUDE.md 托管区块一行 @import;AGENTS.md 渲染写实。托管区块外内容永不触碰;写入原子、git 可见;区块被手改时不静默覆盖,给「导入/覆盖/停止托管」三选。实现前核对两家 CLI 当时版本的 memory 惯例。</div>
+      <div class="note"><b>私有记忆管理(Ⓑ)。</b>「记忆」成为 Session Rail 第五个 Tab,两层:共享规则(R-Code 分发)+ 各家私有(只管理不合并)。私有层只做四件事:查看 / 编辑 / 删除(先备份)/ <b>升格</b>——把某条私有记忆复制进共享候选区,单向,不反向写入。发现机制复用技能系统对 <code style="font:10.5px var(--font-mono)">~/.claude</code>、<code style="font:10.5px var(--font-mono)">~/.codex</code> 的既有只读扫描惯例;找不到就给诚实空态,绝不后台改写。</div>
+      <div class="note q">捕获触发的克制度:mock 按「同类纠正第 2 次起才弹卡、每任务最多 1 张」处理;要不要更保守(只进候选区、从不弹卡)?</div>
+      <div class="note q">规则文件放项目内 <code style="font:10.5px var(--font-mono)">.r-code/rules.md</code>(可 git 共享)还是应用数据目录?mock 按项目内。</div>
+      <div class="note q">同步到 CLAUDE.md / AGENTS.md 默认开还是关?mock 按「默认关,首次开启前预览将写入的区块」——沉淀环要对外部 agent 生效依赖这个开关。</div>
+      <div class="note q">「记忆」作为 rail 第五个独立 Tab(mock 如此)还是并进 Projects 面板?独立 Tab 高频可达,但 rail 图标位是稀缺资源。</div>
+      <div class="note q">编辑私有记忆文件时,CLI 可能同时在写——mock 按沿用 Editor 既有的 dirty-guard/外部变更冲突语义,可接受吗?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const segBtns = document.querySelectorAll('#f1seg button');
+  const views = { a: document.getElementById('f1a'), b: document.getElementById('f1b'), c: document.getElementById('f1c') };
+  segBtns.forEach(btn => btn.addEventListener('click', () => {
+    segBtns.forEach(x => x.classList.toggle('on', x === btn));
+    Object.entries(views).forEach(([k, el]) => { el.style.display = k === btn.dataset.v ? '' : 'none'; });
+  }));
+  const distill = document.getElementById('distill');
+  document.getElementById('dOk').addEventListener('click', () => {
+    distill.classList.add('done');
+    document.getElementById('dHead').textContent = '✓ 已入项目记忆 · 规则 #13「具名导出」— 之后的任务会自动带上';
+    document.getElementById('dRule').setAttribute('contenteditable', 'false');
+    document.getElementById('dActions').innerHTML = '<span style="font-size:11px;color:var(--fg-faint)">可随时在「记忆中枢」停用或编辑 → 点上方 Ⓑ 看它入库后的样子</span>';
+    document.getElementById('newRule').style.display = '';
+  });
+  document.getElementById('dNo').addEventListener('click', () => { distill.style.display = 'none'; });
+  document.getElementById('driftImport').addEventListener('click', () => {
+    const proj = document.getElementById('codexProj'), state = document.getElementById('codexState');
+    proj.classList.remove('drift');
+    state.className = 'p-state ok';
+    state.textContent = '✓ 已同步 · 手改已入候选区';
+    document.getElementById('codexBlock').innerHTML = '&lt;!-- rcode:rules:begin --&gt;\n- 导出一律使用具名导出;禁止 default export。\n- 测试一律用 vitest,不引入 jest。\n…(其余 10 条)\n&lt;!-- rcode:rules:end --&gt;';
+    document.getElementById('codexActions').innerHTML = '✓ 手改内容已进入候选区(切到 Ⓑ 的「候选待批」可见)· 区块已按规则源重写,新 hash 已记录。';
+  });
+  document.querySelectorAll('#f1b .rail .row').forEach(r => r.addEventListener('click', () => {
+    document.querySelectorAll('#f1b .rail .row').forEach(x => x.classList.toggle('sel', x === r));
+    ['Shared', 'Claude', 'Codex', 'R-Code'].forEach(k => {
+      document.getElementById('mem' + k).style.display = (k.toLowerCase() === r.dataset.mv) ? '' : 'none';
+    });
+  }));
+  document.querySelectorAll('#f1b [data-promote]').forEach(b => b.addEventListener('click', () => {
+    b.parentElement.innerHTML = '<span style="font:600 11px/1.8 var(--font-mono);color:var(--success)">✓ 已复制为共享规则候选(候选区 +1)</span>';
+  }));
+})();
+</script>
+
+<!-- ═══════════════════════ ② 复核官 · 门前第二意见 ═══════════════════════ -->
+<style>
+  .rev-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); background: #f0ece0; font-size: 12px; color: var(--fg-muted); flex-wrap: wrap; }
+  .rev-head .who { font: 640 12.5px/1 var(--font-display); color: var(--fg); }
+  .rev-head .tag { border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; font-size: 10.5px; background: var(--bg-input); }
+  .finding { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--bg-card); padding: 10px 13px; display: flex; gap: 11px; align-items: flex-start; }
+  .finding .sev { flex: none; font: 640 10px/1 var(--font-mono); letter-spacing: .05em; border-radius: 6px; padding: 4px 7px; margin-top: 2px; }
+  .finding.hi { border-left: 4px solid var(--danger); }
+  .finding.hi .sev { background: #f3d9cf; color: var(--danger); }
+  .finding.mid { border-left: 4px solid var(--warn); }
+  .finding.mid .sev { background: #f3e6c3; color: var(--warn); }
+  .finding.low { border-left: 4px solid var(--info); }
+  .finding.low .sev { background: #dfe6ec; color: var(--info); }
+  .finding .fb { flex: 1; font-size: 12.5px; line-height: 1.6; }
+  .finding .fb b { font-weight: 640; }
+  .finding .fb .evi { display: block; margin-top: 4px; font: 11px/1.7 var(--font-mono); color: var(--fg-muted); background: var(--bg-input); border: 1px solid var(--border-soft); border-radius: 7px; padding: 5px 9px; }
+  .finding .fa { display: flex; flex-direction: column; gap: 5px; flex: none; }
+  .risk-row { display: flex; align-items: center; gap: 9px; padding: 7px 11px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--bg-card); font-size: 12px; }
+  .risk-row .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .risk-row .path { font: 600 11.5px/1 var(--font-mono); }
+  .risk-row .why { color: var(--fg-faint); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .risk-row .pm2 { font: 600 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+</style>
+<section id="f2">
+  <div class="sec-head">
+    <h2>② 复核官 · REVIEW_READY 门前的第二意见</h2>
+    <div class="prov"><span class="both">⭐⭐ 双提名 · PM #2 + 用户 #2/#3(风险排序并入)</span><span class="freq">每次任务完成触发 · 3-5 次/天</span><span>规模 M(1-2 周)</span></div>
+    <p>「agent 说 3 个测试全绿——但我被坑过,它谎报过成功。现在我默认不信,验证工作自己重做一遍。」在进入人工审查之前,一个<b>独立上下文、只读、可用更强模型</b>的复核官先对抗式核一遍:声明 vs 证据逐条对账、边界与覆盖缺口、然后把整份 Changes 按风险排好序——你先啃 3 张红牌,绿牌批量放行。证伪即拦下 Full 模式的自动接受。</p>
+  </div>
+  <div class="stage">
+    <div class="win">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Session — 给下载接口加重试 · r-code-app</div>
+      <div class="c-tabs" style="background:var(--bg-sidebar);padding:9px 12px"><i>Summary</i><i>File</i><i>Diff</i><i>Preview</i><i>Terminal</i><i class="on">Review</i></div>
+      <div class="rev-head">
+        <span class="who">复核官</span>
+        <span class="tag">独立上下文</span><span class="tag">只读 · 经 Tool Gateway</span><span class="tag mono">opus · high</span><span class="tag mono">42s · $0.06</span>
+        <span style="margin-left:auto;color:var(--success);font-weight:640">已完成 · 3 项发现</span>
+      </div>
+      <div style="background:var(--bg-input);padding:13px 16px;display:grid;gap:9px">
+        <div class="finding hi" id="find1">
+          <span class="sev">高</span>
+          <div class="fb"><b>声明与证据不符。</b>agent 称「auth.spec 3 项全部通过」,但本次验证运行记录里没有 auth.spec 的任何执行。
+            <span class="evi">验证台账 · run #2:vitest run tests/retry.spec.ts — 5 passed · auth.spec 未出现</span>
+          </div>
+          <div class="fa"><button class="btn primary sm" id="f2fix">Request fix</button><button class="btn ghost sm">忽略</button></div>
+        </div>
+        <div class="finding mid">
+          <span class="sev">中</span>
+          <div class="fb"><b>新增分支零覆盖。</b><code style="font:11px var(--font-mono)">retry.ts</code> 的 catch-then-backoff 分支没有任何测试触达;失败路径未被验证。
+            <span class="evi">coverage: src/auth/retry.ts L41–58 — 0 hits</span>
+          </div>
+          <div class="fa"><button class="btn primary sm">Request fix</button><button class="btn ghost sm">忽略</button></div>
+        </div>
+        <div class="finding low">
+          <span class="sev">低</span>
+          <div class="fb"><b>恒真断言。</b><code style="font:11px var(--font-mono)">tests/retry.spec.ts:24</code> 的 <code style="font:11px var(--font-mono)">expect(res).toBeDefined()</code> 对 mock 返回永远成立,不构成有效验证。</div>
+          <div class="fa"><button class="btn ghost sm">Request fix</button><button class="btn ghost sm">忽略</button></div>
+        </div>
+        <div style="border:1px dashed #b6c6a8;border-radius:9px;padding:8px 12px;font-size:12px;color:var(--success);background:#f0f3e8">✓ 其余 11 项完成声明逐条核对,证据齐备(点开逐条查看)——复核通过的部分保持安静,不刷屏。</div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;padding-top:11px;border-top:1px solid var(--border-soft)">
+          <span style="font:640 12px/1 var(--font-display);letter-spacing:.04em;color:var(--fg-muted);text-transform:uppercase">Changes · 按风险排序</span>
+          <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--fg-muted);margin-left:auto;cursor:pointer"><div class="toggle" id="hiOnly" style="transform:scale(.8)"></div>只看高风险</label>
+        </div>
+        <div class="risk-row" data-risk="hi"><span class="dot" style="background:var(--danger)"></span><span class="path">src/gateway/permission-rules.ts</span><span class="why">触及权限引擎 — 影响所有任务的命令分级</span><span class="pm2">+18 −2</span></div>
+        <div class="risk-row" data-risk="mid"><span class="dot" style="background:var(--warn)"></span><span class="path">src/auth/retry.ts</span><span class="why">新增分支零测试覆盖(见发现 #2)</span><span class="pm2">+34</span></div>
+        <div class="risk-row" data-risk="low"><span class="dot" style="background:var(--success)"></span><span class="path">src/auth/redirect.ts</span><span class="why">小改动 · 验证覆盖</span><span class="pm2">+6 −2</span></div>
+        <div class="risk-row" data-risk="low"><span class="dot" style="background:var(--success)"></span><span class="path">docs/CHANGELOG.md</span><span class="why">文档</span><span class="pm2">+4</span></div>
+        <div id="bulkRow" style="display:flex;justify-content:flex-end"><button class="btn sm">批量接受 2 个低风险文件</button></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>Amp「Oracle」:主代理可自主请独立上下文的更强模型出第二意见;Claude Code 高手标配 subagent 复核。</b>反面同样是证据:CodeRabbit 式逐条 PR 评论 60-80% 为噪音、70-90% 被忽略、合并时长 6h→2-3 天——所以这里是<b>门控+分级+去重+通过即安静</b>,不是评论机器人。</div>
+      <div class="note"><b>直击头号信任缺口。</b>Sonar 数据:96% 开发者不敢信 AI 代码、仅 48% 每次验证;官方 issue 实锤 agent 谎报测试通过。让写代码的模型给自己判卷是结构性盲区——复核官不看 executor 自述,只认 spec + diff + 验证 stdout。</div>
+      <div class="note"><b>接驳点。</b>复核官是审查门内的一个只读步骤:经 Tool Gateway 天然受限;发现写入既有证据台账、进 Replay receipt;<b>Full 模式下证伪 = 拦截自动接受回退人工</b>,强化既有「验证失败回退」。风险排序直接复用发现结果,是审查台的 triage 层(解决「先看哪 5%」),与既有 hunk 级接受(解决「怎么接受」)正交。</div>
+      <div class="note"><b>粘性 · 习惯回路。</b>触发=REVIEW_READY 亮起;行动=先看红牌;奖励=抓到真 bug 或确认可信。审查是重度用户一天最累的环节,这里省的是最贵的注意力。补上业界对照自评的「AI critic 层」缺口。</div>
+      <div class="note q">默认档位:同模型更高推理力度(便宜)还是更强模型(准)?mock 按「跟随任务模型、力度 high,可在 Settings 换」。</div>
+      <div class="note q">挑剔度默认值:只报中高风险、低风险折叠?成本敏感用户允许整体关闭?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const t = document.getElementById('hiOnly');
+  t.addEventListener('click', () => {
+    t.classList.toggle('on');
+    const on = t.classList.contains('on');
+    document.querySelectorAll('#f2 .risk-row').forEach(r => { r.style.display = (on && r.dataset.risk !== 'hi') ? 'none' : ''; });
+    document.getElementById('bulkRow').style.display = on ? 'none' : 'flex';
+  });
+  document.getElementById('f2fix').addEventListener('click', () => {
+    const f = document.getElementById('find1');
+    f.querySelector('.fa').innerHTML = '<span style="font:600 11px/1.8 var(--font-mono);color:var(--success)">已回流 ↩</span>';
+    f.style.opacity = .72;
+  });
+})();
+</script>
+
+<!-- ═══════════════════════ ③ 成本账本 ═══════════════════════ -->
+<style>
+  .costline { display: flex; align-items: baseline; gap: 12px; font-size: 12.5px; color: var(--fg-muted); }
+  .costline .amt { font: 640 19px/1 var(--font-display); color: var(--fg); }
+  .phasebar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border-soft); margin: 9px 0 6px; cursor: pointer; }
+  .phasebar i { display: block; }
+  .phaselegend { display: flex; gap: 13px; flex-wrap: wrap; font-size: 11px; color: var(--fg-muted); }
+  .phaselegend i { display: inline-block; width: 8px; height: 8px; border-radius: 3px; margin-right: 4px; }
+  .advice { margin-top: 10px; border: 1px solid #d3bd82; border-left: 4px solid var(--warn); border-radius: 9px; background: #fdf4dd; padding: 8px 12px; font-size: 12px; color: var(--fg-muted); display: flex; gap: 9px; align-items: center; }
+  .advice b { color: var(--fg); }
+  .wkcard { width: 340px; flex: none; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--bg-sidebar); box-shadow: var(--shadow-card); overflow: hidden; position: relative; }
+  .wkcard .wk-head { padding: 11px 15px 0; font: 640 13px/1.4 var(--font-display); }
+  .wkcard .wk-body { padding: 10px 15px 14px; display: grid; gap: 10px; }
+  .budget { height: 10px; border-radius: 5px; background: var(--bg-chip); border: 1px solid var(--border-soft); overflow: hidden; }
+  .budget i { display: block; height: 100%; width: 43%; background: var(--success); }
+  .mrow { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--fg-muted); }
+  .mrow .mname { width: 118px; flex: none; font-family: var(--font-mono); font-size: 10.5px; }
+  .mrow .mbar { flex: 1; height: 8px; border-radius: 4px; background: var(--bg-chip); overflow: hidden; }
+  .mrow .mbar i { display: block; height: 100%; background: var(--border-strong); }
+  .mrow .mv { width: 46px; text-align: right; font: 600 10.5px/1 var(--font-mono); }
+</style>
+<section id="f3">
+  <div class="sec-head">
+    <h2>③ 成本账本 · 每任务归因 + 模型右配</h2>
+    <div class="prov"><span class="both">⭐⭐ 双提名 · PM #5 + 用户 #1</span><span class="freq">每任务收尾看一眼 + 每周对账 · 全本地计算</span><span>规模 S-M(约 1 周)</span></div>
+    <p>「月底账单比我估的高一截,但钱烧在哪说不清——Claude Code 的 /cost 是事后才告诉我,第三方 ccusage 对不上任务。」R-Code 以任务为中心,天生能做 session 型工具做不干净的<b>每任务成本归因</b>:收尾卡上直接给「这单多少钱、花在哪个阶段」,并基于近期同类任务给一句右配建议。BYO-API 用户的账单焦虑,是明确的流失源。</p>
+  </div>
+  <div class="stage">
+    <div class="win" style="width:640px">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Session — 给下载接口加重试 · 收尾卡</div>
+      <div style="background:var(--bg-input);padding:16px 20px;display:grid;gap:12px">
+        <div class="tl-ms" style="padding-left:0">✓ Done · 等你审查</div>
+        <div style="border:1px solid var(--border-soft);border-radius:11px;background:var(--bg-card);padding:12px 15px">
+          <div class="costline"><span class="amt">$0.42</span><span>↑182k ↓9.4k tokens</span><span>缓存命中 71%</span><span style="margin-left:auto;font-size:11px;color:var(--fg-faint)">sonnet · 中力度 · 47 分钟</span></div>
+          <div class="phasebar" id="phasebar" title="点击各段看明细">
+            <i style="flex:8;background:#8f9e6b" data-t="计划 8% · $0.03 — 1 轮计划审批"></i>
+            <i style="flex:31;background:#c98a52" data-t="编辑 31% · $0.13 — 6 文件写入"></i>
+            <i style="flex:22;background:#4a6d8c" data-t="验证 22% · $0.09 — vitest ×3 轮"></i>
+            <i style="flex:39;background:#a03426" data-t="返工 39% · $0.16 — 两轮 request-fix 重跑"></i>
+          </div>
+          <div class="phaselegend">
+            <span><i style="background:#8f9e6b"></i>计划 8%</span><span><i style="background:#c98a52"></i>编辑 31%</span><span><i style="background:#4a6d8c"></i>验证 22%</span><span><i style="background:#a03426"></i>返工 39%</span>
+            <span id="phaseDetail" style="color:var(--fg);font-weight:640"></span>
+          </div>
+          <div class="advice">⚡<span><b>右配建议:</b>近 10 个同类小改动任务,39% 预算花在返工——试试「计划 opus·high → 执行 sonnet」的组合。</span><button class="btn sm" style="flex:none">存为配方默认</button></div>
+        </div>
+        <div style="font-size:11px;color:var(--fg-faint)">成本随任务写入 Replay receipt;按 provider 定价表本地折算,零遥测——用你自己 key 的用量,只算给你自己看。</div>
+      </div>
+    </div>
+
+    <div class="wkcard">
+      <div class="wk-head">本周用量 — Home 常驻小卡</div>
+      <div class="wk-body">
+        <div class="costline"><span class="amt">$12.80</span><span style="color:var(--fg-faint)">/ 预算 $30</span><span style="margin-left:auto;font:600 11px/1 var(--font-mono);color:var(--success)">43%</span></div>
+        <div class="budget"><i></i></div>
+        <div>
+          <div class="mrow"><span class="mname">opus</span><div class="mbar"><i style="width:62%"></i></div><span class="mv">$7.90</span></div>
+          <div class="mrow"><span class="mname">sonnet</span><div class="mbar"><i style="width:28%"></i></div><span class="mv">$3.60</span></div>
+          <div class="mrow"><span class="mname">haiku</span><div class="mbar"><i style="width:10%"></i></div><span class="mv">$1.30</span></div>
+        </div>
+        <div style="border-top:1px solid var(--border-soft);padding-top:9px">
+          <div class="mrow"><span class="mname" style="font-family:var(--font-ui);font-size:11.5px">r-code-app</span><div class="mbar"><i style="width:64%;background:#c98a52"></i></div><span class="mv">$8.20</span></div>
+          <div class="mrow"><span class="mname" style="font-family:var(--font-ui);font-size:11.5px">site</span><div class="mbar"><i style="width:36%;background:#c98a52"></i></div><span class="mv">$4.60</span></div>
+        </div>
+        <button class="btn sm" id="budgetBtn" style="justify-self:start">设置预算…</button>
+      </div>
+      <div class="veil" id="mBudget">
+        <div class="modal" style="width:300px">
+          <h3>每周预算</h3>
+          <p class="m-sub">按你各 provider 的定价表本地折算。</p>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><span style="font:640 15px/1 var(--font-display)">$</span><input value="30" style="width:90px;padding:6px 10px;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-input);font:600 14px/1 var(--font-mono);color:var(--fg)"></div>
+          <div style="display:grid;gap:7px;font-size:12.5px">
+            <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="bx" checked>超限仅提醒,不拦任务</label>
+            <label style="display:flex;gap:8px;align-items:center"><input type="radio" name="bx">超限暂停派发新任务(运行中的不中断)</label>
+          </div>
+          <div class="m-actions"><button class="btn" data-close2>取消</button><button class="btn primary" data-close2>保存</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>RedMonk 把成本可见列为 table-stakes,并点名 2025「定价 rug pull」(Cursor 用量制改革、Claude 限额、Replit 超支)是 churn 驱动;Kiro 已展示每 prompt 成本;ccusage 这类第三方解析工具的流行本身就是需求实锤。</b></div>
+      <div class="note"><b>结构性独家。</b>session 型工具只能给「这次会话花了多少」;R-Code 的任务边界+阶段(计划/编辑/验证/返工)是既有状态机事实,per-task、per-phase 归因是白捡的——而卖 token 差价的竞品没动力做这么透明。</div>
+      <div class="note"><b>粘性 · 工作流嵌入 + 防流失。</b>收尾卡是必经之路,看一眼零成本;「返工烧了 39%」这种归因当场改变下一次的模型选择——右配建议与⑥任务配方打通,一键固化。账单焦虑是 BYO-API 用户明确的退订原因,透明=信任=留存。</div>
+      <div class="note q">定价表内置随版本更新;自定义网关价格未知时退化为只显示 token 数——可接受吗?</div>
+      <div class="note q">预算超限默认动作:mock 按「仅提醒」;要不要默认「暂停派发」更狠一点?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const detail = document.getElementById('phaseDetail');
+  document.querySelectorAll('#phasebar i').forEach(seg => seg.addEventListener('click', () => { detail.textContent = '— ' + seg.dataset.t; }));
+  const veil = document.getElementById('mBudget');
+  document.getElementById('budgetBtn').addEventListener('click', () => veil.classList.add('open'));
+  veil.querySelectorAll('[data-close2]').forEach(b => b.addEventListener('click', () => veil.classList.remove('open')));
+  veil.addEventListener('click', e => { if (e.target === veil) veil.classList.remove('open'); });
+})();
+</script>
+
+<!-- ═══════════════════════ ④ 范围小票 ═══════════════════════ -->
+<style>
+  .ticket { border: 1px solid var(--border-soft); border-radius: 12px; background: var(--bg-card); overflow: hidden; }
+  .ticket .t-head { display: flex; align-items: center; gap: 9px; padding: 10px 14px; border-bottom: 1px solid var(--border-soft); background: #f0ece0; font: 640 12.5px/1 var(--font-display); }
+  .ticket .t-head small { font: 400 11px/1 var(--font-ui); color: var(--fg-faint); margin-left: auto; }
+  .trow { padding: 10px 14px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  .trow:last-child { border-bottom: 0; }
+  .trow .t-sum { display: flex; align-items: center; gap: 9px; cursor: pointer; }
+  .trow .t-sum .ic { flex: none; width: 18px; text-align: center; }
+  .trow .t-sum .n { margin-left: auto; font: 600 10.5px/1 var(--font-mono); color: var(--fg-faint); }
+  .trow.ok .t-sum { color: var(--fg-muted); }
+  .trow.warn2 .t-sum { color: var(--fg); font-weight: 640; }
+  .t-items { display: none; margin: 9px 0 2px 27px; border-left: 2px solid var(--border-soft); padding-left: 12px; display: none; gap: 8px; }
+  .t-items.open { display: grid; }
+  .t-item { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; }
+  .t-item .path { font: 600 11px/1.7 var(--font-mono); flex: none; }
+  .t-item .why { color: var(--fg-muted); flex: 1; }
+  .t-item .acts { display: flex; gap: 5px; flex: none; }
+</style>
+<section id="f4">
+  <div class="sec-head">
+    <h2>④ 范围小票 · 越界与依赖护栏</h2>
+    <div class="prov"><span>用户 #4 单提名(实证充分)</span><span class="freq">每任务收工必跑 · 确定性核对 · 零模型成本</span><span>规模 S(数天)</span></div>
+    <p>「我只让它修登录 bug,审到一半发现它顺手重构了 3 个没让碰的文件、手搓了一个项目里已有的日期工具、还往 package.json 塞了个新依赖。」收工时把<b>最终 diff 对照已批计划</b>做一次确定性核对,打出一张小票:计划内安静放行,计划外单独成组,新依赖必须显式点头,疑似重造轮子给一条 nudge——越界在合并<b>之前</b>被逮住,不是三周后。</p>
+  </div>
+  <div class="stage">
+    <div class="win" style="width:700px">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Session — 修复登录重定向 · Review 顶部</div>
+      <div style="background:var(--bg-input);padding:14px 16px">
+        <div class="ticket">
+          <div class="t-head">范围小票<small>对照已批计划 · 收工自动核对</small></div>
+          <div class="trow ok">
+            <div class="t-sum"><span class="ic" style="color:var(--success)">✓</span><span>计划内改动 · 与已批计划逐条对应</span><span class="n">9 处 · 2 文件</span></div>
+          </div>
+          <div class="trow warn2">
+            <div class="t-sum" id="oosSum"><span class="ic" style="color:var(--warn)">⚠</span><span>计划外改动 — 默认折叠,点开逐条处理</span><span class="n">3 处 ▾</span></div>
+            <div class="t-items" id="oosItems">
+              <div class="t-item"><span class="path">src/api/client.ts</span><span class="why">重构了错误处理 — 计划未涉及此文件</span><span class="acts"><button class="btn sm">保留</button><button class="btn ghost sm">否决</button><button class="btn ghost sm">问它为什么</button></span></div>
+              <div class="t-item"><span class="path">src/api/types.ts</span><span class="why">重命名 2 个类型(连带上一条)</span><span class="acts"><button class="btn sm">保留</button><button class="btn ghost sm">否决</button></span></div>
+              <div class="t-item"><span class="path">.eslintrc.json</span><span class="why">放宽了 no-explicit-any — 计划外且影响全仓</span><span class="acts"><button class="btn sm">保留</button><button class="btn ghost sm">否决</button></span></div>
+            </div>
+          </div>
+          <div class="trow warn2">
+            <div class="t-sum"><span class="ic">📦</span><span>新增依赖 — 需要你显式点头</span><span class="n">1 个</span></div>
+            <div class="t-items open" style="display:grid">
+              <div class="t-item"><span class="path">date-fns@4.1.0</span><span class="why">package.json + lockfile · 走权限引擎的依赖档单独审批</span><span class="acts" id="depActs"><button class="btn primary sm" id="depOk">允许此依赖</button><button class="btn ghost sm">否决</button></span></div>
+            </div>
+          </div>
+          <div class="trow">
+            <div class="t-sum"><span class="ic">💡</span><span>疑似重造轮子:新写的 <code style="font:11px var(--font-mono)">formatRelative()</code> 与已有 <code style="font:11px var(--font-mono)">src/utils/date.ts:fmtRel()</code> 高度相似</span><span class="n"><button class="btn ghost sm">对比</button></span></div>
+          </div>
+        </div>
+        <div style="font-size:11px;color:var(--fg-faint);margin-top:9px">小票是确定性核对(diff ↔ 已批计划 ↔ manifest),不调用模型、每任务免费常开;与②复核官互补,可各自独立采纳。</div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>「almost-right / 越改越多」被 Faros 列为 66% 用户的头号痛点;builder.io 实测 AI 时代 PR 膨胀 18%、事故 +24%;「宁可重造轮子也不用现成库」有专文吐槽。</b>这是每个重度用户的日常肌肉紧张点。</div>
+      <div class="note"><b>接驳点。</b>计划审批门管「开工前批不批」;小票管「收工后是不是只干了批的那些」——是计划门的闭合校验,复用既有计划结构与变更台账。依赖行接 R0-R4 权限引擎的既有语义(包管理命令已是受控档)。</div>
+      <div class="note"><b>粘性 · 工作流嵌入。</b>它消除的是「我得自己记着核对它有没有越界」这份每任务必付的心智税;跑在收工边上、零成本、无噪音(计划内完全安静)。</div>
+      <div class="note q">计划外改动的默认强度:mock 按「折叠展示、不阻断 accept」;要不要更严——存在计划外项时必须逐条处理才能 accept?</div>
+      <div class="note q">重造轮子检测 v1 按轻启发式(同名/相似签名/同目录 util),误报可接受吗?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const sum = document.getElementById('oosSum'), items = document.getElementById('oosItems');
+  sum.addEventListener('click', () => { items.classList.toggle('open'); items.style.display = items.classList.contains('open') ? 'grid' : 'none'; });
+  document.getElementById('depOk').addEventListener('click', () => {
+    document.getElementById('depActs').innerHTML = '<span style="font:600 11px/1.8 var(--font-mono);color:var(--success)">✓ 已允许(记入证据台账)</span>';
+  });
+})();
+</script>
+
+<!-- ═══════════════════════ ⑤ 恢复条 ═══════════════════════ -->
+<style>
+  .resume { display: flex; align-items: center; gap: 12px; margin: 10px 14px 0; border: 1px solid #cdd7de; border-left: 4px solid var(--info); border-radius: 10px; background: #eef2f5; padding: 9px 13px; font-size: 12.5px; color: var(--fg-muted); }
+  .resume .r-main { flex: 1; line-height: 1.6; }
+  .resume .r-main b { color: var(--fg); font-weight: 640; }
+  .resume .r-x { flex: none; border: 0; background: none; color: var(--fg-faint); font-size: 14px; cursor: pointer; }
+  .hunkcard { border: 1px solid var(--border-soft); border-radius: 9px; overflow: hidden; margin-bottom: 8px; }
+  .hunkcard.flash { animation: flashHl 1.6s ease-out 2; }
+  @keyframes flashHl { 0% { box-shadow: 0 0 0 3px rgba(74,109,140,.55); } 100% { box-shadow: 0 0 0 3px transparent; } }
+  .hunkcard .hh { display: flex; gap: 8px; padding: 5px 10px; background: var(--bg-input); border-bottom: 1px solid var(--border-soft); font: 600 10.5px/1.6 var(--font-mono); color: var(--fg-muted); }
+  .hunkcard .hb { padding: 6px 10px; font: 11px/1.75 var(--font-mono); background: var(--bg-input); }
+</style>
+<section id="f5">
+  <div class="sec-head">
+    <h2>⑤ 恢复条 · 上下文切换复位</h2>
+    <div class="prov"><span>用户 #6 单提名(多任务定位强契合)</span><span class="freq">每次切回任务 1 次 · 每天 15-30 次</span><span>规模 S(数天)</span></div>
+    <p>「处理完 C 回到 A,盯着屏幕愣三秒:A 跑到哪了?我上次是想批计划还是等验证?」Needs-you 收件箱解决「哪个任务要我」;恢复条解决下一步——回到任务的那一刻,一行人话把<b>agent 侧进度</b>和<b>你自己上次停在哪</b>一起复位,零秒重新上手,不用重读整条时间线。</p>
+  </div>
+  <div class="stage">
+    <div class="win wide">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> R-Code — 从 Session Rail 切回搁置任务</div>
+      <div class="app-body">
+        <div class="abar">
+          <i class="on" title="Sessions">▤</i>
+          <i title="Inbox">◎<span class="bdg">2</span></i>
+          <i title="Projects">▦</i>
+          <i title="Search ⌘K">⌕</i>
+          <span class="sp"></span>
+          <i title="Editor">⌨</i>
+          <i title="Settings">⚙</i>
+        </div>
+        <div class="rail">
+          <div class="grp">r-code-app<span class="n">1 need you</span></div>
+          <div class="row sel"><span class="st need"></span><span class="t">修复登录重定向</span><small>38m</small></div>
+          <div class="row"><span class="st run"></span><span class="t">给下载接口加重试</span><small>跑</small></div>
+          <div class="row"><span class="st done"></span><span class="t">补充 API 文档</span><small>✓</small></div>
+          <div class="grp">site</div>
+          <div class="row"><span class="st run"></span><span class="t">首页性能优化</span><small>跑</small></div>
+        </div>
+        <div class="main">
+          <div class="room-head"><b>修复登录重定向</b><span class="chip">r-code-app · main</span><span class="chip state need">等你审查</span></div>
+          <div class="resume" id="resumeBar">
+            <div class="r-main"><b>你离开了 38 分钟。</b>期间:agent 改完 6 个文件,验证 <span style="color:var(--success)">✓ 通过</span>,现在等你审查。<br>你停在:<b>Diff · src/router.ts · hunk #3</b>(看了一半,未做决定)。</div>
+            <button class="btn primary sm" id="resumeGo">回到那里</button>
+            <button class="btn ghost sm">从头看</button>
+            <button class="r-x" title="关闭">×</button>
+          </div>
+          <div class="room-cols" style="min-height:0">
+            <div class="conv">
+              <div class="tl">
+                <div class="tl-ms">你离开后</div>
+                <div class="tl-worklog">
+                  <div class="wl"><span class="clk">+02:11</span><span>✎ 改写 src/router.ts · +6 −2</span></div>
+                  <div class="wl"><span class="clk">+09:47</span><span>✎ 改写 src/auth/session.ts 等 5 个文件</span></div>
+                  <div class="wl"><span class="clk">+21:05</span><span class="ok">✓ vitest run — 14 passed</span></div>
+                </div>
+                <div class="tl-agent">全部改动就绪,共 6 个文件 +41 −9,验证通过。</div>
+              </div>
+            </div>
+            <div class="canvas">
+              <div class="c-tabs"><i>Summary</i><i>File</i><i class="on">Diff</i><i>Preview</i><i>Terminal</i><i>Review</i></div>
+              <div class="c-body">
+                <div class="hunkcard"><div class="hh"><span>src/router.ts · hunk #2</span><span style="margin-left:auto">已接受 ✓</span></div><div class="hb"><span style="display:block;background:#dfe8d8">+ const back = params.get('from')</span></div></div>
+                <div class="hunkcard" id="hunk3"><div class="hh"><span>src/router.ts · hunk #3</span><span style="margin-left:auto;color:var(--info)">你上次停在这</span></div><div class="hb"><span style="display:block;background:#f3d9cf">− navigate('/dashboard')</span><span style="display:block;background:#dfe8d8">+ navigate(back ?? '/dashboard')</span></div></div>
+                <div class="hunkcard"><div class="hh"><span>src/auth/session.ts · hunk #4</span></div><div class="hb"><span style="display:block;background:#dfe8d8">+ export const FROM_PARAM = 'from'</span></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>多个 AI changeset 之间反复切换被点名是新的认知税(addyo《Code review in the age of AI》);跨会话上下文重建之痛(O'Reilly)。</b>并行 agent 工具都在做「状态看板」,但没人做「你自己的状态」。</div>
+      <div class="note"><b>接驳点。</b>agent 侧摘要来自既有任务/变更/验证事件的纯投影(无新数据源);「你停在哪」= 记录人类侧的画布滚动位置 + 最后聚焦的 hunk/tab,存本地 layout 存储——与既有 scrollMemory 惯例同类。</div>
+      <div class="note"><b>粘性 · 工作流嵌入。</b>与 Needs-you 收件箱构成完整闭环:收件箱分诊「去哪」,恢复条复位「到了之后干嘛」。切换越多价值越大,正好放大 R-Code 的并行 worktree 优势——竞品并行越强、切换税越高,这是「敢并行」的配套能力。</div>
+      <div class="note q">出现阈值:mock 按「离开该 Session ≥5 分钟且期间有事件」;更短会烦吗?</div>
+      <div class="note q">「你停在哪」记录粒度:滚动位置+最后聚焦 hunk 够吗,还是要记「未发送的批注草稿」一起提示(草稿本身已有 draftStore 持久化)?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  document.getElementById('resumeGo').addEventListener('click', () => {
+    const h = document.getElementById('hunk3');
+    h.classList.remove('flash'); void h.offsetWidth; h.classList.add('flash');
+    h.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+  document.querySelector('#resumeBar .r-x').addEventListener('click', () => { document.getElementById('resumeBar').style.display = 'none'; });
+})();
+</script>
+
+<!-- ═══════════════════════ ⑥ 任务配方 ═══════════════════════ -->
+<style>
+  .hero { font: 650 24px/1.3 var(--font-display); text-align: center; padding: 34px 0 22px; }
+  .slash-menu { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-input); box-shadow: var(--shadow-menu); width: 520px; margin: 0 auto 10px; overflow: hidden; }
+  .slash-menu .sm-grp { padding: 8px 13px 4px; font: 640 10.5px/1 var(--font-display); letter-spacing: .07em; text-transform: uppercase; color: var(--fg-faint); }
+  .slash-menu .sm-it { display: flex; align-items: baseline; gap: 9px; padding: 7px 13px; font-size: 13px; cursor: pointer; }
+  .slash-menu .sm-it:hover, .slash-menu .sm-it.hl { background: var(--bg-hover); }
+  .slash-menu .sm-it .d { color: var(--fg-faint); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .slash-menu .sm-it .pms { font: 600 10px/1 var(--font-mono); color: var(--fg-faint); flex: none; }
+  .composer2 { width: 620px; margin: 0 auto; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--bg-input); padding: 12px 14px 11px; box-shadow: var(--shadow-card); }
+  .composer2 .cx2 { font-size: 13.5px; line-height: 1.7; min-height: 44px; }
+  .composer2 .cx2 .ph { color: var(--fg-faint); }
+  .composer2 .cx2 .var { background: #e7e0f2; border: 1px dashed #a08cc0; border-radius: 6px; padding: 0 6px; font: 600 12px/1.6 var(--font-mono); color: #5c4a80; }
+  .chips2 { display: flex; gap: 6px; margin: 9px 0 0; flex-wrap: wrap; }
+  .chips2 .chip { font-size: 10.5px; }
+</style>
+<section id="f6">
+  <div class="sec-head">
+    <h2>⑥ 任务配方 · 发射参数模板</h2>
+    <div class="prov"><span>用户 #7 单提名(与③右配建议天然联动)</span><span class="freq">每天派 5-15 个任务,大半是重复任务型</span><span>规模 S(数天)</span></div>
+    <p>「同一句『补边界测试,只动 test 文件,跑 vitest,信任 Edit,Sonnet 中力度』我这周敲了第四遍——prompt 片段库带不走模型/力度/信任模式/文件域这些发射参数。」把 composer 的<b>全套发射配置</b>存成配方:<code style="font:12px var(--font-mono)">/配方名</code> 一键装填,留 <span style="font:600 11.5px var(--font-mono);color:#5c4a80">{{变量}}</span> 填空。好 prompt 是资产,不是一次性对话。</p>
+  </div>
+  <div class="stage">
+    <div class="win" style="width:760px">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> R-Code — Home 发射台</div>
+      <div style="background:var(--bg-input);padding:0 20px 26px">
+        <div class="hero">想做点什么?</div>
+        <div class="slash-menu" id="recipeMenu">
+          <div class="sm-grp">配方 — 你的发射参数模板</div>
+          <div class="sm-it hl" data-r="test"><b>/补边界测试</b><span class="d">只动 test 文件 · 绑定 vitest 验证</span><span class="pms">Edit · sonnet·中</span></div>
+          <div class="sm-it"><b>/修bug加回归</b><span class="d">先复现再修 · 必须新增回归测试</span><span class="pms">Auto · opus计划→sonnet</span></div>
+          <div class="sm-it"><b>/重构不改行为</b><span class="d">行为不变 · 测试全绿为准</span><span class="pms">Approve · opus·high</span></div>
+          <div class="sm-grp">技能</div>
+          <div class="sm-it" style="opacity:.6"><b>/analyze-bundle</b><span class="d">分析产物体积(技能=agent 的能力;配方=你的发射模板)</span></div>
+        </div>
+        <div class="composer2">
+          <div class="cx2" id="cx2"><span class="ph">输入任务,或按 / 调出配方与技能…</span></div>
+          <div class="chips2" id="chips2" style="display:none">
+            <span class="chip">📁 r-code-app</span><span class="chip">@ tests/** · 只允许此域</span><span class="chip mono">验证:vitest run --coverage</span>
+          </div>
+          <div class="c-row">
+            <span class="pill" id="trustPill">信任 · —</span>
+            <span class="pill" id="modelPill">模型 · —</span>
+            <span class="sp"></span>
+            <span class="pill" id="saveRecipe">☆ 存为配方</span>
+            <button class="send">↑</button>
+          </div>
+        </div>
+        <div style="text-align:center;margin-top:10px;font-size:11px;color:var(--fg-faint)">配方存于项目内 <code style="font:10.5px var(--font-mono)">.r-code/recipes/</code> 纯文件,可随 git 分享 · <a href="#" id="replayMenu" style="color:var(--fg-muted)">↻ 重看 / 菜单</a></div>
+      </div>
+      <div class="veil" id="mRecipe">
+        <div class="modal" style="width:380px">
+          <h3>存为配方</h3>
+          <p class="m-sub">把当前 composer 的发射配置整体存下来。</p>
+          <input value="补边界测试" style="width:100%;padding:7px 11px;border:1px solid var(--border-strong);border-radius:8px;background:var(--bg-input);font:600 13px/1 var(--font-ui);color:var(--fg);margin-bottom:11px">
+          <div style="display:grid;gap:6px;font-size:12.5px">
+            <label style="display:flex;gap:8px"><input type="checkbox" checked>prompt 骨架(含 {{module}} 变量)</label>
+            <label style="display:flex;gap:8px"><input type="checkbox" checked>模型 × 推理力度(sonnet · 中)</label>
+            <label style="display:flex;gap:8px"><input type="checkbox" checked>信任模式(Edit)</label>
+            <label style="display:flex;gap:8px"><input type="checkbox" checked>文件域(tests/**)</label>
+            <label style="display:flex;gap:8px"><input type="checkbox" checked>验证命令(vitest run --coverage)</label>
+          </div>
+          <div class="m-actions"><button class="btn" data-close3>取消</button><button class="btn primary" data-close3>保存配方</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>Sourcegraph 把 Prompt Library 做成一等公民;Android Studio 的 prompt library 支持模板变量并随项目 git 共享;社区大量「把 prompt 当代码资产管理」实践。</b>但没有工具把「模型×力度×信任×文件域×验证命令」这套发射参数一起模板化——这正是 R-Code composer 的既有维度。</div>
+      <div class="note"><b>与技能的边界。</b>技能 = agent 能调用的能力;配方 = 你发射一个任务的参数模板。两者在 "/" 面板并列不同分组,心智清晰不撞车。</div>
+      <div class="note"><b>粘性 · 工作流嵌入 + 沉淀。</b>派任务是最高频入口动作(每天 5-15 次);配方库越攒越顺手,且③的右配建议可一键「存为配方默认」——成本数据反哺配方,形成本地闭环。</div>
+      <div class="note q">配方与既有「高级 r-code(标题/边界/成功标准/验证)」的关系:mock 按「配方=高级表单的可复用预填」;要不要允许配方锁定字段(团队规范场景)?</div>
+      <div class="note q">变量填空交互:mock 按 Tab 跳到下一个 {{变量}};要不要发射前强校验未填变量?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const menu = document.getElementById('recipeMenu');
+  const cx = document.getElementById('cx2'), chips = document.getElementById('chips2');
+  const trust = document.getElementById('trustPill'), model = document.getElementById('modelPill');
+  menu.querySelector('[data-r="test"]').addEventListener('click', () => {
+    menu.style.display = 'none';
+    cx.innerHTML = '为 <span class="var">{{module}}</span> 补齐边界与异常路径测试,只允许改动 test 文件;跑通 coverage 后再报告。';
+    chips.style.display = 'flex';
+    trust.textContent = '信任 · Edit';
+    model.textContent = '模型 · sonnet · 中力度';
+  });
+  document.getElementById('replayMenu').addEventListener('click', e => {
+    e.preventDefault(); menu.style.display = '';
+    cx.innerHTML = '<span class="ph">输入任务,或按 / 调出配方与技能…</span>';
+    chips.style.display = 'none'; trust.textContent = '信任 · —'; model.textContent = '模型 · —';
+  });
+  const veil = document.getElementById('mRecipe');
+  document.getElementById('saveRecipe').addEventListener('click', () => veil.classList.add('open'));
+  veil.querySelectorAll('[data-close3]').forEach(b => b.addEventListener('click', () => veil.classList.remove('open')));
+  veil.addEventListener('click', e => { if (e.target === veil) veil.classList.remove('open'); });
+})();
+</script>
+
+<!-- ═══════════════════════ ⑦ 选区改写 ═══════════════════════ -->
+<style>
+  .ed-tabs { display: flex; gap: 2px; padding: 8px 12px 0; background: var(--bg-sidebar); border-bottom: 1px solid var(--border-soft); font-size: 12px; }
+  .ed-tabs i { font-style: normal; padding: 6px 13px; border-radius: 8px 8px 0 0; color: var(--fg-muted); }
+  .ed-tabs i.on { background: var(--bg-input); color: var(--fg); border: 1px solid var(--border-soft); border-bottom-color: var(--bg-input); font-weight: 640; }
+  .code { background: var(--bg-input); font: 12px/1.85 var(--font-mono); padding: 12px 0 16px; color: var(--fg); }
+  .code .ln { display: flex; }
+  .code .ln .no { width: 44px; flex: none; text-align: right; padding-right: 14px; color: var(--fg-faint); user-select: none; }
+  .code .ln.sel2 { background: #d9e5f1; }
+  .code .ln.del2 { background: #f3d9cf; }
+  .code .ln.ins2 { background: #dfe8d8; }
+  .code .ln.applied { animation: appliedFlash 1.4s ease-out 1; }
+  @keyframes appliedFlash { 0% { background: #cfe0c4; } 100% { background: transparent; } }
+  .rewrite { margin: 0 12px 0 56px; border: 1px solid #2f2620; border-radius: 11px; background: #35291f; color: #f2e9d8; padding: 9px 12px; box-shadow: var(--shadow-menu); position: relative; max-width: 560px; }
+  .rewrite::before { content: ''; position: absolute; top: -6px; left: 26px; width: 10px; height: 10px; background: #35291f; transform: rotate(45deg); }
+  .rewrite .rw-row { display: flex; gap: 9px; align-items: center; }
+  .rewrite input { flex: 1; border: 0; background: transparent; color: #f2e9d8; font: 13px/1.5 var(--font-ui); outline: none; }
+  .rewrite input::placeholder { color: #b9a88e; }
+  .rewrite .go { border: 0; border-radius: 7px; background: #f2e9d8; color: #35291f; font: 640 12px/1 var(--font-ui); padding: 7px 13px; cursor: pointer; }
+  .rewrite .foot2 { display: flex; gap: 10px; margin-top: 7px; font-size: 10.5px; color: #b9a88e; }
+  .decide { display: none; gap: 8px; margin: 8px 12px 4px 56px; align-items: center; }
+  .decide.show { display: flex; }
+</style>
+<section id="f7">
+  <div class="sec-head">
+    <h2>⑦ 选区改写 · Editor 内 ⌘I</h2>
+    <div class="prov"><span>PM #4 单提名 · 排 PM top3(ROI 最优)</span><span class="freq">重度用户每天数十次 · 肌肉记忆级</span><span>规模 S-M(约 1 周)</span></div>
+    <p>「我知道要改哪几行、要改成什么样——为这个开一个 agent 任务太重,手改又懒。」在 Editor 里选中代码 → 一句话 → inline diff → 回车接受。这是自主度光谱上缺失的那一档(Karpathy 的「自主度滑杆」):agent 管跨文件,这里管手边三五行。与幽灵补全不同,它延迟容忍、复用既有编辑管线,不进军备赛。</p>
+  </div>
+  <div class="stage">
+    <div class="win" style="width:740px">
+      <div class="win-title"><span class="dots"><i></i><i></i><i></i></span> Editor — r-code-app</div>
+      <div class="ed-tabs"><i class="on">src/api/download.ts ●</i><i>retry.ts</i></div>
+      <div class="code" id="code7">
+        <div class="ln"><span class="no">14</span><span>export function download(url: string) {</span></div>
+        <div class="ln sel2" data-old="1"><span class="no">15</span><span>  return fetch(url).then(res => {</span></div>
+        <div class="ln sel2" data-old="1"><span class="no">16</span><span>    if (!res.ok) throw new Error('bad status')</span></div>
+        <div class="ln sel2" data-old="1"><span class="no">17</span><span>    return res.blob()</span></div>
+        <div class="ln sel2" data-old="1"><span class="no">18</span><span>  }).catch(e => { console.log(e); return null })</span></div>
+        <div class="ln"><span class="no">19</span><span>}</span></div>
+      </div>
+      <div class="rewrite" id="rw7">
+        <div class="rw-row"><span style="font:640 10.5px/1 var(--font-mono);letter-spacing:.05em;color:#b9a88e">⌘I</span><input value="改成 async/await,错误统一抛 AppError,不要吞掉" readonly><button class="go" id="rwGo">改写</button></div>
+        <div class="foot2"><span>作用于选区 15–18 行</span><span>·</span><span>经快照 · 字节级可回滚</span><span>·</span><span>Esc 取消</span></div>
+      </div>
+      <div class="decide" id="decide7">
+        <button class="btn primary sm" id="rwOk">接受 ⏎</button><button class="btn ghost sm">重试</button><button class="btn ghost sm">取消 esc</button>
+        <span style="font-size:10.5px;color:var(--fg-faint)">接受后作为一条轻量变更计入任务历史,可在 Replay 溯源</span>
+      </div>
+      <div style="padding:10px 16px 14px;font-size:11px;color:var(--fg-faint)" id="doneNote7"></div>
+    </div>
+
+    <div class="notes">
+      <div class="note ev"><b>Cursor 三面(Tab / Cmd-K / Agent)里,Cmd-K 被反复描述为「更快——只处理选区」的日常高频动作;Copilot NES 则证明「编辑后预测下一处」是自研模型赛道(我们不追)。</b>本提案只取延迟容忍的选区改写切片。</div>
+      <div class="note"><b>比 Cursor 更安全的版本。</b>改写走既有编辑引擎:快照、原子写、字节级回滚、权限引擎全部白捡——连一次三行小改都可逆、可溯源,这是竞品 Cmd-K 没有的审计属性。</div>
+      <div class="note"><b>粘性 · 肌肉记忆。</b>Editor 是 R-Code 已有的完整表面,但目前 Editor 内没有任何 AI 触点——用户在这里断流去开 agent 任务。这一档补上后,「小改不出编辑器」成为默认路径。</div>
+      <div class="note q">键位:⌘K 已被全局面板占用。mock 按 <b>⌘I</b>;另一选项是「有选区时 ⌘K=改写、无选区=面板」,会不会歧义?</div>
+      <div class="note q">改写记账:mock 按「轻量变更计入任务历史(可回放)」;更轻的方案是只进编辑器撤销栈,不留痕。选哪个?</div>
+    </div>
+  </div>
+</section>
+<script>
+(() => {
+  const code = document.getElementById('code7');
+  document.getElementById('rwGo').addEventListener('click', () => {
+    const sel = [...code.querySelectorAll('.sel2')];
+    if (!sel.length) return;
+    sel.forEach(l => { l.classList.remove('sel2'); l.classList.add('del2'); });
+    const last = sel[sel.length - 1];
+    const ins = [
+      '  try {', '    const res = await fetch(url)', "    if (!res.ok) throw new AppError('DOWNLOAD_STATUS', res.status)", '    return await res.blob()', '  } catch (e) {', '    throw AppError.from(e)', '  }'
+    ].map(t => { const d = document.createElement('div'); d.className = 'ln ins2'; d.innerHTML = '<span class="no">+</span><span>' + t.replace(/</g, '&lt;') + '</span>'; return d; });
+    ins.reverse().forEach(d => last.after(d));
+    document.getElementById('decide7').classList.add('show');
+    document.getElementById('rwGo').disabled = true;
+  });
+  document.getElementById('rwOk').addEventListener('click', () => {
+    code.querySelectorAll('.del2').forEach(l => l.remove());
+    code.querySelectorAll('.ins2').forEach(l => { l.classList.remove('ins2'); l.classList.add('applied'); l.querySelector('.no').textContent = ''; });
+    document.getElementById('decide7').classList.remove('show');
+    document.getElementById('rw7').style.display = 'none';
+    document.getElementById('doneNote7').textContent = '✓ 已应用(async/await + AppError)· 变更已计入任务历史,随时可字节级回滚。';
+  });
+})();
+</script>
+
+<!-- ═══════════════════════ 决策汇总 ═══════════════════════ -->
+<style>
+  .verdict { max-width: 1120px; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--bg-card); padding: 16px 20px 18px; }
+  .verdict h3 { font: 640 15px/1 var(--font-display); margin-bottom: 12px; }
+  .verdict table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .verdict th { text-align: left; font: 640 11px/1 var(--font-display); letter-spacing: .05em; text-transform: uppercase; color: var(--fg-faint); padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .verdict td { padding: 8px 10px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  .verdict tr:last-child td { border-bottom: 0; }
+  .verdict .stars { color: var(--accent); letter-spacing: .1em; white-space: nowrap; }
+</style>
+<div class="verdict">
+  <h3>决策面板 — 7 项互相独立,逐项采纳/否决即可</h3>
+  <table>
+    <tr><th>#</th><th>功能</th><th>提名</th><th>粘性类型</th><th>规模</th><th>推荐</th><th>一句话</th></tr>
+    <tr><td>①</td><td><b>项目记忆 · 审查即学习</b></td><td>双 ⭐⭐</td><td>数据沉淀</td><td>M</td><td class="stars">★★★★★</td><td>补「沉淀环」缺口;审查门里的决策级信号是竞品抄不走的捕获点。</td></tr>
+    <tr><td>②</td><td><b>复核官 · 门前第二意见</b></td><td>双 ⭐⭐</td><td>习惯回路</td><td>M</td><td class="stars">★★★★★</td><td>补「critic 层」缺口;直击 96% 信任赤字,门控设计规避评论机器人噪音。</td></tr>
+    <tr><td>③</td><td><b>成本账本</b></td><td>双 ⭐⭐</td><td>嵌入+防流失</td><td>S-M</td><td class="stars">★★★★☆</td><td>任务中心架构让 per-task 归因成为结构性独家;最佳快赢。</td></tr>
+    <tr><td>④</td><td>范围小票</td><td>用户</td><td>工作流嵌入</td><td>S</td><td class="stars">★★★★☆</td><td>确定性核对、零模型成本;消掉「它是不是多干了」的每任务心智税。</td></tr>
+    <tr><td>⑤</td><td>恢复条</td><td>用户</td><td>工作流嵌入</td><td>S</td><td class="stars">★★★☆☆</td><td>并行越强、切换税越高——是「敢并行」的配套。</td></tr>
+    <tr><td>⑥</td><td>任务配方</td><td>用户</td><td>嵌入+沉淀</td><td>S</td><td class="stars">★★★☆☆</td><td>最高频入口动作的模板化;与③右配建议闭环。</td></tr>
+    <tr><td>⑦</td><td>选区改写 ⌘I</td><td>PM</td><td>肌肉记忆</td><td>S-M</td><td class="stars">★★★☆☆</td><td>Editor 内唯一 AI 触点空缺;审计属性比 Cursor Cmd-K 强。</td></tr>
+  </table>
+  <p style="margin-top:12px;font-size:12px;color:var(--fg-muted)">建议节奏:第一批 <b>① + ②</b>(双提名 + 自评缺口,M 级各 1-2 周);<b>③④</b> 作为快赢并行插队(S 级);⑤⑥⑦ 按反馈择机。全部为桌面单机可行,不依赖任何自建云端。</p>
+</div>
+
+<footer>docs/design/retention-features-mock.html · 2026-07-19 · 提案 mock,逐项待产品负责人采纳/否决;样式按 Archive 皮肤 token 手写,实现时走既有 theme 变量。</footer>
+</body>
+</html>

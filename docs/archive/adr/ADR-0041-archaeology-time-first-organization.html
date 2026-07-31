@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0041: 考古页时间优先组织 — 状态降级为行内标记与筛选 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0041-考古页时间优先组织-状态降级为行内标记与筛选">ADR-0041: 考古页时间优先组织 — 状态降级为行内标记与筛选</h1>
+<ul><li>Status: Accepted (user decision 2026-07-21)</li><li>日期: 2026-07-21</li><li>Relates to: ADR-0038 (会话考古 — 本 ADR 调整其决策 7 的列表组织方式)</li></ul>
+<h2 id="背景">背景</h2>
+<p>ADR-0038 的 <code>ArchaeologyView</code> 按归属状态分节：「Discovered outside<br>R-Code」/「Directories never opened in R-Code」/「Already tracked by<br>R-Code」，节内按 <code>endedAt</code> 倒序。实际使用暴露出问题：首次打开时几乎全部<br>会话都是 External（实测 89/89 落在同一节），<strong>分组维度没有区分度等于没有<br>分组</strong>；且状态信息在每行已编码两次（External/Tracked 药丸 + Resume/Open<br>按钮），节标题是第三遍冗余。与此同时用户回忆一段会话的索引是时间加地点<br>（&quot;昨天下午在 bullpen 里那次&quot;），时间却只以行尾相对时间戳的形式弱呈现。</p>
+<h2 id="决策">决策</h2>
+<ol><li><strong>时间升级为一级结构</strong>（<code>bucketSessionsByDay</code>，纯函数）：按本地日历日<br>分桶 Today / Yesterday / Past 7 days / Earlier / Undated（<code>endedAt</code> 为空或不可解析）。桶粒度取回忆视距而非逐日——30 天窗口逐日分组会产生 30 个标题噪音。桶内保持 host 已排好的新→旧顺序；空桶不渲染； <code>Math.round</code> 吸收 DST 偏移日；未来时间戳并入 Today。</li><li><strong>状态从分组降级为筛选</strong>（<code>filterSessions</code> + <code>ArchaeologyFilter</code>）：<br>列表顶部 All / External / Tracked 三个 chip（含计数），二元属性做筛选 而非分组。Tracked 行混排在时间轴内，靠既有药丸与 Open 按钮区分。 筛选后为空显示专用空态（<code>arch-filter-empty</code>）。</li><li><strong>「Directories never opened in R-Code」保持独立区块</strong>：它是另一种<br>实体（目录，地点维度的下钻入口），不混入会话时间轴，仍只在全机 scope 显示，置于时间轴之后。</li></ol>
+<h2 id="替代方案">替代方案</h2>
+<ul><li><strong>保持状态分组、组内加时间子标题</strong>：双层标题过重，且不解决&quot;状态维度<br>无区分度&quot;的根本问题，弃用。</li><li><strong>逐日分组（每天一个标题）</strong>：30 天窗口尾部退化为一行一标题，弃用。</li><li><strong>状态优先以最大化收编转化</strong>：收编是逐条行为（用户找到&quot;那一条&quot;再<br>Resume），入口在行内一个不少；找到那一条靠时间。弃用。</li><li><strong>筛选态放 archaeologyStore 持久化</strong>：视图局部 <code>useState</code> 足够，换<br>scope/重开重置为 All 反而符合预期，不引入存储面。</li></ul>
+<h2 id="安全与数据影响">安全与数据影响</h2>
+<p>纯渲染端重组：无新通道、无 schema 变更、无新能力面。<code>archaeology.scan</code> /<br><code>archaeology.adopt</code> 契约不变。</p>
+<h2 id="迁移-回滚">迁移/回滚</h2>
+<p>无持久化变更。回滚 = 还原 <code>ArchaeologyView.tsx</code> 分节渲染与 store 两个<br>纯函数。</p>
+<h2 id="验证证据">验证证据</h2>
+<ul><li><code>apps/desktop-renderer/src/store/archaeologyStore.test.ts</code> +4 例：<br>日历日边界（今日 00:05 / 昨日 23:55）、6 天前 vs 7 天前的 week/earlier 分界、空桶省略、未来/不可解析时间戳降级、filter 三态。测试用本地时区 构造时间戳，跨时区确定。</li><li><code>npm run check</code> 与全量 <code>npm test</code>（748 passed）通过。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

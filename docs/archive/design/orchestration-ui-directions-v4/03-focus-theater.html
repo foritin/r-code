@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>方向 03 · 单路聚焦剧场</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./shared.css" />
+  </head>
+  <body>
+    <header class="mock-nav">
+      <div class="nav-inner">
+        <a class="nav-home" href="./index.html">R-Code · 编队 UI</a>
+        <a class="nav-link" href="./01-control-room.html">01 指挥舱</a>
+        <a class="nav-link" href="./02-command-drawer.html">02 浮动抽屉</a>
+        <a class="nav-link active" href="./03-focus-theater.html">03 聚焦剧场</a>
+        <a class="nav-link" href="./04-activity-inbox.html">04 事件收件箱</a>
+        <a class="nav-link" href="./05-hybrid-command-center.html">05 综合方案</a>
+        <span class="nav-note">点击顶部胶片条切换 worker</span>
+      </div>
+    </header>
+
+    <section class="page-intro">
+      <div>
+        <p class="eyebrow">Direction 03 / One worker at a time</p>
+        <h1>单路聚焦剧场</h1>
+      </div>
+      <p>
+        这是“我要真正看清楚 / 准备接管”的模式。点击主页面的“看直播”后进入临时全屏工作台；其余 worker 只保留状态，不同时播放，不制造视觉竞争。
+      </p>
+    </section>
+
+    <main class="canvas-wrap">
+      <div class="prototype">
+        <div class="window-bar">
+          <span class="traffic"></span><span class="traffic"></span><span class="traffic"></span>
+          <span class="window-title">R-Code — Worker Theater</span>
+        </div>
+
+        <section class="theater-app">
+          <header class="theater-head">
+            <button class="btn">‹ 返回支付超时排查</button>
+            <h2>Worker Theater</h2>
+            <span class="pill"><span class="live-dot live"></span>3 路在线</span>
+            <span class="spacer"></span>
+            <span class="pill">只读观察</span>
+            <button class="btn warning" id="takeControl">接管这路</button>
+          </header>
+
+          <div class="filmstrip" role="tablist" aria-label="Workers">
+            <button class="film-worker active" data-theater-worker="codex-review">
+              <span class="live-dot live"></span>
+              <span><strong>Codex · 方案评审</strong><small>输出中 · 当前画面</small></span>
+            </button>
+            <button class="film-worker" data-theater-worker="claude-test">
+              <span class="live-dot wait"></span>
+              <span><strong>Claude · 跑测试</strong><small>1 个决策等待处理</small></span>
+            </button>
+            <button class="film-worker" data-theater-worker="claude-docs">
+              <span class="live-dot"></span>
+              <span><strong>Claude · 文档同步</strong><small>已完成 · 4 个文件</small></span>
+            </button>
+            <button class="film-worker" style="opacity: 0.55">
+              <span class="live-dot"></span>
+              <span><strong>＋ 新建 worker</strong><small>Claude / Codex / Shell</small></span>
+            </button>
+          </div>
+
+          <div class="theater-stage">
+            <section class="theater-screen">
+              <header class="screen-head">
+                <span class="live-dot live" id="theaterDot"></span>
+                <strong id="theaterTitle">Codex · 方案评审</strong>
+                <span class="pill" id="theaterState">输出中</span>
+                <span class="spacer"></span>
+                <span style="font: 10px var(--font-mono); color: #747f73">term_4c1a</span>
+              </header>
+
+              <pre class="terminal theater-terminal" data-theater-view="codex-review"><span class="dim">╭─ Codex ────────────────────────────────────────────────────────────╮</span>
+
+I’m reviewing the orchestration changes against the takeover contract.
+
+<span class="ok">✓</span> Direct launch registers the PTY before emitting known-agent state
+<span class="ok">✓</span> Initial prompt uses an argv boundary and survives trust prompts
+<span class="ok">✓</span> Fleet preview reads the rendered xterm screen
+
+<span class="accent">Finding 1</span> · medium confidence
+The renderer can briefly straddle IPC schema versions during Vite reloads.
+Use an empty recentData map as the compatibility fallback.
+
+<span class="dim">Thinking… checking terminal.list response validation
+14 files read · 8,401 weighted tokens</span></pre>
+
+              <pre class="terminal theater-terminal" data-theater-view="claude-test" hidden><span class="dim">╭─ Claude Code · test runner ────────────────────────────────────────╮</span>
+
+Full Vitest suite complete: <span class="ok">829 passed</span>
+Security suite complete: <span class="ok">139 passed</span>
+
+Electron E2E requires a missing Playwright browser dependency.
+
+<span class="warn">Permission required</span>
+Install @playwright/test and update package-lock.json?
+
+  [ Allow once ]   [ Deny ]
+
+<span class="dim">Waiting for commander…</span></pre>
+
+              <pre class="terminal theater-terminal" data-theater-view="claude-docs" hidden><span class="dim">╭─ Claude Code · docs ───────────────────────────────────────────────╮</span>
+
+<span class="ok">Documentation synchronization complete.</span>
+
+Modified
+  README.md
+  README.zh-CN.md
+  docs/IMPLEMENTATION_STATUS.html
+  docs/IMPLEMENTATION_BACKLOG.html
+
+No commit created.
+
+<span class="dim">Session exited 0 · 22:17:36</span></pre>
+            </section>
+
+            <aside class="theater-inspector">
+              <h3>当前 worker</h3>
+              <div class="inspector-row"><span>Purpose</span><strong id="inspectorPurpose">审查 M13 启动与接管边界</strong></div>
+              <div class="inspector-row"><span>Provider</span><strong id="inspectorProvider">Codex · gpt-5.4</strong></div>
+              <div class="inspector-row"><span>Started</span><strong>2 分 18 秒前</strong></div>
+              <div class="inspector-row"><span>Control</span><strong id="inspectorControl">Commander 持有控制权</strong></div>
+              <div class="inspector-row"><span>Changes</span><strong id="inspectorChanges">0 files · 只读评审</strong></div>
+              <div style="margin-top: 16px">
+                <button class="btn" style="width: 100%; border-color: #3a403a; background: #242824; color: #cbd3c8">打开完整会话记录</button>
+              </div>
+            </aside>
+          </div>
+
+          <footer class="theater-command">
+            <span class="pill">发送目标：<b id="commandTarget">Codex · 方案评审</b></span>
+            <div class="command-box">
+              <span style="color: var(--orange)">↳</span>
+              <input id="theaterInput" value="继续，优先验证这个竞态是否真实可复现" aria-label="发送指令" />
+              <button class="btn primary" id="theaterSend">发送</button>
+            </div>
+            <span style="color: var(--faint); font-size: 10px">⌘1–3 切换</span>
+          </footer>
+        </section>
+      </div>
+    </main>
+
+    <section class="mock-caption">
+      <article class="caption-card"><strong>解决什么</strong><span>阅读面积最大化；看日志、检查细节、发送指令、人工接管时不会被其他 worker 闪动打断。</span></article>
+      <article class="caption-card"><strong>关键代价</strong><span>失去同时比较多路输出的能力；这是“介入模式”，不适合做全局态势首页。</span></article>
+      <article class="caption-card"><strong>适用边界</strong><span>从主页面按需进入；适合 debug、审批前审查、手动接管和长终端输出。</span></article>
+    </section>
+
+    <script>
+      const theaterMeta = {
+        'codex-review': {
+          title: 'Codex · 方案评审', state: '输出中', dot: 'live', purpose: '审查 M13 启动与接管边界',
+          provider: 'Codex · gpt-5.4', control: 'Commander 持有控制权', changes: '0 files · 只读评审',
+        },
+        'claude-test': {
+          title: 'Claude · 跑测试', state: '等待决策', dot: 'wait', purpose: '执行全量单测与 Electron E2E',
+          provider: 'Claude Code · Sonnet', control: '等待 Commander 审批', changes: '1 lockfile · 尚未执行',
+        },
+        'claude-docs': {
+          title: 'Claude · 文档同步', state: '已完成', dot: '', purpose: '同步 M13 使用与验收文档',
+          provider: 'Claude Code · Sonnet', control: '会话已结束', changes: '4 files · 未提交',
+        },
+      };
+
+      document.querySelectorAll('[data-theater-worker]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const id = button.dataset.theaterWorker;
+          const meta = theaterMeta[id];
+          document.querySelectorAll('[data-theater-worker]').forEach((item) => item.classList.remove('active'));
+          button.classList.add('active');
+          document.querySelectorAll('[data-theater-view]').forEach((view) => (view.hidden = view.dataset.theaterView !== id));
+          document.getElementById('theaterTitle').textContent = meta.title;
+          document.getElementById('theaterState').textContent = meta.state;
+          document.getElementById('theaterDot').className = `live-dot ${meta.dot}`;
+          document.getElementById('inspectorPurpose').textContent = meta.purpose;
+          document.getElementById('inspectorProvider').textContent = meta.provider;
+          document.getElementById('inspectorControl').textContent = meta.control;
+          document.getElementById('inspectorChanges').textContent = meta.changes;
+          document.getElementById('commandTarget').textContent = meta.title;
+        });
+      });
+
+      document.getElementById('takeControl').addEventListener('click', (event) => {
+        event.currentTarget.textContent = event.currentTarget.textContent.includes('已接管') ? '接管这路' : '✋ 已接管 · 交还';
+      });
+      document.getElementById('theaterSend').addEventListener('click', (event) => {
+        event.currentTarget.textContent = '已发送 ✓';
+        setTimeout(() => (event.currentTarget.textContent = '发送'), 1200);
+      });
+    </script>
+  </body>
+</html>

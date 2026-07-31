@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ADR-0040: Skills 透视纳入外部 CLI 消费方 —— R-Code / Claude Code / Codex 分账 · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="adr-0040-skills-透视纳入外部-cli-消费方-r-code-claude-code-codex-分账">ADR-0040: Skills 透视纳入外部 CLI 消费方 —— R-Code / Claude Code / Codex 分账</h1>
+<ul><li>Status: Accepted (产品对齐 2026-07-21:同一批 skill 被多个 CLI 共用,单看 R-Code 账本会把&quot;外面天天用&quot;的 skill 误判为 unused)</li><li>日期: 2026-07-21</li><li>Relates to: ADR-0037 (skills 透视), ADR-0038 (session archaeology), §9.3 (IPC schema)</li></ul>
+<h2 id="背景">背景</h2>
+<p>ADR-0037 的使用量只统计 R-Code 自己的账本(<code>tool_calls</code> 的 <code>load_skill</code> +<br><code>skill_invocations</code>)。但 skills 目录(<code>~/.claude/skills</code>、<code>~/.codex/skills</code>、<br><code>~/.agents/skills</code>)天然被多个 CLI 共享:用户在 Claude Code / Codex 里独立<br>使用同一批 skill,这些调用完全不计入,导致:</p>
+<ol><li>&quot;unused 45d&quot; 徽章与断舍离建议对外部重度使用的 skill 给出错误信号;</li><li>用户想知道&quot;这个 skill 在 Claude Code 里到底用了多少&quot;,无处可看。</li></ol>
+<p>数据可得性(本机实测):Claude Code 转录<br>(<code>~/.claude/projects/**/*.jsonl</code>)把每次 skill 调用记录为 assistant 行的<br><code>tool_use { name: &#39;Skill&#39;, input: { skill } }</code>,行级 <code>timestamp</code> 可用,且<br>ADR-0038 的 <code>parseClaudeTranscript</code> 已经提取该信号(缺时间戳)。Codex 侧<br>229 个本地会话零 skill 痕迹,调用落盘格式无法验证。</p>
+<h2 id="决策">决策</h2>
+<h3 id="1-consumer-维度贯穿-events-聚合-dto-v2-ui">1. consumer 维度贯穿:events → 聚合 → DTO v2 → UI</h3>
+<ul><li>三元组 <code>SKILL_CONSUMERS = [&#39;r-code&#39;, &#39;claude&#39;, &#39;codex&#39;]</code>(与<br><code>archaeology.ts</code> 的 <code>DISCOVERED_CLIS</code> 呼应)。</li><li><code>skill-usage.ts</code> 事件带 <code>consumer</code>;<code>aggregateSkillUsage</code> 单遍同时累加<br>合计与对应消费方切片(共享窗口/时钟 clamp/周桶逻辑,两个视图不可能不一致)。</li><li><code>SkillUsageDto</code> 顶层 <code>uses/lastUsedAt/weekly</code> 语义改为&quot;跨消费方合计&quot;,<br>新增必填 <code>byConsumer.{r-code,claude,codex}</code>(各自 uses/lastUsedAt/weekly, 桶数与合计一致);<code>skills.usage</code> channel <strong>v1 → v2</strong>。</li><li><code>TaskService.skillUsage</code> 改为 <code>skillUsageEvents</code>(返回原始事件),聚合<br>上移到 <code>skills.usage</code> handler,与外部事件合并后统一进行。</li></ul>
+<h3 id="2-只计-tooluse-skill-事件-不解析">2. 只计 <code>tool_use Skill</code> 事件,不解析 <code>&lt;command-name&gt;</code></h3>
+<p>Claude Code 里用户敲 <code>/skill</code> 通常也触发 <code>Skill</code> tool_use,双算即重复计数。<br>纯斜杠、未触发工具的运行在 v1 少算(可接受,方向性偏保守);v1.1 若需要,<br>可加按轮去重后再计 <code>&lt;command-name&gt;</code> 行。sidechain(子代理)行沿用解析器<br>既有跳过逻辑,不计入。</p>
+<h3 id="3-外部事件采集复用-archaeology-不新建扫描器">3. 外部事件采集复用 archaeology(不新建扫描器)</h3>
+<ul><li><code>TranscriptSummary</code> 增加 <code>skillEvents: {skill, at}[]</code>;无时间戳的行仍进<br><code>skills</code>(archaeology 展示用)但不产生事件。</li><li><code>SessionArchaeologyService.skillUsageEvents()</code>:仅遍历 Claude 候选文件<br>(Codex 解析器不产事件,不走盘),复用 (path, mtime, size) 解析缓存与 并发合并(<code>collecting</code> promise);无窗口参数 —— Claude 目录无日期分区, 遍历成本固定,窗口无关的结果可安全合并并发调用,窗口过滤统一在聚合层。</li><li>首扫成本离关键路径:<code>skillsStore.init()</code> 在应用启动时即触发<br><code>refreshUsage()</code>,Settings 打开时命中缓存。<code>enabled</code> 门控沿用 <code>!PI_IDE_E2E || PI_IDE_ARCHAEOLOGY_HOME</code>。handler 侧 try/catch,外部源 失败降级为仅 R-Code,面板永不因此损坏。</li></ul>
+<h3 id="4-join-算法-外部原始名-目录运行时名">4. join 算法:外部原始名 → 目录运行时名</h3>
+<p>外部 CLI 记录的是原始调用名;目录运行时名经过 <code>skillSlug</code> 且冲突时被限定<br>(<code>pdf@claude</code>)。<code>joinExternalSkillEvents</code> 按优先级解析:</p>
+<ol><li><code>(sourceId, skillSlug(displayName))</code> 命中 —— 外部 CLI 物理读的就是自己<br>目录的副本(内建源 sourceId 恰为 <code>claude</code>/<code>codex</code>),冲突限定名正确落账;</li><li>精确运行时名回退(该源无副本、名字未被限定时);</li><li>丢弃。插件命名空间名(<code>plugin:skill</code>)不在目录内,自然丢弃 —— v1 接受,<br>外部总量对重度插件用户偏低估。</li></ol>
+<h3 id="5-codex-保留位-不写猜测性解析器">5. Codex 保留位,不写猜测性解析器</h3>
+<p>数据模型与 UI 按三方设计,Codex 恒为零:229 个本地会话零 skill 痕迹,格式<br>无法实测,按路径启发式猜写解析器会产生无法察觉的误报/漏报。UI 上 Codex<br>筛选 chip 置灰并注明原因;待真实格式可验证后补 <code>parseCodexRollout</code> 即可,<br>契约与聚合无需再动。</p>
+<h3 id="6-ui-语义-skillssettings-tsx">6. UI 语义(<code>SkillsSettings.tsx</code>)</h3>
+<ul><li><strong>Via 筛选 chips</strong>(All / R-Code / Claude Code / Codex,带消费方色点):<br>投影行级数字 —— 计数、火花线、全部排序跟随所选消费方;All = 合计。 实现为纯函数 <code>projectUsage</code>(顶层三元组换成切片),下游 sort/spark 零改动。</li><li><strong>火花线堆叠</strong>:周桶内按固定消费方序分段着色(r-code <code>#6ca1e8</code>、<br>claude <code>#e0876a</code>、codex <code>#46b477</code>,均取自 INSIGHT_PALETTE 家族;预算条 仍按目录序取色,两者视觉语境不同,接受)。</li><li><strong>tooltip 明细</strong>:<code>consumerBreakdown</code> 列出非零消费方各自次数与末次时间。</li><li><strong><code>unused 45d</code> 徽章</strong>:改为全消费方合计为零才显示(全局健康信号,不随筛选)。</li><li><strong>断舍离经济学仍按 R-Code</strong>:preamble 是 R-Code 的成本,cost-per-use<br>除以 <code>byConsumer.r-code.uses</code>;合计为零 → 候选且预勾选;仅外部有使用 → 候选但不预勾选,理由注明外部用量(用户显然在别处需要它);R-Code 有用 但贵 → 照旧不预勾选。</li></ul>
+<h2 id="后果">后果</h2>
+<ul><li>Claude Code 历史回溯即有(转录是既有数据);Codex 列上线即恒零,直到<br>格式可验证。</li><li>slug 撞名会静默合并计数;插件命名空间的外部用量不计 —— 均文档化接受。</li><li>首扫全量读 <code>~/.claude/projects</code>(mtime 缓存后增量);&gt;50MB 转录沿用<br>maxBytes 跳过;恰好名为 <code>Skill</code> 且带 <code>input.skill</code> 的无关 MCP 工具会被 误计(与 archaeology <code>skills[]</code> 同等暴露,接受)。</li><li>渲染层继续只见 DTO;转录读取全部留在 main(§9.3 边界)。不新增依赖。</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

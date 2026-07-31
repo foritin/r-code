@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Signing and notarization handoff · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="signing-and-notarization-handoff">Signing and notarization handoff</h1>
+<p>R-Code <code>1.0.0-beta.3</code> intentionally uses the unsigned release path. No certificate is needed to<br>build, test, or publish a GitHub prerelease. The instructions below are a dormant handoff for a<br>future signed release; they are not evidence that the current artifacts are signed or notarized.</p>
+<p>The 2026-07-22 audit found that the existing Beta 2 Release had been changed to<br><code>prerelease:false</code> / <code>Latest</code>. That metadata-only channel error was corrected without replacing the<br>tag or assets. At 2026-07-22 23:27 CST, the public metadata was reverified as <code>prerelease:true</code>,<br><code>draft:false</code>; none of this makes the binaries signed or qualifies them as Stable.</p>
+<h2 id="current-unsigned-path">Current unsigned path</h2>
+<ul><li><code>R_CODE_SIGNING_MODE=unsigned</code> is the default and disables certificate auto-discovery.</li><li>A stable SemVer such as <code>1.0.0</code> is rejected by <code>scripts/release-policy.mjs</code> in unsigned mode.</li><li>macOS receives electron-builder&#39;s valid ad-hoc bundle signature after Electron fuses are flipped,<br>but no Developer ID identity or Apple notarization ticket.</li><li>Windows has no Authenticode signature. Linux has no additional platform signing layer.</li><li>The intended GitHub prerelease attaches SHA-256 checksums and a manifest. These verify bytes, not<br>publisher identity.</li></ul>
+<h2 id="future-macos-signed-build">Future macOS signed build</h2>
+<p>Prerequisites outside this repository:</p>
+<ol><li>An Apple Developer Program membership and a <strong>Developer ID Application</strong> certificate exported as<br>a password-protected <code>.p12</code>.</li><li>App Store Connect API credentials for notarization (recommended for CI), or an Apple ID<br>app-specific password and Team ID.</li><li>Protected GitHub environment secrets with release approval enabled.</li></ol>
+<p>CI secret mapping:</p>
+<table><thead><tr><th>Secret</th><th>Purpose</th></tr></thead><tbody><tr><td><code>MAC_CSC_LINK</code></td><td>Base64 <code>.p12</code>; map to <code>CSC_LINK</code> only in the macOS job</td></tr><tr><td><code>MAC_CSC_KEY_PASSWORD</code></td><td><code>.p12</code> export password; map to <code>CSC_KEY_PASSWORD</code></td></tr><tr><td><code>APPLE_API_KEY</code></td><td>Base64 App Store Connect <code>.p8</code></td></tr><tr><td><code>APPLE_API_KEY_ID</code></td><td>App Store Connect key ID</td></tr><tr><td><code>APPLE_API_ISSUER</code></td><td>App Store Connect issuer ID</td></tr><tr><td><code>APPLE_TEAM_ID</code></td><td>Developer team ID</td></tr></tbody></table>
+<p>The alternative notarization credentials are <code>APPLE_ID</code>, <code>APPLE_APP_SPECIFIC_PASSWORD</code>, and<br><code>APPLE_TEAM_ID</code>. Never store any of these values in the repository, workflow YAML, logs, artifacts,<br>or support bundles.</p>
+<p>Build with <code>R_CODE_SIGNING_MODE=signed npm run package -- --mac</code>. Electron-builder uses the explicit<br>Hardened Runtime and entitlements in <code>build-resources/</code>; when notarization credentials are present it<br>submits through its <code>@electron/notarize</code> integration.</p>
+<p>Required verification before changing the release channel to Stable:</p>
+<div class="code-block"><span class="code-block__lang">bash</span><button class="copy-code" type="button">复制</button><pre><code class="language-bash">codesign --verify --deep --strict --verbose=2 R-Code.app
+codesign -dvvv R-Code.app
+spctl --assess --type execute --verbose=4 R-Code.app
+xcrun stapler validate R-Code.app</code></pre></div>
+<p>The output must name the intended Developer ID team, pass Gatekeeper assessment, and validate a<br>stapled notarization ticket. A local ad-hoc signature is not sufficient.</p>
+<h2 id="future-windows-signed-build">Future Windows signed build</h2>
+<p>Acquire a publicly trusted Authenticode certificate or approved hardware/cloud signing service. Put<br>its CI material in <code>WIN_CSC_LINK</code> and <code>WIN_CSC_KEY_PASSWORD</code>, map those to electron-builder only in<br>the Windows signed job, and use <code>R_CODE_SIGNING_MODE=signed npm run package -- --win</code>.</p>
+<p>Before Stable, verify both the application executable and installer with Windows <code>Get-AuthenticodeSignature</code><br>or <code>signtool verify /pa /all /v</code>, install on a clean SmartScreen-enabled machine, then uninstall and<br>confirm the installed executable is removed. Self-signed certificates do not satisfy the public<br>trust gate.</p>
+<h2 id="secret-rotation-and-failure-policy">Secret rotation and failure policy</h2>
+<ul><li>Restrict signing secrets to protected tag jobs; do not expose them to pull requests or forks.</li><li>Rotate a credential after suspected disclosure and revoke the old certificate/key with its issuer.</li><li>A signing or notarization failure stops publication. Never fall back from <code>signed</code> to <code>unsigned</code><br>while retaining a Stable version or title.</li><li>Keep the unsigned prerelease workflow separate. Adding credentials is a reviewed future change,<br>not a prerequisite for the zero-cost Beta.</li></ul></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

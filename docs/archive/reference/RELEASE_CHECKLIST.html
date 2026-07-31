@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>M12 Release Checklist · r-code</title>
+  <link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../../../agent-core/index.html">Agent Core</a><a href="../../index.html" aria-current="page">R-Code</a><a href="../../../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="m12-release-checklist">M12 Release Checklist</h1>
+<h2 id="unsigned-public-beta-1-0-0-beta-3">Unsigned public Beta (<code>1.0.0-beta.3</code>)</h2>
+<ul><li><input class="task-checkbox" type="checkbox" disabled checked>SemVer prerelease version and matching <code>v1.0.0-beta.3</code> tag policy.</li><li><input class="task-checkbox" type="checkbox" disabled checked>Unsigned releases are restricted to prerelease channels; unsigned Stable fails closed.</li><li><input class="task-checkbox" type="checkbox" disabled checked>macOS, Windows and Linux native package/install workflows are defined.</li><li><input class="task-checkbox" type="checkbox" disabled checked>E2E-023 migration and backup restore coverage.</li><li><input class="task-checkbox" type="checkbox" disabled checked>E2E-024 real packaged-application coverage.</li><li><input class="task-checkbox" type="checkbox" disabled checked>Static, unit, performance, Electron E2E, security, soak and dependency gates are wired into <code>release:verify</code>.</li><li><input class="task-checkbox" type="checkbox" disabled checked>DMG clean install/launch/cleanup smoke passed locally.</li><li><input class="task-checkbox" type="checkbox" disabled checked>SPDX SBOM, license inventory, third-party notices, artifact manifest and SHA-256 checksums are generated.</li><li><input class="task-checkbox" type="checkbox" disabled checked>Security, privacy, recovery, signing, known-limitations and release-note documents are present.</li><li><input class="task-checkbox" type="checkbox" disabled checked>GitHub tag workflow creates a Prerelease only after all native package jobs pass.</li><li><input class="task-checkbox" type="checkbox" disabled checked>The tag workflow blocks publication until its release gates and macOS, Windows and Linux package matrix pass.</li><li><input class="task-checkbox" type="checkbox" disabled checked>The publish job creates a GitHub Prerelease with <code>--latest=false</code> and attaches native packages, manifest, checksums and SBOM.</li></ul>
+<p>Beta 2 was the first downloadable preview. Its 13 assets and corrected Prerelease metadata remain<br>available at <a href="https://github.com/foritin/r-code/releases/tag/v1.0.0-beta.2">v1.0.0-beta.2</a>.</p>
+<h2 id="stable-handoff-intentionally-not-claimed">Stable handoff (intentionally not claimed)</h2>
+<ul><li><input class="task-checkbox" type="checkbox" disabled>Obtain Apple Developer Program membership and Developer ID Application credentials.</li><li><input class="task-checkbox" type="checkbox" disabled>Configure Apple notarization credentials and validate Gatekeeper acceptance.</li><li><input class="task-checkbox" type="checkbox" disabled>Obtain a trusted Windows code-signing certificate and validate SmartScreen/install behavior.</li><li><input class="task-checkbox" type="checkbox" disabled>Run Beta-to-Stable update/rollback coverage for the chosen updater service.</li><li><input class="task-checkbox" type="checkbox" disabled>Run the fixed 20-task real-provider evaluation with owner-approved credentials.</li><li><input class="task-checkbox" type="checkbox" disabled>Obtain product-owner sign-off on the Stable test report.</li></ul>
+<p>The user selected the zero-cost Beta path. These Stable items do not block the GitHub Prerelease, but they do block any build labeled Stable.</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../../assets/site.js"></script>
+</body>
+</html>

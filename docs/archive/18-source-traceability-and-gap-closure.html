@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>当前 R-Code 覆盖矩阵与查漏补缺记录 · r-code</title>
+  <link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+  <header class="site-header"><div class="site-header__inner"><a class="brand" href="../index.html">r-code</a><nav class="site-nav" aria-label="重构文档站"><a href="../agent-core/index.html">Agent Core</a><a href="../index.html" aria-current="page">R-Code</a><a href="../tiny-hermes/index.html">Tiny Hermes</a></nav></div></header>
+  <main class="page-grid"><article class="doc-content"><div class="doc-meta">离线 HTML 重构文档</div><h1 id="当前-r-code-覆盖矩阵与查漏补缺记录">当前 R-Code 覆盖矩阵与查漏补缺记录</h1>
+<h2 id="1-审计边界">1. 审计边界</h2>
+<p>本重构指南以当前 R-Code 仓库为事实输入，<strong>显式排除</strong> <code>small-rust-hermes/</code>；后者由<br><code>../tiny-hermes/index.html</code> 单独覆盖。下表记录原有 TypeScript/Electron 包如何被<br>重构架构吸收。路径只用来说明来源，不要求未来实现仓库保留同名目录。</p>
+<table><thead><tr><th>当前区域</th><th>主要职责</th><th>重构目标</th><th>规范页面</th></tr></thead><tbody><tr><td><code>packages/app-domain</code>、<code>foundation</code></td><td>Task、状态、基础 DTO / 工具</td><td><code>r-code-core</code> + 公共 DTO</td><td>01、04、06</td></tr><tr><td><code>packages/agent-contract</code>、<code>agent-runtime-*</code></td><td>Agent 抽象、Pi / mock 适配</td><td><code>r-code-agent</code>、独立 worker</td><td>04、08</td></tr><tr><td><code>packages/ipc-contracts</code></td><td>主进程、preload、renderer 合同</td><td>版本化 JSON-RPC / command DTO</td><td>08、09</td></tr><tr><td><code>packages/persistence</code></td><td>SQLite、migration、投影</td><td><code>r-code-store</code></td><td>06</td></tr><tr><td><code>packages/tool-gateway</code></td><td>工具、风险、权限、命令分类</td><td><code>r-code-gateway</code></td><td>02、07</td></tr><tr><td><code>packages/terminal-service</code></td><td>PTY、shell 集成、外部 agent 检测</td><td><code>r-code-terminal</code></td><td>03、05、10</td></tr><tr><td><code>packages/change-service</code>、<code>git-service</code></td><td>diff、快照、worktree、Git</td><td><code>r-code-change</code>、<code>r-code-git</code></td><td>06、12</td></tr><tr><td><code>workspace/document/search/language/verification-service</code></td><td>文件、编辑器、检索、LSP、验证</td><td>对应服务 crate</td><td>12、13</td></tr><tr><td><code>apps/agent-worker</code></td><td>隔离 Agent 执行</td><td><code>r-code-agent-worker</code></td><td>04、08</td></tr><tr><td><code>apps/desktop-main</code>、<code>desktop-preload</code></td><td>Electron 主进程与受限桥接</td><td>Tauri host / 受限 command API</td><td>07、08、09</td></tr><tr><td><code>apps/desktop-renderer</code></td><td>React 工作台、Monaco、xterm、状态投影</td><td>保留 React UI，适配 WebView bridge</td><td>09、11</td></tr><tr><td><code>tests/</code>、release scripts</td><td>Unit / E2E / 安全 / 打包证据</td><td>Rust + UI + 桌面 E2E 门禁</td><td>15、17</td></tr></tbody></table>
+<h2 id="2-已补齐的跨链路缺口">2. 已补齐的跨链路缺口</h2>
+<p>初始架构文档已经按服务拆分，但完整重构仍缺少跨章节的产品与交付合同。本轮补齐如下：</p>
+<table><thead><tr><th>缺口</th><th>风险</th><th>现在的落点</th></tr></thead><tbody><tr><td>产品目标只分散在 README / 规格中</td><td>迁移时保留技术而丢失用户价值</td><td><code>16-product-scope-and-acceptance</code></td></tr><tr><td>发布、签名、升级、支持包未形成 Rust 版闭环</td><td>只能开发不能交付</td><td><code>17-delivery-release-and-operations</code></td></tr><tr><td>包到目标 crate 的覆盖关系不可审计</td><td>某个服务被静默漏迁</td><td>本页矩阵 + <code>11-crate-mapping</code></td></tr><tr><td>迁移顺序偏宏观</td><td>团队无法从空仓开始执行</td><td><code>19-reconstruction-runbook</code></td></tr><tr><td>公共合同的版本/双端测试规则未落地</td><td>R-Code 与 Tiny Hermes 接口漂移</td><td><code>../agent-core/13-submodule-and-workspace-integration</code>、14</td></tr></tbody></table>
+<h2 id="3-不应在重构中被省略的现有能力">3. 不应在重构中被省略的现有能力</h2>
+<p>审计时最容易遗漏的是“不是主聊天窗口”的能力。以下能力没有单独界面也必须进入产品切片：</p>
+<ul><li>终端 shell integration、命令块、文件链接、受管终端与裸终端的差异。</li><li>外部 CLI 会话发现、JSONL replay、恢复、用户级 instructions / wrapper 链。</li><li>多 worktree、任务基线、外部改动冲突与按 hunk 审查。</li><li>Preview、截图、可视上下文和 artifact / feedback 附件。</li><li>Skills 使用追踪、项目记忆、会话考古、任务历史与可导出证据。</li><li>隐私设置、secret redaction、CSP/navigation、支持包与 startup diagnostics。</li><li>键盘导航、缩放、可访问 diff、窄视口布局与设计 token。</li></ul>
+<p>它们分别已有章节；任何“先做核心、以后补 UI”的阶段计划也应为这些能力预留 DTO、事件和<br>数据库 migration，而不是让其依赖临时字符串解析。</p>
+<h2 id="4-已知的重构选择与非目标">4. 已知的重构选择与非目标</h2>
+<table><thead><tr><th>决策</th><th>规范立场</th><th>原因</th></tr></thead><tbody><tr><td>桌面 shell</td><td>Tauri v2 + 系统 WebView</td><td>Rust host 与 React UI 分层，缩小默认攻击面</td></tr><tr><td>UI</td><td>React / TypeScript 可迁移而非强制 Rust UI</td><td>保留 Monaco、xterm 和既有工作台投资</td></tr><tr><td>Agent runtime</td><td>独立 worker + 显式 RPC 边界</td><td>Pi SDK / provider 适配不污染高权限主进程</td></tr><tr><td>数据</td><td>SQLite 事件投影 + content-addressed evidence</td><td>可恢复、可审查、可导出</td></tr><tr><td>真实实现</td><td>新仓 / 新 workspace 渐进切换</td><td>不在当前生产 Electron 产品上进行破坏性替换</td></tr></tbody></table>
+<p>本指南不承诺：无条件兼容所有第三方 CLI 私有存档格式、把任何 Agent 的原始思维链永久保存、<br>绕过 OS 签名策略、或把用户目录中的所有文件自动纳入 Agent 可访问范围。</p>
+<h2 id="5-审计复查方法">5. 审计复查方法</h2>
+<p>每次产品新增功能或修改重大行为时执行一次轻量复查：</p>
+<ol><li>先写用户可观察的行为和失败态，再找到对应 Task / Tool / Event / Evidence DTO。</li><li>将实现归入一条现有章节；若无归属，先新增规范页而不是把逻辑塞进 <code>r-code-main</code>。</li><li>记录安全边界、数据归属、迁移和 E2E 场景。</li><li>更新本页矩阵、产品验收编号和运行手册的 gate。</li><li>对照 <code>15-testing-strategy</code> 与 <code>17-delivery-release-and-operations</code> 追加证据。</li></ol>
+<p>因此本页不是一次性的“来源注释”，而是防止重构在长期演进中再次漏功能的维护入口。</p></article><aside class="toc" aria-label="本页目录"></aside></main>
+  <footer class="doc-footer">本页为可离线浏览的重构规范；代码示例是实现合同，不是已交付源码。</footer>
+  <script src="../assets/site.js"></script>
+</body>
+</html>
