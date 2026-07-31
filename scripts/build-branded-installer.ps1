@@ -15,6 +15,16 @@ if (-not $versionMatch.Success) {
 }
 $version = $versionMatch.Groups[1].Value
 
+$frontendCheck = Join-Path $repoRoot "scripts\check-installer-frontend.mjs"
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeCommand) {
+    throw "Node.js is required to validate the branded installer frontend"
+}
+& $nodeCommand.Source $frontendCheck
+if ($LASTEXITCODE -ne 0) {
+    throw "Branded installer frontend validation failed with exit code $LASTEXITCODE"
+}
+
 if ($Target -and $Target -notmatch 'windows') {
     throw "The branded installer can only be built for a Windows target"
 }

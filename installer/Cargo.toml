@@ -20,7 +20,7 @@ path = "src/bin/pack.rs"
 dirs = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["image-png"] }
 tauri-plugin-dialog = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
