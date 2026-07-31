@@ -55,6 +55,11 @@
     "windows": {
       "wix": {
         "language": ["en-US", "zh-CN"]
+      },
+      "nsis": {
+        "installerIcon": "../icons/icon.ico",
+        "uninstallerIcon": "../icons/icon.ico",
+        "installerHooks": "installer-hooks.nsh"
       }
     }
   },

@@ -15,6 +15,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - SQLite 产品状态与 JSONL 会话事件双存储，以及内容寻址 Blob、基线和回滚能力。
 - 基于 PTY 与 OSC 133 的集成终端，支持原始输出增量读取和外部 CLI 会话解析。
 - Windows x64、macOS Apple Silicon 与 Linux x64 的 GitHub Actions 发布矩阵及 Tauri 自动更新产物。
+- Windows 品牌安装器，支持自定义安装位置、快捷方式选项、真实阶段进度、取消保护和完成后启动。
 - GitHub 可直接预览的架构、发布、安全和隐私文档，以及版本一致性检查脚本。
 
 ### Security
@@ -26,3 +27,4 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 ### Fixed
 
 - 自动更新源与 Cargo 仓库元数据改为当前 GitHub 仓库，避免客户端从错误仓库查询 `latest.json`。
+- Windows 安装器、卸载器与应用程序使用 R-Code 图标，release 启动不再打开命令行窗口。

@@ -4,6 +4,7 @@
 # Tauri build
 /dist/
 crates/r-code-host/gen/schemas/
+/installer/gen/
 
 # IDE
 .idea/

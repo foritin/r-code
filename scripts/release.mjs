@@ -10,6 +10,7 @@ const PATHS = {
   cargoToml: join(ROOT, "Cargo.toml"),
   cargoLock: join(ROOT, "Cargo.lock"),
   tauri: join(ROOT, "src-tauri", "tauri.conf.json"),
+  installerTauri: join(ROOT, "installer", "tauri.conf.json"),
   packageJson: join(ROOT, "src-tauri", "frontend", "package.json"),
   packageLock: join(ROOT, "src-tauri", "frontend", "package-lock.json"),
   changelog: join(ROOT, "CHANGELOG.md"),
@@ -63,6 +64,7 @@ function versionSnapshot() {
   const cargoToml = read(PATHS.cargoToml);
   const cargoLock = read(PATHS.cargoLock);
   const tauri = JSON.parse(read(PATHS.tauri));
+  const installerTauri = JSON.parse(read(PATHS.installerTauri));
   const packageJson = JSON.parse(read(PATHS.packageJson));
   const packageLock = JSON.parse(read(PATHS.packageLock));
   const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "(r-code-[^"]+)"\r?\nversion = "([^"]+)"/g)]
@@ -73,6 +75,7 @@ function versionSnapshot() {
   return {
     workspace: workspaceVersion(cargoToml),
     tauri: tauri.version,
+    installerTauri: installerTauri.version,
     frontend: packageJson.version,
     frontendLock: packageLock.version,
     frontendLockRoot: packageLock.packages?.[""]?.version,
@@ -87,6 +90,7 @@ function checkVersions(tag) {
 
   const named = [
     ["src-tauri/tauri.conf.json", versions.tauri],
+    ["installer/tauri.conf.json", versions.installerTauri],
     ["src-tauri/frontend/package.json", versions.frontend],
     ["src-tauri/frontend/package-lock.json", versions.frontendLock],
     ["src-tauri/frontend/package-lock.json packages['']", versions.frontendLockRoot],
@@ -163,9 +167,11 @@ function prepare(version) {
 
   const cargoToml = read(PATHS.cargoToml);
   const tauriText = read(PATHS.tauri);
+  const installerTauriText = read(PATHS.installerTauri);
   const packageText = read(PATHS.packageJson);
   const packageLockText = read(PATHS.packageLock);
   const tauri = JSON.parse(tauriText);
+  const installerTauri = JSON.parse(installerTauriText);
   const packageJson = JSON.parse(packageText);
   const packageLock = JSON.parse(packageLockText);
 
@@ -176,6 +182,7 @@ function prepare(version) {
     repositoryUrl(cargoToml),
   );
   tauri.version = version;
+  installerTauri.version = version;
   packageJson.version = version;
   packageLock.version = version;
   if (!packageLock.packages?.[""]) fail("package-lock.json is missing packages['']");
@@ -183,6 +190,7 @@ function prepare(version) {
 
   writeFileSync(PATHS.cargoToml, nextCargoToml);
   writeJson(PATHS.tauri, tauri, newlineOf(tauriText));
+  writeJson(PATHS.installerTauri, installerTauri, newlineOf(installerTauriText));
   writeJson(PATHS.packageJson, packageJson, newlineOf(packageText));
   writeJson(PATHS.packageLock, packageLock, newlineOf(packageLockText));
   writeFileSync(PATHS.changelog, nextChangelog);

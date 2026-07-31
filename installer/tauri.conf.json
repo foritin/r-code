@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "R-Code 安装程序",
+  "version": "0.1.0",
+  "identifier": "com.r-code.installer",
+  "build": {
+    "frontendDist": "frontend"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "R-Code 安装程序",
+        "width": 960,
+        "height": 588,
+        "minWidth": 760,
+        "minHeight": 560,
+        "center": true,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "publisher": "R-Code Team",
+    "copyright": "Copyright © 2026 R-Code Team",
+    "icon": [
+      "../icons/icon.ico"
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+[package]
+name = "r-code-installer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "R-Code branded Windows installer bootstrapper"
+
+[[bin]]
+name = "r-code-installer"
+path = "src/main.rs"
+
+[[bin]]
+name = "r-code-installer-pack"
+path = "src/bin/pack.rs"
+
+[dependencies]
+dirs = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+tauri = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[build-dependencies]
+tauri-build = { workspace = true }

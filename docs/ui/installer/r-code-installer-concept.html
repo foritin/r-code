@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>R-Code 安装器概念原型</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f7f4ef;
+      --muted: #aaa39b;
+      --faint: #6f6963;
+      --panel: #111210;
+      --panel-2: #171815;
+      --line: rgba(255, 255, 255, 0.09);
+      --line-strong: rgba(255, 255, 255, 0.15);
+      --orange: #ff781f;
+      --amber: #ffae2b;
+      --green: #54d39a;
+      --red: #ff6e61;
+      --shadow: 0 28px 90px rgba(0, 0, 0, 0.58), 0 8px 24px rgba(0, 0, 0, 0.34);
+      font-family: "Segoe UI Variable", "Microsoft YaHei UI", "PingFang SC", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      min-width: 760px;
+      background:
+        radial-gradient(circle at 18% 14%, rgba(255, 113, 27, 0.16), transparent 30%),
+        radial-gradient(circle at 78% 88%, rgba(255, 161, 42, 0.08), transparent 34%),
+        #070806;
+      color: var(--ink);
+      overflow: auto;
+    }
+
+    button, input { font: inherit; }
+
+    button { color: inherit; }
+
+    button:focus-visible, input:focus-visible {
+      outline: 2px solid #ffb56c;
+      outline-offset: 3px;
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 54px 28px 96px;
+      display: grid;
+      place-items: center;
+    }
+
+    .installer {
+      position: relative;
+      width: min(960px, calc(100vw - 56px));
+      min-height: 588px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px;
+      background: rgba(12, 13, 11, 0.96);
+      box-shadow: var(--shadow);
+      isolation: isolate;
+    }
+
+    .installer::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background:
+        linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(90deg, #000, transparent 60%);
+      pointer-events: none;
+    }
+
+    .titlebar {
+      position: relative;
+      z-index: 5;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding-left: 15px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(13, 14, 12, 0.92);
+      user-select: none;
+    }
+
+    .titlebar img {
+      width: 23px;
+      height: 23px;
+      border-radius: 6px;
+    }
+
+    .titlebar strong {
+      font-size: 12px;
+      letter-spacing: .01em;
+      font-weight: 620;
+    }
+
+    .prototype-tag {
+      margin-left: 4px;
+      padding: 3px 7px;
+      border: 1px solid rgba(255, 126, 36, 0.3);
+      border-radius: 999px;
+      color: #e4a77c;
+      font: 600 9px/1 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: .1em;
+    }
+
+    .window-actions {
+      margin-left: auto;
+      align-self: stretch;
+      display: flex;
+    }
+
+    .window-action {
+      width: 48px;
+      border: 0;
+      background: transparent;
+      color: #8e8983;
+      cursor: pointer;
+    }
+
+    .window-action:hover { color: #fff; background: rgba(255,255,255,.06); }
+    .window-action.close:hover { background: #c52b1f; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 42% 58%;
+      min-height: 539px;
+    }
+
+    .brand-stage {
+      position: relative;
+      padding: 58px 50px 44px;
+      overflow: hidden;
+      border-right: 1px solid var(--line);
+      background:
+        radial-gradient(circle at 72% 22%, rgba(255, 132, 31, .14), transparent 28%),
+        linear-gradient(145deg, rgba(255,255,255,.025), transparent 44%);
+    }
+
+    .brand-stage::after {
+      content: "";
+      position: absolute;
+      width: 370px;
+      height: 370px;
+      left: -170px;
+      bottom: -200px;
+      border: 1px solid rgba(255, 129, 29, .2);
+      border-radius: 50%;
+      box-shadow: 0 0 0 34px rgba(255, 129, 29, .03), 0 0 0 70px rgba(255, 129, 29, .025);
+    }
+
+    .energy-line {
+      position: absolute;
+      top: 86px;
+      right: -72px;
+      width: 244px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--orange), transparent);
+      transform: rotate(-34deg);
+      opacity: .7;
+      box-shadow: 0 0 22px rgba(255, 119, 31, .7);
+    }
+
+    .brand-icon {
+      position: relative;
+      width: 116px;
+      height: 116px;
+      border-radius: 27px;
+      box-shadow: 0 18px 50px rgba(255, 105, 10, .18);
+    }
+
+    .eyebrow {
+      margin: 34px 0 10px;
+      color: var(--orange);
+      font: 700 10px/1.3 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: .16em;
+    }
+
+    .brand-stage h1 {
+      margin: 0;
+      max-width: 310px;
+      font-size: clamp(30px, 3vw, 39px);
+      line-height: 1.13;
+      letter-spacing: -.045em;
+      font-weight: 670;
+    }
+
+    .brand-stage > p:not(.eyebrow) {
+      max-width: 290px;
+      margin: 19px 0 0;
+      color: #9b958e;
+      font-size: 13px;
+      line-height: 1.75;
+    }
+
+    .brand-points {
+      position: absolute;
+      left: 50px;
+      bottom: 36px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .brand-points span {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.025);
+      color: #918b84;
+      font-size: 10px;
+    }
+
+    .panel {
+      position: relative;
+      padding: 54px 58px 36px;
+      background: linear-gradient(180deg, rgba(255,255,255,.015), transparent 32%);
+    }
+
+    .view { display: none; min-height: 449px; animation: panel-in .28s cubic-bezier(.2,.8,.2,1); }
+    .view.active { display: flex; flex-direction: column; }
+
+    @keyframes panel-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .view-kicker {
+      margin: 0 0 10px;
+      color: #817b75;
+      font: 700 10px/1 ui-monospace, "Cascadia Code", monospace;
+      letter-spacing: .16em;
+    }
+
+    .view h2 {
+      margin: 0;
+      font-size: 30px;
+      line-height: 1.15;
+      letter-spacing: -.035em;
+      font-weight: 660;
+    }
+
+    .lede {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    .version {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: 7px;
+      color: #d3cec8;
+      font: 600 11px/1 ui-monospace, "Cascadia Code", monospace;
+    }
+
+    .version::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 10px rgba(84, 211, 154, .6);
+    }
+
+    .install-card {
+      margin-top: 30px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: rgba(255,255,255,.018);
+      overflow: hidden;
+    }
+
+    .install-row {
+      min-height: 64px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 15px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .install-row:last-child { border-bottom: 0; }
+
+    .row-icon {
+      flex: none;
+      width: 31px;
+      height: 31px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 129, 29, .2);
+      border-radius: 8px;
+      background: rgba(255, 122, 31, .07);
+      color: #ff9a56;
+    }
+
+    .row-copy { min-width: 0; flex: 1; }
+    .row-copy strong { display: block; font-size: 12px; font-weight: 620; }
+    .row-copy small { display: block; margin-top: 4px; color: #77716b; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .text-button {
+      border: 0;
+      background: transparent;
+      color: #d98c55;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .text-button:hover { color: #ffb177; }
+
+    .switch {
+      position: relative;
+      width: 34px;
+      height: 19px;
+      flex: none;
+    }
+
+    .switch input { position: absolute; opacity: 0; pointer-events: none; }
+    .switch span {
+      position: absolute;
+      inset: 0;
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      background: #242521;
+      cursor: pointer;
+      transition: background .18s ease, border-color .18s ease;
+    }
+    .switch span::after {
+      content: "";
+      position: absolute;
+      width: 13px;
+      height: 13px;
+      left: 2px;
+      top: 2px;
+      border-radius: 50%;
+      background: #8a857e;
+      transition: transform .18s ease, background .18s ease;
+    }
+    .switch input:checked + span { background: rgba(255, 121, 31, .2); border-color: rgba(255, 131, 46, .55); }
+    .switch input:checked + span::after { transform: translateX(15px); background: var(--orange); }
+    .switch input:focus-visible + span { outline: 2px solid #ffb56c; outline-offset: 3px; }
+
+    .custom-panel {
+      display: none;
+      padding: 13px 15px;
+      border-top: 1px solid var(--line);
+      background: rgba(0,0,0,.12);
+    }
+    .custom-panel.open { display: block; }
+    .custom-panel label { display: block; color: #89837d; font-size: 10px; }
+    .path-field { display: flex; gap: 8px; margin-top: 7px; }
+    .path-field input {
+      min-width: 0;
+      flex: 1;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #0d0e0c;
+      color: #d7d2cc;
+      padding: 0 10px;
+      font: 11px/1 ui-monospace, "Cascadia Code", monospace;
+    }
+
+    .actions {
+      margin-top: auto;
+      padding-top: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .legal {
+      max-width: 220px;
+      color: #68635e;
+      font-size: 9px;
+      line-height: 1.55;
+    }
+
+    .legal button {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #8c867f;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .primary, .secondary {
+      min-height: 42px;
+      padding: 0 20px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .primary {
+      border: 1px solid #ff974e;
+      background: linear-gradient(180deg, #ff8732, #f26712);
+      color: #150b04;
+      box-shadow: 0 8px 24px rgba(255, 105, 19, .18), inset 0 1px rgba(255,255,255,.32);
+    }
+    .primary:hover { filter: brightness(1.07); }
+    .primary:active { transform: translateY(1px); }
+
+    .secondary {
+      border: 1px solid var(--line-strong);
+      background: rgba(255,255,255,.035);
+      color: #d1ccc6;
+    }
+    .secondary:hover { background: rgba(255,255,255,.065); }
+
+    .phase-map {
+      margin: 34px 0 0;
+      display: grid;
+      gap: 13px;
+    }
+
+    .phase {
+      display: grid;
+      grid-template-columns: 20px 1fr auto;
+      align-items: center;
+      gap: 11px;
+      color: #68635d;
+      font-size: 11px;
+    }
+
+    .phase-dot {
+      width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      font: 700 9px/1 ui-monospace, monospace;
+    }
+    .phase.active { color: #eee9e3; }
+    .phase.active .phase-dot { border-color: rgba(255, 133, 51, .6); color: var(--orange); box-shadow: 0 0 16px rgba(255, 119, 31, .14); }
+    .phase.done { color: #9a948d; }
+    .phase.done .phase-dot { border-color: rgba(84, 211, 154, .35); background: rgba(84, 211, 154, .08); color: var(--green); }
+    .phase-state { font: 600 9px/1 ui-monospace, monospace; letter-spacing: .06em; }
+
+    .progress-wrap { margin-top: 31px; }
+    .progress-head { display: flex; justify-content: space-between; align-items: end; }
+    .progress-head strong { font-size: 12px; font-weight: 620; }
+    .progress-value { color: #ff9a56; font: 700 19px/1 ui-monospace, "Cascadia Code", monospace; }
+    .progress-track { height: 5px; margin-top: 12px; overflow: hidden; border-radius: 99px; background: #242520; }
+    .progress-fill { height: 100%; width: 0; border-radius: inherit; background: linear-gradient(90deg, var(--orange), var(--amber)); box-shadow: 0 0 20px rgba(255, 122, 31, .55); transition: width .14s linear; }
+    .progress-note { margin-top: 9px; color: #6d6761; font-size: 10px; }
+
+    .success-mark, .error-mark {
+      width: 58px;
+      height: 58px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 27px;
+      border-radius: 16px;
+    }
+    .success-mark { border: 1px solid rgba(84, 211, 154, .38); background: rgba(84, 211, 154, .08); color: var(--green); box-shadow: 0 16px 42px rgba(84, 211, 154, .08); }
+    .error-mark { border: 1px solid rgba(255, 110, 97, .38); background: rgba(255, 110, 97, .08); color: var(--red); }
+
+    .summary {
+      margin-top: 28px;
+      padding: 15px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.018);
+    }
+    .summary-row { display: flex; justify-content: space-between; gap: 20px; padding: 7px 0; color: #7d7771; font-size: 10px; }
+    .summary-row strong { color: #c7c1ba; font-weight: 560; text-align: right; }
+
+    .error-code {
+      margin: 24px 0 0;
+      padding: 13px 15px;
+      border: 1px solid rgba(255, 110, 97, .2);
+      border-radius: 9px;
+      background: rgba(255, 110, 97, .045);
+      color: #bbb4ad;
+      font: 10px/1.7 ui-monospace, "Cascadia Code", monospace;
+    }
+    .error-code strong { color: #ff8e84; }
+
+    .modal-backdrop {
+      position: absolute;
+      inset: 48px 0 0;
+      z-index: 20;
+      display: none;
+      place-items: center;
+      background: rgba(0,0,0,.64);
+      backdrop-filter: blur(8px);
+    }
+    .modal-backdrop.open { display: grid; }
+    .modal {
+      width: 360px;
+      padding: 25px;
+      border: 1px solid var(--line-strong);
+      border-radius: 13px;
+      background: #171815;
+      box-shadow: 0 24px 60px rgba(0,0,0,.54);
+    }
+    .modal h3 { margin: 0; font-size: 17px; }
+    .modal p { margin: 10px 0 0; color: #918b84; font-size: 11px; line-height: 1.65; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 23px; }
+    .modal-actions .primary, .modal-actions .secondary { min-height: 36px; padding: 0 14px; }
+
+    .prototype-controls {
+      position: fixed;
+      left: 50%;
+      bottom: 20px;
+      z-index: 50;
+      display: flex;
+      gap: 5px;
+      padding: 6px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 10px;
+      background: rgba(17,18,16,.92);
+      box-shadow: 0 12px 34px rgba(0,0,0,.34);
+      transform: translateX(-50%);
+      backdrop-filter: blur(14px);
+    }
+    .prototype-controls button {
+      min-height: 30px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: #858079;
+      font-size: 10px;
+      cursor: pointer;
+    }
+    .prototype-controls button:hover, .prototype-controls button.active { background: rgba(255,255,255,.06); color: #eee8e1; }
+
+    .prototype-toast {
+      position: absolute;
+      right: 22px;
+      bottom: 20px;
+      z-index: 30;
+      max-width: 320px;
+      padding: 10px 13px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: rgba(28, 29, 26, .96);
+      color: #b9b3ac;
+      box-shadow: 0 12px 34px rgba(0,0,0,.34);
+      font-size: 10px;
+      line-height: 1.5;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity .18s ease, transform .18s ease;
+    }
+    .prototype-toast.show { opacity: 1; transform: translateY(0); }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 860px) {
+      body { min-width: 680px; }
+      .page { padding-inline: 20px; }
+      .installer { width: min(800px, calc(100vw - 40px)); }
+      .layout { grid-template-columns: 38% 62%; }
+      .brand-stage { padding: 52px 34px 40px; }
+      .brand-stage h1 { font-size: 29px; }
+      .brand-points { left: 34px; }
+      .panel { padding: 48px 38px 32px; }
+    }
+
+    @media (max-height: 700px) {
+      .page { padding-top: 8px; padding-bottom: 54px; }
+      .prototype-controls { bottom: 8px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+      .energy-line { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="installer" aria-label="R-Code 安装器交互原型">
+      <header class="titlebar">
+        <img src="../../../icons/icon.png" alt="" />
+        <strong>R-Code 安装程序</strong>
+        <span class="prototype-tag">INTERACTION PROTOTYPE</span>
+        <div class="window-actions" aria-label="窗口操作">
+          <button class="window-action" id="minimize-window" type="button" aria-label="最小化">—</button>
+          <button class="window-action close" id="close-window" type="button" aria-label="关闭">×</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="brand-stage">
+          <span class="energy-line" aria-hidden="true"></span>
+          <img class="brand-icon" src="../../../icons/icon.png" alt="R-Code" />
+          <p class="eyebrow">SESSION-FIRST AI CODING</p>
+          <h1>让代码工作，<br />让上下文留下。</h1>
+          <p>安装一个围绕任务、变更与验证展开的本地 AI 编程工作台。</p>
+          <div class="brand-points" aria-label="产品特点">
+            <span>本地优先</span>
+            <span>会话留痕</span>
+            <span>可审查变更</span>
+          </div>
+        </aside>
+
+        <section class="panel">
+          <div class="view active" data-view="welcome">
+            <div>
+              <p class="view-kicker">READY TO INSTALL <span class="version">v0.1.0</span></p>
+              <h2>安装 R-Code</h2>
+              <p class="lede">默认安装到当前用户目录，不需要管理员权限。</p>
+            </div>
+
+            <div class="install-card">
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">⌁</span>
+                <span class="row-copy">
+                  <strong>安装位置</strong>
+                  <small id="path-summary">C:\Users\你\AppData\Local\R-Code</small>
+                </span>
+                <button class="text-button" id="customize" type="button" aria-expanded="false" aria-controls="custom-panel">自定义</button>
+              </div>
+              <div class="custom-panel" id="custom-panel">
+                <label for="install-path">目标文件夹</label>
+                <div class="path-field">
+                  <input id="install-path" value="C:\Users\你\AppData\Local\R-Code" spellcheck="false" />
+                  <button class="secondary" id="browse-path" type="button">浏览…</button>
+                </div>
+              </div>
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">↗</span>
+                <span class="row-copy"><strong>创建桌面快捷方式</strong><small>也会添加到 Windows 开始菜单</small></span>
+                <label class="switch"><span class="sr-only">创建桌面快捷方式</span><input type="checkbox" checked /><span aria-hidden="true"></span></label>
+              </div>
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">↻</span>
+                <span class="row-copy"><strong>自动检查更新</strong><small>仅检查正式发布版本，不自动重启应用</small></span>
+                <label class="switch"><span class="sr-only">自动检查更新</span><input type="checkbox" checked /><span aria-hidden="true"></span></label>
+              </div>
+            </div>
+
+            <div class="actions">
+              <p class="legal">继续即表示同意 <button type="button" data-notice="生产版本会在独立窗口打开软件许可。">软件许可</button> 与 <button type="button" data-notice="生产版本会在独立窗口打开隐私说明。">隐私说明</button>。</p>
+              <button class="primary" id="install-now" type="button">立即安装&nbsp; →</button>
+            </div>
+          </div>
+
+          <div class="view" data-view="installing" aria-live="polite">
+            <div>
+              <p class="view-kicker">INSTALLING</p>
+              <h2>正在准备你的工作台</h2>
+              <p class="lede" id="phase-description">校验安装环境与文件完整性。</p>
+            </div>
+
+            <div class="phase-map" aria-label="安装阶段">
+              <div class="phase active" data-phase="0"><span class="phase-dot">1</span><span>准备安装环境</span><span class="phase-state">ACTIVE</span></div>
+              <div class="phase" data-phase="1"><span class="phase-dot">2</span><span>写入应用文件</span><span class="phase-state">WAITING</span></div>
+              <div class="phase" data-phase="2"><span class="phase-dot">3</span><span>创建系统入口</span><span class="phase-state">WAITING</span></div>
+              <div class="phase" data-phase="3"><span class="phase-dot">4</span><span>完成本地配置</span><span class="phase-state">WAITING</span></div>
+            </div>
+
+            <div class="progress-wrap">
+              <div class="progress-head"><strong>总体进度</strong><span class="progress-value" id="progress-value">0%</span></div>
+              <div class="progress-track" role="progressbar" aria-label="安装进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="progress-fill" id="progress-fill"></div>
+              </div>
+              <p class="progress-note">原型使用模拟进度；生产实现应接入安装器真实阶段。</p>
+            </div>
+
+            <div class="actions">
+              <p class="legal">安装期间可以取消；已写入的临时文件会回滚。</p>
+              <button class="secondary" id="cancel-install" type="button">取消安装</button>
+            </div>
+          </div>
+
+          <div class="view" data-view="complete" aria-live="polite">
+            <div class="success-mark" aria-hidden="true">
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="none"><path d="m5 12.5 4.2 4.1L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </div>
+            <div>
+              <p class="view-kicker">INSTALLATION COMPLETE</p>
+              <h2>R-Code 已准备就绪</h2>
+              <p class="lede">应用、开始菜单入口和更新组件均已安装。</p>
+            </div>
+            <div class="summary">
+              <div class="summary-row"><span>版本</span><strong>0.1.0 · x64</strong></div>
+              <div class="summary-row"><span>安装位置</span><strong>C:\Users\你\AppData\Local\R-Code</strong></div>
+              <div class="summary-row"><span>用户数据</span><strong>升级与卸载时默认保留</strong></div>
+            </div>
+            <div class="actions">
+              <label class="switch"><span class="sr-only">关闭后启动 R-Code</span><input type="checkbox" checked /><span aria-hidden="true"></span></label>
+              <span style="margin-left:-6px; color:#8b857e; font-size:10px; flex:1;">关闭后启动 R-Code</span>
+              <button class="primary" id="start-r-code" type="button">开始使用&nbsp; →</button>
+            </div>
+          </div>
+
+          <div class="view" data-view="error" aria-live="assertive">
+            <div class="error-mark" aria-hidden="true">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M12 7v6m0 4h.01M4.9 19h14.2a2 2 0 0 0 1.73-3L13.73 4a2 2 0 0 0-3.46 0L3.17 16a2 2 0 0 0 1.73 3Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </div>
+            <div>
+              <p class="view-kicker">INSTALLATION INTERRUPTED</p>
+              <h2>安装没有完成</h2>
+              <p class="lede">目标文件正在被另一个进程使用。请退出旧版 R-Code 后重试。</p>
+            </div>
+            <div class="error-code"><strong>RC-INSTALL-02</strong><br />无法替换 r-code-host.exe · 文件占用</div>
+            <div class="actions">
+              <button class="secondary" data-switch="welcome" type="button">返回设置</button>
+              <button class="primary" id="retry-install" type="button">重新尝试&nbsp; →</button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="prototype-toast" id="prototype-toast" role="status" aria-live="polite"></div>
+
+      <div class="modal-backdrop" id="cancel-modal">
+        <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="cancel-title" aria-describedby="cancel-copy">
+          <h3 id="cancel-title">取消安装？</h3>
+          <p id="cancel-copy">R-Code 会回滚本次已写入的文件。你现有的项目、对话和设置不会被修改。</p>
+          <div class="modal-actions">
+            <button class="secondary" id="continue-install" type="button">继续安装</button>
+            <button class="primary" id="confirm-cancel" type="button">取消并回滚</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="prototype-controls" aria-label="原型状态切换">
+    <button class="active" data-switch="welcome" type="button">欢迎</button>
+    <button data-switch="installing" type="button">安装中</button>
+    <button data-switch="complete" type="button">完成</button>
+    <button data-switch="error" type="button">错误</button>
+  </nav>
+
+  <script>
+    const views = [...document.querySelectorAll("[data-view]")];
+    const stateButtons = [...document.querySelectorAll("[data-switch]")];
+    const progressFill = document.getElementById("progress-fill");
+    const progressValue = document.getElementById("progress-value");
+    const progressTrack = document.querySelector("[role='progressbar']");
+    const phaseDescription = document.getElementById("phase-description");
+    const cancelModal = document.getElementById("cancel-modal");
+    const continueInstall = document.getElementById("continue-install");
+    const prototypeToast = document.getElementById("prototype-toast");
+    let progressTimer = null;
+    let progress = 0;
+    let noticeTimer = null;
+
+    const phases = [
+      { at: 0, copy: "校验安装环境与文件完整性。" },
+      { at: 20, copy: "正在写入 R-Code 应用文件。" },
+      { at: 68, copy: "正在创建开始菜单与桌面快捷方式。" },
+      { at: 90, copy: "正在完成本地配置与更新组件。" },
+    ];
+
+    function stopProgress() {
+      if (progressTimer) window.clearInterval(progressTimer);
+      progressTimer = null;
+    }
+
+    function showNotice(message) {
+      window.clearTimeout(noticeTimer);
+      prototypeToast.textContent = message;
+      prototypeToast.classList.add("show");
+      noticeTimer = window.setTimeout(() => prototypeToast.classList.remove("show"), 2400);
+    }
+
+    function renderProgress(value) {
+      progress = Math.max(0, Math.min(100, value));
+      progressFill.style.width = `${progress}%`;
+      progressValue.textContent = `${Math.round(progress)}%`;
+      progressTrack.setAttribute("aria-valuenow", String(Math.round(progress)));
+      let activePhase = 0;
+      phases.forEach((phase, index) => { if (progress >= phase.at) activePhase = index; });
+      phaseDescription.textContent = phases[activePhase].copy;
+      document.querySelectorAll("[data-phase]").forEach((row, index) => {
+        row.classList.toggle("done", index < activePhase);
+        row.classList.toggle("active", index === activePhase);
+        const status = row.querySelector(".phase-state");
+        status.textContent = index < activePhase ? "DONE" : index === activePhase ? "ACTIVE" : "WAITING";
+      });
+    }
+
+    function showView(name, { simulate = false } = {}) {
+      stopProgress();
+      cancelModal.classList.remove("open");
+      views.forEach((view) => view.classList.toggle("active", view.dataset.view === name));
+      document.querySelectorAll(".prototype-controls [data-switch]").forEach((button) => button.classList.toggle("active", button.dataset.switch === name));
+      if (name === "installing") {
+        renderProgress(simulate ? 0 : 58);
+        if (simulate) {
+          progressTimer = window.setInterval(() => {
+            const increment = progress < 20 ? 2 : progress < 68 ? 1.35 : progress < 90 ? 1.05 : .8;
+            renderProgress(progress + increment);
+            if (progress >= 100) {
+              stopProgress();
+              window.setTimeout(() => showView("complete"), 260);
+            }
+          }, 90);
+        }
+      }
+    }
+
+    stateButtons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.switch)));
+    document.getElementById("install-now").addEventListener("click", () => showView("installing", { simulate: true }));
+    document.getElementById("retry-install").addEventListener("click", () => showView("installing", { simulate: true }));
+
+    const customize = document.getElementById("customize");
+    const customPanel = document.getElementById("custom-panel");
+    customize.addEventListener("click", () => {
+      const open = customPanel.classList.toggle("open");
+      customize.setAttribute("aria-expanded", String(open));
+      customize.textContent = open ? "收起" : "自定义";
+      if (open) document.getElementById("install-path").focus();
+    });
+    document.getElementById("install-path").addEventListener("input", (event) => {
+      document.getElementById("path-summary").textContent = event.target.value || "请选择安装位置";
+    });
+    document.getElementById("browse-path").addEventListener("click", () => {
+      document.getElementById("install-path").focus();
+      showNotice("原型中以路径输入框代替 Windows 文件夹选择器。");
+    });
+    document.querySelectorAll("[data-notice]").forEach((button) => button.addEventListener("click", () => showNotice(button.dataset.notice)));
+    document.getElementById("minimize-window").addEventListener("click", () => showNotice("这是浏览器内的设计原型；生产安装器会最小化到任务栏。"));
+    document.getElementById("start-r-code").addEventListener("click", () => showNotice("生产安装器会关闭并启动 R-Code。"));
+
+    function openCancelDialog() {
+      stopProgress();
+      cancelModal.classList.add("open");
+      continueInstall.focus();
+    }
+
+    document.getElementById("cancel-install").addEventListener("click", openCancelDialog);
+    document.getElementById("close-window").addEventListener("click", () => {
+      const installing = document.querySelector("[data-view='installing']").classList.contains("active");
+      if (installing) openCancelDialog();
+      else showNotice("这是浏览器内的设计原型；没有关闭当前页面。");
+    });
+    continueInstall.addEventListener("click", () => {
+      cancelModal.classList.remove("open");
+      showView("installing", { simulate: true });
+    });
+    document.getElementById("confirm-cancel").addEventListener("click", () => showView("welcome"));
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && cancelModal.classList.contains("open")) {
+        cancelModal.classList.remove("open");
+        document.getElementById("cancel-install").focus();
+      }
+    });
+  </script>
+</body>
+</html>
