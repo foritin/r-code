@@ -42,6 +42,7 @@ import {
   browserMockMarkAllNotificationsRead,
   browserMockMarkNotificationRead,
   browserMockMessages,
+  browserMockNotifications,
   browserMockNotificationList,
   browserMockProviderCatalog,
   browserMockSaveCodexCliPreferences as browserMockSaveCliPreferences,
@@ -731,6 +732,30 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const workspace: Workspace = { canonical_path: path, display_name: path.split(/[\\/]/).filter(Boolean).pop() ?? path, access_mode: "request_approval", last_opened_at: nowIso() };
       browserMockWorkspaces.unshift(workspace);
       return copy(workspace);
+    }
+    case "cmd_workspace_forget": {
+      const workspacePath = stringArg(args, "workspacePath");
+      const live = browserMockTasks.some((task) =>
+        task.workspace_path === workspacePath && (task.state === "exploring" || task.state === "in_progress")
+      );
+      if (live) throw new Error("项目仍有会话正在运行，请先停止后再清除项目");
+      const removedTaskIds = browserMockTasks
+        .filter((task) => task.workspace_path === workspacePath)
+        .map((task) => task.id);
+      for (const taskId of removedTaskIds) {
+        const taskIndex = browserMockTasks.findIndex((task) => task.id === taskId);
+        if (taskIndex >= 0) browserMockTasks.splice(taskIndex, 1);
+        delete browserMockDetails[taskId];
+      }
+      for (let notificationIndex = browserMockNotifications.length - 1; notificationIndex >= 0; notificationIndex -= 1) {
+        const notification = browserMockNotifications[notificationIndex];
+        if (notification.workspace_path === workspacePath || (notification.task_id && removedTaskIds.includes(notification.task_id))) {
+          browserMockNotifications.splice(notificationIndex, 1);
+        }
+      }
+      const index = browserMockWorkspaces.findIndex((item) => item.canonical_path === workspacePath);
+      if (index >= 0) browserMockWorkspaces.splice(index, 1);
+      return { removed: index >= 0, removed_sessions: removedTaskIds.length };
     }
     case "cmd_workspace_choose": {
       const workspace = browserMockWorkspaces[0];

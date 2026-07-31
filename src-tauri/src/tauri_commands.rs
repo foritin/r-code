@@ -16,6 +16,7 @@ use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
     RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage, TaskDetail,
     TaskDetailBatch, TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard,
+    WorkspaceForgetResult,
 };
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::replay::ReplayEntry;
@@ -399,6 +400,15 @@ pub async fn cmd_workspace_open(
     path: String,
 ) -> Result<Workspace, String> {
     r_code_host::commands::workspace_open(&state, std::path::Path::new(&path)).await
+}
+
+/// 清除 R-Code 内的项目及关联记录；不删除、移动或修改真实工作区目录。
+#[tauri::command]
+pub async fn cmd_workspace_forget(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+) -> Result<WorkspaceForgetResult, String> {
+    r_code_host::commands::workspace_forget(&state, &workspace_path).await
 }
 
 /// 调用系统原生目录选择器；用户取消时返回 None，不把任何路径授予前端文件权限。

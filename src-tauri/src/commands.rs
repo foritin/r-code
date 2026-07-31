@@ -1325,6 +1325,31 @@ pub async fn task_archive(state: &CommandState, task_id: &str) -> Result<Task, S
         .ok_or_else(|| format!("task not found after archive: {task_id}"))
 }
 
+fn remove_task_session_logs(sessions_dir: &Path, task_id: &str, storage_ids: &HashSet<String>) {
+    // 只枚举 R-Code 自己的会话目录，不接受调用方提供的删除目标。工作区目录永远
+    // 不会进入这条路径。
+    if let Ok(entries) = std::fs::read_dir(sessions_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            let storage_match = storage_ids
+                .iter()
+                .any(|storage_id| file_name == format!("{storage_id}.jsonl"));
+            let task_prefix_match = file_name.ends_with(".jsonl")
+                && (file_name == format!("{task_id}.jsonl")
+                    || file_name.starts_with(&format!("{task_id}--")));
+            if (storage_match || task_prefix_match) && path.is_file() {
+                if let Err(error) = std::fs::remove_file(&path) {
+                    tracing::warn!(task_id, file = %path.display(), %error, "failed to remove deleted task session log");
+                }
+            }
+        }
+    }
+}
+
 /// 永久删除一个已经停止的会话及其 R-Code 审计数据。
 ///
 /// 工作区和其中的文件不属于会话存储，永远不会在这里删除。运行中的会话必须先停止，
@@ -1362,26 +1387,7 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
 
     // JSONL 不在 SQLite 事务中；数据库删除成功后做幂等的最佳努力清理。
     // 同时按 task 前缀覆盖旧主分支和外部子代理日志，绝不触碰工作区目录。
-    if let Ok(entries) = std::fs::read_dir(&state.sessions_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_name = entry.file_name();
-            let Some(file_name) = file_name.to_str() else {
-                continue;
-            };
-            let storage_match = storage_ids
-                .iter()
-                .any(|storage_id| file_name == format!("{storage_id}.jsonl"));
-            let task_prefix_match = file_name.ends_with(".jsonl")
-                && (file_name == format!("{task_id}.jsonl")
-                    || file_name.starts_with(&format!("{task_id}--")));
-            if (storage_match || task_prefix_match) && path.is_file() {
-                if let Err(error) = std::fs::remove_file(&path) {
-                    tracing::warn!(task_id, file = %path.display(), %error, "failed to remove deleted task session log");
-                }
-            }
-        }
-    }
+    remove_task_session_logs(&state.sessions_dir, task_id, &storage_ids);
     Ok(())
 }
 
@@ -1907,8 +1913,8 @@ pub async fn workspace_dashboard(
             .cmp(&dashboard_task_rank(right))
             .then_with(|| right.task.updated_at.cmp(&left.task.updated_at))
     });
-    attention.sort_by(|left, right| left.since.cmp(&right.since));
-    completed.sort_by(|left, right| right.task.updated_at.cmp(&left.task.updated_at));
+    attention.sort_by_key(|item| item.since);
+    completed.sort_by_key(|item| std::cmp::Reverse(item.task.updated_at));
     completed.truncate(6);
 
     Ok(WorkspaceDashboard {
@@ -2542,6 +2548,7 @@ fn ensure_subagent_run(
     Ok(true)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn persist_runtime_event(
     db: &Database,
     session_store: &SessionStore,
@@ -3154,6 +3161,7 @@ async fn append_user_content_with_mode(
         .map_err(err_str)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn start_run_locked(
     bridge: &mut AgentBridge,
     db: &Database,
@@ -3458,6 +3466,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_drain_loop_with_resources(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
     external_agents: Arc<ExternalAgentRegistry>,
@@ -4496,6 +4505,81 @@ pub async fn workspace_open(state: &CommandState, path: &Path) -> Result<Workspa
     WorkspaceService::new(&state.db)
         .open(&canonical_path, &display_name)
         .map_err(err_str)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceForgetResult {
+    pub removed: bool,
+    pub removed_sessions: usize,
+}
+
+/// 从 R-Code 的项目列表中忘记一个 workspace。
+///
+/// 该路径只作为数据库主键使用，刻意不 canonicalize、不读取目录，也不调用任何
+/// 工作区文件删除 API。因此即使真实目录已移动或不可访问，R-Code 内部的项目、会话
+/// 和审计记录仍可被清理。
+pub async fn workspace_forget(
+    state: &CommandState,
+    workspace_path: &str,
+) -> Result<WorkspaceForgetResult, String> {
+    let service = WorkspaceService::new(&state.db);
+    if service.get(workspace_path).map_err(err_str)?.is_none() {
+        return Ok(WorkspaceForgetResult {
+            removed: false,
+            removed_sessions: 0,
+        });
+    }
+
+    let tasks = TaskRepository::new(&state.db)
+        .list(Some(workspace_path), None, true)
+        .map_err(err_str)?;
+    if tasks
+        .iter()
+        .any(|task| matches!(task.state, TaskState::Exploring | TaskState::InProgress))
+    {
+        return Err("项目仍有会话正在运行，请先停止后再清除项目".to_string());
+    }
+
+    let task_ids = tasks
+        .iter()
+        .map(|task| task.id.as_str())
+        .collect::<HashSet<_>>();
+    let session_logs = tasks
+        .iter()
+        .map(|task| {
+            let storage_ids = SessionBranchRepository::new(&state.db)
+                .list_by_task(&task.id)
+                .map_err(err_str)?
+                .into_iter()
+                .map(|branch| branch.storage_id)
+                .collect::<HashSet<_>>();
+            Ok((task.id.clone(), storage_ids))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    let mut bridge = state.agent.lock().await;
+    if bridge
+        .active
+        .as_ref()
+        .is_some_and(|active| task_ids.contains(active.task_id.as_str()))
+    {
+        return Err("项目仍有会话正在运行，请先停止后再清除项目".to_string());
+    }
+
+    let (removed, removed_sessions) = service.forget(workspace_path).map_err(err_str)?;
+    for task in &tasks {
+        bridge.sessions.remove(&task.id);
+    }
+    drop(bridge);
+
+    for (task_id, storage_ids) in session_logs {
+        remove_task_session_logs(&state.sessions_dir, &task_id, &storage_ids);
+    }
+
+    Ok(WorkspaceForgetResult {
+        removed,
+        removed_sessions,
+    })
 }
 
 pub async fn workspace_set_access_mode(
@@ -6051,7 +6135,7 @@ fn load_config_json_for_editing(state: &CommandState) -> Result<serde_json::Valu
             toml::from_str(&content).map_err(|e| format!("parse {}: {e}", path.display()))?;
         serde_json::to_value(tv).map_err(|e| e.to_string())
     } else {
-        serde_json::to_value(&hermes_config::Config::default()).map_err(|e| e.to_string())
+        serde_json::to_value(hermes_config::Config::default()).map_err(|e| e.to_string())
     }
 }
 
@@ -6201,8 +6285,7 @@ pub async fn settings_save_provider(
     if base_url.contains("${") {
         return Err("请把接口地址里的占位符替换为实际值".to_string());
     }
-    if !base_url.is_empty()
-        && !(base_url.starts_with("https://") || base_url.starts_with("http://"))
+    if !(base_url.is_empty() || base_url.starts_with("https://") || base_url.starts_with("http://"))
     {
         return Err("接口地址需要以 http:// 或 https:// 开头".to_string());
     }
@@ -6984,9 +7067,9 @@ fn codex_config_string(
     }
 }
 
-fn read_codex_preference_values(
-    config_path: &Path,
-) -> Result<(String, Option<String>, Option<String>, Option<String>), String> {
+type CodexPreferenceValues = (String, Option<String>, Option<String>, Option<String>);
+
+fn read_codex_preference_values(config_path: &Path) -> Result<CodexPreferenceValues, String> {
     let source = match std::fs::read_to_string(config_path) {
         Ok(source) => source,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -7752,6 +7835,7 @@ const CODEX_EXEC_HARD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Copy)]
 struct CodexExecLimits {
+    startup_timeout: Duration,
     idle_timeout: Duration,
     hard_timeout: Duration,
 }
@@ -7759,6 +7843,7 @@ struct CodexExecLimits {
 impl Default for CodexExecLimits {
     fn default() -> Self {
         Self {
+            startup_timeout: CODEX_APP_SERVER_START_TIMEOUT,
             idle_timeout: CODEX_EXEC_IDLE_TIMEOUT,
             hard_timeout: CODEX_EXEC_HARD_TIMEOUT,
         }
@@ -8633,7 +8718,7 @@ fn codex_npm_node_command(cli_path: &Path) -> Result<TokioCommand, String> {
 fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String> {
     #[cfg(windows)]
     {
-        return match cli_path {
+        match cli_path {
             Some(path)
                 if path
                     .extension()
@@ -8652,7 +8737,7 @@ fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String
             // 正常委派始终先经 `probe_codex_cli`，因此这里不允许把任务文本交给 PATH
             // 中未知的 cmd shim。这样即使探测结果意外丢失，也不会退回 shell 解析。
             None => Ok(TokioCommand::new("codex.exe")),
-        };
+        }
     }
     #[cfg(not(windows))]
     {
@@ -8813,6 +8898,7 @@ async fn run_codex_exec_process_with_options(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_exec_process_with_options_and_permissions(
     workspace: &Path,
     prompt: &str,
@@ -8837,6 +8923,7 @@ async fn run_codex_exec_process_with_options_and_permissions(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_exec_process_with_options_and_permissions_and_images(
     workspace: &Path,
     prompt: &str,
@@ -9195,9 +9282,10 @@ async fn write_codex_app_server_value(
 async fn wait_for_codex_app_server_response(
     lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
     expected_id: u64,
+    startup_timeout: Duration,
 ) -> Result<serde_json::Value, CodexExecFailure> {
     loop {
-        let next = timeout(CODEX_APP_SERVER_START_TIMEOUT, lines.next_line())
+        let next = timeout(startup_timeout, lines.next_line())
             .await
             .map_err(|_| CodexExecFailure::ApprovalBridge)?
             .map_err(|_| CodexExecFailure::ApprovalBridge)?;
@@ -9400,9 +9488,7 @@ async fn observe_codex_app_server_event(
     event_sink: Option<&CodexSubagentEventSink>,
     summary: &mut Option<String>,
 ) -> Option<CodexExecFailure> {
-    let Some(method) = value.get("method").and_then(serde_json::Value::as_str) else {
-        return None;
-    };
+    let method = value.get("method").and_then(serde_json::Value::as_str)?;
     let params = value.get("params").cloned().unwrap_or_default();
     match method {
         "item/started" => {
@@ -9506,6 +9592,7 @@ async fn observe_codex_app_server_event(
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
 #[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process(
     workspace: &Path,
     prompt: &str,
@@ -9532,6 +9619,7 @@ async fn run_codex_app_server_process(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process_with_images(
     workspace: &Path,
     prompt: &str,
@@ -9596,7 +9684,7 @@ async fn run_codex_app_server_process_with_images(
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let _ = wait_for_codex_app_server_response(&mut lines, 0).await?;
+        let _ = wait_for_codex_app_server_response(&mut lines, 0, limits.startup_timeout).await?;
         write_codex_app_server_value(
             &mut stdin,
             &serde_json::json!({ "method": "initialized", "params": {} }),
@@ -9619,7 +9707,8 @@ async fn run_codex_app_server_process_with_images(
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let thread = wait_for_codex_app_server_response(&mut lines, 1).await?;
+        let thread =
+            wait_for_codex_app_server_response(&mut lines, 1, limits.startup_timeout).await?;
         let thread_id = codex_app_server_thread_id(&thread).ok_or(CodexExecFailure::ApprovalBridge)?;
         write_codex_app_server_value(
             &mut stdin,
@@ -9634,7 +9723,7 @@ async fn run_codex_app_server_process_with_images(
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let _ = wait_for_codex_app_server_response(&mut lines, 2).await?;
+        let _ = wait_for_codex_app_server_response(&mut lines, 2, limits.startup_timeout).await?;
         Ok::<String, CodexExecFailure>(thread_id)
     }
     .await;
@@ -9790,6 +9879,7 @@ fn codex_app_server_input(prompt: &str, image_paths: &[PathBuf]) -> Vec<serde_js
     input
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_exec_subagent(
     db: &Database,
     session_store: &SessionStore,
@@ -9831,6 +9921,7 @@ async fn run_codex_exec_subagent(
 
 /// 根据每次启动时读取到的 profile 选择轻量 exec 或可交互 App Server。调用方传入
 /// 的 `permissions` 已经是安全解析后的快照，运行中不受后续配置修改影响。
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_delegation_process(
     workspace: &Path,
     prompt: &str,
@@ -9855,6 +9946,7 @@ async fn run_codex_delegation_process(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_codex_delegation_process_with_images(
     workspace: &Path,
     prompt: &str,
@@ -10046,6 +10138,7 @@ fn spawn_codex_main(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_codex_exec_subagent(
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
@@ -10161,6 +10254,7 @@ fn spawn_codex_exec_subagent(
 ///
 /// 与 `codex exec` 路径共享同一份运行树、取消注册和安全投影规则；差异仅在于
 /// MCP 会话返回的 thread ID 会被保存，以便后续可显式续接。
+#[allow(clippy::too_many_arguments)]
 fn spawn_codex_mcp_subagent(
     external_agents: Arc<ExternalAgentRegistry>,
     codex_mcp: Arc<CodexMcpRegistry>,
@@ -10698,10 +10792,31 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    // Windows 的 `set /p` 批处理 shim 不是并发安全的 JSONL 模拟器。真实 App Server
-    // 不受此限制；仅串行化这两个进程级回归，避免测试之间的管道时序互相干扰。
+    // Windows 进程启动和管道握手在全量并行测试下会争抢调度资源。真实 App Server
+    // 不受测试夹具限制；这里只串行化两个进程级回归，避免测试之间互相放大抖动。
     #[cfg(windows)]
     static CODEX_APP_SERVER_SHIM_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    #[cfg(windows)]
+    const CODEX_APP_SERVER_FIXTURE_TIMEOUT: Duration = Duration::from_secs(30);
+
+    #[cfg(windows)]
+    fn write_codex_app_server_fixture(
+        directory: &Path,
+        name: &str,
+        source: &str,
+    ) -> Option<PathBuf> {
+        let node = executable_paths(&["node.exe"]).into_iter().next()?;
+        windows_cmd_safe_path(&node).expect("Node.js test executable path must be cmd-safe");
+        let script = directory.join(format!("{name}.js"));
+        let shim = directory.join(format!("{name}.cmd"));
+        std::fs::write(&script, source).unwrap();
+        std::fs::write(
+            &shim,
+            format!("@echo off\r\n\"{}\" \"%~dp0{name}.js\"\r\n", node.display()),
+        )
+        .unwrap();
+        Some(shim)
+    }
 
     /// 创建测试状态。
     fn setup_state() -> (TempDir, CommandState) {
@@ -11762,6 +11877,103 @@ mod tests {
         let list = workspace_list(&state).await.unwrap();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].access_mode, ProjectAccessMode::RequestApproval);
+    }
+
+    #[tokio::test]
+    async fn workspace_forget_clears_app_records_but_preserves_real_files() {
+        let (dir, state) = setup_state();
+        let project = dir.path().join("real-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let sentinel = project.join("keep-me.txt");
+        std::fs::write(&sentinel, "real project content").unwrap();
+        let project_memory = project.join(".r-code").join("memory.md");
+        std::fs::create_dir_all(project_memory.parent().unwrap()).unwrap();
+        std::fs::write(&project_memory, "real project memory").unwrap();
+
+        let workspace = workspace_open(&state, &project).await.unwrap();
+        let task = task_create(
+            &state,
+            Some(&workspace.canonical_path),
+            "保留历史",
+            "验证忘记项目",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .active(&task.id)
+            .unwrap()
+            .unwrap();
+        let session_log = state
+            .sessions_dir
+            .join(format!("{}.jsonl", branch.storage_id));
+        std::fs::write(&session_log, "app-owned session history").unwrap();
+        let conn = state.db.conn().unwrap();
+        conn.execute(
+            "INSERT INTO notifications \
+             (id, source_key, kind, title, body, task_id, workspace_path, created_at) \
+             VALUES ('forget-test', 'forget-test', 'review_ready', 'Review', 'Body', ?1, ?2, ?3)",
+            rusqlite::params![
+                &task.id,
+                &workspace.canonical_path,
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .unwrap();
+        drop(conn);
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+        let error = workspace_forget(&state, &workspace.canonical_path)
+            .await
+            .unwrap_err();
+        assert!(error.contains("仍有会话正在运行"));
+        assert_eq!(workspace_list(&state).await.unwrap().len(), 1);
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::Idle)
+            .unwrap();
+        let removed = workspace_forget(&state, &workspace.canonical_path)
+            .await
+            .unwrap();
+
+        assert_eq!(removed.removed_sessions, 1);
+        assert!(removed.removed);
+        assert!(workspace_list(&state).await.unwrap().is_empty());
+        assert!(TaskRepository::new(&state.db)
+            .get(&task.id)
+            .unwrap()
+            .is_none());
+        let remaining_notifications: i64 = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM notifications WHERE workspace_path = ?1",
+                rusqlite::params![&workspace.canonical_path],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_notifications, 0);
+        assert!(!session_log.exists());
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            "real project content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&project_memory).unwrap(),
+            "real project memory"
+        );
+        assert!(project.is_dir());
+
+        let reopened = workspace_open(&state, &project).await.unwrap();
+        assert_eq!(reopened.canonical_path, workspace.canonical_path);
+        assert_eq!(workspace_list(&state).await.unwrap().len(), 1);
+        assert!(TaskRepository::new(&state.db)
+            .get(&task.id)
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -13368,23 +13580,27 @@ process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output
     async fn codex_app_server_process_returns_a_visible_summary_without_an_interactive_terminal() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
         let directory = TempDir::new().unwrap();
-        let shim = directory.path().join("codex-app-server.cmd");
-        std::fs::write(
-            &shim,
-            "@echo off\r\n\
-setlocal\r\n\
-set /p line=\r\n\
-echo {\"id\":0,\"result\":{}}\r\n\
-set /p line=\r\n\
-set /p line=\r\n\
-echo {\"id\":1,\"result\":{\"thread\":{\"id\":\"thread-app-server\"}}}\r\n\
-set /p line=\r\n\
-echo {\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-app-server\"}}}\r\n\
-echo {\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"App Server child summary\"}}}\r\n\
-echo {\"method\":\"turn/completed\",\"params\":{\"turn\":{\"status\":\"completed\"}}}\r\n\
-exit /b 0\r\n",
-        )
-        .unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-app-server' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-app-server' } } });
+    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'App Server child summary' } } });
+    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
         let permissions =
             CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
                 .expect("request-approval must be a built-in preset");
@@ -13403,8 +13619,9 @@ exit /b 0\r\n",
                 caller: "subagent:run-app-server".to_string(),
             },
             CodexExecLimits {
-                idle_timeout: Duration::from_secs(2),
-                hard_timeout: Duration::from_secs(5),
+                startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
             },
         )
         .await;
@@ -13421,31 +13638,32 @@ exit /b 0\r\n",
     #[tokio::test]
     async fn codex_app_server_turn_waits_for_an_r_code_permission_decision() {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
-        // Spawning `cmd.exe` can exceed two seconds while the full Windows test suite is
-        // running in parallel. Keep this fixture's observation windows inside one explicit
-        // budget so scheduler load cannot masquerade as an approval-bridge regression.
-        let fixture_hard_timeout = Duration::from_secs(10);
-        let approval_surface_timeout = Duration::from_secs(5);
         let directory = TempDir::new().unwrap();
-        let shim = directory.path().join("codex-app-server-approval.cmd");
-        std::fs::write(
-            &shim,
-            "@echo off\r\n\
-setlocal\r\n\
-set /p line=\r\n\
-echo {\"id\":0,\"result\":{}}\r\n\
-set /p line=\r\n\
-set /p line=\r\n\
-echo {\"id\":1,\"result\":{\"thread\":{\"id\":\"thread-approval\"}}}\r\n\
-set /p line=\r\n\
-echo {\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-approval\"}}}\r\n\
-echo {\"id\":3,\"method\":\"item/fileChange/requestApproval\",\"params\":{\"itemId\":\"change-approval\",\"reason\":\"modify approval.txt\"}}\r\n\
-set /p line=\r\n\
-echo {\"method\":\"item/completed\",\"params\":{\"item\":{\"type\":\"agentMessage\",\"text\":\"Approved change completed\"}}}\r\n\
-echo {\"method\":\"turn/completed\",\"params\":{\"turn\":{\"status\":\"completed\"}}}\r\n\
-exit /b 0\r\n",
-        )
-        .unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-approval",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+let approvalRequested = false;
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-approval' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-approval' } } });
+    send({ id: 3, method: 'item/fileChange/requestApproval', params: { itemId: 'change-approval', reason: 'modify approval.txt' } });
+    approvalRequested = true;
+  } else if (approvalRequested && message.id === 3) {
+    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'Approved change completed' } } });
+    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
         let permission_engine = Arc::new(PermissionEngine::new());
         let engine_for_run = permission_engine.clone();
         let permissions =
@@ -13468,13 +13686,14 @@ exit /b 0\r\n",
                     caller: "subagent:run-approval".to_string(),
                 },
                 CodexExecLimits {
-                    idle_timeout: approval_surface_timeout,
-                    hard_timeout: fixture_hard_timeout,
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                 },
             )
             .await
         });
-        let request = timeout(approval_surface_timeout, async {
+        let request = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, async {
             loop {
                 if let Some(request) = permission_engine
                     .pending_for_task("task-approval")
@@ -13495,7 +13714,7 @@ exit /b 0\r\n",
             .decide(&request.id, PermissionDecision::Allow)
             .await
             .unwrap();
-        let completion = timeout(fixture_hard_timeout, run)
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
             .await
             .expect("Codex App Server turn must finish after approval")
             .unwrap();
@@ -13541,6 +13760,7 @@ exit /b 0\r\n",
             CodexExecLimits {
                 idle_timeout: Duration::from_millis(80),
                 hard_timeout: Duration::from_secs(5),
+                ..Default::default()
             },
         )
         .await;
@@ -13586,6 +13806,7 @@ exit /b 0\r\n",
             CodexExecLimits {
                 idle_timeout: Duration::from_millis(250),
                 hard_timeout: Duration::from_secs(5),
+                ..Default::default()
             },
         )
         .await;

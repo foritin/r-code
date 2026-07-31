@@ -351,6 +351,15 @@ export const workspaceList = () => ipc<Workspace[]>("cmd_workspace_list");
 export const workspaceOpen = (path: string) =>
   ipc<Workspace>("cmd_workspace_open", { path });
 
+export interface WorkspaceForgetResult {
+  removed: boolean;
+  removed_sessions: number;
+}
+
+/** 清除 R-Code 内部的项目与关联记录；真实工作区目录始终保留。 */
+export const workspaceForget = (workspacePath: string) =>
+  ipc<WorkspaceForgetResult>("cmd_workspace_forget", { workspacePath });
+
 /** 原生系统文件夹选择器；用户取消时返回 null。 */
 export const workspaceChoose = () => ipc<Workspace | null>("cmd_workspace_choose");
 

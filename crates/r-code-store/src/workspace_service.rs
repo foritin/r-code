@@ -1,9 +1,9 @@
-//! Workspace 服务层：管理 workspace 的打开/关闭/最近列表/权限模式。
+//! Workspace 服务层：管理 workspace 的打开/关闭/最近列表/忘记/权限模式。
 //!
 //! 封装 [`WorkspaceRepository`]，提供更高层的工作流语义：
 //! - `open`：upsert + touch，并保留既有项目权限模式
 //! - `close`：仅 touch `last_opened_at`
-//! - `list_recent` / `set_access_mode` / `get`
+//! - `list_recent` / `forget` / `set_access_mode` / `get`
 //!
 //! [doc-06 §3.8] [doc-13]
 
@@ -60,6 +60,14 @@ impl<'a> WorkspaceService<'a> {
     /// 列出最近打开的 workspace（按 `last_opened_at` 降序）。
     pub fn list_recent(&self, limit: u32) -> Result<Vec<Workspace>, ProductError> {
         self.repo.list_recent(limit)
+    }
+
+    /// 忘记 workspace，清除 R-Code 内部的项目、会话与关联审计记录。
+    ///
+    /// 此调用只操作产品数据库，不会读取、修改或删除 `canonical_path` 指向的任何
+    /// 磁盘内容。返回 `(是否清除了项目, 清除的会话数)`。
+    pub fn forget(&self, canonical_path: &str) -> Result<(bool, usize), ProductError> {
+        self.repo.remove(canonical_path)
     }
 
     /// 设置项目级 Agent 权限模式。
@@ -249,6 +257,18 @@ mod tests {
 
         let recent = svc.list_recent(10).unwrap();
         assert_eq!(recent.len(), 1);
+    }
+
+    #[test]
+    fn test_forget_removes_recent_workspace_record() {
+        let db = setup();
+        let svc = WorkspaceService::new(&db);
+
+        svc.open("/proj", "P").unwrap();
+        assert_eq!(svc.forget("/proj").unwrap(), (true, 0));
+        assert!(svc.get("/proj").unwrap().is_none());
+        assert!(svc.list_recent(10).unwrap().is_empty());
+        assert_eq!(svc.forget("/proj").unwrap(), (false, 0));
     }
 
     #[test]

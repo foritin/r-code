@@ -188,3 +188,38 @@ test("archived conversations remain available as read-only history", async () =>
   assert.equal(await page.locator(".composer").count(), 0);
   await page.close();
 });
+
+test("clearing a project removes app records without implying disk deletion", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  // The preview data intentionally starts this project with a live task. Stop it through the
+  // same mock IPC runtime so the product guard and the successful removal path are both exercised.
+  await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    await browserMockInvoke("cmd_agent_abort", { taskId: "mock-task-api" });
+  });
+
+  await page.locator(".sidebar-project-manage").click();
+  const row = page.locator(".workspace-row").filter({ hasText: "api-server" });
+  const remove = row.getByRole("button", { name: "从 R-Code 中清除 api-server" });
+  await page.waitForFunction(
+    () => !document.querySelector('.workspace-row .workspace-remove[aria-label*="api-server"]')?.hasAttribute("disabled"),
+  );
+  await remove.click();
+
+  const dialog = page.getByRole("alertdialog", { name: "从 R-Code 中清除这个项目？" });
+  await dialog.waitFor({ state: "visible" });
+  const copy = await dialog.innerText();
+  assert.match(copy, /真实文件夹及其中的文件不会被删除、移动或修改/);
+  assert.match(copy, /1 段对话以及关联的运行与审计数据/);
+  await dialog.getByRole("button", { name: "清除项目", exact: true }).click();
+
+  await page.getByText("项目已从 R-Code 清除", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await page.locator(".workspace-row").filter({ hasText: "api-server" }).count(), 0);
+  assert.equal(await page.locator(".sidebar-project").filter({ hasText: "api-server" }).count(), 0);
+
+  await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
+  assert.equal(await page.locator(".conversation-row").filter({ hasText: "添加请求限流中间件" }).count(), 0);
+  await page.close();
+});

@@ -1,19 +1,22 @@
 # R-Code 文档
 
-`docs/` 顶层只保留当前有效入口；历史方案统一放入 `archive/`，不再作为实现或验收基线。
+这里保存 GitHub 可以直接预览的当前文档。代码行为与文档冲突时，以当前测试通过的代码为准，并在同一个变更中修正文档。
 
-## 当前 UI
+## 维护者入口
 
-- [当前原型与交互 Demo](./ui/README.md)
-- [任务运行与子代理交互规范](./ui/SPEC.md)
-- [前后端接入合同](./ui/BACKEND-CONTRACT.md)
+| 文档 | 用途 |
+| --- | --- |
+| [架构与实现细节](./ARCHITECTURE.md) | 运行边界、crate 分层、Agent loop、存储、安全、终端、前端和扩展路径 |
+| [发布手册](./RELEASING.md) | 版本、CHANGELOG、tag、GitHub Release、签名、失败恢复和首次发布清单 |
+| [CHANGELOG](../CHANGELOG.md) | 每个版本的用户可见变化与发布历史 |
+| [Security Policy](../SECURITY.md) | 支持范围、私密漏洞报告和安全边界 |
+| [Privacy Notice](../PRIVACY.md) | 本地存储、模型 Provider、Codex、更新和支持包的数据流 |
+| [根 README](../README.md) | 产品概览、快速开发、验证命令和仓库导航 |
 
-当前评审范围是任务运行、命令详情和子代理渐进披露。其他页面会按同一套新视觉语言逐页重绘；完成前不从历史目录恢复旧页面作为占位。
+## UI 参考图
 
-## 历史归档
+- [`ui/light/`](./ui/light/)：亮色 UI 原型图。
+- [`ui/dark/`](./ui/dark/)：暗色 UI 原型图。
+- [`ui/signature-dark/`](./ui/signature-dark/)：R-Code 个性化暗色原型图。
 
-- [UI 历史版本](./archive/ui/README.md)
-- `archive/design/`：更早的方向探索、单页 Mockup 与实验稿。
-- `archive/` 其余内容：历史架构、ADR、交付与实现资料。
-
-归档内容只用于追溯设计决策，不应被产品、Demo 或前端实现直接引用。
+`ui/` 只存放静态参考图，不包含可执行 Demo、生成脚本或实现合同。历史资料如需恢复，应放在 `archive/` 并明确标注不再是实现基线。

@@ -20,16 +20,30 @@ pub struct Database {
 impl Database {
     /// 打开文件数据库（WAL 模式 + foreign_keys ON）。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ProductError> {
+        let path = path.as_ref();
+        // `journal_mode` is persistent database state and may require a write lock. Configure it
+        // once before r2d2 starts opening connections; doing this in `with_init` lets eager pool
+        // connections race each other and produces transient `database is locked` failures.
+        let bootstrap = rusqlite::Connection::open(path)
+            .map_err(|e| ProductError::DatabaseError(format!("database open failed: {e}")))?;
+        bootstrap
+            .execute_batch(
+                "PRAGMA busy_timeout=5000;\n\
+                 PRAGMA journal_mode=WAL;",
+            )
+            .map_err(|e| ProductError::DatabaseError(format!("WAL setup failed: {e}")))?;
+        drop(bootstrap);
+
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.execute_batch(
-                "PRAGMA journal_mode=WAL;\n\
-                 PRAGMA foreign_keys=ON;\n\
+                "PRAGMA foreign_keys=ON;\n\
                  PRAGMA synchronous=NORMAL;\n\
                  PRAGMA busy_timeout=5000;",
             )
         });
         let pool = Pool::builder()
             .max_size(8)
+            .min_idle(Some(1))
             .build(manager)
             .map_err(|e| ProductError::DatabaseError(format!("pool build failed: {e}")))?;
 
@@ -98,5 +112,35 @@ mod tests {
         assert!(tables.contains(&"permission_requests".to_string()));
         assert!(tables.contains(&"workspaces".to_string()));
         assert!(tables.contains(&"task_events".to_string()));
+    }
+
+    #[test]
+    fn open_file_configures_every_pooled_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(dir.path().join("r-code.db")).unwrap();
+
+        // Hold all connections at once so the pool must grow from its single idle connection to
+        // the configured maximum. Every new connection must receive the connection-local PRAGMAs
+        // without trying to reconfigure the persistent journal mode.
+        let connections: Vec<_> = (0..8).map(|_| db.conn().unwrap()).collect();
+        for conn in connections {
+            let journal_mode: String = conn
+                .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+                .unwrap();
+            let foreign_keys: i64 = conn
+                .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+                .unwrap();
+            let synchronous: i64 = conn
+                .query_row("PRAGMA synchronous", [], |row| row.get(0))
+                .unwrap();
+            let busy_timeout: i64 = conn
+                .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+                .unwrap();
+
+            assert_eq!(journal_mode, "wal");
+            assert_eq!(foreign_keys, 1);
+            assert_eq!(synchronous, 1);
+            assert_eq!(busy_timeout, 5_000);
+        }
     }
 }

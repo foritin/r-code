@@ -25,7 +25,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT"
-repository = "https://github.com/charter/r-code"
+repository = "https://github.com/foritin/r-code"
 authors = ["R-Code Team"]
 
 [workspace.dependencies]

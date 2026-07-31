@@ -561,12 +561,8 @@ impl AgentRuntime for LlmAgentRuntime {
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError> {
         let mut event_rx = self.event_rx.lock().await;
         let mut events = Vec::new();
-        loop {
-            match event_rx.try_recv() {
-                Ok(event) => events.push(event),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-                | Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
-            }
+        while let Ok(event) = event_rx.try_recv() {
+            events.push(event);
         }
         Ok(events)
     }
