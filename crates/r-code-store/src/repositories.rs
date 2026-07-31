@@ -1593,6 +1593,42 @@ impl<'a> WorkspaceRepository<'a> {
         Ok(workspaces)
     }
 
+    /// 从 R-Code 中清除一个 Workspace 及其关联产品记录。
+    ///
+    /// `tasks` 的关联审计表由外键级联清理；通知按 `workspace_path` 显式清理。
+    /// 整个操作在单一事务中完成。磁盘目录不属于数据库，也不在此方法的能力范围内。
+    /// 返回 `(是否存在并清除了 Workspace, 清除的会话数)`。
+    pub fn remove(&self, canonical_path: &str) -> Result<(bool, usize), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn.transaction().map_err(db_err)?;
+        let removed_sessions = tx
+            .query_row(
+                "SELECT COUNT(*) FROM tasks WHERE workspace_path = ?1",
+                params![canonical_path],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(db_err)?;
+        tx.execute(
+            "DELETE FROM notifications WHERE workspace_path = ?1 \
+             OR task_id IN (SELECT id FROM tasks WHERE workspace_path = ?1)",
+            params![canonical_path],
+        )
+        .map_err(db_err)?;
+        tx.execute(
+            "DELETE FROM tasks WHERE workspace_path = ?1",
+            params![canonical_path],
+        )
+        .map_err(db_err)?;
+        let affected = tx
+            .execute(
+                "DELETE FROM workspaces WHERE canonical_path = ?1",
+                params![canonical_path],
+            )
+            .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
+        Ok((affected > 0, removed_sessions.max(0) as usize))
+    }
+
     /// 更新项目级 Agent 权限模式。
     pub fn update_access_mode(
         &self,

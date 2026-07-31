@@ -357,6 +357,7 @@ ALTER TABLE tasks ADD COLUMN model TEXT;
 ///   - `review_state = 'pending'` 排除已被任何流程改写过状态的 run
 ///   - 没有任何 tool_call 挂在它下面（真实 run 一开跑就会产生工具调用）
 ///   - 没有子代理以它为父
+///
 /// 结束时刻取该 run 对应验证的最晚 ended_at，取不到则退回 started_at
 /// （时长为 0 好过显示"跑了三个月"）。`ended_at IS NULL` 使其可重复执行。
 const MIGRATION_009: &str = r#"
@@ -853,7 +854,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
 
-        let legacy_values: (
+        type LegacyValues = (
             String,
             Option<String>,
             String,
@@ -861,7 +862,8 @@ mod tests {
             Option<String>,
             String,
             Option<String>,
-        ) = conn
+        );
+        let legacy_values: LegacyValues = conn
             .query_row(
                 "SELECT branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
                         runtime_kind, external_session_id \

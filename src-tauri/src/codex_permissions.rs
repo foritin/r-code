@@ -7,10 +7,11 @@
 use serde::{Deserialize, Serialize};
 
 /// 设置页展示的 Codex 子代理权限预设。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexPermissionMode {
     /// R-Code 的历史默认值；只允许读取工作区。
+    #[default]
     ReadOnly,
     /// Codex 请求额外权限时由 R-Code 呈现审批卡。
     RequestApproval,
@@ -20,12 +21,6 @@ pub enum CodexPermissionMode {
     FullAccess,
     /// 用户在 config.toml 中配置了非预设组合。
     Custom,
-}
-
-impl Default for CodexPermissionMode {
-    fn default() -> Self {
-        Self::ReadOnly
-    }
 }
 
 impl CodexPermissionMode {

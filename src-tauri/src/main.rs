@@ -145,6 +145,7 @@ fn main() {
             tauri_commands::cmd_verification_output,
             tauri_commands::cmd_workspace_list,
             tauri_commands::cmd_workspace_open,
+            tauri_commands::cmd_workspace_forget,
             tauri_commands::cmd_workspace_choose,
             tauri_commands::cmd_workspace_set_access_mode,
             tauri_commands::cmd_workspace_dashboard,

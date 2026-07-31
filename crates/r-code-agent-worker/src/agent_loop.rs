@@ -115,6 +115,7 @@ pub async fn run_agent_loop_iteration_streaming_with_abort(
 ///
 /// 相比基于 channel 的包装，此入口让嵌套运行可为每个事件附加运行作用域，
 /// 同时复用同一套文本、工具和中止语义。
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_loop_iteration_with_abort_and_emit<F>(
     provider: &dyn LlmProvider,
     tool_host: &dyn ToolHost,

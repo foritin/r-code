@@ -7,6 +7,7 @@ interface Props {
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -18,6 +19,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "正在处理…",
   busy = false,
   onConfirm,
   onCancel,
@@ -72,7 +74,7 @@ export function ConfirmDialog({
             取消
           </button>
           <button type="button" className="rc-button rc-button-danger" disabled={busy} onClick={onConfirm}>
-            {busy ? "正在删除…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </button>
         </div>
       </div>

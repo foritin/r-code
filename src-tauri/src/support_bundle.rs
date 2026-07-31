@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn bundle_contents_is_serializable() {
         let contents = BundleContents {
-            version: "0.1.0".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
             platform: "linux/x86_64".into(),
             generated_at: "2026-07-25T00:00:00Z".into(),
             logs: vec![LogEntry {

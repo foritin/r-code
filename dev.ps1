@@ -28,6 +28,55 @@ function Assert-Command {
     }
 }
 
+function Sync-AgentCoreSubmodule {
+    $treeEntry = ((& git ls-tree HEAD -- "vendor/agent-core") | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $treeEntry) {
+        throw "无法读取父仓库锁定的 agent-core 提交。"
+    }
+    $expectedCommit = ($treeEntry -split '\s+')[2]
+
+    if (-not (Test-Path -LiteralPath $agentCoreManifest)) {
+        Write-Step "初始化 agent-core 子模块"
+        & git submodule update --init --recursive --checkout -- "vendor/agent-core"
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $agentCoreManifest)) {
+            throw "agent-core 子模块初始化失败。"
+        }
+    }
+
+    $actualCommit = ((& git -C "vendor/agent-core" rev-parse HEAD) | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $actualCommit) {
+        throw "无法读取 agent-core 当前提交。"
+    }
+
+    if ($actualCommit -ne $expectedCommit) {
+        $localChanges = @(& git -C "vendor/agent-core" status --porcelain --untracked-files=all)
+        if ($LASTEXITCODE -ne 0) {
+            throw "无法检查 agent-core 本地改动。"
+        }
+        if ($localChanges.Count -gt 0) {
+            throw "agent-core 位于 $actualCommit，但父仓库锁定 $expectedCommit，且子模块含本地改动。请先提交或暂存这些改动，再运行 'git submodule update --init --recursive --checkout -- vendor/agent-core'。"
+        }
+
+        Write-Step "同步 agent-core 到父仓库锁定版本"
+        & git submodule update --init --recursive --checkout -- "vendor/agent-core"
+        if ($LASTEXITCODE -ne 0) {
+            throw "agent-core 子模块同步失败。"
+        }
+        $actualCommit = ((& git -C "vendor/agent-core" rev-parse HEAD) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $actualCommit -ne $expectedCommit) {
+            throw "agent-core 同步后仍与父仓库锁定提交不一致。"
+        }
+    }
+
+    $remainingChanges = @(& git -C "vendor/agent-core" status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法检查 agent-core 本地改动。"
+    }
+    if ($remainingChanges.Count -gt 0) {
+        Write-Host "[R-Code] agent-core 含本地改动；将按当前工作树继续。" -ForegroundColor Yellow
+    }
+}
+
 try {
     Push-Location $repoRoot
     $locationPushed = $true
@@ -62,13 +111,8 @@ try {
     }
     Write-Host "[R-Code] $tauriVersion" -ForegroundColor DarkGray
 
-    if (-not (Test-Path -LiteralPath $agentCoreManifest)) {
-        Write-Step "初始化 agent-core 子模块"
-        & git submodule update --init --recursive -- "vendor/agent-core"
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $agentCoreManifest)) {
-            throw "agent-core 子模块初始化失败。"
-        }
-    }
+    Write-Step "检查 agent-core 子模块版本"
+    Sync-AgentCoreSubmodule
 
     Write-Step "检查前端依赖"
     $viteCommand = Join-Path $frontendDir "node_modules\.bin\vite.cmd"

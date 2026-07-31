@@ -103,15 +103,9 @@ async fn r7_t2_e2e_approval_flow() {
     let (_dir, state) = setup_state();
 
     // 创建任务
-    let task = task_create(
-        &state,
-        None,
-        "Risk task".into(),
-        "Do something risky".into(),
-        "edit".into(),
-    )
-    .await
-    .unwrap();
+    let task = task_create(&state, None, "Risk task", "Do something risky", "edit")
+        .await
+        .unwrap();
 
     // 触发 R3 权限请求（模拟高风险工具调用）
     let request = state
@@ -191,9 +185,9 @@ async fn r7_t3_e2e_rollback() {
     let task = task_create(
         &state,
         Some(&workspace_path),
-        "Rollback test".into(),
-        "Modify and rollback".into(),
-        "edit".into(),
+        "Rollback test",
+        "Modify and rollback",
+        "edit",
     )
     .await
     .unwrap();
@@ -264,9 +258,9 @@ async fn r7_t3b_e2e_rollback_all() {
     let task = task_create(
         &state,
         Some(&workspace_path),
-        "Multi rollback".into(),
-        "Modify multiple files".into(),
-        "edit".into(),
+        "Multi rollback",
+        "Modify multiple files",
+        "edit",
     )
     .await
     .unwrap();
@@ -659,15 +653,9 @@ fn r7_t5_context_injection_features() {
 async fn r7_agent_send_and_abort() {
     let (_dir, state) = setup_state();
 
-    let task = task_create(
-        &state,
-        None,
-        "Agent test".into(),
-        "Test agent".into(),
-        "ask".into(),
-    )
-    .await
-    .unwrap();
+    let task = task_create(&state, None, "Agent test", "Test agent", "ask")
+        .await
+        .unwrap();
 
     // 发送消息
     agent_send(&state, &task.id, "Hello agent").await.unwrap();
@@ -711,15 +699,9 @@ async fn r7_recovery_data() {
 async fn r7_accept_task() {
     let (_dir, state) = setup_state();
 
-    let task = task_create(
-        &state,
-        None,
-        "Accept test".into(),
-        "Test accept".into(),
-        "edit".into(),
-    )
-    .await
-    .unwrap();
+    let task = task_create(&state, None, "Accept test", "Test accept", "edit")
+        .await
+        .unwrap();
 
     // 创建活跃 Agent Run（接受操作需要活跃 run）
     let run = r_code_core::dto::AgentRun::new(&task.id, "test-model");

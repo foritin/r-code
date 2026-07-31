@@ -168,29 +168,26 @@ fn f9_dod_privacy_review() {
 /// F-11: DoD - documentation links to corresponding design, contract, test, release conditions
 #[test]
 fn f11_dod_documentation_links() {
-    let docs_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs");
-    assert!(docs_dir.exists(), "docs/ directory must exist");
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
 
-    // Verify key docs exist
+    // Keep this list aligned with the current public documentation surface. Historical
+    // reconstruction HTML lives outside the delivery contract and may be pruned.
     let required_docs = [
-        "00-rust-rebuild-feasibility.html",
-        "01-architecture-overview.html",
-        "19-reconstruction-runbook.html",
-        "agent-core-development-checklist.html",
+        "README.md",
+        "CHANGELOG.md",
+        "docs/README.md",
+        ".github/workflows/release.yml",
+        "vendor/agent-core/docs/index.html",
+        "vendor/agent-core/docs/checklist.html",
     ];
 
-    for doc in &required_docs {
+    for doc in required_docs {
         assert!(
-            docs_dir.join(doc).exists(),
+            repo_root.join(doc).is_file(),
             "Required doc must exist: {}",
             doc
         );
     }
-
-    // Verify vendor docs exist
-    let vendor_docs =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../vendor/agent-core/docs");
-    assert!(vendor_docs.exists(), "vendor/agent-core/docs must exist");
 }
 
 /// F-12: Work card goal

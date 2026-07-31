@@ -1,9 +1,17 @@
 import { useEffect, useState } from "react";
 import { useTasksStore } from "../../store/tasks";
-import { memoryGet, memorySet, workspaceChoose } from "../../lib/ipc";
+import { pushToast } from "../../store/toast";
+import { memoryGet, memorySet, taskList, workspaceChoose, workspaceForget } from "../../lib/ipc";
 import { displayPath } from "../../lib/format";
-import { IconAttach, IconCheck, IconProjects } from "../icons";
+import type { Workspace } from "../../lib/types";
+import { IconAttach, IconCheck, IconClose, IconProjects } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
+
+interface PendingProjectRemoval {
+  workspace: Workspace;
+  sessionCount: number;
+}
 
 /**
  * 工作区库：系统文件夹选择是唯一主入口；手工路径不再要求用户输入。
@@ -11,11 +19,17 @@ import { projectAccessModeLabel } from "../ProjectAccessSelector";
  */
 export function ProjectsScene() {
   const workspaces = useTasksStore((s) => s.workspaces);
+  const tasks = useTasksStore((s) => s.tasks);
   const currentWorkspacePath = useTasksStore((s) => s.currentProjectId);
   const setCurrentWorkspace = useTasksStore((s) => s.setCurrentProject);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
+  const refreshTasks = useTasksStore((s) => s.refreshTasks);
+  const refreshActivity = useTasksStore((s) => s.refreshActivity);
 
   const [opening, setOpening] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [checkingRemoval, setCheckingRemoval] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingProjectRemoval | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const chooseWorkspace = async () => {
@@ -31,6 +45,38 @@ export function ProjectsScene() {
       setError(`打开工作区失败：${String(cause)}`);
     } finally {
       setOpening(false);
+    }
+  };
+
+  const prepareRemoval = async (workspace: Workspace) => {
+    if (checkingRemoval || removing) return;
+    setCheckingRemoval(workspace.canonical_path);
+    try {
+      const sessions = await taskList(workspace.canonical_path, true);
+      setPendingRemoval({ workspace, sessionCount: sessions.length });
+    } catch (cause) {
+      pushToast({ kind: "error", title: "无法检查项目记录", body: String(cause) });
+    } finally {
+      setCheckingRemoval(null);
+    }
+  };
+
+  const removeWorkspace = async () => {
+    if (!pendingRemoval || removing) return;
+    setRemoving(true);
+    try {
+      const result = await workspaceForget(pendingRemoval.workspace.canonical_path);
+      await Promise.all([refreshWorkspaces(), refreshTasks(), refreshActivity()]);
+      pushToast({
+        kind: "success",
+        title: "项目已从 R-Code 清除",
+        body: `${pendingRemoval.workspace.display_name} · 已清除 ${result.removed_sessions} 段对话 · 磁盘文件未更改`,
+      });
+      setPendingRemoval(null);
+    } catch (cause) {
+      pushToast({ kind: "error", title: "无法清除项目", body: String(cause) });
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -68,6 +114,10 @@ export function ProjectsScene() {
             <div className="workspace-list">
               {workspaces.map((workspace) => {
                 const isCurrent = workspace.canonical_path === currentWorkspacePath;
+                const hasLiveTask = tasks.some(
+                  (task) => task.workspace_path === workspace.canonical_path
+                    && (task.state === "exploring" || task.state === "in_progress"),
+                );
                 return (
                   <article className={`workspace-row${isCurrent ? " current" : ""}`} key={workspace.canonical_path}>
                     <button
@@ -86,6 +136,17 @@ export function ProjectsScene() {
                       <span className="workspace-access scoped">
                         {projectAccessModeLabel(workspace.access_mode)}
                       </span>
+                      <button
+                        type="button"
+                        className="workspace-remove"
+                        disabled={hasLiveTask || checkingRemoval === workspace.canonical_path}
+                        onClick={() => void prepareRemoval(workspace)}
+                        title={hasLiveTask ? "先停止该项目中正在运行的会话" : "清除 R-Code 中的项目记录，不影响磁盘文件"}
+                        aria-label={`从 R-Code 中清除 ${workspace.display_name}`}
+                      >
+                        <IconClose width={13} height={13} />
+                        {checkingRemoval === workspace.canonical_path ? "正在检查…" : "清除项目"}
+                      </button>
                     </div>
                   </article>
                 );
@@ -96,6 +157,18 @@ export function ProjectsScene() {
 
         <MemorySection workspacePath={currentWorkspace?.canonical_path ?? null} />
       </div>
+      <ConfirmDialog
+        open={pendingRemoval != null}
+        title="从 R-Code 中清除这个项目？"
+        description={`这会永久清除“${pendingRemoval?.workspace.display_name ?? "该项目"}”在 R-Code 中的项目记录、${pendingRemoval?.sessionCount ?? 0} 段对话以及关联的运行与审计数据。真实文件夹及其中的文件不会被删除、移动或修改。`}
+        confirmLabel="清除项目"
+        busyLabel="正在清除…"
+        busy={removing}
+        onCancel={() => {
+          if (!removing) setPendingRemoval(null);
+        }}
+        onConfirm={() => void removeWorkspace()}
+      />
     </div>
   );
 }
