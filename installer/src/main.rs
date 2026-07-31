@@ -569,6 +569,15 @@ fn main() {
     let state = InstallerState::default();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                let icon =
+                    tauri::image::Image::from_bytes(include_bytes!("../../icons/512x512.png"))?;
+                window.set_icon(icon)?;
+            }
+            Ok(())
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             installer_info,

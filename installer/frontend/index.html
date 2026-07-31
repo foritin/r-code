@@ -7,6 +7,7 @@
     <title>R-Code 安装程序</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="app.js" defer></script>
+    <script src="watchdog.js" defer></script>
   </head>
   <body>
     <main class="installer" aria-label="R-Code 安装程序">
@@ -88,7 +89,7 @@
 
             <div class="actions">
               <p class="legal">继续安装表示你已阅读<button type="button" data-document="license">软件许可</button>与<button type="button" data-document="privacy">隐私说明</button>。</p>
-              <button class="primary" id="install-now" type="button">立即安装 <span aria-hidden="true">→</span></button>
+              <button class="primary" id="install-now" type="button" disabled>立即安装 <span aria-hidden="true">→</span></button>
             </div>
           </section>
 

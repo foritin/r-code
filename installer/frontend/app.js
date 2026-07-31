@@ -1,5 +1,13 @@
-const tauri = window.__TAURI__;
-const isTauri = Boolean(tauri?.core?.invoke);
+(() => {
+"use strict";
+
+// Keep every binding scoped to this closure. Tauri injects its own global lexical
+// bindings (including `isTauri`) before application scripts are evaluated.
+const tauriApi = window.__TAURI__;
+const hasTauriBridge = Boolean(tauriApi?.core?.invoke);
+const isPackagedWindow = window.location.hostname === "tauri.localhost"
+  || window.location.protocol === "tauri:";
+const previewMode = !hasTauriBridge && !isPackagedWindow;
 const localListeners = new Map();
 
 const previewInfo = {
@@ -11,7 +19,8 @@ const previewInfo = {
 
 const bridge = {
   async invoke(command, payload = {}) {
-    if (isTauri) return tauri.core.invoke(command, payload);
+    if (hasTauriBridge) return tauriApi.core.invoke(command, payload);
+    if (!previewMode) throw new Error("安装器运行时桥接不可用");
     if (command === "installer_info") return previewInfo;
     if (command === "choose_directory") return "D:\\Apps\\R-Code";
     if (command === "legal_document") {
@@ -27,7 +36,8 @@ const bridge = {
     return null;
   },
   async listen(name, handler) {
-    if (isTauri) return tauri.event.listen(name, handler);
+    if (hasTauriBridge) return tauriApi.event.listen(name, handler);
+    if (!previewMode) throw new Error("安装器事件桥接不可用");
     localListeners.set(name, handler);
     return () => localListeners.delete(name);
   },
@@ -395,13 +405,14 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-bridge.listen("installer-progress", (event) => handleProgress(event.payload));
-bridge.listen("installer-close-requested", (event) => {
-  openDecisionModal(Boolean(event.payload?.cancelable), true);
-});
-
 (async function initialize() {
   try {
+    await Promise.all([
+      bridge.listen("installer-progress", (event) => handleProgress(event.payload)),
+      bridge.listen("installer-close-requested", (event) => {
+        openDecisionModal(Boolean(event.payload?.cancelable), true);
+      }),
+    ]);
     info = await bridge.invoke("installer_info");
     setVersion(info.version);
     updatePath(info.defaultInstallPath);
@@ -410,7 +421,14 @@ bridge.listen("installer-close-requested", (event) => {
       elements.welcomeLede.textContent = "更新当前用户安装，不需要管理员权限。";
       elements.installNow.innerHTML = "更新 R-Code <span aria-hidden=\"true\">→</span>";
     }
+    elements.installNow.disabled = false;
+    document.documentElement.dataset.installerReady = "true";
   } catch (error) {
+    elements.installNow.disabled = true;
+    document.documentElement.dataset.installerReady = "error";
     showError("RCI-099", `无法初始化安装程序：${error}`);
   }
+})();
+
+document.documentElement.dataset.installerBooted = "true";
 })();
