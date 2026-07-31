@@ -191,7 +191,7 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .sidebar-projects { flex: 1; min-height: 0; padding-top: 14px; overflow-y: auto; }
 .sidebar-section-head { display: flex; align-items: center; min-height: 26px; padding: 0 8px 6px; color: var(--fg-faint); font-size: 11px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
 .sidebar-section-head small { margin-left: auto; color: var(--accent); font-size: 10px; font-weight: 500; letter-spacing: 0; text-transform: none; }
-.sidebar-project-manage { display: grid; place-items: center; flex: none; width: 24px; height: 24px; margin-left: 4px; border-radius: 5px; color: var(--fg-faint); }
+.sidebar-project-manage { display: flex; align-items: center; justify-content: center; flex: none; min-width: 24px; height: 24px; gap: 4px; margin-left: 4px; padding: 0 5px; border-radius: 5px; color: var(--fg-faint); font-size: 10px; letter-spacing: 0; text-transform: none; }
 .sidebar-section-head > span + .sidebar-project-manage { margin-left: auto; }
 .sidebar-project-manage:hover { color: var(--accent); background: var(--bg-hover); }
 .sidebar-project-list { display: grid; gap: 10px; }

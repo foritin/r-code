@@ -200,7 +200,7 @@ test("clearing a project removes app records without implying disk deletion", as
     await browserMockInvoke("cmd_agent_abort", { taskId: "mock-task-api" });
   });
 
-  await page.locator(".sidebar-project-manage").click();
+  await page.getByRole("button", { name: "管理项目" }).click();
   const row = page.locator(".workspace-row").filter({ hasText: "api-server" });
   const remove = row.getByRole("button", { name: "从 R-Code 中清除 api-server" });
   await page.waitForFunction(
