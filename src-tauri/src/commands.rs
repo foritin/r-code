@@ -29,7 +29,11 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use hermes_core::{CompletionRequest, InferenceOptions, Message, Role, SessionEvent, SessionMeta};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use hermes_core::{
+    CompletionRequest, ContentBlock, FileSource, InferenceOptions, Message, Role, SessionEvent,
+    SessionMeta,
+};
 use hermes_store::SessionStore;
 use r_code_agent_worker::{
     AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
@@ -619,6 +623,14 @@ pub struct RecoveryCleanupResult {
 ///
 /// 由 `{taskId}.jsonl` 的 SessionEvent 逐行转换而来。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionAttachmentMeta {
+    pub name: String,
+    pub media_type: String,
+    /// image / text / pdf
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMessage {
     /// 稳定消息标识（`{storage_id}:{line}`），用于编辑后分叉。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -633,6 +645,14 @@ pub struct SessionMessage {
     /// message / system 的文本内容
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// 图片正文的安全摘要；Base64 永不返回 WebView。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_media_types: Option<Vec<String>>,
+    /// 所有附件的安全元数据；正文和 Base64 永不返回 WebView。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<SessionAttachmentMeta>>,
     /// tool_call 的工具名
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
@@ -2179,6 +2199,16 @@ impl AgentRuntime for AgentRuntimeKind {
             Self::Mock(r) => r.start_run(session_id, goal).await,
         }
     }
+    async fn start_run_with_message(
+        &mut self,
+        session_id: &str,
+        message: Message,
+    ) -> Result<String, ProductError> {
+        match self {
+            Self::Real(r) => r.start_run_with_message(session_id, message).await,
+            Self::Mock(r) => r.start_run_with_message(session_id, message).await,
+        }
+    }
     async fn steer(
         &mut self,
         session_id: &str,
@@ -2839,6 +2869,241 @@ async fn ensure_runtime_session(
 /// 在已持有 AgentBridge 锁的前提下启动一个 run。调用方必须在返回后尽快释放锁，
 /// 再启动 drain 循环，防止不同任务的流事件互相串台。
 const USER_MESSAGE_MODE_EVENT: &str = "r_code_user_message_mode";
+const MAX_ATTACHMENTS: usize = 8;
+const MAX_IMAGE_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES: usize = 1024 * 1024;
+const MAX_PDF_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ATTACHMENTS_TOTAL_BYTES: usize = 24 * 1024 * 1024;
+
+/// WebView 传入的附件。`data` 是不含 data URL 前缀的标准 Base64。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachmentInput {
+    pub name: String,
+    pub media_type: String,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ValidatedAttachmentKind {
+    Image,
+    Text,
+    Pdf,
+}
+
+#[derive(Debug, Clone)]
+struct ValidatedAttachment {
+    name: String,
+    media_type: String,
+    data: String,
+    bytes: Vec<u8>,
+    text: Option<String>,
+    kind: ValidatedAttachmentKind,
+}
+
+fn image_magic_matches(media_type: &str, bytes: &[u8]) -> bool {
+    match media_type {
+        "image/png" => bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]),
+        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
+        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
+        "image/webp" => bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP",
+        _ => false,
+    }
+}
+
+fn text_attachment_allowed(name: &str, media_type: &str) -> bool {
+    if media_type.starts_with("text/") {
+        return true;
+    }
+    if matches!(
+        media_type,
+        "application/json"
+            | "application/ld+json"
+            | "application/xml"
+            | "application/javascript"
+            | "application/x-javascript"
+            | "application/yaml"
+            | "application/x-yaml"
+            | "application/toml"
+            | "application/sql"
+            | "application/graphql"
+    ) {
+        return true;
+    }
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "txt"
+            | "md"
+            | "mdx"
+            | "rst"
+            | "csv"
+            | "tsv"
+            | "json"
+            | "jsonl"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "toml"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "log"
+            | "rs"
+            | "ts"
+            | "tsx"
+            | "js"
+            | "jsx"
+            | "mjs"
+            | "cjs"
+            | "py"
+            | "go"
+            | "java"
+            | "kt"
+            | "kts"
+            | "swift"
+            | "c"
+            | "h"
+            | "cc"
+            | "cpp"
+            | "hpp"
+            | "cs"
+            | "rb"
+            | "php"
+            | "sh"
+            | "bash"
+            | "zsh"
+            | "fish"
+            | "ps1"
+            | "bat"
+            | "cmd"
+            | "sql"
+            | "graphql"
+            | "gql"
+            | "html"
+            | "htm"
+            | "css"
+            | "scss"
+            | "sass"
+            | "less"
+            | "vue"
+            | "svelte"
+            | "dockerfile"
+            | "gitignore"
+    )
+}
+
+fn safe_attachment_name(value: &str, index: usize) -> Result<String, String> {
+    if value.contains('\0') {
+        return Err("附件名称不能包含 NUL 字符".to_string());
+    }
+    let trimmed = value.trim();
+    let fallback = format!("attachment-{}", index + 1);
+    let file_name = Path::new(trimmed)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(&fallback);
+    Ok(trim_chars(file_name, 180))
+}
+
+fn validate_attachments(
+    attachments: &[AttachmentInput],
+) -> Result<Vec<ValidatedAttachment>, String> {
+    if attachments.len() > MAX_ATTACHMENTS {
+        return Err(format!("一次最多附加 {MAX_ATTACHMENTS} 个文件"));
+    }
+    let mut total = 0usize;
+    let mut validated = Vec::with_capacity(attachments.len());
+    for (index, attachment) in attachments.iter().enumerate() {
+        let name = safe_attachment_name(&attachment.name, index)?;
+        let media_type = attachment.media_type.trim().to_ascii_lowercase();
+        let bytes = BASE64_STANDARD
+            .decode(attachment.data.as_bytes())
+            .map_err(|_| format!("{name} 不是有效的 Base64 文件"))?;
+        if bytes.is_empty() {
+            return Err(format!("{name} 的文件内容为空"));
+        }
+        total = total.saturating_add(bytes.len());
+        if total > MAX_ATTACHMENTS_TOTAL_BYTES {
+            return Err("附件总大小不能超过 24 MiB".to_string());
+        }
+
+        let (kind, text) = if media_type.starts_with("image/") {
+            if bytes.len() > MAX_IMAGE_ATTACHMENT_BYTES {
+                return Err(format!("{name} 超过 8 MiB"));
+            }
+            if !image_magic_matches(&media_type, &bytes) {
+                return Err(format!("{name} 的内容与声明格式 {media_type} 不一致"));
+            }
+            (ValidatedAttachmentKind::Image, None)
+        } else if media_type == "application/pdf" {
+            if bytes.len() > MAX_PDF_ATTACHMENT_BYTES {
+                return Err(format!("{name} 超过 16 MiB"));
+            }
+            if !bytes.starts_with(b"%PDF-") {
+                return Err(format!("{name} 不是有效的 PDF 文件"));
+            }
+            (ValidatedAttachmentKind::Pdf, None)
+        } else if text_attachment_allowed(&name, &media_type) {
+            if bytes.len() > MAX_TEXT_ATTACHMENT_BYTES {
+                return Err(format!("{name} 超过 1 MiB"));
+            }
+            let text = String::from_utf8(bytes.clone())
+                .map_err(|_| format!("{name} 不是 UTF-8 文本文件"))?;
+            if text.contains('\0') {
+                return Err(format!("{name} 含有二进制内容，不能作为文本附件读取"));
+            }
+            (
+                ValidatedAttachmentKind::Text,
+                Some(text.trim_start_matches('\u{feff}').to_string()),
+            )
+        } else {
+            return Err(format!("暂不支持读取附件 {name}（{media_type}）"));
+        };
+
+        validated.push(ValidatedAttachment {
+            name,
+            media_type,
+            data: BASE64_STANDARD.encode(&bytes),
+            bytes,
+            text,
+            kind,
+        });
+    }
+    Ok(validated)
+}
+
+fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]) -> Message {
+    let mut content = Vec::with_capacity(attachments.len() + usize::from(!text.is_empty()));
+    if !text.is_empty() {
+        content.push(ContentBlock::Text {
+            text: text.to_string(),
+        });
+    }
+    content.extend(attachments.iter().map(|attachment| ContentBlock::File {
+        source: FileSource {
+            kind: if attachment.kind == ValidatedAttachmentKind::Text {
+                "text".to_string()
+            } else {
+                "base64".to_string()
+            },
+            name: attachment.name.clone(),
+            media_type: attachment.media_type.clone(),
+            text: attachment.text.clone(),
+            data:
+                (attachment.kind != ValidatedAttachmentKind::Text).then(|| attachment.data.clone()),
+        },
+    }));
+    Message {
+        role: Role::User,
+        content,
+    }
+}
 
 fn send_mode_name(mode: AgentSendMode) -> &'static str {
     match mode {
@@ -2863,6 +3128,16 @@ async fn append_user_message_with_mode(
     message: &str,
     mode: AgentSendMode,
 ) -> Result<(), String> {
+    append_user_content_with_mode(session_store, storage_id, Message::user_text(message), mode)
+        .await
+}
+
+async fn append_user_content_with_mode(
+    session_store: &SessionStore,
+    storage_id: &str,
+    message: Message,
+    mode: AgentSendMode,
+) -> Result<(), String> {
     session_store
         .append(
             storage_id,
@@ -2874,10 +3149,7 @@ async fn append_user_message_with_mode(
         .await
         .map_err(err_str)?;
     session_store
-        .append(
-            storage_id,
-            SessionEvent::Message(Message::user_text(message)),
-        )
+        .append(storage_id, SessionEvent::Message(message))
         .await
         .map_err(err_str)
 }
@@ -2892,56 +3164,17 @@ async fn start_run_locked(
     message: &str,
     message_mode: AgentSendMode,
 ) -> Result<ActiveRun, String> {
-    if bridge.active.is_some() {
-        return Err("已有运行正在收尾，无法并发启动新的运行".to_string());
-    }
-    let runtime_session_id =
-        ensure_runtime_session(bridge, db, session_store, sessions_dir, task, branch).await?;
-    append_user_message_with_mode(session_store, &branch.storage_id, message, message_mode).await?;
-
-    if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {
-        push_demo_scenario(runtime, message);
-    }
-    let runtime_run_id = bridge
-        .kind
-        .start_run(&runtime_session_id, message)
-        .await
-        .map_err(err_str)?;
-
-    // 会话有显式模型时以它为准；否则回退到 runtime fingerprint 里的 provider 默认模型。
-    // 若继续只读 fingerprint，切换过模型的会话会把运行记录写成错误的模型名。
-    let run_model = task
-        .model
-        .clone()
-        .filter(|model| !model.trim().is_empty())
-        .or_else(|| {
-            bridge
-                .fingerprint
-                .as_deref()
-                .and_then(|fingerprint| fingerprint.split('|').nth(2))
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "mock".to_string());
-    let mut run = AgentRun::new_for_branch(&task.id, &branch.id, run_model);
-    // Runtime 生成的 run id 同时是工具审计和子代理父子关系的锚点；不能再另起一个
-    // 仅供数据库使用的 UUID，否则实时事件与持久化运行树会失去关联。
-    run.id = runtime_run_id;
-    AgentRunRepository::new(db).create(&run).map_err(err_str)?;
-    TaskRepository::new(db)
-        .update_state(&task.id, TaskState::InProgress)
-        .map_err(err_str)?;
-    TaskEventStore::new(db)
-        .append_for_branch(&task.id, &branch.id, TaskEventType::RunStarted)
-        .map_err(err_str)?;
-
-    let active = ActiveRun {
-        task_id: task.id.clone(),
-        branch_id: branch.id.clone(),
-        runtime_session_id,
-        run_id: run.id,
-    };
-    bridge.active = Some(active.clone());
-    Ok(active)
+    start_run_locked_with_message(
+        bridge,
+        db,
+        session_store,
+        sessions_dir,
+        task,
+        branch,
+        &Message::user_text(message),
+        message_mode,
+    )
+    .await
 }
 
 fn enqueue_message(
@@ -2999,10 +3232,27 @@ pub async fn agent_send_with_mode(
     message: &str,
     mode: AgentSendMode,
 ) -> Result<(), String> {
+    agent_send_with_mode_and_attachments(state, task_id, message, mode, &[]).await
+}
+
+/// 发送文本与附件正文。附件只允许启动一个新 run；运行中 steer/queue 的持久化
+/// 结构目前只有文本字段，因此必须明确拒绝，不能静默丢失文件。
+pub async fn agent_send_with_mode_and_attachments(
+    state: &CommandState,
+    task_id: &str,
+    message: &str,
+    mode: AgentSendMode,
+    attachments: &[AttachmentInput],
+) -> Result<(), String> {
     let message = message.trim();
-    if message.is_empty() {
+    let attachments = validate_attachments(attachments)?;
+    if message.is_empty() && attachments.is_empty() {
         return Err("消息不能为空".to_string());
     }
+    if !attachments.is_empty() && matches!(mode, AgentSendMode::Steer | AgentSendMode::Queue) {
+        return Err("附件只能在当前运行结束后作为新一轮消息发送".to_string());
+    }
+    let user_message = user_message_with_attachments(message, &attachments);
     let task = TaskRepository::new(&state.db)
         .get(task_id)
         .map_err(err_str)?
@@ -3015,7 +3265,8 @@ pub async fn agent_send_with_mode(
         .map_err(err_str)?;
 
     if task.agent_engine == AgentEngine::Codex {
-        return agent_send_codex_with_mode(state, &task, &branch, message, mode).await;
+        return agent_send_codex_with_mode(state, &task, &branch, message, mode, &attachments)
+            .await;
     }
 
     let mut bridge = state.agent.lock().await;
@@ -3035,6 +3286,9 @@ pub async fn agent_send_with_mode(
         .await?;
     }
     let active = bridge.active.clone();
+    if active.is_some() && !attachments.is_empty() {
+        return Err("当前运行结束后才能把附件作为新一轮消息发送".to_string());
+    }
 
     match mode {
         AgentSendMode::Steer => {
@@ -3109,14 +3363,14 @@ pub async fn agent_send_with_mode(
                 );
                 Ok(())
             } else {
-                let active = start_run_locked(
+                let active = start_run_locked_with_message(
                     &mut bridge,
                     &state.db,
                     &state.session_store,
                     &state.sessions_dir,
                     &task,
                     &branch,
-                    message,
+                    &user_message,
                     AgentSendMode::SendNow,
                 )
                 .await?;
@@ -3164,14 +3418,14 @@ pub async fn agent_send_with_mode(
                     Ok(())
                 }
             } else {
-                let active = start_run_locked(
+                let active = start_run_locked_with_message(
                     &mut bridge,
                     &state.db,
                     &state.session_store,
                     &state.sessions_dir,
                     &task,
                     &branch,
-                    message,
+                    &user_message,
                     AgentSendMode::Auto,
                 )
                 .await?;
@@ -3466,6 +3720,7 @@ async fn dispatch_next_queued(
                 branch.clone(),
                 queued.message.clone(),
                 queued_dispatch_mode(&queued),
+                Vec::new(),
                 sink.clone(),
             )
             .await;
@@ -4800,6 +5055,9 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 kind: "meta".into(),
                 role: None,
                 text: Some(format!("{} · {}", meta.provider, meta.model)),
+                image_count: None,
+                image_media_types: None,
+                attachments: None,
                 tool_name: None,
                 call_id: None,
                 input_json: None,
@@ -4814,6 +5072,8 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 };
                 // 拼接文本块 + Custom 块（file_ref 等）的 @path 占位
                 let mut text = String::new();
+                let mut image_media_types = Vec::new();
+                let mut attachments = Vec::new();
                 for block in &msg.content {
                     match block {
                         hermes_core::ContentBlock::Text { text: t } => text.push_str(t),
@@ -4828,6 +5088,29 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                                 }
                             }
                         }
+                        hermes_core::ContentBlock::Image { source } => {
+                            image_media_types.push(source.media_type.clone());
+                            attachments.push(SessionAttachmentMeta {
+                                name: format!("图片 {}", attachments.len() + 1),
+                                media_type: source.media_type.clone(),
+                                kind: "image".to_string(),
+                            });
+                        }
+                        hermes_core::ContentBlock::File { source } => {
+                            let kind = if source.media_type.starts_with("image/") {
+                                image_media_types.push(source.media_type.clone());
+                                "image"
+                            } else if source.media_type == "application/pdf" {
+                                "pdf"
+                            } else {
+                                "text"
+                            };
+                            attachments.push(SessionAttachmentMeta {
+                                name: source.name.clone(),
+                                media_type: source.media_type.clone(),
+                                kind: kind.to_string(),
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -4836,7 +5119,10 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                     branch_id: branch_id.to_string(),
                     kind: "message".into(),
                     role: Some(role.into()),
-                    text: Some(text),
+                    text: (!text.is_empty()).then_some(text),
+                    image_count: (!image_media_types.is_empty()).then_some(image_media_types.len()),
+                    image_media_types: (!image_media_types.is_empty()).then_some(image_media_types),
+                    attachments: (!attachments.is_empty()).then_some(attachments),
                     tool_name: None,
                     call_id: None,
                     input_json: None,
@@ -4854,6 +5140,9 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                     kind: "tool_call".into(),
                     role: None,
                     text: None,
+                    image_count: None,
+                    image_media_types: None,
+                    attachments: None,
                     tool_name: Some(name),
                     call_id: Some(call_id),
                     input_json: Some(input.to_string()),
@@ -4893,6 +5182,9 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                     kind: "tool_result".into(),
                     role: None,
                     text: None,
+                    image_count: None,
+                    image_media_types: None,
+                    attachments: None,
                     tool_name: None,
                     call_id: Some(resolved),
                     input_json: None,
@@ -4909,6 +5201,9 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 kind: "system".into(),
                 role: None,
                 text: Some(event),
+                image_count: None,
+                image_media_types: None,
+                attachments: None,
                 tool_name: None,
                 call_id: None,
                 input_json: None,
@@ -5025,9 +5320,272 @@ pub struct FileTreeListing {
     pub truncated: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn start_run_locked_with_message(
+    bridge: &mut AgentBridge,
+    db: &Database,
+    session_store: &SessionStore,
+    sessions_dir: &Path,
+    task: &Task,
+    branch: &SessionBranch,
+    message: &Message,
+    message_mode: AgentSendMode,
+) -> Result<ActiveRun, String> {
+    if bridge.active.is_some() {
+        return Err("已有运行正在收尾，无法并发启动新的运行".to_string());
+    }
+    let runtime_session_id =
+        ensure_runtime_session(bridge, db, session_store, sessions_dir, task, branch).await?;
+    append_user_content_with_mode(
+        session_store,
+        &branch.storage_id,
+        message.clone(),
+        message_mode,
+    )
+    .await?;
+
+    let message_text = message.text_content();
+    if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {
+        push_demo_scenario(runtime, &message_text);
+    }
+    let runtime_run_id = bridge
+        .kind
+        .start_run_with_message(&runtime_session_id, message.clone())
+        .await
+        .map_err(err_str)?;
+
+    let run_model = task
+        .model
+        .clone()
+        .filter(|model| !model.trim().is_empty())
+        .or_else(|| {
+            bridge
+                .fingerprint
+                .as_deref()
+                .and_then(|fingerprint| fingerprint.split('|').nth(2))
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "mock".to_string());
+    let mut run = AgentRun::new_for_branch(&task.id, &branch.id, run_model);
+    run.id = runtime_run_id;
+    AgentRunRepository::new(db).create(&run).map_err(err_str)?;
+    TaskRepository::new(db)
+        .update_state(&task.id, TaskState::InProgress)
+        .map_err(err_str)?;
+    TaskEventStore::new(db)
+        .append_for_branch(&task.id, &branch.id, TaskEventType::RunStarted)
+        .map_err(err_str)?;
+
+    let active = ActiveRun {
+        task_id: task.id.clone(),
+        branch_id: branch.id.clone(),
+        runtime_session_id,
+        run_id: run.id,
+    };
+    bridge.active = Some(active.clone());
+    Ok(active)
+}
+
+/// A user-visible local resource resolved by the trusted host process.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LocalFileTarget {
+    /// `workspace` opens in the task Files workbench; `external` is revealed by the OS.
+    pub scope: LocalFileScope,
+    /// Existing absolute path, normalized for display and platform APIs.
+    pub absolute_path: String,
+    /// Forward-slash path relative to the attached workspace when `scope == workspace`.
+    pub relative_path: Option<String>,
+    pub is_directory: bool,
+    /// Present only for image formats the WebView preview deliberately supports.
+    pub mime_type: Option<String>,
+    pub size_bytes: Option<u64>,
+    /// Optional source location parsed from `path:line:column` or `path#LlineCcolumn`.
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalFileScope {
+    Workspace,
+    External,
+}
+
 /// Editor 读取大小上限（512 KiB）。
 const MAX_READ_BYTES: usize = 512 * 1024;
 const MAX_TREE_ENTRIES: usize = 500;
+const MAX_IMAGE_PREVIEW_BYTES: u64 = 32 * 1024 * 1024;
+
+fn numeric_location(value: &str) -> Option<u32> {
+    (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| value.parse::<u32>().ok())
+        .flatten()
+        .filter(|value| *value > 0)
+}
+
+/// Separate optional editor coordinates without confusing the `C:` prefix of a Windows path.
+fn split_local_file_location(raw: &str) -> (String, Option<u32>, Option<u32>) {
+    let trimmed = raw
+        .trim()
+        .trim_matches(|value| value == '<' || value == '>');
+    if let Some(marker) = trimmed.rfind("#L") {
+        let location = &trimmed[marker + 2..];
+        let (line, column) = location
+            .split_once('C')
+            .map(|(line, column)| (numeric_location(line), numeric_location(column)))
+            .unwrap_or_else(|| (numeric_location(location), None));
+        if line.is_some() {
+            return (trimmed[..marker].to_string(), line, column);
+        }
+    }
+    let Some((before_last, last)) = trimmed.rsplit_once(':') else {
+        return (trimmed.to_string(), None, None);
+    };
+    let Some(last_number) = numeric_location(last) else {
+        return (trimmed.to_string(), None, None);
+    };
+    if let Some((before_line, possible_line)) = before_last.rsplit_once(':') {
+        if let Some(line) = numeric_location(possible_line) {
+            return (before_line.to_string(), Some(line), Some(last_number));
+        }
+    }
+    (before_last.to_string(), Some(last_number), None)
+}
+
+fn local_path_from_reference(raw: &str) -> Result<(PathBuf, Option<u32>, Option<u32>), String> {
+    let (path, line, column) = split_local_file_location(raw);
+    if path.trim().is_empty() || path.contains('\0') {
+        return Err("file reference is empty or invalid".to_string());
+    }
+    let parsed = if path.to_ascii_lowercase().starts_with("file:") {
+        url::Url::parse(&path)
+            .map_err(|error| format!("invalid file URL: {error}"))?
+            .to_file_path()
+            .map_err(|_| "file URL does not identify a local path".to_string())?
+    } else {
+        PathBuf::from(path)
+    };
+    Ok((parsed, line, column))
+}
+
+fn local_image_mime(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => Some("image/png"),
+        Some("jpg" | "jpeg") => Some("image/jpeg"),
+        Some("gif") => Some("image/gif"),
+        Some("webp") => Some("image/webp"),
+        Some("bmp") => Some("image/bmp"),
+        Some("avif") => Some("image/avif"),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn platform_display_path(path: &Path) -> String {
+    let value = path.to_string_lossy();
+    if let Some(network) = value.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{network}");
+    }
+    value.strip_prefix(r"\\?\").unwrap_or(&value).to_string()
+}
+
+#[cfg(not(windows))]
+fn platform_display_path(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+/// Resolve a Markdown/local-artifact reference and decide which navigation surface owns it.
+pub fn resolve_local_file_target(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+    reference: &str,
+) -> Result<LocalFileTarget, String> {
+    let (requested, line, column) = local_path_from_reference(reference)?;
+    let workspace_root = workspace_path
+        .map(|path| attached_workspace_root(state, path))
+        .transpose()?;
+    let candidate = if requested.is_absolute() {
+        requested
+    } else {
+        workspace_root
+            .as_ref()
+            .ok_or_else(|| "relative file reference requires an attached workspace".to_string())?
+            .join(requested)
+    };
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| format!("cannot resolve local file {}: {error}", candidate.display()))?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| format!("cannot inspect local file {}: {error}", canonical.display()))?;
+    let relative_path = workspace_root
+        .as_ref()
+        .and_then(|root| relative_workspace_path(root, &canonical).ok());
+    let scope = if relative_path.is_some() {
+        LocalFileScope::Workspace
+    } else {
+        LocalFileScope::External
+    };
+    let mime_type = metadata
+        .is_file()
+        .then(|| local_image_mime(&canonical).map(str::to_string))
+        .flatten();
+
+    Ok(LocalFileTarget {
+        scope,
+        absolute_path: platform_display_path(&canonical),
+        relative_path,
+        is_directory: metadata.is_dir(),
+        mime_type,
+        size_bytes: metadata.is_file().then_some(metadata.len()),
+        line,
+        column,
+    })
+}
+
+fn local_image_preview_with_codex_home(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+    reference: &str,
+    codex_home: &Path,
+) -> Result<(LocalFileTarget, Vec<u8>), String> {
+    let target = resolve_local_file_target(state, workspace_path, reference)?;
+    if target.is_directory || target.mime_type.is_none() {
+        return Err("local resource is not a supported raster image".to_string());
+    }
+    if target.scope == LocalFileScope::External {
+        let generated_images = codex_home.join("generated_images").canonicalize().ok();
+        let target_path = Path::new(&target.absolute_path).canonicalize().ok();
+        let is_codex_artifact = generated_images
+            .zip(target_path)
+            .is_some_and(|(root, path)| path.starts_with(root));
+        if !is_codex_artifact {
+            return Err(
+                "external image preview is limited to Codex generated_images artifacts".to_string(),
+            );
+        }
+    }
+    if target.size_bytes.unwrap_or(0) > MAX_IMAGE_PREVIEW_BYTES {
+        return Err("image is larger than the 32 MiB preview limit".to_string());
+    }
+    let bytes = std::fs::read(&target.absolute_path)
+        .map_err(|error| format!("cannot read image preview: {error}"))?;
+    Ok((target, bytes))
+}
+
+/// Read a bounded raster image for an in-app preview. SVG and arbitrary external files are
+/// intentionally excluded; external previews are restricted to Codex's artifact directory.
+pub fn local_image_preview(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+    reference: &str,
+) -> Result<(LocalFileTarget, Vec<u8>), String> {
+    local_image_preview_with_codex_home(state, workspace_path, reference, &codex_home_dir())
+}
 
 fn file_content_from_bytes(path: &Path, bytes: &[u8]) -> FileContent {
     let truncated = bytes.len() > MAX_READ_BYTES;
@@ -5892,6 +6450,8 @@ pub struct CodexModelOption {
     pub description: String,
     pub default_reasoning_effort: String,
     pub supported_reasoning_efforts: Vec<CodexReasoningOption>,
+    /// None 表示旧版 CLI 未提供 input_modalities，不能误判为不支持。
+    pub supports_images: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -5918,6 +6478,8 @@ struct CodexModelWire {
     default_reasoning_level: String,
     #[serde(default)]
     supported_reasoning_levels: Vec<CodexReasoningWire>,
+    #[serde(default)]
+    input_modalities: Option<Vec<String>>,
     visibility: Option<String>,
     priority: Option<u32>,
 }
@@ -6326,6 +6888,11 @@ fn parse_codex_model_catalog(stdout: &[u8]) -> Result<Vec<CodexModelOption>, Str
                 return None;
             }
             let mut seen = HashSet::new();
+            let supports_images = model.input_modalities.as_ref().map(|modalities| {
+                modalities
+                    .iter()
+                    .any(|modality| modality.eq_ignore_ascii_case("image"))
+            });
             let supported_reasoning_efforts = model
                 .supported_reasoning_levels
                 .into_iter()
@@ -6352,6 +6919,7 @@ fn parse_codex_model_catalog(stdout: &[u8]) -> Result<Vec<CodexModelOption>, Str
                     description: model.description.trim().to_string(),
                     default_reasoning_effort: model.default_reasoning_level.trim().to_string(),
                     supported_reasoning_efforts,
+                    supports_images,
                 },
             ))
         })
@@ -7494,6 +8062,10 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
                 .unwrap_or_else(|| tool.to_string());
             ("Codex 工具", safe_codex_action(&label, "工具"))
         }
+        "image_generation" | "imageGeneration" => {
+            ("Codex 图片生成", "生成图片并保存本地产物".to_string())
+        }
+        "image_view" | "imageView" => ("Codex 图片预览", "读取本地图片".to_string()),
         _ => return None,
     };
     Some((call_id, name.to_string(), summary))
@@ -7637,11 +8209,15 @@ async fn agent_send_codex_with_mode(
     branch: &SessionBranch,
     message: &str,
     mode: AgentSendMode,
+    attachments: &[ValidatedAttachment],
 ) -> Result<(), String> {
     let active = AgentRunRepository::new(&state.db)
         .get_active_run_for_branch(&task.id, &branch.id)
         .map_err(err_str)?;
     if active.is_some() {
+        if !attachments.is_empty() {
+            return Err("当前 Codex 运行结束后才能把附件作为新一轮消息发送".to_string());
+        }
         let priority = if mode == AgentSendMode::SendNow {
             1_000_000
         } else {
@@ -7675,6 +8251,7 @@ async fn agent_send_codex_with_mode(
         branch.clone(),
         message.to_string(),
         mode,
+        attachments.to_vec(),
         sink,
     )
     .await
@@ -7682,7 +8259,17 @@ async fn agent_send_codex_with_mode(
 
 const CODEX_MAIN_CONTEXT_CHARS: usize = 24_000;
 
-fn codex_main_prompt(history: &[Message], task: &Task, request: &str) -> String {
+fn codex_main_prompt(
+    history: &[Message],
+    task: &Task,
+    request: &str,
+    prepared: Option<&PreparedCodexAttachments>,
+) -> String {
+    let request = if request.trim().is_empty() {
+        "请读取本轮附加的文件，并直接回答或完成其中要求。"
+    } else {
+        request
+    };
     let mut selected = Vec::new();
     let mut used = 0usize;
     for message in history.iter().rev() {
@@ -7708,6 +8295,27 @@ fn codex_main_prompt(history: &[Message], task: &Task, request: &str) -> String 
     } else {
         selected.join("\n\n")
     };
+    let attachment_context = prepared
+        .filter(|prepared| !prepared.references.is_empty())
+        .map(|prepared| {
+            let files = prepared
+                .references
+                .iter()
+                .map(|reference| {
+                    format!(
+                        "- {} ({}) at {}",
+                        reference.name,
+                        reference.media_type,
+                        reference.path.display()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "\n\nAttached files for this turn:\n{files}\nRead these local files when needed. Images are also supplied through Codex's native image input."
+            )
+        })
+        .unwrap_or_default();
     format!(
         "You are the selected main coding agent inside the independent R-Code desktop client. \
 Work directly on the user's request inside the attached workspace. You may use the configured \
@@ -7715,8 +8323,8 @@ R-Code MCP tools to delegate a bounded task to an R-Code child agent when useful
 children are read-only by default; request full access only when the user's request explicitly \
 requires the child to edit files or run commands. Keep tool activity observable, do not expose \
 private chain-of-thought, and finish with a concise result and verification summary.\n\n\
-Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}",
-        task.title, transcript, request
+Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}{}",
+        task.title, transcript, request, attachment_context
     )
 }
 
@@ -7732,6 +8340,7 @@ async fn start_codex_main_with_resources(
     branch: SessionBranch,
     message: String,
     message_mode: AgentSendMode,
+    attachments: Vec<ValidatedAttachment>,
     sink: Option<AgentEventSink>,
 ) -> Result<(), String> {
     if task.agent_engine != AgentEngine::Codex {
@@ -7776,9 +8385,15 @@ async fn start_codex_main_with_resources(
         .await
         .map(|session| session.messages)
         .unwrap_or_default();
-    let prompt = codex_main_prompt(&history, &task, &message);
-    append_user_message_with_mode(&session_store, &branch.storage_id, &message, message_mode)
-        .await?;
+    let prepared_attachments = prepare_codex_attachments(&attachments)?;
+    let prompt = codex_main_prompt(&history, &task, &message, prepared_attachments.as_ref());
+    append_user_content_with_mode(
+        &session_store,
+        &branch.storage_id,
+        user_message_with_attachments(&message, &attachments),
+        message_mode,
+    )
+    .await?;
 
     let model = read_codex_preference_values(&codex_home_dir().join("config.toml"))
         .ok()
@@ -7845,10 +8460,80 @@ async fn start_codex_main_with_resources(
         prompt,
         cli.path,
         permissions,
+        prepared_attachments,
         cancellation,
         sink,
     );
     Ok(())
+}
+
+struct PreparedCodexAttachmentRef {
+    name: String,
+    media_type: String,
+    path: PathBuf,
+}
+
+struct PreparedCodexAttachments {
+    _directory: tempfile::TempDir,
+    paths: Vec<PathBuf>,
+    references: Vec<PreparedCodexAttachmentRef>,
+}
+
+fn attachment_extension(media_type: &str, name: &str) -> String {
+    if let Some(extension) = Path::new(name).extension().and_then(|value| value.to_str()) {
+        let sanitized = extension
+            .chars()
+            .filter(|ch| ch.is_ascii_alphanumeric())
+            .take(12)
+            .collect::<String>();
+        if !sanitized.is_empty() {
+            return sanitized;
+        }
+    }
+    match media_type {
+        "image/jpeg" => "jpg".to_string(),
+        "image/gif" => "gif".to_string(),
+        "image/webp" => "webp".to_string(),
+        "image/png" => "png".to_string(),
+        "application/pdf" => "pdf".to_string(),
+        _ => "txt".to_string(),
+    }
+}
+
+fn prepare_codex_attachments(
+    attachments: &[ValidatedAttachment],
+) -> Result<Option<PreparedCodexAttachments>, String> {
+    if attachments.is_empty() {
+        return Ok(None);
+    }
+    let directory = tempfile::Builder::new()
+        .prefix("r-code-codex-attachments-")
+        .tempdir()
+        .map_err(|error| format!("无法创建 Codex 附件临时目录：{error}"))?;
+    let mut paths = Vec::new();
+    let mut references = Vec::with_capacity(attachments.len());
+    for (index, attachment) in attachments.iter().enumerate() {
+        let path = directory.path().join(format!(
+            "attachment-{}.{}",
+            index + 1,
+            attachment_extension(&attachment.media_type, &attachment.name)
+        ));
+        std::fs::write(&path, &attachment.bytes)
+            .map_err(|error| format!("无法准备附件 {}：{error}", attachment.name))?;
+        if attachment.kind == ValidatedAttachmentKind::Image {
+            paths.push(path.clone());
+        }
+        references.push(PreparedCodexAttachmentRef {
+            name: attachment.name.clone(),
+            media_type: attachment.media_type.clone(),
+            path,
+        });
+    }
+    Ok(Some(PreparedCodexAttachments {
+        _directory: directory,
+        paths,
+        references,
+    }))
 }
 
 fn scoped_external_event(run: &AgentRun, event: AgentEvent) -> AgentEvent {
@@ -7980,11 +8665,22 @@ fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String
 /// 构造 Codex 非交互进程。任务文本作为位置参数直接传给已验证的 CLI，绝不进入
 /// shell 命令串。权限参数只会来自 [`CodexDelegationPermissions`] 的受限枚举，绝不
 /// 接受 WebView 或 config.toml 的原始命令片段。
+#[cfg_attr(not(test), allow(dead_code))]
 fn codex_exec_command_with_permissions(
     cli_path: Option<PathBuf>,
     workspace: &Path,
     permissions: CodexDelegationPermissions,
     prompt: &str,
+) -> Result<TokioCommand, String> {
+    codex_exec_command_with_permissions_and_images(cli_path, workspace, permissions, prompt, &[])
+}
+
+fn codex_exec_command_with_permissions_and_images(
+    cli_path: Option<PathBuf>,
+    workspace: &Path,
+    permissions: CodexDelegationPermissions,
+    prompt: &str,
+    image_paths: &[PathBuf],
 ) -> Result<TokioCommand, String> {
     if prompt.contains('\0') {
         return Err("Codex 委派任务不能包含 NUL 字符。".to_string());
@@ -8005,7 +8701,11 @@ fn codex_exec_command_with_permissions(
         permissions.approvals_reviewer().config_override(),
     ];
     let mut command = codex_child_command(cli_path)?;
-    command.args(exec_args).arg(prompt);
+    command.args(exec_args);
+    for image_path in image_paths {
+        command.arg("--image").arg(image_path);
+    }
+    command.arg(prompt);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -8123,6 +8823,31 @@ async fn run_codex_exec_process_with_options_and_permissions(
     permissions: CodexDelegationPermissions,
     limits: CodexExecLimits,
 ) -> CodexExecCompletion {
+    run_codex_exec_process_with_options_and_permissions_and_images(
+        workspace,
+        prompt,
+        &[],
+        cli_path,
+        cancellation,
+        observer,
+        event_sink,
+        permissions,
+        limits,
+    )
+    .await
+}
+
+async fn run_codex_exec_process_with_options_and_permissions_and_images(
+    workspace: &Path,
+    prompt: &str,
+    image_paths: &[PathBuf],
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    permissions: CodexDelegationPermissions,
+    limits: CodexExecLimits,
+) -> CodexExecCompletion {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
     if cancellation.is_cancelled() {
@@ -8132,23 +8857,28 @@ async fn run_codex_exec_process_with_options_and_permissions(
         };
     }
 
-    let mut child =
-        match codex_exec_command_with_permissions(cli_path, workspace, permissions, prompt)
-            .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
-        {
-            Ok(child) => child,
-            Err(error) => {
-                let run_id = observer
-                    .as_ref()
-                    .map(|value| value.run.id.as_str())
-                    .unwrap_or("agent-tool");
-                tracing::warn!(run_id, error = %error, "failed to launch Codex exec child");
-                return CodexExecCompletion {
-                    failure: Some(CodexExecFailure::Launch),
-                    ..Default::default()
-                };
-            }
-        };
+    let mut child = match codex_exec_command_with_permissions_and_images(
+        cli_path,
+        workspace,
+        permissions,
+        prompt,
+        image_paths,
+    )
+    .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
+    {
+        Ok(child) => child,
+        Err(error) => {
+            let run_id = observer
+                .as_ref()
+                .map(|value| value.run.id.as_str())
+                .unwrap_or("agent-tool");
+            tracing::warn!(run_id, error = %error, "failed to launch Codex exec child");
+            return CodexExecCompletion {
+                failure: Some(CodexExecFailure::Launch),
+                ..Default::default()
+            };
+        }
+    };
     emit_codex_observable_event(
         observer.as_ref(),
         event_sink,
@@ -8377,7 +9107,10 @@ async fn run_codex_exec_process_with_options_and_permissions(
 }
 
 const CODEX_APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(15);
-const CODEX_APP_SERVER_MAX_LINE_BYTES: usize = 512 * 1024;
+// App Server's imageGeneration completion includes an inline base64 `result` even when a
+// `savedPath` is present. A typical generated PNG is several MiB, so the transport line needs a
+// bounded artifact-aware ceiling. Observable events never persist or emit that base64 field.
+const CODEX_APP_SERVER_MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_APP_SERVER_APPROVAL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 
 /// R-Code 对 Codex App Server 审批请求的归属。它只引用既有权限引擎，因此审批卡
@@ -8772,9 +9505,37 @@ async fn observe_codex_app_server_event(
 
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
+#[cfg_attr(not(test), allow(dead_code))]
 async fn run_codex_app_server_process(
     workspace: &Path,
     prompt: &str,
+    cli_path: Option<PathBuf>,
+    permissions: CodexDelegationPermissions,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    approval: CodexAppServerApprovalContext,
+    limits: CodexExecLimits,
+) -> CodexExecCompletion {
+    run_codex_app_server_process_with_images(
+        workspace,
+        prompt,
+        &[],
+        cli_path,
+        permissions,
+        cancellation,
+        observer,
+        event_sink,
+        approval,
+        limits,
+    )
+    .await
+}
+
+async fn run_codex_app_server_process_with_images(
+    workspace: &Path,
+    prompt: &str,
+    image_paths: &[PathBuf],
     cli_path: Option<PathBuf>,
     permissions: CodexDelegationPermissions,
     cancellation: CancellationToken,
@@ -8867,7 +9628,7 @@ async fn run_codex_app_server_process(
                 "method": "turn/start",
                 "params": {
                     "threadId": thread_id,
-                    "input": [{ "type": "text", "text": prompt }],
+                    "input": codex_app_server_input(prompt, image_paths),
                 }
             }),
         )
@@ -9015,6 +9776,20 @@ async fn run_codex_app_server_process(
     }
 }
 
+fn codex_app_server_input(prompt: &str, image_paths: &[PathBuf]) -> Vec<serde_json::Value> {
+    let mut input = Vec::with_capacity(image_paths.len() + usize::from(!prompt.is_empty()));
+    if !prompt.is_empty() {
+        input.push(serde_json::json!({ "type": "text", "text": prompt }));
+    }
+    input.extend(image_paths.iter().map(|path| {
+        serde_json::json!({
+            "type": "localImage",
+            "path": path.to_string_lossy(),
+        })
+    }));
+    input
+}
+
 async fn run_codex_exec_subagent(
     db: &Database,
     session_store: &SessionStore,
@@ -9066,10 +9841,36 @@ async fn run_codex_delegation_process(
     permissions: CodexDelegationPermissions,
     approval: CodexAppServerApprovalContext,
 ) -> CodexExecCompletion {
+    run_codex_delegation_process_with_images(
+        workspace,
+        prompt,
+        &[],
+        cli_path,
+        cancellation,
+        observer,
+        event_sink,
+        permissions,
+        approval,
+    )
+    .await
+}
+
+async fn run_codex_delegation_process_with_images(
+    workspace: &Path,
+    prompt: &str,
+    image_paths: &[PathBuf],
+    cli_path: Option<PathBuf>,
+    cancellation: CancellationToken,
+    observer: Option<CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    permissions: CodexDelegationPermissions,
+    approval: CodexAppServerApprovalContext,
+) -> CodexExecCompletion {
     if permissions.requests_r_code_approval() {
-        run_codex_app_server_process(
+        run_codex_app_server_process_with_images(
             workspace,
             prompt,
+            image_paths,
             cli_path,
             permissions,
             cancellation,
@@ -9080,9 +9881,10 @@ async fn run_codex_delegation_process(
         )
         .await
     } else {
-        run_codex_exec_process_with_options_and_permissions(
+        run_codex_exec_process_with_options_and_permissions_and_images(
             workspace,
             prompt,
+            image_paths,
             cli_path,
             cancellation,
             observer,
@@ -9108,14 +9910,20 @@ fn spawn_codex_main(
     prompt: String,
     cli_path: Option<PathBuf>,
     permissions: CodexDelegationPermissions,
+    prepared_images: Option<PreparedCodexAttachments>,
     cancellation: CancellationToken,
     sink: Option<AgentEventSink>,
 ) {
     tokio::spawn(async move {
         let session_store = SessionStore::new(sessions_dir.clone());
-        let completion = run_codex_delegation_process(
+        let image_paths = prepared_images
+            .as_ref()
+            .map(|prepared| prepared.paths.as_slice())
+            .unwrap_or_default();
+        let completion = run_codex_delegation_process_with_images(
             &workspace,
             &prompt,
+            image_paths,
             cli_path,
             cancellation,
             Some(CodexExecObserver {
@@ -10634,6 +11442,42 @@ mod tests {
         assert!(msgs.iter().any(|m| m.kind == "system"));
     }
 
+    #[tokio::test]
+    async fn agent_send_persists_image_body_but_only_returns_safe_metadata() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Image", "analyze", "ask")
+            .await
+            .unwrap();
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        let attachment = AttachmentInput {
+            name: "clipboard.png".into(),
+            media_type: "image/png".into(),
+            data: BASE64_STANDARD.encode(png),
+        };
+
+        agent_send_with_mode_and_attachments(
+            &state,
+            &task.id,
+            "analyze this",
+            AgentSendMode::Auto,
+            &[attachment],
+        )
+        .await
+        .unwrap();
+
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        let user = messages
+            .iter()
+            .find(|message| message.role.as_deref() == Some("user"))
+            .expect("persisted user message");
+        assert_eq!(user.image_count, Some(1));
+        assert_eq!(user.image_media_types, Some(vec!["image/png".into()]));
+        assert_eq!(user.attachments.as_ref().map(Vec::len), Some(1));
+        assert_eq!(user.attachments.as_ref().unwrap()[0].name, "clipboard.png");
+        assert!(!serde_json::to_string(user).unwrap().contains("iVBORw0KGgo"));
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+    }
+
     #[test]
     fn session_message_parser_backfills_the_provider_tool_call_id() {
         let content = concat!(
@@ -10654,6 +11498,34 @@ mod tests {
 
         assert_eq!(call.call_id.as_deref(), Some("provider-delegate-42"));
         assert_eq!(result.call_id.as_deref(), Some("provider-delegate-42"));
+    }
+
+    #[test]
+    fn session_message_parser_exposes_image_metadata_without_base64() {
+        let content = r#"{"message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"secret-base64"}}]}}"#;
+        let messages = parse_session_messages(content, "branch", "storage");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].image_count, Some(1));
+        assert_eq!(
+            messages[0].image_media_types,
+            Some(vec!["image/png".into()])
+        );
+        assert_eq!(messages[0].attachments.as_ref().map(Vec::len), Some(1));
+        assert!(messages[0].text.is_none());
+        assert!(!serde_json::to_string(&messages[0])
+            .unwrap()
+            .contains("secret-base64"));
+    }
+
+    #[test]
+    fn session_message_parser_exposes_file_metadata_without_file_body() {
+        let content = r#"{"message":{"role":"user","content":[{"type":"text","text":"review"},{"type":"file","source":{"type":"text","name":"main.rs","media_type":"text/x-rust","text":"fn secret() {}"}}]}}"#;
+        let messages = parse_session_messages(content, "branch", "storage");
+        assert_eq!(messages[0].text.as_deref(), Some("review"));
+        assert_eq!(messages[0].attachments.as_ref().unwrap()[0].name, "main.rs");
+        assert!(!serde_json::to_string(&messages[0])
+            .unwrap()
+            .contains("fn secret"));
     }
 
     #[tokio::test]
@@ -11763,6 +12635,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_file_targets_route_workspace_and_external_artifacts() {
+        let (_dir, state) = setup_state();
+        let workspace_path = scoped_test_workspace(&state).await;
+        std::fs::create_dir_all(state.project_root.join("assets")).unwrap();
+        std::fs::write(
+            state.project_root.join("assets/sky.png"),
+            b"\x89PNG\r\n\x1a\n",
+        )
+        .unwrap();
+
+        let inside =
+            resolve_local_file_target(&state, Some(&workspace_path), "assets/sky.png#L12C3")
+                .unwrap();
+        assert_eq!(inside.scope, LocalFileScope::Workspace);
+        assert_eq!(inside.relative_path.as_deref(), Some("assets/sky.png"));
+        assert_eq!(inside.mime_type.as_deref(), Some("image/png"));
+        assert_eq!((inside.line, inside.column), (Some(12), Some(3)));
+        let (_, workspace_bytes) =
+            local_image_preview(&state, Some(&workspace_path), "assets/sky.png").unwrap();
+        assert_eq!(workspace_bytes, b"\x89PNG\r\n\x1a\n");
+
+        let external_dir = TempDir::new().unwrap();
+        let external_path = external_dir.path().join("result.webp");
+        std::fs::write(&external_path, b"RIFFpreviewWEBP").unwrap();
+        let external = resolve_local_file_target(
+            &state,
+            Some(&workspace_path),
+            &external_path.to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(external.scope, LocalFileScope::External);
+        assert!(external.relative_path.is_none());
+        assert_eq!(external.mime_type.as_deref(), Some("image/webp"));
+
+        let arbitrary_external = local_image_preview(
+            &state,
+            Some(&workspace_path),
+            &external_path.to_string_lossy(),
+        );
+        assert!(arbitrary_external
+            .unwrap_err()
+            .contains("Codex generated_images"));
+
+        let codex_home = external_dir.path().join(".codex");
+        let generated_images = codex_home.join("generated_images");
+        std::fs::create_dir_all(&generated_images).unwrap();
+        let generated_path = generated_images.join("result.webp");
+        std::fs::write(&generated_path, b"RIFFgeneratedWEBP").unwrap();
+        let (_, bytes) = local_image_preview_with_codex_home(
+            &state,
+            Some(&workspace_path),
+            &generated_path.to_string_lossy(),
+            &codex_home,
+        )
+        .unwrap();
+        assert_eq!(bytes, b"RIFFgeneratedWEBP");
+    }
+
+    #[test]
+    fn local_file_location_parser_keeps_windows_drive_letters() {
+        assert_eq!(
+            split_local_file_location(r"C:\work\src\main.rs:24:7"),
+            (r"C:\work\src\main.rs".to_string(), Some(24), Some(7))
+        );
+        assert_eq!(
+            split_local_file_location("/work/src/main.rs:24"),
+            ("/work/src/main.rs".to_string(), Some(24), None)
+        );
+    }
+
+    #[tokio::test]
     async fn archive_rejects_running_tasks_and_blocks_new_messages() {
         let (_dir, state) = setup_state();
         let task = task_create(&state, None, "归档测试", "验证归档边界", "ask")
@@ -11912,6 +12855,7 @@ mod tests {
                     {"effort": "low", "description": "Fast"},
                     {"effort": "medium", "description": "Balanced"}
                   ],
+                  "input_modalities": ["text", "image"],
                   "visibility": "list",
                   "priority": 2
                 },
@@ -11932,6 +12876,60 @@ mod tests {
         assert_eq!(catalog[0].slug, "gpt-5.6-terra");
         assert_eq!(catalog[0].default_reasoning_effort, "medium");
         assert_eq!(catalog[0].supported_reasoning_efforts.len(), 2);
+        assert_eq!(catalog[0].supports_images, Some(true));
+    }
+
+    #[test]
+    fn attachments_are_typed_size_and_magic_validated() {
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0];
+        let input = AttachmentInput {
+            name: "clipboard.png".into(),
+            media_type: "image/png".into(),
+            data: BASE64_STANDARD.encode(png),
+        };
+        let validated = validate_attachments(&[input]).unwrap();
+        assert_eq!(validated.len(), 1);
+        assert_eq!(validated[0].kind, ValidatedAttachmentKind::Image);
+
+        let invalid = AttachmentInput {
+            name: "spoofed.png".into(),
+            media_type: "image/png".into(),
+            data: BASE64_STANDARD.encode(b"not a png"),
+        };
+        assert!(validate_attachments(&[invalid]).is_err());
+
+        let source = AttachmentInput {
+            name: "main.rs".into(),
+            media_type: "text/x-rust".into(),
+            data: BASE64_STANDARD.encode(b"fn main() {}"),
+        };
+        let validated = validate_attachments(&[source]).unwrap();
+        assert_eq!(validated[0].kind, ValidatedAttachmentKind::Text);
+        assert_eq!(validated[0].text.as_deref(), Some("fn main() {}"));
+
+        let pdf = AttachmentInput {
+            name: "spec.pdf".into(),
+            media_type: "application/pdf".into(),
+            data: BASE64_STANDARD.encode(b"%PDF-1.7\n"),
+        };
+        assert_eq!(
+            validate_attachments(&[pdf]).unwrap()[0].kind,
+            ValidatedAttachmentKind::Pdf
+        );
+    }
+
+    #[test]
+    fn codex_app_server_input_keeps_text_and_local_images_in_order() {
+        let input = codex_app_server_input(
+            "inspect",
+            &[
+                PathBuf::from("image-one.png"),
+                PathBuf::from("image-two.webp"),
+            ],
+        );
+        assert_eq!(input[0]["type"], "text");
+        assert_eq!(input[1]["type"], "localImage");
+        assert_eq!(input[2]["type"], "localImage");
     }
 
     #[test]

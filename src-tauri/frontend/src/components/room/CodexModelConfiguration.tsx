@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { codexCliPreferences, codexSaveCliPreferences } from "../../lib/ipc";
 import type { CodexCliPreferences, CodexModelOption } from "../../lib/types";
 import { errText } from "../../lib/format";
@@ -7,6 +7,10 @@ import { IconChevronDown } from "../icons";
 
 interface Props {
   running: boolean;
+  openRequest?: number;
+  preload?: boolean;
+  onPreferencesChange?: (preferences: CodexCliPreferences) => void;
+  placement?: "up" | "down";
 }
 
 type View = "root" | "models" | "reasoning" | "verbosity";
@@ -44,27 +48,45 @@ function reasoningOptions(preferences: CodexCliPreferences | null): CodexModelOp
   });
 }
 
-export function CodexModelConfiguration({ running }: Props) {
+export function CodexModelConfiguration({
+  running,
+  openRequest,
+  preload = false,
+  onPreferencesChange,
+  placement = "up",
+}: Props) {
   const [preferences, setPreferences] = useState<CodexCliPreferences | null>(null);
   const [view, setView] = useState<View>("root");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const loadingRef = useRef(false);
+  const preloadAttemptedRef = useRef(false);
   const model = selectedModel(preferences);
   const efforts = useMemo(() => reasoningOptions(preferences), [preferences]);
 
-  const load = async () => {
-    if (loading) return;
+  const load = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     try {
-      setPreferences(await codexCliPreferences());
+      const loaded = await codexCliPreferences();
+      setPreferences(loaded);
+      onPreferencesChange?.(loaded);
     } catch (cause) {
       setError(errText(cause));
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
-  };
+  }, [onPreferencesChange]);
+
+  useEffect(() => {
+    if (!preload || preloadAttemptedRef.current) return;
+    preloadAttemptedRef.current = true;
+    void load();
+  }, [load, preload]);
 
   const save = async (next: {
     model?: string | null;
@@ -82,6 +104,7 @@ export function CodexModelConfiguration({ running }: Props) {
         preferences.permission_mode,
       );
       setPreferences(updated);
+      onPreferencesChange?.(updated);
       setView("root");
     } catch (cause) {
       setError(errText(cause));
@@ -117,11 +140,12 @@ export function CodexModelConfiguration({ running }: Props) {
       }
       role="dialog"
       label="Codex 模型与推理配置"
-      placement="up"
+      placement={placement}
       align="left"
       disabled={running || saving}
       menuClassName="model-menu model-config-menu codex-model-config"
       scroll
+      openRequest={openRequest}
       onOpenChange={(open) => {
         if (open && !preferences) void load();
         if (!open) setView("root");

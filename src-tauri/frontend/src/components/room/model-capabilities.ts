@@ -1,4 +1,9 @@
-import type { InferenceOptions } from "../../lib/types";
+import type {
+  AttachmentKind,
+  CodexCliPreferences,
+  InferenceOptions,
+  TaskAgentEngine,
+} from "../../lib/types";
 import type { ProviderChoice } from "../../lib/provider";
 
 export interface CapabilityOption {
@@ -18,6 +23,14 @@ export interface ModelCapabilities {
   reasoning?: CapabilityControl;
   verbosity?: CapabilityControl;
   note?: string;
+}
+
+export type ImageCapabilityState = "supported" | "unsupported" | "unknown";
+
+export interface ImageCapability {
+  state: ImageCapabilityState;
+  modelLabel: string;
+  reason: string;
 }
 
 const THINKING: CapabilityOption[] = [
@@ -123,6 +136,134 @@ export function capabilitiesFor(provider: ProviderChoice | undefined, model: str
   }
 
   return { note: "该模型未声明可调推理参数；当前沿用模型服务默认值。" };
+}
+
+/**
+ * 图片能力不能从 OpenAI/Anthropic 线路协议本身推出：同一端点可以同时承载文本与
+ * 多模态模型。这里只认模型族的明确声明；其余返回 unknown，让请求真实尝试，避免
+ * 把一个新发布的多模态模型误判成不可用。
+ */
+export function imageCapabilityFor(
+  provider: ProviderChoice | undefined,
+  model: string,
+): ImageCapability {
+  const providerName = provider?.name.toLowerCase() ?? "";
+  const modelName = model.trim().toLowerCase();
+  const modelLabel = model.trim() || provider?.model || "当前模型";
+
+  const explicitVisionModel = [
+    "vision",
+    "qwen-vl",
+    "qvq",
+    "glm-4v",
+    "glm-4.6v",
+    "pixtral",
+    "llava",
+  ].some((needle) => modelName.includes(needle));
+  if (explicitVisionModel) {
+    return { state: "supported", modelLabel, reason: `${modelLabel} 声明了视觉输入能力。` };
+  }
+
+  if (
+    providerName === "anthropic"
+    || modelName.includes("claude")
+    || providerName.includes("gemini")
+    || modelName.includes("gemini")
+    || modelName.startsWith("gpt-4o")
+    || modelName.startsWith("gpt-4.1")
+    || modelName.startsWith("gpt-5")
+    || modelName.startsWith("o1")
+    || modelName.startsWith("o3")
+    || modelName.startsWith("o4")
+  ) {
+    return { state: "supported", modelLabel, reason: `${modelLabel} 支持图片输入。` };
+  }
+
+  const explicitlyTextOnly =
+    (modelName.includes("glm-") && !explicitVisionModel)
+    || modelName.includes("deepseek")
+    || modelName.includes("ark-code")
+    || modelName.includes("code-latest")
+    || modelName.includes("codex-spark");
+  if (explicitlyTextOnly) {
+    return {
+      state: "unsupported",
+      modelLabel,
+      reason: `${modelLabel} 没有声明图片输入能力；图片会保留在草稿中，但不会发送。`,
+    };
+  }
+
+  return {
+    state: "unknown",
+    modelLabel,
+    reason: `${modelLabel} 没有提供可读取的图片能力声明；R-Code 会尝试发送。`,
+  };
+}
+
+/** Codex CLI 的模型目录明确提供 input_modalities，优先使用真实声明。 */
+export function codexImageCapability(preferences: CodexCliPreferences | null): ImageCapability {
+  const configured = preferences?.model
+    ? preferences.models.find((option) => option.slug === preferences.model)
+    : undefined;
+  const effective = configured ?? preferences?.models[0];
+  const modelLabel = effective?.display_name ?? preferences?.model ?? "Codex 默认模型";
+  if (!effective) {
+    return {
+      state: "unknown",
+      modelLabel,
+      reason: "Codex CLI 尚未返回模型能力目录；R-Code 会尝试发送图片。",
+    };
+  }
+  if (effective.supports_images == null) {
+    return {
+      state: "unknown",
+      modelLabel,
+      reason: `${modelLabel} 的 Codex 模型目录没有图片能力字段；R-Code 会尝试发送。`,
+    };
+  }
+  return effective.supports_images
+    ? { state: "supported", modelLabel, reason: `${modelLabel} 的 Codex 模型目录声明支持图片输入。` }
+    : {
+        state: "unsupported",
+        modelLabel,
+        reason: `${modelLabel} 不支持图片；图片会保留在草稿中，但不会发送。`,
+      };
+}
+
+/** 每个附件独立判定，避免一张不支持的图片把普通代码文件也一起划掉。 */
+export function attachmentCapabilityFor(
+  kind: AttachmentKind,
+  imageCapability: ImageCapability,
+  agentEngine: TaskAgentEngine,
+  provider?: ProviderChoice,
+): ImageCapability {
+  if (kind === "image") return imageCapability;
+  if (kind === "text") {
+    return {
+      state: "supported",
+      modelLabel: "当前 Agent",
+      reason: "文本、代码和结构化文本会作为带文件名的上下文发送。",
+    };
+  }
+  if (agentEngine === "codex") {
+    return {
+      state: "supported",
+      modelLabel: "Codex CLI",
+      reason: "PDF 会作为本轮临时本地文件交给 Codex CLI 读取。",
+    };
+  }
+  if (provider?.protocol === "anthropic_messages" || provider?.protocol === "openai_responses") {
+    return {
+      state: "supported",
+      modelLabel: provider.label,
+      reason: `${provider.label} 当前线路支持原生 PDF 文件输入。`,
+    };
+  }
+  return {
+    state: "unsupported",
+    modelLabel: provider?.label ?? "当前模型服务",
+    reason: `${provider?.label ?? "当前模型服务"} 的线路不能直接读取 PDF；文件会保留在草稿中，请切换到 Responses、Anthropic 或 Codex。`,
+  };
 }
 
 export function normalizeInference(

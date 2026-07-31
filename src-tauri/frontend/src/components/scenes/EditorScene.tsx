@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fileList, fileRead, fileWrite, quickOpen, type FileContent, type FileTreeEntry } from "../../lib/ipc";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { displayPath } from "../../lib/format";
 import { IconChevronDown, IconChevronRight, IconEditor, IconFile, IconFolderOpen, IconProjects, IconSearch } from "../icons";
+import { AnchoredSurface } from "../ui/AnchoredSurface";
 
 const ROOT = "__root__";
 
@@ -26,6 +27,7 @@ export function EditorScene() {
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const searchRef = useRef<HTMLLabelElement>(null);
 
   const loadDirectory = useCallback(async (path: string | null) => {
     if (!workspacePath) return;
@@ -118,8 +120,23 @@ export function EditorScene() {
       <div className="file-page">
         <header className="file-page-header">
           <div><p className="page-kicker">PROJECT FILES</p><h1>项目文件</h1><p><IconProjects width={14} height={14} /> {workspace?.display_name ?? displayPath(workspacePath)}</p></div>
-          <label className="file-search"><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="快速打开文件…" /><kbd>Ctrl K</kbd></label>
-          {query && <div className="file-search-results">{hits.length ? hits.map((path) => <button key={path} onClick={() => selectFile(path)}><IconFile width={15} height={15} />{path}</button>) : <span>没有匹配的文件</span>}</div>}
+          <label className="file-search" ref={searchRef}><IconSearch width={16} height={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="快速打开文件…" /><kbd>Ctrl K</kbd></label>
+          {query && (
+            <AnchoredSurface
+              anchorRef={searchRef}
+              className="file-search-results"
+              role="listbox"
+              label="快速打开文件"
+              placement="down"
+              align="right"
+              matchAnchorWidth
+              onDismiss={() => setQuery("")}
+            >
+              {hits.length
+                ? hits.map((path) => <button key={path} role="option" onClick={() => selectFile(path)}><IconFile width={15} height={15} />{path}</button>)
+                : <span>没有匹配的文件</span>}
+            </AnchoredSurface>
+          )}
         </header>
         {error && <div className="file-error" role="alert">{error}</div>}
         <div className="file-workspace">

@@ -61,7 +61,6 @@ export function AgentEngineSwitcher({
           >
             <IconSubagent width={14} height={14} />
             <span>{value === "codex" ? "Codex CLI" : "R-Code"}</span>
-            <small>主 Agent</small>
             <IconChevronDown width={12} height={12} />
           </button>
         }

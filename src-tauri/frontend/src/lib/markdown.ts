@@ -51,7 +51,7 @@ export interface MdLink {
   title: string | null;
   children: MdInline[];
 }
-/** 图片只渲染成链接，不发起远程请求。 */
+/** 图片资源；渲染层只会通过受控 IPC 加载本地位图，不直接请求远程 URL。 */
 export interface MdImage {
   type: "image";
   href: string;
@@ -545,18 +545,30 @@ function parseList(
 
 const SAFE_SCHEME = /^(?:https?|mailto|file):/i;
 const HAS_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+
+/** Whether a sanitized destination must be handled by the trusted local-resource bridge. */
+export function isLocalResourceUrl(raw: string): boolean {
+  const url = raw.trim();
+  if (!url) return false;
+  const probe = url.replace(/[\u0000-\u0020\u007f\u00a0\u2028\u2029]/g, "");
+  if (/^file:/i.test(probe) || WINDOWS_ABSOLUTE_PATH.test(probe)) return true;
+  if (HAS_SCHEME.test(probe) || probe.startsWith("//")) return false;
+  return true;
+}
 
 /**
- * scheme 白名单。只放行 http / https / mailto / file；
- * 其它（javascript:、data:、vbscript:、协议相对 //host、无 scheme 的相对路径）
- * 一律返回 null，由调用方降级成纯文本。
+ * URL/resource whitelist. Web links are limited to http(s)/mailto. Local file URLs, Windows
+ * absolute paths, POSIX paths and workspace-relative paths are kept as inert resource references;
+ * the renderer never navigates them directly and resolves them through host IPC instead.
  */
 export function sanitizeUrl(raw: string): string | null {
   const url = raw.trim();
   if (!url) return null;
   // 去掉控制字符与内嵌空白后再判 scheme，挡住 "java\nscript:" 这类混淆
   const probe = url.replace(/[\u0000-\u0020\u007f\u00a0\u2028\u2029]/g, "");
-  if (!HAS_SCHEME.test(probe)) return null;
+  if (WINDOWS_ABSOLUTE_PATH.test(probe)) return url;
+  if (!HAS_SCHEME.test(probe)) return probe.startsWith("//") ? null : url;
   if (!SAFE_SCHEME.test(probe)) return null;
   return url;
 }
@@ -630,8 +642,16 @@ function parseDestination(src: string, i: number): Destination | null {
   while (j < src.length) {
     const c = src.charAt(j);
     if (c === "\\") {
-      raw += src.charAt(j + 1);
-      j += 2;
+      const next = src.charAt(j + 1);
+      // Only consume Markdown destination escapes. Keeping `\\U` intact is essential for native
+      // Windows paths such as `C:\\Users\\name\\result.png`.
+      if (next === "\\" || next === "(" || next === ")") {
+        raw += next;
+        j += 2;
+      } else {
+        raw += c;
+        j++;
+      }
       continue;
     }
     if (c === "(") {

@@ -12,6 +12,8 @@ import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { CSSProperties, ReactNode } from "react";
 import {
   parseMarkdown,
+  inlineToText,
+  isLocalResourceUrl,
   type MdCode,
   type MdInline,
   type MdList,
@@ -20,18 +22,33 @@ import {
 } from "../../lib/markdown";
 import { highlight } from "../../lib/highlight";
 import { COPIED_RESET_MS, copyText } from "../../lib/clipboard";
+import { isLocalRasterReference, LocalFileLink, LocalImageArtifact } from "./LocalResource";
 
 export interface MarkdownProps {
   text: string;
   /** true 时在最后一个文本块末尾附加流式光标 <span className="caret" /> */
   streaming?: boolean;
+  /** Local resource links are resolved against this task/workspace instead of navigating WebView. */
+  taskId?: string;
+  workspacePath?: string | null;
+}
+
+interface RenderContext {
+  taskId?: string;
+  workspacePath: string | null;
 }
 
 /** 代码块折叠阈值；与 markdown.css 的 --md-clip-lines 保持一致。 */
 const COLLAPSE_LINES = 16;
 
-export const Markdown = memo(function Markdown({ text, streaming = false }: MarkdownProps) {
+export const Markdown = memo(function Markdown({
+  text,
+  streaming = false,
+  taskId,
+  workspacePath = null,
+}: MarkdownProps) {
   const nodes = useMemo(() => parseMarkdown(text), [text]);
+  const context = useMemo<RenderContext>(() => ({ taskId, workspacePath }), [taskId, workspacePath]);
 
   const last = nodes.length - 1;
   const tail = last >= 0 ? nodes[last] : null;
@@ -43,7 +60,7 @@ export const Markdown = memo(function Markdown({ text, streaming = false }: Mark
   return (
     <div className="md">
       {nodes.map((node, i) => (
-        <Block key={i} node={node} caret={inlineCaret && i === last} />
+        <Block key={i} node={node} caret={inlineCaret && i === last} context={context} />
       ))}
       {streaming && !inlineCaret && <span className="caret md-caret" />}
     </div>
@@ -52,19 +69,27 @@ export const Markdown = memo(function Markdown({ text, streaming = false }: Mark
 
 /* ------------------------------------------------------------------ 块级 */
 
-function Block({ node, caret = false }: { node: MdNode; caret?: boolean }): ReactNode {
+function Block({
+  node,
+  caret = false,
+  context,
+}: {
+  node: MdNode;
+  caret?: boolean;
+  context: RenderContext;
+}): ReactNode {
   switch (node.type) {
     case "paragraph":
       return (
         <p>
-          {renderInline(node.children)}
+          {renderInline(node.children, context)}
           {caret && <span className="caret" />}
         </p>
       );
     case "heading": {
       const content = (
         <>
-          {renderInline(node.children)}
+          {renderInline(node.children, context)}
           {caret && <span className="caret" />}
         </>
       );
@@ -83,25 +108,25 @@ function Block({ node, caret = false }: { node: MdNode; caret?: boolean }): Reac
       return (
         <blockquote>
           {node.children.map((child, i) => (
-            <Block key={i} node={child} />
+            <Block key={i} node={child} context={context} />
           ))}
         </blockquote>
       );
     case "list":
-      return <List node={node} />;
+      return <List node={node} context={context} />;
     case "table":
-      return <Table node={node} />;
+      return <Table node={node} context={context} />;
   }
 }
 
-function List({ node }: { node: MdList }) {
+function List({ node, context }: { node: MdList; context: RenderContext }) {
   const items = node.items.map((item, i) => {
     const body = item.children.map((child, j) =>
       // 紧凑列表里的段落不套 <p>，避免每项都多出一段外边距
       node.tight && child.type === "paragraph" ? (
-        <Fragment key={j}>{renderInline(child.children)}</Fragment>
+        <Fragment key={j}>{renderInline(child.children, context)}</Fragment>
       ) : (
-        <Block key={j} node={child} />
+        <Block key={j} node={child} context={context} />
       )
     );
     // 普通项直接把内容挂在 <li> 上（嵌套 <ul> 不能塞进 <span>）；
@@ -125,7 +150,7 @@ function List({ node }: { node: MdList }) {
   );
 }
 
-function Table({ node }: { node: MdTable }) {
+function Table({ node, context }: { node: MdTable; context: RenderContext }) {
   const style = (i: number): CSSProperties | undefined => {
     const align = node.align[i];
     return align ? { textAlign: align } : undefined;
@@ -137,7 +162,7 @@ function Table({ node }: { node: MdTable }) {
           <tr>
             {node.header.map((cell, i) => (
               <th key={i} style={style(i)}>
-                {renderInline(cell.children)}
+                {renderInline(cell.children, context)}
               </th>
             ))}
           </tr>
@@ -147,7 +172,7 @@ function Table({ node }: { node: MdTable }) {
             <tr key={r}>
               {row.map((cell, c) => (
                 <td key={c} style={style(c)}>
-                  {renderInline(cell.children)}
+                  {renderInline(cell.children, context)}
                 </td>
               ))}
             </tr>
@@ -235,7 +260,7 @@ function CodeBlock({ node }: { node: MdCode }) {
 
 /* ------------------------------------------------------------------ 行内 */
 
-function renderInline(nodes: MdInline[]): ReactNode[] {
+function renderInline(nodes: MdInline[], context: RenderContext): ReactNode[] {
   return nodes.map((node, i) => {
     switch (node.type) {
       case "text":
@@ -249,12 +274,38 @@ function renderInline(nodes: MdInline[]): ReactNode[] {
           </code>
         );
       case "strong":
-        return <strong key={i}>{renderInline(node.children)}</strong>;
+        return <strong key={i}>{renderInline(node.children, context)}</strong>;
       case "em":
-        return <em key={i}>{renderInline(node.children)}</em>;
+        return <em key={i}>{renderInline(node.children, context)}</em>;
       case "del":
-        return <del key={i}>{renderInline(node.children)}</del>;
-      case "link":
+        return <del key={i}>{renderInline(node.children, context)}</del>;
+      case "link": {
+        if (isLocalResourceUrl(node.href)) {
+          const label = inlineToText(node.children) || node.href;
+          if (isLocalRasterReference(node.href)) {
+            return (
+              <LocalImageArtifact
+                key={i}
+                href={node.href}
+                alt={label}
+                label={label}
+                taskId={context.taskId}
+                workspacePath={context.workspacePath}
+              />
+            );
+          }
+          return (
+            <LocalFileLink
+              key={i}
+              href={node.href}
+              title={node.title ?? undefined}
+              taskId={context.taskId}
+              workspacePath={context.workspacePath}
+            >
+              {renderInline(node.children, context)}
+            </LocalFileLink>
+          );
+        }
         return (
           <a
             key={i}
@@ -264,11 +315,24 @@ function renderInline(nodes: MdInline[]): ReactNode[] {
             target="_blank"
             rel="noopener noreferrer"
           >
-            {renderInline(node.children)}
+            {renderInline(node.children, context)}
           </a>
         );
+      }
       case "image":
-        // 不加载远程图片：只给一个可点开的链接
+        if (isLocalResourceUrl(node.href) && isLocalRasterReference(node.href)) {
+          return (
+            <LocalImageArtifact
+              key={i}
+              href={node.href}
+              alt={node.alt}
+              label={node.alt || "图片产物"}
+              taskId={context.taskId}
+              workspacePath={context.workspacePath}
+            />
+          );
+        }
+        // Remote images remain inert links; the app never loads model-provided remote pixels.
         return (
           <a
             key={i}

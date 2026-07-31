@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
@@ -33,7 +33,6 @@ export function MenuBar() {
   const needsYou = useTasksStore(selectNeedsYou);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notificationPage, setNotificationPage] = useState<NotificationPage | null>(null);
-  const notificationRef = useRef<HTMLDivElement>(null);
 
   const refreshNotifications = async () => {
     try {
@@ -49,22 +48,6 @@ export function MenuBar() {
     return () => window.clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!notificationOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!notificationRef.current?.contains(event.target as Node)) setNotificationOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setNotificationOpen(false);
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [notificationOpen]);
-
   const openNotification = async (notification: Notification) => {
     try {
       await notificationMarkRead(notification.id);
@@ -75,7 +58,6 @@ export function MenuBar() {
         notifications: page.notifications.map((item) => item.id === notification.id ? { ...item, read_at: item.read_at ?? new Date().toISOString() } : item),
       } : page);
     }
-    setNotificationOpen(false);
     if (notification.task_id) openRoom(notification.task_id);
   };
 
@@ -172,28 +154,37 @@ export function MenuBar() {
 
       <div className="topbar-spacer" />
       <div className="top-actions" aria-label="全局操作">
-        <div className="notification-menu-wrap" ref={notificationRef}>
-          <button
-            className={`top-icon has-badge${notificationOpen ? " active" : ""}`}
-            onClick={() => { setNotificationOpen((open) => !open); if (!notificationOpen) void refreshNotifications(); }}
-            title="通知中心"
-            aria-label={unreadNotifications > 0 ? `通知中心，${unreadNotifications} 条未读` : "通知中心，无未读通知"}
-            aria-expanded={notificationOpen}
-            aria-haspopup="dialog"
-          >
-            <IconBell />
-            {unreadNotifications > 0 && <b>{unreadNotifications > 9 ? "9+" : unreadNotifications}</b>}
-          </button>
-          {notificationOpen && (
-            <section className="notification-menu" role="dialog" aria-label="通知中心">
-              <header className="notification-menu-head"><div><strong>通知</strong><span>{unreadNotifications ? `${unreadNotifications} 条未读` : "已全部读完"}</span></div><button className="text-link" disabled={!unreadNotifications} onClick={() => void markAllNotificationsRead()}>全部已读</button></header>
-              <div className="notification-menu-list">
-                {!notificationPage?.notifications.length ? <p>暂时没有通知。</p> : notificationPage.notifications.map((notification) => <button className={`notification-menu-item${notification.read_at ? " read" : ""}`} key={notification.id} onClick={() => void openNotification(notification)}><i className={notification.kind} /><span><strong>{notification.title}</strong><small>{notification.body}</small></span><time>{notification.read_at ? "已读" : "未读"}</time></button>)}
-              </div>
-              <button className="notification-menu-inbox" onClick={() => { setNotificationOpen(false); setScene("inbox"); }}>打开待处理</button>
-            </section>
-          )}
-        </div>
+        <Menu
+          className="notification-menu-wrap"
+          role="dialog"
+          label="通知中心"
+          placement="down"
+          align="right"
+          menuClassName="notification-menu"
+          scroll
+          onOpenChange={(open) => {
+            setNotificationOpen(open);
+            if (open) void refreshNotifications();
+          }}
+          trigger={
+            <button
+              className={`top-icon has-badge${notificationOpen ? " active" : ""}`}
+              title="通知中心"
+              aria-label={unreadNotifications > 0 ? `通知中心，${unreadNotifications} 条未读` : "通知中心，无未读通知"}
+            >
+              <IconBell />
+              {unreadNotifications > 0 && <b>{unreadNotifications > 9 ? "9+" : unreadNotifications}</b>}
+            </button>
+          }
+        >
+          {({ close }) => <>
+            <header className="notification-menu-head"><div><strong>通知</strong><span>{unreadNotifications ? `${unreadNotifications} 条未读` : "已全部读完"}</span></div><button className="text-link" disabled={!unreadNotifications} onClick={() => void markAllNotificationsRead()}>全部已读</button></header>
+            <div className="notification-menu-list">
+              {!notificationPage?.notifications.length ? <p>暂时没有通知。</p> : notificationPage.notifications.map((notification) => <button className={`notification-menu-item${notification.read_at ? " read" : ""}`} key={notification.id} onClick={() => { close(); void openNotification(notification); }}><i className={notification.kind} /><span><strong>{notification.title}</strong><small>{notification.body}</small></span><time>{notification.read_at ? "已读" : "未读"}</time></button>)}
+            </div>
+            <button className="notification-menu-inbox" onClick={() => { close(); setScene("inbox"); }}>打开待处理</button>
+          </>}
+        </Menu>
         <button className="top-icon top-action-help" onClick={showShortcuts} title="快捷键与帮助">
           <IconHelp />
         </button>

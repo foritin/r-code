@@ -8,6 +8,7 @@ import { usePoll } from "../../lib/poll";
 import {
   agentAbort,
   agentAbortSubagent,
+  prepareWorkbenchWindow,
   taskSetWorkspace,
   workspaceChoose,
   workspaceSetAccessMode,
@@ -118,6 +119,15 @@ export function RoomScene() {
         `${run.id}:${run.agent_kind}:${run.agent_label ?? ""}:${run.review_state}:${run.ended_at ?? ""}:${run.summary ?? ""}`
     )
     .join("|");
+
+  // A docked tool should gain horizontal room first. The host preserves the left edge whenever
+  // the active monitor has space on the right and no-ops for maximized/fullscreen windows.
+  useEffect(() => {
+    if (workbenchMode !== "docked") return;
+    void prepareWorkbenchWindow().catch(() => {
+      // Window growth is an ergonomic enhancement; overlay layout remains the safe fallback.
+    });
+  }, [workbenchMode]);
 
   const saveSubagentView = useCallback((open: boolean, selectedId: string | null) => {
     if (currentTaskId) taskSubagentViews.set(currentTaskId, { open, selectedId });
@@ -426,6 +436,7 @@ export function RoomScene() {
         <Timeline
           ref={tlRef}
           taskId={currentTaskId}
+          workspacePath={workspacePath}
           cur={null}
           running={running}
           onAgentEvent={observeAgentEvent}
@@ -456,7 +467,7 @@ export function RoomScene() {
               running={running}
               queuedMessages={queuedMessages}
               onAbort={abortRun}
-              onSent={(text, mode) => tlRef.current?.onSent(text, mode)}
+              onSent={(text, mode, attachments) => tlRef.current?.onSent(text, mode, attachments)}
               onSendFailed={() => tlRef.current?.reload()}
               onActivitySent={observeSend}
               onShowSubagents={showSubagentList}

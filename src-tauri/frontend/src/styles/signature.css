@@ -366,8 +366,8 @@
 
 #app.r-code-signature .scene-home .home-stage {
   display: flex;
-  width: min(760px, 100%);
-  max-width: 760px;
+  width: min(900px, 100%);
+  max-width: 900px;
   height: 100%;
   min-height: 0;
   padding: clamp(46px, 14vh, 136px) 0 0;
@@ -453,7 +453,7 @@
 #app.r-code-signature .scene-room .comp-box {
   position: relative;
   border: 1px solid var(--signature-panel-edge);
-  border-radius: 16px 16px 5px 16px;
+  border-radius: 16px;
   background: var(--bg-card);
   box-shadow: var(--signature-composer-shadow);
 }
@@ -502,13 +502,92 @@
   height: 34px;
   gap: 8px;
   padding: 0 14px;
-  border-radius: 9px 9px 3px 9px;
+  border-radius: 9px;
   background: var(--signature-send-bg);
   color: #1a1009;
   font-size: 13px;
   font-weight: 650;
   white-space: nowrap;
   transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+/* Composer controls are one compact tool row. Long model names scroll with the row instead of
+   turning every control into a two-line card. */
+#app.r-code-signature .scene-home .chat-composer-foot {
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+#app.r-code-signature .scene-home .composer-context {
+  gap: 6px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+#app.r-code-signature .scene-home .composer-context::-webkit-scrollbar {
+  display: none;
+}
+
+#app.r-code-signature .scene-home .composer-context > * {
+  flex: 0 0 auto;
+}
+
+#app.r-code-signature .scene-home .composer-attachment-add {
+  width: 34px;
+  padding: 0;
+  border-color: var(--border);
+  background: var(--signature-control);
+}
+
+#app.r-code-signature .scene-home .composer-attachment-add > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+#app.r-code-signature .scene-home .scope-pill,
+#app.r-code-signature .scene-home .provider-pill,
+#app.r-code-signature .scene-home .project-access-trigger {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 10px;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  white-space: nowrap;
+}
+
+#app.r-code-signature .scene-home .scope-pill {
+  max-width: 168px;
+}
+
+#app.r-code-signature .scene-home .agent-engine-pill {
+  max-width: 112px;
+}
+
+#app.r-code-signature .scene-home .model-config-trigger {
+  max-width: 310px;
+}
+
+#app.r-code-signature .scene-home .provider-pill > span,
+#app.r-code-signature .scene-home .provider-pill > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#app.r-code-signature .scene-home .provider-pill > small {
+  display: block;
+  max-width: 224px;
+  line-height: 1;
+  overflow-wrap: normal;
+}
+
+#app.r-code-signature .scene-home .composer-actions {
+  gap: 10px;
 }
 
 #app.r-code-signature .send-button:not(:disabled):hover,

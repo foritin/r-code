@@ -4,7 +4,7 @@
 //! `r_code_host::commands` 中的同名 inner（lib 侧可测核心）。
 //! lib 不依赖 tauri（保持单元测试二进制无 GUI 链接）。
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, PhysicalPosition, PhysicalSize, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
 use hermes_core::InferenceOptions;
@@ -175,13 +175,21 @@ pub async fn cmd_agent_send(
     task_id: String,
     message: String,
     mode: Option<String>,
+    attachments: Option<Vec<r_code_host::commands::AttachmentInput>>,
 ) -> Result<(), String> {
     let mode = match mode {
         Some(value) => AgentSendMode::try_from_str(&value)
             .ok_or_else(|| format!("invalid agent send mode: {value}"))?,
         None => AgentSendMode::Auto,
     };
-    r_code_host::commands::agent_send_with_mode(&state, &task_id, &message, mode).await
+    r_code_host::commands::agent_send_with_mode_and_attachments(
+        &state,
+        &task_id,
+        &message,
+        mode,
+        attachments.as_deref().unwrap_or_default(),
+    )
+    .await
 }
 
 /// 中止 Agent 运行。
@@ -821,6 +829,82 @@ pub async fn cmd_file_write(
 ) -> Result<r_code_host::commands::FileContent, String> {
     r_code_host::commands::file_write(&state, &workspace_path, &path, &content, &expected_revision)
         .await
+}
+
+/// Resolve a local Markdown/artifact target and classify it against the attached workspace.
+#[tauri::command]
+pub async fn cmd_local_file_target(
+    state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+    reference: String,
+) -> Result<r_code_host::commands::LocalFileTarget, String> {
+    r_code_host::commands::resolve_local_file_target(&state, workspace_path.as_deref(), &reference)
+}
+
+/// Return bounded image bytes through Tauri's binary IPC response (not JSON/base64).
+#[tauri::command]
+pub async fn cmd_local_image_preview(
+    state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+    reference: String,
+) -> Result<tauri::ipc::Response, String> {
+    let (_, bytes) =
+        r_code_host::commands::local_image_preview(&state, workspace_path.as_deref(), &reference)?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Reveal an already resolved local path using the platform file manager.
+#[tauri::command]
+pub async fn cmd_reveal_local_path(path: String) -> Result<(), String> {
+    r_code_host::system_integration::reveal_in_file_manager(std::path::Path::new(&path))
+}
+
+/// Make room for the docked workbench without granting window-mutation permissions to JS.
+#[tauri::command]
+pub async fn cmd_prepare_workbench_window(window: WebviewWindow) -> Result<bool, String> {
+    if window.is_maximized().map_err(|error| error.to_string())?
+        || window.is_fullscreen().map_err(|error| error.to_string())?
+    {
+        return Ok(false);
+    }
+    let Some(monitor) = window
+        .current_monitor()
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    let position = window.outer_position().map_err(|error| error.to_string())?;
+    let size = window.outer_size().map_err(|error| error.to_string())?;
+    let work_area = monitor.work_area();
+    let current = r_code_host::system_integration::DesktopRect {
+        x: position.x,
+        y: position.y,
+        width: size.width,
+        height: size.height,
+    };
+    let available = r_code_host::system_integration::DesktopRect {
+        x: work_area.position.x,
+        y: work_area.position.y,
+        width: work_area.size.width,
+        height: work_area.size.height,
+    };
+    let Some(target) = r_code_host::system_integration::workbench_window_rect(
+        current,
+        available,
+        monitor.scale_factor(),
+    ) else {
+        return Ok(false);
+    };
+
+    if target.x != current.x || target.y != current.y {
+        window
+            .set_position(PhysicalPosition::new(target.x, target.y))
+            .map_err(|error| error.to_string())?;
+    }
+    window
+        .set_size(PhysicalSize::new(target.width, target.height))
+        .map_err(|error| error.to_string())?;
+    Ok(true)
 }
 
 /// 读取验证记录的输出文本（blob 缺失时返回空串）。

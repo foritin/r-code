@@ -127,6 +127,14 @@ export const IconAttach = (p: P) => (
   </svg>
 );
 
+export const IconImage = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+    <circle cx="9" cy="9.5" r="1.5" />
+    <path d="m5.5 17 4.2-4.2 2.7 2.7 2.2-2.2 3.9 3.7" />
+  </svg>
+);
+
 export const IconStop = (p: P) => (
   <svg {...base(p)}>
     <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none" />

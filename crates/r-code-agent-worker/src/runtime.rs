@@ -34,6 +34,16 @@ pub trait AgentRuntime: Send + Sync {
     /// 启动一次 run -- 开始 agent 循环。返回 run id。
     async fn start_run(&mut self, session_id: &str, goal: &str) -> Result<String, ProductError>;
 
+    /// 以完整协议消息启动 run。默认降级到文本，保持 Mock 与第三方 runtime 兼容；
+    /// 多模态 runtime 应覆盖此方法以保留 Image 等内容块。
+    async fn start_run_with_message(
+        &mut self,
+        session_id: &str,
+        message: Message,
+    ) -> Result<String, ProductError> {
+        self.start_run(session_id, &message.text_content()).await
+    }
+
     /// Steer -- 在 run 中途提交用户消息。
     ///
     /// 该操作不会修改已经发出的 provider HTTP 请求；实现方必须在下一次 agent

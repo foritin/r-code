@@ -22,22 +22,22 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
+import {
+  AnchoredSurface,
+  type SurfaceAlign,
+  type SurfacePlacement,
+} from "./AnchoredSurface";
 
 
 /** 全局互斥：打开新菜单时关掉上一个。 */
 let closeActive: (() => void) | null = null;
 
 const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"],[role="option"]';
-const GAP = 6;
-const MARGIN = 8; // 与视口边缘的最小距离
 
 export interface MenuRenderApi {
   close: () => void;
@@ -48,9 +48,9 @@ interface Props {
   trigger: ReactElement;
   children: ReactNode | ((api: MenuRenderApi) => ReactNode);
   /** 首选展开方向；空间不足时自动翻转 */
-  placement?: "up" | "down";
+  placement?: SurfacePlacement;
   /** 水平对齐基准边 */
-  align?: "left" | "right";
+  align?: SurfaceAlign;
   /** 弹层的可访问名称 */
   label?: string;
   /** dialog 用于非菜单式内容（如队列列表） */
@@ -62,6 +62,8 @@ interface Props {
   className?: string;
   /** 内容可滚动（长列表） */
   scroll?: boolean;
+  /** 补全列表等场景需要与触发器等宽 */
+  matchAnchorWidth?: boolean;
   onOpenChange?: (open: boolean) => void;
   /** 递增该值可从斜杠命令等外部入口打开菜单。 */
   openRequest?: number;
@@ -78,11 +80,11 @@ export function Menu({
   menuClassName,
   className,
   scroll = false,
+  matchAnchorWidth = false,
   onOpenChange,
   openRequest,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
   const rootRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -141,56 +143,6 @@ export function Menu({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [open, close]);
-
-  /** 由触发器的视口坐标算出 fixed 位置，空间不足时翻转，最后钳进视口。 */
-  const reposition = useCallback(() => {
-    const anchor = triggerRef.current;
-    const menu = menuRef.current;
-    if (!anchor || !menu) return;
-
-    const rect = anchor.getBoundingClientRect();
-    const vw = document.documentElement.clientWidth;
-    const vh = document.documentElement.clientHeight;
-    const { width, height } = menu.getBoundingClientRect();
-
-    const spaceBelow = vh - rect.bottom - GAP - MARGIN;
-    const spaceAbove = rect.top - GAP - MARGIN;
-    let up = placement === "up";
-    if (up && spaceAbove < height && spaceBelow > spaceAbove) up = false;
-    if (!up && spaceBelow < height && spaceAbove > spaceBelow) up = true;
-
-    const top = up ? Math.max(MARGIN, rect.top - GAP - height) : rect.bottom + GAP;
-    const rawLeft = align === "right" ? rect.right - width : rect.left;
-    const left = Math.min(Math.max(MARGIN, rawLeft), Math.max(MARGIN, vw - width - MARGIN));
-    const maxHeight = up ? rect.top - GAP - MARGIN : vh - rect.bottom - GAP - MARGIN;
-
-    setStyle({
-      top: Math.round(top),
-      left: Math.round(left),
-      maxHeight: Math.max(120, Math.floor(maxHeight)),
-      visibility: "visible",
-    });
-  }, [placement, align]);
-
-  // 先以 hidden 挂载量出尺寸，再定位，避免出现在错误位置后再跳一次
-  useLayoutEffect(() => {
-    if (!open) {
-      setStyle({ visibility: "hidden" });
-      return;
-    }
-    reposition();
-    // 第一遍量的是未受 maxHeight 约束的高度；设完之后尺寸会变，再算一次才落准。
-    const settle = requestAnimationFrame(() => reposition());
-    const onChange = () => reposition();
-    window.addEventListener("resize", onChange);
-    // capture：祖先容器（时间线、侧栏）滚动时也要跟着走
-    window.addEventListener("scroll", onChange, true);
-    return () => {
-      cancelAnimationFrame(settle);
-      window.removeEventListener("resize", onChange);
-      window.removeEventListener("scroll", onChange, true);
-    };
-  }, [open, reposition]);
 
   // 打开后把焦点移到第一个可用项（role="menu" 时）。dialog 交给内容自己决定。
   useEffect(() => {
@@ -274,24 +226,24 @@ export function Menu({
     <div className={"menu-root" + (className ? ` ${className}` : "")} ref={rootRef}>
       {injected}
       {open &&
-        createPortal(
-          <div
-            id={menuId}
-            ref={menuRef}
-            role={role}
-            aria-label={label}
-            style={style}
-            className={
-              "popover" +
-              (scroll ? " popover--scroll" : "") +
-              (menuClassName ? ` ${menuClassName}` : "")
-            }
-            onKeyDown={onMenuKeyDown}
-          >
-            {typeof children === "function" ? children({ close }) : children}
-          </div>,
-          document.body
-        )}
+        <AnchoredSurface
+          id={menuId}
+          anchorRef={triggerRef}
+          surfaceRef={menuRef}
+          role={role}
+          label={label}
+          placement={placement}
+          align={align}
+          matchAnchorWidth={matchAnchorWidth}
+          className={
+            "popover" +
+            (scroll ? " popover--scroll" : "") +
+            (menuClassName ? ` ${menuClassName}` : "")
+          }
+          onKeyDown={onMenuKeyDown}
+        >
+          {typeof children === "function" ? children({ close }) : children}
+        </AnchoredSurface>}
     </div>
   );
 }

@@ -27,6 +27,7 @@ import type {
 
 interface Props {
   taskId: string;
+  workspacePath: string | null;
   activity: ActivityTraceState;
   runs: readonly AgentRun[];
   selectedSubagentId: string | null;
@@ -80,6 +81,7 @@ type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroup
  */
 export function SubagentWorkbench({
   taskId,
+  workspacePath,
   activity,
   runs,
   selectedSubagentId,
@@ -108,7 +110,7 @@ export function SubagentWorkbench({
       {selected ? (
         <>
           <SubagentDetailHeader child={selected} index={selectedIndex} onBack={onBack} />
-          <SubagentInspector taskId={taskId} child={selected} index={selectedIndex} onAbort={onAbort} />
+          <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
         </>
       ) : (
         <>
@@ -298,11 +300,13 @@ function SubagentListSection({
 
 function SubagentInspector({
   taskId,
+  workspacePath,
   child,
   index,
   onAbort,
 }: {
   taskId: string;
+  workspacePath: string | null;
   child: ActivitySubagent;
   index: number;
   onAbort: (subagentId: string) => Promise<void>;
@@ -417,7 +421,7 @@ function SubagentInspector({
                       <SubagentAvatar index={index} identity={child.id} size="xs" />
                       <span>子智能体</span>
                     </div>
-                    <Markdown text={entry.text} />
+                    <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
                   </article>
                 ))}
               </div>
