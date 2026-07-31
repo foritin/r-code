@@ -116,6 +116,21 @@ jobs:
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: true
 
+      - name: Build branded Windows installer
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/build-branded-installer.ps1 -SkipInnerBuild -Target ${{ matrix.rust-target }}
+
+      - name: Upload branded Windows installer
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $installer = Get-ChildItem "target/${{ matrix.rust-target }}/release/bundle/branded" -Filter "R-Code_*-installer.exe" -File
+          if ($installer.Count -ne 1) { throw "Expected one branded installer, found $($installer.Count)" }
+          gh release upload "$env:RELEASE_TAG" $installer[0].FullName --clobber
+
   finalize:
     name: Publish completed release
     needs: build

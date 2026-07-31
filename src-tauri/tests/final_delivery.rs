@@ -288,3 +288,84 @@ fn f19_windows_release_uses_gui_subsystem() {
         "release builds must use the Windows GUI subsystem"
     );
 }
+
+/// F-20: The NSIS installer and uninstaller use the product icon instead of NSIS defaults.
+#[test]
+fn f20_nsis_uses_r_code_icons() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(manifest_dir.join("tauri.conf.json")).unwrap(),
+    )
+    .unwrap();
+    let nsis = &config["bundle"]["windows"]["nsis"];
+
+    for key in ["installerIcon", "uninstallerIcon"] {
+        let relative = nsis[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("bundle.windows.nsis.{key} must be configured"));
+        assert_eq!(relative, "../icons/icon.ico");
+        assert!(
+            manifest_dir.join(relative).is_file(),
+            "configured NSIS icon does not exist: {relative}"
+        );
+    }
+
+    assert_eq!(nsis["installerHooks"], "installer-hooks.nsh");
+    let hooks = std::fs::read_to_string(manifest_dir.join("installer-hooks.nsh")).unwrap();
+    assert!(hooks.contains("NSIS_HOOK_PREINSTALL"));
+    assert!(hooks.contains("NSIS_HOOK_POSTINSTALL"));
+    assert!(hooks.contains("/RC_PROGRESS="));
+}
+
+/// F-21: The distributable Windows installer is a real branded bootstrapper,
+/// not only a design mockup around inert controls.
+#[test]
+fn f21_branded_installer_contract() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let installer = repository.join("installer");
+
+    let main = std::fs::read_to_string(installer.join("src/main.rs")).unwrap();
+    for contract in [
+        "windows_subsystem = \"windows\"",
+        "fn start_install",
+        "extract_payload",
+        "command.arg(\"/S\")",
+        "command.arg(\"/NS\")",
+        "NSIS requires /D to be the final command-line argument",
+    ] {
+        assert!(
+            main.contains(contract),
+            "missing installer contract: {contract}"
+        );
+    }
+
+    let html = std::fs::read_to_string(installer.join("frontend/index.html")).unwrap();
+    for control in [
+        "id=\"install-now\"",
+        "id=\"browse-path\"",
+        "id=\"cancel-install\"",
+        "id=\"complete-primary\"",
+    ] {
+        assert!(
+            html.contains(control),
+            "missing installer control: {control}"
+        );
+    }
+    assert!(!html.contains("INTERACTION PROTOTYPE"));
+
+    let script = std::fs::read_to_string(installer.join("frontend/app.js")).unwrap();
+    assert!(script.contains("bridge.invoke(\"start_install\""));
+    assert!(script.contains("bridge.invoke(\"cancel_install\""));
+
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(installer.join("tauri.conf.json")).unwrap())
+            .unwrap();
+    assert_eq!(config["app"]["windows"][0]["decorations"], false);
+    assert_eq!(config["bundle"]["icon"][0], "../icons/icon.ico");
+
+    assert!(repository
+        .join("scripts/build-branded-installer.ps1")
+        .is_file());
+}

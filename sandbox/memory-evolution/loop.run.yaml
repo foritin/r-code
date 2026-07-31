@@ -1,0 +1,13 @@
+prompt: >-
+  Plan, but do not implement, a user-supervised self-evolving memory system for R-Code.
+  Reuse the shared Hermes foundations where appropriate; make memories visible,
+  editable, approvable, auditable, scoped, and manageable by users. Preserve the
+  existing project-memory behavior and identify open product decisions for discussion
+  before implementation is finalized.
+repo: .
+plan_file: ./sandbox/memory-evolution/plan.md
+tasks_file: ./sandbox/memory-evolution/tasks.json
+pr_loc: "100-400"
+sandbox_root: ./sandbox/memory-evolution
+budget: 5
+skill_dir: ./.agents/skills/plan-loop

@@ -1,0 +1,7 @@
+iter	phase	verdict	score	blocking	major	change
+0	build	-	-	-	-	first-principles decomposition: 8 components, 15 tasks, validator ok with no warnings
+1	critique	revise	61	3	4	PE: fix crate boundary, frozen Codex paths, rules revision concurrency, deletion retention, DTO precision, and oversized tasks
+2	revise	-	-	-	-	moved renderer to core; added ActiveRun snapshot paths, revision CAS and applying recovery; split capture, IPC, mocks, E2E; cleared all task-derived text; 18 tasks validator ok
+3	critique	revise	72	0	6	PE: freeze legacy as editor-only; enforce inject_rules; trigger applying recovery; close external-child lifecycle gate; fix sequence pagination/schema and CI browser resolution
+4	revise	-	-	-	-	removed legacy injection ambiguity; added strict settings DTO and snapshot source matrix; wired restart recovery; linearized host child close/reserve; froze observation/paging schema; added executable mock and Chromium fallback tests; validator clean
+5	critique	revise	76	0	3	PE: make applying recovery a universal mutation gate; linearize forget with file mutation and final run start; choose a Node 20-executable production mock seam

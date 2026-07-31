@@ -3120,6 +3120,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "r-code-installer"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "serde",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tempfile",
+ "thiserror 2.0.19",
+ "winreg 0.55.0",
+]
+
+[[package]]
 name = "r-code-store"
 version = "0.1.0"
 dependencies = [

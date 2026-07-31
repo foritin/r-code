@@ -31,7 +31,7 @@ flowchart LR
 
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
-| Windows | x86_64 MSVC | NSIS `.exe`、WiX `.msi` |
+| Windows | x86_64 MSVC | 品牌安装器 `.exe`、NSIS updater `.exe`、WiX `.msi` |
 | macOS | Apple Silicon `aarch64` | `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
@@ -86,7 +86,7 @@ node scripts/release.mjs check
 node scripts/release.mjs prepare 0.2.0
 ```
 
-`check` 只读地检查一致性。`prepare` 会同步版本、刷新 `Cargo.lock`，并把 `CHANGELOG.md` 的 `[Unreleased]` 内容移动到带当天日期的版本节。版本参数不带 `v`，Git tag 带 `v`。
+`check` 只读地检查一致性。`prepare` 会同步主应用和品牌安装器版本、刷新 `Cargo.lock`，并把 `CHANGELOG.md` 的 `[Unreleased]` 内容移动到带当天日期的版本节。版本参数不带 `v`，Git tag 带 `v`。
 
 每个面向用户的合并都应在 `[Unreleased]` 下维护 `Added`、`Changed`、`Deprecated`、`Removed`、`Fixed` 或 `Security` 中适用的分类。提交标题推荐 Conventional Commits；但 CHANGELOG 是发布合同，不能只依赖自动生成的 commit 列表。
 
@@ -110,7 +110,7 @@ node scripts/release.mjs check
 
 ```bash
 node scripts/release.mjs prepare 0.1.0
-git diff -- Cargo.toml Cargo.lock src-tauri/tauri.conf.json \
+git diff -- Cargo.toml Cargo.lock src-tauri/tauri.conf.json installer/tauri.conf.json \
   src-tauri/frontend/package.json src-tauri/frontend/package-lock.json CHANGELOG.md
 ```
 
@@ -129,6 +129,9 @@ npm run test:dev-server
 npm run test:popover
 npm run build
 cd ../..
+
+# Windows：构建最终品牌安装器
+./scripts/build-branded-installer.ps1
 ```
 
 至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。
@@ -151,7 +154,7 @@ git push origin v0.1.0
 Tag push 后工作流按以下顺序运行：
 
 1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
-2. 三个平台并行构建，所有产物写入同一个 Draft Release。
+2. 三个平台并行构建，Windows 额外封装品牌安装器；所有产物写入同一个 Draft Release。
 3. `finalize` 确认 Draft 中存在 `latest.json`，随后发布并标为 latest。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag。`workflow_dispatch` 不是创建 tag 的替代品。

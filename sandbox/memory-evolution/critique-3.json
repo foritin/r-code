@@ -1,0 +1,62 @@
+{
+  "verdict": "revise",
+  "score": 76,
+  "summary": "第二轮问题大多已真正闭合：legacy 已彻底隔离，inject_rules 矩阵明确，重启恢复、sequence 分页、observation schema、external-child gate、strict settings、Chromium fallback 和 applying-delete tombstone 都已修正。当前仍有三个主要缺口：未解决 applying 可以被其他 mutation/ack 绕过、workspace forget 与等待中的 mutation/run start 尚未线性化，以及 Node 20 下的 memory mock harness 没有可执行的 TypeScript 加载方案。",
+  "issues": [
+    {
+      "severity": "major",
+      "task_id": "T5B",
+      "category": "correctness",
+      "problem": "只有 overview 和 build_snapshot 明确先调用 recover_workspace_applications。approve_candidate、update_rule、set_rule_enabled、delete_rule 和 acknowledge_rules 没有相同 preflight。崩溃留下 file=intended、candidate=applying 后，调用者可绕过 overview 直接执行另一个 rule mutation；尤其 acknowledge_rules 只检查 parser/revision，会把包含未完成 applying 规则的整版文件授权，却没有完成或显式 reconcile 原 candidate，绕过了 durable intent 协议。",
+      "fix": "把恢复拆成持锁版本 recover_workspace_applications_locked，并要求所有会改变或批准 rules revision 的入口在同一 workspace lock 内首先调用它。若仍存在 other-revision applying，approve/update/enable/delete/acknowledge 全部返回 invalid_state，只有 reconcile_candidate_apply 可继续；acknowledge 不得充当 applying 的旁路。增加不经过 overview 的重启测试：旧 applying 后直接调用第二个 approve、rule update 和 acknowledge，断言 expected/intended 自动恢复，other revision 全部被拒绝且 approved revision 不变化。"
+    },
+    {
+      "severity": "major",
+      "task_id": "T7",
+      "category": "correctness",
+      "problem": "Memory lock、AgentBridge 和 ExternalAgentRegistry 的顺序已明确，但 workspace 生命周期仍未线性化。T7 在 build_snapshot 返回时释放 workspace lock，再获取 AgentBridge 启动 run；此窗口内 workspace_forget 可看到任务尚未 active 并删除 task/workspace，随后 T7 仍用旧 Task 启动 provider，AgentRun 外键写入失败并可能留下无人 drain 的 runtime。类似地，rule_update 可在命令层完成 attached_workspace_root 校验后等待锁；若 forget 先删除 workspace，update 获锁后没有规定重新检查 workspace row，仍可能先改写 rules.md，再因 event FK 失败而返回错误，违反‘forget 后不再修改真实文件’。",
+      "fix": "为每个 workspace 增加真正的生命周期线性化边界。最简单方案是最终 run-start 阶段持有 workspace guard，按 memory workspace -> AgentBridge 顺序重新读取 task/workspace/branch，构建最终 snapshot，执行 update/start、持久化 AgentRun 并标记 task active 后才释放；Codex main 在 CLI preflight 后走同一最终边界。所有 MemoryService mutation 在取得 workspace lock 后、任何文件写入前重新查询 workspaces row，不存在则返回 workspace_not_open。forget 在同一锁内删除。增加 barrier 测试覆盖 forget 先赢和 mutation/run-start 先赢两种线性化结果，并让 T14 显式依赖 T7/T8 的 run-start gate。"
+    },
+    {
+      "severity": "major",
+      "task_id": "T10A",
+      "category": "testability",
+      "problem": "计划把 test:memory-mock 定义为 node --test scripts/memory-mock.test.mjs，并要求它真实执行 browser-mock-runtime.ts；但项目固定 Node 20，tsconfig noEmit，且没有 tsx/ts-node/custom loader。Node 20 不能直接 import .ts，browser mock 还依赖其他 TypeScript 模块，因此当前所列文件和包无法实现承诺的可运行 harness，除非测试复制一套逻辑而失去验证价值。",
+      "fix": "冻结一种实际可运行的 seam：推荐增加 tsx devDependency 和 package-lock 变更，把测试改为 scripts/memory-mock.test.ts，脚本使用 tsx --test；或者把纯 memory mock 状态机抽到 Node 可直接 import 的 memory-mock-state.mjs，并由 browser-mock-runtime.ts 委托它。相应补充 package-lock.json/新模块到 files，测试必须 import 生产 mock 实现而不是复制状态机。"
+    },
+    {
+      "severity": "minor",
+      "task_id": "T7",
+      "category": "correctness",
+      "problem": "T7.1 要求在 RuntimeBackend 枚举转发，但真实仓库中该类型不存在；host 使用的是 src-tauri/src/commands.rs::AgentRuntimeKind。",
+      "fix": "把 RuntimeBackend 改为 AgentRuntimeKind，并明确 Real/Mock 两个 match 分支都转发 update_memory_snapshot。"
+    },
+    {
+      "severity": "minor",
+      "task_id": "T11",
+      "category": "alignment",
+      "problem": "room Composer 已有 taskId，candidate create API 也支持 taskId，但 T11 调用写成 memoryCandidateCreate(workspacePath,args)，会让显式 /remember 丢失可用的会话来源，削弱候选 provenance。",
+      "fix": "在 room 中调用 memoryCandidateCreate(workspacePath,args,taskId)，仅没有任务上下文的入口传 null；E2E 断言候选显示当前 task 引用，task 删除后引用按 T14 清理。"
+    },
+    {
+      "severity": "minor",
+      "task_id": "T12",
+      "category": "executability",
+      "problem": "T1 冻结的 MemoryOverview 字段是 last_injection，但 T12.1 要求读取 overview.injection_status；literal implementation 会产生 TypeScript 字段漂移。",
+      "fix": "统一为一个名称，例如 last_injection: MemoryInjectionStatus | null，并同步 T1、T10A、T12 和 mock/E2E 文案。"
+    },
+    {
+      "severity": "minor",
+      "task_id": "T2",
+      "category": "executability",
+      "problem": "T2 说 applying 时约束‘四个 durable intent 字段的合法组合’，但 apply_replace_rule_id 对普通新增批准必须可空；若 junior 把四列都设为 NOT NULL/CHECK，新增规则无法进入 applying。",
+      "fix": "写出精确 CHECK：status='applying' 时 apply_edited_text、apply_expected_revision、apply_intended_revision 非空，apply_replace_rule_id 可空；非 applying 状态四列全部为空。补新增批准与替换批准两种 migration constraint 测试。"
+    }
+  ],
+  "coverage_gaps": [
+    "缺少所有 rules mutation/acknowledge 对未解决 applying 的统一 preflight 和旁路禁止。",
+    "缺少 workspace forget 与最终 native/Codex run start、等待中 rule mutation 的共同线性化边界。",
+    "缺少 Node 20 下能够直接执行生产 TypeScript browser mock 的具体加载或抽取方案。"
+  ],
+  "suggested_skills": ["investigate", "blue-team", "devex-review", "careful", "review"]
+}

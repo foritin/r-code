@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>R-Code 安装程序</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <main class="installer" aria-label="R-Code 安装程序">
+      <header class="titlebar" data-tauri-drag-region>
+        <img src="icon.png" alt="" draggable="false" data-tauri-drag-region />
+        <strong data-tauri-drag-region>R-Code 安装程序</strong>
+        <span class="title-version" id="title-version" data-tauri-drag-region>v0.1.0</span>
+        <div class="window-actions" aria-label="窗口操作">
+          <button class="window-action" id="minimize-window" type="button" aria-label="最小化">—</button>
+          <button class="window-action close" id="close-window" type="button" aria-label="关闭">×</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <aside class="brand-stage" aria-label="R-Code 产品介绍">
+          <span class="energy-line" aria-hidden="true"></span>
+          <img class="brand-icon" src="icon.png" alt="R-Code" draggable="false" />
+          <p class="eyebrow">SESSION-FIRST AI CODING</p>
+          <h1>让代码工作，<br />让上下文留下。</h1>
+          <p>安装一个围绕任务、变更与验证展开的本地 AI 编程工作台。</p>
+          <div class="brand-points" aria-label="产品特点">
+            <span>本地优先</span>
+            <span>会话留痕</span>
+            <span>可审查变更</span>
+          </div>
+        </aside>
+
+        <section class="panel">
+          <section class="view active" data-view="welcome" aria-labelledby="welcome-title">
+            <div>
+              <p class="view-kicker">READY TO INSTALL <span class="version" id="welcome-version">v0.1.0</span></p>
+              <h2 id="welcome-title">安装 R-Code</h2>
+              <p class="lede" id="welcome-lede">默认安装到当前用户目录，不需要管理员权限。</p>
+              <p class="existing-note" id="existing-note">检测到已安装版本，将安全更新应用文件并保留本地数据。</p>
+            </div>
+
+            <div class="install-card">
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">⌁</span>
+                <span class="row-copy">
+                  <strong>安装位置</strong>
+                  <small id="path-summary">正在读取默认位置…</small>
+                </span>
+                <button class="text-button" id="customize" type="button" aria-expanded="false" aria-controls="custom-panel">自定义</button>
+              </div>
+              <div class="custom-panel" id="custom-panel">
+                <label for="install-path">目标文件夹</label>
+                <div class="path-field">
+                  <input id="install-path" spellcheck="false" autocomplete="off" aria-describedby="path-help" />
+                  <button class="secondary compact" id="browse-path" type="button">浏览…</button>
+                </div>
+                <small id="path-help">请选择一个当前用户有写入权限的文件夹。</small>
+              </div>
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">↗</span>
+                <span class="row-copy">
+                  <strong>创建应用快捷方式</strong>
+                  <small>添加到桌面和 Windows 开始菜单</small>
+                </span>
+                <label class="switch">
+                  <span class="sr-only">创建应用快捷方式</span>
+                  <input id="create-shortcuts" type="checkbox" checked />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
+              <div class="install-row">
+                <span class="row-icon" aria-hidden="true">▷</span>
+                <span class="row-copy">
+                  <strong>安装完成后启动</strong>
+                  <small>在完成页一键打开 R-Code</small>
+                </span>
+                <label class="switch">
+                  <span class="sr-only">安装完成后启动 R-Code</span>
+                  <input id="launch-after" type="checkbox" checked />
+                  <span aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="actions">
+              <p class="legal">继续安装表示你已阅读<button type="button" data-document="license">软件许可</button>与<button type="button" data-document="privacy">隐私说明</button>。</p>
+              <button class="primary" id="install-now" type="button">立即安装 <span aria-hidden="true">→</span></button>
+            </div>
+          </section>
+
+          <section class="view" data-view="installing" aria-labelledby="installing-title" aria-live="polite">
+            <div>
+              <p class="view-kicker">INSTALLING <span class="version shared-version">v0.1.0</span></p>
+              <h2 id="installing-title">正在安装 R-Code</h2>
+              <p class="lede" id="installing-message">正在验证安装包，请稍候。</p>
+            </div>
+
+            <div class="phase-map" aria-label="安装阶段">
+              <div class="phase active" data-phase="verify">
+                <span class="phase-dot" aria-hidden="true">1</span>
+                <span>验证并准备安装组件</span>
+                <span class="phase-state">进行中</span>
+              </div>
+              <div class="phase" data-phase="write">
+                <span class="phase-dot" aria-hidden="true">2</span>
+                <span>写入 R-Code 应用文件</span>
+                <span class="phase-state">等待</span>
+              </div>
+              <div class="phase" data-phase="integrate">
+                <span class="phase-dot" aria-hidden="true">3</span>
+                <span>创建快捷方式并完成集成</span>
+                <span class="phase-state">等待</span>
+              </div>
+            </div>
+
+            <div class="progress-wrap">
+              <div class="progress-head">
+                <strong>总体进度</strong>
+                <span class="progress-value" id="progress-value">2%</span>
+              </div>
+              <div class="progress-track" id="progress-track" role="progressbar" aria-label="安装进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="2">
+                <div class="progress-fill" id="progress-fill"></div>
+              </div>
+              <p class="progress-note" id="progress-note">验证阶段可以安全取消；写入开始后会完整结束当前操作。</p>
+            </div>
+
+            <div class="actions installing-actions">
+              <p class="destination">目标位置<br /><strong id="installing-path"></strong></p>
+              <button class="secondary" id="cancel-install" type="button">取消安装</button>
+            </div>
+          </section>
+
+          <section class="view result-view" data-view="complete" aria-labelledby="complete-title">
+            <div class="success-mark" aria-hidden="true">✓</div>
+            <p class="view-kicker">INSTALLATION COMPLETE</p>
+            <h2 id="complete-title">R-Code 已准备就绪</h2>
+            <p class="lede">应用已安装到你的电脑，可以马上开始一个新的编程任务。</p>
+            <div class="summary">
+              <div class="summary-row"><span>版本</span><strong id="complete-version">0.1.0</strong></div>
+              <div class="summary-row"><span>安装位置</span><strong id="complete-path"></strong></div>
+              <div class="summary-row"><span>本地数据</span><strong>已保留</strong></div>
+            </div>
+            <div class="actions result-actions">
+              <button class="secondary" id="complete-later" type="button">稍后</button>
+              <button class="primary" id="complete-primary" type="button">启动 R-Code <span aria-hidden="true">→</span></button>
+            </div>
+          </section>
+
+          <section class="view result-view" data-view="error" aria-labelledby="error-title">
+            <div class="error-mark" aria-hidden="true">!</div>
+            <p class="view-kicker error-kicker">INSTALLATION INTERRUPTED</p>
+            <h2 id="error-title">安装没有完成</h2>
+            <p class="lede" id="error-message">请检查安装位置后重试。</p>
+            <div class="error-code"><strong id="error-code">RCI-000</strong><span id="error-detail">安装程序未返回更多信息。</span></div>
+            <div class="actions result-actions">
+              <button class="secondary" id="error-close" type="button">关闭</button>
+              <button class="primary" id="retry-install" type="button">返回重试</button>
+            </div>
+          </section>
+        </section>
+      </div>
+
+      <div class="modal-backdrop" id="decision-backdrop" aria-hidden="true">
+        <section class="modal" role="dialog" aria-modal="true" aria-labelledby="decision-title" aria-describedby="decision-copy">
+          <h3 id="decision-title">取消安装？</h3>
+          <p id="decision-copy">现在取消会停止准备过程并清理临时文件。已经存在的项目和设置不会被删除。</p>
+          <div class="modal-actions">
+            <button class="secondary" id="continue-install" type="button">继续安装</button>
+            <button class="primary danger-action" id="confirm-cancel" type="button">确认取消</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="modal-backdrop" id="document-backdrop" aria-hidden="true">
+        <section class="modal document-modal" role="dialog" aria-modal="true" aria-labelledby="document-title">
+          <div class="document-heading">
+            <h3 id="document-title">软件许可</h3>
+            <button class="icon-button" id="close-document" type="button" aria-label="关闭文档">×</button>
+          </div>
+          <pre id="document-content" tabindex="0"></pre>
+          <div class="modal-actions">
+            <button class="primary" id="document-done" type="button">我知道了</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </main>
+  </body>
+</html>

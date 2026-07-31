@@ -18,7 +18,7 @@ R-Code 把对话、模型执行、工具审批、文件变更、验证和回放�
 
 | 平台 | 当前发布目标 | 安装包 |
 | --- | --- | --- |
-| Windows | x86_64 MSVC | NSIS `.exe`、WiX `.msi` |
+| Windows | x86_64 MSVC | 品牌安装器 `.exe`、NSIS updater `.exe`、WiX `.msi` |
 | macOS | Apple Silicon | `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
@@ -101,7 +101,10 @@ npm run build
 本地打包：
 
 ```bash
-# Windows
+# Windows：构建带品牌界面的最终安装器（内部复用 NSIS）
+./scripts/build-branded-installer.ps1
+
+# 如需单独构建原始 NSIS / MSI
 cargo tauri build --bundles nsis,msi
 
 # macOS
@@ -111,7 +114,7 @@ cargo tauri build --bundles app,dmg
 cargo tauri build --bundles appimage,deb
 ```
 
-产物位于 `target/release/bundle/`；指定 `--target` 时位于 `target/<triple>/release/bundle/`。
+Windows 最终安装器位于 `target/release/bundle/branded/`。其他产物位于 `target/release/bundle/`；指定 `--target` 时位于 `target/<triple>/release/bundle/`。
 
 ## 发布
 
@@ -133,6 +136,7 @@ git push origin v0.1.0
 ```text
 r-code/
 ├─ crates/                    # 产品私有 Rust crates
+├─ installer/                 # Windows 品牌安装器与 NSIS 载荷封装
 ├─ src-tauri/                 # Tauri Host 与正式 React 前端
 ├─ vendor/agent-core/         # 公共合同子模块
 ├─ docs/                      # 当前 Markdown 文档与 UI 参考图
