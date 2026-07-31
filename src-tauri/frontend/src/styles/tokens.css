@@ -97,7 +97,7 @@
 :root[data-theme='obsidian'] {
   color-scheme: dark;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
-  --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+  --font-display: 'Iowan Old Style', Georgia, serif;
   --font-mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
 
   --bg-app: #16171b;
@@ -139,7 +139,7 @@
 :root[data-theme='studio-light'] {
   color-scheme: light;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', sans-serif;
-  --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
+  --font-display: 'Iowan Old Style', Georgia, serif;
   --font-mono: 'SF Mono', Menlo, Monaco, Consolas, monospace;
 
   --bg-app: #f3f3f1;
