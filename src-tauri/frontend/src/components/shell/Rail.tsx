@@ -112,8 +112,9 @@ export function Rail() {
         <div className="sidebar-section-head">
           <span className="rail-label">项目</span>
           {runningCount > 0 && <small className="rail-label">{runningCount} 运行中</small>}
-          <button className="sidebar-project-manage" onClick={() => setScene("projects")} aria-label="管理和添加项目" title="管理和添加项目">
-            <IconPlus width={14} height={14} />
+          <button className="sidebar-project-manage" onClick={() => setScene("projects")} aria-label="管理项目" title="管理项目：添加或清除项目">
+            <IconSettings width={13} height={13} />
+            <span className="rail-label">管理</span>
           </button>
         </div>
         <div className="sidebar-project-list">

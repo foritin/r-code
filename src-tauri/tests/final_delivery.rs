@@ -275,3 +275,16 @@ fn f18_work_card_rollback() {
     });
     assert!(card.validate().is_ok());
 }
+
+/// F-19: Windows release launches as a desktop GUI without opening a console window.
+#[test]
+fn f19_windows_release_uses_gui_subsystem() {
+    let main = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
+    )
+    .unwrap();
+    assert!(
+        main.contains("windows_subsystem = \"windows\""),
+        "release builds must use the Windows GUI subsystem"
+    );
+}

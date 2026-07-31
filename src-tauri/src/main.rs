@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 //! R-Code Host 二进制入口 -- Tauri 应用壳。
 //!
 //! 启动流程：
