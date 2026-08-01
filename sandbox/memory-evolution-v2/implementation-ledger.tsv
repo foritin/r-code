@@ -4,3 +4,6 @@ iter	task	phase	tests	quality	pass	note
 1	T0M	engineer	12/12 targeted migrations	-	-	Added contiguous MigrationSpec registry, atomic schema_version initialization, BEGIN IMMEDIATE per-version apply with in-lock recheck, FK-off wrapper for migration 002, fault hooks and transactional version stamp
 1	T0M	qa	1113/1113	min4	yes	Authored four sharp test groups for zero-write registry rejection, both rollback windows, parent-child/FK preservation and two-connection non-idempotent concurrency; full Rust regression green excluding only baseline F20
 1	T0M	keep	1113/1113	min4	yes	T0M acceptance criteria met; source and test ownership remained disjoint after Engineer degraded locally and independent QA authored tests
+1	T0W1	engineer	cargo check --workspace + lib clippy	-	-	Added schema 014 stable workspace owner ids, inherit/read_only/off mode, monotonic generation CAS, preserving UPSERT RETURNING, get_by_id, service winner identity, and host migration metadata
+1	T0W1	qa	1120/1120	min4	yes	Authored schema13 fixture/fault, UUID serde, preserving upsert, CAS/read, reopen/case and two-database barrier concurrency tests; full Rust regression green excluding only baseline F20
+1	T0W1	keep	1120/1120	min4	yes	T0W1 acceptance criteria met; schema14 creates no memory tables or rows and path is no longer the future memory owner key

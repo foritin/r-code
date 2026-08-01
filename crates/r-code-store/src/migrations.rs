@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 13;
+pub const LATEST_SCHEMA_VERSION: u32 = 14;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -42,6 +42,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(11, MIGRATION_011, false),
     MigrationSpec::new(12, MIGRATION_012, false),
     MigrationSpec::new(13, MIGRATION_013, false),
+    MigrationSpec::new(14, MIGRATION_014, true),
 ];
 
 impl MigrationSpec {
@@ -606,9 +607,53 @@ const MIGRATION_013: &str = r#"
 ALTER TABLE tasks ADD COLUMN inference_json TEXT NOT NULL DEFAULT '{}';
 "#;
 
+/// Migration 014: 稳定的 workspace owner key 与项目记忆模式。
+///
+/// `canonical_path` 仍然唯一，但不再承担未来 memory 外键的所有者身份。重建时为
+/// 每个既有 workspace 生成一次 128-bit 本地 id；本迁移不创建或启用任何记忆数据。
+const MIGRATION_014: &str = r#"
+CREATE TABLE workspaces_v14 (
+    id TEXT NOT NULL UNIQUE,
+    canonical_path TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    access_mode TEXT NOT NULL DEFAULT 'request_approval'
+        CHECK (access_mode IN ('request_approval', 'risk_based', 'full_access')),
+    last_opened_at TEXT NOT NULL,
+    memory_mode TEXT NOT NULL DEFAULT 'inherit'
+        CHECK (memory_mode IN ('inherit', 'read_only', 'off')),
+    memory_generation INTEGER NOT NULL DEFAULT 1
+        CHECK (memory_generation >= 1)
+);
+
+INSERT INTO workspaces_v14 (
+    id,
+    canonical_path,
+    display_name,
+    access_mode,
+    last_opened_at,
+    memory_mode,
+    memory_generation
+)
+SELECT
+    lower(hex(randomblob(16))),
+    canonical_path,
+    display_name,
+    access_mode,
+    last_opened_at,
+    'inherit',
+    1
+FROM workspaces;
+
+DROP TABLE workspaces;
+ALTER TABLE workspaces_v14 RENAME TO workspaces;
+CREATE INDEX idx_workspaces_last_opened
+    ON workspaces(last_opened_at DESC);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Barrier,
@@ -703,6 +748,22 @@ mod tests {
         conn
     }
 
+    fn schema_13_database_with_workspaces() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations_with_specs(&conn, &MIGRATIONS[..13], None).unwrap();
+        conn.execute_batch(
+            "INSERT INTO workspaces \
+                 (canonical_path, display_name, trust_state, last_opened_at, access_mode) \
+             VALUES \
+                 ('/Repo/Alpha', 'Alpha', 'untrusted', '2025-01-01T00:00:00Z', 'request_approval'), \
+                 ('/repo/alpha', 'Beta', 'trusted', '2025-02-02T03:04:05Z', 'full_access'), \
+                 ('/space path', 'Gamma', 'trusted', '2025-03-03T06:07:08Z', 'risk_based');",
+        )
+        .unwrap();
+        conn
+    }
+
     #[test]
     fn migration_v2_preserves_children_and_restores_foreign_keys() {
         let conn = v1_database_with_parent_and_children();
@@ -738,6 +799,157 @@ mod tests {
             )
             .unwrap();
         assert_eq!(migrated, ("/workspace".into(), 2, 0, 1));
+    }
+
+    #[test]
+    fn migration_v14_backfills_stable_unique_ids_and_preserves_schema_13_rows() {
+        type WorkspaceRow = (String, String, String, String, String, String, i64);
+        let conn = schema_13_database_with_workspaces();
+
+        run_migrations(&conn).unwrap();
+        let rows: Vec<WorkspaceRow> = conn
+            .prepare(
+                "SELECT id, canonical_path, display_name, access_mode, last_opened_at, \
+                        memory_mode, memory_generation \
+                 FROM workspaces ORDER BY canonical_path",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        assert_eq!(rows.len(), 3);
+        let ids: HashSet<&str> = rows.iter().map(|row| row.0.as_str()).collect();
+        assert_eq!(ids.len(), rows.len());
+        assert!(ids
+            .iter()
+            .all(|id| id.len() == 32 && id.chars().all(|c| c.is_ascii_hexdigit())));
+        assert_eq!(
+            rows.iter()
+                .map(|row| {
+                    (
+                        row.1.as_str(),
+                        row.2.as_str(),
+                        row.3.as_str(),
+                        row.4.as_str(),
+                        row.5.as_str(),
+                        row.6,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "/Repo/Alpha",
+                    "Alpha",
+                    "request_approval",
+                    "2025-01-01T00:00:00Z",
+                    "inherit",
+                    1,
+                ),
+                (
+                    "/repo/alpha",
+                    "Beta",
+                    "full_access",
+                    "2025-02-02T03:04:05Z",
+                    "inherit",
+                    1,
+                ),
+                (
+                    "/space path",
+                    "Gamma",
+                    "risk_based",
+                    "2025-03-03T06:07:08Z",
+                    "inherit",
+                    1,
+                ),
+            ]
+        );
+        let memory_tables: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND (name LIKE 'memory_%' OR name LIKE '%memories%')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(memory_tables, 0);
+        assert_eq!(
+            conn.query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+
+        let first_ids: Vec<String> = rows.into_iter().map(|row| row.0).collect();
+        run_migrations(&conn).unwrap();
+        let rerun_ids: Vec<String> = conn
+            .prepare("SELECT id FROM workspaces ORDER BY canonical_path")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rerun_ids, first_ids);
+    }
+
+    #[test]
+    fn migration_v14_faults_restore_schema_13_and_foreign_keys_before_retry() {
+        for fault_point in [
+            MigrationFaultPoint::AfterSqlBeforeVersion,
+            MigrationFaultPoint::BeforeCommit,
+        ] {
+            let conn = schema_13_database_with_workspaces();
+            let fault = |version, point| {
+                if version == 14 && point == fault_point {
+                    return Err(ProductError::MigrationError("injected v14 fault".into()));
+                }
+                Ok(())
+            };
+
+            assert!(run_migrations_with_specs(&conn, MIGRATIONS, Some(&fault)).is_err());
+            let rolled_back: (i64, i64, i64, i64, i64) = conn
+                .query_row(
+                    "SELECT (SELECT MAX(version) FROM schema_version), \
+                            (SELECT COUNT(*) FROM workspaces), \
+                            (SELECT COUNT(*) FROM pragma_table_info('workspaces') WHERE name = 'id'), \
+                            (SELECT COUNT(*) FROM sqlite_master WHERE name = 'workspaces_v14'), \
+                            (SELECT foreign_keys FROM pragma_foreign_keys)",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .unwrap();
+            assert_eq!(rolled_back, (13, 3, 0, 0, 1));
+
+            run_migrations(&conn).unwrap();
+            let retried: (i64, i64, i64) = conn
+                .query_row(
+                    "SELECT (SELECT MAX(version) FROM schema_version), \
+                            (SELECT COUNT(*) FROM workspaces), \
+                            (SELECT foreign_keys FROM pragma_foreign_keys)",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .unwrap();
+            assert_eq!(retried, (14, 3, 1));
+        }
     }
 
     #[test]
