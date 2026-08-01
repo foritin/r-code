@@ -314,7 +314,7 @@ fn f20_nsis_uses_r_code_icons() {
     let hooks = std::fs::read_to_string(manifest_dir.join("installer-hooks.nsh")).unwrap();
     assert!(hooks.contains("NSIS_HOOK_PREINSTALL"));
     assert!(hooks.contains("NSIS_HOOK_POSTINSTALL"));
-    assert!(hooks.contains("/RC_PROGRESS="));
+    assert!(hooks.contains("/BRANDED_PROGRESS="));
 }
 
 /// F-21: The distributable Windows installer is a real branded bootstrapper,
