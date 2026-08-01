@@ -331,6 +331,13 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 13,
+            to_version: 14,
+            description: "Stable workspace identity and local memory mode".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
