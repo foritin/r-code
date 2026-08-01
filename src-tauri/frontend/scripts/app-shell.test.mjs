@@ -189,6 +189,103 @@ test("archived conversations remain available as read-only history", async () =>
   await page.close();
 });
 
+test("workspace mock keeps opaque identity stable until forget", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const result = await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    const { browserMockWorkspaces } = await import("/src/lib/mock-data.ts");
+    const path = "D:/identity-regression/shared-name";
+    const siblingPath = "D:/other-root/shared-name";
+    const legacyPath = "D:/legacy/workspace";
+    const trackedPaths = new Set([path, siblingPath, legacyPath]);
+
+    try {
+      const first = await browserMockInvoke("cmd_workspace_open", { path });
+      const second = await browserMockInvoke("cmd_workspace_open", { path });
+      const sibling = await browserMockInvoke("cmd_workspace_open", { path: siblingPath });
+      const listed = await browserMockInvoke("cmd_workspace_list");
+      const firstListed = listed.find((workspace) => workspace.canonical_path === path);
+      const routed = await browserMockInvoke("cmd_workspace_set_access_mode", {
+        workspacePath: path,
+        accessMode: "full_access",
+      });
+
+      const legacy = {
+        canonical_path: legacyPath,
+        display_name: "workspace",
+        access_mode: "request_approval",
+        last_opened_at: "2026-01-01T00:00:00.000Z",
+      };
+      browserMockWorkspaces.unshift(legacy);
+      const legacyListed = (await browserMockInvoke("cmd_workspace_list"))
+        .find((workspace) => workspace.canonical_path === legacyPath);
+      const legacyOpened = await browserMockInvoke("cmd_workspace_open", { path: legacyPath });
+      const legacyListedAgain = (await browserMockInvoke("cmd_workspace_list"))
+        .find((workspace) => workspace.canonical_path === legacyPath);
+
+      legacy.memory_mode = "future_mode";
+      let invalidListError = "";
+      let invalidOpenError = "";
+      try {
+        await browserMockInvoke("cmd_workspace_list");
+      } catch (error) {
+        invalidListError = String(error);
+      }
+      try {
+        await browserMockInvoke("cmd_workspace_open", { path: legacyPath });
+      } catch (error) {
+        invalidOpenError = String(error);
+      }
+      legacy.memory_mode = "inherit";
+
+      await browserMockInvoke("cmd_workspace_forget", { workspacePath: path });
+      const reopened = await browserMockInvoke("cmd_workspace_open", { path });
+
+      return {
+        first,
+        second,
+        sibling,
+        firstListed,
+        routed,
+        legacyListed,
+        legacyOpened,
+        legacyListedAgain,
+        invalidListError,
+        invalidOpenError,
+        reopened,
+      };
+    } finally {
+      for (let index = browserMockWorkspaces.length - 1; index >= 0; index -= 1) {
+        if (trackedPaths.has(browserMockWorkspaces[index].canonical_path)) {
+          browserMockWorkspaces.splice(index, 1);
+        }
+      }
+    }
+  });
+
+  assert.equal(result.first.id, result.second.id);
+  assert.equal(result.firstListed.id, result.first.id);
+  assert.equal(result.firstListed.memory_mode, "inherit");
+  assert.equal(result.firstListed.memory_generation, 1);
+  assert.equal(result.first.canonical_path, "D:/identity-regression/shared-name");
+  assert.equal(result.routed.canonical_path, result.first.canonical_path);
+  assert.equal(result.routed.id, result.first.id, "path-based navigation must not replace identity");
+  assert.notEqual(result.first.id, result.first.canonical_path);
+  assert.notEqual(result.first.id, result.first.display_name);
+  assert.notEqual(result.first.id, result.sibling.id, "display name must not determine identity");
+  assert.notEqual(result.first.id, result.reopened.id, "forget must discard the old identity");
+
+  assert.equal(result.legacyListed.memory_mode, "inherit");
+  assert.equal(result.legacyListed.memory_generation, 1);
+  assert.equal(result.legacyOpened.id, result.legacyListed.id);
+  assert.equal(result.legacyListedAgain.id, result.legacyListed.id);
+  assert.match(result.invalidListError, /memory_mode/);
+  assert.match(result.invalidOpenError, /memory_mode/);
+  await page.close();
+});
+
 test("clearing a project removes app records without implying disk deletion", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

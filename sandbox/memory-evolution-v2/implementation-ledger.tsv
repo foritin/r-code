@@ -7,3 +7,6 @@ iter	task	phase	tests	quality	pass	note
 1	T0W1	engineer	cargo check --workspace + lib clippy	-	-	Added schema 014 stable workspace owner ids, inherit/read_only/off mode, monotonic generation CAS, preserving UPSERT RETURNING, get_by_id, service winner identity, and host migration metadata
 1	T0W1	qa	1120/1120	min4	yes	Authored schema13 fixture/fault, UUID serde, preserving upsert, CAS/read, reopen/case and two-database barrier concurrency tests; full Rust regression green excluding only baseline F20
 1	T0W1	keep	1120/1120	min4	yes	T0W1 acceptance criteria met; schema14 creates no memory tables or rows and path is no longer the future memory owner key
+1	T0W2	engineer	frontend build + cargo check	-	-	Added frontend Workspace identity/mode/generation wire contract plus stable browser-mock generation, legacy defaults, validation and identity reuse; Rust serde required no adapter
+1	T0W2	qa	1122/1122	min5	yes	Authored Rust command serde/forget tests and browser identity/legacy/invalid-mode smoke; 3 unrelated app-shell 1px layout failures reproduce on clean baseline
+1	T0W2	keep	1122/1122	min5	yes	T0W2 acceptance criteria met; WebView can retain opaque workspace ids while navigation remains canonical-path based

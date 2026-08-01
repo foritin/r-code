@@ -11888,6 +11888,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn workspace_commands_round_trip_identity_and_memory_contract() {
+        let (_dir, state) = setup_state();
+        let opened = workspace_open(&state, &state.project_root).await.unwrap();
+        let reopened = workspace_open(&state, &state.project_root).await.unwrap();
+        let opened_json = serde_json::to_value(&opened).unwrap();
+        let opened_round_trip: Workspace = serde_json::from_value(opened_json.clone()).unwrap();
+
+        assert!(!opened.id.is_empty());
+        assert_ne!(opened.id, opened.canonical_path);
+        assert_ne!(opened.id, opened.display_name);
+        assert_eq!(reopened.id, opened.id);
+        assert_eq!(opened_json["id"], opened.id);
+        assert_eq!(opened_json["memory_mode"], "inherit");
+        assert_eq!(opened_json["memory_generation"], 1);
+        assert_eq!(opened_round_trip, opened);
+
+        let listed = workspace_list(&state).await.unwrap();
+        let listed_json = serde_json::to_value(&listed).unwrap();
+        assert_eq!(listed_json[0]["id"], opened.id);
+        assert_eq!(listed_json[0]["memory_mode"], "inherit");
+        assert_eq!(listed_json[0]["memory_generation"], 1);
+
+        for (mode, wire, generation) in [
+            (
+                r_code_core::dto::WorkspaceMemoryMode::Inherit,
+                "inherit",
+                2_u64,
+            ),
+            (
+                r_code_core::dto::WorkspaceMemoryMode::ReadOnly,
+                "read_only",
+                3_u64,
+            ),
+            (r_code_core::dto::WorkspaceMemoryMode::Off, "off", 4_u64),
+        ] {
+            let mut fixture = opened_json.clone();
+            fixture["memory_mode"] = serde_json::json!(wire);
+            fixture["memory_generation"] = serde_json::json!(generation);
+            let decoded: Workspace = serde_json::from_value(fixture).unwrap();
+            assert_eq!(decoded.memory_mode, mode);
+            assert_eq!(decoded.memory_generation, generation);
+            assert_eq!(serde_json::to_value(decoded).unwrap()["memory_mode"], wire);
+        }
+
+        let mut unknown_mode = opened_json;
+        unknown_mode["memory_mode"] = serde_json::json!("future_mode");
+        assert!(serde_json::from_value::<Workspace>(unknown_mode).is_err());
+    }
+
+    #[tokio::test]
     async fn workspace_forget_clears_app_records_but_preserves_real_files() {
         let (dir, state) = setup_state();
         let project = dir.path().join("real-project");
@@ -11977,6 +12027,7 @@ mod tests {
 
         let reopened = workspace_open(&state, &project).await.unwrap();
         assert_eq!(reopened.canonical_path, workspace.canonical_path);
+        assert_ne!(reopened.id, workspace.id);
         assert_eq!(workspace_list(&state).await.unwrap().len(), 1);
         assert!(TaskRepository::new(&state.db)
             .get(&task.id)

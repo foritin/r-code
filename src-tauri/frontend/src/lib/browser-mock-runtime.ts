@@ -89,6 +89,41 @@ function nextId(prefix: string): string {
   return `demo-${prefix}-${Date.now().toString(36)}-${sequence}`;
 }
 
+function newWorkspaceId(): string {
+  return globalThis.crypto.randomUUID().replaceAll("-", "");
+}
+
+function isWorkspaceMemoryMode(value: unknown): value is Workspace["memory_mode"] {
+  return value === "inherit" || value === "read_only" || value === "off";
+}
+
+function normalizeWorkspace(workspace: Workspace): Workspace {
+  const legacy = workspace as unknown as {
+    id?: unknown;
+    memory_mode?: unknown;
+    memory_generation?: unknown;
+  };
+
+  if (legacy.id === undefined) workspace.id = newWorkspaceId();
+  else if (typeof legacy.id !== "string" || legacy.id.length === 0) throw new Error("Demo workspace id 无效");
+
+  if (legacy.memory_mode === undefined) workspace.memory_mode = "inherit";
+  else if (!isWorkspaceMemoryMode(legacy.memory_mode)) {
+    throw new Error(`Demo workspace memory_mode 无效: ${String(legacy.memory_mode)}`);
+  }
+
+  if (legacy.memory_generation === undefined) workspace.memory_generation = 1;
+  else if (
+    typeof legacy.memory_generation !== "number"
+    || !Number.isSafeInteger(legacy.memory_generation)
+    || legacy.memory_generation < 1
+  ) {
+    throw new Error("Demo workspace memory_generation 无效");
+  }
+
+  return workspace;
+}
+
 function stringArg(args: MockArgs, key: string): string {
   const value = args[key];
   if (typeof value !== "string") throw new Error(`Demo 参数 ${key} 无效`);
@@ -115,7 +150,7 @@ function detailById(taskId: string): TaskDetail {
 function workspaceByPath(path: string): Workspace {
   const workspace = browserMockWorkspaces.find((item) => item.canonical_path === path);
   if (!workspace) throw new Error(`Demo 中不存在项目 ${path}`);
-  return workspace;
+  return normalizeWorkspace(workspace);
 }
 
 function addEvent(detail: TaskDetail, eventType: TaskDetail["events"][number]["event_type"]): void {
@@ -724,12 +759,20 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_prepare_workbench_window": return false;
 
-    case "cmd_workspace_list": return copy(browserMockWorkspaces);
+    case "cmd_workspace_list": return copy(browserMockWorkspaces.map(normalizeWorkspace));
     case "cmd_workspace_open": {
       const path = stringArg(args, "path");
       const existing = browserMockWorkspaces.find((item) => item.canonical_path === path);
-      if (existing) return copy(existing);
-      const workspace: Workspace = { canonical_path: path, display_name: path.split(/[\\/]/).filter(Boolean).pop() ?? path, access_mode: "request_approval", last_opened_at: nowIso() };
+      if (existing) return copy(normalizeWorkspace(existing));
+      const workspace: Workspace = {
+        id: newWorkspaceId(),
+        canonical_path: path,
+        display_name: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
+        access_mode: "request_approval",
+        last_opened_at: nowIso(),
+        memory_mode: "inherit",
+        memory_generation: 1,
+      };
       browserMockWorkspaces.unshift(workspace);
       return copy(workspace);
     }
@@ -758,7 +801,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return { removed: index >= 0, removed_sessions: removedTaskIds.length };
     }
     case "cmd_workspace_choose": {
-      const workspace = browserMockWorkspaces[0];
+      const workspace = normalizeWorkspace(browserMockWorkspaces[0]);
       workspace.last_opened_at = nowIso();
       return copy(workspace);
     }
