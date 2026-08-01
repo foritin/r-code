@@ -506,6 +506,16 @@ function ProviderSection({
     normalizeUrl(fields.base_url) === normalizeUrl(activePreset.base_url) &&
     fields.protocol === "openai_responses" &&
     fields.model.trim() !== "deepseek-v4-flash";
+  const allowedProtocolOptions = allowedProtocols(activePreset, fields.base_url);
+  const protocolMismatch = Boolean(
+    allowedProtocolOptions && !allowedProtocolOptions.includes(fields.protocol)
+  );
+  const advancedMustOpen =
+    presetName === CUSTOM_PRESET ||
+    pendingVars.length > 0 ||
+    protocolMismatch ||
+    deepSeekResponsesUnsupported ||
+    outputExceedsDeepSeekLimit;
   // 占位符没替换就保存 = 一个必然 404 的地址进了配置
   const saveBlocked =
     busy || outputExceedsDeepSeekLimit || deepSeekResponsesUnsupported || pendingVars.length > 0;
@@ -574,242 +584,241 @@ function ProviderSection({
             )}
           </div>
 
-          <div className="field">
-            <label htmlFor="set-preset">预设</label>
-            <select id="set-preset"
-              className="input"
-              value={presetName}
-              disabled={busy || Boolean(editing)}
-              onChange={(event) => applyPreset(event.target.value)}
-            >
-              {groupByCategory(catalog).map(([category, presets]) => (
-                <optgroup key={category} label={CATEGORY_LABELS[category] ?? category}>
-                  {presets.map((preset) => (
-                    <option key={preset.id} value={preset.id}>{preset.label}</option>
-                  ))}
-                </optgroup>
-              ))}
-              <option value={CUSTOM_PRESET}>自建 / 其它 OpenAI 兼容接口</option>
-            </select>
-            {activePreset && (
-              <span className="hint">
-                {`推荐 ${PROTOCOL_LABELS[activePreset.protocol]}`}
-                {activePreset.context_window != null &&
-                  ` · 上下文 ${activePreset.context_window.toLocaleString()}`}
-                {activePreset.api_key_url && (
-                  <>
-                    {" · "}
-                    <a href={activePreset.api_key_url} target="_blank" rel="noreferrer">获取密钥</a>
-                  </>
-                )}
-              </span>
-            )}
-            {activePreset?.note && <span className="field-warning">{activePreset.note}</span>}
-            {editing && <span className="hint">已有服务保留其当前设置；如需新预设，请新建一项。</span>}
-          </div>
-          <div className="field">
-            <label htmlFor="set-profile-name">配置名称</label>
-            <input id="set-profile-name"
-              className="input"
-              value={profileName}
-              readOnly={Boolean(editing)}
-              placeholder="例如：DeepSeek 工作账户"
-              onChange={(event) => setProfileName(event.target.value)}
-            />
-            {editing && <span className="hint">名称用于区分配置；需要改名时新建后删除旧项。</span>}
-          </div>
-          <div className="field">
-            <label htmlFor="set-base-url">接口地址</label>
-            <input id="set-base-url"
-              className="input"
-              value={fields.base_url}
-              placeholder="https://api.example.com/v1"
-              onChange={(event) => setFields((value) => ({ ...value, base_url: event.target.value }))}
-            />
-            <span className="hint">填写服务根地址，不要填写完整的 /chat/completions 路径。</span>
-            {pendingVars.length > 0 && (
-              <span className="field-warning">
-                地址里还有占位符待替换：
-                {pendingVars.map((variable) => `\${${variable.name}}（${variable.label}）`).join("、")}
-              </span>
-            )}
-            {activePreset && activePreset.endpoint_candidates.length > 0 && (
-              <span className="hint">
-                接口线路：
-                <button
-                  className="quiet-link"
-                  type="button"
-                  disabled={busy}
-                  title={`${activePreset.base_url}（${PROTOCOL_LABELS[activePreset.protocol]}）`}
-                  onClick={() =>
-                    setFields((value) => ({
-                      ...value,
-                      base_url: activePreset.base_url,
-                      protocol: activePreset.protocol,
-                    }))
-                  }
+          <div className="provider-form">
+            <div className="provider-form-grid">
+              <div className="provider-form-field">
+                <label htmlFor="set-preset">预设</label>
+                <select id="set-preset"
+                  className="input"
+                  value={presetName}
+                  disabled={busy || Boolean(editing)}
+                  onChange={(event) => applyPreset(event.target.value)}
                 >
-                  主入口
-                </button>
-                {activePreset.endpoint_candidates.map((candidate) => (
-                  <Fragment key={candidate.url}>
-                    {" · "}
-                    <button
-                      className="quiet-link"
-                      type="button"
-                      disabled={busy}
-                      title={`${candidate.url}（${PROTOCOL_LABELS[candidate.protocol]}）`}
-                      // 协议必须跟着地址一起切：多数备用线路是同一厂商的另一个协议口，
-                      // 只改地址会把 Anthropic 的请求发到一个只有 Chat 的 endpoint 上。
-                      onClick={() =>
-                        setFields((value) => ({
-                          ...value,
-                          base_url: candidate.url,
-                          protocol: candidate.protocol,
-                        }))
-                      }
-                    >
-                      {candidate.label}
-                    </button>
-                  </Fragment>
-                ))}
-              </span>
-            )}
-          </div>
-          <div className="field">
-            <label htmlFor="set-protocol">线路协议</label>
-            <select id="set-protocol"
-              className="input"
-              disabled={busy}
-              value={fields.protocol}
-              onChange={(event) =>
-                setFields((value) => ({
-                  ...value,
-                  protocol: event.target.value as ProviderProtocol,
-                }))
-              }
-            >
-              {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
-                <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
-              ))}
-            </select>
-            <span className="hint">
-              决定请求体形状与鉴权头。同一地址支持多种协议时计费和能力可能不同，由你决定走哪个。
-            </span>
-            {deepSeekResponsesUnsupported && (
-              <span className="field-warning" role="alert">
-                DeepSeek Responses 当前仅支持 deepseek-v4-flash（0731）；V4 Pro 请改用 Chat Completions 或 Anthropic 口。
-              </span>
-            )}
-            {fields.protocol === "openai_responses" && (
-              <span className="field-warning">
-                Responses 仅部分服务实现完整；不确定时选 Chat Completions。
-                {activePreset && !activePreset.reasoning_replay &&
-                  " 该服务不支持加密推理回放，多轮工具调用间的思维链不连续。"}
-              </span>
-            )}
-            {(() => {
-              const allowed = allowedProtocols(activePreset, fields.base_url);
-              if (!allowed) {
-                return activePreset ? (
-                  <span className="hint">
-                    地址已改写，协议不再受预设约束——请按你这条线路实际实现的接口选择。
+                  {groupByCategory(catalog).map(([category, presets]) => (
+                    <optgroup key={category} label={CATEGORY_LABELS[category] ?? category}>
+                      {presets.map((preset) => (
+                        <option key={preset.id} value={preset.id}>{preset.label}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                  <option value={CUSTOM_PRESET}>自建 / 其它 OpenAI 兼容接口</option>
+                </select>
+                {activePreset && (
+                  <span className="provider-field-meta">
+                    {PROTOCOL_LABELS[activePreset.protocol]}
+                    {activePreset.context_window != null &&
+                      ` · ${activePreset.context_window.toLocaleString()} 上下文`}
+                    {activePreset.api_key_url && (
+                      <>
+                        {" · "}
+                        <a href={activePreset.api_key_url} target="_blank" rel="noreferrer">获取密钥</a>
+                      </>
+                    )}
                   </span>
-                ) : null;
-              }
-              if (allowed.includes(fields.protocol)) return null;
-              return (
-                <span className="field-warning">
-                  该地址不支持这个协议，保存会被拒绝。可选：
-                  {allowed.map((protocol) => PROTOCOL_LABELS[protocol]).join(" / ")}
-                </span>
-              );
-            })()}
-          </div>
-          <div className="field">
-            <label htmlFor="set-model">模型</label>
-            <div className="provider-model-controls">
-              {/* 保留自由输入：并不是所有兼容网关都实现 /models。 */}
-              <input id="set-model"
-                className="input"
-                value={fields.model}
-                placeholder="模型名称"
-                onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
-              />
-              <select
-                className="input provider-model-select"
-                aria-label="从模型列表选择"
-                title="从模型列表选择"
-                value=""
-                disabled={busy || modelChoices.length === 0}
-                onChange={(event) => {
-                  if (event.target.value) {
-                    setFields((value) => ({ ...value, model: event.target.value }));
-                  }
-                }}
-              >
-                <option value="">选择模型（{modelChoices.length}）</option>
-                {modelChoices.map((model) => (
-                  <option key={model} value={model}>{model}</option>
-                ))}
-              </select>
-              <button
-                className={`btn provider-model-refresh${modelsBusy ? " loading" : ""}`}
-                type="button"
-                disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
-                title="从当前接口实时获取模型列表"
-                onClick={() => void fetchModels()}
-              >
-                <IconRefresh width={15} height={15} />
-                {modelsBusy ? "获取中" : "获取列表"}
-              </button>
+                )}
+                {editing && <span className="provider-field-meta">更换预设请新建服务</span>}
+              </div>
+
+              <div className="provider-form-field">
+                <label htmlFor="set-profile-name">配置名称</label>
+                <input id="set-profile-name"
+                  className="input"
+                  value={profileName}
+                  readOnly={Boolean(editing)}
+                  placeholder="例如：DeepSeek 工作账户"
+                  onChange={(event) => setProfileName(event.target.value)}
+                />
+              </div>
+
+              <div className="provider-form-field provider-form-field-wide">
+                <div className="provider-field-label-row">
+                  <label htmlFor="set-api-key">访问密钥</label>
+                  <span className={credential?.configured ? "saved" : undefined}>{credentialLabel}</span>
+                </div>
+                <input id="set-api-key"
+                  className="input"
+                  type="password"
+                  autoComplete="off"
+                  placeholder={credential?.configured ? "留空则保留当前密钥" : "粘贴访问密钥"}
+                  value={keyInput}
+                  onChange={(event) => setKeyInput(event.target.value)}
+                />
+              </div>
+
+              <div className="provider-form-field provider-form-field-wide">
+                <label htmlFor="set-model">模型</label>
+                <div className="provider-model-input">
+                  {/* datalist 同时保留自由输入与接口候选；不是所有兼容网关都实现 /models。 */}
+                  <input id="set-model"
+                    className="provider-model-text"
+                    list="set-model-options"
+                    value={fields.model}
+                    placeholder="输入或同步模型名称"
+                    onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
+                  />
+                  <button
+                    className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
+                    type="button"
+                    disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
+                    title="从当前接口同步模型列表"
+                    onClick={() => void fetchModels()}
+                  >
+                    <IconRefresh width={15} height={15} />
+                    {modelsBusy ? "同步中" : "同步模型"}
+                  </button>
+                </div>
+                <datalist id="set-model-options">
+                  {modelChoices.map((model) => <option key={model} value={model} />)}
+                </datalist>
+                {modelsMessage && <span className="provider-field-success" role="status">{modelsMessage}</span>}
+                {modelsError && <span className="provider-field-warning" role="alert">{modelsError}</span>}
+              </div>
             </div>
-            <span className="hint">可从当前接口实时获取并选择；接口不支持时仍可直接填写。</span>
-            {modelsMessage && <span className="field-success" role="status">{modelsMessage}</span>}
-            {modelsError && <span className="field-warning" role="alert">{modelsError}</span>}
-          </div>
-          <div className="field">
-            <label htmlFor="set-api-key">访问密钥</label>
-            <span className="val">{credentialLabel}</span>
-            <input id="set-api-key"
-              className="input"
-              type="password"
-              placeholder={credential?.configured ? "留空则保留当前密钥" : "粘贴访问密钥"}
-              value={keyInput}
-              onChange={(event) => setKeyInput(event.target.value)}
-            />
-          </div>
-          <div className="field token-field">
-            <label htmlFor="set-max-tokens">最大输出</label>
-            <input id="set-max-tokens"
-              className="input"
-              inputMode="numeric"
-              value={fields.max_tokens}
-              onChange={(event) => setFields((value) => ({ ...value, max_tokens: event.target.value }))}
-            />
-            <span className="hint">
-              {deepSeekV4
-                ? "单次回复上限。V4 的上下文为 1,000,000，最大输出为 393,216；通常建议 8,192。"
-                : "单次回复上限，不是上下文窗口。通常 8,192 已足够。"}
-            </span>
-            {outputExceedsDeepSeekLimit && (
-              <span className="field-warning">
-                当前旧值超出服务限制；请求会暂时按 393,216 发送。请改为建议值后保存。
-                <button className="quiet-link" type="button" onClick={() => setFields((value) => ({ ...value, max_tokens: OUTPUT_DEFAULT }))}>
-                  恢复为 8,192
-                </button>
-              </span>
-            )}
-          </div>
-          <div className="field">
-            <label htmlFor="set-temperature">随机性</label>
-            <input id="set-temperature"
-              className="input"
-              inputMode="decimal"
-              value={fields.temperature}
-              onChange={(event) => setFields((value) => ({ ...value, temperature: event.target.value }))}
-            />
-            <span className="hint">建议 0.1–0.3，用于稳定的编码与问答。</span>
+
+            <details className="provider-advanced" open={advancedMustOpen || undefined}>
+              <summary>
+                <span>高级设置</span>
+                <small>{PROTOCOL_LABELS[fields.protocol]} · 最大输出 {fields.max_tokens || "默认"}</small>
+              </summary>
+              <div className="provider-advanced-grid">
+                {activePreset?.note && (
+                  <p className="provider-advanced-note">{activePreset.note}</p>
+                )}
+
+                <div className="provider-form-field provider-form-field-wide">
+                  <label htmlFor="set-base-url">接口地址</label>
+                  <input id="set-base-url"
+                    className="input"
+                    value={fields.base_url}
+                    placeholder="https://api.example.com/v1"
+                    onChange={(event) => setFields((value) => ({ ...value, base_url: event.target.value }))}
+                  />
+                  {!activePreset && (
+                    <span className="provider-field-meta">填写服务根地址，不含 /chat/completions</span>
+                  )}
+                  {pendingVars.length > 0 && (
+                    <span className="provider-field-warning" role="alert">
+                      地址里还有占位符待替换：
+                      {pendingVars.map((variable) => `\${${variable.name}}（${variable.label}）`).join("、")}
+                    </span>
+                  )}
+                  {activePreset && activePreset.endpoint_candidates.length > 0 && (
+                    <span className="provider-route-switcher">
+                      <span>接口线路</span>
+                      <button
+                        className="quiet-link"
+                        type="button"
+                        disabled={busy}
+                        title={`${activePreset.base_url}（${PROTOCOL_LABELS[activePreset.protocol]}）`}
+                        onClick={() =>
+                          setFields((value) => ({
+                            ...value,
+                            base_url: activePreset.base_url,
+                            protocol: activePreset.protocol,
+                          }))
+                        }
+                      >
+                        主入口
+                      </button>
+                      {activePreset.endpoint_candidates.map((candidate) => (
+                        <Fragment key={candidate.url}>
+                          <span aria-hidden="true">·</span>
+                          <button
+                            className="quiet-link"
+                            type="button"
+                            disabled={busy}
+                            title={`${candidate.url}（${PROTOCOL_LABELS[candidate.protocol]}）`}
+                            // 协议必须跟着地址一起切：多数备用线路是同一厂商的另一个协议口，
+                            // 只改地址会把 Anthropic 的请求发到一个只有 Chat 的 endpoint 上。
+                            onClick={() =>
+                              setFields((value) => ({
+                                ...value,
+                                base_url: candidate.url,
+                                protocol: candidate.protocol,
+                              }))
+                            }
+                          >
+                            {candidate.label}
+                          </button>
+                        </Fragment>
+                      ))}
+                    </span>
+                  )}
+                </div>
+
+                <div className="provider-form-field provider-form-field-wide">
+                  <label htmlFor="set-protocol">线路协议</label>
+                  <select id="set-protocol"
+                    className="input"
+                    disabled={busy}
+                    value={fields.protocol}
+                    onChange={(event) =>
+                      setFields((value) => ({
+                        ...value,
+                        protocol: event.target.value as ProviderProtocol,
+                      }))
+                    }
+                  >
+                    {protocolChoices(activePreset, fields.base_url, fields.protocol).map((protocol) => (
+                      <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
+                    ))}
+                  </select>
+                  {deepSeekResponsesUnsupported && (
+                    <span className="provider-field-warning" role="alert">
+                      Responses 仅支持 deepseek-v4-flash（0731）；V4 Pro 请改用 Chat 或 Anthropic。
+                    </span>
+                  )}
+                  {fields.protocol === "openai_responses" && !deepSeekResponsesUnsupported && (
+                    <span className="provider-field-meta">
+                      {activePreset && !activePreset.reasoning_replay
+                        ? "该服务不支持加密推理回放"
+                        : "由 Responses 接口发送请求"}
+                    </span>
+                  )}
+                  {!allowedProtocolOptions && activePreset && (
+                    <span className="provider-field-meta">自定义地址，请按接口实现选择协议</span>
+                  )}
+                  {protocolMismatch && allowedProtocolOptions && (
+                    <span className="provider-field-warning" role="alert">
+                      当前地址不支持该协议。可选：
+                      {allowedProtocolOptions.map((protocol) => PROTOCOL_LABELS[protocol]).join(" / ")}
+                    </span>
+                  )}
+                </div>
+
+                <div className="provider-form-field">
+                  <label htmlFor="set-max-tokens">最大输出</label>
+                  <input id="set-max-tokens"
+                    className="input"
+                    inputMode="numeric"
+                    value={fields.max_tokens}
+                    onChange={(event) => setFields((value) => ({ ...value, max_tokens: event.target.value }))}
+                  />
+                  <span className="provider-field-meta">
+                    {deepSeekV4 ? "V4 最大 393,216，建议 8,192" : "通常建议 8,192"}
+                  </span>
+                  {outputExceedsDeepSeekLimit && (
+                    <span className="provider-field-warning" role="alert">
+                      当前值超出限制，请
+                      <button className="quiet-link" type="button" onClick={() => setFields((value) => ({ ...value, max_tokens: OUTPUT_DEFAULT }))}>
+                        恢复为 8,192
+                      </button>
+                    </span>
+                  )}
+                </div>
+
+                <div className="provider-form-field">
+                  <label htmlFor="set-temperature">随机性</label>
+                  <input id="set-temperature"
+                    className="input"
+                    inputMode="decimal"
+                    value={fields.temperature}
+                    onChange={(event) => setFields((value) => ({ ...value, temperature: event.target.value }))}
+                  />
+                  <span className="provider-field-meta">编码任务建议 0.1–0.3</span>
+                </div>
+              </div>
+            </details>
           </div>
 
           <div className="footbar provider-actions">
