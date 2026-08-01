@@ -312,42 +312,47 @@ export function OnboardingCampaign() {
 
   const finish = async () => {
     if (busy) return;
-    if (engine === "r_code" && !providerReady) {
-      setStep(2);
-      setError("先连接一个 Provider，或关闭后稍后设置。");
-      return;
-    }
-    if (engine === "codex" && (!codexReady || scope !== "workspace" || !selectedWorkspace)) {
-      setStep(codexReady ? 3 : 1);
-      setError(codexReady ? "Codex CLI 需要附加工作区。" : "请先在设置中完成 Codex CLI 协作配置。");
-      return;
-    }
-
     setBusy(true);
     setError(null);
-    try {
-      if (engine === "r_code" && !providerActive) await settingsSelectProvider(selectedProviderId);
-      await settingsSet("orchestration.default_agent_engine", engine);
-      if (scope === "workspace" && selectedWorkspace) {
+    const failures: string[] = [];
+    const persist = async (label: string, action: () => Promise<void>) => {
+      try {
+        await action();
+      } catch (cause) {
+        failures.push(`${label}：${errText(cause)}`);
+      }
+    };
+
+    // This is an introduction, not a blocking setup wizard. Persist only choices
+    // that are currently valid, then always let the user enter the product.
+    if (engine === "r_code" && providerReady && !providerActive) {
+      await persist("默认 Provider", () => settingsSelectProvider(selectedProviderId));
+    }
+    const engineReady = engine === "r_code"
+      || Boolean(codexReady && scope === "workspace" && selectedWorkspace);
+    if (engineReady) {
+      await persist("默认主 Agent", () => settingsSet("orchestration.default_agent_engine", engine));
+    }
+    if (scope === "workspace" && selectedWorkspace) {
+      await persist("工作区权限", async () => {
         if (selectedWorkspace.access_mode !== accessMode) {
           await workspaceSetAccessMode(selectedWorkspace.canonical_path, accessMode);
           await refreshWorkspaces();
         }
-        setCurrentWorkspace(selectedWorkspace.canonical_path);
-      } else {
-        setCurrentWorkspace(null);
-      }
-      saveOnboardingReceipt("completed");
-      announceRuntimeSettingsChanged();
-      setScene("home");
-      setApiKey("");
-      setOpen(false);
-      window.setTimeout(() => window.dispatchEvent(new Event("r-code:new-session-ready")), 0);
-    } catch (cause) {
-      setError(`保存首次设置失败：${errText(cause)}`);
-    } finally {
-      setBusy(false);
+      });
+      setCurrentWorkspace(selectedWorkspace.canonical_path);
+    } else {
+      setCurrentWorkspace(null);
     }
+    if (failures.length) console.warn("部分首次设置未保存：", failures.join("；"));
+
+    saveOnboardingReceipt("completed");
+    announceRuntimeSettingsChanged();
+    setScene("home");
+    setApiKey("");
+    setBusy(false);
+    setOpen(false);
+    window.setTimeout(() => window.dispatchEvent(new Event("r-code:new-session-ready")), 0);
   };
 
   const dismiss = () => {
@@ -428,7 +433,7 @@ export function OnboardingCampaign() {
             className={`onboarding-track${dragRef.current ? " dragging" : ""}`}
             style={{ transform: `translate3d(calc(${-step * 100}% + ${dragOffset}px), 0, 0)` }}
           >
-            <article className="onboarding-slide onboarding-hero" aria-hidden={step !== 0} inert={step !== 0}>
+            <article className="onboarding-slide onboarding-hero" aria-hidden={step !== 0} inert={step !== 0 ? "" : undefined}>
               <div className="onboarding-hero-copy">
                 <span>R-CODE / FIRST RUN</span>
                 <h1>把目标<br />交给 R-Code。</h1>
@@ -441,7 +446,7 @@ export function OnboardingCampaign() {
               </div>
             </article>
 
-            <article className="onboarding-slide onboarding-engine" aria-hidden={step !== 1} inert={step !== 1}>
+            <article className="onboarding-slide onboarding-engine" aria-hidden={step !== 1} inert={step !== 1 ? "" : undefined}>
               <div className="onboarding-ad-title">
                 <span>01 / MAIN AGENT</span>
                 <h1>选执行者。</h1>
@@ -471,7 +476,7 @@ export function OnboardingCampaign() {
               </div>
             </article>
 
-            <article className="onboarding-slide onboarding-provider" aria-hidden={step !== 2} inert={step !== 2}>
+            <article className="onboarding-slide onboarding-provider" aria-hidden={step !== 2} inert={step !== 2 ? "" : undefined}>
               <div className="onboarding-ad-title onboarding-light-title">
                 <span>02 / PROVIDER</span>
                 <h1>接上模型。</h1>
@@ -512,7 +517,7 @@ export function OnboardingCampaign() {
               </form>
             </article>
 
-            <article className="onboarding-slide onboarding-scope" aria-hidden={step !== 3} inert={step !== 3}>
+            <article className="onboarding-slide onboarding-scope" aria-hidden={step !== 3} inert={step !== 3 ? "" : undefined}>
               <div className="onboarding-ad-title onboarding-dark-title">
                 <span>03 / WORKSPACE</span>
                 <h1>圈定代码。</h1>
@@ -538,7 +543,7 @@ export function OnboardingCampaign() {
               </div>
             </article>
 
-            <article className="onboarding-slide onboarding-launch" aria-hidden={step !== 4} inert={step !== 4}>
+            <article className="onboarding-slide onboarding-launch" aria-hidden={step !== 4} inert={step !== 4 ? "" : undefined}>
               <div className="onboarding-launch-copy">
                 <span>{engine === "r_code" ? (providerReady ? "READY" : "CHECK") : codexReady && selectedWorkspace ? "READY" : "CHECK"}</span>
                 <h1>{engine === "r_code" ? (providerReady ? "开工。" : "差一步。") : codexReady && selectedWorkspace ? "开工。" : "差一步。"}</h1>
