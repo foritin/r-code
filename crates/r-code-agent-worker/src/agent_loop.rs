@@ -15,7 +15,7 @@
 //!
 //! [doc-04 §10 路径 B]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -34,6 +34,86 @@ use r_code_core::error::ProductError;
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
+}
+
+/// 修复旧版本在中断工具期间可能留下的悬空 `ToolUse`。
+///
+/// Provider 要求 assistant 发出的每个工具调用在下一条 user 工具消息中都有对应结果。
+/// 合成的错误结果不会重新执行工具，只把“已被中断”这一事实补回协议历史；修复后的
+/// 工作集会随下一次 history snapshot 持久化，从而让既有受损会话自动恢复。
+fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
+    let mut index = 0usize;
+    let mut repaired = 0usize;
+
+    while index < messages.len() {
+        let tool_use_ids = if messages[index].role == Role::Assistant {
+            messages[index]
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if tool_use_ids.is_empty() {
+            index += 1;
+            continue;
+        }
+
+        let recorded_results = messages
+            .get(index + 1)
+            .filter(|message| message.role == Role::User)
+            .map(|message| {
+                message
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                        _ => None,
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let missing = tool_use_ids
+            .into_iter()
+            .filter(|id| !recorded_results.contains(id))
+            .map(|tool_use_id| ContentBlock::ToolResult {
+                tool_use_id,
+                content: serde_json::json!({
+                    "status": "cancelled",
+                    "reason": "tool execution was interrupted before its result was recorded"
+                })
+                .to_string(),
+                is_error: true,
+            })
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            index += 1;
+            continue;
+        }
+
+        repaired += missing.len();
+        let next_is_tool_result_message = messages.get(index + 1).is_some_and(|message| {
+            message.role == Role::User && message.content.iter().any(ContentBlock::is_tool_result)
+        });
+        if next_is_tool_result_message {
+            messages[index + 1].content.extend(missing);
+        } else {
+            messages.insert(
+                index + 1,
+                Message {
+                    role: Role::User,
+                    content: missing,
+                },
+            );
+        }
+        index += 2;
+    }
+
+    repaired
 }
 
 /// 运行一次 agent 循环迭代。
@@ -129,6 +209,13 @@ pub async fn run_agent_loop_iteration_with_abort_and_emit<F>(
 where
     F: FnMut(AgentEvent),
 {
+    let repaired_tool_results = repair_dangling_tool_uses(messages);
+    if repaired_tool_results > 0 {
+        tracing::warn!(
+            repaired_tool_results,
+            "repaired interrupted tool results before provider request"
+        );
+    }
     // 将工作集同步进 request（messages 是单一事实源）
     request.messages = messages.clone();
     request.tools = tools.to_vec();
@@ -216,9 +303,9 @@ where
                     .call_with_id(&id, &name, input)
                     .await
                     .map_err(map_hermes_err)?;
-                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                    break;
-                }
+                // 工具已经返回后必须先闭合 ToolUse/ToolResult 协议对，再响应取消。
+                // 否则 history snapshot 会永久带着悬空 tool call，后续请求都会被拒绝。
+                let abort_after_tool = abort.is_some_and(|flag| flag.load(Ordering::Relaxed));
                 let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
                     .unwrap_or(serde_json::Value::String(outcome.content.clone()));
                 emit(AgentEvent::ToolResult {
@@ -231,6 +318,9 @@ where
                     content: outcome.content,
                     is_error: outcome.is_error,
                 });
+                if abort_after_tool {
+                    break;
+                }
             }
             StreamEvent::Stop { .. } => {
                 break;
@@ -303,13 +393,16 @@ fn map_hermes_err(err: hermes_error::Error) -> ProductError {
 mod tests {
     use async_trait::async_trait;
     use hermes_core::{
-        CompletionRequest, Message, Role, StopReason, StreamEvent, ToolCallOutcome, ToolHost,
-        ToolSource, ToolSpec, Usage,
+        CompletionRequest, ContentBlock, Message, Role, StopReason, StreamEvent, ToolCallOutcome,
+        ToolHost, ToolSource, ToolSpec, Usage,
     };
     use hermes_error::{Error, Result};
     use hermes_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::AgentEvent;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
 
     use super::{
         run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
@@ -351,6 +444,32 @@ mod tests {
             } else {
                 Err(Error::ToolNotFound(name.to_string()))
             }
+        }
+    }
+
+    /// 模拟工具在执行期间收到取消信号：工具仍然返回一个可记录的取消结果。
+    struct AbortDuringToolHost {
+        tools: Vec<ToolSpec>,
+        abort: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl ToolHost for AbortDuringToolHost {
+        async fn list_tools(&self) -> Result<Vec<ToolSpec>> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call(&self, _name: &str, _args: serde_json::Value) -> Result<ToolCallOutcome> {
+            self.abort.store(true, Ordering::Relaxed);
+            Ok(ToolCallOutcome {
+                content: serde_json::json!({
+                    "status": "cancelled",
+                    "reason": "run interrupted"
+                })
+                .to_string(),
+                is_error: true,
+                metadata: None,
+            })
         }
     }
 
@@ -495,6 +614,96 @@ mod tests {
         assert!(messages[1].content.iter().any(|b| b.is_tool_use()));
         assert_eq!(messages[2].role, Role::User);
         assert!(messages[2].content.iter().any(|b| b.is_tool_result()));
+    }
+
+    #[tokio::test]
+    async fn abort_during_tool_call_preserves_the_matching_tool_result() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "interrupted-tool".to_string(),
+                name: "wait_for_children".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "interrupted-tool".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let abort = Arc::new(AtomicBool::new(false));
+        let tool_host = AbortDuringToolHost {
+            tools: vec![ToolSpec {
+                name: "wait_for_children".to_string(),
+                description: "wait for delegated work".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                requires_confirmation: false,
+            }],
+            abort: abort.clone(),
+        };
+        let mut messages = vec![Message::user_text("start")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        let events = run_agent_loop_iteration_with_abort(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            Some(abort.as_ref()),
+        )
+        .await
+        .unwrap();
+
+        assert!(abort.load(Ordering::Relaxed));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult {
+                call_id,
+                is_error: true,
+                ..
+            } if call_id == "interrupted-tool"
+        )));
+        assert_eq!(messages.len(), 3, "tool use must be closed before aborting");
+        assert!(matches!(
+            messages[2].content.as_slice(),
+            [ContentBlock::ToolResult { tool_use_id, is_error: true, .. }]
+                if tool_use_id == "interrupted-tool"
+        ));
+    }
+
+    #[tokio::test]
+    async fn dangling_tool_use_from_an_interrupted_history_is_repaired_before_the_next_request() {
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("recovered", Usage::default());
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![
+            Message::user_text("start"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "orphaned-tool".to_string(),
+                    name: "collect_subagents".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message::user_text("continue after interrupt"),
+        ];
+
+        run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &[])
+            .await
+            .unwrap();
+
+        assert_eq!(messages[2].role, Role::User);
+        assert!(matches!(
+            messages[2].content.as_slice(),
+            [ContentBlock::ToolResult { tool_use_id, is_error: true, .. }]
+                if tool_use_id == "orphaned-tool"
+        ));
+        assert_eq!(messages[3].text_content(), "continue after interrupt");
+        assert_eq!(messages.last().unwrap().text_content(), "recovered");
     }
 
     #[tokio::test]

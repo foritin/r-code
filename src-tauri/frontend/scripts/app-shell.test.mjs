@@ -566,3 +566,61 @@ test("clearing a project removes app records without implying disk deletion", as
   assert.equal(await page.locator(".conversation-row").filter({ hasText: "添加请求限流中间件" }).count(), 0);
   await page.close();
 });
+
+test("plain Enter while a run is active queues the next turn instead of steering", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const taskId = "mock-task-queue";
+  const baseline = await page.evaluate(async (id) => {
+    const {
+      browserMockDetails,
+      browserMockMessages,
+      browserMockTasks,
+    } = await import("/src/lib/mock-data.ts");
+    return {
+      task: structuredClone(browserMockTasks.find((item) => item.id === id)),
+      detail: structuredClone(browserMockDetails[id]),
+      messages: structuredClone(browserMockMessages(id)),
+    };
+  }, taskId);
+
+  try {
+    const taskRow = page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" });
+    await taskRow.locator(".sidebar-task").click();
+    await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+
+    const composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.fill("作为下一轮发送");
+    await composer.press("Enter");
+    await page.waitForTimeout(100);
+
+    const snapshot = await page.evaluate(async (id) => {
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const detail = browserMockDetails[id];
+      return {
+        queue: structuredClone(detail.queued_messages),
+        activeMainRun: detail.runs.find((run) => run.agent_kind === "main" && run.ended_at == null),
+      };
+    }, taskId);
+    assert.equal(snapshot.queue.length, baseline.detail.queued_messages.length + 1);
+    assert.equal(snapshot.queue.at(-1)?.message, "作为下一轮发送");
+    assert.ok(snapshot.activeMainRun, "plain Enter must not replace or finish the active run");
+
+    const controls = page.locator('[aria-label="运行中消息操作"]');
+    assert.match(await controls.locator(".run-command-action.primary").innerText(), /排队\s*Enter/);
+    assert.match(await controls.locator(".run-command-action:not(.primary)").innerText(), /引导\s*Alt\+Enter/);
+  } finally {
+    await page.evaluate(async ({ id, original }) => {
+      const {
+        browserMockDetails,
+        browserMockSetMessages,
+        browserMockTasks,
+      } = await import("/src/lib/mock-data.ts");
+      const task = browserMockTasks.find((item) => item.id === id);
+      if (task && original.task) Object.assign(task, structuredClone(original.task));
+      browserMockDetails[id] = structuredClone(original.detail);
+      browserMockSetMessages(id, structuredClone(original.messages));
+    }, { id: taskId, original: baseline }).catch(() => {});
+    await page.close();
+  }
+});

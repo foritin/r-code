@@ -1,5 +1,5 @@
 /**
- * Room 输入区 —— Enter 发送 / Shift+Enter 换行；运行中以引导为主动作。
+ * Room 输入区 —— Enter 发送 / Shift+Enter 换行；运行中普通发送进入下一轮队列。
  * `@` 触发 quickOpen 文件下拉，选中后插入 @path 文本。
  *
  * 输入区脚下现在镜像了「模型」与「权限」两个控件（与新对话页同构）。原先这里
@@ -675,8 +675,8 @@ export function Composer({
       e.preventDefault();
       if (running) {
         if (e.ctrlKey || e.metaKey) sendNow.trigger();
-        else if (e.altKey) void send("queue");
-        else void send("steer");
+        else if (e.altKey) void send("steer");
+        else void send("queue");
       } else {
         void send();
       }
@@ -859,20 +859,20 @@ export function Composer({
               className="run-command-action primary"
               type="button"
               disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-              onClick={() => void send("steer")}
-              title="作为引导注入当前运行（Enter）"
+              onClick={() => void send("queue")}
+              title="当前消息将在本轮结束后发送（Enter）"
             >
               <IconSend width={11} height={11} />
-              引导 <kbd>Enter</kbd>
+              排队 <kbd>Enter</kbd>
             </button>
             <button
               className="run-command-action"
               type="button"
               disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-              onClick={() => void send("queue")}
-              title="当前消息将在本轮结束后发送（Alt+Enter）"
+              onClick={() => void send("steer")}
+              title="作为引导注入当前运行（Alt+Enter）"
             >
-              排队 <kbd>Alt+Enter</kbd>
+              引导 <kbd>Alt+Enter</kbd>
             </button>
 
             <Menu

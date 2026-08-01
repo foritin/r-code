@@ -322,6 +322,14 @@ impl CommandState {
         db_path: Option<PathBuf>,
     ) -> Self {
         let permission_engine = Arc::new(PermissionEngine::new());
+        match reconcile_tool_calls_for_finished_runs(&db) {
+            Ok(repaired) if repaired > 0 => tracing::info!(
+                repaired,
+                "closed tool calls left running by already-finished agent runs"
+            ),
+            Err(error) => tracing::warn!("failed to reconcile finished-run tool calls: {error}"),
+            _ => {}
+        }
         // 在任何新的 Agent / MCP sidecar 有机会写入之前记录遗留项。查询失败不应
         // 阻断桌面启动，恢复页会安全地显示为空并保留数据库原状。
         let startup_recovery = capture_startup_recovery(&db).unwrap_or_default();
@@ -398,6 +406,35 @@ impl CommandState {
             sink(task_id, event);
         }
     }
+}
+
+/// 收束旧版本可能留下的不可能状态：父 Run 已经结束，工具调用却仍显示运行中。
+///
+/// 这里只修正审计投影，不重放工具、不修改会话正文；仍在活跃 Run 下的调用不会匹配。
+fn reconcile_tool_calls_for_finished_runs(db: &Database) -> Result<u64, ProductError> {
+    let conn = db.conn()?;
+    let repaired = conn
+        .execute(
+            "UPDATE tool_calls
+             SET status = 'error',
+                 output_json = COALESCE(output_json, ?1),
+                 ended_at = COALESCE(ended_at, ?2)
+             WHERE status = 'running'
+               AND EXISTS (
+                   SELECT 1 FROM agent_runs
+                   WHERE agent_runs.id = tool_calls.run_id
+                     AND agent_runs.ended_at IS NOT NULL
+               )",
+            rusqlite::params![
+                serde_json::json!({
+                    "error": "parent run ended before the tool result was recorded"
+                })
+                .to_string(),
+                chrono::Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+    Ok(repaired as u64)
 }
 
 fn capture_startup_recovery(db: &Database) -> Result<StartupRecoverySnapshot, ProductError> {
@@ -3395,37 +3432,12 @@ pub async fn agent_send_with_mode_and_attachments(
             }
         }
         AgentSendMode::Auto => {
-            if let Some(active) = active {
-                if active.task_id == task_id && active.branch_id == branch.id {
-                    let result = bridge
-                        .kind
-                        .steer(&active.runtime_session_id, message)
-                        .await
-                        .map_err(err_str)?;
-                    match result {
-                        SteerResult::Accepted => {
-                            append_user_message_with_mode(
-                                &state.session_store,
-                                &branch.storage_id,
-                                message,
-                                AgentSendMode::Steer,
-                            )
-                            .await?;
-                            TaskEventStore::new(&state.db)
-                                .append_for_branch(task_id, &branch.id, TaskEventType::UserSteered)
-                                .map_err(err_str)?;
-                        }
-                        SteerResult::RunFinished => {
-                            enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
-                        }
-                    }
-                    Ok(())
-                } else {
-                    // Runtime 的事件队列是全局的；另一个任务运行时绝不能错误地 steer
-                    // 到它的 session，改为持久化排队。
-                    enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
-                    Ok(())
-                }
+            if active.is_some() {
+                // Auto 始终表示普通的下一轮消息。只要物理 runtime 仍在运行（无论
+                // 当前任务还是另一个任务），就持久化排队；Steer 只接受显式模式，
+                // 避免同一个 Enter 因瞬时运行状态不同而改变含义。
+                enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
+                Ok(())
             } else {
                 let active = start_run_locked_with_message(
                     &mut bridge,
@@ -11713,6 +11725,50 @@ mod tests {
         assert_eq!(archived.state, TaskState::Archived);
     }
 
+    #[test]
+    fn command_state_startup_closes_tool_calls_whose_parent_run_already_ended() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("r-code.db");
+        let db = Arc::new(Database::open(&db_path).unwrap());
+        let task = Task::new(None, "Interrupted", "recover audit", TaskMode::Ask);
+        TaskRepository::new(db.as_ref()).create(&task).unwrap();
+        let branch = SessionBranchRepository::new(db.as_ref())
+            .ensure_active(&task.id)
+            .unwrap();
+        let run = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(db.as_ref()).create(&run).unwrap();
+        let tool_call = ToolCall::new(&run.id, &task.id, "collect_subagents", "{}", RiskLevel::R0);
+        ToolCallRepository::new(db.as_ref())
+            .create_if_absent(&tool_call)
+            .unwrap();
+        AgentRunRepository::new(db.as_ref())
+            .update_review_state(&run.id, ReviewState::Aborted)
+            .unwrap();
+
+        let state = CommandState::new(
+            db,
+            dir.path().join("blobs"),
+            dir.path().join("sessions"),
+            dir.path().join("config"),
+            dir.path().to_path_buf(),
+            Some(db_path),
+        );
+
+        let conn = state.db.conn().unwrap();
+        let (status, ended_at, output): (String, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at, output_json FROM tool_calls WHERE id = ?1",
+                [&tool_call.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "error");
+        assert!(ended_at.is_some());
+        assert!(output
+            .as_deref()
+            .is_some_and(|value| value.contains("parent run ended")));
+    }
+
     #[tokio::test]
     async fn queued_message_starts_after_active_run_finishes() {
         let (_dir, state) = setup_state();
@@ -11818,6 +11874,23 @@ mod tests {
         let queued = agent_queue_list(&state, &second.id).await.unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].message, "second task");
+    }
+
+    #[tokio::test]
+    async fn auto_send_for_the_active_task_is_queued_not_silently_steered() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+
+        agent_send(&state, &task.id, "first turn").await.unwrap();
+        agent_send(&state, &task.id, "next turn").await.unwrap();
+
+        let queued = agent_queue_list(&state, &task.id).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].message, "next turn");
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        assert!(!messages.iter().any(|message| {
+            message.role.as_deref() == Some("user") && message.text.as_deref() == Some("next turn")
+        }));
     }
 
     #[tokio::test]
