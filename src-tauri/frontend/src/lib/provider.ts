@@ -49,7 +49,10 @@ export function loadCatalog(): Promise<void> {
 
 /** 目录里的预设，未加载或非内置服务时为 undefined。 */
 export function presetOf(name: string): ProviderPreset | undefined {
-  return catalogById.get(name);
+  // 0.1.0 早期版本把 DeepSeek Anthropic 口存成独立 Provider；目录合并后
+  // 继续把旧 key 映射到统一预设，编辑与模型选择都不会退化成“自建服务”。
+  const canonical = name === "deepseek_anthropic" ? "deepseek" : name;
+  return catalogById.get(canonical);
 }
 
 /** 全部预设，顺序即后端声明的展示顺序。目录未加载时为空数组。 */
@@ -58,7 +61,7 @@ export function catalogPresets(): ProviderPreset[] {
 }
 
 export function providerLabel(name: string): string {
-  return catalogById.get(name)?.label ?? name;
+  return presetOf(name)?.label ?? name;
 }
 
 /**

@@ -319,6 +319,7 @@ function ProviderSection({
   const [modelsMessage, setModelsMessage] = useState<string | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const modelRequest = useRef(0);
+  const initialPresetApplied = useRef(false);
 
   // 目录来自后端 provider_catalog.rs：预设一旦分散成两份就会漂移，
   // 前端不再自带硬编码表。
@@ -328,9 +329,6 @@ function ProviderSection({
       if (!alive) return;
       const presets = catalogPresets();
       setCatalog(presets);
-      setPresetName((current) =>
-        current === CUSTOM_PRESET && presets.length > 0 ? presets[0].id : current
-      );
     });
     return () => {
       alive = false;
@@ -368,7 +366,14 @@ function ProviderSection({
       setKeyInput("");
       setSaved(null);
       setErr(null);
-      applyPreset(presetName);
+      // 没有任何已保存服务时，目录异步返回后的首次初始化必须整组应用预设。
+      // 只改 presetName 会造成下拉框显示 Anthropic，而名称、地址和协议仍是空白/Chat。
+      if (!initialPresetApplied.current && catalog.length > 0 && names.length === 0) {
+        initialPresetApplied.current = true;
+        applyPreset(catalog[0].id);
+      } else {
+        applyPreset(presetName);
+      }
       return;
     }
     const profile = providers[selectedProvider] as ProviderConfig | undefined;
@@ -391,7 +396,8 @@ function ProviderSection({
     setKeyInput("");
     setSaved(null);
     setErr(null);
-  }, [applyPreset, providers, providerStatus, selectedProvider]);
+    // catalog 触发目录异步返回后的重算；否则已有内置配置可能被误显示为“自建服务”。
+  }, [applyPreset, catalog, names.length, presetName, providers, providerStatus, selectedProvider]);
 
   // 地址、协议或编辑对象变化后，旧请求结果不再属于当前表单。
   useEffect(() => {
@@ -495,8 +501,14 @@ function ProviderSection({
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
   const outputExceedsDeepSeekLimit = deepSeekV4 && Number.isFinite(outputValue) && outputValue > 393_216;
+  const deepSeekResponsesUnsupported =
+    activePreset?.id === "deepseek" &&
+    normalizeUrl(fields.base_url) === normalizeUrl(activePreset.base_url) &&
+    fields.protocol === "openai_responses" &&
+    fields.model.trim() !== "deepseek-v4-flash";
   // 占位符没替换就保存 = 一个必然 404 的地址进了配置
-  const saveBlocked = busy || outputExceedsDeepSeekLimit || pendingVars.length > 0;
+  const saveBlocked =
+    busy || outputExceedsDeepSeekLimit || deepSeekResponsesUnsupported || pendingVars.length > 0;
 
   return (
     <section className="settings-block provider-settings">
@@ -623,10 +635,25 @@ function ProviderSection({
             )}
             {activePreset && activePreset.endpoint_candidates.length > 0 && (
               <span className="hint">
-                备用线路：
-                {activePreset.endpoint_candidates.map((candidate, index) => (
+                接口线路：
+                <button
+                  className="quiet-link"
+                  type="button"
+                  disabled={busy}
+                  title={`${activePreset.base_url}（${PROTOCOL_LABELS[activePreset.protocol]}）`}
+                  onClick={() =>
+                    setFields((value) => ({
+                      ...value,
+                      base_url: activePreset.base_url,
+                      protocol: activePreset.protocol,
+                    }))
+                  }
+                >
+                  主入口
+                </button>
+                {activePreset.endpoint_candidates.map((candidate) => (
                   <Fragment key={candidate.url}>
-                    {index > 0 && " · "}
+                    {" · "}
                     <button
                       className="quiet-link"
                       type="button"
@@ -669,6 +696,11 @@ function ProviderSection({
             <span className="hint">
               决定请求体形状与鉴权头。同一地址支持多种协议时计费和能力可能不同，由你决定走哪个。
             </span>
+            {deepSeekResponsesUnsupported && (
+              <span className="field-warning" role="alert">
+                DeepSeek Responses 当前仅支持 deepseek-v4-flash（0731）；V4 Pro 请改用 Chat Completions 或 Anthropic 口。
+              </span>
+            )}
             {fields.protocol === "openai_responses" && (
               <span className="field-warning">
                 Responses 仅部分服务实现完整；不确定时选 Chat Completions。

@@ -119,3 +119,53 @@ test("completion never blocks on optional setup and only auto-opens once", async
   assert.deepEqual(runtimeErrors, []);
   await page.close();
 });
+
+test("an empty provider form applies the complete first preset", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const mock = await import("/src/lib/mock-data.ts");
+    mock.browserMockSettings.config.default_provider = undefined;
+    mock.browserMockSettings.config.providers = {};
+    mock.browserMockSettings.provider_status = {};
+  });
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.locator("#set-preset").waitFor({ state: "visible" });
+
+  const form = await page.evaluate(() => ({
+    preset: document.querySelector("#set-preset")?.value,
+    profile: document.querySelector("#set-profile-name")?.value,
+    baseUrl: document.querySelector("#set-base-url")?.value,
+    protocol: document.querySelector("#set-protocol")?.value,
+    model: document.querySelector("#set-model")?.value,
+  }));
+  assert.deepEqual(form, {
+    preset: "openai",
+    profile: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    protocol: "openai_chat",
+    model: "gpt-5.6-sol",
+  });
+
+  await page.locator("#set-preset").selectOption("deepseek");
+  assert.equal(await page.locator("#set-profile-name").inputValue(), "deepseek");
+  assert.deepEqual(
+    await page.locator("#set-protocol option").evaluateAll((options) =>
+      options.map((option) => option.value)
+    ),
+    ["openai_chat", "openai_responses"],
+  );
+  await page.getByRole("button", { name: "Anthropic 兼容口" }).click();
+  assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com/anthropic");
+  assert.equal(await page.locator("#set-protocol").inputValue(), "anthropic_messages");
+  await page.getByRole("button", { name: "主入口" }).click();
+  assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com");
+  assert.equal(await page.locator("#set-protocol").inputValue(), "openai_chat");
+
+  await page.locator("#set-model").fill("deepseek-v4-pro");
+  await page.locator("#set-protocol").selectOption("openai_responses");
+  await page.getByText(/Responses 当前仅支持 deepseek-v4-flash/).waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
+  await page.close();
+});
