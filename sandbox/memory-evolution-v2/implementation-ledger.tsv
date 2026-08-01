@@ -1,0 +1,6 @@
+iter	task	phase	tests	quality	pass	note
+0	-	baseline	Rust: all executed except 1 known failure; Frontend: 5/5 current tests + build	-	-	cargo fmt/clippy pass; cargo test baseline fails only r-code-host final_delivery::f20_nsis_uses_r_code_icons because hooks lacks /RC_PROGRESS=; clean temporary npm ci passes, test:dev-server 4/4, test:popover 1/1 and production build pass; planned test:memory/test:app-shell scripts do not exist until T16A*
+0	-	baseline	quality-check calibration	baseline	-	migrations.rs starts at file_loc=866 and max_comment_block=17, so T0M uses 20/100/60/4/1200 to reject new bloat without treating inherited SQL layout as a regression
+1	T0M	engineer	12/12 targeted migrations	-	-	Added contiguous MigrationSpec registry, atomic schema_version initialization, BEGIN IMMEDIATE per-version apply with in-lock recheck, FK-off wrapper for migration 002, fault hooks and transactional version stamp
+1	T0M	qa	1113/1113	min4	yes	Authored four sharp test groups for zero-write registry rejection, both rollback windows, parent-child/FK preservation and two-connection non-idempotent concurrency; full Rust regression green excluding only baseline F20
+1	T0M	keep	1113/1113	min4	yes	T0M acceptance criteria met; source and test ownership remained disjoint after Engineer degraded locally and independent QA authored tests

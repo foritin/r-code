@@ -5,7 +5,7 @@
 //! [doc-06 §3, §5]
 
 use r_code_core::error::ProductError;
-use rusqlite::Connection;
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 /// 当前 SQLite schema 的最新版本。
 ///
@@ -13,59 +13,235 @@ use rusqlite::Connection;
 /// 预检和实际 store 迁移版本发生漂移。
 pub const LATEST_SCHEMA_VERSION: u32 = 13;
 
+#[derive(Clone, Copy)]
+struct MigrationSpec {
+    version: i64,
+    sql: &'static str,
+    requires_foreign_keys_off: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MigrationFaultPoint {
+    AfterSqlBeforeVersion,
+    BeforeCommit,
+}
+
+type MigrationFaultHook<'a> = dyn Fn(i64, MigrationFaultPoint) -> Result<(), ProductError> + 'a;
+
+const MIGRATIONS: &[MigrationSpec] = &[
+    MigrationSpec::new(1, MIGRATION_001, false),
+    MigrationSpec::new(2, MIGRATION_002, true),
+    MigrationSpec::new(3, MIGRATION_003, false),
+    MigrationSpec::new(4, MIGRATION_004, false),
+    MigrationSpec::new(5, MIGRATION_005, false),
+    MigrationSpec::new(6, MIGRATION_006, false),
+    MigrationSpec::new(7, MIGRATION_007, false),
+    MigrationSpec::new(8, MIGRATION_008, false),
+    MigrationSpec::new(9, MIGRATION_009, false),
+    MigrationSpec::new(10, MIGRATION_010, false),
+    MigrationSpec::new(11, MIGRATION_011, false),
+    MigrationSpec::new(12, MIGRATION_012, false),
+    MigrationSpec::new(13, MIGRATION_013, false),
+];
+
+impl MigrationSpec {
+    const fn new(version: i64, sql: &'static str, requires_foreign_keys_off: bool) -> Self {
+        Self {
+            version,
+            sql,
+            requires_foreign_keys_off,
+        }
+    }
+}
+
 /// 运行所有待执行的 migration。
 pub fn run_migrations(conn: &Connection) -> Result<(), ProductError> {
-    // 创建 schema_version 表（如果不存在）
-    conn.execute_batch(
+    validate_registry(MIGRATIONS)?;
+    let latest = MIGRATIONS.last().map(|spec| spec.version);
+    if latest != Some(i64::from(LATEST_SCHEMA_VERSION)) {
+        return Err(ProductError::MigrationError(format!(
+            "migration registry latest version {latest:?} does not match {LATEST_SCHEMA_VERSION}"
+        )));
+    }
+    run_migrations_with_specs(conn, MIGRATIONS, None)
+}
+
+fn run_migrations_with_specs(
+    conn: &Connection,
+    migrations: &[MigrationSpec],
+    fault_hook: Option<&MigrationFaultHook<'_>>,
+) -> Result<(), ProductError> {
+    validate_registry(migrations)?;
+    initialize_schema_version(conn)?;
+    for spec in migrations {
+        apply_one_migration(conn, spec, fault_hook)?;
+    }
+    Ok(())
+}
+
+fn validate_registry(migrations: &[MigrationSpec]) -> Result<(), ProductError> {
+    for (index, spec) in migrations.iter().enumerate() {
+        let expected = i64::try_from(index + 1)
+            .map_err(|_| ProductError::MigrationError("migration registry is too large".into()))?;
+        if spec.version != expected {
+            return Err(ProductError::MigrationError(format!(
+                "migration registry expected version {expected}, found {}",
+                spec.version
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn initialize_schema_version(conn: &Connection) -> Result<(), ProductError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|error| {
+        ProductError::MigrationError(format!("begin schema_version transaction: {error}"))
+    })?;
+    tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_version (\n\
          version INTEGER PRIMARY KEY,\n\
          applied_at TEXT NOT NULL DEFAULT (datetime('now'))\n\
          );",
     )
-    .map_err(|e| ProductError::MigrationError(format!("create schema_version table: {e}")))?;
+    .map_err(|error| {
+        ProductError::MigrationError(format!("create schema_version table: {error}"))
+    })?;
+    tx.commit().map_err(|error| {
+        ProductError::MigrationError(format!("commit schema_version table: {error}"))
+    })
+}
 
-    // 获取当前版本
-    let current: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| ProductError::MigrationError(format!("read schema_version: {e}")))?;
-
-    // 按序执行 migration
-    let migrations: &[(i64, &str)] = &[
-        (1, MIGRATION_001),
-        (2, MIGRATION_002),
-        (3, MIGRATION_003),
-        (4, MIGRATION_004),
-        (5, MIGRATION_005),
-        (6, MIGRATION_006),
-        (7, MIGRATION_007),
-        (8, MIGRATION_008),
-        (9, MIGRATION_009),
-        (10, MIGRATION_010),
-        (11, MIGRATION_011),
-        (12, MIGRATION_012),
-        (13, MIGRATION_013),
-    ];
-
-    for (version, sql) in migrations {
-        if *version > current {
-            tracing::info!(version, "applying migration");
-            conn.execute_batch(sql)
-                .map_err(|e| ProductError::MigrationError(format!("migration {version}: {e}")))?;
-            conn.execute(
-                "INSERT INTO schema_version (version) VALUES (?1)",
-                rusqlite::params![version],
-            )
-            .map_err(|e| {
-                ProductError::MigrationError(format!("record migration {version}: {e}"))
-            })?;
-        }
+fn apply_one_migration(
+    conn: &Connection,
+    spec: &MigrationSpec,
+    fault_hook: Option<&MigrationFaultHook<'_>>,
+) -> Result<(), ProductError> {
+    if !spec.requires_foreign_keys_off {
+        return apply_one_migration_transaction(conn, spec, fault_hook);
     }
 
+    set_foreign_keys(conn, false)?;
+    let migration_result = apply_one_migration_transaction(conn, spec, fault_hook);
+    let restore_result = set_foreign_keys(conn, true);
+    match (migration_result, restore_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(restore_error)) => Err(ProductError::MigrationError(format!(
+            "{error}; additionally failed to restore foreign keys: {restore_error}"
+        ))),
+    }
+}
+
+fn apply_one_migration_transaction(
+    conn: &Connection,
+    spec: &MigrationSpec,
+    fault_hook: Option<&MigrationFaultHook<'_>>,
+) -> Result<(), ProductError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate).map_err(|error| {
+        ProductError::MigrationError(format!("begin migration {}: {error}", spec.version))
+    })?;
+    let current = current_version(&tx)?;
+    if spec.version <= current {
+        return tx.commit().map_err(|error| {
+            ProductError::MigrationError(format!(
+                "commit skipped migration {}: {error}",
+                spec.version
+            ))
+        });
+    }
+
+    tracing::info!(version = spec.version, "applying migration");
+    tx.execute_batch(spec.sql).map_err(|error| {
+        ProductError::MigrationError(format!("migration {}: {error}", spec.version))
+    })?;
+    if spec.requires_foreign_keys_off {
+        ensure_foreign_keys_valid(&tx, spec.version)?;
+    }
+    run_fault_hook(
+        fault_hook,
+        spec.version,
+        MigrationFaultPoint::AfterSqlBeforeVersion,
+    )?;
+    tx.execute(
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        params![spec.version],
+    )
+    .map_err(|error| {
+        ProductError::MigrationError(format!("record migration {}: {error}", spec.version))
+    })?;
+    run_fault_hook(fault_hook, spec.version, MigrationFaultPoint::BeforeCommit)?;
+    tx.commit().map_err(|error| {
+        ProductError::MigrationError(format!("commit migration {}: {error}", spec.version))
+    })
+}
+
+fn current_version(tx: &Transaction<'_>) -> Result<i64, ProductError> {
+    tx.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|error| ProductError::MigrationError(format!("read schema_version: {error}")))
+}
+
+fn ensure_foreign_keys_valid(tx: &Transaction<'_>, version: i64) -> Result<(), ProductError> {
+    let mut statement = tx.prepare("PRAGMA foreign_key_check").map_err(|error| {
+        ProductError::MigrationError(format!(
+            "prepare foreign key check for migration {version}: {error}"
+        ))
+    })?;
+    let mut violations = statement.query([]).map_err(|error| {
+        ProductError::MigrationError(format!(
+            "run foreign key check for migration {version}: {error}"
+        ))
+    })?;
+    if violations
+        .next()
+        .map_err(|error| {
+            ProductError::MigrationError(format!(
+                "read foreign key check for migration {version}: {error}"
+            ))
+        })?
+        .is_some()
+    {
+        return Err(ProductError::MigrationError(format!(
+            "migration {version} failed foreign_key_check"
+        )));
+    }
     Ok(())
+}
+
+fn set_foreign_keys(conn: &Connection, enabled: bool) -> Result<(), ProductError> {
+    let value = if enabled { "ON" } else { "OFF" };
+    conn.execute_batch(&format!("PRAGMA foreign_keys = {value};"))
+        .map_err(|error| {
+            ProductError::MigrationError(format!("set foreign_keys {value}: {error}"))
+        })?;
+    let actual: i64 = conn
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .map_err(|error| {
+            ProductError::MigrationError(format!(
+                "read foreign_keys after setting {value}: {error}"
+            ))
+        })?;
+    if actual != i64::from(enabled) {
+        return Err(ProductError::MigrationError(format!(
+            "foreign_keys remained {actual} after setting {value}"
+        )));
+    }
+    Ok(())
+}
+
+fn run_fault_hook(
+    fault_hook: Option<&MigrationFaultHook<'_>>,
+    version: i64,
+    point: MigrationFaultPoint,
+) -> Result<(), ProductError> {
+    match fault_hook {
+        Some(hook) => hook(version, point),
+        None => Ok(()),
+    }
 }
 
 /// Migration 001: 初始 schema -- 全部核心表。
@@ -222,8 +398,6 @@ CREATE INDEX IF NOT EXISTS idx_verifications_task ON verifications(task_id);
 /// 纯聊天会话没有本地工作区；SQLite 不能直接移除 NOT NULL 约束，因此以表重建
 /// 完成列改名与可空化。历史任务的 project_id 原样迁移为 workspace_path。
 const MIGRATION_002: &str = r#"
-PRAGMA foreign_keys = OFF;
-
 CREATE TABLE tasks_v2 (
     id TEXT PRIMARY KEY,
     workspace_path TEXT,
@@ -245,8 +419,6 @@ ALTER TABLE tasks_v2 RENAME TO tasks;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_path);
 CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state);
-
-PRAGMA foreign_keys = ON;
 "#;
 
 /// Migration 003: 会话分支与任务级待发送队列。
@@ -437,6 +609,186 @@ ALTER TABLE tasks ADD COLUMN inference_json TEXT NOT NULL DEFAULT '{}';
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Barrier,
+    };
+    use std::{thread, time::Duration};
+
+    fn assert_registry_rejected_without_mutation(migrations: &[MigrationSpec]) {
+        let conn = Connection::open_in_memory().unwrap();
+        assert!(run_migrations_with_specs(&conn, migrations, None).is_err());
+        let object_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(object_count, 0);
+    }
+
+    #[test]
+    fn registry_gap_and_duplicate_fail_before_database_mutation() {
+        const NOOP: &str = "SELECT 1;";
+        assert_registry_rejected_without_mutation(&[
+            MigrationSpec::new(1, NOOP, false),
+            MigrationSpec::new(3, NOOP, false),
+        ]);
+        assert_registry_rejected_without_mutation(&[
+            MigrationSpec::new(1, NOOP, false),
+            MigrationSpec::new(1, NOOP, false),
+        ]);
+    }
+
+    fn assert_fault_rolls_back_and_retries(fault_point: MigrationFaultPoint) {
+        const SQL: &str = "CREATE TABLE migration_probe(value INTEGER NOT NULL);\
+                           INSERT INTO migration_probe VALUES (1);\
+                           UPDATE counter SET value = value + 1;";
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES (0);")
+            .unwrap();
+        let migrations = [MigrationSpec::new(1, SQL, false)];
+        let fault = |_, point| {
+            if point == fault_point {
+                return Err(ProductError::MigrationError("injected fault".into()));
+            }
+            Ok(())
+        };
+
+        assert!(run_migrations_with_specs(&conn, &migrations, Some(&fault)).is_err());
+        let rolled_back: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM sqlite_master WHERE name = 'migration_probe'),\
+                        (SELECT value FROM counter),\
+                        (SELECT COUNT(*) FROM schema_version)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(rolled_back, (0, 0, 0));
+
+        run_migrations_with_specs(&conn, &migrations, None).unwrap();
+        let committed: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM migration_probe),\
+                        (SELECT value FROM counter),\
+                        (SELECT MAX(version) FROM schema_version)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(committed, (1, 1, 1));
+    }
+
+    #[test]
+    fn migration_faults_rollback_ddl_data_and_version_then_retry() {
+        for point in [
+            MigrationFaultPoint::AfterSqlBeforeVersion,
+            MigrationFaultPoint::BeforeCommit,
+        ] {
+            assert_fault_rolls_back_and_retries(point);
+        }
+    }
+
+    fn v1_database_with_parent_and_children() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        run_migrations_with_specs(&conn, &MIGRATIONS[..1], None).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tasks (id, project_id, title, goal, created_at, updated_at)\
+             VALUES ('parent', '/workspace', 'Title', 'Goal', '2026-01-01', '2026-01-01');\
+             INSERT INTO agent_runs (id, task_id, model, started_at)\
+             VALUES ('child-run', 'parent', 'model', '2026-01-01');\
+             INSERT INTO task_events (task_id, event_type, created_at)\
+             VALUES ('parent', 'created', '2026-01-01');",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn migration_v2_preserves_children_and_restores_foreign_keys() {
+        let conn = v1_database_with_parent_and_children();
+        let fault = |version, point| {
+            if version == 2 && point == MigrationFaultPoint::BeforeCommit {
+                return Err(ProductError::MigrationError("injected v2 fault".into()));
+            }
+            Ok(())
+        };
+        assert!(run_migrations_with_specs(&conn, &MIGRATIONS[..2], Some(&fault)).is_err());
+        let rolled_back: (i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT MAX(version) FROM schema_version),\
+                        (SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'project_id'),\
+                        (SELECT COUNT(*) FROM agent_runs) + (SELECT COUNT(*) FROM task_events),\
+                        (SELECT foreign_keys FROM pragma_foreign_keys)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(rolled_back, (1, 1, 2, 1));
+
+        run_migrations(&conn).unwrap();
+        let migrated: (String, i64, i64, i64) = conn
+            .query_row(
+                "SELECT workspace_path,\
+                        (SELECT COUNT(*) FROM agent_runs) + (SELECT COUNT(*) FROM task_events),\
+                        (SELECT COUNT(*) FROM pragma_foreign_key_check),\
+                        (SELECT foreign_keys FROM pragma_foreign_keys)
+                 FROM tasks WHERE id = 'parent'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(migrated, ("/workspace".into(), 2, 0, 1));
+    }
+
+    #[test]
+    fn concurrent_connections_apply_non_idempotent_migration_once() {
+        const BACKFILL: &str = "UPDATE counter SET value = value + 1;";
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("concurrent.sqlite");
+        Connection::open(&database)
+            .unwrap()
+            .execute_batch("CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES (0);")
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let applications = Arc::new(AtomicUsize::new(0));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let database = database.clone();
+                let barrier = Arc::clone(&barrier);
+                let applications = Arc::clone(&applications);
+                thread::spawn(move || {
+                    let conn = Connection::open(database).unwrap();
+                    conn.busy_timeout(Duration::from_secs(10)).unwrap();
+                    let hook = move |_, point| {
+                        if point == MigrationFaultPoint::AfterSqlBeforeVersion {
+                            applications.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Ok(())
+                    };
+                    barrier.wait();
+                    run_migrations_with_specs(
+                        &conn,
+                        &[MigrationSpec::new(1, BACKFILL, false)],
+                        Some(&hook),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let conn = Connection::open(database).unwrap();
+        let committed: (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT value FROM counter), (SELECT COUNT(*) FROM schema_version)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(committed, (1, 1));
+        assert_eq!(applications.load(Ordering::SeqCst), 1);
+    }
 
     /// 回归：v9 只结束"验证占位 run"，不碰真实的运行中记录，也不删任何行。
     #[test]
