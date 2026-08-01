@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 14;
+pub const LATEST_SCHEMA_VERSION: u32 = 15;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -43,6 +43,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(12, MIGRATION_012, false),
     MigrationSpec::new(13, MIGRATION_013, false),
     MigrationSpec::new(14, MIGRATION_014, true),
+    MigrationSpec::new(15, MIGRATION_015, false),
 ];
 
 impl MigrationSpec {
@@ -650,6 +651,12 @@ CREATE INDEX idx_workspaces_last_opened
     ON workspaces(last_opened_at DESC);
 "#;
 
+/// Migration 015: 修复旧安装中通知迁移版本与实际 schema 漂移的问题。
+///
+/// 部分历史数据库已经记录 v10-v14，但 `notifications` 表并不存在。以新的向前
+/// 迁移重放 v10 的幂等 DDL，确保正常启动即可修复，而不是在各业务查询中吞错。
+const MIGRATION_015: &str = MIGRATION_010;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,7 +955,7 @@ mod tests {
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )
                 .unwrap();
-            assert_eq!(retried, (14, 3, 1));
+            assert_eq!(retried, (i64::from(LATEST_SCHEMA_VERSION), 3, 1));
         }
     }
 
@@ -1077,6 +1084,36 @@ mod tests {
                 "missing table: {expected}"
             );
         }
+    }
+
+    #[test]
+    fn migration_repairs_v14_database_missing_notifications() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+
+        // Reproduce a legacy installation whose version ledger says v14 while
+        // the notification schema created by v10 is physically absent.
+        conn.execute_batch(
+            "DROP TABLE notifications;\
+             DELETE FROM schema_version WHERE version > 14;",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let notification_objects: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE (type = 'table' AND name = 'notifications') \
+                    OR (type = 'index' AND name IN ( \
+                        'idx_notifications_unread', \
+                        'idx_notifications_task' \
+                    ))",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notification_objects, 3);
     }
 
     #[test]
