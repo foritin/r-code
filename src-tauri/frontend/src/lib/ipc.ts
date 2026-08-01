@@ -46,6 +46,7 @@ import type {
   CodexIntegrationStatus,
   ContextCompactionResult,
   InferenceOptions,
+  LegacyMemoryStatus,
 } from "./types";
 import {
   browserMockDetails,
@@ -494,11 +495,9 @@ export const subagentSessionMessages = async (taskId: string, subagentId: string
   }
 };
 
-// ---------- 项目记忆 ----------
-export const memoryGet = (workspacePath: string) => ipc<string>("cmd_memory_get", { workspacePath });
-
-export const memorySet = (workspacePath: string, content: string) =>
-  ipc<void>("cmd_memory_set", { workspacePath, content });
+// ---------- 旧版项目记忆文件风险状态 ----------
+export const legacyMemoryStatus = (workspacePath: string) =>
+  ipc<LegacyMemoryStatus>("cmd_legacy_memory_status", { workspacePath });
 
 // ---------- 设置 ----------
 export const settingsGet = async () => {

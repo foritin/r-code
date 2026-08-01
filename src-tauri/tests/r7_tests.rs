@@ -466,7 +466,7 @@ fn r7_t4_desktop_verification_app_wiring() {
         "cmd_terminal_raw_since",
         "cmd_replay",
         "cmd_session_messages",
-        "cmd_memory_get",
+        "cmd_legacy_memory_status",
         "cmd_recovery_cleanup",
         "cmd_support_preview",
         "cmd_logs_tail",

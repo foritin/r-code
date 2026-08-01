@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTasksStore } from "../../store/tasks";
 import { pushToast } from "../../store/toast";
-import { memoryGet, memorySet, taskList, workspaceChoose, workspaceForget } from "../../lib/ipc";
+import { legacyMemoryStatus, taskList, workspaceChoose, workspaceForget } from "../../lib/ipc";
 import { displayPath } from "../../lib/format";
-import type { Workspace } from "../../lib/types";
+import type { LegacyMemoryStatus, Workspace } from "../../lib/types";
 import { IconAttach, IconCheck, IconClose, IconProjects } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
@@ -174,33 +174,32 @@ export function ProjectsScene() {
 }
 
 function MemorySection({ workspacePath }: { workspacePath: string | null }) {
-  const [text, setText] = useState("");
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<LegacyMemoryStatus | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    setText("");
-    setError(null);
-    setLoaded(false);
+    setStatus(null);
+    setFailed(false);
     if (!workspacePath) {
-      setLoaded(true);
+      setLoading(false);
       return () => {
         alive = false;
       };
     }
-    void memoryGet(workspacePath)
-      .then((content) => {
+    setLoading(true);
+    void legacyMemoryStatus(workspacePath)
+      .then((nextStatus) => {
         if (alive) {
-          setText(content);
-          setLoaded(true);
+          setStatus(nextStatus);
+          setLoading(false);
         }
       })
-      .catch((cause) => {
+      .catch(() => {
         if (alive) {
-          setError(String(cause));
-          setLoaded(true);
+          setFailed(true);
+          setLoading(false);
         }
       });
     return () => {
@@ -208,42 +207,63 @@ function MemorySection({ workspacePath }: { workspacePath: string | null }) {
     };
   }, [workspacePath]);
 
-  const save = async () => {
-    if (!workspacePath || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      await memorySet(workspacePath, text);
-    } catch (cause) {
-      setError(String(cause));
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <section className="workspace-memory">
       <div>
-        <div className="section-label">PROJECT MEMORY</div>
-        <h2>项目记忆</h2>
-        <p>保存在当前附加工作区的 <code>.r-code/memory.md</code> 中。</p>
+        <div className="section-label">MEMORY SAFETY</div>
+        <h2>记忆与旧版文件</h2>
+        <p>新的 Memory Center 尚未启用。启用后，数据只保存在 R-Code AppData，不会写入项目目录。</p>
       </div>
       {!workspacePath ? (
-        <div className="memory-placeholder">先从上方选择一个工作区；这不会影响纯聊天会话。</div>
-      ) : !loaded ? (
-        <div className="memory-placeholder">读取中…</div>
-      ) : (
-        <div className="memory-editor">
-          {error && <div className="errbar">读取或保存失败：{error}</div>}
-          <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="记录架构约定、开发偏好与重要上下文…"
-            spellCheck={false}
-          />
-          <div><button className="btn accent" disabled={saving} onClick={() => void save()}>{saving ? "保存中…" : "保存记忆"}</button></div>
+        <div className="memory-placeholder">先从上方附加一个工作区，以检查旧版记忆文件的风险状态。</div>
+      ) : loading ? (
+        <div className="memory-placeholder">正在检查旧版记忆文件状态…</div>
+      ) : failed ? (
+        <div className="legacy-memory-status unknown">
+          <strong>无法检查旧版记忆文件状态</strong>
+          <p>R-Code 没有读取或修改项目文件，请稍后重试。</p>
         </div>
+      ) : status ? (
+        <LegacyMemoryNotice status={status} />
+      ) : (
+        <div className="memory-placeholder">没有可用的旧版记忆文件状态。</div>
       )}
     </section>
+  );
+}
+
+function LegacyMemoryNotice({ status }: { status: LegacyMemoryStatus }) {
+  if (status.git_tracking === "tracked") {
+    return (
+      <div className="legacy-memory-status tracked" role="alert">
+        <strong>{status.exists ? "旧版记忆文件可能已进入 Git 历史" : "工作树中未发现旧版记忆文件，但 Git 仍有跟踪记录"}</strong>
+        <p>{status.exists ? "检测到该文件当前受 Git 跟踪。" : "该文件当前不在工作树中，但 Git 索引仍记录它，历史也可能保留内容。"} R-Code 不会读取、导入、修改或删除 <code>.r-code/memory.md</code>，也不会自动执行 git rm 或取消跟踪；请自行审查 Git 索引及历史。</p>
+      </div>
+    );
+  }
+
+  if (status.git_tracking === "unknown") {
+    return (
+      <div className="legacy-memory-status unknown">
+        <strong>无法检测旧版记忆文件的 Git 跟踪状态</strong>
+        <p>{status.exists ? "工作树中发现了旧版记忆文件。" : "工作树中未发现旧版记忆文件，但无法据此判断 Git 历史中是否保留过它。"} R-Code 不会读取、导入、修改或删除 <code>.r-code/memory.md</code>；请在 R-Code 之外自行审查。</p>
+      </div>
+    );
+  }
+
+  if (!status.exists) {
+    return (
+      <div className="legacy-memory-status absent">
+        <strong>未发现旧版记忆文件</strong>
+        <p>当前工作树中没有 <code>.r-code/memory.md</code>，Git 索引也未跟踪该路径。R-Code 未检查 Git 历史；若过去曾提交，仍需自行审查历史，R-Code 不会自动操作。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="legacy-memory-status untracked">
+      <strong>发现未被 Git 跟踪的旧版记忆文件</strong>
+      <p>R-Code 不会读取、导入、修改或删除 <code>.r-code/memory.md</code>；请在 R-Code 之外自行审查与处置。</p>
+    </div>
   );
 }
