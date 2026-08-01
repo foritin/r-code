@@ -87,6 +87,86 @@ test.after(async () => {
   server?.kill();
 });
 
+test("only the current text frontier owns the animated caret", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const contract = await page.evaluate(async () => {
+    const { applyAgentEvent } = await import("/src/components/room/model.ts");
+    let nextId = 0;
+    let items = [];
+    const nid = () => `event-${nextId += 1}`;
+    const streamingText = () => items
+      .filter((item) => item.kind === "agent" && item.streaming)
+      .map((item) => item.text);
+
+    items = applyAgentEvent(items, { type: "message", text: "先看代码", delta: true }, 1, nid);
+    const whileWritingFirst = streamingText();
+
+    items = applyAgentEvent(items, { type: "activity", phase: "tool", detail: "read_file" }, 2, nid);
+    const whenToolStarts = streamingText();
+    items = applyAgentEvent(items, {
+      type: "tool_call",
+      name: "read_file",
+      input: { path: "src/main.rs" },
+      call_id: "call-1",
+    }, 2, nid);
+    items = applyAgentEvent(items, {
+      type: "tool_result",
+      call_id: "call-1",
+      output: "ok",
+      is_error: false,
+    }, 3, nid);
+
+    items = applyAgentEvent(items, { type: "activity", phase: "streaming" }, 4, nid);
+    items = applyAgentEvent(items, { type: "message", text: "再看测试", delta: true }, 4, nid);
+    const whileWritingSecond = streamingText();
+    items = applyAgentEvent(items, { type: "message", text: "，继续", delta: true }, 4, nid);
+    const afterAppending = streamingText();
+
+    items = applyAgentEvent(items, { type: "activity", phase: "finalizing" }, 5, nid);
+    const whileFinalizing = streamingText();
+    items = applyAgentEvent(items, { type: "state", state: "review_ready" }, 6, nid);
+
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    document.body.append(caret);
+    const style = getComputedStyle(caret);
+    const caretStyle = {
+      width: style.width,
+      animationName: style.animationName,
+      pointerEvents: style.pointerEvents,
+    };
+    caret.remove();
+
+    return {
+      whileWritingFirst,
+      whenToolStarts,
+      whileWritingSecond,
+      afterAppending,
+      whileFinalizing,
+      afterRun: streamingText(),
+      agentText: items.filter((item) => item.kind === "agent").map((item) => item.text),
+      caretStyle,
+    };
+  });
+
+  assert.deepEqual(contract.whileWritingFirst, ["先看代码"]);
+  assert.deepEqual(contract.whenToolStarts, []);
+  assert.deepEqual(contract.whileWritingSecond, ["再看测试"]);
+  assert.deepEqual(contract.afterAppending, ["再看测试，继续"]);
+  assert.deepEqual(contract.whileFinalizing, []);
+  assert.deepEqual(contract.afterRun, []);
+  assert.deepEqual(contract.agentText, ["先看代码", "再看测试，继续"]);
+  assert.deepEqual(contract.caretStyle, {
+    width: "2px",
+    animationName: "blink",
+    pointerEvents: "none",
+  });
+
+  await page.close();
+});
+
 for (const viewport of [{ width: 800, height: 600 }, { width: 1200, height: 800 }, { width: 1800, height: 1200 }]) {
   test(`room fills and scrolls within ${viewport.width}x${viewport.height}`, async () => {
     const page = await browser.newPage({ viewport });
