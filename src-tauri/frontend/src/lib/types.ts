@@ -306,6 +306,12 @@ export interface QueuedMessage {
 // ---------- Workspace ----------
 export type ProjectAccessMode = "request_approval" | "risk_based" | "full_access";
 export type WorkspaceMemoryMode = "inherit" | "read_only" | "off";
+export type LegacyMemoryGitTracking = "tracked" | "untracked" | "unknown";
+
+export interface LegacyMemoryStatus {
+  exists: boolean;
+  git_tracking: LegacyMemoryGitTracking;
+}
 
 export interface Workspace {
   id: string;

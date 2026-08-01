@@ -10,6 +10,7 @@ import type {
   ChangeDiff,
   AttachmentInput,
   InferenceOptions,
+  LegacyMemoryStatus,
   LogEntry,
   ProjectAccessMode,
   ProviderModelsInput,
@@ -58,9 +59,12 @@ import {
 type MockArgs = Record<string, unknown>;
 
 let sequence = 0;
-const memoryByWorkspace = new Map<string, string>([
-  ["D:/project/rust/r-code", "# 项目记忆\n\n- Rust + Tauri v2 桌面应用\n- 前端位于 `src-tauri/frontend`\n- 提交前运行前端构建与 Rust 测试\n"],
-  ["D:/project/rust/api-server", "# 项目记忆\n\n- API 服务优先保持向后兼容\n- 新增中间件必须包含边界测试\n"],
+const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
+  ["D:/project/rust/r-code", { exists: true, git_tracking: "tracked" }],
+  ["D:/project/rust/api-server", { exists: true, git_tracking: "untracked" }],
+  ["D:/project/rust/legacy-unknown", { exists: true, git_tracking: "unknown" }],
+  ["D:/project/rust/legacy-deleted-tracked", { exists: false, git_tracking: "tracked" }],
+  ["D:/project/rust/legacy-absent", { exists: false, git_tracking: "untracked" }],
 ]);
 const verificationOutputs = new Map<string, string>();
 const terminalOutputs = new Map<string, string>();
@@ -866,8 +870,10 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_session_messages": return copy(browserMockMessages(stringArg(args, "taskId")));
     case "cmd_subagent_session_messages": return copy(browserMockSubagentMessages(stringArg(args, "taskId"), stringArg(args, "subagentId")));
 
-    case "cmd_memory_get": return memoryByWorkspace.get(stringArg(args, "workspacePath")) ?? "";
-    case "cmd_memory_set": memoryByWorkspace.set(stringArg(args, "workspacePath"), stringArg(args, "content")); return undefined;
+    case "cmd_legacy_memory_status": return copy(
+      legacyMemoryStatusByWorkspace.get(stringArg(args, "workspacePath"))
+        ?? { exists: false, git_tracking: "unknown" },
+    );
     case "cmd_settings_get": return copy(browserMockSettings);
     case "cmd_provider_catalog": return copy(browserMockProviderCatalog);
     case "cmd_provider_models": return copy(providerModels(args.request as ProviderModelsInput));

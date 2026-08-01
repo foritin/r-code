@@ -286,6 +286,172 @@ test("workspace mock keeps opaque identity stable until forget", async () => {
   await page.close();
 });
 
+test("legacy memory notices stay metadata-only and preserve workspace identity", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  const addedPaths = [
+    "D:/project/rust/legacy-unknown",
+    "D:/project/rust/legacy-deleted-tracked",
+    "D:/project/rust/legacy-absent",
+    "D:/project/rust/legacy-unmapped",
+  ];
+
+  try {
+    await page.goto(baseUrl, { waitUntil: "networkidle" });
+    const contract = await page.evaluate(async (paths) => {
+      const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+      const { browserMockWorkspaces } = await import("/src/lib/mock-data.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const additions = paths.map((canonicalPath, index) => ({
+        id: `9000000000000000000000000000000${index}`,
+        canonical_path: canonicalPath,
+        display_name: canonicalPath.split("/").at(-1),
+        access_mode: "request_approval",
+        last_opened_at: `2026-07-31T00:0${index}:00.000Z`,
+        memory_mode: "inherit",
+        memory_generation: 1,
+      }));
+      browserMockWorkspaces.push(...additions);
+      await useTasksStore.getState().refreshWorkspaces();
+      useTasksStore.getState().setCurrentProject(null);
+
+      const statusResponses = await Promise.all([
+        "D:/project/rust/r-code",
+        "D:/project/rust/api-server",
+        ...paths,
+      ].map(async (workspacePath) => ({
+        workspacePath,
+        response: await browserMockInvoke("cmd_legacy_memory_status", { workspacePath }),
+      })));
+      const retiredErrors = [];
+      for (const command of ["cmd_memory_get", "cmd_memory_set"]) {
+        try {
+          await browserMockInvoke(command, { workspacePath: paths[0], content: "PRIVATE_BODY_SENTINEL" });
+        } catch (error) {
+          retiredErrors.push(String(error));
+        }
+      }
+
+      return {
+        initialIdentity: Object.fromEntries(
+          useTasksStore.getState().workspaces.map((workspace) => [
+            workspace.canonical_path,
+            { id: workspace.id, canonical_path: workspace.canonical_path },
+          ]),
+        ),
+        retiredErrors,
+        statusResponses,
+      };
+    }, addedPaths);
+
+    assert.equal(contract.retiredErrors.length, 2);
+    for (const error of contract.retiredErrors) assert.match(error, /尚未实现命令/);
+    for (const { response } of contract.statusResponses) {
+      assert.deepEqual(Object.keys(response).sort(), ["exists", "git_tracking"]);
+    }
+
+    await page.getByRole("button", { name: "管理项目" }).click();
+    await page.locator("#main-content > .scene-projects").waitFor({ state: "visible" });
+
+    const scenarios = [
+      {
+        path: "D:/project/rust/r-code",
+        heading: /可能已进入 Git 历史/,
+        copy: /自行审查|人工审查/,
+      },
+      {
+        path: "D:/project/rust/api-server",
+        heading: /发现未被 Git 跟踪/,
+        copy: /不会读取、导入、修改或删除/,
+      },
+      {
+        path: "D:/project/rust/legacy-unknown",
+        heading: /无法检测旧版记忆文件的 Git 跟踪状态/,
+        copy: /工作树中发现了旧版记忆文件/,
+        forbidden: /未被 Git 跟踪|Git 未跟踪|无需处理|历史安全/,
+      },
+      {
+        path: "D:/project/rust/legacy-deleted-tracked",
+        heading: /Git 仍有跟踪记录/,
+        copy: /索引仍记录|可能保留内容/,
+      },
+      {
+        path: "D:/project/rust/legacy-absent",
+        heading: /未发现旧版记忆文件/,
+        copy: /未检查.*Git 历史/,
+        forbidden: /无需处理|历史安全/,
+      },
+      {
+        path: "D:/project/rust/legacy-unmapped",
+        heading: /无法检测旧版记忆文件的 Git 跟踪状态/,
+        copy: /无法据此判断 Git 历史/,
+        forbidden: /未被 Git 跟踪|Git 未跟踪|无需处理|历史安全/,
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const displayName = scenario.path.split("/").at(-1);
+      const row = page.locator(".workspace-row").filter({ hasText: displayName });
+      await row.locator(".workspace-main").click();
+
+      const notice = page.locator(".workspace-memory .legacy-memory-status");
+      await notice.locator("strong").filter({ hasText: scenario.heading }).waitFor({ state: "visible" });
+      const copy = await notice.innerText();
+      assert.match(copy, scenario.copy);
+      if (scenario.forbidden) assert.doesNotMatch(copy, scenario.forbidden);
+      assert.ok(!copy.includes(scenario.path), "notice must not reveal the absolute workspace path");
+      assert.ok(!copy.includes("PRIVATE_BODY_SENTINEL"), "notice must not reveal file content");
+      assert.equal(
+        await notice.locator('textarea,input,select,button,a,[contenteditable="true"],[role="button"]').count(),
+        0,
+        "legacy memory status must not expose edit/import/delete/untrack actions",
+      );
+
+      const navigation = await page.evaluate(async (workspacePath) => {
+        const { useTasksStore } = await import("/src/store/tasks.ts");
+        const state = useTasksStore.getState();
+        const workspace = state.workspaces.find((item) => item.canonical_path === workspacePath);
+        return {
+          currentProjectId: state.currentProjectId,
+          identity: workspace && { id: workspace.id, canonical_path: workspace.canonical_path },
+        };
+      }, scenario.path);
+      assert.equal(navigation.currentProjectId, scenario.path);
+      assert.deepEqual(navigation.identity, contract.initialIdentity[scenario.path]);
+      assert.equal(await row.getAttribute("class"), "workspace-row current");
+    }
+
+    const statusResponsesAfterNavigation = await page.evaluate(async (workspacePaths) => {
+      const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+      return Promise.all(workspacePaths.map(async (workspacePath) => ({
+        workspacePath,
+        response: await browserMockInvoke("cmd_legacy_memory_status", { workspacePath }),
+      })));
+    }, contract.statusResponses.map(({ workspacePath }) => workspacePath));
+    assert.deepEqual(
+      statusResponsesAfterNavigation,
+      contract.statusResponses,
+      "viewing notices must not import, delete, or untrack a legacy file",
+    );
+
+    const memorySection = page.locator(".workspace-memory");
+    assert.equal(await memorySection.locator("textarea").count(), 0);
+    assert.doesNotMatch(await memorySection.innerText(), /保存记忆|记录架构约定、开发偏好与重要上下文/);
+  } finally {
+    await page.evaluate(async (paths) => {
+      const { browserMockWorkspaces } = await import("/src/lib/mock-data.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      for (let index = browserMockWorkspaces.length - 1; index >= 0; index -= 1) {
+        if (paths.includes(browserMockWorkspaces[index].canonical_path)) browserMockWorkspaces.splice(index, 1);
+      }
+      useTasksStore.setState((state) => ({
+        workspaces: state.workspaces.filter((workspace) => !paths.includes(workspace.canonical_path)),
+        currentProjectId: null,
+      }));
+    }, addedPaths).catch(() => {});
+    await page.close();
+  }
+});
+
 test("clearing a project removes app records without implying disk deletion", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

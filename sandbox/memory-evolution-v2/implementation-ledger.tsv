@@ -13,3 +13,6 @@ iter	task	phase	tests	quality	pass	note
 1	T0L1	engineer	production cargo check	-	-	Deleted ProjectMemory and memory_get/set registration; added fixed-path metadata-only legacy status with symlink_metadata and parameterized git ls-files
 1	T0L1	qa	1101/1101	min5	yes	Authored real TempDir Git and command tests for tracking states, fixed path, byte/porcelain preservation, no response leakage, dangling symlink, unregistered workspace and retired backend surface
 1	T0L1	keep	1101/1101	min5	yes	T0L1 acceptance criteria met; focused read-only security review found no >=8/10 path traversal, shell injection, content leak or residual backend writer finding
+1	T0L2	engineer	isolated frontend build + cargo check	-	-	Removed the file-backed editor, write/read IPC and body-bearing browser mock; added metadata-only tracked/untracked/unknown notices without automatic import, delete or untrack actions
+1	T0L2	qa	Rust 1106/1106 + targeted app-shell 1/1	min4	yes	Authored five-state browser contract plus frontend retirement and wiring tests; isolated build, fmt and clippy pass; 3 unrelated full app-shell 1px viewport failures reproduce on baseline
+1	T0L2	keep	Rust 1106/1106 + targeted app-shell 1/1	min4	yes	T0L2 acceptance criteria met; security review corrected deleted-but-tracked priority and removed any claim that an absent untracked path proves Git history safe

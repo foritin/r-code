@@ -274,7 +274,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
     name: "memory",
     aliases: ["instructions"],
     title: "项目记忆",
-    description: "打开当前项目的持久记忆编辑器。",
+    description: "查看当前项目的旧版记忆文件风险状态。",
     category: "view",
     kind: "local",
     locations: ["home", "room"],
