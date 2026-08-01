@@ -120,7 +120,7 @@ test("completion never blocks on optional setup and only auto-opens once", async
   await page.close();
 });
 
-test("an empty provider form applies the complete first preset", async () => {
+test("an empty provider form applies the complete first preset and keeps the primary flow compact", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.evaluate(async () => {
@@ -156,6 +156,39 @@ test("an empty provider form applies the complete first preset", async () => {
     ),
     ["openai_chat", "openai_responses"],
   );
+
+  const primaryLayout = await page.locator(".provider-form").evaluate((form) => {
+    const key = form.querySelector("#set-api-key")?.getBoundingClientRect();
+    const model = form.querySelector(".provider-model-input")?.getBoundingClientRect();
+    const advanced = form.querySelector(".provider-advanced");
+    return {
+      fieldCount: form.querySelectorAll(":scope > .provider-form-grid > .provider-form-field").length,
+      keyLeft: key?.left,
+      keyRight: key?.right,
+      modelLeft: model?.left,
+      modelRight: model?.right,
+      advancedOpen: advanced?.hasAttribute("open"),
+    };
+  });
+  assert.equal(primaryLayout.fieldCount, 4, "the default flow should only expose four field groups");
+  assert.equal(primaryLayout.advancedOpen, false, "technical fields should stay collapsed for a preset");
+  assert.ok(Math.abs(primaryLayout.keyLeft - primaryLayout.modelLeft) < 1, "API key and model must share a left edge");
+  assert.ok(Math.abs(primaryLayout.keyRight - primaryLayout.modelRight) < 1, "API key and model must share a right edge");
+  assert.equal(await page.locator("#set-base-url").isVisible(), false);
+  assert.equal(await page.locator("#set-protocol").isVisible(), false);
+
+  if (process.env.R_CODE_PROVIDER_FORM_SHOT) {
+    fs.mkdirSync(path.dirname(process.env.R_CODE_PROVIDER_FORM_SHOT), { recursive: true });
+    await page.locator(".provider-editor").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_SHOT });
+  }
+
+  await page.locator(".provider-advanced > summary").click();
+  assert.equal(await page.locator("#set-base-url").isVisible(), true);
+  assert.equal(await page.locator("#set-protocol").isVisible(), true);
+  if (process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT) {
+    fs.mkdirSync(path.dirname(process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT), { recursive: true });
+    await page.locator(".provider-editor").screenshot({ path: process.env.R_CODE_PROVIDER_FORM_ADVANCED_SHOT });
+  }
   await page.getByRole("button", { name: "Anthropic 兼容口" }).click();
   assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com/anthropic");
   assert.equal(await page.locator("#set-protocol").inputValue(), "anthropic_messages");
@@ -165,7 +198,7 @@ test("an empty provider form applies the complete first preset", async () => {
 
   await page.locator("#set-model").fill("deepseek-v4-pro");
   await page.locator("#set-protocol").selectOption("openai_responses");
-  await page.getByText(/Responses 当前仅支持 deepseek-v4-flash/).waitFor({ state: "visible" });
+  await page.getByText(/Responses 仅支持 deepseek-v4-flash/).waitFor({ state: "visible" });
   assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
   await page.close();
 });
