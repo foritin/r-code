@@ -305,12 +305,16 @@ export interface QueuedMessage {
 
 // ---------- Workspace ----------
 export type ProjectAccessMode = "request_approval" | "risk_based" | "full_access";
+export type WorkspaceMemoryMode = "inherit" | "read_only" | "off";
 
 export interface Workspace {
+  id: string;
   canonical_path: string;
   display_name: string;
   access_mode: ProjectAccessMode;
   last_opened_at: string;
+  memory_mode: WorkspaceMemoryMode;
+  memory_generation: number;
 }
 
 // ---------- 搜索 ----------

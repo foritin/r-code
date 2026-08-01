@@ -25,16 +25,22 @@ const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOStri
 
 export const browserMockWorkspaces: Workspace[] = [
   {
+    id: "7f4d622084db4d359fb2f50c9780a1ad",
     canonical_path: "D:/project/rust/r-code",
     display_name: "r-code",
     access_mode: "risk_based",
     last_opened_at: at(2),
+    memory_mode: "inherit",
+    memory_generation: 1,
   },
   {
+    id: "a49332f6079b4b629aee49ed1bfe8e71",
     canonical_path: "D:/project/rust/api-server",
     display_name: "api-server",
     access_mode: "request_approval",
     last_opened_at: at(46),
+    memory_mode: "inherit",
+    memory_generation: 1,
   },
 ];
 
