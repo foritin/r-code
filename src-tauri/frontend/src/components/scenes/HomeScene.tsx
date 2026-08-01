@@ -15,6 +15,7 @@ import {
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { errText } from "../../lib/format";
+import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../../lib/onboarding";
 import type {
   CodexCliPreferences,
   CodexIntegrationStatus,
@@ -172,7 +173,7 @@ export function HomeScene() {
     });
   }, [providerChoices, fallback]);
 
-  useEffect(() => {
+  const loadRuntimeDefaults = useCallback(() => {
     let alive = true;
     void Promise.all([settingsGet(), codexIntegrationStatus()]).then(([settings, status]) => {
       if (!alive) return;
@@ -183,6 +184,22 @@ export function HomeScene() {
     });
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    let cancel = loadRuntimeDefaults();
+    const refresh = () => {
+      cancel();
+      cancel = loadRuntimeDefaults();
+    };
+    const focusComposer = () => textareaRef.current?.focus({ preventScroll: true });
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    window.addEventListener("r-code:new-session-ready", focusComposer);
+    return () => {
+      cancel();
+      window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+      window.removeEventListener("r-code:new-session-ready", focusComposer);
+    };
+  }, [loadRuntimeDefaults]);
 
   useEffect(() => {
     if (slashActive < slashItems.length) return;

@@ -4,6 +4,7 @@ import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
 import { notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
 import type { Notification, NotificationPage } from "../../lib/types";
+import { requestOnboarding } from "../../lib/onboarding";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import {
   IconBell,
@@ -141,6 +142,8 @@ export function MenuBar() {
             trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">帮助</button>}
           >
             {({ close }) => <>
+              <MenuItem close={close} onSelect={requestOnboarding}>首次设置</MenuItem>
+              <MenuSeparator />
               <MenuItem close={close} shortcut="Ctrl /" onSelect={showShortcuts}>快捷键</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("diagnostics")}>诊断与支持</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>Codex 协作</MenuItem>

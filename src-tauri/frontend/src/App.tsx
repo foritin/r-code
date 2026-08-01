@@ -15,6 +15,7 @@ import { EditorScene } from "./components/scenes/EditorScene";
 import { SettingsScene } from "./components/scenes/SettingsScene";
 import { SearchOverlay } from "./components/SearchOverlay";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
+import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
 
 /**
  * R-Code 应用根组件。
@@ -101,6 +102,7 @@ export default function App() {
       {searchOpen && <SearchOverlay />}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
+      <OnboardingCampaign />
     </div>
   );
 }
