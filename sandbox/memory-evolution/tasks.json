@@ -111,7 +111,7 @@
         },
         {
           "id": "T1.3",
-          "description": "定义 MemoryFileState={empty,ready,unverified,invalid,unavailable}、MemoryDiagnostic{code,severity,line,message}、MemoryInjectionStatus、MemoryStats 和 MemoryRuleEvent；diagnostic/error message 禁止嵌入规则或来源正文。"
+          "description": "定义 MemoryFileState={empty,ready,unverified,invalid,unavailable}、MemoryDiagnostic{code,severity,line?,message}；MemoryStats{pending_candidate_count,applying_candidate_count,enabled_rule_count,disabled_rule_count,observation_count}；MemoryInjectionStatus{run_id,snapshot_hash,included_rule_count,omitted_rule_count,injected_at}；MemoryRuleEvent{sequence,rule_id?,action,actor=local_user,source_task_id?,before_hash?,after_hash?,file_revision?,occurred_at}。任何 message 禁止正文。"
         },
         {
           "id": "T1.4",
@@ -123,7 +123,7 @@
         },
         {
           "id": "T1.6",
-          "description": "定义 MemoryCaptureOutcome{candidate_id:Option<String>,status,related_rule_id:Option<String>,observation_count}：exact active rule merge 时 candidate_id=None；另定义 MemoryMutationResult、MemoryReconcileAction={accept_current,abort} 和稳定 MemoryCommandError codes。"
+          "description": "定义 MemoryCaptureOutcome{candidate_id?,status,related_rule_id?,observation_count}；MemoryMutationResult{candidate_id?,rule_id?,status?,file_revision,approved_revision?,file_state}；MemoryReconcileAction={accept_current,abort}；MemoryCommandError code 精确为 workspace_not_open/invalid_input/not_found/conflict/invalid_state/invalid_rules_file/storage_unavailable。"
         },
         {
           "id": "T1.7",
@@ -183,7 +183,7 @@
         },
         {
           "id": "T2.3",
-          "description": "创建 memory_settings 与 memory_injections；settings.workspace_path 及所有 memory 表 workspace_path 外键引用 workspaces(canonical_path) ON DELETE CASCADE；injections 只保存 snapshot hash、rule_ids JSON、omitted_count。"
+          "description": "创建 memory_settings(workspace_path PK,auto_capture_review INTEGER DEFAULT 0 CHECK 0/1,inject_rules INTEGER DEFAULT 1 CHECK 0/1,prompt_char_budget INTEGER DEFAULT 12000 CHECK 1000..50000,updated_at)；创建 memory_injections(sequence,workspace_path,task_id,run_id,snapshot_hash,rule_ids_json,omitted_count,injected_at)，不含 prompt。所有 workspace FK -> workspaces(canonical_path) CASCADE。"
         },
         {
           "id": "T2.4",
@@ -283,7 +283,7 @@
       "id": "T4",
       "title": "Add a lossless structured rules file store",
       "serves": ["C1", "C3", "C7"],
-      "description": "新增 .r-code/rules.md 内容存储，格式为分类标题下的单行 checkbox 规则和稳定 HTML comment ID。每次 load 返回 BLAKE3 revision；mutation 必须携带 expected revision 并拒绝 lost update。解析器宽容保留未知 Markdown，写入复用现有 tempfile 依赖的 NamedTempFile::persist 以在 Windows/Unix 原子替换。现有 memory.md API 不改名、不删除。",
+      "description": "新增 .r-code/rules.md 内容存储，格式为分类标题下的单行 checkbox 规则和稳定 HTML comment ID。所有读写先复用 r_code_core::security::PathGuard 解析 containment；首次创建 .r-code 后必须重新 canonicalize 父目录，拒绝 rules.md 经 symlink/junction 逃出 workspace；revisioned mutation 再用同一重解析父目录中的 NamedTempFile::persist 原子替换。现有 memory.md API 不改名、不删除。",
       "building_blocks": [
         "# R-Code Rules / ## category / - [x] text <!-- r-code:id=UUID -->",
         "lossless unknown-line preservation with 1 MiB file cap",
@@ -291,7 +291,7 @@
         "legacy .r-code/memory.md compatibility"
       ],
       "tools": ["cargo test", "tempfile fixtures"],
-      "packages": ["tempfile（dev，沿用）"],
+      "packages": ["tempfile（沿用）", "r-code-core PathGuard（沿用）"],
       "files": [
         {
           "path": "src-tauri/src/memory_rules.rs",
@@ -312,7 +312,7 @@
       "subtasks": [
         {
           "id": "T4.1",
-          "description": "定义 MAX_RULES_FILE_BYTES=1 MiB、FileRevision='missing:v1' 或 'blake3:<hex>' 和 RulesDocument{rules,revision,diagnostics,raw}; 超限不读正文并返回 error diagnostic；parse_rules 识别 managed 行，重复 ID/空/过长规则产生带行号 error。"
+          "description": "RulesFileStore::new(root) 构建 PathGuard；load 每次用 guard.resolve(root/.r-code/rules.md)（不存在时由最近现存祖先解析），只使用返回路径做 IO。首次 write 只允许在已验证 canonical workspace root 下用 create_dir 创建单层 .r-code；无论目录原有或刚创建，都立即重新 guard.resolve(root/.r-code) 得到 canonical parent，任何 symlink/junction escape fail closed。再定义 1 MiB cap、missing/hash revision、RulesDocument 和带行号 diagnostics。"
         },
         {
           "id": "T4.2",
@@ -320,15 +320,15 @@
         },
         {
           "id": "T4.3",
-          "description": "文件不存在时 revision=missing:v1；首次批准创建 # R-Code Rules/## General。无 ID checkbox 产生 warning diagnostic、不会注入或自动改写；UI 可让用户通过候选流程导入。"
+          "description": "文件不存在时 revision=missing:v1；首次批准在重新解析的 canonical .r-code parent 中创建 # R-Code Rules/## General。无 ID checkbox 产生 warning diagnostic、不会注入或自动改写；UI 可让用户通过候选流程导入。"
         },
         {
           "id": "T4.4",
-          "description": "write_if_revision 用 tempfile::NamedTempFile::new_in(parent)，write_all+flush+sync_all 后 persist(target)；persist 失败保留原目标并清理临时文件。同一 rule ID/同文本重试返回 AlreadyApplied，不重复。"
+          "description": "write_if_revision 在最终 preflight 中重新 resolve parent/target 并匹配 revision，只能用 NamedTempFile::new_in(canonical_parent) write+flush+sync_all+persist(canonical_parent/rules.md)，随后再 resolve/重读确认 intended revision；post-write drift 返回专用错误且上层不得授权。同一 rule ID/同文本重试 AlreadyApplied。文档明确任意外部进程竞速 replace syscall 不具备真正 filesystem CAS。"
         },
         {
           "id": "T4.5",
-          "description": "fixture 测试 CRLF/LF、中文、未知 Markdown、1 MiB 边界/超限、diagnostics、missing/hash revision、外部编辑 conflict、两个 document 写不丢更新、Windows replacement 和 legacy 原样保留。"
+          "description": "fixture 测试 CRLF/LF、中文、未知 Markdown、1 MiB、diagnostics、revision conflict、两个 document、Windows replacement 和 legacy 原样保留；覆盖初始没有 .r-code 的首次批准。Unix symlink/Windows reparse-junction 在创建前已指向外部，或在首次校验与写入前被替换到外部时，load/write 均拒绝且外部 sentinel 不变。"
         }
       ],
       "tests": [
@@ -340,6 +340,8 @@
       "acceptance_criteria": [
         "用户可直接阅读和 Git diff .r-code/rules.md，稳定 ID 不暴露在可见规则文本中。",
         "R-Code 修改一条规则时不重排或删除未知 Markdown；expected revision 过期时不写任何字节。",
+        "rules 路径经 symlink/junction 解析到 workspace 外时 fail closed，绝不读取、覆盖或注入外部目标。",
+        "全新 workspace 可安全创建 .r-code/rules.md；临时文件与最终 target 始终来自创建后重新解析的 canonical .r-code parent。",
         "升级后已有 .r-code/memory.md 内容和值完全不变。"
       ],
       "depends_on": ["T1"],
@@ -441,7 +443,7 @@
       "subtasks": [
         {
           "id": "T5B.1",
-          "description": "实现 approve_candidate(workspace_key,root,candidate_id,edited_text,replace_rule_id,expected_revision)->Result<MemoryMutationResult,MemoryCommandError>，candidate ID 作为新 rule ID，replace 只停用旧规则。"
+          "description": "实现 approve_candidate(workspace_key,root,candidate_id,edited_text,replace_rule_id,expected_revision)->Result<MemoryMutationResult,MemoryCommandError>；edited_text 在进入 apply_edited_text/rules.md 前重新走 T5 的 redact + 单行/长度验证，candidate ID 作为新 rule ID，replace 只停用旧规则。"
         },
         {
           "id": "T5B.2",
@@ -457,7 +459,7 @@
         },
         {
           "id": "T5B.5",
-          "description": "实现 dismiss_candidate（仅 pending）、update_rule、set_rule_enabled、delete_rule；所有会改 rules revision 的入口在 guard 内先验证 workspace row并调用 recover_workspace_applications_locked。若返回 unresolved，全部 invalid_state；否则再比较 expected_revision、写文件并追加 event。event 失败时文件保持 unverified。"
+          "description": "实现 dismiss_candidate（仅 pending）、update_rule、set_rule_enabled、delete_rule；approve/update 的用户文本在任何 DB/file 写入前再次脱敏验证。所有会改 rules revision 的入口在 guard 内验证 workspace 并调用 locked recovery；unresolved 时 invalid_state，否则再比较 expected_revision、写文件和 event。event 失败时文件保持 unverified。"
         },
         {
           "id": "T5B.6",
@@ -465,7 +467,7 @@
         },
         {
           "id": "T5B.7",
-          "description": "除并发批准/外部 conflict 外，加入不经过 overview 的真实重启测试：第二个 MemoryService 在 expected/intended applying 后直接调用第二个 approve、rule update、acknowledge，断言先自动恢复再按新 revision 处理；other revision 下三者全部 invalid_state、approved revision 不变，只有 targeted reconcile 可继续。另测 forget 已先删 workspace 时所有 mutation 在文件写前返回 workspace_not_open。"
+          "description": "除并发批准/外部 conflict 外，加入不经过 overview 的真实重启测试：第二个 MemoryService 在 expected/intended applying 后直接调用第二个 approve、rule update、acknowledge，断言先恢复；other revision 下三者全 invalid_state、approved revision 不变。另测批准/编辑输入 secret 在 DB/rules.md 前脱敏，以及 forget 已先删 workspace 时所有 mutation 在文件写前 workspace_not_open。"
         }
       ],
       "tests": [
@@ -475,7 +477,7 @@
         }
       ],
       "acceptance_criteria": [
-        "不同候选、UI 规则编辑和外部文件编辑并发时不会发生 last-writer-wins 数据丢失。",
+        "不同候选和所有 R-Code UI mutation 不会 last-writer-wins；已可观察的外部 revision 变化拒绝覆盖，post-write drift 不获授权。",
         "文件写成功但 DB finalize 失败时 revision 未被批准；重启后的 overview/build_snapshot 会主动恢复，下一 run 只可能看到完整授权快照或 fail closed。",
         "只有最新本地用户批准 revision 中的 managed rules 能进入 snapshot；Git/Agent/手工改写需重新确认。",
         "任何失败路径都不覆盖过期 revision，不自动批准额外外部修改；unresolved applying 无法被第二个 mutation 或 acknowledge 绕过。"
@@ -564,15 +566,14 @@
     },
     {
       "id": "T7",
-      "title": "Refresh and inject snapshots in the native Agent runtime",
-      "serves": ["C1", "C5", "C7", "C8"],
-      "description": "扩展 R-Code 私有 AgentRuntime，而不是 Hermes provider 接口。最终 native start 使用 T5 暴露的 workspace lifecycle guard：锁内重读 task/workspace/branch、构建快照，再按顺序取得 AgentBridge，完成 update/start 与 run active 持久化后才释放。LlmAgentRuntime 在 RunContext 冻结，ActiveRun 保存同一快照；forget 与 start 因此只有两种线性化结果。",
+      "title": "Freeze memory snapshots inside the native Agent runtime",
+      "serves": ["C1", "C5", "C7"],
+      "description": "只改 R-Code 私有 AgentRuntime/worker：session 接受每 run 刷新的可选快照，start_run 冻结到 RunContext，native main/subagents 与 runtime 内 Codex child 都读取冻结值。此 PR 不改 host 的 run-start/数据库生命周期。",
       "building_blocks": [
         "AgentRuntime::update_memory_snapshot default no-op",
         "SessionState -> immutable RunContext copy",
-        "main and native subagent system prompt append",
-        "ActiveRun frozen snapshot for host-side child lookup",
-        "workspace lifecycle guard and post-start failure cleanup"
+        "main/native-child prompt append",
+        "CodexSubagentRequest frozen prompt/hash"
       ],
       "tools": ["cargo test"],
       "packages": ["r-code-core"],
@@ -580,64 +581,132 @@
         {
           "path": "crates/r-code-agent-worker/src/runtime.rs",
           "action": "modify",
-          "what": "增加兼容 mock/第三方 runtime 的默认 update_memory_snapshot 方法。"
+          "what": "增加兼容既有 mock runtime 的默认 update_memory_snapshot 方法。"
         },
         {
           "path": "crates/r-code-agent-worker/src/llm_runtime.rs",
           "action": "modify",
-          "what": "保存、冻结、渲染 native main/subagent snapshot；让 CodexSubagentRequest 携带冻结后的 prompt。"
-        },
-        {
-          "path": "src-tauri/src/commands.rs",
-          "action": "modify",
-          "what": "让 direct/queued native start 与 forget 共享 workspace guard；锁内构建快照、启动、持久化 ActiveRun/injection，并为 T8 parent gate 提供发布挂点。"
+          "what": "保存、冻结、渲染 native main/subagent snapshot；CodexSubagentRequest 携带冻结 prompt/hash。"
         }
       ],
       "subtasks": [
         {
           "id": "T7.1",
-          "description": "给 AgentRuntime 增加 async update_memory_snapshot(session_id,Option<MemorySnapshot>) 默认 Ok(())；在真实存在的 AgentRuntimeKind::{Real,Mock} 两个 match 分支转发，不引入不存在的 RuntimeBackend。"
+          "description": "给 AgentRuntime 增加 async update_memory_snapshot(session_id,Option<MemorySnapshot>) 默认 Ok(())；worker 现有测试 mock 无需新增实现。"
         },
         {
           "id": "T7.2",
-          "description": "SessionState 保存最新 snapshot；start_run 构造 RunContext 时 clone，后续 update 不改变已运行 context；SnapshotBuildResult.snapshot=None 时显式清除旧 session snapshot。"
+          "description": "SessionState 保存 latest snapshot；start_run 构造 RunContext 时 clone，后续 update 不改变正在运行的 context；None 显式清除旧 session snapshot。"
         },
         {
           "id": "T7.3",
-          "description": "main build_system_prompt 和 build_subagent_system_prompt 调用 r_code_core::memory_prompt::render_memory_prompt；纯聊天或无 snapshot 时 prompt 与当前版本逐字兼容。"
+          "description": "main/native subagent system prompt 调用 core renderer；CodexSubagentRequest 只覆盖 LlmAgentRuntime delegate_task，携带同一 rendered prompt/hash且不再读文件。"
         },
         {
           "id": "T7.4",
-          "description": "direct/queued new-run 最终阶段先取得 workspace guard（无 workspace 则直接走 AgentBridge），在 guard 内从 repository 重读 task/workspace/branch 并调用 build_snapshot_locked，再取得 AgentBridge 并重验 active。forget 先赢则在任何 runtime 调用前 workspace_not_open；active 先出现则遵循现有 queue/steer。可启动时执行 update->start->persist AgentRun/Task InProgress/RunStarted/injection，发布 ActiveRun{...,memory_snapshot} 后才释放 guard。"
-        },
-        {
-          "id": "T7.5",
-          "description": "spawn_drain_loop_with_resources 与 dispatch_next_queued 增加 Arc<MemoryService> 并沿 direct/queue 传递，统一最终 guarded start。固定顺序 memory workspace -> AgentBridge -> ExternalAgentRegistry；T14 delete/forget 采用同序。若 runtime start 成功后任一 DB persistence 失败，立即 abort 并排空该 runtime run、清理局部记录，不发布 ActiveRun/parent gate。"
-        },
-        {
-          "id": "T7.6",
-          "description": "CodexSubagentRequest 只覆盖 LlmAgentRuntime 内 delegate_task path，携带 RunContext 冻结的 rendered prompt/hash。RecordingProvider 除连续 run/children/queue 外，用 barrier 测 forget 与 final start：forget 先赢时 start 未调用；start 先赢时 Task 已 active、forget 被拒绝。故障注入 DB persist 失败时 runtime 被 abort/drain 且 bridge.active=None。"
+          "description": "RecordingProvider/RecordingCodexRunner 测连续两个 session-reused run、运行中 update 不变、native child/runtime Codex child 继承、None 清除、无 memory 时 prompt 逐字兼容。"
         }
       ],
       "tests": [
         {
           "kind": "integration",
-          "description": "cargo test -p r-code-agent-worker memory：验证 session 重用刷新、run 内冻结、子代理继承和 default no-op mock 兼容。"
-        },
-        {
-          "kind": "integration",
-          "description": "cargo test -p r-code-host agent_memory：验证 guarded re-read->snapshot->update->start->persist/publish、forget 两种线性化结果和 post-start persistence failure cleanup。"
+          "description": "cargo test -p r-code-agent-worker memory：验证刷新、run 冻结、两类 child 继承、default no-op mock 和无快照兼容。"
         }
       ],
       "acceptance_criteria": [
-        "批准/编辑规则后无需重建会话，下一次 run 生效。",
-        "正在运行的 native main、native child 与 runtime delegate_task Codex child 始终使用启动时同一 snapshot hash。",
-        "forget 与 final native start 线性化：前者先赢则 provider 从未启动，后者先赢则 active 状态在 guard 释放前可见；任何失败都不留下无人 drain 的 runtime。",
-        "未附加 workspace 和所有现有 mock runtime 行为不变；AgentBridge revalidation 不覆盖并发 active run。"
+        "批准/编辑规则后不需重建 session，host 下一次 update 后的新 run 才使用新 hash。",
+        "同一 native run 的 main、native child 与 runtime Codex child 始终使用同一冻结快照。",
+        "worker 不依赖 host/store，不修改 Hermes provider trait。"
       ],
       "depends_on": ["T1", "T6"],
-      "estimated_loc": 390,
+      "estimated_loc": 270,
       "suggested_skills": ["swe-loop", "blue-team", "review"]
+    },
+    {
+      "id": "T7B",
+      "title": "Atomically publish guarded native run starts",
+      "serves": ["C2", "C5", "C7", "C8"],
+      "description": "在 host/store 接入 T7，并把 final native start 冻结为可恢复协议：workspace guard 内重读实体、构建快照、启动 runtime；runtime 返回 run_id 后用一个 SQLite transaction 写 Run/Task/RunStarted/injection，commit 后才发布 ActiveRun。commit 前失败使用不依赖 ActiveRun/DB 的 unpublished cleanup。",
+      "building_blocks": [
+        "RunLifecycleRepository::commit_start single transaction",
+        "workspace lifecycle guard -> AgentBridge lock order",
+        "abort_unpublished_run_locked bounded drain",
+        "cleanup_pending gate for timed-out unpublished runtime",
+        "direct and queued native start convergence"
+      ],
+      "tools": ["cargo test", "fault injection", "tokio barrier/time pause"],
+      "packages": ["rusqlite（现有）", "tokio（现有）"],
+      "files": [
+        {
+          "path": "crates/r-code-store/src/repositories.rs",
+          "action": "modify",
+          "what": "新增 RunLifecycleRepository/RunStartBundle，并把 agent-run insert、task update、event insert 抽成 transaction 内部 helper。"
+        },
+        {
+          "path": "crates/r-code-store/src/memory.rs",
+          "action": "modify",
+          "what": "提供 transaction-scoped optional memory injection insert，不另取连接。"
+        },
+        {
+          "path": "crates/r-code-store/src/lib.rs",
+          "action": "modify",
+          "what": "导出 run-start transaction 合同。"
+        },
+        {
+          "path": "src-tauri/src/commands.rs",
+          "action": "modify",
+          "what": "AgentRuntimeKind 转发 snapshot；direct/queue final start、ActiveRun snapshot 和 unpublished cleanup。"
+        }
+      ],
+      "subtasks": [
+        {
+          "id": "T7B.1",
+          "description": "在 AgentRuntimeKind::{Real,Mock} 转发 update_memory_snapshot；ActiveRun 增加 memory_snapshot，AgentBridge 增加 unpublished_cleanup:Option<{session_id,run_id}>，任何 new start/delete/forget 都把它视为 busy。"
+        },
+        {
+          "id": "T7B.2",
+          "description": "实现 RunLifecycleRepository::commit_start(RunStartBundle{run,branch_id,memory_injection?})：同一 rusqlite::Transaction 插入 AgentRun、更新 Task=InProgress、追加 RunStarted、可选插入 memory_injections，最后 commit；测试 fault seam 可在 begin、各 write、commit 前失败，回滚后四处均无残留。"
+        },
+        {
+          "id": "T7B.3",
+          "description": "direct/queued 预检不得持 AgentBridge 等 memory guard；final start 在 guard 内重读 task/workspace/branch、build_snapshot_locked，再取 AgentBridge 重验 active/cleanup。执行 update->runtime start->commit_start；只有 commit 成功才设置 bridge.active，T8 的 open-parent hook 也只能在此后运行。"
+        },
+        {
+          "id": "T7B.4",
+          "description": "定义 abort_unpublished_run_locked(bridge,session_id,run_id)：调用 abort，最多 2 秒每 40ms poll_events/is_running，丢弃 event body且绝不写 run 终态 DB。停止则清理返回；超时在 bridge 设置 cleanup_pending，记录无正文类别诊断，释放 locks 后启动只做 abort/poll 的受控 cleanup task，完成后清 flag；期间 new start/task delete/forget 均拒绝。"
+        },
+        {
+          "id": "T7B.5",
+          "description": "spawn_drain_loop_with_resources/dispatch_next_queued 贯穿 Arc<MemoryService>，正常 commit 后沿用 ActiveRun drain。固定 memory->AgentBridge->ExternalAgentRegistry；无 workspace 仍在 AgentBridge 内重读 task/branch。"
+        },
+        {
+          "id": "T7B.6",
+          "description": "RecordingRuntime + Barrier 覆盖 forget/start 两种顺序；fault seam 分别使 begin/write/commit 失败，断言 transaction 零残留、ActiveRun/open hook 未发布、abort 被调用。paused-time 覆盖 2 秒超时、cleanup_pending 阻止 start/forget、后台停止后释放。"
+        },
+        {
+          "id": "T7B.7",
+          "description": "用真实 MemoryService、TempDir/SQLite 和 RecordingRuntime 跑三次顺序 native start：先 capture pending 后启动，断言 update_memory_snapshot(None) 且 memory_injections 无新增；结束并批准后启动下一 run，断言 runtime 收到 Some(snapshot_hash) 且 injection row 的 hash 一致；结束并 disable 唯一规则后第三次启动，断言 snapshot 清为 None、不会沿用 session 旧 hash且无新增 injection row。"
+        }
+      ],
+      "tests": [
+        {
+          "kind": "integration",
+          "description": "cargo test -p r-code-store run_start_transaction：原子提交与 begin/write/commit 回滚。"
+        },
+        {
+          "kind": "integration",
+          "description": "cargo test -p r-code-host agent_memory_lifecycle：guard barrier、direct/queue、unpublished abort/drain/timeout、ActiveRun 发布顺序，以及真实 MemoryService 下 pending/approved/disabled 三次 run 的 snapshot/injection ledger 变化。"
+        }
+      ],
+      "acceptance_criteria": [
+        "runtime start 后要么四项 SQLite 状态一次 commit 且 ActiveRun 随后发布，要么事务零残留且 runtime 进入受控停止；不存在中间组合。",
+        "失败 cleanup 不调用依赖 ActiveRun/DB 的常规 drain；超时 provider 仍被 cleanup_pending 隔离，不能被 forget 或下一 run 越过。",
+        "forget 先赢时 provider 从未启动；start 先赢时 active 状态在 workspace guard 释放前可见。",
+        "真实 host 集成测试证明 pending 不注入、批准只从下一 run 生效、disabled 从再下一 run 消失，且每次 session refresh 不残留旧 snapshot。"
+      ],
+      "depends_on": ["T7"],
+      "estimated_loc": 390,
+      "suggested_skills": ["careful", "blue-team", "swe-loop", "review"]
     },
     {
       "id": "T8",
@@ -668,7 +737,7 @@
       "subtasks": [
         {
           "id": "T8.1",
-          "description": "修改 codex_main_prompt(history,task,message,attachments,memory_prompt)。Codex CLI/auth preflight 可在锁外；最终 start 取得 workspace guard，重读 task/workspace/branch、build_snapshot_locked、拼 prompt，reserve/create run、持久化 Task InProgress/RunStarted/injection 并实际调度进程后才释放。forget 先赢时不创建 run/进程；它仍不写 AgentBridge.active。"
+          "description": "修改 codex_main_prompt(...,memory_prompt)。CLI/auth preflight 可锁外；最终 start 取得 workspace guard，重读实体、build_snapshot_locked、拼 prompt并构造已知 ID 的 Codex run。reserve 成功后复用 T7B RunLifecycleRepository::commit_start 原子写四项，commit 失败先 remove reservation且不创建进程；commit 后调度进程再释放 guard。它不写 AgentBridge.active。"
         },
         {
           "id": "T8.2",
@@ -680,7 +749,7 @@
         },
         {
           "id": "T8.4",
-          "description": "在 commands.rs 的 ExternalAgentRegistry 同一 mutex 中增加 open_parent、reserve_for_open_parent、close_parent_and_check_idle，并保留 standalone main reserve；native ActiveRun 发布时按 memory->AgentBridge->registry 顺序 open，drain 先 close 再判 children。除四路径与 close/reserve barrier 外，Codex main 加 forget/start barrier：forget 先赢则无 external process，start 先赢则 active DB state 阻止 forget。"
+          "description": "在 ExternalAgentRegistry 同一 mutex 中增加 open_parent/reserve_for_open_parent/close_parent_and_check_idle，并保留 main reserve；native T7B transaction commit 后、ActiveRun 发布边界内才 open，任何 unpublished cleanup 路径都不 open。drain 先 close 再判 children。测试四路径、close/reserve barrier、Codex main transaction/forget barrier。"
         }
       ],
       "tests": [
@@ -696,7 +765,7 @@
         "Codex main 的 external parent 禁止再委派语义保持不变，不虚构不支持的 run tree。",
         "prompt 文本和支持日志都不输出完整 memory 内容；Codex main 与 forget 共享 workspace lifecycle guard。"
       ],
-      "depends_on": ["T6", "T7"],
+      "depends_on": ["T6", "T7B"],
       "estimated_loc": 370,
       "suggested_skills": ["swe-loop", "blue-team", "review"]
     },
@@ -757,15 +826,15 @@
       "id": "T10A",
       "title": "Expose read, paging, and explicit-capture memory IPC",
       "serves": ["C1", "C4", "C6", "C7"],
-      "description": "先落地只读 overview/pages 与显式 candidate create，并同时建立完整 TypeScript 镜像和可在 Node 20 执行的生产 browser mock harness。Node test 本身只加载 JavaScript；TypeScript 模块由既有 Vite dev server 在浏览器内转译/加载，不新增 tsx/ts-node，也不复制状态机。",
+      "description": "落地只读 overview/pages 与显式 candidate create，并建立完整 TypeScript DTO/IPC 镜像。此 PR 只做真实 Rust/Tauri 边界和前端类型层；production browser mock 与可运行状态机测试由 T10M 单独交付。",
       "building_blocks": [
         "workspace-scoped authorization",
         "overview + candidate/event sequence pagination",
         "explicit_remember capture",
-        "typed IPC and initial browser mock state"
+        "typed IPC and structured error preservation"
       ],
-      "tools": ["cargo test", "npm run test:memory-mock", "npm run build"],
-      "packages": ["Tauri invoke", "serde", "vite（已存在）", "playwright-core（已存在）", "existing browser mock runtime"],
+      "tools": ["cargo test", "npm run build"],
+      "packages": ["Tauri invoke", "serde"],
       "files": [
         {
           "path": "src-tauri/src/commands.rs",
@@ -791,26 +860,6 @@
           "path": "src-tauri/frontend/src/lib/ipc.ts",
           "action": "modify",
           "what": "增加 typed overview/pages/create helpers 和 MemoryIpcError 解析。"
-        },
-        {
-          "path": "src-tauri/frontend/src/lib/browser-mock-runtime.ts",
-          "action": "modify",
-          "what": "建立 rules/candidates/events/settings/revisions state 并模拟 T10A commands。"
-        },
-        {
-          "path": "src-tauri/frontend/scripts/memory-mock.test.mjs",
-          "action": "create",
-          "what": "Node 20 脚本用 vite.createServer({root,server:{port:0}}) 和 playwright-core.chromium 启动浏览器；page.evaluate 内 import('/src/lib/browser-mock-runtime.ts')，直接测试生产 browserMockInvoke。"
-        },
-        {
-          "path": "src-tauri/frontend/scripts/memory-mock.fixture.html",
-          "action": "create",
-          "what": "提供不加载 React app 的同源空白 Vite 页面，让 direct mock tests 不被应用启动时的 IPC 调用污染。"
-        },
-        {
-          "path": "src-tauri/frontend/package.json",
-          "action": "modify",
-          "what": "增加 test:memory-mock='node --test scripts/memory-mock.test.mjs'。"
         }
       ],
       "subtasks": [
@@ -832,11 +881,7 @@
         },
         {
           "id": "T10A.5",
-          "description": "定义 MemoryIpcError extends Error{code,retryable}；memoryIpc<T> 捕获 Tauri serialized object 并保留字段，未知 string 降级 storage_unavailable。所有 helpers 用 camelCase；browser mock 抛同 shape。"
-        },
-        {
-          "id": "T10A.6",
-          "description": "memory-mock.test.mjs 只 import Node/Vite/Playwright JS API；从 server.resolvedUrls 打开 /scripts/memory-mock.fixture.html，再 page.evaluate(async()=>{const {browserMockInvoke}=await import('/src/lib/browser-mock-runtime.ts'); ...})。每个 case 新建 context/page 复位模块状态，finally 关闭 browser/server；验证 create 后 page/count 更新、rules/snapshot 不变和 sequence cursor。"
+          "description": "定义 MemoryIpcError extends Error{code,retryable}；memoryIpc<T> 捕获 Tauri serialized object 并保留字段，未知 string 降级 storage_unavailable。所有 helpers 用 camelCase，TypeScript 联合类型逐字段镜像 T1。"
         }
       ],
       "tests": [
@@ -846,18 +891,85 @@
         },
         {
           "kind": "unit",
-          "description": "npm run test:memory-mock && npm run build：真实执行 create/paging 状态转换，并验证 TypeScript DTO/IPC/mock 无 any 或 camelCase 漂移。"
+          "description": "npm run build：TypeScript DTO/IPC 无 any、camelCase 或 last_injection 字段漂移。"
         }
       ],
       "acceptance_criteria": [
         "四个命令的 Rust 签名、Tauri 名、camelCase 参数和返回 DTO 与 T1 一一对应。",
         "candidate/event pages 默认 50、最大 100，overview 不无界内嵌候选/事件。",
-        "前端能可靠区分 retryable conflict 与 non-retryable reconciliation，不把 custom error 显示为 [object Object]。",
-        "browser mock 在此 PR 即支持后续 /remember 和 UI；Node 20 从不直接 import .ts，测试通过 Vite 加载并执行生产 browserMockInvoke，而非复制状态机。"
+        "前端能可靠区分 retryable conflict 与 non-retryable reconciliation，不把 custom error 显示为 [object Object]。"
       ],
       "depends_on": ["T5", "T5B", "T6"],
-      "estimated_loc": 400,
+      "estimated_loc": 330,
       "suggested_skills": ["swe-loop", "devex-review", "blue-team", "review"]
+    },
+    {
+      "id": "T10M",
+      "title": "Add a production-backed, browser-free memory mock harness",
+      "serves": ["C4", "C6", "C7"],
+      "description": "给 production browser-mock-runtime 增加与 T10A 对等的有状态 memory commands，并在 Node 20 中用 Vite SSR 直接加载这份 TypeScript 模块。测试无需 Chromium、tsx 或复制状态机，随本 PR 立即进入 CI，成为 T10B/T10C/UI 的 mock 基线。",
+      "building_blocks": [
+        "workspace-keyed candidates/events/rules/settings/revisions state",
+        "same DTO/error/page semantics as real IPC",
+        "Vite middlewareMode + ssrLoadModule production seam",
+        "clean npm ci CI execution without browser binaries"
+      ],
+      "tools": ["node --test", "npm run test:memory-mock", "npm run build"],
+      "packages": ["vite ^5.4（已存在）", "Node 20 built-in test runner"],
+      "files": [
+        {
+          "path": "src-tauri/frontend/src/lib/browser-mock-runtime.ts",
+          "action": "modify",
+          "what": "建立 rules/candidates/events/settings/revisions state 并模拟 T10A commands/error shapes。"
+        },
+        {
+          "path": "src-tauri/frontend/scripts/memory-mock.test.mjs",
+          "action": "create",
+          "what": "用 Vite SSR 加载并调用生产 browserMockInvoke；不 import TypeScript 文件到原生 Node loader。"
+        },
+        {
+          "path": "src-tauri/frontend/package.json",
+          "action": "modify",
+          "what": "增加 test:memory-mock='node --test scripts/memory-mock.test.mjs'。"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "action": "modify",
+          "what": "frontend npm ci 后立即运行 npm run test:memory-mock；该步骤不安装或依赖 Chromium。"
+        }
+      ],
+      "subtasks": [
+        {
+          "id": "T10M.1",
+          "description": "按 workspace 初始化 MemoryOverview、candidate/event sequence、settings、file/approved revision；实现 overview/list/create，cursor 为 exclusive sequence DESC，错误对象与 MemoryIpcError shape 一致。"
+        },
+        {
+          "id": "T10M.2",
+          "description": "memory-mock.test.mjs 对每个隔离 case 创建 Vite server：createServer({root:frontendRoot,server:{middlewareMode:true},appType:'custom'})，调用 server.ssrLoadModule('/src/lib/browser-mock-runtime.ts') 取得真实 browserMockInvoke，finally server.close()；Node loader 从不直接 import .ts。"
+        },
+        {
+          "id": "T10M.3",
+          "description": "测试 create 后 candidate page/count 增加但 rules/last_injection 不变、sequence paging、workspace 隔离、invalid cursor/limit 和 structured error；不得复制 production state transition。"
+        },
+        {
+          "id": "T10M.4",
+          "description": "把 test:memory-mock 接入当前 frontend CI，证明干净 npm ci 后直接通过；无需 npx playwright install、系统 Chrome 或用户目录。"
+        }
+      ],
+      "tests": [
+        {
+          "kind": "unit",
+          "description": "npm run test:memory-mock && npm run build：Vite SSR 真实执行 production mock create/paging/error transitions。"
+        }
+      ],
+      "acceptance_criteria": [
+        "T10M 在只有 Node 20 + npm ci 依赖的环境中独立通过，不需要浏览器二进制。",
+        "测试调用的就是 browser-mock-runtime.ts 导出的 production browserMockInvoke，不存在第二份 memory 状态机。",
+        "后续 mock mutation PR 可在同一脚本中追加状态转换断言并由 CI 立即执行。"
+      ],
+      "depends_on": ["T10A"],
+      "estimated_loc": 220,
+      "suggested_skills": ["devex-review", "swe-loop", "review"]
     },
     {
       "id": "T10B",
@@ -937,7 +1049,7 @@
         "replaceRuleId 只接受同 workspace managed rule，永远不自动推断。",
         "applying 非预期 revision 只能经用户显式 accept_current 或安全 abort 解决；mock 和真实命令返回相同 shape。"
       ],
-      "depends_on": ["T10A"],
+      "depends_on": ["T10M"],
       "estimated_loc": 280,
       "suggested_skills": ["careful", "swe-loop", "review"]
     },
@@ -1023,7 +1135,7 @@
         "acknowledge 是唯一能把外部/Agent 修改后的当前 file revision 重新授权的 API。",
         "旧 memory_get/set 行为和 legacy 文件内容完全兼容。"
       ],
-      "depends_on": ["T10A", "T10B"],
+      "depends_on": ["T10M", "T10B"],
       "estimated_loc": 340,
       "suggested_skills": ["careful", "swe-loop", "blue-team", "review"]
     },
@@ -1031,14 +1143,14 @@
       "id": "T11",
       "title": "Add explicit /remember candidate capture",
       "serves": ["C4", "C6", "C7", "C8"],
-      "description": "在已有 slash command 架构中增加 /remember <rule>。它是高信号用户动作，但仍创建 pending candidate，不直接激活；成功后清空 composer、显示候选已创建，并提供进入 /memory 审核的路径。",
+      "description": "在已有 slash command 架构中增加 /remember <rule>。它是高信号用户动作，但仍创建 pending candidate，不直接激活；成功后清空 composer、显示候选已创建，并提供进入 /memory 审核的路径。本 PR 同时建立第一个可在干净 CI 运行的 Chromium app-shell 基线，后续 UI PR 不再等待最终 rollout 才获得 E2E 门。",
       "building_blocks": [
         "existing ParsedSlashCommand args",
         "required workspace and argument validation",
         "explicit_remember IPC",
         "visible pending-state feedback"
       ],
-      "tools": ["npm run build", "node --test"],
+      "tools": ["npm run build", "node --test", "Playwright", "GitHub Actions"],
       "packages": ["React existing command system"],
       "files": [
         {
@@ -1060,6 +1172,11 @@
           "path": "src-tauri/frontend/package.json",
           "action": "modify",
           "what": "在第一个 app-shell E2E PR 增加 test:app-shell='node --test scripts/app-shell.test.mjs'；后续 UI PR 直接复用。"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "action": "modify",
+          "what": "frontend job 安装 Playwright Chromium、执行 launch/close smoke 和 npm run test:app-shell。"
         }
       ],
       "subtasks": [
@@ -1074,21 +1191,30 @@
         {
           "id": "T11.3",
           "description": "测试无参数、无 workspace、API 失败、成功 pending、source_task_id 等于当前 task，以及输入中含 secret 时 UI 不回显服务端脱敏前内容；T14 再验证 task 删除后引用被清理。"
+        },
+        {
+          "id": "T11.4",
+          "description": "app-shell helper 用 browserExecutable() ?? chromium.executablePath() 选 executable，assert fs.existsSync 后启动/关闭且不得 skip。CI 保持 T10M browser-free test 在前，再执行 npx playwright-core install chromium --with-deps、只依赖 chromium.executablePath() 的 launch/close smoke、npm run test:app-shell；此门随本 PR 生效。"
         }
       ],
       "tests": [
         {
           "kind": "e2e",
           "description": "node --test scripts/app-shell.test.mjs：输入 /remember 后断言 notice 包含‘尚未生效’，candidate page/count 增加而 rules revision 不变。"
+        },
+        {
+          "kind": "e2e",
+          "description": "干净 npm ci 后安装 Playwright Chromium，launch/close smoke 与 npm run test:app-shell 均不得 skip 或回退到系统 Chrome。"
         }
       ],
       "acceptance_criteria": [
         "/remember 无文本或无 workspace 时不调用后端。",
-        "成功创建的内容只出现在 pending 列表，下一 run prompt 尚不包含它。",
+        "成功创建的内容只出现在 pending 列表且 rules revision 不变；真实下一 run 不含 pending 的证据由 T7B host 集成测试提供。",
+        "从本 PR 起每个 UI PR 都在干净 CI 中运行 app-shell Chromium E2E，不把浏览器前置条件延迟到 T15。",
         "用户能从提示或现有 /memory 命令进入审核。"
       ],
-      "depends_on": ["T10A"],
-      "estimated_loc": 180,
+      "depends_on": ["T10M"],
+      "estimated_loc": 230,
       "suggested_skills": ["swe-loop", "qa", "review"]
     },
     {
@@ -1151,7 +1277,7 @@
         },
         {
           "id": "T12.5",
-          "description": "把旧 memory.md textarea 放在折叠 Legacy 区；显示 snapshot hash/included/omitted 和‘修改从下一次运行生效’，不展示 prompt 原文。"
+          "description": "把旧 memory.md textarea 放在折叠 Legacy 区；last_injection 明确标‘最近一次注入’，显示 hash/included/omitted 和‘修改从下一次运行生效’；inject_rules=false 时显示当前已关闭，不能把历史 row 冒充当前状态，不展示 prompt 原文。"
         },
         {
           "id": "T12.6",
@@ -1173,7 +1299,7 @@
         "legacy notes 与批准规则在 UI 和文案上不混淆，升级不会丢失旧文本。",
         "删除规则有确认，切换开关/保存失败可见且不会假装成功。"
       ],
-      "depends_on": ["T10C"],
+      "depends_on": ["T10M", "T10C"],
       "estimated_loc": 400,
       "suggested_skills": ["design-review", "qa", "swe-loop", "review"]
     },
@@ -1220,7 +1346,7 @@
       "subtasks": [
         {
           "id": "T13.1",
-          "description": "CandidateInbox 用 cursor/limit=50 分页；候选卡显示 source_kind、时间、可用 task 引用、redacted_excerpt、proposed_text、observation count 和 related rule。"
+          "description": "CandidateInbox 用 cursor/limit=50 分页；顶部‘新增候选’调用 T10A create（ProjectsScene 无 task context 时 taskId=null），仍只进入 pending。候选卡显示 source_kind、时间、可用 task 引用、redacted_excerpt、proposed_text、observation count 和 related rule。"
         },
         {
           "id": "T13.2",
@@ -1236,7 +1362,7 @@
         },
         {
           "id": "T13.5",
-          "description": "浏览器测试 pending 不注入、approve 后 next-run hash 变化、replace 旧 rule disabled、dismiss、分页、stale conflict 表单保留、applying recovery。"
+          "description": "浏览器测试 pending 时 rules/revision 不变、approve 后 candidate/rule/revision UI 更新、replace 旧 rule disabled、dismiss、分页、stale conflict 表单保留和 applying recovery。production mock 不声称观察真实 runtime snapshot；跨 run 的 pending/approved/disabled 注入闭环只由 T7B integration test 证明。"
         }
       ],
       "tests": [
@@ -1246,11 +1372,11 @@
         }
       ],
       "acceptance_criteria": [
-        "用户批准前能看到候选为何出现、是否与旧规则相关、批准后会发生什么。",
+        "用户既能通过 /remember，也能直接在 Memory Center 新增 pending；批准前能看到候选为何出现、是否与旧规则相关、批准后会发生什么。",
         "替换永远是用户显式选择，旧规则被停用而非不可恢复删除。",
         "所有成功 mutation 立即反映在 overview；失败不丢输入且可重试。"
       ],
-      "depends_on": ["T9", "T10B", "T10C", "T11", "T12"],
+      "depends_on": ["T9", "T10M", "T10B", "T10C", "T11", "T12"],
       "estimated_loc": 400,
       "suggested_skills": ["design-review", "qa", "swe-loop", "review"]
     },
@@ -1292,19 +1418,19 @@
       "subtasks": [
         {
           "id": "T14.1",
-          "description": "task_delete 在确认任务停止并释放 AgentBridge lock 后，对有 workspace 的 task 取得同一 MemoryMutationLocks workspace key，在锁内重新确认无 active run，再 purge_task_sources 并删除 TaskRepository；approved/merged 正文/source 全置 NULL，pending/dismissed/applying/observations 删除；不调用 applying recovery、不改 rules.md，cleanup 失败不删除 task。"
+          "description": "task_delete 初检后释放 AgentBridge，再对有 workspace task 取得 lifecycle guard。锁内固定重新读取 TaskRepository::get(task_id) 并要求 state!=InProgress；调用 AgentRunRepository::get_active_run(task_id) 并要求无任意 branch 的 native/Codex active run；再检查 AgentBridge.active 与 T7B cleanup_pending 均不指向该 task/workspace。任一 active/busy 即拒绝，只有全部为空才 purge sources + delete task。approved/merged 清正文，pending/dismissed/applying/observations 删除；不恢复 applying、不改 rules.md，cleanup 失败不删 task。"
         },
         {
           "id": "T14.2",
-          "description": "workspace_forget 以数据库 canonical_path 字符串取得同一 lifecycle guard（不 canonicalize/读取目录），再按 memory->AgentBridge 顺序检查 native active，并在同一 guard 内检查 DB active native/Codex run 后删除 workspace/metadata；不删除真实文件。等待中的 mutation/final start 随后必须重查 workspace row。"
+          "description": "workspace_forget 以数据库 canonical_path 字符串取得 lifecycle guard（不读目录），再按 memory->AgentBridge 检查 native active 或 T7B cleanup_pending，并检查 DB active native/Codex run；任一存在即拒绝，否则同 guard 内删 workspace/metadata。等待中的 mutation/final start 随后重查 row；不删真实文件。"
         },
         {
           "id": "T14.3",
-          "description": "SupportBundle DbStats 增加 memory_candidate_count、memory_rule_event_count、memory_injection_count，仅汇总；序列化测试用 sentinel secret/规则文本断言 JSON 不含它。"
+          "description": "SupportBundle DbStats 精确增加 memory_candidate_count、memory_observation_count、memory_rule_event_count、memory_injection_count、auto_capture_review_enabled_workspace_count、inject_rules_enabled_workspace_count；全部仅聚合。序列化测试用 candidate/source/rule sentinel 断言 JSON 不含正文、excerpt、rule IDs。"
         },
         {
           "id": "T14.4",
-          "description": "除 SQL sentinel/applying 删除外，用 barrier 覆盖 forget 与等待中的 rule mutation/native start/Codex main：forget 先赢时三者在任何文件写/runtime process 前 workspace_not_open；mutation/start 先赢时其 event/active state 在释放 guard 前完成，forget 随后要么清 metadata（已完成 mutation）要么因 active run 拒绝。"
+          "description": "除 SQL sentinel/applying 删除外，用 barrier 覆盖 forget 与等待中的 rule mutation/native start/Codex main：forget 先赢时三者在任何文件写/runtime process 前 workspace_not_open；mutation/start 先赢时其 event/active state 在释放 guard 前完成，forget 随后要么清 metadata（已完成 mutation）要么因 active run 拒绝。另做 task_delete/Codex-main 双向 barrier：delete 先取得 guard 时删除完成，Codex final start 重读 task missing，commit_start/process 均不发生；Codex 先取得 guard 时先原子持久化 Task InProgress + active AgentRun 再启动/发布，delete 的锁内 Task/AgentRun DB 重验必须拒绝。"
         },
         {
           "id": "T14.5",
@@ -1320,10 +1446,11 @@
       "acceptance_criteria": [
         "删除任务后 SQLite/支持包/日志中找不到其候选来源正文；崩溃 applying 不留不可恢复空壳、也不触发文件写入，批准规则文件仍存在。",
         "删除/forget、所有 MemoryService mutation 与 native/Codex final start 共享 lifecycle guard；forget 后不会再写 rules.md 或启动 provider，start 先赢时 forget 必须看到 active 状态。",
+        "task_delete 不依赖 AgentBridge 判断 standalone Codex main：锁内 DB active-run 重验能在 Codex 先赢时拒绝删除，delete 先赢时阻止 commit/start。",
         "忘记项目永不删除或改写真实工作区文件；重新打开时 rules.md 只可见且 unverified。",
         "支持包即使数据库含 sentinel secret 和规则文本也只输出计数，不输出正文、excerpt 或 prompt。"
       ],
-      "depends_on": ["T3", "T5B", "T7", "T8", "T10C", "T12"],
+      "depends_on": ["T3", "T5B", "T7B", "T8", "T10C", "T12"],
       "estimated_loc": 340,
       "suggested_skills": ["careful", "cso", "blue-team", "review"]
     },
@@ -1331,10 +1458,10 @@
       "id": "T15",
       "title": "Wire CI, cross-viewport regression, docs, and release gates",
       "serves": ["C1", "C3", "C4", "C5", "C6", "C7", "C8"],
-      "description": "可运行 mock harness 和 app-shell 脚本已随 T10A–T13 落地；最终小 PR 只负责 CI 浏览器解析、三 viewport/键盘回归、架构/用户/隐私文档和全仓 release gate。",
+      "description": "browser-free mock harness/CI 已由 T10M 落地，基础 Chromium 安装/smoke/app-shell CI 已由 T11 落地并随 T12–T13 持续运行；最终小 PR 只扩展三 viewport/键盘回归、文档和全仓 release gate。",
       "building_blocks": [
         "cross-viewport app-shell E2E",
-        "explicit Chromium installation and missing-browser failure",
+        "preserved Chromium executable assertion and no-skip gate",
         "architecture/user documentation and rollout checklist"
       ],
       "tools": ["Playwright", "npm", "cargo", "GitHub Actions"],
@@ -1348,7 +1475,7 @@
         {
           "path": ".github/workflows/ci.yml",
           "action": "modify",
-          "what": "frontend job 显式安装 Chromium 后运行 app-shell。"
+          "what": "保留 T11 的 Chromium install/smoke/app-shell 门，并把最终 frontend/full-repo release 命令纳入 gate。"
         },
         {
           "path": "docs/ARCHITECTURE.md",
@@ -1373,11 +1500,11 @@
         },
         {
           "id": "T15.2",
-          "description": "app-shell helper 选择 const executablePath = browserExecutable() ?? chromium.executablePath()，随后 assert fs.existsSync(executablePath)，输出最终路径并启动/关闭 Chromium；测试不得 skip，不能依赖系统 Chrome。"
+          "description": "复核并保留 T11 的 executablePath fallback、fs.existsSync assertion、launch/close smoke 和 no-skip 约束；viewport/键盘扩展必须复用同一 helper，不能引入系统 Chrome 或真实用户目录依赖。"
         },
         {
           "id": "T15.3",
-          "description": "CI frontend job 在 npm ci 后执行 'npx playwright-core install chromium --with-deps'；先运行一个只依赖 chromium.executablePath() 的 launch/close smoke，再执行 npm run test:memory-mock 和 npm run test:app-shell。"
+          "description": "CI 保持 T10M 的 npm run test:memory-mock 在 browser install 之前，并原样保留 T11 已生效的 chromium install、chromium.executablePath() launch/close smoke、npm run test:app-shell；本任务只补齐最终 frontend/full-workspace release 顺序，不延后任何前置门。"
         },
         {
           "id": "T15.4",
@@ -1407,7 +1534,7 @@
         "文档与 UI 对默认关闭自动捕获、人工批准、存储位置和删除边界表述一致。",
         "所有 Rust/TypeScript 回归门通过，v13 升级、纯聊天和现有 legacy memory 测试保持绿色。"
       ],
-      "depends_on": ["T7", "T8", "T9", "T10A", "T10B", "T10C", "T11", "T12", "T13", "T14"],
+      "depends_on": ["T7", "T7B", "T8", "T9", "T10A", "T10M", "T10B", "T10C", "T11", "T12", "T13", "T14"],
       "estimated_loc": 280,
       "suggested_skills": ["qa", "devex-review", "careful", "review"]
     }
@@ -1421,9 +1548,11 @@
     "T5B",
     "T6",
     "T7",
+    "T7B",
     "T8",
     "T9",
     "T10A",
+    "T10M",
     "T10B",
     "T10C",
     "T11",

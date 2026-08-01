@@ -1,0 +1,33 @@
+{
+  "verdict": "revise",
+  "score": 85,
+  "summary": "核心架构和前三轮高风险并发问题已经闭合，validator 也干净。剩余两个主要问题都影响逐 PR 可执行性：T10A 的浏览器测试前置条件被放到了依赖它的 T15，且 T10A 实际包含两个 PR；T7 对 runtime 已启动但持久化失败的恢复仍未冻结成可照做的事务与 drain 协议。",
+  "issues": [
+    {
+      "severity": "major",
+      "task_id": "T10A",
+      "category": "decomposition",
+      "problem": "T10A 同时包含四个 Rust 产品函数、Tauri wrappers/注册、完整 TypeScript DTO/IPC、browser mock 状态机和 Vite/Playwright harness，实际明显超过 400 LOC。更关键的是其验收要求当前 PR 执行 npm run test:memory-mock，但 playwright-core 不随 npm ci 安装 Chromium；明确安装浏览器和 CI 执行该测试被放在依赖 T10A 的 T15，形成测试前置条件晚于被测 PR 的语义依赖倒置。新环境下 T10A 无法按计划独立验收。",
+      "fix": "拆成 T10A 后端 read/create IPC 与 TypeScript DTO/IPC，以及 T10M production browser mock + harness。推荐让 T10M 使用 Vite createServer({server:{middlewareMode:true},appType:'custom'}) 的 ssrLoadModule('/src/lib/browser-mock-runtime.ts') 直接加载生产模块，从而不需要浏览器；若坚持 Playwright，则把 Chromium install、路径断言和 CI 的 test:memory-mock 步骤移入 T10M，不能等到 T15。让 T10B、T10C、T11 以及 UI 任务显式依赖 T10M。"
+    },
+    {
+      "severity": "major",
+      "task_id": "T7",
+      "category": "executability",
+      "problem": "T7.5 只说 runtime start 后任一 DB persistence 失败时 abort、排空并清理局部记录，但没有冻结 AgentRun/Task/RunStarted/injection 是单事务还是逐项补偿，也没有定义如何在尚未发布 ActiveRun、甚至尚未创建 AgentRun 时复用现有依赖 ActiveRun 的 drain loop。literal implementation 很容易留下半创建 AgentRun、InProgress task、缺失事件或持锁等待错误 runtime；这正是该 gate 要消除的孤儿 provider 风险。",
+      "fix": "在 T7 中冻结一个明确协议：runtime start 返回 run_id 后，用同一 rusqlite transaction 原子写 AgentRun、Task InProgress、RunStarted 和 injection；commit 成功后才设置 bridge.active/open parent gate。定义具体的 abort_unpublished_run_locked(bridge, runtime_session_id, runtime_run_id) helper，在 commit 失败时调用 abort，并以有界循环 poll_events/is_running 排空，不调用会写终态 DB 的常规 spawn_drain_loop；超时必须记录无正文诊断并继续由受控 cleanup task 接管。故障测试分别注入 transaction begin/write/commit 失败并断言事务无残留、active/gate 未发布、runtime 已停止。为保持 PR 大小，建议把 worker 的 SessionState/RunContext/prompt 传播拆为 T7A，把 host final-start transaction、queue/drain 和 lifecycle barrier 拆为 T7B，T8 依赖 T7B。"
+    },
+    {
+      "severity": "minor",
+      "task_id": "T14",
+      "category": "executability",
+      "problem": "T14 的 description/building_blocks 承诺 observation 数量与 capture/injection 开关计数，但 T14.3 只冻结 memory_candidate_count、memory_rule_event_count、memory_injection_count；按 subtasks 实施会遗漏 observation 和 settings 开关统计。",
+      "fix": "在 T14.3 精确列出最终 DbStats 字段，包括 memory_observation_count、auto_capture_review_enabled_workspace_count 和 inject_rules_enabled_workspace_count，或从上层描述中删除未打算交付的统计；同步 sentinel 序列化测试。"
+    }
+  ],
+  "coverage_gaps": [
+    "缺少能在 T10A 所在 PR 的干净 npm ci 环境中运行 memory mock 测试的前置条件。",
+    "缺少 native runtime 已启动但持久化事务失败时不依赖 ActiveRun 的精确 abort/drain 合同。"
+  ],
+  "suggested_skills": ["devex-review", "careful", "blue-team"]
+}

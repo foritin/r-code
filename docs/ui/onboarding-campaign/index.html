@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>R-Code 首次设置 · Campaign</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="underlay" aria-hidden="true"></div>
+    <div class="veil" aria-hidden="true"></div>
+
+    <main class="tour" role="dialog" aria-modal="true" aria-label="R-Code 首次设置">
+      <header class="tour-header">
+        <div class="brand"><img src="../../../installer/frontend/icon.png" alt="" /><strong>R-Code</strong></div>
+        <span id="step-name">欢迎</span>
+        <b><i id="step-current">01</i> / 05</b>
+        <button id="close" type="button" aria-label="关闭">×</button>
+      </header>
+
+      <section class="viewport" id="viewport" tabindex="0" aria-roledescription="轮播" aria-label="首次设置步骤">
+        <div class="track" id="track">
+          <article class="slide hero" data-label="欢迎" aria-labelledby="hero-title">
+            <div class="hero-copy">
+              <span>R-CODE / FIRST RUN</span>
+              <h1 id="hero-title">把目标<br />交给 R-Code。</h1>
+              <p>从结果开始。</p>
+            </div>
+            <div class="hero-brand">
+              <img src="../../../installer/frontend/icon.png" alt="R-Code" />
+              <strong>R</strong>
+              <small>SESSION-FIRST<br />CODING</small>
+            </div>
+          </article>
+
+          <article class="slide engine" data-label="主 Agent" aria-labelledby="engine-title">
+            <div class="ad-title">
+              <span>01 / MAIN AGENT</span>
+              <h1 id="engine-title">选执行者。</h1>
+              <p>运行中不可切换。</p>
+            </div>
+            <div class="engine-pick" role="radiogroup" aria-label="主 Agent">
+              <button class="engine-option selected" type="button" role="radio" aria-checked="true" data-engine="r_code">
+                <b>R</b><strong>R-Code</strong><span>自定义 Provider</span><i>已选</i>
+              </button>
+              <button class="engine-option codex" type="button" role="radio" aria-checked="false" aria-disabled="true" data-engine="codex">
+                <b>C</b><strong>Codex CLI</strong><span>本机登录 · 需工作区</span><i>未连接</i>
+              </button>
+              <small id="engine-note" role="status">R-Code 可直接聊天。</small>
+            </div>
+          </article>
+
+          <article class="slide provider" data-label="Provider" aria-labelledby="provider-title">
+            <div class="ad-title light-title">
+              <span>02 / PROVIDER</span>
+              <h1 id="provider-title">接上模型。</h1>
+            </div>
+            <div class="provider-pick" role="radiogroup" aria-label="Provider">
+              <button class="selected" type="button" role="radio" aria-checked="true" data-provider="DeepSeek" data-code="DS" data-model="deepseek-v4-flash" data-url="https://api.deepseek.com">DeepSeek</button>
+              <button type="button" role="radio" aria-checked="false" data-provider="OpenAI" data-code="OA" data-model="gpt-5.6-sol" data-url="https://api.openai.com/v1">OpenAI</button>
+              <button type="button" role="radio" aria-checked="false" data-provider="Anthropic" data-code="AN" data-model="claude-sonnet-5" data-url="https://api.anthropic.com">Anthropic</button>
+            </div>
+            <section class="provider-object">
+              <div class="provider-name"><b id="provider-code">DS</b><div><small id="provider-url">https://api.deepseek.com</small><strong id="provider-name">DeepSeek</strong><span id="provider-model">deepseek-v4-flash</span></div></div>
+              <label class="secret" id="secret-field">
+                <span>访问密钥</span>
+                <div><input id="api-key" type="password" autocomplete="off" placeholder="粘贴密钥" /><button id="save-key" type="button">保存</button></div>
+                <small id="secret-note">只进系统凭据库。</small>
+              </label>
+            </section>
+          </article>
+
+          <article class="slide scope" data-label="工作区" aria-labelledby="scope-title">
+            <div class="ad-title dark-title">
+              <span>03 / WORKSPACE</span>
+              <h1 id="scope-title">圈定代码。</h1>
+              <p>工作区就是边界。</p>
+            </div>
+            <div class="scope-controls">
+              <div class="scope-mode" role="radiogroup" aria-label="工作区模式">
+                <button type="button" role="radio" aria-checked="false" data-scope="chat">纯聊天</button>
+                <button class="selected" type="button" role="radio" aria-checked="true" data-scope="workspace">附加工作区</button>
+              </div>
+              <section class="workspace-object" id="workspace-object">
+                <span>示例工作区</span><strong id="workspace-value">D:\Projects\my-app</strong><button id="change-workspace" type="button">更换</button>
+              </section>
+              <div class="access-pick" id="access-pick" role="radiogroup" aria-label="项目权限">
+                <button type="button" role="radio" aria-checked="false" data-mode="请求批准" data-short="R1–R3 询问">请求批准</button>
+                <button class="selected" type="button" role="radio" aria-checked="true" data-mode="替我审批" data-short="中高风险再问">替我审批</button>
+                <button type="button" role="radio" aria-checked="false" data-mode="完全访问" data-short="R0–R3 自动">完全访问</button>
+              </div>
+              <small id="access-note">中高风险再问 · R4 拒绝</small>
+            </div>
+          </article>
+
+          <article class="slide launch" data-label="开始" aria-labelledby="launch-title">
+            <div class="launch-copy">
+              <span>READY</span>
+              <h1 id="launch-title">开工。</h1>
+              <p id="launch-line">R-Code × DeepSeek × my-app</p>
+              <small id="launch-access">替我审批 · 中高风险再问</small>
+              <button id="create-session" type="button"><strong>创建会话</strong><i>→</i></button>
+            </div>
+            <div class="launch-brand"><img src="../../../installer/frontend/icon.png" alt="" /><span>R-CODE</span></div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="tour-footer">
+        <button id="back" type="button"><span>←</span><i>返回</i></button>
+        <nav aria-label="步骤">
+          <button class="dot active" type="button" data-go="0" aria-label="欢迎"></button>
+          <button class="dot" type="button" data-go="1" aria-label="主 Agent"></button>
+          <button class="dot" type="button" data-go="2" aria-label="Provider"></button>
+          <button class="dot" type="button" data-go="3" aria-label="工作区"></button>
+          <button class="dot" type="button" data-go="4" aria-label="开始"></button>
+        </nav>
+        <button id="next" type="button"><i>下一页</i><span>→</span></button>
+      </footer>
+    </main>
+
+    <section class="dialog" id="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" hidden>
+      <div><b id="dialog-mark">PAUSE</b><h2 id="dialog-title">稍后设置？</h2><p id="dialog-copy">可从设置继续。</p><span><button id="resume" type="button">返回</button><button id="leave" type="button">进入工作台</button></span></div>
+    </section>
+  </body>
+</html>

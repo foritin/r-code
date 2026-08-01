@@ -1,0 +1,55 @@
+prompt: >-
+  Finalize, but do not implement, R-Code's single-device single-user evolving memory
+  plan after product review. Memory has exactly two owner scopes: global and local
+  workspace identity; provider is never a scope or owner. Global automatic changes
+  require explicit approval; exact-project changes may auto-apply with history/Undo.
+  All memory content and metadata stay in AppData SQLite and R-Code must perform zero
+  workspace/.git/AGENTS.md/CLAUDE.md writes; retire the legacy file-backed memory
+  writer without deleting user files. Use a stable local workspace UUID mapped to a
+  canonical path, with clones/worktrees/moves isolated unless a future explicit
+  migration links them. Add per-workspace inherit/read-only/off modes, explicit
+  remember-now review, admission/sensitivity rules, bounded retention/history,
+  true delete/secure SQLite cleanup, one selected lightweight review provider/model,
+  no provider-specific memories, interrupted-call manual recovery, default-off
+  rollout, and the existing AppData/OS security boundary without SQLCipher. Provider
+  review wire data must use job-local ordinals rather than durable workspace/task/run/
+  entry identifiers, and main-provider snapshots use scope-local ordinals too;
+  high-sensitive manual memory requires content/owner/target-bound
+  disclosure for both main and Reviewer Providers. Terminal candidates scrub immediately
+  and all metadata is bounded. Every explicit delete persists a physical-cleanup marker.
+  Privacy-safe app backup is RAM-redacted behind a 128 MiB source-size input guard and
+  fails closed without unredacted disk temp; it does not claim an OS-level RAM guarantee.
+  All ProviderMemory/FinalStart/PhysicalCleanup/AgentBridge/ExternalRegistry coordination
+  obeys one increasing global lock rank; a writer-fair GlobalFinalStartGate uses shared
+  guards through start publish or bounded cleanup/handoff and an exclusive clear-all barrier so dynamic
+  task/workspace keys cannot escape. Stalled prepared-run cleanup atomically hands ownership
+  to a ranked pending registry before releasing shared, so clear can progress without losing
+  unpublished handles. External Codex launch must additionally survive a hard parent-app
+  crash without relying on Rust Drop or persisted PIDs: use a same-executable early supervisor
+  and Ready→Arm→Contained→Release→Released gating. Only a frozen StrongTree capability may receive a
+  non-empty external memory snapshot: Windows uses a non-breakaway Job Object; Linux is StrongTree
+  only when an out-of-workload supervisor can place the still-gated target alone into a real
+  user-systemd transient scope, verify unified cgroup v2 membership, pre-open same-cgroup
+  cgroup.kill/events controls as the ordinary desktop user, and later prove populated=0;
+  macOS is DirectOnly in v1 and external Codex runs memoryless with a visible reason while native
+  memory remains available. Process-group-only must never be presented as full-tree containment.
+  The target must inherit neither the user-manager bus nor containment control FDs. Before any
+  possible Release, persist a one-way release_intent_or_delivery_unknown audit state; only a
+  Released ack followed by ActiveRun publication may advance it to recorded. Intent-before abort
+  is aborted_before_release, intent-after faults remain unknown forever, and suppressed paths have
+  zero refs/hash/counts. OS cleanup success must never rewrite delivery history as unsent.
+  A host-started external child may inherit only the parent's frozen snapshot bytes and owner/source
+  generations. It must never inherit the parent's containment capability, proof, decision, injection
+  event or control handle: each child performs a fresh supervised Contained proof and owns a distinct
+  run/injection audit. If a StrongTree parent has a DirectOnly/Unavailable child, that child alone is
+  suppressed with a zero-byte memory wire while the parent remains unaffected.
+  Tests must include setsid/setpgid, double-fork, rapid leader exit, fork storms and hard parent kills;
+  capability-negative lanes must prove zero memory bytes on the external wire. Preserve the Hermes-aligned post-response cadence and frozen
+  snapshot model already researched.
+repo: .
+plan_file: ./sandbox/memory-evolution-v2/plan.md
+tasks_file: ./sandbox/memory-evolution-v2/tasks.json
+pr_loc: "100-400"
+sandbox_root: ./sandbox/memory-evolution-v2
+budget: 5
+skill_dir: ./.agents/skills/plan-loop

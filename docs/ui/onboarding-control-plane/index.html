@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>R-Code 首次启动导览 · Session Control</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="workspace-underlay" aria-hidden="true"></div>
+    <div class="workspace-veil" aria-hidden="true"></div>
+
+    <main class="tour" role="dialog" aria-modal="true" aria-label="R-Code 首次启动导览">
+      <header class="tour-header">
+        <div class="brand-lockup">
+          <img src="../../../installer/frontend/icon.png" alt="" draggable="false" />
+          <div>
+            <strong>R-Code</strong>
+            <span>SESSION CONTROL</span>
+          </div>
+        </div>
+
+        <div class="header-bus" aria-hidden="true">
+          <i></i><span>MAIN AGENT</span><i></i><span>MODEL ROUTE</span><i></i><span>WORKSPACE</span><i></i><span>POLICY</span><i></i>
+        </div>
+
+        <div class="header-position" aria-live="polite">
+          <span id="position-label">会话上下文</span>
+          <b><i id="position-current">01</i> / 04</b>
+        </div>
+
+        <div class="header-actions">
+          <button id="skip-button" class="text-button" type="button">稍后设置</button>
+          <button id="close-button" class="window-button" type="button" aria-label="关闭导览">×</button>
+        </div>
+      </header>
+
+      <section
+        class="slider-viewport"
+        id="slider-viewport"
+        tabindex="0"
+        aria-roledescription="轮播"
+        aria-label="首次启动设置步骤"
+      >
+        <div class="slider-track" id="slider-track">
+          <article class="slide slide-context" data-label="会话上下文" data-slide="0" aria-labelledby="context-title">
+            <aside class="index-column">
+              <span class="index-kicker">CONTEXT</span>
+              <b>01</b>
+              <div class="index-state"><i></i><span>SESSION<br />SNAPSHOT</span></div>
+            </aside>
+
+            <div class="slide-main context-main">
+              <div class="slide-title-row">
+                <div>
+                  <span class="overline">R-CODE / TASK BINDING</span>
+                  <h1 id="context-title">一次会话，<br /><em>锁定一套执行上下文。</em></h1>
+                </div>
+                <p>主 Agent、模型来源、工作区与权限在创建时写入任务。全局默认随后变化，也不会静默改写已有会话。</p>
+              </div>
+
+              <section class="execution-board" aria-label="会话执行上下文">
+                <div class="board-heading">
+                  <span>LIVE CONFIGURATION BUS</span>
+                  <b>task_record / persisted</b>
+                </div>
+                <div class="execution-bus" aria-label="主 Agent 到权限策略的数据流">
+                  <div class="bus-line" aria-hidden="true"></div>
+                  <div class="bus-node node-agent">
+                    <span class="node-port">A</span>
+                    <small>MAIN AGENT</small>
+                    <strong>R-Code</strong>
+                    <code>agent_engine=r_code</code>
+                  </div>
+                  <div class="bus-node node-provider">
+                    <span class="node-port">P</span>
+                    <small>PROVIDER</small>
+                    <strong>DeepSeek</strong>
+                    <code>openai_chat</code>
+                  </div>
+                  <div class="bus-node node-model">
+                    <span class="node-port">M</span>
+                    <small>MODEL</small>
+                    <strong>deepseek-v4-flash</strong>
+                    <code>session scoped</code>
+                  </div>
+                  <div class="bus-node node-workspace is-open">
+                    <span class="node-port">W</span>
+                    <small>WORKSPACE</small>
+                    <strong>未附加</strong>
+                    <code>pure chat</code>
+                  </div>
+                  <div class="bus-node node-policy">
+                    <span class="node-port">R</span>
+                    <small>ACCESS</small>
+                    <strong>请求批准</strong>
+                    <code>workspace scoped</code>
+                  </div>
+                </div>
+                <div class="board-footer">
+                  <div class="immutable-rule">
+                    <span class="rule-icon">!</span>
+                    <div><small>ACTIVE RUN GUARD</small><strong>运行中禁止切换 Agent / Provider / Model</strong></div>
+                  </div>
+                  <div class="snapshot-rule">
+                    <span>GLOBAL DEFAULT</span><i>≠</i><span>EXISTING SESSION</span>
+                  </div>
+                </div>
+              </section>
+
+              <div class="context-action-row">
+                <button class="primary-action next-action" type="button"><span>配置这套上下文</span><i>→</i></button>
+                <p><b>工作区可稍后附加。</b>没有工作区时，R-Code 仍可作为纯聊天会话启动。</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="slide slide-engine" data-label="主 Agent" data-slide="1" aria-labelledby="engine-title">
+            <aside class="index-column">
+              <span class="index-kicker">ENGINE</span>
+              <b>02</b>
+              <div class="index-state"><i></i><span>EXECUTION<br />PATH</span></div>
+            </aside>
+
+            <div class="slide-main engine-main">
+              <div class="compact-title-row">
+                <div>
+                  <span class="overline">SELECT MAIN AGENT</span>
+                  <h1 id="engine-title">主 Agent 决定<em>执行路径。</em></h1>
+                </div>
+                <p>这不是外观偏好：两条路径使用不同的模型来源、凭据与工作区前置条件。</p>
+              </div>
+
+              <div class="engine-selector" role="radiogroup" aria-label="主 Agent">
+                <button class="engine-option selected" type="button" role="radio" aria-checked="true" data-engine="r_code">
+                  <span class="engine-index">A</span>
+                  <div class="engine-option-head">
+                    <div><small>BUILT-IN ROUTE</small><strong>R-Code</strong></div>
+                    <i class="selection-mark">已选择</i>
+                  </div>
+                  <p>使用自定义 Provider；支持宿主路由与质量复核。</p>
+                  <dl>
+                    <div><dt>模型来源</dt><dd>R-Code Provider</dd></div>
+                    <div><dt>无工作区</dt><dd class="positive">可以纯聊天</dd></div>
+                    <div><dt>凭据归属</dt><dd>系统凭据库</dd></div>
+                  </dl>
+                  <div class="engine-route"><span>R-CODE</span><i></i><span>PROVIDER</span><i></i><span>TASK</span></div>
+                </button>
+
+                <button class="engine-option gated" type="button" role="radio" aria-checked="false" aria-describedby="codex-gate" data-engine="codex">
+                  <span class="engine-index">B</span>
+                  <div class="engine-option-head">
+                    <div><small>LOCAL CLI ROUTE</small><strong>Codex CLI</strong></div>
+                    <i class="selection-mark">前置检查</i>
+                  </div>
+                  <p>使用本机登录的 Codex CLI，沿用 Codex 的模型与认证状态。</p>
+                  <dl>
+                    <div><dt>模型来源</dt><dd>本机 Codex CLI</dd></div>
+                    <div><dt>无工作区</dt><dd class="negative">不可启动</dd></div>
+                    <div><dt>凭据归属</dt><dd>由 Codex 管理</dd></div>
+                  </dl>
+                  <div class="engine-route"><span>R-CODE</span><i></i><span>CODEX CLI</span><i></i><span>WORKSPACE</span></div>
+                </button>
+              </div>
+
+              <div class="engine-gate" id="codex-gate">
+                <div class="gate-title"><span>CODEX INTEGRATION GATE</span><b>当前不可选</b></div>
+                <div class="gate-checks">
+                  <span><i class="pending"></i><b>CLI 协作配置</b><small>integration_ready</small></span>
+                  <span><i class="pending"></i><b>本机登录状态</b><small>由 Codex 管理</small></span>
+                  <span><i class="missing"></i><b>已附加工作区</b><small>required</small></span>
+                </div>
+                <p id="engine-feedback" aria-live="polite">当前会话将写入 <code>agent_engine=r_code</code>。</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="slide slide-provider" data-label="模型服务" data-slide="2" aria-labelledby="provider-title">
+            <aside class="index-column">
+              <span class="index-kicker">PROVIDER</span>
+              <b>03</b>
+              <div class="index-state"><i></i><span>MODEL<br />ROUTE</span></div>
+            </aside>
+
+            <div class="slide-main provider-main">
+              <div class="compact-title-row provider-title-row">
+                <div>
+                  <span class="overline">CONFIGURE MODEL ROUTE</span>
+                  <h1 id="provider-title">Provider 是一组<em>可执行参数。</em></h1>
+                </div>
+                <p>预设同时确定接口地址、线路协议、默认模型与能力边界；保存时由后端统一校验。</p>
+              </div>
+
+              <div class="provider-console">
+                <div class="provider-rail" role="radiogroup" aria-label="模型服务">
+                  <div class="console-label"><span>PRESET CATALOG</span><b>03</b></div>
+                  <button class="provider-option selected" type="button" role="radio" aria-checked="true"
+                    data-provider="DeepSeek" data-code="DS" data-protocol="OpenAI Chat" data-protocol-code="openai_chat"
+                    data-url="https://api.deepseek.com" data-model="deepseek-v4-flash" data-context="1,000,000" data-auth="Bearer"
+                    data-output="393,216" data-note="deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线">
+                    <span>DS</span><div><strong>DeepSeek</strong><small>国内官方</small></div><i>01</i>
+                  </button>
+                  <button class="provider-option" type="button" role="radio" aria-checked="false"
+                    data-provider="OpenAI" data-code="OA" data-protocol="Responses" data-protocol-code="openai_responses"
+                    data-url="https://api.openai.com/v1" data-model="gpt-5.6-sol" data-context="1,050,000" data-auth="Bearer"
+                    data-output="由模型决定" data-note="走 Responses；Chat Completions 未弃用但调不到 codex 系列">
+                    <span>OA</span><div><strong>OpenAI</strong><small>海外官方</small></div><i>02</i>
+                  </button>
+                  <button class="provider-option" type="button" role="radio" aria-checked="false"
+                    data-provider="Anthropic" data-code="AN" data-protocol="Messages" data-protocol-code="anthropic_messages"
+                    data-url="https://api.anthropic.com" data-model="claude-sonnet-5" data-context="200,000" data-auth="X-API-Key"
+                    data-output="由模型决定" data-note="Anthropic 官方 Messages 入口">
+                    <span>AN</span><div><strong>Anthropic</strong><small>海外官方</small></div><i>03</i>
+                  </button>
+                </div>
+
+                <section class="provider-profile" aria-label="Provider 预设详情">
+                  <div class="profile-head">
+                    <span id="provider-code">DS</span>
+                    <div><small>ACTIVE PRESET</small><strong id="provider-name">DeepSeek</strong></div>
+                    <i id="provider-auth">Bearer</i>
+                  </div>
+                  <dl class="profile-fields">
+                    <div><dt>接口地址</dt><dd id="provider-url">https://api.deepseek.com</dd></div>
+                    <div><dt>线路协议</dt><dd><b id="provider-protocol">OpenAI Chat</b><code id="provider-protocol-code">openai_chat</code></dd></div>
+                    <div><dt>默认模型</dt><dd id="provider-model">deepseek-v4-flash</dd></div>
+                    <div class="metric"><dt>上下文窗口</dt><dd id="provider-context">1,000,000</dd></div>
+                    <div class="metric"><dt>单次输出上限</dt><dd id="provider-output">393,216</dd></div>
+                  </dl>
+                  <div class="provider-note"><span>CATALOG NOTE</span><p id="provider-note">deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线</p></div>
+                </section>
+
+                <section class="credential-pipeline" aria-label="凭据保存流程">
+                  <div class="console-label"><span>CREDENTIAL WRITE</span><b>ATOMIC</b></div>
+                  <label class="secret-field" id="secret-field">
+                    <span>访问密钥 <i>不会返回 WebView</i></span>
+                    <div><b>••••••••••••••••••</b><button id="save-secret" type="button">保存并用于新对话</button></div>
+                    <small id="secret-feedback" role="status">密钥只进入 Windows Credential Manager / OS keychain。</small>
+                  </label>
+                  <ol class="write-order">
+                    <li><b>01</b><span><strong>校验字段</strong><small>地址 / 协议 / 模型 / 密钥状态</small></span></li>
+                    <li><b>02</b><span><strong>先写系统凭据库</strong><small>失败时不覆盖现有配置</small></span></li>
+                    <li><b>03</b><span><strong>再写无密钥 TOML</strong><small>前端仅收到 ready / source</small></span></li>
+                  </ol>
+                </section>
+              </div>
+            </div>
+          </article>
+
+          <article class="slide slide-scope" data-label="工作区与权限" data-slide="3" aria-labelledby="scope-title">
+            <aside class="index-column">
+              <span class="index-kicker">SCOPE</span>
+              <b>04</b>
+              <div class="index-state"><i></i><span>PATH +<br />POLICY</span></div>
+            </aside>
+
+            <div class="slide-main scope-main">
+              <div class="compact-title-row scope-title-row">
+                <div>
+                  <span class="overline">ATTACH WORKSPACE / SET POLICY</span>
+                  <h1 id="scope-title">工作区是<em>硬边界</em>，<br />权限只管审批频率。</h1>
+                </div>
+                <p>三种模式都不能突破已附加工作区；R4 始终拒绝，显式拒绝规则始终有效。</p>
+              </div>
+
+              <div class="scope-console">
+                <section class="workspace-module">
+                  <div class="console-label"><span>WORKSPACE ROOT</span><b>PATHGUARD</b></div>
+                  <div class="workspace-path">
+                    <div class="folder-mark">W</div>
+                    <div><small>示例路径</small><strong>D:\Projects\my-app</strong><span>已打开 · canonical directory</span></div>
+                    <button type="button" id="workspace-button">更换</button>
+                  </div>
+                  <div class="boundary-diagram" aria-label="工作区边界说明">
+                    <div class="boundary-root">
+                      <span>ALLOWED ROOT</span>
+                      <b>D:\Projects\my-app\</b>
+                      <div><i>src\</i><i>tests\</i><i>README.md</i></div>
+                    </div>
+                    <div class="boundary-denied"><span>OUTSIDE ROOT</span><b>× 拒绝解析</b></div>
+                  </div>
+                  <p class="workspace-rule"><b>没有工作区：</b>可以聊天；本地文件与命令工具不可用。Codex 主 Agent 也不能启动。</p>
+                </section>
+
+                <section class="policy-module">
+                  <div class="console-label"><span>PROJECT ACCESS MODE</span><b>PER PROJECT</b></div>
+                  <div class="risk-legend" aria-hidden="true"><span>R0<small>只读</small></span><span>R1<small>低风险</small></span><span>R2<small>中风险</small></span><span>R3<small>高风险</small></span><span>R4<small>禁止</small></span></div>
+                  <div class="policy-list" role="radiogroup" aria-label="项目 Agent 权限">
+                    <button class="policy-option" type="button" role="radio" aria-checked="false" data-mode="请求批准" data-code="request_approval" data-summary="R1–R3 需确认">
+                      <div class="policy-copy"><strong>请求批准</strong><small>访问外部服务、执行命令或修改文件时总是询问。</small></div>
+                      <div class="policy-cells"><i class="allow">自动</i><i class="ask">询问</i><i class="ask">询问</i><i class="ask">询问</i><i class="deny">拒绝</i></div>
+                    </button>
+                    <button class="policy-option selected" type="button" role="radio" aria-checked="true" data-mode="替我审批" data-code="risk_based" data-summary="R2/R3 需确认">
+                      <div class="policy-copy"><strong>替我审批</strong><small>仅在检测到中高风险操作时请求批准。</small></div>
+                      <div class="policy-cells"><i class="allow">自动</i><i class="allow">自动</i><i class="ask">询问</i><i class="ask">询问</i><i class="deny">拒绝</i></div>
+                    </button>
+                    <button class="policy-option" type="button" role="radio" aria-checked="false" data-mode="完全访问权限" data-code="full_access" data-summary="R0–R3 自动批准">
+                      <div class="policy-copy"><strong>完全访问权限</strong><small>自动批准工作区内的低、中、高风险操作。</small></div>
+                      <div class="policy-cells"><i class="allow">自动</i><i class="allow">自动</i><i class="allow">自动</i><i class="allow">自动</i><i class="deny">拒绝</i></div>
+                    </button>
+                  </div>
+                </section>
+              </div>
+
+              <div class="session-launch">
+                <div class="launch-snapshot">
+                  <small>NEW SESSION SNAPSHOT</small>
+                  <span><b>Agent</b> R-Code</span>
+                  <span><b>Provider</b> DeepSeek</span>
+                  <span><b>Model</b> deepseek-v4-flash</span>
+                  <span><b>Workspace</b> my-app</span>
+                  <span><b>Access</b> <i id="launch-access">替我审批 · R2/R3 需确认</i></span>
+                </div>
+                <button class="launch-action" id="launch-action" type="button"><span>创建会话</span><i>→</i></button>
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <button class="edge-control edge-prev" id="edge-prev" type="button" aria-label="上一步"><span>←</span></button>
+        <button class="edge-control edge-next" id="edge-next" type="button" aria-label="下一步"><span>→</span></button>
+      </section>
+
+      <footer class="tour-footer">
+        <div class="drag-hint"><span>↔</span><b>按住画面左右滑动</b><small>也可使用方向键</small></div>
+        <nav class="port-nav" aria-label="导览步骤">
+          <div class="port-line" aria-hidden="true"><i id="port-progress"></i></div>
+          <button class="port-step active" type="button" data-go="0"><i></i><b>01</b><span>上下文</span></button>
+          <button class="port-step" type="button" data-go="1"><i></i><b>02</b><span>主 Agent</span></button>
+          <button class="port-step" type="button" data-go="2"><i></i><b>03</b><span>Provider</span></button>
+          <button class="port-step" type="button" data-go="3"><i></i><b>04</b><span>工作区 / 权限</span></button>
+        </nav>
+        <button class="footer-next" id="footer-next" type="button"><span>下一项</span><i>→</i></button>
+      </footer>
+    </main>
+
+    <section class="exit-layer" id="exit-layer" role="dialog" aria-modal="true" aria-labelledby="exit-title" hidden>
+      <div class="exit-card">
+        <span class="exit-index">PAUSE</span>
+        <div>
+          <span class="overline">FIRST-RUN SETUP</span>
+          <h2 id="exit-title">稍后再完成设置？</h2>
+          <p>当前配置不会伪装成已保存。进入工作台后，可从“设置 → 模型服务 / Codex / Agent”继续。</p>
+          <div class="exit-actions"><button id="resume-button" type="button">继续导览</button><button id="leave-button" class="primary-action" type="button"><span>进入工作台</span><i>→</i></button></div>
+        </div>
+      </div>
+    </section>
+  </body>
+</html>

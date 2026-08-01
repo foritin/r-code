@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>R-Code 悬浮滑动导览 · Ribbon Concept</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="workspace-underlay" aria-hidden="true"></div>
+    <div class="workspace-veil" aria-hidden="true"></div>
+
+    <div class="tour-shadow">
+      <main class="tour" role="dialog" aria-modal="true" aria-label="R-Code 首次启动导览">
+        <div class="tour-grain" aria-hidden="true"></div>
+        <div class="ambient-ribbon ambient-ribbon-a" aria-hidden="true"></div>
+        <div class="ambient-ribbon ambient-ribbon-b" aria-hidden="true"></div>
+
+        <header class="tour-header">
+          <div class="tour-brand">
+            <img src="../../../installer/frontend/icon.png" alt="" draggable="false" />
+            <div><strong>R-Code</strong><span>QUICK START</span></div>
+          </div>
+          <div class="tour-position" aria-live="polite">
+            <span id="position-label">启动导览</span>
+            <b><i id="position-current">01</i> / 04</b>
+          </div>
+          <div class="tour-actions">
+            <span class="drag-caption">按住画面左右滑动</span>
+            <button id="skip-button" class="plain-button" type="button">稍后设置</button>
+            <button id="close-button" class="close-button" type="button" aria-label="关闭导览">×</button>
+          </div>
+        </header>
+
+        <section
+          class="slider-viewport"
+          id="slider-viewport"
+          tabindex="0"
+          aria-roledescription="轮播"
+          aria-label="首次启动设置步骤"
+        >
+          <div class="slider-track" id="slider-track">
+            <article class="slide slide-intro" data-label="启动导览" data-slide="0" aria-labelledby="intro-title">
+              <div class="slide-ribbon intro-ribbon" aria-hidden="true">
+                <span>FIRST RUN</span><b>R-CODE</b><span>FIRST RUN</span><b>R-CODE</b>
+              </div>
+              <div class="intro-copy">
+                <div class="slant-kicker"><span>01 · GET READY</span></div>
+                <h1 id="intro-title">两分钟，<br /><em>配置好</em>你的<br />AI 工作台。</h1>
+                <p>连接模型服务、安全保存凭据，然后把第一个真实目标交给 R-Code。</p>
+                <div class="intro-actions">
+                  <button class="primary-action next-action" type="button">开始导览 <span>→</span></button>
+                  <small>无需一次完成 · 之后可从“帮助”再次打开</small>
+                </div>
+              </div>
+
+              <div class="intro-system" aria-label="导览包含的三个步骤">
+                <div class="system-title"><span>SETUP ROUTE</span><b>02:00</b></div>
+                <div class="route-stack">
+                  <div class="route-layer layer-provider">
+                    <span class="route-no">01</span>
+                    <div><small>CONNECT</small><strong>选择模型服务</strong></div>
+                    <b>Provider</b>
+                  </div>
+                  <div class="route-layer layer-secure">
+                    <span class="route-no">02</span>
+                    <div><small>SECURE</small><strong>保存访问凭据</strong></div>
+                    <b>Keychain</b>
+                  </div>
+                  <div class="route-layer layer-start">
+                    <span class="route-no">03</span>
+                    <div><small>START</small><strong>创建第一个任务</strong></div>
+                    <b>Session</b>
+                  </div>
+                </div>
+                <div class="system-foot"><span>LOCAL FIRST</span><i></i><span>SESSION FIRST</span><i></i><span>REVIEWABLE</span></div>
+              </div>
+            </article>
+
+            <article class="slide slide-provider" data-label="选择服务" data-slide="1" aria-labelledby="provider-title">
+              <div class="provider-copy-panel">
+                <div class="slant-kicker"><span>02 · MODEL SERVICE</span></div>
+                <h1 id="provider-title">选一个熟悉的<br /><em>Provider。</em></h1>
+                <p>预设会自动带入官方地址、线路协议和推荐模型，之后每个会话仍可单独切换。</p>
+                <div class="provider-list" role="radiogroup" aria-label="模型服务">
+                  <button class="provider-option selected" type="button" role="radio" aria-checked="true" data-provider="DeepSeek" data-model="deepseek-v4-pro" data-protocol="OpenAI Chat" data-url="https://api.deepseek.com">
+                    <span class="provider-code">DS</span><strong>DeepSeek</strong><small>国内官方</small><i>✓</i>
+                  </button>
+                  <button class="provider-option" type="button" role="radio" aria-checked="false" data-provider="OpenAI" data-model="gpt-5.6-sol" data-protocol="Responses" data-url="https://api.openai.com/v1">
+                    <span class="provider-code">OA</span><strong>OpenAI</strong><small>官方</small><i>✓</i>
+                  </button>
+                  <button class="provider-option" type="button" role="radio" aria-checked="false" data-provider="Anthropic" data-model="claude-sonnet-5" data-protocol="Messages" data-url="https://api.anthropic.com">
+                    <span class="provider-code">AN</span><strong>Anthropic</strong><small>官方</small><i>✓</i>
+                  </button>
+                </div>
+                <button class="catalog-link" type="button">浏览 Kimi、智谱、火山方舟等更多预设　↗</button>
+              </div>
+
+              <div class="provider-route-panel">
+                <div class="route-ribbon" aria-hidden="true"><span>PROVIDER ROUTE</span><b>OFFICIAL PRESET</b></div>
+                <div class="preset-card">
+                  <div class="preset-head">
+                    <span class="preset-logo" id="preset-logo">DS</span>
+                    <div><small>当前选择</small><strong id="preset-provider">DeepSeek</strong></div>
+                    <span class="preset-status">预设已载入</span>
+                  </div>
+                  <dl>
+                    <div><dt>接口地址</dt><dd id="preset-url">https://api.deepseek.com</dd></div>
+                    <div><dt>线路协议</dt><dd id="preset-protocol">OpenAI Chat</dd></div>
+                    <div><dt>默认模型</dt><dd id="preset-model">deepseek-v4-pro</dd></div>
+                  </dl>
+                  <div class="preset-flow" aria-hidden="true">
+                    <span>MODEL</span><i></i><span>R-CODE CONTEXT</span><i></i><span>TASK</span>
+                  </div>
+                </div>
+                <div class="codex-route">
+                  <span>⌘</span>
+                  <div><strong>也可以连接本机 Codex CLI</strong><small>沿用 Codex 的登录、模型与运行偏好。</small></div>
+                  <button type="button">稍后连接</button>
+                </div>
+              </div>
+            </article>
+
+            <article class="slide slide-credentials" data-label="安全配置" data-slide="2" aria-labelledby="credentials-title">
+              <div class="credential-ribbon" aria-hidden="true"><span>SYSTEM CREDENTIAL VAULT</span><b>LOCAL ONLY</b><span>SYSTEM CREDENTIAL VAULT</span></div>
+              <div class="credential-intro">
+                <div class="slant-kicker"><span>03 · CREDENTIALS</span></div>
+                <h1 id="credentials-title">一次配置，<br />之后专注<em>任务。</em></h1>
+                <p>访问密钥进入系统凭据库；项目与明文配置文件都不会保存它。</p>
+                <div class="vault-emblem" aria-hidden="true">
+                  <div class="vault-orbit orbit-a"></div>
+                  <div class="vault-orbit orbit-b"></div>
+                  <div class="vault-center"><span>◇</span><b>LOCAL</b></div>
+                </div>
+              </div>
+
+              <form class="credential-card" novalidate>
+                <div class="credential-head">
+                  <div><span id="credential-logo">DS</span><strong id="credential-provider">DeepSeek</strong></div>
+                  <small>密钥不会显示在截图或配置文件中</small>
+                </div>
+                <label class="field field-key" id="key-field">
+                  <span>访问密钥 <a href="#">获取密钥 ↗</a></span>
+                  <div class="field-control"><i>⌘</i><input id="api-key" type="password" autocomplete="off" placeholder="粘贴访问密钥" /><button id="toggle-key" type="button" aria-label="显示或隐藏密钥">◉</button></div>
+                  <small class="field-message">保存后只显示“已安全保存”。</small>
+                  <small class="field-error" role="alert">请先填写访问密钥。</small>
+                </label>
+                <div class="field-row">
+                  <label class="field"><span>接口地址</span><div class="field-control"><input id="provider-url" value="https://api.deepseek.com" /></div></label>
+                  <label class="field"><span>默认模型</span><div class="field-control select-control"><input id="provider-model" value="deepseek-v4-pro" readonly /><i>⌄</i></div></label>
+                </div>
+                <div class="connection-strip">
+                  <span><b>协议</b><i id="provider-protocol">OpenAI Chat</i></span>
+                  <span><b>新对话默认</b><i>开启</i></span>
+                  <button id="test-connection" type="button">测试连接</button>
+                </div>
+                <div class="connection-state" id="connection-state" hidden><span>✓</span><strong>连接检查通过</strong><small>服务地址、鉴权与模型均可用。</small></div>
+                <div class="credential-note"><span>◇</span><div><strong>只写入系统凭据库</strong><small>R-Code 配置仅记录服务地址、协议与模型。</small></div></div>
+              </form>
+            </article>
+
+            <article class="slide slide-first-task" data-label="开始任务" data-slide="3" aria-labelledby="task-title">
+              <div class="finish-ribbon" aria-hidden="true"><span>READY TO BUILD</span><b>04</b><span>READY TO BUILD</span></div>
+              <div class="task-intro">
+                <div class="slant-kicker"><span>04 · FIRST SESSION</span></div>
+                <h1 id="task-title">现在，从<br /><em>结果</em>开始。</h1>
+                <p>先描述你要完成的事情，再决定 R-Code 可以读取或修改哪些文件。</p>
+                <div class="ready-list">
+                  <span><b>01</b> 模型服务已选择 <i>✓</i></span>
+                  <span id="credential-ready-row"><b>02</b> 凭据尚未保存 <i>!</i></span>
+                  <span><b>03</b> 工作区由你决定 <i>→</i></span>
+                </div>
+              </div>
+
+              <div class="task-builder">
+                <div class="workspace-picker">
+                  <span class="workspace-mark">▱</span>
+                  <div><strong>附加项目文件夹</strong><small>不附加也可以直接聊天</small></div>
+                  <button type="button">选择文件夹　↗</button>
+                </div>
+                <div class="task-composer">
+                  <textarea aria-label="任务描述" placeholder="例如：检查这个项目的启动流程，找出最容易出错的环节，并给出修复建议。"></textarea>
+                  <div class="composer-bar">
+                    <div><span><i>✦</i> R-Code</span><span><i>DS</i> DeepSeek</span><span>deepseek-v4-pro</span><span>权限：替我审批</span></div>
+                    <button type="button" aria-label="发送任务">↑</button>
+                  </div>
+                </div>
+                <div class="prompt-row"><span>快速开始</span><button type="button">解释项目结构</button><button type="button">检查启动流程</button><button type="button">定位一个 Bug</button></div>
+                <button class="enter-action" id="enter-action" type="button"><span>配置完成</span><strong>进入 R-Code</strong><i>→</i></button>
+              </div>
+            </article>
+          </div>
+
+          <button class="edge-control edge-prev" id="edge-prev" type="button" aria-label="上一步"><span>‹</span></button>
+          <button class="edge-control edge-next" id="edge-next" type="button" aria-label="下一步"><small id="next-peek">NEXT · 02</small><span>›</span></button>
+        </section>
+
+        <footer class="tour-footer">
+          <nav class="ribbon-nav" aria-label="导览步骤">
+            <button class="ribbon-step active" type="button" data-go="0"><b>01</b><span>启动</span></button>
+            <button class="ribbon-step" type="button" data-go="1"><b>02</b><span>服务</span></button>
+            <button class="ribbon-step" type="button" data-go="2"><b>03</b><span>凭据</span></button>
+            <button class="ribbon-step" type="button" data-go="3"><b>04</b><span>任务</span></button>
+          </nav>
+          <div class="slide-meter" aria-hidden="true"><i id="slide-meter-fill"></i></div>
+          <div class="footer-copy"><span>←</span> 拖动、点击步骤或使用方向键 <span>→</span></div>
+          <button class="footer-next" id="footer-next" type="button">下一步 <span>→</span></button>
+        </footer>
+      </main>
+    </div>
+
+    <section class="exit-layer" id="exit-layer" role="dialog" aria-modal="true" aria-labelledby="exit-title" hidden>
+      <div class="exit-card">
+        <div class="exit-ribbon">PAUSE / SETUP</div>
+        <h2 id="exit-title">稍后再完成设置？</h2>
+        <p>当前步骤会保留。进入工作台后，可以从“设置 → 模型服务”继续。</p>
+        <div><button id="resume-button" class="secondary-action" type="button">继续导览</button><button id="leave-button" class="primary-action" type="button">进入工作台 <span>→</span></button></div>
+      </div>
+    </section>
+  </body>
+</html>
