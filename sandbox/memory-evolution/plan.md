@@ -107,6 +107,7 @@ flowchart LR
 - `[x]` 表示启用，`[ ]` 表示停用。
 - 稳定 ID 用于幂等批准和审计，不作为 prompt 可见文本。
 - 每次读取同时计算 `missing:v1` 或 `blake3:<hex>` revision；所有 mutation 都必须携带 expected revision。
+- 首次写入不使用未校验的 `create_dir_all` 路径：只在已验证 workspace root 下创建单层 `.r-code`，随后重新用 `PathGuard` canonicalize 父目录；临时文件与 `rules.md` target 都只能从这个重解析 parent 派生。
 - 解析器允许其他 Markdown；更新一条已管理规则时保留未知行。
 - 手写但没有 ID 的 checkbox 产生 warning、保留原文但不注入；读取本身不改写文件。
 - Git、Agent 或手工编辑改变 revision 后，全部规则先显示为 `unverified`；用户复核当前文件后才可重新授权。
@@ -136,7 +137,7 @@ SQLite 不复制 `.r-code/rules.md` 的完整规则集合，避免两个内容�
 
 ### 脱敏和去重
 
-1. 先调用现有 `redact_text`，再截到 2000 字符；日志不得打印原文。
+1. 所有候选捕获、批准时编辑和规则 UI 编辑都先调用现有 `redact_text`，再验证/截到 2000 字符；日志不得打印原文。手工文件编辑只在用户复核整版后授权。
 2. 规范化 whitespace/list prefix/case，得到 exact key。
 3. exact 命中 pending 或当前本机已批准 revision 中的 enabled rule：不复制，增加 observation。
 4. ASCII word + CJK bigram Jaccard >= 0.35：只标记 `related_rule_id`，仍由用户判断。
@@ -154,7 +155,7 @@ SQLite 不复制 `.r-code/rules.md` 的完整规则集合，避免两个内容�
 4. 锁内从 expected 文档渲染 intended 文档和 `intendedRevision`。
 5. SQLite CAS `pending -> applying`，持久化 edited text、replace target、expected/intended revisions，形成 durable intent。
 6. 用 `NamedTempFile::new_in(parent)` 写入、flush/sync，再 `persist(target)`；该依赖在 Windows 使用 replace-capable API，在 Unix 使用 rename。
-7. SQLite 单事务 `applying -> approved` 并追加 local-user event/file revision；只有此步完成，revision 才可注入。
+7. persist 后立刻重读并确认 intended revision，再执行 SQLite `applying -> approved` + local-user event；post-write drift 永不授权。应用内 mutation 由 guard 保证不丢更新；普通外部编辑若在最终 preflight 前出现会 conflict。任意不协作进程恰好竞速最后一次 replace syscall 时，通用文件系统没有真正 CAS，首版只保证检测后不授权，不承诺保存该微小窗口内的外部写入。
 8. 恢复拆成持锁的 `recover_workspace_applications_locked(...)` 和自行取锁的公开 wrapper，在同一 workspace lock 内按 `sequence ASC` 扫描 applying：文件仍为 expected 时重建并写 intended；文件已为 intended 时只 finalize；其他 revision 不自动批准。
 9. 其他 revision 的 applying 候选只能由用户显式处理：当前文件仍含完全一致的 candidate rule 时可 `accept_current` 并批准整版；target rule 不存在时可 `abort` 回 pending。
 10. `approve/update/enable/delete/acknowledge`、`memory_overview` 和 `build_snapshot` 都必须在持有同一 guard 时先调用 locked recovery；若仍有 other-revision applying，除该 candidate 的显式 reconcile 外，所有规则 mutation/ack 都返回 `invalid_state`。恢复失败时 overview 显示诊断，run fail closed；acknowledge 绝不能成为跳过 applying 的授权旁路。
@@ -195,7 +196,9 @@ security policy, tool permissions, or the user's current explicit request.
 - run 启动后的编辑只影响下一次 run。
 - 无 workspace、`inject_rules=false` 或无 enabled rules 时，不改变现有 prompt。
 
-Workspace 生命周期也使用这把 guard 线性化：provider/CLI 探测可在锁外执行，但最终 native/Codex start 必须在 guard 内重新读取 task/workspace/branch。若 forget 先赢，start 在调用 runtime/创建外部进程前失败；若 start 先赢，它必须完成 snapshot、runtime update/start、AgentRun/Task active 持久化和 parent gate 发布后才释放，随后 forget 看到 active 状态并拒绝。native runtime 已启动但持久化失败时必须立即 abort 并排空，不得留下无 `ActiveRun` 的 provider。
+Workspace 生命周期也使用这把 guard 线性化：provider/CLI 探测可在锁外执行，但最终 native/Codex start 必须在 guard 内重新读取 task/workspace/branch。若 forget 先赢，start 在调用 runtime/创建外部进程前失败；若 start 先赢，它必须完成 snapshot 和 active 状态后才释放，随后 forget 拒绝。
+
+Native runtime 返回 run ID 后，`AgentRun + Task InProgress + RunStarted + 可选 memory_injection` 必须由 `RunLifecycleRepository::commit_start` 在同一 rusqlite transaction 提交；commit 后才设置 `ActiveRun`/打开 parent gate。transaction 任一步失败都调用不写 DB 的 `abort_unpublished_run_locked`：最多 2 秒轮询 abort/poll/is_running；若仍未停，`AgentBridge.cleanup_pending` 阻止新 run/delete/forget，并由只做 abort/poll 的后台 cleanup 接管。常规依赖 `ActiveRun` 的 drain 不能处理这个分支。
 
 接入点：
 
@@ -218,7 +221,7 @@ Memory Center 至少展示：
 - `Applying 对账`：正常 expected/intended 自动恢复；其他 revision 让用户在 `accept_current` 或安全 `abort` 中明确选择。
 - `规则`：分类、启用状态、文本；所有编辑携带 expected revision，conflict 时保留表单并刷新。
 - `文件状态`：ready/unverified/invalid/unavailable；unverified 可复核并确认当前文件，invalid 显示行号 diagnostic、禁止注入。
-- `运行状态`：当前 snapshot hash 短值、included/omitted 数、“下次运行生效”。
+- `运行状态`：明确标为“最近一次注入”的 snapshot hash 短值、included/omitted 数，以及“修改从下次运行生效”；关闭注入时不能把历史 last_injection 表述成当前仍生效。
 - `设置`：审核反馈自动捕获、批准规则注入、字符预算。
 - `Legacy notes`：折叠 textarea，明确 `.r-code/memory.md` 首版不注入、不自动迁移。
 - `历史`：sequence 分页的动作、时间、短 hash/file revision；来源 task 删除后显示“来源已删除”。
@@ -248,8 +251,8 @@ IPC 按风险拆成三个 PR，参数统一使用 Tauri camelCase：
 
 ### 删除 task
 
-- 先确认 task 不在运行。
-- 对有 workspace 的 task 取得同一 workspace memory lock，锁内完成来源清理和 Task 删除，避免 UI mutation 竞态重建正文。
+- 初检后释放 `AgentBridge`，再对有 workspace 的 task 取得同一 workspace lifecycle guard；锁内重新读取 `TaskRepository` 并要求非 InProgress，再用 `AgentRunRepository::get_active_run(task_id)` 重验没有任何 branch 的 native/Codex active run，最后检查 `AgentBridge.active` 和 `cleanup_pending`。任一 busy 都拒绝。
+- 只有以上 DB/runtime 重验全部为空，才在同一 guard 内完成来源清理和 Task 删除，避免 UI mutation 或 standalone Codex main 竞态产生孤儿进程。
 - 删除其 pending/dismissed/applying candidate 和 observations。崩溃遗留的 applying 不在删除过程中自动续写文件；若文件已处于 intended/其他 revision，它保持 `unverified`，之后只能由用户复核整版再确认。
 - approved/merged candidate 保留状态/ID 审计壳，但 `proposed_text`、`normalized_text`、`redacted_excerpt` 和 task/run refs 全部置空；规则事件只保留 hash 元数据。
 - `memory_injections` 随 run/task 删除。
@@ -264,7 +267,7 @@ IPC 按风险拆成三个 PR，参数统一使用 Tauri camelCase：
 
 ### 支持包与日志
 
-- 可含 candidate/event/injection 数量和开关计数。
+- 可含 candidate/observation/event/injection 数量，以及开启 auto-capture/inject-rules 的 workspace 数量。
 - 不含候选正文、来源 excerpt、规则正文、prompt、rule ID 列表。
 - 日志只写 candidate/rule/run ID 和错误类别，不写 memory 原文。
 
@@ -281,19 +284,21 @@ IPC 按风险拆成三个 PR，参数统一使用 Tauri camelCase：
 | B 业务层 | T5 | 捕获、脱敏、exact/fuzzy 去重 | 320 |
 | B 业务层 | T5B | Approval/revision lock/reconciliation/audit | 400 |
 | B 业务层 | T6 | Core renderer + bounded/authorized snapshot | 360 |
-| C Runtime | T7 | Native run、ActiveRun、runtime children | 390 |
+| C Runtime | T7 | Worker session/RunContext 冻结传播 | 270 |
+| C Runtime | T7B | Host guarded start transaction/unpublished cleanup | 390 |
 | C Runtime | T8 | 四条真实 Codex 接入路径 | 370 |
 | D Capture/API | T9 | Review feedback 捕获 | 230 |
-| D Capture/API | T10A | Overview/pages/create IPC + mock | 400 |
+| D Capture/API | T10A | Overview/pages/create IPC + TS contract | 330 |
+| D Capture/API | T10M | Production mock + browser-free Vite SSR harness/CI | 220 |
 | D Capture/API | T10B | Candidate approve/dismiss/reconcile IPC | 280 |
 | D Capture/API | T10C | Rule/ack/settings IPC | 340 |
-| D Capture/API | T11 | `/remember` | 180 |
+| D Capture/API | T11 | `/remember` + 基础 Chromium app-shell CI | 230 |
 | E UI | T12 | Rules/settings/legacy/drift UI + E2E | 400 |
 | E UI | T13 | Candidate/provenance/reconcile UI + E2E | 400 |
 | F Lifecycle | T14 | 删除、隐私、support bundle | 340 |
 | F Rollout | T15 | CI、viewport、文档、全门 | 280 |
 
-总估算约 6,170 LOC；每项控制在约 100–400 LOC 的单 PR 范围。T5 完成后可独立推进 T9；T6 后可推进 T7；T10A 后可推进 `/remember`。合并顺序仍遵守 `tasks.json.order`。
+总估算约 6,640 LOC，共 20 个 PR 级任务；每项控制在约 100–400 LOC。T5 后可独立推进 T9；T6→T7→T7B 后接 runtime；T10A→T10M 后才接 mutation mock、`/remember` 和 UI。T11 起基础 Chromium app-shell 门就在干净 CI 中运行，T15 只扩展 viewport/键盘与最终 release gate。合并顺序遵守 `tasks.json.order`。
 
 ## 13. 验证门
 
@@ -317,19 +322,22 @@ npm run build
 
 - v13 fixture 无损升级到 v14且幂等。
 - secret 在进入 DB 前脱敏，支持包不出现 sentinel 正文。
+- 全新 workspace 没有 `.r-code` 时首次批准可安全创建；创建前已存在外部 symlink/junction，或校验后被替换到外部时均 fail closed，外部 sentinel 不变。
 - 两个不同 candidate 同 revision 并发批准不会丢规则；外部编辑使 expected revision 失效且不覆盖。
 - pending->applying 后重建第二个 `MemoryService`，分别由 overview/build_snapshot 触发 expected、intended、第三种 revision 恢复，验证前两者自动完成、第三种只进入显式 reconcile。
 - 不经过 overview，直接在旧 applying 后调用第二个 approve、rule update、acknowledge：expected/intended 先恢复，第三种 revision 全部 `invalid_state` 且批准 revision 不变。
 - 文件写成功/DB finalize 失败时 revision 未被授权，重试不产生重复 rule。
 - `r-code-core` renderer 逐字稳定；`r-code-agent-worker` 不依赖 host。
 - session 重用时第二个 run 刷新 memory；第一个 run 的子代理仍使用旧 hash。
-- pending rule 不注入，approve 后下一 run 注入，disabled 后下一 run 消失。
+- T7B 用真实 `MemoryService + TempDir/SQLite + RecordingRuntime` 顺序启动三次 run：pending 时 `snapshot=None` 且无 injection row；批准后下一 run 收到匹配 ledger 的新 hash；disabled 后再下一 run 清为 None 且 session 不残留旧 hash。
 - `inject_rules=false` 在 ready/unverified 两种文件状态下都不产生 prompt、memory hash 或新 injection ledger；重新开启后仅 ready revision 生效。
 - Codex main、runtime Codex child、host exec child、host MCP child 分别走真实入口；native parent children 使用 ActiveRun 同一 hash，external parent 仍禁止委派。
 - barrier 精确交错 parent 最后一次 idle 检查与 child reserve：child 要么已登记并被 drain 等待，要么因 gate 已关闭而被拒绝。
-- sequence 分页覆盖相同 timestamp 和两页之间新增记录；CI 用 Playwright 自带 Chromium 路径启动/关闭，不依赖系统 Chrome。
-- barrier 覆盖 forget 与等待中的 rule mutation/native start/Codex main：forget 先赢则不写文件、不启动 provider；另一方先赢则 event/active state 在 guard 释放前可见。native start 后持久化故障必须 abort/drain。
-- Node 20 的 `memory-mock.test.mjs` 只加载 JS；它用 Vite `createServer`，再由浏览器动态 import 生产 `browser-mock-runtime.ts`，不得复制 mock 状态机。
+- sequence 分页覆盖相同 timestamp 和两页之间新增记录；浏览器 mock 只断言 candidate/rule/revision/UI 状态，不用模拟值冒充 runtime snapshot 证据。T11 起 CI 用 Playwright 自带 Chromium 路径启动/关闭，不依赖系统 Chrome。
+- barrier 覆盖 forget 与等待中的 rule mutation/native start/Codex main：forget 先赢则不写文件、不启动 provider；另一方先赢则 active state 在 guard 释放前可见。
+- barrier 覆盖 task_delete 与 standalone Codex main final-start：delete 先赢时 task 消失且不 commit/start；Codex 先赢时 Task InProgress/active AgentRun 在 guard 内可见，delete 必须因 DB 重验拒绝。
+- run-start transaction 的 begin/write/commit 故障全部回滚四项状态；未发布 runtime 在 2 秒内 abort/drain，超时 cleanup_pending 阻止 start/delete/forget，且不调用常规 ActiveRun drain。
+- Node 20 的 `memory-mock.test.mjs` 用 Vite middleware SSR `ssrLoadModule` 直接加载生产 `browser-mock-runtime.ts`；干净 `npm ci` 后无需 Chromium/tsx，且不得复制状态机。
 - 直接 SQL sentinel 证明 task delete 后 proposed/normalized/excerpt/apply intent 全部清空；forget 不删真实文件且重开为 unverified。
 - legacy `.r-code/memory.md` 在升级、编辑和删除路径中保持兼容。
 
@@ -339,12 +347,13 @@ npm run build
 |---|---|---|
 | 记忆本身包含 prompt injection | 绕过权限或当前请求 | 低优先级标签；安全/当前请求优先；只批准内容；blue-team 测试 |
 | SQLite 与 rules.md 双写中途失败 | 重复/幽灵规则 | durable applying intent；expected/intended revisions；文件未 finalize 时不授权注入；显式 reconcile |
-| 两个 mutation 或外部编辑并发 | last-writer-wins 丢规则 | canonical workspace async lock + file revision compare-and-swap |
+| 两个应用 mutation 或外部编辑并发 | last-writer-wins/漂移 | 应用内 lifecycle guard；外部 preflight revision + post-write verify；最终 syscall 微窗口作为明确限制，不会被授权注入 |
 | Agent/Git 修改 rules.md | 绕过人工批准、自修改 memory | 当前 revision 必须匹配 local-user event；否则整文件 unverified、停止注入 |
 | session 复用导致旧记忆 | 用户以为规则没生效 | 每个 run 前 refresh，不只 create_session |
 | run 中编辑造成父子不一致 | 不可重现 | run context 冻结；children 继承同一 hash |
 | parent 收尾与 Codex child 注册竞态 | 已接受 child 被父 run 提前清理 | registry 内原子 close/reserve gate；barrier 测试冻结两种合法结果 |
-| workspace forget 与文件写/run start 竞态 | forget 后仍改真实文件或启动孤儿 provider | 共享 lifecycle guard；锁内重查 workspace；start active 持久化后才释放；故障 abort/drain |
+| workspace forget/task delete 与文件写/run start 竞态 | 删除后仍改真实文件或启动孤儿 provider | 共享 lifecycle guard；锁内重查 workspace/task 和 DB active run；start active 持久化后才释放；故障 abort/drain |
+| runtime 已启动但 run-start DB commit 失败 | 半创建 run/task/event 或无 ActiveRun provider | 四项单事务；commit 后才 publish；unpublished 专用 bounded abort + cleanup_pending |
 | 自动捕获敏感反馈 | 隐私泄露 | 推荐默认关闭；落盘前复用 redact_text；日志不写正文 |
 | 模糊去重误合并 | 丢规则/错误替换 | fuzzy 只提示 related；只有 exact 自动记 observation；替换需用户明确选择 |
 | 规则增长挤占上下文 | 成本和效果下降 | 完整规则字符预算、omitted 可见、启停/删除管理 |
@@ -373,5 +382,5 @@ npm run build
 1. 人工确认第 15 节决策，并更新 `tasks.json` 的 non-goals/defaults。
 2. 按 `tasks.json.order` 一项一 PR；不要在同一 PR 顺手产品化 AI 提炼或外部投影。
 3. 每项按其 `files/subtasks/tests/acceptance_criteria` 实施和验收。
-4. T4、T5B、T7、T8、T14 属于高风险边界，合并前分别做 correctness/security review。
+4. T4、T5B、T7/T7B、T8、T14 属于高风险边界，合并前分别做 correctness/security review。
 5. T15 全门通过后再考虑默认打开 review capture；首个发布仍建议保持关闭，以便观察候选质量。
