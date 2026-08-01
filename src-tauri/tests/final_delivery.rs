@@ -317,6 +317,35 @@ fn f20_nsis_uses_r_code_icons() {
     assert!(hooks.contains("/BRANDED_PROGRESS="));
 }
 
+/// F-20b: Selecting "delete app data" also releases the managed MCP host that
+/// owns r-code.db, retries both Tauri data roots, and never touches an unrelated
+/// Codex MCP registration or executable.
+#[test]
+fn f20b_uninstall_delete_data_releases_managed_mcp_host() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let hooks = std::fs::read_to_string(manifest_dir.join("installer-hooks.nsh")).unwrap();
+
+    for contract in [
+        "NSIS_HOOK_POSTUNINSTALL",
+        "$DeleteAppDataCheckboxState = 1",
+        "$UpdateMode <> 1",
+        "codex.Source mcp get r-code --json",
+        "codex.Source mcp remove r-code",
+        "Get-CimInstance Win32_Process",
+        "r-code-mcp-host-",
+        "registeredCommand.StartsWith($$hostRoot",
+        "registeredArgs.Count -eq 3",
+        "RMDir /r /REBOOTOK \"$APPDATA\\${BUNDLEID}\"",
+        "RMDir /r /REBOOTOK \"$LOCALAPPDATA\\${BUNDLEID}\"",
+        "删除将在 Windows 重启后完成",
+    ] {
+        assert!(
+            hooks.contains(contract),
+            "missing uninstall cleanup contract: {contract}"
+        );
+    }
+}
+
 /// F-21: The distributable Windows installer is a real branded bootstrapper,
 /// not only a design mockup around inert controls.
 #[test]
