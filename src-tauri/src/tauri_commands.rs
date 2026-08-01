@@ -654,23 +654,13 @@ pub async fn cmd_subagent_session_messages(
     r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id).await
 }
 
-/// 读取项目记忆（`<project_root>/.r-code/memory.md`）。
+/// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
 #[tauri::command]
-pub async fn cmd_memory_get(
+pub async fn cmd_legacy_memory_status(
     state: State<'_, CommandState>,
     workspace_path: String,
-) -> Result<String, String> {
-    r_code_host::commands::memory_get(&state, &workspace_path).await
-}
-
-/// 写入项目记忆（三投影：memory.md / CLAUDE.md / AGENTS.md 由调用方另行同步）。
-#[tauri::command]
-pub async fn cmd_memory_set(
-    state: State<'_, CommandState>,
-    workspace_path: String,
-    content: String,
-) -> Result<(), String> {
-    r_code_host::commands::memory_set(&state, &workspace_path, &content).await
+) -> Result<r_code_host::LegacyMemoryStatus, String> {
+    r_code_host::commands::legacy_memory_status(&state, &workspace_path).await
 }
 
 /// 读取最近的日志条目（环形缓冲；level 过滤如 "error"/"warn"）。
