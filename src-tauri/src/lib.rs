@@ -13,12 +13,12 @@ pub mod commands;
 #[cfg(unix)] // Control Door 仅 Unix（Windows 不编译且 main.rs 未启动）
 pub mod control_door;
 pub mod ipc;
+pub mod legacy_memory;
 pub mod log_buffer;
 pub mod logging;
 pub mod mcp_server;
 pub mod migration;
 pub mod packaging;
-pub mod project_memory;
 pub mod provider_catalog;
 pub mod provider_models;
 pub mod recovery;
@@ -36,12 +36,12 @@ pub use commands::{
     CommandState, RecoveryPageData as CmdRecoveryPageData, SearchMatch as CmdSearchMatch,
     TerminalInfo as CmdTerminalInfo,
 };
+pub use legacy_memory::{LegacyMemoryGitTracking, LegacyMemoryStatus};
 pub use migration::{MigrationManager, MigrationResult, MigrationStep};
 pub use packaging::{
     BundleTarget, LicenseEntry, LinuxConfig, MacOSConfig, PackagingConfig, SbomGenerator,
     UpdateChannel, UpdateConfig, WindowsConfig,
 };
-pub use project_memory::ProjectMemory;
 pub use provider_catalog::{
     AuthStyle as ProviderAuthStyle, Category as ProviderCategory, Endpoint as ProviderEndpoint,
     Preset as ProviderPreset, Protocol as ProviderProtocol,

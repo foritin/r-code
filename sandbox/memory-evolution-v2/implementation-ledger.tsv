@@ -10,3 +10,6 @@ iter	task	phase	tests	quality	pass	note
 1	T0W2	engineer	frontend build + cargo check	-	-	Added frontend Workspace identity/mode/generation wire contract plus stable browser-mock generation, legacy defaults, validation and identity reuse; Rust serde required no adapter
 1	T0W2	qa	1122/1122	min5	yes	Authored Rust command serde/forget tests and browser identity/legacy/invalid-mode smoke; 3 unrelated app-shell 1px layout failures reproduce on clean baseline
 1	T0W2	keep	1122/1122	min5	yes	T0W2 acceptance criteria met; WebView can retain opaque workspace ids while navigation remains canonical-path based
+1	T0L1	engineer	production cargo check	-	-	Deleted ProjectMemory and memory_get/set registration; added fixed-path metadata-only legacy status with symlink_metadata and parameterized git ls-files
+1	T0L1	qa	1101/1101	min5	yes	Authored real TempDir Git and command tests for tracking states, fixed path, byte/porcelain preservation, no response leakage, dangling symlink, unregistered workspace and retired backend surface
+1	T0L1	keep	1101/1101	min5	yes	T0L1 acceptance criteria met; focused read-only security review found no >=8/10 path traversal, shell injection, content leak or residual backend writer finding

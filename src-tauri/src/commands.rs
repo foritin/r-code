@@ -17,7 +17,7 @@
 //! - **终端**：列表/创建/发送/读取/终止/调整大小
 //! - **恢复**：恢复页面数据/清理孤儿权限/支持包
 //! - **回放**：三层深度回放/会话消息序列
-//! - **项目记忆**：读取/写入
+//! - **旧版项目记忆**：只读状态探测
 //! - **设置**：获取/设置
 //!
 //! [doc-09] [doc-11]
@@ -71,7 +71,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
-use crate::project_memory::ProjectMemory;
+use crate::legacy_memory::{legacy_memory_status as inspect_legacy_memory, LegacyMemoryStatus};
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
@@ -5335,23 +5335,15 @@ pub async fn subagent_session_messages(
 }
 
 // ============================================================================
-// 项目记忆命令
+// 旧版项目记忆状态命令
 // ============================================================================
 
-pub async fn memory_get(state: &CommandState, workspace_path: &str) -> Result<String, String> {
-    ProjectMemory::new(attached_workspace_root(state, workspace_path)?)
-        .load()
-        .map_err(err_str)
-}
-
-pub async fn memory_set(
+pub async fn legacy_memory_status(
     state: &CommandState,
     workspace_path: &str,
-    content: &str,
-) -> Result<(), String> {
-    ProjectMemory::new(attached_workspace_root(state, workspace_path)?)
-        .save(content)
-        .map_err(err_str)
+) -> Result<LegacyMemoryStatus, String> {
+    let root = attached_workspace_root(state, workspace_path)?;
+    inspect_legacy_memory(&root).map_err(err_str)
 }
 
 // ============================================================================
@@ -12744,14 +12736,96 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_set_then_get() {
+    async fn legacy_memory_status_rejects_an_unregistered_workspace() {
         let (_dir, state) = setup_state();
-        let workspace_path = scoped_test_workspace(&state).await;
-        memory_set(&state, &workspace_path, "always run cargo test")
+        let unregistered = state.project_root.join("never-registered");
+        std::fs::create_dir(&unregistered).unwrap();
+
+        let error = legacy_memory_status(&state, &unregistered.display().to_string())
+            .await
+            .unwrap_err();
+
+        assert!(
+            error.contains("workspace is not open"),
+            "actual error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_memory_status_command_preserves_user_files_and_returns_only_metadata() {
+        let (_dir, state) = setup_state();
+        let repo = state.project_root.join("legacy-repo");
+        std::fs::create_dir(&repo).unwrap();
+        let init = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["init", "--quiet"])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed: {init:?}");
+        let workspace = workspace_open(&state, &repo).await.unwrap();
+
+        std::fs::create_dir(repo.join(".r-code")).unwrap();
+        let fixtures: [(&str, &[u8]); 3] = [
+            (
+                ".r-code/memory.md",
+                b"COMMAND_MEMORY_SENTINEL_18be0f\0\xff private body",
+            ),
+            ("AGENTS.md", b"COMMAND_AGENTS_SENTINEL_a954c1\r\n"),
+            ("CLAUDE.md", b"COMMAND_CLAUDE_SENTINEL_f1602e\n"),
+        ];
+        for (path, body) in fixtures {
+            std::fs::write(repo.join(path), body).unwrap();
+        }
+        let add = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["add", "--", ".r-code/memory.md"])
+            .output()
+            .unwrap();
+        assert!(add.status.success(), "git add failed: {add:?}");
+        let git_status = || {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git status failed: {output:?}");
+            output.stdout
+        };
+        let before_files: Vec<_> = fixtures
+            .iter()
+            .map(|(path, _)| std::fs::read(repo.join(path)).unwrap())
+            .collect();
+        let before_status = git_status();
+
+        let status = legacy_memory_status(&state, &workspace.canonical_path)
             .await
             .unwrap();
-        let got = memory_get(&state, &workspace_path).await.unwrap();
-        assert_eq!(got, "always run cargo test");
+
+        let after_files: Vec<_> = fixtures
+            .iter()
+            .map(|(path, _)| std::fs::read(repo.join(path)).unwrap())
+            .collect();
+        assert_eq!(after_files, before_files);
+        assert_eq!(git_status(), before_status);
+        let response = serde_json::to_string(&status).unwrap();
+        assert_eq!(response, r#"{"exists":true,"git_tracking":"tracked"}"#);
+        for forbidden in [
+            "COMMAND_MEMORY_SENTINEL",
+            "COMMAND_AGENTS_SENTINEL",
+            "COMMAND_CLAUDE_SENTINEL",
+            ".r-code/memory.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            &workspace.canonical_path,
+        ] {
+            assert!(
+                !response.contains(forbidden),
+                "metadata response leaked {forbidden:?}: {response}"
+            );
+        }
     }
 
     #[tokio::test]
