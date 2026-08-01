@@ -310,7 +310,9 @@ pub const PRESETS: &[Preset] = &[
         id: "deepseek",
         label: "DeepSeek",
         protocol: Protocol::OpenAiChat,
-        native: P_C,
+        // 2026-07-31 起，官方主入口同时支持 Chat Completions 与 Responses；
+        // Responses 暂时只开放给 deepseek-v4-flash。
+        native: P_CR,
         auth: AuthStyle::Bearer,
         base_url: "https://api.deepseek.com",
         reasoning_replay: false,
@@ -319,13 +321,22 @@ pub const PRESETS: &[Preset] = &[
         category: Category::CnOfficial,
         website_url: "https://platform.deepseek.com",
         api_key_url: Some("https://platform.deepseek.com/api_keys"),
-        endpoint_candidates: &[],
+        endpoint_candidates: &[Endpoint {
+            url: "https://api.deepseek.com/anthropic",
+            protocol: Protocol::AnthropicMessages,
+            native: P_A,
+            label: "Anthropic 兼容口",
+        }],
         template_vars: &[],
         // V4 单次输出上限 384K，填上下文窗口会被服务端 400
         max_output_tokens: Some(393_216),
         context_window: Some(1_000_000),
-        note: Some("deepseek-chat / deepseek-reasoner 已于 2026-07-24 下线"),
+        note: Some(
+            "V4-Flash 已升级为 0731 版本；Responses 当前仅支持 Flash，V4-Pro 请走 Chat 或 Anthropic 口",
+        ),
     },
+    // 旧版曾把 Anthropic 口展示成第二个 Provider。保留这条只为读取已有配置；
+    // `catalog_dto()` 会隐藏它，新配置统一从上面的 DeepSeek 预设切换线路。
     Preset {
         id: "deepseek_anthropic",
         label: "DeepSeek（Anthropic 口）",
@@ -984,13 +995,18 @@ pub fn resolve_reasoning_replay(id: &str, base_url: &str) -> bool {
 /// 供 IPC 下发给前端的目录快照。
 #[derive(Debug, Serialize)]
 pub struct CatalogDto {
-    pub presets: &'static [Preset],
+    pub presets: Vec<&'static Preset>,
 }
 
 /// 由 `commands.rs::provider_catalog()` 经 IPC 命令 `cmd_provider_catalog` 下发，
 /// 前端设置页的"新建服务"据此列出预设。
 pub fn catalog_dto() -> CatalogDto {
-    CatalogDto { presets: PRESETS }
+    CatalogDto {
+        presets: PRESETS
+            .iter()
+            .filter(|preset| preset.id != "deepseek_anthropic")
+            .collect(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1349,6 +1365,34 @@ mod tests {
         let gateway = "https://relay.example.com/v1";
         assert_eq!(allowed_protocols("openai", gateway), None);
         assert_eq!(allowed_protocols("my_relay", gateway), None);
+    }
+
+    #[test]
+    fn deepseek_is_one_visible_provider_with_three_protocol_routes() {
+        let visible = catalog_dto();
+        let deepseek = visible
+            .presets
+            .iter()
+            .filter(|preset| preset.id.starts_with("deepseek"))
+            .copied()
+            .collect::<Vec<_>>();
+        assert_eq!(deepseek.len(), 1, "设置页只能展示一个 DeepSeek 预设");
+        assert_eq!(deepseek[0].id, "deepseek");
+        assert_eq!(deepseek[0].model, "deepseek-v4-flash");
+        assert_eq!(
+            allowed_protocols("deepseek", "https://api.deepseek.com"),
+            Some(vec![Protocol::OpenAiChat, Protocol::OpenAiResponses])
+        );
+        assert_eq!(
+            allowed_protocols("deepseek", "https://api.deepseek.com/anthropic"),
+            Some(vec![Protocol::AnthropicMessages])
+        );
+
+        // 旧配置仍能命中原来的预设，升级后不会突然失效。
+        assert_eq!(
+            resolve_protocol("deepseek_anthropic", "https://api.deepseek.com/anthropic"),
+            Protocol::AnthropicMessages
+        );
     }
 
     #[test]

@@ -52,6 +52,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // 持久化状态：AppData/r-code/{db,blobs,sessions,config}
             let base = app.path().app_data_dir()?.join("r-code");
