@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { providerCatalog, settingsGet } from "./ipc";
 import { errText } from "./format";
 import type { ProviderPreset, ProviderProtocol } from "./types";
+import { RUNTIME_SETTINGS_CHANGED_EVENT } from "./onboarding";
 
 export interface ProviderChoice {
   name: string;
@@ -148,6 +149,12 @@ export function useProviders(deps: unknown[] = []): ProvidersState {
     // deps 由调用方给出（如 taskId / providerName），用于触发重新拉取
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
+
+  useEffect(() => {
+    const refresh = () => void reload();
+    window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
+  }, [reload]);
 
   return { choices, fallback, loading, error, reload };
 }

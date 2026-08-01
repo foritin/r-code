@@ -13,6 +13,7 @@ import "./styles/r-code-ui.css";
 import "./styles/product-ui.css";
 import "./styles/workbench.css";
 import "./styles/signature.css";
+import "./styles/onboarding.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
