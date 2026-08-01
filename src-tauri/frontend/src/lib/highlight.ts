@@ -246,6 +246,22 @@ const YAML: Rule[] = [
   PUNCT,
 ];
 
+/* --------------------------------------------------------------- Markdown */
+
+const MARKDOWN: Rule[] = [
+  { re: /<!--[\s\S]*?(?:-->|$)/y, cls: "tok-com" },
+  { re: /^(?:```|~~~)[^\n]*/my, cls: "tok-kw" },
+  { re: /^#{1,6}[ \t]+[^\n]*/my, cls: "tok-kw" },
+  { re: /^[ \t]*(?:>|[-+*]|\d+[.)])(?=[ \t])/my, cls: "tok-punc" },
+  { re: /^[ \t]*(?:-{3,}|_{3,}|\*{3,})[ \t]*$/my, cls: "tok-punc" },
+  { re: /!?\[[^\]\n]*\]\([^\)\n]+\)/y, cls: "tok-attr" },
+  { re: /`[^`\n]*`/y, cls: "tok-str" },
+  { re: /[*_~]{1,3}/y, cls: "tok-punc" },
+  WS,
+  NL,
+  PUNCT,
+];
+
 /* -------------------------------------------------------------- HTML/XML */
 
 const HTML: Rule[] = [
@@ -388,6 +404,7 @@ const LANGS: Record<string, Rule[]> = {
   bash: BASH,
   toml: TOML,
   yaml: YAML,
+  markdown: MARKDOWN,
   html: HTML,
   css: CSS,
   sql: SQL,
@@ -430,6 +447,10 @@ const ALIASES: Record<string, string> = {
 
   yaml: "yaml",
   yml: "yaml",
+
+  markdown: "markdown",
+  md: "markdown",
+  mdx: "markdown",
 
   html: "html",
   xml: "html",

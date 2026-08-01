@@ -422,15 +422,151 @@
 
 /* Editor is a full-height tool surface. */
 #app.scene-editor .scene-editor {
+  min-height: 0;
   overflow: hidden;
 }
 
 #app.scene-editor .file-page {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   height: 100%;
   min-height: 0;
   padding: 0;
+}
+
+#app.scene-editor .file-project-picker {
+  width: min(900px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 42px clamp(24px, 5vw, 64px) 56px;
+  overflow-y: auto;
+}
+
+#app.scene-editor .file-project-picker-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding-bottom: 25px;
+  border-bottom: 1px solid var(--border);
+}
+
+#app.scene-editor .file-project-picker-head h1 {
+  margin-top: 5px;
+  color: var(--fg);
+  font: 650 26px/1.15 var(--font-ui);
+  letter-spacing: -.02em;
+}
+
+#app.scene-editor .file-project-picker-head p:last-child {
+  max-width: 620px;
+  margin-top: 8px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+#app.scene-editor .file-project-list {
+  margin-top: 22px;
+  border-top: 1px solid var(--border);
+}
+
+#app.scene-editor .file-project-list > li {
+  list-style: none;
+}
+
+#app.scene-editor .file-project-row {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto 18px;
+  align-items: center;
+  width: 100%;
+  min-height: 72px;
+  gap: 12px;
+  padding: 10px 12px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  text-align: left;
+}
+
+#app.scene-editor .file-project-row:hover,
+#app.scene-editor .file-project-row:focus-visible {
+  background: var(--bg-hover);
+}
+
+#app.scene-editor .file-project-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--accent);
+}
+
+#app.scene-editor .file-project-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+#app.scene-editor .file-project-copy strong {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#app.scene-editor .file-project-copy small {
+  overflow: hidden;
+  color: var(--fg-faint);
+  font: 11px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#app.scene-editor .file-project-current {
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+#app.scene-editor .file-project-chevron {
+  color: var(--fg-faint);
+}
+
+#app.scene-editor .file-project-row:hover .file-project-chevron,
+#app.scene-editor .file-project-row:focus-visible .file-project-chevron {
+  color: var(--accent);
+}
+
+#app.scene-editor .file-project-empty {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  margin-top: 48px;
+  color: var(--fg-faint);
+}
+
+#app.scene-editor .file-project-empty > svg {
+  color: var(--accent);
+}
+
+#app.scene-editor .file-project-empty h2 {
+  color: var(--fg);
+  font-size: 16px;
+}
+
+#app.scene-editor .file-project-empty p {
+  font-size: 12px;
+}
+
+#app.scene-editor .file-project-empty .rc-button {
+  margin-top: 5px;
 }
 
 #app.scene-editor .file-page-header {
@@ -451,24 +587,93 @@
   margin: 0;
 }
 
+#app.scene-editor .file-page-project {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+#app.scene-editor .file-page-project > div {
+  min-width: 0;
+}
+
+#app.scene-editor .file-project-back {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  color: var(--fg-faint);
+}
+
+#app.scene-editor .file-project-back:hover,
+#app.scene-editor .file-project-back:focus-visible {
+  color: var(--fg);
+  background: var(--bg-hover);
+}
+
 #app.scene-editor .file-workspace {
   grid-template-columns: minmax(380px, 1fr) 280px;
+  flex: 1;
   min-height: 0;
-  height: 100%;
+  height: auto;
   margin-top: 0;
   border-top: 0;
+  overflow: hidden;
 }
 
 #app.scene-editor .file-preview {
   grid-column: 1;
   grid-row: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 #app.scene-editor .file-tree {
+  display: flex;
+  flex-direction: column;
   grid-column: 2;
   grid-row: 1;
+  min-height: 0;
   border-right: 0;
   border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+#app.scene-editor .file-tree-items {
+  min-height: 0;
+  overflow: auto;
+}
+
+#app.scene-editor .file-code,
+#app.scene-editor .file-code-editor {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+#app.scene-editor .file-code-editor {
+  box-sizing: border-box;
+}
+
+#app.scene-editor .file-code-text {
+  padding-right: 18px;
+  color: var(--fg-muted);
+  white-space: pre;
+}
+
+#app.scene-editor .file-code .tok-kw { color: var(--accent-2); }
+#app.scene-editor .file-code .tok-str { color: var(--success); }
+#app.scene-editor .file-code .tok-num { color: var(--warning); }
+#app.scene-editor .file-code .tok-fn { color: var(--accent); }
+#app.scene-editor .file-code .tok-type { color: color-mix(in srgb, var(--success) 45%, var(--accent)); }
+#app.scene-editor .file-code .tok-attr { color: color-mix(in srgb, var(--warning) 55%, var(--danger)); }
+#app.scene-editor .file-code .tok-punc { color: var(--fg-muted); }
+#app.scene-editor .file-code .tok-com {
+  color: var(--fg-faint);
+  font-style: italic;
 }
 
 /* Home remains a starting point, but reads as part of the desktop tool. */
@@ -574,7 +779,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  #app.scene-editor .file-page-header > div:first-child {
+  #app.scene-editor .file-page-project > div {
     display: none;
   }
 
@@ -588,5 +793,23 @@
 
   #app.scene-editor .file-preview {
     height: 100%;
+  }
+
+  #app.scene-editor .file-project-picker {
+    padding: 26px 18px 38px;
+  }
+
+  #app.scene-editor .file-project-picker-head {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #app.scene-editor .file-project-row {
+    grid-template-columns: 38px minmax(0, 1fr) 18px;
+  }
+
+  #app.scene-editor .file-project-current {
+    display: none;
   }
 }
