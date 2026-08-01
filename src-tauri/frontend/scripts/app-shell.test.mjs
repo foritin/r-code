@@ -167,6 +167,102 @@ test("only the current text frontier owns the animated caret", async () => {
   await page.close();
 });
 
+test("project files starts from the added-project list before entering a workspace", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useAppStore.setState({ editorFile: null });
+    useTasksStore.getState().setCurrentProject("D:/project/rust/api-server");
+  });
+
+  await page.locator(".sidebar-nav-item").filter({ hasText: "项目文件" }).click();
+  const chooser = page.getByRole("region", { name: "选择项目" });
+  await chooser.waitFor({ state: "visible" });
+  assert.equal(await page.locator(".file-workspace").count(), 0, "the last conversation project must not open implicitly");
+  await chooser.getByRole("button", { name: "打开 r-code 的文件" }).click();
+  await page.locator(".file-workspace").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "返回项目列表" }).click();
+  await chooser.waitFor({ state: "visible" });
+
+  await page.close();
+});
+
+test("project file preview highlights common syntax and both modes own their scroll", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 720 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const original = await page.evaluate(async () => {
+    const { browserMockFiles } = await import("/src/lib/mock-data.ts");
+    const previous = { ...browserMockFiles["src/main.rs"] };
+    const body = Array.from(
+      { length: 180 },
+      (_, index) => `    let item_${index} = Result::<usize, String>::Ok(${index});`,
+    );
+    browserMockFiles["src/main.rs"] = {
+      revision: "editor-scroll-regression",
+      content: ["fn main() {", ...body, "}"].join("\n"),
+    };
+    return previous;
+  });
+
+  try {
+    await page.locator(".sidebar-nav-item").filter({ hasText: "项目文件" }).click();
+    await page.getByRole("button", { name: "打开 r-code 的文件" }).click();
+    await page.locator(".file-tree-row").filter({ hasText: "README.md" }).click();
+    await page.locator(".file-code .tok-kw").filter({ hasText: "# R-Code" }).waitFor({ state: "visible" });
+    await page.locator(".file-tree-row.folder").filter({ hasText: "src" }).click();
+    await page.locator(".file-tree-row").filter({ hasText: "main.rs" }).click();
+
+    const preview = page.locator(".file-code");
+    await preview.waitFor({ state: "visible" });
+    assert.ok(await preview.locator(".tok-kw").count(), "Rust keywords should be syntax highlighted");
+    const previewScroll = await preview.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      const rect = element.getBoundingClientRect();
+      const mainRect = document.querySelector("#main-content").getBoundingClientRect();
+      return {
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+        overflowY: getComputedStyle(element).overflowY,
+        bottom: rect.bottom,
+        mainBottom: mainRect.bottom,
+      };
+    });
+    assert.ok(previewScroll.scrollHeight > previewScroll.clientHeight, "long read-only previews must overflow locally");
+    assert.ok(previewScroll.scrollTop > 0, "read-only previews must accept vertical scrolling");
+    assert.match(previewScroll.overflowY, /auto|scroll/);
+    assert.ok(previewScroll.bottom <= previewScroll.mainBottom + 1, "preview must stay inside the app viewport");
+
+    await page.locator("#main-content").getByRole("button", { name: "编辑", exact: true }).click();
+    const editor = page.locator(".file-code-editor");
+    await editor.waitFor({ state: "visible" });
+    const editorScroll = await editor.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      return {
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+        maxScrollTop: element.scrollHeight - element.clientHeight,
+        overflowY: getComputedStyle(element).overflowY,
+      };
+    });
+    assert.ok(editorScroll.scrollHeight > editorScroll.clientHeight, "long editable files must overflow locally");
+    assert.ok(editorScroll.scrollTop > 0, "the editor must scroll to lower lines");
+    assert.ok(Math.abs(editorScroll.maxScrollTop - editorScroll.scrollTop) <= 1, "the final line must be reachable");
+    assert.match(editorScroll.overflowY, /auto|scroll/);
+  } finally {
+    await page.evaluate(async (previous) => {
+      const { browserMockFiles } = await import("/src/lib/mock-data.ts");
+      browserMockFiles["src/main.rs"] = previous;
+    }, original).catch(() => {});
+    await page.close();
+  }
+});
+
 for (const viewport of [{ width: 800, height: 600 }, { width: 1200, height: 800 }, { width: 1800, height: 1200 }]) {
   test(`room fills and scrolls within ${viewport.width}x${viewport.height}`, async () => {
     const page = await browser.newPage({ viewport });
