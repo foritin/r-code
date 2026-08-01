@@ -425,6 +425,11 @@
           "what": "定义 scope/kind/origin、settings、entry/revision/candidate、review turn/job/outcome/page、snapshot/injection 与 error DTO。"
         },
         {
+          "path": "crates/r-code-core/src/memory/provider_wire.rs",
+          "action": "create",
+          "what": "隔离严格 Reviewer input/output、job-local ordinal 映射与不实现 Serde/Debug 的 host assembly。"
+        },
+        {
           "path": "crates/r-code-core/src/lib.rs",
           "action": "modify",
           "what": "导出私有 memory 模块，不修改 vendored Hermes。"
