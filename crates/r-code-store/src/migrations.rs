@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 16;
+pub const LATEST_SCHEMA_VERSION: u32 = 17;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -45,6 +45,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(14, MIGRATION_014, true),
     MigrationSpec::new(15, MIGRATION_015, false),
     MigrationSpec::new(16, MIGRATION_016, false),
+    MigrationSpec::new(17, MIGRATION_017, false),
 ];
 
 impl MigrationSpec {
@@ -686,6 +687,56 @@ CREATE TABLE IF NOT EXISTS run_snapshot_changes (
 );
 "#;
 
+/// Migration 017: application-owned review sessions and decisions.
+///
+/// Review is intentionally independent from Git's index. A decision only mutates these
+/// tables; staging, committing, and pushing remain explicit delivery operations. The run-scoped
+/// session key prevents an old acceptance from leaking into a later run that happens to touch
+/// the same path.
+const MIGRATION_017: &str = r#"
+CREATE TABLE IF NOT EXISTS review_sessions (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'resolved', 'superseded')),
+    materialized_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_review_sessions_task
+    ON review_sessions(task_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS review_files (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES review_sessions(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    before_hash TEXT,
+    after_hash TEXT,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'accepted', 'rejected', 'conflict')),
+    blocker TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (session_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_review_files_session_state
+    ON review_files(session_id, state, path);
+
+CREATE TABLE IF NOT EXISTS review_items (
+    id TEXT PRIMARY KEY,
+    review_file_id TEXT NOT NULL REFERENCES review_files(id) ON DELETE CASCADE,
+    item_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'accepted', 'rejected')),
+    decided_at TEXT,
+    UNIQUE (review_file_id, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_review_items_file_state
+    ON review_items(review_file_id, state, ordinal);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1106,6 +1157,9 @@ mod tests {
             "session_branches",
             "queued_messages",
             "notifications",
+            "review_sessions",
+            "review_files",
+            "review_items",
             "schema_version",
         ] {
             assert!(

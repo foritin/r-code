@@ -470,6 +470,7 @@ export interface SessionMessage {
 // ---------- 变更 diff（cmd_change_diff 返回） ----------
 export interface ChangeDiffLine {
   line_id?: string;
+  review_state?: "pending" | "accepted" | "rejected";
   kind: "ctx" | "add" | "del" | "hunk";
   text: string;
   old_no?: number;
@@ -659,27 +660,35 @@ export interface AppConfig {
 
 export interface ReviewPathStatus {
   path: string;
-  staged: boolean;
+  accepted: boolean;
+  rejected: boolean;
   remaining: boolean;
   conflict: boolean;
-  preexisting_dirty: boolean;
   safe_to_accept: boolean;
   blocker?: string | null;
+  accepted_items: number;
+  rejected_items: number;
+  remaining_items: number;
 }
 
-export interface ReviewGitStatus {
+export interface ReviewStatus {
   git_repository: boolean;
   repo_root?: string | null;
   paths: ReviewPathStatus[];
-  staged_count: number;
+  accepted_count: number;
+  rejected_count: number;
   remaining_count: number;
   conflict_count: number;
   can_accept_all: boolean;
 }
 
+/** @deprecated command compatibility name; review state is application-owned, not Git state. */
+export type ReviewGitStatus = ReviewStatus;
+
 export interface ReviewAcceptResult {
   path?: string | null;
-  staged_count: number;
+  accepted_count: number;
+  rejected_count: number;
   remaining_count: number;
   fully_accepted: boolean;
 }
@@ -691,6 +700,7 @@ export interface GitDeliveryStatus {
   behind: number;
   staged_task_paths: string[];
   staged_other_paths: string[];
+  can_stage: boolean;
   can_commit: boolean;
   can_push: boolean;
   blockers: string[];

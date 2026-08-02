@@ -1633,7 +1633,7 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   assert.equal(
     await secondLineAccept.isEnabled(),
     true,
-    "accepting one line must not lock unrelated line decisions while the Git mutation is pending",
+    "accepting one line must not lock unrelated line decisions while its ledger write is pending",
   );
   await secondLineAccept.click();
   await page.waitForFunction(
@@ -1641,6 +1641,7 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
       && [...root.querySelectorAll("button.diff-line-accept")].filter((button) => button.textContent === "已接受").length >= 2,
     await workbench.elementHandle(),
   );
+  await workbench.getByRole("button", { name: "接受文件", exact: true }).click();
 
   await workbench.getByRole("tab", { name: "验证与决策", exact: true }).click();
   const delivery = workbench.getByRole("region", { name: "Git 提交与推送" });
@@ -1648,12 +1649,15 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   assert.match(await delivery.innerText(), /codex\/demo/);
   assert.match(await delivery.innerText(), /origin\/codex\/demo/);
 
+  await delivery.getByRole("button", { name: "暂存已接受文件", exact: true }).click();
+  await delivery.getByText("1 个任务文件已暂存", { exact: false }).waitFor({ state: "visible" });
+
   await delivery.getByRole("button", { name: "自动生成", exact: true }).click();
   const message = delivery.getByPlaceholder("提交信息（可编辑）");
   await page.waitForFunction((element) => element.value.length > 0, await message.elementHandle());
   assert.equal(await message.inputValue(), "feat: update reviewed task files");
 
-  const commit = delivery.getByRole("button", { name: "提交已接受变更", exact: true });
+  const commit = delivery.getByRole("button", { name: "提交已暂存变更", exact: true });
   await commit.click();
   await delivery.getByRole("button", { name: "再次点击确认提交", exact: true }).click();
   await workbench.locator(".panel-note").filter({ hasText: "已提交 01234567" }).waitFor({ state: "visible" });
@@ -1704,7 +1708,7 @@ test("Needs You groups projects and synchronizes granular review acceptance live
   await acceptFile.waitFor({ state: "visible" });
   await acceptFile.click();
   const reviewInspector = inbox.getByLabel("审核摘要", { exact: true });
-  await reviewInspector.getByText("1 个文件待接受", { exact: true }).waitFor({ state: "visible" });
+  await reviewInspector.getByText("1 个文件待处理", { exact: true }).waitFor({ state: "visible" });
   assert.equal(await inbox.getByText("src/error.rs", { exact: true }).count(), 0);
 
   // Equivalent to accepting the remaining file from the task-local review workbench.
@@ -1714,7 +1718,7 @@ test("Needs You groups projects and synchronizes granular review acceptance live
     return reviewGitStatus("mock-task-review");
   });
   assert.equal(externallyAccepted.remaining_count, 0);
-  await reviewInspector.getByText("文件已全部接受", { exact: true }).first().waitFor({ state: "visible", timeout: 5000 });
+  await reviewInspector.getByText("审核项已全部处理", { exact: true }).first().waitFor({ state: "visible", timeout: 5000 });
 
   await inbox.getByRole("button", { name: "完成审核", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('[data-task-id="mock-task-review"]'));

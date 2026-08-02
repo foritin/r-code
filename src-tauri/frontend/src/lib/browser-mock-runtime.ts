@@ -101,9 +101,12 @@ const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
 const verificationOutputs = new Map<string, string>();
 const terminalOutputs = new Map<string, string>();
 const terminalInputs = new Map<string, string>();
-/** Browser QA needs the same durable Git-index semantics as the desktop backend. */
+/** Browser QA mirrors the desktop's application-owned review ledger. */
 const acceptedReviewPaths = new Map<string, Set<string>>();
 const partiallyAcceptedReviewPaths = new Map<string, Set<string>>();
+const rejectedReviewPaths = new Map<string, Set<string>>();
+/** Git staging is an explicit delivery step and never changes review decisions. */
+const stagedReviewPaths = new Map<string, Set<string>>();
 const terminals: TerminalInfo[] = [
   { id: "demo-terminal-main", state: "idle", shell: "PowerShell", is_busy: false },
 ];
@@ -763,20 +766,25 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const changes = reviewChanges(taskId);
       const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
       const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
-      const remainingCount = changes.filter((change) => !accepted.has(change.path)).length;
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const remainingCount = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path)).length;
       return {
         git_repository: true,
         repo_root: "D:/demo/r-code",
         paths: changes.map((change) => ({
           path: change.path,
-          staged: accepted.has(change.path) || partiallyAccepted.has(change.path),
-          remaining: !accepted.has(change.path),
+          accepted: accepted.has(change.path),
+          rejected: rejected.has(change.path),
+          remaining: !accepted.has(change.path) && !rejected.has(change.path),
           conflict: false,
-          preexisting_dirty: false,
           safe_to_accept: true,
           blocker: null,
+          accepted_items: accepted.has(change.path) ? 1 : partiallyAccepted.has(change.path) ? 1 : 0,
+          rejected_items: rejected.has(change.path) ? 1 : 0,
+          remaining_items: accepted.has(change.path) || rejected.has(change.path) ? 0 : 1,
         })),
-        staged_count: changes.filter((change) => accepted.has(change.path) || partiallyAccepted.has(change.path)).length,
+        accepted_count: changes.filter((change) => accepted.has(change.path)).length,
+        rejected_count: changes.filter((change) => rejected.has(change.path)).length,
         remaining_count: remainingCount,
         conflict_count: 0,
         can_accept_all: remainingCount > 0,
@@ -784,43 +792,85 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_review_accept_line":
     case "cmd_review_accept_file":
-    case "cmd_review_accept_all": {
+    case "cmd_review_accept_all":
+    case "cmd_review_reject_file": {
       const taskId = stringArg(args, "taskId");
       const changes = reviewChanges(taskId);
       const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
       const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
       if (command === "cmd_review_accept_all") {
         for (const change of changes) {
           accepted.add(change.path);
           partiallyAccepted.delete(change.path);
+          rejected.delete(change.path);
         }
       } else if (command === "cmd_review_accept_file" && typeof args.path === "string") {
         accepted.add(args.path);
         partiallyAccepted.delete(args.path);
+        rejected.delete(args.path);
       } else if (command === "cmd_review_accept_line" && typeof args.path === "string") {
         partiallyAccepted.add(args.path);
+      } else if (command === "cmd_review_reject_file" && typeof args.path === "string") {
+        rejected.add(args.path);
+        accepted.delete(args.path);
+        partiallyAccepted.delete(args.path);
       }
       acceptedReviewPaths.set(taskId, accepted);
       partiallyAcceptedReviewPaths.set(taskId, partiallyAccepted);
-      const remainingCount = changes.filter((change) => !accepted.has(change.path)).length;
+      rejectedReviewPaths.set(taskId, rejected);
+      const remainingCount = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path)).length;
       return {
         path: typeof args.path === "string" ? args.path : null,
-        staged_count: changes.filter((change) => accepted.has(change.path) || partiallyAccepted.has(change.path)).length,
+        accepted_count: changes.filter((change) => accepted.has(change.path)).length,
+        rejected_count: changes.filter((change) => rejected.has(change.path)).length,
         remaining_count: remainingCount,
         fully_accepted: remainingCount === 0,
       };
     }
-    case "cmd_git_delivery_status": return {
-      branch: "codex/demo",
-      upstream: "origin/codex/demo",
-      ahead: 1,
-      behind: 0,
-      staged_task_paths: detailById(stringArg(args, "taskId")).changes.map((change) => change.path),
-      staged_other_paths: [],
-      can_commit: true,
-      can_push: true,
-      blockers: [],
-    };
+    case "cmd_git_delivery_status": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const staged = stagedReviewPaths.get(taskId) ?? new Set<string>();
+      const unresolved = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path));
+      const acceptedPaths = changes.filter((change) => accepted.has(change.path)).map((change) => change.path);
+      return {
+        branch: "codex/demo",
+        upstream: "origin/codex/demo",
+        ahead: 1,
+        behind: 0,
+        staged_task_paths: [...staged],
+        staged_other_paths: [],
+        can_stage: unresolved.length === 0 && acceptedPaths.some((path) => !staged.has(path)),
+        can_commit: staged.size > 0,
+        can_push: true,
+        blockers: unresolved.length > 0 ? ["请先处理完所有审核项，再将已接受文件加入暂存区"] : [],
+      };
+    }
+    case "cmd_git_stage_accepted": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const unresolved = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path));
+      if (unresolved.length > 0) throw new Error("请先处理完所有审核项，再将已接受文件加入暂存区");
+      const staged = new Set(changes.filter((change) => accepted.has(change.path)).map((change) => change.path));
+      stagedReviewPaths.set(taskId, staged);
+      return {
+        branch: "codex/demo",
+        upstream: "origin/codex/demo",
+        ahead: 1,
+        behind: 0,
+        staged_task_paths: [...staged],
+        staged_other_paths: [],
+        can_stage: false,
+        can_commit: staged.size > 0,
+        can_push: true,
+        blockers: [],
+      };
+    }
     case "cmd_git_suggest_commit_message": return "feat: update reviewed task files";
     case "cmd_git_commit_task": return {
       sha: "0123456789abcdef0123456789abcdef01234567",
