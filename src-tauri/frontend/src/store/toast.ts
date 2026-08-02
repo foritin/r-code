@@ -10,7 +10,8 @@ import { create } from "zustand";
  * - 队列上限 4 条，超出挤掉最旧的；toast 不是日志，堆满屏幕等于没有提示。
  * - 同 kind + title 在 3s 内不叠加，只刷新已有那条的时间戳（轮询会把同一事件
  *   报好几遍，叠加就会变成刷屏）。
- * - error 不自动消失：失败必须由用户手动确认，不能一眨眼就没了。
+ * - error 默认不自动消失：真正的失败必须由用户手动确认；可恢复且能回看详情的
+ *   事件可以由调用方显式给 timeout（例如任务被中止）。
  * - 额外导出命令式入口 pushToast / dismissToast，让非 React 代码（store 订阅、
  *   轮询回调、事件监听）也能发通知。
  */
@@ -51,7 +52,7 @@ const DEFAULT_TIMEOUT: Record<ToastKind, number> = {
   info: 4000,
   success: 4000,
   warn: 6000,
-  /** 失败必须手动关闭 */
+  /** 真正的失败默认必须手动关闭；可恢复事件由调用方显式覆盖。 */
   error: 0,
 };
 

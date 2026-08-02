@@ -115,6 +115,13 @@ export const IconArchive = (p: P) => (
   </svg>
 );
 
+export const IconRestore = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4.5 8.5V4.5h4" />
+    <path d="M5.2 8.2A8 8 0 1 1 4 14" />
+  </svg>
+);
+
 export const IconTrash = (p: P) => (
   <svg {...base(p)}>
     <path d="M5.5 7.5h13M9 7.5V5h6v2.5M7.5 7.5l.8 12h7.4l.8-12M10 11v5M14 11v5" />

@@ -17,8 +17,9 @@
 //!
 //! [doc-12 §1] [doc-06 §3.7]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use r_code_core::error::ProductError;
 use r_code_core::process::hide_background_console;
@@ -61,6 +62,20 @@ pub struct GitDiffResult {
     pub path: String,
     /// diff 文本
     pub diff: String,
+}
+
+/// A path changed between two Git tree objects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitTreeChange {
+    pub path: String,
+    pub kind: GitTreeChangeKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitTreeChangeKind {
+    Added,
+    Modified,
+    Deleted,
 }
 
 impl GitService {
@@ -159,6 +174,63 @@ impl GitService {
         Ok(())
     }
 
+    /// Add an intent-to-add index entry so an untracked text file can be partially staged.
+    pub fn intent_to_add(&self, path: &str) -> Result<(), ProductError> {
+        self.run_git(&["add", "-N", "--", path])?;
+        Ok(())
+    }
+
+    /// Return the current index-to-worktree patch for one path.
+    pub fn worktree_patch(&self, path: &str) -> Result<String, ProductError> {
+        self.run_git(&[
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--unified=0",
+            "--",
+            path,
+        ])
+    }
+
+    /// Apply a patch to the real index without changing the worktree.
+    pub fn apply_cached_patch(&self, patch: &[u8]) -> Result<(), ProductError> {
+        self.run_git_with_stdin(
+            &[
+                "apply",
+                "--cached",
+                "--unidiff-zero",
+                "--whitespace=nowarn",
+                "-",
+            ],
+            patch,
+        )?;
+        Ok(())
+    }
+
+    /// Whether a path currently has staged content relative to HEAD.
+    pub fn has_staged_change(&self, path: &str) -> Result<bool, ProductError> {
+        Ok(!self.git_exit_success(&["diff", "--cached", "--quiet", "--", path])?)
+    }
+
+    /// Whether a tracked or intent-to-add path differs between index and worktree.
+    pub fn has_worktree_change(&self, path: &str) -> Result<bool, ProductError> {
+        Ok(!self.git_exit_success(&["diff", "--quiet", "--", path])?)
+    }
+
+    /// Whether a path has unresolved index stages.
+    pub fn has_conflict(&self, path: &str) -> Result<bool, ProductError> {
+        Ok(!self
+            .run_git_bytes(&["ls-files", "--unmerged", "-z", "--", path])?
+            .is_empty())
+    }
+
+    /// Whether a path has any entry in the index (including intent-to-add).
+    pub fn is_indexed(&self, path: &str) -> Result<bool, ProductError> {
+        Ok(!self
+            .run_git_bytes(&["ls-files", "--stage", "-z", "--", path])?
+            .is_empty())
+    }
+
     /// 取消暂存文件。
     ///
     /// 若 HEAD 存在，使用 `git reset HEAD -- <path>`；
@@ -193,6 +265,60 @@ impl GitService {
         Ok(sha.trim().to_string())
     }
 
+    /// Paths currently staged relative to HEAD.
+    pub fn staged_paths(&self) -> Result<Vec<String>, ProductError> {
+        let bytes = self.run_git_bytes(&["diff", "--cached", "--name-only", "-z", "--"])?;
+        Ok(bytes
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .map(|path| String::from_utf8_lossy(path).into_owned())
+            .collect())
+    }
+
+    /// The configured upstream of the current branch, if one exists.
+    pub fn upstream(&self) -> Result<Option<String>, ProductError> {
+        match self.run_git(&[
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ]) {
+            Ok(value) => Ok(Some(value.trim().to_string())),
+            Err(ProductError::GitError(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Return (ahead, behind) relative to the configured upstream.
+    pub fn ahead_behind(&self) -> Result<Option<(usize, usize)>, ProductError> {
+        if self.upstream()?.is_none() {
+            return Ok(None);
+        }
+        let value = self.run_git(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])?;
+        let mut counts = value.split_whitespace();
+        let ahead = counts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        let behind = counts
+            .next()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0);
+        Ok(Some((ahead, behind)))
+    }
+
+    /// Push the current branch to its already configured upstream. No refspec or force flag
+    /// is supplied, so Git's normal branch protection and non-fast-forward checks remain active.
+    pub fn push_upstream(&self) -> Result<String, ProductError> {
+        if self.upstream()?.is_none() {
+            return Err(ProductError::GitError(
+                "当前分支没有 upstream，请先在终端显式设置远端跟踪分支".into(),
+            ));
+        }
+        self.run_git(&["push"])?;
+        Ok(self.run_git(&["rev-parse", "HEAD"])?.trim().to_string())
+    }
+
     /// 创建新分支（`git branch <name>`）。不切换到该分支。
     pub fn create_branch(&self, name: &str) -> Result<(), ProductError> {
         self.run_git(&["branch", name])?;
@@ -205,6 +331,85 @@ impl GitService {
     pub fn current_branch(&self) -> Result<String, ProductError> {
         let out = self.run_git(&["symbolic-ref", "--short", "HEAD"])?;
         Ok(out.trim().to_string())
+    }
+
+    pub fn head_tree(&self) -> Result<Option<String>, ProductError> {
+        if !Self::detect(&self.repo_path)? {
+            return Ok(None);
+        }
+        match self.run_git(&["rev-parse", "--verify", "HEAD^{tree}"]) {
+            Ok(tree) => Ok(Some(tree.trim().to_string())),
+            Err(ProductError::GitError(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Snapshot the real Git index without reading or changing the worktree.
+    pub fn index_snapshot(&self) -> Result<Option<String>, ProductError> {
+        if !Self::detect(&self.repo_path)? {
+            return Ok(None);
+        }
+        let tree = self.run_git(&["write-tree"])?;
+        Ok(Some(tree.trim().to_string()))
+    }
+
+    /// List net path changes between two tree objects. Rename detection is intentionally
+    /// disabled so downstream review only needs create/modify/delete semantics.
+    pub fn tree_changes(
+        &self,
+        before_tree: &str,
+        after_tree: &str,
+    ) -> Result<Vec<GitTreeChange>, ProductError> {
+        let output = self.run_git_bytes(&[
+            "diff",
+            "--name-status",
+            "-z",
+            "--no-renames",
+            before_tree,
+            after_tree,
+            "--",
+        ])?;
+        let fields: Vec<&[u8]> = output
+            .split(|byte| *byte == 0)
+            .filter(|field| !field.is_empty())
+            .collect();
+        let mut changes = Vec::with_capacity(fields.len() / 2);
+        for pair in fields.chunks_exact(2) {
+            let status = pair[0].first().copied();
+            let kind = match status {
+                Some(b'A') => GitTreeChangeKind::Added,
+                Some(b'D') => GitTreeChangeKind::Deleted,
+                Some(b'M') | Some(b'T') => GitTreeChangeKind::Modified,
+                _ => continue,
+            };
+            changes.push(GitTreeChange {
+                path: String::from_utf8_lossy(pair[1]).into_owned(),
+                kind,
+            });
+        }
+        Ok(changes)
+    }
+
+    /// Read a regular-file blob from a tree. A missing path (or a directory entry) is `None`.
+    pub fn blob_at_tree(&self, tree: &str, path: &str) -> Result<Option<Vec<u8>>, ProductError> {
+        let listing = self.run_git_bytes(&["ls-tree", "-z", tree, "--", path])?;
+        let Some(record) = listing.split(|byte| *byte == 0).find(|row| !row.is_empty()) else {
+            return Ok(None);
+        };
+        let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
+            return Ok(None);
+        };
+        let header = String::from_utf8_lossy(&record[..tab]);
+        let mut parts = header.split_whitespace();
+        let _mode = parts.next();
+        if parts.next() != Some("blob") {
+            return Ok(None);
+        }
+        let Some(object_id) = parts.next() else {
+            return Ok(None);
+        };
+        self.run_git_bytes(&["cat-file", "blob", object_id])
+            .map(Some)
     }
 
     /// 为任务创建 git worktree。
@@ -309,6 +514,42 @@ impl GitService {
             .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
         check_git_success(args, &output)?;
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn git_exit_success(&self, args: &[&str]) -> Result<bool, ProductError> {
+        let output = self
+            .git_command(args)
+            .output()
+            .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => {
+                check_git_success(args, &output)?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn run_git_with_stdin(&self, args: &[&str], input: &[u8]) -> Result<(), ProductError> {
+        let mut command = self.git_command(args);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|e| ProductError::GitError(format!("failed to execute git: {e}")))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| ProductError::GitError("git stdin was not available".into()))?
+            .write_all(input)
+            .map_err(|e| ProductError::GitError(format!("failed to write git stdin: {e}")))?;
+        let output = child
+            .wait_with_output()
+            .map_err(|e| ProductError::GitError(format!("failed to wait for git: {e}")))?;
+        check_git_success(args, &output)
     }
 }
 

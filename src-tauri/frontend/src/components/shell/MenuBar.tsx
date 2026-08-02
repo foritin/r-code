@@ -5,6 +5,7 @@ import { selectNeedsYou, useTasksStore } from "../../store/tasks";
 import { notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
 import type { Notification, NotificationPage } from "../../lib/types";
 import { requestOnboarding } from "../../lib/onboarding";
+import { isMacPlatform, keyLabel } from "../../lib/keys";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import {
   IconBell,
@@ -22,9 +23,13 @@ import {
  * 项目内才出现的活动流由 DashboardScene 自己持有，避免跨页面残留错误的右栏。
  */
 export function MenuBar() {
-  const scene = useAppStore((s) => s.scene);
+  const macOS = isMacPlatform();
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
+  const goBack = useAppStore((s) => s.goBack);
+  const goForward = useAppStore((s) => s.goForward);
+  const canGoBack = useAppStore((s) => s.navigationBack.length > 0);
+  const canGoForward = useAppStore((s) => s.navigationForward.length > 0);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
   const openRoom = useAppStore((s) => s.openRoom);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
@@ -77,11 +82,6 @@ export function MenuBar() {
 
   const unreadNotifications = notificationPage?.unread_count ?? needsYou.length;
 
-  const goBack = () => {
-    if (scene === "room") setScene("conversations");
-    else if (scene !== "home") goHome();
-  };
-
   const showShortcuts = () => window.dispatchEvent(new Event("r-code:shortcuts"));
 
   return (
@@ -91,10 +91,10 @@ export function MenuBar() {
       </button>
       <nav className="desktop-navigation" aria-label="桌面导航">
         <div className="desktop-history-actions" aria-label="浏览历史">
-          <button className="desktop-nav-button desktop-history-button" type="button" onClick={goBack} disabled={scene === "home"} aria-label="后退" title="后退">
+          <button className="desktop-nav-button desktop-history-button" type="button" onClick={goBack} disabled={!canGoBack} aria-label="后退" title="后退">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
           </button>
-          <button className="desktop-nav-button desktop-history-button" type="button" disabled aria-label="前进" title="前进">
+          <button className="desktop-nav-button desktop-history-button" type="button" onClick={goForward} disabled={!canGoForward} aria-label="前进" title="前进">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
           </button>
         </div>
@@ -105,9 +105,9 @@ export function MenuBar() {
             trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">文件</button>}
           >
             {({ close }) => <>
-              <MenuItem close={close} shortcut="Ctrl N" onSelect={goHome}>新建任务</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("new")} onSelect={goHome}>新建任务</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("projects")}>打开项目…</MenuItem>
-              <MenuItem close={close} onSelect={() => setScene("editor")}>项目文件</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("editor")}>当前项目文件</MenuItem>
               <MenuSeparator />
               <MenuItem close={close} onSelect={() => void getCurrentWindow().close().catch(() => {})}>关闭窗口</MenuItem>
             </>}
@@ -118,8 +118,8 @@ export function MenuBar() {
             trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">编辑</button>}
           >
             {({ close }) => <>
-              <MenuItem close={close} shortcut="Ctrl K" onSelect={toggleSearch}>查找</MenuItem>
-              <MenuItem close={close} shortcut="Ctrl B" onSelect={toggleRail}>切换左侧边栏</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("search")} onSelect={toggleSearch}>查找</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("toggleRail")} onSelect={toggleRail}>切换左侧边栏</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("editor")}>编辑当前项目文件</MenuItem>
             </>}
           </Menu>
@@ -132,8 +132,9 @@ export function MenuBar() {
               <MenuItem close={close} onSelect={() => setScene("conversations")}>对话</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("inbox")}>待处理</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("deck")}>活动</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("knowledge")}>知识与指令</MenuItem>
               <MenuSeparator />
-              <MenuItem close={close} shortcut="Ctrl 0" onSelect={zoomReset}>重置缩放</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("zoomReset")} onSelect={zoomReset}>重置缩放</MenuItem>
             </>}
           </Menu>
           <Menu
@@ -144,7 +145,7 @@ export function MenuBar() {
             {({ close }) => <>
               <MenuItem close={close} onSelect={requestOnboarding}>首次设置</MenuItem>
               <MenuSeparator />
-              <MenuItem close={close} shortcut="Ctrl /" onSelect={showShortcuts}>快捷键</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("shortcuts")} onSelect={showShortcuts}>快捷键</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("diagnostics")}>诊断与支持</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>Codex 协作</MenuItem>
             </>}
@@ -193,11 +194,13 @@ export function MenuBar() {
         </button>
       </div>
 
-      <span className="winctl app-window-controls" aria-label="窗口控制">
-        <button className="wc" onClick={() => void getCurrentWindow().minimize().catch(() => {})} aria-label="最小化"><IconMinimize /></button>
-        <button className="wc" onClick={() => void getCurrentWindow().toggleMaximize().catch(() => {})} aria-label="最大化或还原"><IconMaximize /></button>
-        <button className="wc close" onClick={() => void getCurrentWindow().close().catch(() => {})} aria-label="关闭"><IconClose /></button>
-      </span>
+      {!macOS && (
+        <span className="winctl app-window-controls" aria-label="窗口控制">
+          <button className="wc" onClick={() => void getCurrentWindow().minimize().catch(() => {})} aria-label="最小化"><IconMinimize /></button>
+          <button className="wc" onClick={() => void getCurrentWindow().toggleMaximize().catch(() => {})} aria-label="最大化或还原"><IconMaximize /></button>
+          <button className="wc close" onClick={() => void getCurrentWindow().close().catch(() => {})} aria-label="关闭"><IconClose /></button>
+        </span>
+      )}
     </header>
   );
 }

@@ -26,6 +26,8 @@ import type {
   TerminalInfo,
   VerificationRecord,
   Workspace,
+  WorkflowSkill,
+  WorkflowSkillDraft,
 } from "./types";
 import {
   browserMockAbortSubagent,
@@ -59,6 +61,36 @@ import {
 type MockArgs = Record<string, unknown>;
 
 let sequence = 0;
+const defaultWorkflowSkills: WorkflowSkill[] = [
+  {
+    id: "builtin:skill-creator",
+    name: "skill-creator",
+    description: "创建并注册 R-Code 自定义 Skill。",
+    instructions: "设计 Skill 后必须调用 save_skill 工具保存。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+  {
+    id: "builtin:review-changes",
+    name: "review-changes",
+    description: "安全审核并接受任务变更。",
+    instructions: "只审核当前任务路径。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+  {
+    id: "builtin:git-commit-push",
+    name: "git-commit-push",
+    description: "提交并推送已接受的任务变更。",
+    instructions: "不得 force push。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+];
+let workflowSkills = defaultWorkflowSkills.map((skill) => ({ ...skill }));
 const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
   ["D:/project/rust/r-code", { exists: true, git_tracking: "tracked" }],
   ["D:/project/rust/api-server", { exists: true, git_tracking: "untracked" }],
@@ -69,6 +101,9 @@ const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
 const verificationOutputs = new Map<string, string>();
 const terminalOutputs = new Map<string, string>();
 const terminalInputs = new Map<string, string>();
+/** Browser QA needs the same durable Git-index semantics as the desktop backend. */
+const acceptedReviewPaths = new Map<string, Set<string>>();
+const partiallyAcceptedReviewPaths = new Map<string, Set<string>>();
 const terminals: TerminalInfo[] = [
   { id: "demo-terminal-main", state: "idle", shell: "PowerShell", is_busy: false },
 ];
@@ -439,12 +474,20 @@ function diffFor(path: string): ChangeDiff {
     lines: [
       { kind: "hunk", text: "@@ -1,3 +1,4 @@" },
       { kind: "ctx", text: first, old_no: 1, new_no: 1 },
-      { kind: "del", text: "// previous demo implementation", old_no: 2 },
-      { kind: "add", text: "// complete interactive demo implementation", new_no: 2 },
-      { kind: "add", text: "// shares the production React UI", new_no: 3 },
+      { kind: "del", text: "// previous demo implementation", old_no: 2, line_id: "del:2:demo-previous" },
+      { kind: "add", text: "// complete interactive demo implementation", new_no: 2, line_id: "add:2:demo-complete" },
+      { kind: "add", text: "// shares the production React UI", new_no: 3, line_id: "add:3:demo-shared" },
     ],
     truncated: false,
   };
+}
+
+function reviewChanges(taskId: string) {
+  const excluded = new Set(
+    (globalThis as { __rCodeBrowserMockExcludedReviewPaths?: string[] })
+      .__rCodeBrowserMockExcludedReviewPaths ?? [],
+  );
+  return detailById(taskId).changes.filter((change) => !excluded.has(change.path));
 }
 
 function runVerification(args: MockArgs): VerificationRecord {
@@ -534,6 +577,13 @@ function sendTerminalInput(id: string, text: string): void {
 }
 
 function setConfigValue(key: string, value: unknown): void {
+  if (key === "agent_prompts" && value == null) {
+    browserMockSettings.config.agent_prompts = {
+      main_agent: "主 Agent 对最终结果负责；只在委派有明确收益时拆分边界清晰的子任务。",
+      subagent: "子代理只完成父 Agent 指定的任务，不再委派，并返回可核验的简洁摘要。",
+    };
+    return;
+  }
   const parts = key.split(".").filter(Boolean);
   let target = browserMockSettings.config as Record<string, unknown>;
   while (parts.length > 1) {
@@ -614,6 +664,13 @@ async function browserMockImagePreview(): Promise<ArrayBuffer> {
 
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
+  (globalThis as { __rCodePerformanceIpcProbe?: (name: string, args: MockArgs) => void })
+    .__rCodePerformanceIpcProbe?.(command, args);
+  const delayMs = (globalThis as { __rCodeBrowserMockDelayMs?: Record<string, number> })
+    .__rCodeBrowserMockDelayMs?.[command] ?? 0;
+  if (delayMs > 0) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+  }
   switch (command) {
     case "ping": return true;
 
@@ -627,9 +684,21 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_task_archive": {
       const task = taskById(stringArg(args, "taskId"));
+      if (task.state === "exploring" || task.state === "in_progress") {
+        throw new Error("会话仍在运行，请先停止后归档");
+      }
       task.state = "archived";
       touchTask(task);
       if (browserMockDetails[task.id]) browserMockDetails[task.id].task = copy(task);
+      return copy(task);
+    }
+    case "cmd_task_restore": {
+      const task = taskById(stringArg(args, "taskId"));
+      if (task.state === "archived") {
+        task.state = "idle";
+        touchTask(task);
+        if (browserMockDetails[task.id]) browserMockDetails[task.id].task = copy(task);
+      }
       return copy(task);
     }
     case "cmd_task_delete": {
@@ -689,6 +758,107 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_notification_mark_all_read": return browserMockMarkAllNotificationsRead();
 
     case "cmd_changes_list": return copy(detailById(stringArg(args, "taskId")).changes);
+    case "cmd_review_git_status": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const remainingCount = changes.filter((change) => !accepted.has(change.path)).length;
+      return {
+        git_repository: true,
+        repo_root: "D:/demo/r-code",
+        paths: changes.map((change) => ({
+          path: change.path,
+          staged: accepted.has(change.path) || partiallyAccepted.has(change.path),
+          remaining: !accepted.has(change.path),
+          conflict: false,
+          preexisting_dirty: false,
+          safe_to_accept: true,
+          blocker: null,
+        })),
+        staged_count: changes.filter((change) => accepted.has(change.path) || partiallyAccepted.has(change.path)).length,
+        remaining_count: remainingCount,
+        conflict_count: 0,
+        can_accept_all: remainingCount > 0,
+      };
+    }
+    case "cmd_review_accept_line":
+    case "cmd_review_accept_file":
+    case "cmd_review_accept_all": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
+      if (command === "cmd_review_accept_all") {
+        for (const change of changes) {
+          accepted.add(change.path);
+          partiallyAccepted.delete(change.path);
+        }
+      } else if (command === "cmd_review_accept_file" && typeof args.path === "string") {
+        accepted.add(args.path);
+        partiallyAccepted.delete(args.path);
+      } else if (command === "cmd_review_accept_line" && typeof args.path === "string") {
+        partiallyAccepted.add(args.path);
+      }
+      acceptedReviewPaths.set(taskId, accepted);
+      partiallyAcceptedReviewPaths.set(taskId, partiallyAccepted);
+      const remainingCount = changes.filter((change) => !accepted.has(change.path)).length;
+      return {
+        path: typeof args.path === "string" ? args.path : null,
+        staged_count: changes.filter((change) => accepted.has(change.path) || partiallyAccepted.has(change.path)).length,
+        remaining_count: remainingCount,
+        fully_accepted: remainingCount === 0,
+      };
+    }
+    case "cmd_git_delivery_status": return {
+      branch: "codex/demo",
+      upstream: "origin/codex/demo",
+      ahead: 1,
+      behind: 0,
+      staged_task_paths: detailById(stringArg(args, "taskId")).changes.map((change) => change.path),
+      staged_other_paths: [],
+      can_commit: true,
+      can_push: true,
+      blockers: [],
+    };
+    case "cmd_git_suggest_commit_message": return "feat: update reviewed task files";
+    case "cmd_git_commit_task": return {
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      message: stringArg(args, "message"),
+    };
+    case "cmd_git_push_task": return {
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      branch: "codex/demo",
+      upstream: "origin/codex/demo",
+    };
+    case "cmd_workflow_skills_list": return copy(workflowSkills);
+    case "cmd_workflow_skill_save": {
+      const draft = args.draft as WorkflowSkillDraft;
+      const id = draft.id ?? `custom:${globalThis.crypto.randomUUID()}`;
+      const saved: WorkflowSkill = {
+        ...draft,
+        id,
+        overridden: draft.source === "builtin",
+      };
+      const index = workflowSkills.findIndex((skill) => skill.id === id);
+      if (index >= 0) workflowSkills[index] = saved;
+      else workflowSkills.push(saved);
+      return copy(saved);
+    }
+    case "cmd_workflow_skill_reset": {
+      const id = stringArg(args, "id");
+      const restored = defaultWorkflowSkills.find((skill) => skill.id === id);
+      if (!restored) throw new Error(`Unknown built-in Skill: ${id}`);
+      const index = workflowSkills.findIndex((skill) => skill.id === id);
+      if (index >= 0) workflowSkills[index] = { ...restored };
+      else workflowSkills.push({ ...restored });
+      return copy(restored);
+    }
+    case "cmd_workflow_skill_delete": {
+      const id = stringArg(args, "id");
+      workflowSkills = workflowSkills.filter((skill) => skill.id !== id || skill.source === "builtin");
+      return null;
+    }
     case "cmd_rollback_file": {
       const detail = detailById(stringArg(args, "taskId"));
       const path = stringArg(args, "path");
@@ -854,7 +1024,10 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
 
     case "cmd_recovery_data": return { interrupted_tasks: [], orphaned_permissions: 0 };
     case "cmd_recovery_cleanup": return { runs_closed: 0, tasks_interrupted: 0, permissions_denied: 0, tool_calls_closed: 0 };
-    case "cmd_support_bundle": return `${stringArg(args, "outputDir").replace(/[\\/]+$/, "")}/r-code-support-demo.json`;
+    case "cmd_support_bundle": {
+      const outputDir = stringArg(args, "outputDir").replace(/[\\/]+$/, "");
+      return `${outputDir || "Downloads"}/r-code-support-demo.json`;
+    }
     case "cmd_support_preview": return {
       version: "0.1.0-demo",
       platform: navigator.platform || "browser",

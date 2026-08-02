@@ -105,6 +105,12 @@
   padding-inline: 12px 0;
 }
 
+/* macOS 使用 Overlay 原生标题栏：为 traffic lights 保留系统命中区域，并由系统
+   提供关闭/最小化/全屏行为；Windows/Linux 继续使用右侧自绘窗口按钮。 */
+#app.r-code-signature.platform-macos .app-topbar {
+  padding-left: 78px;
+}
+
 #app.r-code-signature .main {
   position: relative;
   z-index: 1;
@@ -328,8 +334,12 @@
   font-family: var(--font-display);
 }
 
-#app.r-code-signature .sidebar-project-head:hover,
-#app.r-code-signature .sidebar-project.selected .sidebar-project-head {
+#app.r-code-signature .sidebar-project-row {
+  border-radius: 5px;
+}
+
+#app.r-code-signature .sidebar-project-row:hover,
+#app.r-code-signature .sidebar-project.selected .sidebar-project-row {
   background: color-mix(in srgb, var(--fg) 3.5%, transparent);
 }
 

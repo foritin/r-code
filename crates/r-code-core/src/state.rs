@@ -2,12 +2,12 @@
 //!
 //! 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`，
 //! 运行可从探索或执行阶段进入 `Interrupted`，之后可空闲或直接启动排队消息。
-//! 任意状态可以 `-> Archived`。
+//! 任意状态可以 `-> Archived`；用户还原时 `Archived -> Idle`。
 //!
 //! 硬性不变量：
 //! - 一个 Task 任意时刻最多一个活跃主 Agent Run；其只读子 Agent 可作为该运行的受控子节点并行执行
 //! - 未完成高风险 Tool Call 不能进入 ReviewReady 或 Accepted
-//! - Archived 是终态，不可逆
+//! - Archived 期间不可运行；只能显式还原到 Idle
 
 use crate::dto::{ReviewState, TaskState};
 
@@ -22,8 +22,8 @@ pub enum StateTransitionError {
         /// 目标状态
         to: TaskState,
     },
-    /// 已归档，不可操作
-    #[error("task is archived, no further transitions allowed")]
+    /// 已归档，只允许显式还原到 Idle
+    #[error("task is archived; restore it to idle before continuing")]
     Archived,
     /// 存在活跃 Run，不能开始新 Run
     #[error("task already has an active run")]
@@ -43,10 +43,14 @@ pub enum StateTransitionError {
 /// - `Interrupted -> Idle/InProgress` (中止后收尾或分发排队消息)
 /// - `ReviewReady -> Idle` (接受/回滚后回到空闲)
 /// - `Idle/Exploring/InProgress/ReviewReady -> Archived` (归档)
-/// - `Archived -> ` (终态，不可转换)
+/// - `Archived -> Idle` (显式还原)
 pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), StateTransitionError> {
     if from == TaskState::Archived {
-        return Err(StateTransitionError::Archived);
+        return if to == TaskState::Idle {
+            Ok(())
+        } else {
+            Err(StateTransitionError::Archived)
+        };
     }
 
     let valid = match (from, to) {
@@ -154,11 +158,8 @@ mod tests {
     }
 
     #[test]
-    fn test_archived_is_terminal() {
-        assert!(matches!(
-            validate_transition(TaskState::Archived, TaskState::Idle),
-            Err(StateTransitionError::Archived)
-        ));
+    fn test_archived_can_only_be_restored_to_idle() {
+        assert!(validate_transition(TaskState::Archived, TaskState::Idle).is_ok());
         assert!(matches!(
             validate_transition(TaskState::Archived, TaskState::Archived),
             Err(StateTransitionError::Archived)
@@ -171,8 +172,8 @@ mod tests {
         assert!(validate_transition(TaskState::Idle, TaskState::InProgress).is_err());
         // 不能从 ReviewReady 直接进入 InProgress
         assert!(validate_transition(TaskState::ReviewReady, TaskState::InProgress).is_err());
-        // 不能从 Archived 恢复
-        assert!(validate_transition(TaskState::Archived, TaskState::Idle).is_err());
+        // 不能从 Archived 直接进入运行态
+        assert!(validate_transition(TaskState::Archived, TaskState::Exploring).is_err());
     }
 
     #[test]

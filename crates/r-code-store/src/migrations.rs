@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 15;
+pub const LATEST_SCHEMA_VERSION: u32 = 16;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -44,6 +44,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(13, MIGRATION_013, false),
     MigrationSpec::new(14, MIGRATION_014, true),
     MigrationSpec::new(15, MIGRATION_015, false),
+    MigrationSpec::new(16, MIGRATION_016, false),
 ];
 
 impl MigrationSpec {
@@ -656,6 +657,34 @@ CREATE INDEX idx_workspaces_last_opened
 /// 部分历史数据库已经记录 v10-v14，但 `notifications` 表并不存在。以新的向前
 /// 迁移重放 v10 的幂等 DDL，确保正常启动即可修复，而不是在各业务查询中吞错。
 const MIGRATION_015: &str = MIGRATION_010;
+
+/// Migration 016: task-run Git snapshots and idempotent snapshot change rows.
+///
+/// The entry index tree and full worktree tree are kept separately so Review can later
+/// distinguish agent changes from files that were already dirty before the run.
+const MIGRATION_016: &str = r#"
+CREATE TABLE IF NOT EXISTS run_workspace_snapshots (
+    run_id TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repo_root TEXT NOT NULL,
+    workspace_root TEXT NOT NULL,
+    entry_head_tree TEXT,
+    entry_index_tree TEXT NOT NULL,
+    entry_worktree_tree TEXT NOT NULL,
+    exit_worktree_tree TEXT,
+    captured_at TEXT NOT NULL,
+    finalized_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_run_workspace_snapshots_task
+    ON run_workspace_snapshots(task_id, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS run_snapshot_changes (
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    file_change_id TEXT NOT NULL UNIQUE REFERENCES file_changes(id) ON DELETE CASCADE,
+    PRIMARY KEY (run_id, path)
+);
+"#;
 
 #[cfg(test)]
 mod tests {

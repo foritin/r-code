@@ -12,6 +12,7 @@ import {
   taskSetModel,
   workspaceChoose,
   workspaceSetAccessMode,
+  workflowSkillsList,
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { errText } from "../../lib/format";
@@ -24,6 +25,7 @@ import type {
   ProjectAccessMode,
   RecoveryPageData,
   TaskAgentEngine,
+  WorkflowSkill,
 } from "../../lib/types";
 import {
   ProjectAccessSelector,
@@ -33,7 +35,6 @@ import { useProviders, type ProviderChoice } from "../../lib/provider";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
 import { SlashCommandMenu } from "../SlashCommandMenu";
-import { keyLabel } from "../../lib/keys";
 import {
   commandUnavailableReason,
   matchingSlashCommands,
@@ -109,6 +110,7 @@ export function HomeScene() {
   const [slashDismissed, setSlashDismissed] = useState(false);
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
+  const [workflowSkills, setWorkflowSkills] = useState<WorkflowSkill[]>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
@@ -149,7 +151,7 @@ export function HomeScene() {
     workspaceAttached: Boolean(currentWorkspace),
     running: false,
   };
-  const slashItems = slashDismissed ? [] : matchingSlashCommands(goal, slashContext);
+  const slashItems = slashDismissed ? [] : matchingSlashCommands(goal, slashContext, workflowSkills);
   const slashOpen = slashItems.length > 0;
   const canSend = (goal.trim().length > 0 || sendableAttachments.length > 0)
     && !launching
@@ -172,6 +174,12 @@ export function HomeScene() {
       return providerChoices.find((choice) => choice.name === fallback) ?? null;
     });
   }, [providerChoices, fallback]);
+
+  // A model-created Skill is written to AppData through `save_skill`. Keep the home
+  // composer catalog fresh so it becomes callable immediately, without restarting R-Code.
+  usePoll(async () => {
+    setWorkflowSkills(await workflowSkillsList());
+  }, 2000);
 
   const loadRuntimeDefaults = useCallback(() => {
     let alive = true;
@@ -268,8 +276,13 @@ export function HomeScene() {
       setError("Codex CLI 尚未完成安装、登录或 R-Code 协作配置。请先前往设置完成连接。");
       return;
     }
+    const draft = goal;
     setLaunching(true);
     setError(null);
+    // 会话创建与首轮发送可能涉及多次 IPC。用户按下 Enter 后立即释放输入框，
+    // 若链路失败且用户没有继续输入，再恢复原草稿。
+    setGoal("");
+    setSlashDismissed(false);
     let stage = "创建会话";
     try {
       const task = await taskCreate(
@@ -287,11 +300,11 @@ export function HomeScene() {
       stage = "发送消息";
       await agentSend(task.id, message, "auto", files);
       await refreshTasks().catch(() => {});
-      setGoal("");
       attachments.clear();
       openRoom(task.id);
     } catch (cause) {
       setError(`${stage}失败：${errText(cause)}`);
+      setGoal((current) => current.length > 0 ? current : draft);
     } finally {
       setLaunching(false);
     }
@@ -304,7 +317,7 @@ export function HomeScene() {
       return;
     }
     if ((!text && sendableAttachments.length === 0) || launching) return;
-    const parsed = text ? parseSlashCommand(text) : null;
+    const parsed = text ? parseSlashCommand(text, workflowSkills) : null;
     if (!parsed) {
       const title = text || `分析 ${sendableAttachments[0]?.name ?? "附加文件"}`;
       await launchConversation(text, title, sendableAttachments);
@@ -377,7 +390,7 @@ export function HomeScene() {
         return;
       case "memory":
         setGoal("");
-        setScene("projects");
+        setScene("knowledge");
         return;
       case "theme": {
         const requested = parsed.args.toLowerCase();
@@ -514,6 +527,7 @@ export function HomeScene() {
               anchorRef={composerRef}
               value={goal}
               context={slashContext}
+              skills={workflowSkills}
               activeIndex={slashActive}
               onActiveIndexChange={setSlashActive}
               onPick={pickSlash}
@@ -535,6 +549,7 @@ export function HomeScene() {
             }}
             onPaste={attachments.onPaste}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing) return;
               if (slashOpen) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
@@ -568,12 +583,7 @@ export function HomeScene() {
                   }
                 }
               }
-              if (event.key === "Enter" && !event.shiftKey && parseSlashCommand(goal.trim())) {
-                event.preventDefault();
-                void send();
-                return;
-              }
-              if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+              if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
                 void send();
               }
@@ -721,11 +731,11 @@ export function HomeScene() {
                   {agentEngine === "codex" ? "连接 Codex CLI" : "连接模型服务"}
                 </button>
               )}
-              <span className="send-hint">{keyLabel("new").replace(/ .*/, "")} + Enter</span>
+              <span className="send-hint">Enter 发送 · Shift+Enter 换行</span>
               <button
                 className="send-button"
                 disabled={!canSend}
-                title={attachmentBlockedReason ?? "发送（Ctrl/⌘ + Enter）"}
+                title={attachmentBlockedReason ?? "发送（Enter）"}
                 onClick={() => void send()}
                 aria-label="发送"
               >

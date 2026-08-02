@@ -19,11 +19,22 @@ import {
 } from "../../lib/ipc";
 import type { CodexIntegrationStatus } from "../../lib/types";
 import { IconAlert, IconCheck, IconClose, IconRefresh, IconTerminal } from "../icons";
+import {
+  CODEX_LOGIN_WAIT_MINUTES,
+  nextCodexLoginPollDelay,
+} from "./login-watcher";
 
 const INSTALL_COMMAND = "npm install -g @openai/codex";
 const STATUS_CACHE_MS = 15_000;
 
-type GatePhase = "confirm" | "installing" | "login" | "waiting-login" | "resuming" | "error";
+type GatePhase =
+  | "confirm"
+  | "installing"
+  | "login"
+  | "waiting-login"
+  | "login-timeout"
+  | "resuming"
+  | "error";
 
 export interface CodexCliRequirement {
   /** 面向用户描述本次点击要完成的动作。 */
@@ -62,6 +73,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
   const cachedStatusRef = useRef<CodexIntegrationStatus | null>(null);
   const checkedAtRef = useRef(0);
   const statusPromiseRef = useRef<Promise<CodexIntegrationStatus> | null>(null);
+  const loginStartedAtRef = useRef(0);
 
   useFocusTrap(dialogRef, Boolean(pending));
   useReturnFocus(Boolean(pending));
@@ -77,7 +89,8 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
     if (!force && cachedStatusRef.current && Date.now() - checkedAtRef.current < STATUS_CACHE_MS) {
       return cachedStatusRef.current;
     }
-    if (!force && statusPromiseRef.current) return statusPromiseRef.current;
+    // 手动检测与自动轮询共享同一个在途请求，避免重复启动 `codex login status`。
+    if (statusPromiseRef.current) return statusPromiseRef.current;
     const request = codexIntegrationStatus()
       .then(rememberStatus)
       .finally(() => {
@@ -98,6 +111,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
     setError(null);
     setCopied(false);
     setPhase("confirm");
+    loginStartedAtRef.current = 0;
   }, [pending]);
 
   const resume = useCallback(async (request: PendingRequest) => {
@@ -112,6 +126,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
       setError(null);
       setCopied(false);
       setPhase("confirm");
+      loginStartedAtRef.current = 0;
     }
   }, []);
 
@@ -135,6 +150,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
       setError(null);
       setCopied(false);
       setPhase(current.cli_available ? "login" : "confirm");
+      loginStartedAtRef.current = 0;
       setPending({ requirement, action, resolve, reject });
     });
   }, [getStatus, pending]);
@@ -181,8 +197,10 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
     try {
       if (mode === "browser") await codexStartLogin();
       else await codexStartDeviceLogin();
+      loginStartedAtRef.current = Date.now();
       setPhase("waiting-login");
     } catch (reason) {
+      loginStartedAtRef.current = 0;
       setError(errText(reason));
       setPhase("login");
     }
@@ -203,16 +221,43 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!pending || phase !== "waiting-login") return;
     let active = true;
-    const timer = window.setInterval(() => {
-      void getStatus(true)
-        .then((next) => {
-          if (active && next.auth_status === "authenticated") return resume(pending);
-        })
-        .catch(() => {});
-    }, 2_000);
+    let timer: number | undefined;
+    const startedAt = loginStartedAtRef.current || Date.now();
+    loginStartedAtRef.current = startedAt;
+
+    const expire = () => {
+      if (!active) return;
+      setError(null);
+      setPhase("login-timeout");
+    };
+    const scheduleNext = () => {
+      if (!active) return;
+      const delay = nextCodexLoginPollDelay(startedAt);
+      if (delay === null) {
+        expire();
+        return;
+      }
+      timer = window.setTimeout(() => void poll(), delay);
+    };
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const next = await getStatus(true);
+        if (!active) return;
+        if (next.auth_status === "authenticated") {
+          await resume(pending);
+          return;
+        }
+      } catch {
+        // 临时探测失败不终止登录；在统一截止时间前继续尝试。
+      }
+      scheduleNext();
+    };
+
+    scheduleNext();
     return () => {
       active = false;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [getStatus, pending, phase, resume]);
 
@@ -283,7 +328,14 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
               {phase === "waiting-login" && (
                 <div className="codex-gate-wait" role="status">
                   <IconRefresh width={15} height={15} />
-                  <span>正在等待 Codex 返回登录状态；完成后会自动继续。</span>
+                  <span>正在等待 Codex 返回登录状态；完成后会自动继续，最多等待 {CODEX_LOGIN_WAIT_MINUTES} 分钟。</span>
+                </div>
+              )}
+
+              {phase === "login-timeout" && (
+                <div className="codex-gate-wait timeout" role="status">
+                  <IconAlert width={15} height={15} />
+                  <span>等待已结束，但登录流程没有被取消。完成授权后可重新检测，也可重新打开浏览器或改用设备码。</span>
                 </div>
               )}
 
@@ -329,6 +381,14 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
                   <button className="btn accent" onClick={() => void checkLogin()} ref={primaryRef}>重新检测</button>
                 </>
               )}
+              {phase === "login-timeout" && (
+                <>
+                  <button className="btn ghost" onClick={() => close()}>稍后处理</button>
+                  <button className="btn ghost" onClick={() => void checkLogin()}>重新检测</button>
+                  <button className="btn ghost" onClick={() => void beginLogin("device")}>使用设备码</button>
+                  <button className="btn accent" onClick={() => void beginLogin("browser")} ref={primaryRef}>重新打开浏览器</button>
+                </>
+              )}
             </footer>
           </div>
         </div>,
@@ -341,6 +401,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
 function gateTitle(phase: GatePhase): string {
   if (phase === "installing") return "正在安装 Codex CLI";
   if (phase === "login" || phase === "waiting-login") return "登录 Codex";
+  if (phase === "login-timeout") return "尚未检测到登录完成";
   if (phase === "resuming") return "准备完成";
   if (phase === "error") return "安装没有完成";
   return "需要安装 Codex CLI";
@@ -350,6 +411,7 @@ function gateDescription(phase: GatePhase, feature: string): string {
   if (phase === "installing") return `安装完成后，R-Code 会重新检测并继续“${feature}”。`;
   if (phase === "login") return `“${feature}”还需要登录。R-Code 只打开 Codex 官方登录流程，不接触你的凭据。`;
   if (phase === "waiting-login") return "请在刚打开的系统终端和浏览器中完成授权。";
+  if (phase === "login-timeout") return `R-Code 已停止自动检测，避免长期占用资源；本次等待上限为 ${CODEX_LOGIN_WAIT_MINUTES} 分钟。`;
   if (phase === "resuming") return "安装和登录状态已通过检测。";
   if (phase === "error") return "没有修改 R-Code 项目文件。你可以重试，或复制命令到系统终端执行。";
   return `“${feature}”由本机 Codex CLI 提供。确认后，R-Code 将执行以下固定命令：`;

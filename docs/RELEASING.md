@@ -58,12 +58,22 @@ flowchart LR
 
 ### 3.3 操作系统代码签名
 
-Updater 签名只保证应用更新包的完整性，不替代平台发行签名。当前仓库尚未包含以下生产凭据和完整 workflow 接线：
+Updater 签名只保证应用更新包的完整性，不替代平台发行签名。
 
-- macOS Developer ID Application 证书、Apple Team、notarization 和 stapling；
-- Windows Authenticode 证书及其安全签名服务/时间戳配置。
+macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release workflow。仓库 Settings → Secrets and variables → Actions 必须配置：
 
-公开发布前应把这两项视为上线门槛，否则 macOS Gatekeeper 和 Windows SmartScreen 会产生明显信任警告。凭据接入应单独评审，不能把证书或密码放入仓库。Linux 包签名是否启用则由分发渠道策略决定。
+- `APPLE_CERTIFICATE`：Developer ID Application `.p12` 的单行 Base64 内容；
+- `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码；
+- `APPLE_SIGNING_IDENTITY`：例如 `Developer ID Application: Example Team (TEAMID)`；
+- `APPLE_ID`：提交 notarization 的 Apple ID；
+- `APPLE_PASSWORD`：该 Apple ID 的 app-specific password，不是账户登录密码；
+- `APPLE_TEAM_ID`：Apple Developer Team ID。
+
+workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时 macOS release job 会明确失败，而不会静默发布未签名包。证书和密码不得提交到仓库。
+
+本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
+
+Windows Authenticode 证书及其安全签名服务/时间戳配置尚未接线。公开发布前仍应把它视为上线门槛，否则 Windows SmartScreen 会产生明显信任警告。Linux 包签名是否启用由分发渠道策略决定。
 
 ### 3.4 GitHub 安全入口
 
@@ -132,6 +142,10 @@ cd ../..
 
 # Windows：构建最终品牌安装器
 ./scripts/build-branded-installer.ps1
+
+# macOS：本机 ad-hoc 候选包；正式候选包追加 --signed
+# Intel 本地包可追加 --target x86_64-apple-darwin
+bash ./scripts/build-macos.sh
 ```
 
 至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。
@@ -228,8 +242,9 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 | 文件 | 作用 |
 | --- | --- |
 | `.github/workflows/ci.yml` | 合并前质量门和版本漂移检查 |
-| `.github/workflows/release.yml` | tag 校验、跨平台构建、Draft 聚合与发布 |
+| `.github/workflows/release.yml` | tag 校验、跨平台构建、Apple 签名公证、Draft 聚合与发布 |
 | `.github/release.yml` | GitHub 自动 Release Notes 分类 |
 | `scripts/release.mjs` | 版本同步、CHANGELOG 盖章和 tag 一致性校验 |
+| `scripts/build-macos.sh` | macOS app/dmg 本地构建、签名与公证验收 |
 | `src-tauri/tauri.conf.json` | Bundle、updater endpoint 和公钥 |
 | `CHANGELOG.md` | 用户可见版本历史 |

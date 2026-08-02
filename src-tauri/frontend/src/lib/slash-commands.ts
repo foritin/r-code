@@ -1,3 +1,5 @@
+import type { WorkflowSkill } from "./types";
+
 export type SlashCommandLocation = "home" | "room";
 export type SlashCommandCategory = "session" | "view" | "workflow" | "integration";
 export type SlashCommandKind = "local" | "workflow";
@@ -15,6 +17,7 @@ export interface SlashCommandDefinition {
   blockedWhileRunning?: boolean;
   requiresRunning?: boolean;
   keywords?: string[];
+  skill?: WorkflowSkill;
 }
 
 export interface SlashCommandContext {
@@ -175,8 +178,8 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   {
     name: "projects",
     aliases: ["workspaces"],
-    title: "管理项目",
-    description: "打开项目、访问权限与项目记忆管理。",
+    title: "添加或打开项目",
+    description: "从本地添加项目，或进入已有项目工作台。",
     category: "view",
     kind: "local",
     locations: ["home", "room"],
@@ -272,14 +275,13 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   },
   {
     name: "memory",
-    aliases: ["instructions"],
-    title: "项目记忆",
-    description: "查看当前项目的旧版记忆文件风险状态。",
+    aliases: ["knowledge", "instructions"],
+    title: "知识与指令",
+    description: "管理全局/项目记忆、协作 Prompt 与 Skills。",
     category: "view",
     kind: "local",
     locations: ["home", "room"],
-    requiresWorkspace: true,
-    keywords: ["约定", "上下文", "偏好"],
+    keywords: ["约定", "上下文", "偏好", "prompt", "skill"],
   },
   {
     name: "theme",
@@ -431,18 +433,6 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
     keywords: ["测试", "构建", "回归"],
   },
   {
-    name: "codex",
-    title: "委派给 Codex",
-    description: "把独立任务交给本机 Codex CLI，并使用已配置的权限。",
-    category: "integration",
-    kind: "local",
-    locations: ["room"],
-    argumentHint: "<调查任务>",
-    requiresWorkspace: true,
-    requiresRunning: true,
-    keywords: ["子代理", "CLI", "委派"],
-  },
-  {
     name: "mcp",
     title: "MCP 与 Codex 协作",
     description: "打开 Codex CLI、协作 Skill 与 MCP 的一键配置。",
@@ -487,14 +477,39 @@ for (const command of SLASH_COMMANDS) {
   for (const alias of command.aliases ?? []) commandByName.set(alias, command);
 }
 
-export function parseSlashCommand(value: string): ParsedSlashCommand | null {
+function skillCommands(skills: readonly WorkflowSkill[]): SlashCommandDefinition[] {
+  return skills
+    .filter((skill) => skill.enabled && !commandByName.has(skill.name))
+    .map((skill) => ({
+      name: skill.name,
+      title: skill.name,
+      description: skill.description,
+      category: "workflow" as const,
+      kind: "workflow" as const,
+      locations: ["home", "room"] as SlashCommandLocation[],
+      argumentHint: "[补充要求]",
+      keywords: [skill.source === "builtin" ? "内置 skill" : "自定义 skill", "skill", "技能"],
+      skill,
+    }));
+}
+
+function commandLookup(skills: readonly WorkflowSkill[]): Map<string, SlashCommandDefinition> {
+  const lookup = new Map(commandByName);
+  for (const command of skillCommands(skills)) lookup.set(command.name, command);
+  return lookup;
+}
+
+export function parseSlashCommand(
+  value: string,
+  skills: readonly WorkflowSkill[] = []
+): ParsedSlashCommand | null {
   const match = /^\/([a-z0-9-]+)(?:\s+([\s\S]*))?\s*$/i.exec(value.trim());
   if (!match) return null;
   const rawName = match[1].toLowerCase();
   return {
     rawName,
     args: (match[2] ?? "").trim(),
-    command: commandByName.get(rawName) ?? null,
+    command: commandLookup(skills).get(rawName) ?? null,
   };
 }
 
@@ -517,11 +532,17 @@ export function commandUnavailableReason(
 
 export function matchingSlashCommands(
   value: string,
-  context: SlashCommandContext
+  context: SlashCommandContext,
+  skills: readonly WorkflowSkill[] = []
 ): SlashCommandDefinition[] {
   const query = slashSearchQuery(value);
   if (query == null) return [];
-  return SLASH_COMMANDS.filter((command) => command.locations.includes(context.location))
+  const dynamicSkills = skillCommands(skills);
+  // A bare slash is the discovery entry point for user workflows, so keep enabled Skills in
+  // the first visible rows. Static commands remain available immediately below them.
+  const catalog = query ? [...SLASH_COMMANDS, ...dynamicSkills] : [...dynamicSkills, ...SLASH_COMMANDS];
+  return catalog
+    .filter((command) => command.locations.includes(context.location))
     .filter((command) => {
       if (!query) return true;
       const haystack = [
@@ -543,6 +564,18 @@ export function slashCommandInsertion(command: SlashCommandDefinition): string {
 
 export function workflowPrompt(command: SlashCommandDefinition, args: string): string {
   const scope = args.trim();
+  if (command.skill) {
+    const metadata = JSON.stringify({
+      id: command.skill.id,
+      name: command.skill.name,
+      source: command.skill.source,
+      args: scope,
+    });
+    const supplement = scope
+      ? `\n\n本次用户补充要求：\n${scope}`
+      : "";
+    return `[R-CODE-SKILL] ${metadata}\n\n${command.skill.instructions}${supplement}`;
+  }
   let instruction: string;
   switch (command.name) {
     case "plan":

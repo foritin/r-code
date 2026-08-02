@@ -16,6 +16,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 基于 PTY 与 OSC 133 的集成终端，支持原始输出增量读取和外部 CLI 会话解析。
 - Windows x64、macOS Apple Silicon 与 Linux x64 的 GitHub Actions 发布矩阵及 Tauri 自动更新产物。
 - Windows 品牌安装器，支持自定义安装位置、快捷方式选项、真实阶段进度、取消保护和完成后启动。
+- macOS 原生 traffic-light 标题栏、GUI shell PATH 恢复、可见 Codex 登录终端，以及 Developer ID 签名/公证打包脚本。
 - GitHub 可直接预览的架构、发布、安全和隐私文档，以及版本一致性检查脚本。
 
 ### Security

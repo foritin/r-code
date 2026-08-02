@@ -894,6 +894,31 @@ impl<'a> ToolCallRepository<'a> {
         .map_err(db_err)?;
         Ok(())
     }
+
+    /// 子运行已经进入终态、但外部事件流没有为部分工具发出结果时，立即关闭这些
+    /// 残留审计行。它们不能继续显示为“运行中”，也不能被误记为成功。
+    pub fn finish_running_for_run_as_error(
+        &self,
+        run_id: &str,
+        output: &serde_json::Value,
+    ) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let updated = conn
+            .execute(
+                "UPDATE tool_calls \
+                 SET output_json = COALESCE(output_json, ?1), status = ?2, ended_at = ?3 \
+                 WHERE run_id = ?4 AND status = ?5",
+                params![
+                    output.to_string(),
+                    ToolCallStatus::Error.to_string(),
+                    Utc::now().to_rfc3339(),
+                    run_id,
+                    ToolCallStatus::Running.to_string(),
+                ],
+            )
+            .map_err(db_err)?;
+        Ok(updated as u64)
+    }
 }
 
 // ============================================================================
@@ -1056,7 +1081,7 @@ impl<'a> TaskEventStore<'a> {
                 "SELECT event.id, event.task_id, event.branch_id, event.event_type, event.created_at \
                  FROM task_events AS event \
                  INNER JOIN tasks AS task ON task.id = event.task_id \
-                 WHERE task.workspace_path = ?1 AND event.id < ?2 \
+                 WHERE task.workspace_path = ?1 AND task.state != 'archived' AND event.id < ?2 \
                  ORDER BY event.id DESC LIMIT ?3",
             )
             .map_err(db_err)?;

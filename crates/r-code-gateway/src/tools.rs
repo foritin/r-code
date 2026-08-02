@@ -20,7 +20,7 @@ use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
 use r_code_core::process::hide_background_console;
 
-use crate::gateway::Tool;
+use crate::gateway::{PathBinding, Tool};
 
 /// `read_file` 不带 limit 时，单次最多返回的行数。
 ///
@@ -208,6 +208,10 @@ impl Tool for ListFilesTool {
 /// R0：只读。使用 `git status --porcelain=v1`。
 pub struct GitStatusTool;
 
+/// `path` 在模型契约中是可选的；缺省时必须由会话的 `PathGuard`
+/// 注入已校验的工作区根，不能让执行器回落到 R-Code 进程 CWD。
+const GIT_STATUS_PATH_BINDINGS: &[PathBinding] = &[PathBinding::default_root("path")];
+
 #[async_trait]
 impl Tool for GitStatusTool {
     fn name(&self) -> &str {
@@ -218,6 +222,9 @@ impl Tool for GitStatusTool {
     }
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R0
+    }
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        GIT_STATUS_PATH_BINDINGS
     }
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -735,6 +742,14 @@ mod tests {
         let tool = GitStatusTool;
         // 不传 path，使用 CWD（可能是 git 仓库也可能不是，只要不 panic 即可）
         let _ = tool.execute(serde_json::json!({})).await;
+    }
+
+    #[test]
+    fn git_status_declares_workspace_root_as_its_missing_path_default() {
+        let bindings = GitStatusTool.path_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].key, "path");
+        assert_eq!(bindings[0].arity, crate::gateway::PathArity::DefaultRoot);
     }
 
     #[tokio::test]

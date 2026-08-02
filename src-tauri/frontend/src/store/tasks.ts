@@ -59,6 +59,64 @@ interface TasksState {
   setCurrentProject: (projectId: string | null) => void;
 }
 
+/**
+ * Tauri IPC payloads are plain JSON values.  Polling returns a fresh object graph even when
+ * nothing changed, so assigning every response used to wake every dependent React subtree.
+ * Cache the serialization of retained graphs and preserve their references on equal payloads.
+ */
+const payloadSignatures = new WeakMap<object, string>();
+
+function payloadSignature(value: object): string {
+  const cached = payloadSignatures.get(value);
+  if (cached !== undefined) return cached;
+  const signature = JSON.stringify(value);
+  payloadSignatures.set(value, signature);
+  return signature;
+}
+
+function samePayload<T>(left: T, right: T): boolean {
+  if (Object.is(left, right)) return true;
+  if (left == null || right == null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  return payloadSignature(left) === payloadSignature(right);
+}
+
+function mergeChangedDetails(
+  current: Record<string, TaskDetail>,
+  incoming: Record<string, TaskDetail>,
+): Record<string, TaskDetail> {
+  let next = current;
+  for (const [taskId, detail] of Object.entries(incoming)) {
+    if (samePayload(current[taskId], detail)) continue;
+    if (next === current) next = { ...current };
+    next[taskId] = detail;
+  }
+  return next;
+}
+
+const detailRequests = new Map<string, Promise<TaskDetail>>();
+
+async function loadTaskDetail(taskId: string): Promise<TaskDetail> {
+  try {
+    return await ipc.taskDetail(taskId);
+  } catch (error) {
+    if (!shouldUseBrowserMock() || !browserMockDetails[taskId]) throw error;
+    return browserMockDetails[taskId];
+  }
+}
+
+function requestTaskDetail(taskId: string): Promise<TaskDetail> {
+  const pending = detailRequests.get(taskId);
+  if (pending) return pending;
+
+  const request = loadTaskDetail(taskId).finally(() => {
+    if (detailRequests.get(taskId) === request) detailRequests.delete(taskId);
+  });
+  detailRequests.set(taskId, request);
+  return request;
+}
+
 export const useTasksStore = create<TasksState>((set, get) => ({
   tasks: [],
   details: {},
@@ -70,13 +128,23 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   refreshedAt: 0,
 
   refreshTasks: async () => {
+    let tasks: Task[];
+    let fallbackDetails: Record<string, TaskDetail> | null = null;
     try {
-      const tasks = await ipc.taskList(undefined, false);
-      set({ tasks, refreshedAt: Date.now() });
+      tasks = await ipc.taskList(undefined, false);
     } catch (error) {
       if (!shouldUseBrowserMock()) throw error;
-      set({ tasks: browserMockTasks, details: browserMockDetails, refreshedAt: Date.now() });
+      tasks = browserMockTasks;
+      fallbackDetails = browserMockDetails;
     }
+    set((s) => {
+      const nextTasks = samePayload(s.tasks, tasks) ? s.tasks : tasks;
+      const nextDetails = fallbackDetails
+        ? mergeChangedDetails(s.details, fallbackDetails)
+        : s.details;
+      if (nextTasks === s.tasks && nextDetails === s.details) return s;
+      return { tasks: nextTasks, details: nextDetails, refreshedAt: Date.now() };
+    });
   },
 
   refreshWorkspaces: async () => {
@@ -87,24 +155,23 @@ export const useTasksStore = create<TasksState>((set, get) => ({
       if (!shouldUseBrowserMock()) throw error;
       workspaces = browserMockWorkspaces;
     }
-    set((s) => ({
-      workspaces,
+    set((s) => {
       // 不能因为存在最近项目就自动把它附加到新对话：默认应是纯聊天。
-      currentProjectId: workspaces.some((w) => w.canonical_path === s.currentProjectId)
+      const currentProjectId = workspaces.some((w) => w.canonical_path === s.currentProjectId)
         ? s.currentProjectId
-        : null,
-    }));
+        : null;
+      const nextWorkspaces = samePayload(s.workspaces, workspaces) ? s.workspaces : workspaces;
+      if (nextWorkspaces === s.workspaces && currentProjectId === s.currentProjectId) return s;
+      return { workspaces: nextWorkspaces, currentProjectId };
+    });
   },
 
   refreshDetail: async (taskId) => {
-    let detail: TaskDetail;
-    try {
-      detail = await ipc.taskDetail(taskId);
-    } catch (error) {
-      if (!shouldUseBrowserMock() || !browserMockDetails[taskId]) throw error;
-      detail = browserMockDetails[taskId];
-    }
-    set((s) => ({ details: { ...s.details, [taskId]: detail } }));
+    const detail = await requestTaskDetail(taskId);
+    set((s) => {
+      if (samePayload(s.details[taskId], detail)) return s;
+      return { details: { ...s.details, [taskId]: detail } };
+    });
   },
 
   refreshDetails: async (taskIds) => {
@@ -113,37 +180,54 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     try {
       const batch = await ipc.taskDetailBatch(ids);
       const details = Object.fromEntries(batch.details.map((detail) => [detail.task.id, detail]));
-      set((s) => ({ details: { ...s.details, ...details } }));
+      set((s) => {
+        const nextDetails = mergeChangedDetails(s.details, details);
+        return nextDetails === s.details ? s : { details: nextDetails };
+      });
     } catch {
       // 批量接口在旧桌面端不可用时，保留逐项降级，避免一次升级影响现有会话。
       const results: Record<string, TaskDetail> = {};
       for (const id of ids) {
         try {
-          results[id] = await ipc.taskDetail(id);
+          results[id] = await requestTaskDetail(id);
         } catch {
           if (shouldUseBrowserMock() && browserMockDetails[id]) results[id] = browserMockDetails[id];
         }
       }
-      if (Object.keys(results).length) set((s) => ({ details: { ...s.details, ...results } }));
+      if (Object.keys(results).length) {
+        set((s) => {
+          const nextDetails = mergeChangedDetails(s.details, results);
+          return nextDetails === s.details ? s : { details: nextDetails };
+        });
+      }
     }
   },
 
   refreshDashboard: async (workspacePath) => {
     const dashboard = await ipc.workspaceDashboard(workspacePath);
-    set((s) => ({ dashboards: { ...s.dashboards, [workspacePath]: dashboard } }));
+    set((s) =>
+      samePayload(s.dashboards[workspacePath], dashboard)
+        ? s
+        : { dashboards: { ...s.dashboards, [workspacePath]: dashboard } }
+    );
   },
 
   refreshProjectActivity: async (workspacePath) => {
     const page = await ipc.projectActivityList(workspacePath);
-    set((s) => ({ projectActivities: { ...s.projectActivities, [workspacePath]: page } }));
+    set((s) =>
+      samePayload(s.projectActivities[workspacePath], page)
+        ? s
+        : { projectActivities: { ...s.projectActivities, [workspacePath]: page } }
+    );
   },
 
   refreshActivity: async () => {
     const activityPage = await ipc.activityList();
-    set({ activityPage });
+    set((s) => (samePayload(s.activityPage, activityPage) ? s : { activityPage }));
   },
 
-  setCurrentProject: (currentProjectId) => set({ currentProjectId }),
+  setCurrentProject: (currentProjectId) =>
+    set((s) => (s.currentProjectId === currentProjectId ? s : { currentProjectId })),
 }));
 
 // ---------- 派生选择器 ----------

@@ -223,11 +223,11 @@ export interface DashboardAttentionItem {
 
 export interface WorkspaceDashboardMetrics {
   task_count: number;
+  archived_task_count: number;
   pending_permission_count: number;
   review_ready_count: number;
   running_task_count: number;
   active_subagent_count: number;
-  completed_last_hour_count: number;
 }
 
 export interface WorkspaceDashboard {
@@ -236,7 +236,7 @@ export interface WorkspaceDashboard {
   metrics: WorkspaceDashboardMetrics;
   tasks: DashboardTaskSummary[];
   attention: DashboardAttentionItem[];
-  completed: DashboardTaskSummary[];
+  archived: Task[];
 }
 
 export interface ProjectActivityItem {
@@ -469,6 +469,7 @@ export interface SessionMessage {
 
 // ---------- 变更 diff（cmd_change_diff 返回） ----------
 export interface ChangeDiffLine {
+  line_id?: string;
   kind: "ctx" | "add" | "del" | "hunk";
   text: string;
   old_no?: number;
@@ -650,8 +651,86 @@ export interface AppConfig {
   storage?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
   orchestration?: OrchestrationConfig;
+  /** 用户级协作提示，保存在 R-Code AppData，不进入任何项目。 */
+  agent_prompts?: AgentPromptConfig;
   tauri?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface ReviewPathStatus {
+  path: string;
+  staged: boolean;
+  remaining: boolean;
+  conflict: boolean;
+  preexisting_dirty: boolean;
+  safe_to_accept: boolean;
+  blocker?: string | null;
+}
+
+export interface ReviewGitStatus {
+  git_repository: boolean;
+  repo_root?: string | null;
+  paths: ReviewPathStatus[];
+  staged_count: number;
+  remaining_count: number;
+  conflict_count: number;
+  can_accept_all: boolean;
+}
+
+export interface ReviewAcceptResult {
+  path?: string | null;
+  staged_count: number;
+  remaining_count: number;
+  fully_accepted: boolean;
+}
+
+export interface GitDeliveryStatus {
+  branch?: string | null;
+  upstream?: string | null;
+  ahead: number;
+  behind: number;
+  staged_task_paths: string[];
+  staged_other_paths: string[];
+  can_commit: boolean;
+  can_push: boolean;
+  blockers: string[];
+}
+
+export interface GitCommitResult {
+  sha: string;
+  message: string;
+}
+
+export interface GitPushResult {
+  sha: string;
+  branch: string;
+  upstream: string;
+}
+
+export type WorkflowSkillSource = "builtin" | "custom";
+
+export interface WorkflowSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  source: WorkflowSkillSource;
+  enabled: boolean;
+  overridden: boolean;
+}
+
+export interface WorkflowSkillDraft {
+  id?: string | null;
+  name: string;
+  description: string;
+  instructions: string;
+  source: WorkflowSkillSource;
+  enabled: boolean;
+}
+
+export interface AgentPromptConfig {
+  main_agent: string;
+  subagent: string;
 }
 
 export interface OrchestrationConfig {
