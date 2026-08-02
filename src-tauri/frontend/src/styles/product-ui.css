@@ -289,6 +289,52 @@
   padding: 0;
 }
 
+.rail-resizer {
+  position: absolute;
+  z-index: 42;
+  top: var(--rc-topbar-h);
+  bottom: 0;
+  left: calc(var(--rc-current-rail) - 5px);
+  width: 10px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.rail-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: color-mix(in srgb, var(--accent) 62%, var(--border));
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 120ms ease-out;
+}
+
+.rail-resizer:hover::after,
+.rail-resizer:focus-visible::after,
+.rail-resizer.is-active::after {
+  opacity: 1;
+}
+
+#app.rail-is-collapsed .rail-resizer {
+  display: none;
+}
+
+#app.rail-is-resizing,
+#app.rail-is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+@media (max-width: 760px) {
+  .rail-resizer {
+    display: none;
+  }
+}
+
 /* Shared compact page chrome */
 .dashboard-scroll,
 .conversation-list-page,
@@ -1017,45 +1063,6 @@
 @media (max-width: 1119px) {
   .compact-search-toggle {
     display: grid;
-  }
-  #app.app-shell:not(.rail-is-collapsed) {
-    --rc-current-rail: var(--rc-rail-collapsed-w);
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .app-sidebar {
-    padding: 0 10px 10px;
-    align-items: center;
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .rail-label,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item b,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-projects,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-search {
-    display: none;
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-brand-row,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-new,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer-action {
-    justify-content: center;
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-brand {
-    flex: none;
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-create,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer {
-    width: 100%;
-  }
-
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-new,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-nav-item,
-  #app.app-shell:not(.rail-is-collapsed) .sidebar-footer-action {
-    padding-right: 0;
-    padding-left: 0;
   }
 
   #app.app-shell .main > .scene-inbox,

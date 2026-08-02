@@ -80,6 +80,8 @@ interface AppState {
   editorFile: string | null;
   /** 侧栏是否折叠（Ctrl+B） */
   railCollapsed: boolean;
+  /** 展开时的侧栏宽度；折叠宽度仍由布局 token 控制。 */
+  railWidth: number;
   /** Deck 密度模式 */
   deckDensity: "cards" | "rows";
   /** 外观模式（亮/暗/跟随系统） */
@@ -114,6 +116,7 @@ interface AppState {
   setSearchOpen: (open: boolean) => void;
   setEditorFile: (path: string | null) => void;
   toggleRail: () => void;
+  setRailWidth: (width: number) => void;
   setDeckDensity: (d: "cards" | "rows") => void;
   setThemeMode: (mode: ThemeMode) => void;
   setZoom: (level: number) => void;
@@ -124,6 +127,10 @@ interface AppState {
 }
 
 const RAIL_KEY = "r-code.rail.collapsed";
+const RAIL_WIDTH_KEY = "r-code.rail.width";
+export const DEFAULT_RAIL_WIDTH = 300;
+export const MIN_RAIL_WIDTH = 232;
+export const MAX_RAIL_WIDTH = 520;
 const THEME_KEY = "r-code.theme.mode";
 let fileNavigationSequence = 0;
 let fileReferenceSequence = 0;
@@ -172,6 +179,20 @@ function readCollapsed(): boolean {
     return window.localStorage.getItem(RAIL_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+export function clampRailWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_RAIL_WIDTH;
+  return Math.round(Math.min(MAX_RAIL_WIDTH, Math.max(MIN_RAIL_WIDTH, width)));
+}
+
+function readRailWidth(): number {
+  try {
+    const saved = Number(window.localStorage.getItem(RAIL_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampRailWidth(saved) : DEFAULT_RAIL_WIDTH;
+  } catch {
+    return DEFAULT_RAIL_WIDTH;
   }
 }
 
@@ -256,6 +277,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   searchOpen: false,
   editorFile: null,
   railCollapsed: readCollapsed(),
+  railWidth: readRailWidth(),
   deckDensity: "cards",
   themeMode: readThemeMode(),
   zoomLevel: 100,
@@ -495,6 +517,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { railCollapsed };
     }),
+  setRailWidth: (width) => {
+    const railWidth = clampRailWidth(width);
+    try {
+      window.localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth));
+    } catch {
+      // 受限环境下不持久化，不影响本次使用
+    }
+    set({ railWidth });
+  },
   setDeckDensity: (deckDensity) => set({ deckDensity }),
   setThemeMode: (themeMode) => {
     try {
