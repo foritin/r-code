@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$WindowsOnly
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -9,7 +11,11 @@ $iconsRoot = Join-Path $repoRoot "icons"
 $fullbleedSource = Join-Path $iconsRoot "source\master\r-code-icon-bright-1024-fullbleed.png"
 $insetSource = Join-Path $iconsRoot "source\master\r-code-icon-bright-1024.png"
 
-foreach ($source in @($fullbleedSource, $insetSource)) {
+$requiredSources = @($fullbleedSource)
+if (-not $WindowsOnly) {
+    $requiredSources += $insetSource
+}
+foreach ($source in $requiredSources) {
     if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
         throw "Icon source not found: $source"
     }
@@ -18,6 +24,11 @@ foreach ($source in @($fullbleedSource, $insetSource)) {
 $cargo = Get-Command cargo -ErrorAction SilentlyContinue
 if (-not $cargo) {
     throw "cargo is required to generate the Tauri icon assets"
+}
+
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+    throw "node is required to render the pixel-aligned small icon assets"
 }
 
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("r-code-icons-" + [Guid]::NewGuid().ToString("N"))
@@ -83,6 +94,16 @@ function Write-PngIco {
     }
 }
 
+function Invoke-SmallIconRenderer {
+    param([string]$OutputDirectory)
+
+    $renderer = Join-Path $repoRoot "scripts\render-small-app-icons.mjs"
+    & $node.Source $renderer --output $OutputDirectory --sizes "16,20,24,32"
+    if ($LASTEXITCODE -ne 0) {
+        throw "small icon renderer failed with exit code $LASTEXITCODE"
+    }
+}
+
 try {
     $sizes = @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256, 512)
     Invoke-TauriIcon -Arguments @(
@@ -90,17 +111,22 @@ try {
         "--output", $pngOutput,
         "--png", ($sizes -join ",")
     )
-    Invoke-TauriIcon -Arguments @(
-        "tauri", "icon", $insetSource,
-        "--output", $platformOutput
-    )
+    if (-not $WindowsOnly) {
+        Invoke-TauriIcon -Arguments @(
+            "tauri", "icon", $insetSource,
+            "--output", $platformOutput
+        )
+    }
+    Invoke-SmallIconRenderer -OutputDirectory $pngOutput
 
     Copy-Item -LiteralPath (Join-Path $pngOutput "32x32.png") -Destination (Join-Path $iconsRoot "32x32.png") -Force
     Copy-Item -LiteralPath (Join-Path $pngOutput "128x128.png") -Destination (Join-Path $iconsRoot "128x128.png") -Force
     Copy-Item -LiteralPath (Join-Path $pngOutput "256x256.png") -Destination (Join-Path $iconsRoot "128x128@2x.png") -Force
     Copy-Item -LiteralPath (Join-Path $pngOutput "512x512.png") -Destination (Join-Path $iconsRoot "512x512.png") -Force
     Copy-Item -LiteralPath $fullbleedSource -Destination (Join-Path $iconsRoot "icon.png") -Force
-    Copy-Item -LiteralPath (Join-Path $platformOutput "icon.icns") -Destination (Join-Path $iconsRoot "icon.icns") -Force
+    if (-not $WindowsOnly) {
+        Copy-Item -LiteralPath (Join-Path $platformOutput "icon.icns") -Destination (Join-Path $iconsRoot "icon.icns") -Force
+    }
     Copy-Item -LiteralPath (Join-Path $pngOutput "512x512.png") -Destination (Join-Path $repoRoot "installer\frontend\icon.png") -Force
 
     Write-PngIco `
@@ -108,7 +134,8 @@ try {
         -InputDirectory $pngOutput `
         -Sizes @(16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 
-    Write-Host "R-Code application icons regenerated from the bright masters."
+    $scope = if ($WindowsOnly) { "Windows/Linux" } else { "all platforms" }
+    Write-Host "R-Code $scope icons regenerated with pixel-aligned Windows small frames."
 } finally {
     $resolvedTemp = [IO.Path]::GetFullPath($tempRoot)
     $systemTemp = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
