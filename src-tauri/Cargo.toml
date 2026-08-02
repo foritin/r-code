@@ -67,5 +67,12 @@ anyhow = { workspace = true }
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
 
+# Finder 启动的 macOS GUI 应用不会继承登录 shell 的 PATH。固定到已审核的 Tauri
+# helper revision，确保 Homebrew/npm/nvm 安装的 Codex CLI 与 Node.js 能被发现。
+[target.'cfg(target_os = "macos")'.dependencies]
+fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
+# 约束 fix-path-env 的传递依赖，保持 workspace 声明的 Rust 1.80 最低版本。
+home = "=0.5.9"
+
 [build-dependencies]
 tauri-build = { workspace = true }

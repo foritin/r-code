@@ -29,6 +29,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use hermes_core::{
     CompletionRequest, ContentBlock, FileSource, InferenceOptions, Message, Role, SessionEvent,
@@ -57,9 +60,11 @@ use r_code_gateway::permission::{PermissionCheckResult, PermissionEngine};
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
-    AgentRunRepository, BlobStore, ChangeService, Database, NotificationRepository,
-    QueuedMessageRepository, ReviewService, SessionBranchRepository, TaskEventStore,
-    TaskRepository, ToolCallRepository, VerificationConfig, VerificationService, WorkspaceService,
+    AgentRunRepository, BlobStore, ChangeService, Database, GitCommitResult, GitDeliveryStatus,
+    GitPushResult, GitService, GitTreeChangeKind, NewRunWorkspaceSnapshot, NotificationRepository,
+    QueuedMessageRepository, ReviewAcceptResult, ReviewDiffLineKind, ReviewGitService,
+    ReviewGitStatus, ReviewService, SessionBranchRepository, TaskEventStore, TaskRepository,
+    ToolCallRepository, VerificationConfig, VerificationService, WorkspaceService,
 };
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
 pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
@@ -78,6 +83,9 @@ use crate::search::SearchService;
 use crate::settings::SettingsService;
 use crate::skills::SkillManager;
 use crate::support_bundle::SupportBundle;
+use crate::workflow_skills::{
+    SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
+};
 
 // ============================================================================
 // AgentBridge -- Mock runtime + 任务会话映射
@@ -96,6 +104,94 @@ struct ActiveRun {
     branch_id: String,
     runtime_session_id: String,
     run_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct PendingWorkspaceSnapshot {
+    repo_root: PathBuf,
+    workspace_root: PathBuf,
+    entry_head_tree: Option<String>,
+    entry_index_tree: String,
+    entry_worktree_tree: String,
+}
+
+#[derive(Debug, Clone)]
+struct AgentRuntimePaths {
+    blobs_dir: PathBuf,
+    sessions_dir: PathBuf,
+    config_dir: PathBuf,
+}
+
+fn capture_workspace_snapshot(db: &Database, task: &Task) -> Option<PendingWorkspaceSnapshot> {
+    let workspace = task_workspace_binding_from_db(db, task)
+        .ok()
+        .and_then(|(path, _)| path)
+        .map(PathBuf::from)?;
+    let git = GitService::new(workspace.clone());
+    let repo_root = git.repo_root().ok()?.canonicalize().ok()?;
+    let workspace_root = workspace.canonicalize().ok()?;
+    let entry_head_tree = git.head_tree().ok().flatten();
+    let entry_index_tree = git.index_snapshot().ok().flatten()?;
+    let entry_worktree_tree = git.entry_snapshot().ok().flatten()?;
+    Some(PendingWorkspaceSnapshot {
+        repo_root,
+        workspace_root,
+        entry_head_tree,
+        entry_index_tree,
+        entry_worktree_tree,
+    })
+}
+
+async fn finalize_workspace_snapshot(
+    db: &Database,
+    blobs_dir: &Path,
+    run_id: &str,
+) -> Result<usize, ProductError> {
+    let changes = ChangeService::new(db, blobs_dir.to_path_buf());
+    let Some(snapshot) = changes.get_run_workspace_snapshot(run_id)? else {
+        return Ok(0);
+    };
+    if snapshot.exit_worktree_tree.is_some() {
+        return Ok(0);
+    }
+
+    let repo_root = PathBuf::from(&snapshot.repo_root);
+    let workspace_root = PathBuf::from(&snapshot.workspace_root);
+    let git = GitService::new(repo_root.clone());
+    let Some(exit_tree) = git.entry_snapshot()? else {
+        return Ok(0);
+    };
+    let mut recorded = 0;
+    for tree_change in git.tree_changes(&snapshot.entry_worktree_tree, &exit_tree)? {
+        let physical_path = repo_root.join(Path::new(&tree_change.path));
+        let Ok(workspace_path) = physical_path.strip_prefix(&workspace_root) else {
+            continue;
+        };
+        let display_path = workspace_path.to_string_lossy().replace('\\', "/");
+        if display_path.is_empty() {
+            continue;
+        }
+        let before = git.blob_at_tree(&snapshot.entry_worktree_tree, &tree_change.path)?;
+        let after = git.blob_at_tree(&exit_tree, &tree_change.path)?;
+        let kind = match tree_change.kind {
+            GitTreeChangeKind::Added => FileChangeType::Create,
+            GitTreeChangeKind::Modified => FileChangeType::Modify,
+            GitTreeChangeKind::Deleted => FileChangeType::Delete,
+        };
+        changes
+            .record_snapshot_change(
+                run_id,
+                &snapshot.task_id,
+                &display_path,
+                kind,
+                before.as_deref(),
+                after.as_deref(),
+            )
+            .await?;
+        recorded += 1;
+    }
+    changes.finalize_run_workspace_snapshot(run_id, &exit_tree)?;
+    Ok(recorded)
 }
 
 /// 应用本次启动前遗留的活动记录。
@@ -273,6 +369,16 @@ impl AgentBridge {
 // CommandState -- 命令执行所需的全局状态
 // ============================================================================
 
+#[derive(Default)]
+struct LegacyReconciliationCache {
+    /// Tasks whose legacy audit fallback reached a stable result during this app session.
+    completed: HashSet<String>,
+    /// Serialize the first reconciliation per task so Room and Rail polls cannot duplicate it.
+    task_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    #[cfg(test)]
+    uncached_runs: HashMap<String, usize>,
+}
+
 /// 命令状态 -- 持有所有命令执行所需的服务与存储。
 pub struct CommandState {
     /// SQLite 数据库（产品状态源）
@@ -305,6 +411,8 @@ pub struct CommandState {
     pub agent_event_sink: Mutex<Option<AgentEventSink>>,
     /// 工具门（内置工具 + 权限门 + 审计账本），真实 runtime 的 ToolHost 来源
     pub tool_gateway: Arc<r_code_gateway::ToolGateway>,
+    /// 旧版审核补录只允许稳定任务扫描一次；当前运行中的任务仍可在结束后重试。
+    legacy_reconciliation: tokio::sync::Mutex<LegacyReconciliationCache>,
 }
 
 /// Agent 事件出口闭包（task_id, event）——由 bin 侧用 AppHandle 实现 emit。
@@ -341,6 +449,9 @@ impl CommandState {
         gateway.register(Box::new(r_code_gateway::GlobTool));
         gateway.register(Box::new(r_code_gateway::GitStatusTool));
         gateway.register(Box::new(r_code_gateway::LoadSkillTool));
+        gateway.register(Box::new(SaveWorkflowSkillTool::new(
+            WorkflowSkillCatalog::new(config_dir.join("workflow-skills")),
+        )));
         // 写入（R2）
         gateway.register(Box::new(r_code_gateway::EditTool));
         gateway.register(Box::new(r_code_gateway::ApplyPatchTool));
@@ -364,6 +475,7 @@ impl CommandState {
             startup_recovery: Arc::new(Mutex::new(startup_recovery)),
             agent_event_sink: Mutex::new(None),
             tool_gateway: Arc::new(gateway),
+            legacy_reconciliation: tokio::sync::Mutex::new(LegacyReconciliationCache::default()),
         }
     }
 
@@ -557,11 +669,11 @@ pub struct DashboardAttentionItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceDashboardMetrics {
     pub task_count: u32,
+    pub archived_task_count: u32,
     pub pending_permission_count: u32,
     pub review_ready_count: u32,
     pub running_task_count: u32,
     pub active_subagent_count: u32,
-    pub completed_last_hour_count: u32,
 }
 
 /// 一个项目的完整仪表盘数据源。
@@ -572,7 +684,7 @@ pub struct WorkspaceDashboard {
     pub metrics: WorkspaceDashboardMetrics,
     pub tasks: Vec<DashboardTaskSummary>,
     pub attention: Vec<DashboardAttentionItem>,
-    pub completed: Vec<DashboardTaskSummary>,
+    pub archived: Vec<Task>,
 }
 
 /// 可分页的项目 / 全局活动项。
@@ -728,6 +840,9 @@ pub enum ChangeDiffLineKind {
 /// 单文件 diff 的一行。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeDiffLine {
+    /// 可用于接受单行的稳定标识；上下文与分隔行没有标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_id: Option<String>,
     /// 行类型
     pub kind: ChangeDiffLineKind,
     /// 行文本（不含换行符）
@@ -1363,6 +1478,24 @@ pub async fn task_archive(state: &CommandState, task_id: &str) -> Result<Task, S
         .ok_or_else(|| format!("task not found after archive: {task_id}"))
 }
 
+/// 将归档会话还原为空闲状态，使其重新出现在项目任务与对话列表中。
+pub async fn task_restore(state: &CommandState, task_id: &str) -> Result<Task, String> {
+    let repo = TaskRepository::new(&state.db);
+    let task = repo
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state != TaskState::Archived {
+        return Ok(task);
+    }
+
+    repo.update_state(task_id, TaskState::Idle)
+        .map_err(err_str)?;
+    repo.get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found after restore: {task_id}"))
+}
+
 fn remove_task_session_logs(sessions_dir: &Path, task_id: &str, storage_ids: &HashSet<String>) {
     // 只枚举 R-Code 自己的会话目录，不接受调用方提供的删除目标。工作区目录永远
     // 不会进入这条路径。
@@ -1689,10 +1822,7 @@ pub async fn task_detail(state: &CommandState, task_id: &str) -> Result<TaskDeta
         .list_by_task_branch(task_id, &active_branch.id, Some(400), None)
         .map_err(err_str)?;
 
-    let changes = ChangeService::new(&state.db, state.blobs_dir.clone())
-        .list_changes(task_id)
-        .await
-        .map_err(err_str)?;
+    let changes = changes_list(state, task_id).await?;
 
     let permissions = state.permission_engine.pending_for_task(task_id).await;
 
@@ -1866,20 +1996,24 @@ pub async fn workspace_dashboard(
             "workspace is not open; choose the folder before viewing its dashboard".to_string()
         })?;
     let tasks = TaskRepository::new(&state.db)
-        .list(Some(&workspace.canonical_path), None, false)
+        .list(Some(&workspace.canonical_path), None, true)
         .map_err(err_str)?;
 
     let now = chrono::Utc::now();
-    let completed_since = now - chrono::Duration::hours(1);
     let runs = AgentRunRepository::new(&state.db);
     let change_service = ChangeService::new(&state.db, state.blobs_dir.clone());
     let verification_service = VerificationService::new(&state.db, state.blobs_dir.clone());
     let mut metrics = WorkspaceDashboardMetrics::default();
     let mut summaries = Vec::with_capacity(tasks.len());
     let mut attention = Vec::new();
-    let mut completed = Vec::new();
+    let mut archived = Vec::new();
 
     for task in tasks {
+        if task.state == TaskState::Archived {
+            metrics.archived_task_count += 1;
+            archived.push(task);
+            continue;
+        }
         metrics.task_count += 1;
         let task_runs = runs.list_by_task(&task.id).map_err(err_str)?;
         let active_run = current_dashboard_run(&task_runs);
@@ -1910,10 +2044,6 @@ pub async fn workspace_dashboard(
             .iter()
             .filter(|run| run.agent_kind == AgentKind::Subagent && run.ended_at.is_none())
             .count() as u32;
-        if task.state == TaskState::Idle && task.updated_at >= completed_since {
-            metrics.completed_last_hour_count += 1;
-        }
-
         for permission in &pending_permissions {
             attention.push(DashboardAttentionItem {
                 kind: DashboardAttentionKind::Permission,
@@ -1940,9 +2070,6 @@ pub async fn workspace_dashboard(
             active_run,
             task,
         };
-        if summary.task.state == TaskState::Idle && summary.task.updated_at >= completed_since {
-            completed.push(summary.clone());
-        }
         summaries.push(summary);
     }
 
@@ -1952,8 +2079,7 @@ pub async fn workspace_dashboard(
             .then_with(|| right.task.updated_at.cmp(&left.task.updated_at))
     });
     attention.sort_by_key(|item| item.since);
-    completed.sort_by_key(|item| std::cmp::Reverse(item.task.updated_at));
-    completed.truncate(6);
+    archived.sort_by_key(|task| std::cmp::Reverse(task.updated_at));
 
     Ok(WorkspaceDashboard {
         workspace,
@@ -1961,7 +2087,7 @@ pub async fn workspace_dashboard(
         metrics,
         tasks: summaries,
         attention,
-        completed,
+        archived,
     })
 }
 
@@ -2342,6 +2468,12 @@ impl AgentBridge {
             AgentRuntimeKind::Mock(r) => r.aborted(),
         }
     }
+
+    fn set_cross_engine_delegation_enabled(&self, enabled: bool) {
+        if let AgentRuntimeKind::Real(runtime) = &self.kind {
+            runtime.set_cross_engine_delegation_enabled(enabled);
+        }
+    }
 }
 
 /// 确保 bridge 持有与指定会话服务配置一致的真实 runtime。
@@ -2359,6 +2491,7 @@ async fn ensure_real_runtime(
     // 设置页允许保留尚未完成的非默认 Provider 草稿；启动会话时只校验当前
     // 选中的 Provider，不能让无关草稿阻断已配置好的服务。
     let config = settings.load_global_unvalidated().map_err(err_str)?;
+    let agent_prompts = settings.load_agent_prompts().map_err(err_str)?;
     // 旧会话没有 provider_name 时才使用全局默认；一旦任务绑定了服务，后续全局
     // 默认变更不应影响它。
     let provider_name = requested_provider
@@ -2406,15 +2539,27 @@ async fn ensure_real_runtime(
         },
         max_review_rounds: config.orchestration.max_review_rounds,
     };
+    // 该开关是热配置：设置页在活跃运行中会直接更新同一个原子门；这里再次同步，
+    // 也覆盖用户在应用外编辑配置文件后开始下一轮交互的情况。
+    bridge.set_cross_engine_delegation_enabled(orchestration.allow_cross_engine_delegation);
+    let prompt_fingerprint = blake3::hash(
+        format!("{}\0{}", agent_prompts.main_agent, agent_prompts.subagent).as_bytes(),
+    );
     let fingerprint = format!(
-        "{provider_name}|{}|{}|{}|{:?}|{:?}|{}|{:?}",
+        "{provider_name}|{}|{}|{}|{:?}|{:?}|{}|{:?}|{}",
         pcfg.base_url,
         pcfg.model,
         pcfg.api_key,
         pcfg.max_tokens,
         pcfg.temperature,
         resolve_effective_protocol(&provider_name, pcfg).as_str(),
-        orchestration,
+        (
+            orchestration.delegation_router,
+            orchestration.quality_loop,
+            orchestration.quality_reviewer,
+            orchestration.max_review_rounds,
+        ),
+        prompt_fingerprint.to_hex(),
     );
     if matches!(&bridge.kind, AgentRuntimeKind::Real(_))
         && bridge.fingerprint.as_deref() == Some(fingerprint.as_str())
@@ -2436,8 +2581,10 @@ async fn ensure_real_runtime(
         pcfg.temperature,
     )
     .with_orchestration_policy(orchestration)
+    .with_agent_prompts(agent_prompts.clone())
     .with_codex_subagent_runner(Arc::new(RCodeCodexSubagentRunner {
         permission_engine: tool_gateway.permission_engine().clone(),
+        subagent_prompt: agent_prompts.subagent,
     }));
 
     bridge.kind = AgentRuntimeKind::Real(runtime);
@@ -2788,6 +2935,27 @@ async fn persist_runtime_event(
                 state,
                 SubagentState::Completed | SubagentState::Failed | SubagentState::Cancelled
             ) {
+                let unresolved_tool_output = serde_json::json!({
+                    "error": "subagent_ended_without_tool_result",
+                    "message": "子代理已结束，但工具没有返回完成事件；R-Code 已自动收口该记录。",
+                    "subagent_state": format!("{state:?}"),
+                });
+                match ToolCallRepository::new(db)
+                    .finish_running_for_run_as_error(&scope.run_id, &unresolved_tool_output)
+                {
+                    Ok(closed) if closed > 0 => tracing::warn!(
+                        task_id,
+                        child_run_id = %scope.run_id,
+                        closed,
+                        "closed unresolved tool calls when subagent reached a terminal state"
+                    ),
+                    Err(error) => tracing::warn!(
+                        task_id,
+                        child_run_id = %scope.run_id,
+                        "failed to close unresolved subagent tool calls: {error}"
+                    ),
+                    _ => {}
+                }
                 let repo = AgentRunRepository::new(db);
                 let already_finished = repo
                     .get(&scope.run_id)
@@ -3380,8 +3548,11 @@ pub async fn agent_send_with_mode_and_attachments(
                     state.agent.clone(),
                     state.external_agents.clone(),
                     state.db.clone(),
-                    state.sessions_dir.clone(),
-                    state.config_dir.clone(),
+                    AgentRuntimePaths {
+                        blobs_dir: state.blobs_dir.clone(),
+                        sessions_dir: state.sessions_dir.clone(),
+                        config_dir: state.config_dir.clone(),
+                    },
                     state.tool_gateway.clone(),
                     sink,
                 )
@@ -3471,6 +3642,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
         state.agent.clone(),
         state.external_agents.clone(),
         state.db.clone(),
+        state.blobs_dir.clone(),
         state.sessions_dir.clone(),
         state.config_dir.clone(),
         state.tool_gateway.clone(),
@@ -3484,6 +3656,7 @@ fn spawn_drain_loop_with_resources(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
+    blobs_dir: PathBuf,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
@@ -3627,6 +3800,10 @@ fn spawn_drain_loop_with_resources(
                 .await;
         }
 
+        if let Err(error) = finalize_workspace_snapshot(&db, &blobs_dir, &active.run_id).await {
+            tracing::warn!(run_id = %active.run_id, "failed to finalize workspace snapshot: {error}");
+        }
+
         if was_aborted {
             // runtime 已等待所有子代理确认取消；现在再结束父 Run 并发布终态，
             // 从而保证 Stop All 不会让仍在收尾的 Working 条目提前消失。
@@ -3668,8 +3845,11 @@ fn spawn_drain_loop_with_resources(
             agent,
             external_agents,
             db,
-            sessions_dir,
-            config_dir,
+            AgentRuntimePaths {
+                blobs_dir,
+                sessions_dir,
+                config_dir,
+            },
             tool_gateway,
             sink,
         )
@@ -3682,11 +3862,15 @@ async fn dispatch_next_queued(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
-    sessions_dir: PathBuf,
-    config_dir: PathBuf,
+    paths: AgentRuntimePaths,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     sink: Option<AgentEventSink>,
 ) {
+    let AgentRuntimePaths {
+        blobs_dir,
+        sessions_dir,
+        config_dir,
+    } = paths;
     loop {
         let mut bridge = agent.lock().await;
         if bridge.active.is_some() {
@@ -3735,6 +3919,7 @@ async fn dispatch_next_queued(
                 agent.clone(),
                 external_agents.clone(),
                 db.clone(),
+                blobs_dir.clone(),
                 sessions_dir.clone(),
                 config_dir.clone(),
                 tool_gateway.clone(),
@@ -3812,6 +3997,7 @@ async fn dispatch_next_queued(
                     agent,
                     external_agents,
                     db,
+                    blobs_dir,
                     sessions_dir,
                     config_dir,
                     tool_gateway,
@@ -4098,11 +4284,244 @@ pub async fn permission_pending(
 // 变更命令
 // ============================================================================
 
-pub async fn changes_list(state: &CommandState, task_id: &str) -> Result<Vec<FileChange>, String> {
-    ChangeService::new(&state.db, state.blobs_dir.clone())
+fn collect_mutation_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(key.as_str(), "path" | "file_path" | "target_path") {
+                    if let Some(path) = value.as_str() {
+                        paths.push(path.to_string());
+                    }
+                }
+                if key == "patch" {
+                    if let Some(patch) = value.as_str() {
+                        for line in patch.lines() {
+                            let path = line
+                                .strip_prefix("*** Add File: ")
+                                .or_else(|| line.strip_prefix("*** Update File: "))
+                                .or_else(|| line.strip_prefix("*** Delete File: "));
+                            if let Some(path) = path {
+                                paths.push(path.trim().to_string());
+                            }
+                        }
+                    }
+                }
+                collect_mutation_paths(value, paths);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_mutation_paths(item, paths);
+            }
+        }
+        _ => {}
+    }
+}
+
+struct LegacyReconciliationOutcome {
+    recorded: usize,
+    cacheable: bool,
+}
+
+impl LegacyReconciliationOutcome {
+    fn stable(recorded: usize) -> Self {
+        Self {
+            recorded,
+            cacheable: true,
+        }
+    }
+
+    fn retryable() -> Self {
+        Self {
+            recorded: 0,
+            cacheable: false,
+        }
+    }
+}
+
+async fn reconcile_legacy_task_changes_uncached(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<LegacyReconciliationOutcome, String> {
+    let service = ChangeService::new(&state.db, state.blobs_dir.clone());
+    if service
+        .task_has_workspace_snapshot(task_id)
+        .map_err(err_str)?
+    {
+        return Ok(LegacyReconciliationOutcome::stable(0));
+    }
+    let Some(task) = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+    else {
+        return Ok(LegacyReconciliationOutcome::stable(0));
+    };
+    if task.workspace_path.is_none() {
+        // Pure chat sessions have no local files to reconcile. This is expected, not a
+        // degraded audit state, so do not turn every detail refresh into a warning.
+        return Ok(LegacyReconciliationOutcome::stable(0));
+    }
+    let Some(run) = AgentRunRepository::new(&state.db)
+        .get_latest_main_run(task_id)
+        .map_err(err_str)?
+    else {
+        // A newly-created workspace task can start a run later, so it is not stable yet.
+        return Ok(LegacyReconciliationOutcome::retryable());
+    };
+    if run.ended_at.is_none() {
+        // Never snapshot a workspace while it is still mutating. Live tools record their own
+        // changes; the legacy fallback gets one complete pass after this run reaches a terminal
+        // state.
+        return Ok(LegacyReconciliationOutcome::retryable());
+    }
+    let root = attached_task_workspace_root(state, task_id)?;
+    let git = GitService::new(root.clone());
+    let repo_root = git
+        .repo_root()
+        .map_err(err_str)?
+        .canonicalize()
+        .map_err(err_str)?;
+    let head_tree = git.head_tree().map_err(err_str)?;
+    // Legacy tasks may have recorded only some mutation tools. Repair just the missing paths;
+    // re-inserting an already recorded path would duplicate the visible audit trail.
+    let existing_paths: HashSet<String> = service
         .list_changes(task_id)
         .await
-        .map_err(err_str)
+        .map_err(err_str)?
+        .into_iter()
+        .map(|change| change.path)
+        .collect();
+
+    let mut raw_paths = Vec::new();
+    {
+        let conn = state.db.conn().map_err(err_str)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT input_json FROM tool_calls \
+                 WHERE task_id = ?1 AND status = 'ok' AND tool_name IN \
+                       ('create_file', 'edit', 'apply_patch', 'delete_file') \
+                 ORDER BY started_at ASC",
+            )
+            .map_err(err_str)?;
+        let rows = stmt
+            .query_map([task_id], |row| row.get::<_, String>(0))
+            .map_err(err_str)?;
+        for row in rows {
+            let input = row.map_err(err_str)?;
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&input) {
+                collect_mutation_paths(&value, &mut raw_paths);
+            }
+        }
+    }
+
+    let guard = PathGuard::new(root.clone()).map_err(err_str)?;
+    let mut seen = HashSet::new();
+    let mut recorded = 0;
+    for raw_path in raw_paths {
+        let requested = PathBuf::from(&raw_path);
+        let candidate = if requested.is_absolute() {
+            requested
+        } else {
+            root.join(requested)
+        };
+        let Ok(physical) = guard.resolve(&candidate) else {
+            continue;
+        };
+        let Ok(workspace_relative) = physical.strip_prefix(guard.root()) else {
+            continue;
+        };
+        let display_path = workspace_relative.to_string_lossy().replace('\\', "/");
+        if display_path.is_empty() || !seen.insert(display_path.clone()) {
+            continue;
+        }
+        if existing_paths.contains(&display_path) {
+            continue;
+        }
+        let Ok(repo_relative) = physical.strip_prefix(&repo_root) else {
+            continue;
+        };
+        let repo_path = repo_relative.to_string_lossy().replace('\\', "/");
+        let before = match head_tree.as_deref() {
+            Some(tree) => git.blob_at_tree(tree, &repo_path).map_err(err_str)?,
+            None => None,
+        };
+        let after = if physical.is_file() {
+            Some(std::fs::read(&physical).map_err(err_str)?)
+        } else {
+            None
+        };
+        if before == after {
+            continue;
+        }
+        let change_type = match (before.is_some(), after.is_some()) {
+            (false, true) => FileChangeType::Create,
+            (true, false) => FileChangeType::Delete,
+            (true, true) => FileChangeType::Modify,
+            (false, false) => continue,
+        };
+        service
+            .record_snapshot_change(
+                &run.id,
+                task_id,
+                &display_path,
+                change_type,
+                before.as_deref(),
+                after.as_deref(),
+            )
+            .await
+            .map_err(err_str)?;
+        recorded += 1;
+    }
+    Ok(LegacyReconciliationOutcome::stable(recorded))
+}
+
+async fn reconcile_legacy_task_changes(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<usize, String> {
+    let task_lock = {
+        let mut cache = state.legacy_reconciliation.lock().await;
+        if cache.completed.contains(task_id) {
+            return Ok(0);
+        }
+        cache
+            .task_locks
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+
+    let _task_guard = task_lock.lock().await;
+    {
+        let cache = state.legacy_reconciliation.lock().await;
+        if cache.completed.contains(task_id) {
+            return Ok(0);
+        }
+    }
+    #[cfg(test)]
+    {
+        let mut cache = state.legacy_reconciliation.lock().await;
+        *cache.uncached_runs.entry(task_id.to_string()).or_default() += 1;
+    }
+
+    let outcome = reconcile_legacy_task_changes_uncached(state, task_id).await?;
+    if outcome.cacheable {
+        state
+            .legacy_reconciliation
+            .lock()
+            .await
+            .completed
+            .insert(task_id.to_string());
+    }
+    Ok(outcome.recorded)
+}
+
+pub async fn changes_list(state: &CommandState, task_id: &str) -> Result<Vec<FileChange>, String> {
+    let service = ChangeService::new(&state.db, state.blobs_dir.clone());
+    if let Err(error) = reconcile_legacy_task_changes(state, task_id).await {
+        tracing::warn!(task_id, "legacy review reconciliation failed: {error}");
+    }
+    service.list_changes(task_id).await.map_err(err_str)
 }
 
 pub async fn rollback_file(
@@ -4167,6 +4586,11 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
 }
 
 pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), String> {
+    let git_review = ReviewGitService::new(&state.db);
+    let git_status = git_review.status(task_id).map_err(err_str)?;
+    if git_status.git_repository && !git_status.paths.is_empty() {
+        git_review.accept_all(task_id).map_err(err_str)?;
+    }
     let svc = ReviewService::new(&state.db, state.blobs_dir.clone());
     svc.apply_action(task_id, ReviewAction::AcceptAll)
         .await
@@ -4176,6 +4600,100 @@ pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), Stri
         .map_err(err_str)?;
     mark_current_review_notification_read(state, task_id)?;
     Ok(())
+}
+
+pub fn review_git_status(state: &CommandState, task_id: &str) -> Result<ReviewGitStatus, String> {
+    ReviewGitService::new(&state.db)
+        .status(task_id)
+        .map_err(err_str)
+}
+
+pub fn review_accept_line(
+    state: &CommandState,
+    task_id: &str,
+    path: &str,
+    line_id: &str,
+) -> Result<ReviewAcceptResult, String> {
+    ReviewGitService::new(&state.db)
+        .accept_line(task_id, path, line_id)
+        .map_err(err_str)
+}
+
+pub fn review_accept_file(
+    state: &CommandState,
+    task_id: &str,
+    path: &str,
+) -> Result<ReviewAcceptResult, String> {
+    ReviewGitService::new(&state.db)
+        .accept_file(task_id, path)
+        .map_err(err_str)
+}
+
+pub fn review_accept_all(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<ReviewAcceptResult, String> {
+    ReviewGitService::new(&state.db)
+        .accept_all(task_id)
+        .map_err(err_str)
+}
+
+pub fn git_delivery_status(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<GitDeliveryStatus, String> {
+    ReviewGitService::new(&state.db)
+        .delivery_status(task_id)
+        .map_err(err_str)
+}
+
+pub fn git_suggest_commit_message(state: &CommandState, task_id: &str) -> Result<String, String> {
+    ReviewGitService::new(&state.db)
+        .suggest_commit_message(task_id)
+        .map_err(err_str)
+}
+
+pub fn git_commit_task(
+    state: &CommandState,
+    task_id: &str,
+    message: &str,
+) -> Result<GitCommitResult, String> {
+    ReviewGitService::new(&state.db)
+        .commit_task(task_id, message)
+        .map_err(err_str)
+}
+
+pub fn git_push_task(state: &CommandState, task_id: &str) -> Result<GitPushResult, String> {
+    ReviewGitService::new(&state.db)
+        .push_task(task_id)
+        .map_err(err_str)
+}
+
+pub fn workflow_skills_list(state: &CommandState) -> Result<Vec<WorkflowSkill>, String> {
+    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+        .list()
+        .map_err(err_str)
+}
+
+pub fn workflow_skill_save(
+    state: &CommandState,
+    draft: WorkflowSkillDraft,
+) -> Result<WorkflowSkill, String> {
+    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+        .save(draft)
+        .map_err(err_str)
+}
+
+pub fn workflow_skill_reset(state: &CommandState, id: &str) -> Result<WorkflowSkill, String> {
+    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+        .reset_builtin(id)
+        .map_err(err_str)
+}
+
+pub fn workflow_skill_delete(state: &CommandState, id: &str) -> Result<(), String> {
+    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+        .delete_custom(id)
+        .map_err(err_str)
 }
 
 /// 将审核反馈作为一个新的用户指令发送给任务，并保留明确的审计事件。
@@ -4238,6 +4756,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
             Vec::with_capacity(old.len().min(MAX_DIFF_LINES) + new.len().min(MAX_DIFF_LINES));
         for (i, l) in old.iter().take(MAX_DIFF_LINES).enumerate() {
             lines.push(ChangeDiffLine {
+                line_id: None,
                 kind: ChangeDiffLineKind::Del,
                 text: (*l).into(),
                 old_no: Some(i + 1),
@@ -4246,6 +4765,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         }
         for (i, l) in new.iter().take(MAX_DIFF_LINES).enumerate() {
             lines.push(ChangeDiffLine {
+                line_id: None,
                 kind: ChangeDiffLineKind::Add,
                 text: (*l).into(),
                 old_no: None,
@@ -4325,6 +4845,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         if !keep[idx] {
             if !in_gap {
                 lines.push(ChangeDiffLine {
+                    line_id: None,
                     kind: ChangeDiffLineKind::Hunk,
                     text: "···".into(),
                     old_no: None,
@@ -4337,18 +4858,21 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         in_gap = false;
         match *op {
             Op::Ctx(o, nn) => lines.push(ChangeDiffLine {
+                line_id: None,
                 kind: ChangeDiffLineKind::Ctx,
                 text: old[o].into(),
                 old_no: Some(o + 1),
                 new_no: Some(nn + 1),
             }),
             Op::Del(o) => lines.push(ChangeDiffLine {
+                line_id: None,
                 kind: ChangeDiffLineKind::Del,
                 text: old[o].into(),
                 old_no: Some(o + 1),
                 new_no: None,
             }),
             Op::Add(nn) => lines.push(ChangeDiffLine {
+                line_id: None,
                 kind: ChangeDiffLineKind::Add,
                 text: new[nn].into(),
                 old_no: None,
@@ -4404,10 +4928,19 @@ pub async fn change_diff(
         });
     }
 
-    let (lines, truncated) = build_diff_lines(
+    let (mut lines, truncated) = build_diff_lines(
         before.as_deref().unwrap_or(""),
         after.as_deref().unwrap_or(""),
     );
+    for line in &mut lines {
+        let kind = match line.kind {
+            ChangeDiffLineKind::Add => Some(ReviewDiffLineKind::Add),
+            ChangeDiffLineKind::Del => Some(ReviewDiffLineKind::Del),
+            ChangeDiffLineKind::Ctx | ChangeDiffLineKind::Hunk => None,
+        };
+        line.line_id = kind
+            .map(|kind| r_code_store::review_line_id(kind, line.old_no, line.new_no, &line.text));
+    }
     Ok(ChangeDiff {
         supported: true,
         path: change.path.clone(),
@@ -5078,8 +5611,42 @@ fn support_db_path(state: &CommandState) -> Result<PathBuf, String> {
     }
 }
 
+fn resolve_support_output_dir(output_dir: &str) -> Result<PathBuf, String> {
+    let requested = output_dir.trim();
+    if requested.contains('\0') {
+        return Err("支持包输出目录不能包含 NUL 字符。".to_string());
+    }
+    if requested.is_empty() {
+        return Ok(dirs::download_dir()
+            .or_else(dirs::document_dir)
+            .unwrap_or_else(std::env::temp_dir));
+    }
+    if requested == "~" {
+        return dirs::home_dir().ok_or_else(|| "无法确定当前用户主目录。".to_string());
+    }
+    if let Some(relative) = requested
+        .strip_prefix("~/")
+        .or_else(|| requested.strip_prefix("~\\"))
+    {
+        return dirs::home_dir()
+            .map(|home| home.join(relative))
+            .ok_or_else(|| "无法确定当前用户主目录。".to_string());
+    }
+    #[cfg(windows)]
+    if let Some(relative) = requested
+        .strip_prefix("%APPDATA%/")
+        .or_else(|| requested.strip_prefix("%APPDATA%\\"))
+    {
+        return std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|directory| directory.join(relative))
+            .ok_or_else(|| "无法确定当前用户 AppData 目录。".to_string());
+    }
+    Ok(PathBuf::from(requested))
+}
+
 pub async fn support_bundle(state: &CommandState, output_dir: &str) -> Result<String, String> {
-    let bundle = SupportBundle::new(PathBuf::from(output_dir));
+    let bundle = SupportBundle::new(resolve_support_output_dir(output_dir)?);
     let db_path = support_db_path(state)?;
     let path = bundle.generate(&db_path).await.map_err(err_str)?;
     Ok(path.display().to_string())
@@ -5437,6 +6004,9 @@ async fn start_run_locked_with_message(
     if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {
         push_demo_scenario(runtime, &message_text);
     }
+    // Capture before the provider is allowed to execute its first tool call. The row itself is
+    // persisted after the runtime returns its run id, but the immutable trees already exist.
+    let pending_snapshot = capture_workspace_snapshot(db, task);
     let runtime_run_id = bridge
         .kind
         .start_run_with_message(&runtime_session_id, message.clone())
@@ -5458,6 +6028,21 @@ async fn start_run_locked_with_message(
     let mut run = AgentRun::new_for_branch(&task.id, &branch.id, run_model);
     run.id = runtime_run_id;
     AgentRunRepository::new(db).create(&run).map_err(err_str)?;
+    if let Some(snapshot) = pending_snapshot {
+        if let Err(error) = ChangeService::new(db, PathBuf::new()).save_run_workspace_snapshot(
+            NewRunWorkspaceSnapshot {
+                run_id: &run.id,
+                task_id: &task.id,
+                repo_root: &snapshot.repo_root,
+                workspace_root: &snapshot.workspace_root,
+                entry_head_tree: snapshot.entry_head_tree.as_deref(),
+                entry_index_tree: &snapshot.entry_index_tree,
+                entry_worktree_tree: &snapshot.entry_worktree_tree,
+            },
+        ) {
+            tracing::warn!(run_id = %run.id, "failed to persist workspace snapshot: {error}");
+        }
+    }
     TaskRepository::new(db)
         .update_state(&task.id, TaskState::InProgress)
         .map_err(err_str)?;
@@ -6248,7 +6833,15 @@ pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, Str
         );
         provider.api_key.clear();
     }
-    let config_json = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+    let mut config_json = serde_json::to_value(&config).map_err(|e| e.to_string())?;
+    config_json
+        .as_object_mut()
+        .ok_or_else(|| "配置根节点必须是对象".to_string())?
+        .insert(
+            "agent_prompts".to_string(),
+            serde_json::to_value(settings.load_agent_prompts().map_err(err_str)?)
+                .map_err(err_str)?,
+        );
     Ok(serde_json::json!({
         "config": config_json,
         "validation": validation,
@@ -7789,8 +8382,79 @@ impl CodexLoginMode {
     }
 }
 
+#[cfg(windows)]
+fn codex_login_shell_script(executable: &Path, mode: CodexLoginMode) -> Result<String, String> {
+    let executable = windows_cmd_safe_path(executable)?;
+    let arguments = mode.args().join(" ");
+    Ok(format!(
+        "call {executable} {arguments} & if errorlevel 1 (echo. & echo Codex login did not complete. & echo This window stays open for diagnostics. Press any key to close it. & pause)"
+    ))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn posix_shell_quote(value: &str) -> Result<String, String> {
+    if value
+        .chars()
+        .any(|character| matches!(character, '\0' | '\r' | '\n'))
+    {
+        return Err("命令路径包含终端脚本不支持的控制字符。".to_string());
+    }
+    Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn macos_codex_login_shell_script(
+    executable: &Path,
+    mode: CodexLoginMode,
+) -> Result<String, String> {
+    let executable_text = executable
+        .to_str()
+        .ok_or_else(|| "Codex 命令路径不是有效的 Unicode 文本。".to_string())?;
+    let quoted_executable = posix_shell_quote(executable_text)?;
+    let path_prefix = Path::new(executable_text)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(Path::to_str)
+        .map(posix_shell_quote)
+        .transpose()?
+        .map(|directory| format!("PATH={directory}:\"$PATH\"; export PATH; "))
+        .unwrap_or_default();
+    let arguments = mode.args().join(" ");
+    Ok(format!(
+        "{path_prefix}{quoted_executable} {arguments}; status=$?; \
+if [ \"$status\" -eq 0 ]; then exit 0; fi; \
+printf '\\nCodex login did not complete (exit %s).\\nThis window stays open for diagnostics. Press Return to close it.\\n' \"$status\"; \
+IFS= read -r _; exit \"$status\""
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn create_macos_codex_login_command_file(
+    executable: &Path,
+    mode: CodexLoginMode,
+) -> Result<PathBuf, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let command_path = std::env::temp_dir().join(format!(
+        "r-code-codex-login-{}.command",
+        uuid::Uuid::new_v4()
+    ));
+    let shell = macos_codex_login_shell_script(executable, mode)?;
+    let source = format!("#!/bin/sh\n/bin/rm -f \"$0\"\n{shell}\n");
+    std::fs::write(&command_path, source)
+        .map_err(|_| "无法创建临时 Codex 登录脚本。".to_string())?;
+    if let Err(error) =
+        std::fs::set_permissions(&command_path, std::fs::Permissions::from_mode(0o700))
+    {
+        let _ = std::fs::remove_file(&command_path);
+        return Err(format!("无法授权临时 Codex 登录脚本：{error}"));
+    }
+    Ok(command_path)
+}
+
 /// 在用户可见的系统终端中启动 Codex 登录。它不接收任何来自 WebView 的命令文本，
-/// 也不读取登录输出或 auth.json；OAuth 交互完全由 Codex CLI 处理。
+/// 也不读取登录输出或 auth.json；OAuth 交互完全由 Codex CLI 处理。成功后终端会话
+/// 干净退出（窗口是否关闭由系统终端偏好决定），失败时保留诊断输出等待用户关闭。
 async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String> {
     let cli = probe_codex_cli().await;
     if !cli.available {
@@ -7803,18 +8467,37 @@ async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String>
     #[cfg(windows)]
     {
         let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
-        windows_cmd_safe_path(&executable)?;
-        // `start` 显式创建可见窗口，避免 Tauri 的 GUI 子进程吞掉交互式登录提示。
+        let script = codex_login_shell_script(&executable, mode)?;
+        // R-Code 是 GUI 进程；新控制台确保设备码和 OAuth 提示始终对用户可见。
+        // `/C` 在成功时自然退出，脚本只在失败分支执行 `pause` 保留诊断信息。
         let mut command = Command::new("cmd.exe");
         command
-            .args(["/D", "/C", "start", "", "cmd.exe", "/D", "/K", "call"])
-            .arg(executable)
-            .args(mode.args());
+            .args(["/D", "/S", "/C"])
+            .arg(script)
+            .creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
         command
             .spawn()
             .map_err(|_| "无法启动 Codex 登录终端。请在系统终端运行 `codex login`。".to_string())?;
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
+        let command_path = create_macos_codex_login_command_file(&executable, mode)?;
+        // 通过 Launch Services 打开 `.command`，不申请控制 Terminal 的 Apple Events
+        // 权限；脚本启动后会立即自删，成功时 shell 干净退出，失败时保留诊断输出。
+        if Command::new("/usr/bin/open")
+            .args(["-a", "Terminal"])
+            .arg(&command_path)
+            .spawn()
+            .is_err()
+        {
+            let _ = std::fs::remove_file(command_path);
+            return Err(
+                "无法启动 macOS Terminal 登录窗口。请在系统终端运行 `codex login`。".to_string(),
+            );
+        }
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
     {
         let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
         let mut command = Command::new(executable);
@@ -7912,6 +8595,7 @@ struct CodexExecCompletion {
 /// official CLI discovery, authentication gating and the configured-permission child process.
 struct RCodeCodexSubagentRunner {
     permission_engine: Arc<PermissionEngine>,
+    subagent_prompt: String,
 }
 
 #[async_trait::async_trait]
@@ -7978,7 +8662,7 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
         };
         let completion = run_codex_delegation_process(
             &workspace,
-            &build_codex_delegation_prompt(&goal, permissions),
+            &build_codex_delegation_prompt(&goal, permissions, &self.subagent_prompt),
             cli.path,
             cancellation,
             None,
@@ -8254,7 +8938,18 @@ fn codex_exec_failure_message(failure: Option<CodexExecFailure>) -> String {
     }
 }
 
-fn build_codex_delegation_prompt(goal: &str, permissions: CodexDelegationPermissions) -> String {
+const CODEX_PARALLEL_EXECUTION_HINT: &str =
+    "Prefer parallel execution for independent operations. \
+Use a bounded batch of at most four for unrelated read-only inspections and verification commands \
+only when they do not share mutable files, caches, build outputs, package state, or services. \
+Keep writes and result-dependent steps sequential; never parallelize edits, package changes, Git \
+mutations, or commands that may contend for the same resource.";
+
+fn build_codex_delegation_prompt(
+    goal: &str,
+    permissions: CodexDelegationPermissions,
+    editable_prompt: &str,
+) -> String {
     let capability = match permissions.mode() {
         CodexPermissionMode::ReadOnly => {
             "Your configured permission profile is read-only. Do not edit files, do not create commits, and do not change configuration."
@@ -8272,10 +8967,17 @@ fn build_codex_delegation_prompt(goal: &str, permissions: CodexDelegationPermiss
             "Your configured permission profile comes from the user's custom Codex config.toml. Respect its sandbox and approval policy, and use only the minimum access needed."
         }
     };
+    let editable_prompt = editable_prompt.trim();
+    let editable = if editable_prompt.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nUser-configured subagent guidance:\n{editable_prompt}")
+    };
     format!(
         "You are a delegated subagent inside R-Code. {capability} \
 Do not create commits, do not alter global Codex or R-Code configuration, and do not start more agents. \
-Return a concise factual summary for the parent agent. Do not expose private chain-of-thought.\n\nAssignment:\n{goal}"
+{CODEX_PARALLEL_EXECUTION_HINT} Return a concise factual summary for the parent agent. \
+Do not expose private chain-of-thought.{editable}\n\nAssignment:\n{goal}"
     )
 }
 
@@ -8338,6 +9040,7 @@ async fn agent_send_codex_with_mode(
         state.agent.clone(),
         state.external_agents.clone(),
         state.db.clone(),
+        state.blobs_dir.clone(),
         state.sessions_dir.clone(),
         state.config_dir.clone(),
         state.tool_gateway.clone(),
@@ -8358,6 +9061,7 @@ fn codex_main_prompt(
     task: &Task,
     request: &str,
     prepared: Option<&PreparedCodexAttachments>,
+    editable_prompt: &str,
 ) -> String {
     let request = if request.trim().is_empty() {
         "请读取本轮附加的文件，并直接回答或完成其中要求。"
@@ -8410,6 +9114,12 @@ fn codex_main_prompt(
             )
         })
         .unwrap_or_default();
+    let editable_prompt = editable_prompt.trim();
+    let editable = if editable_prompt.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nUser-configured main/subagent coordination guidance:\n{editable_prompt}")
+    };
     format!(
         "You are the selected main coding agent inside the independent R-Code desktop client. \
 Work directly on the user's request inside the attached workspace. You may use the configured \
@@ -8417,6 +9127,7 @@ R-Code MCP tools to delegate a bounded task to an R-Code child agent when useful
 children are read-only by default; request full access only when the user's request explicitly \
 requires the child to edit files or run commands. Keep tool activity observable, do not expose \
 private chain-of-thought, and finish with a concise result and verification summary.\n\n\
+{CODEX_PARALLEL_EXECUTION_HINT}{editable}\n\n\
 Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}{}",
         task.title, transcript, request, attachment_context
     )
@@ -8427,6 +9138,7 @@ async fn start_codex_main_with_resources(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
+    blobs_dir: PathBuf,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
@@ -8480,7 +9192,17 @@ async fn start_codex_main_with_resources(
         .map(|session| session.messages)
         .unwrap_or_default();
     let prepared_attachments = prepare_codex_attachments(&attachments)?;
-    let prompt = codex_main_prompt(&history, &task, &message, prepared_attachments.as_ref());
+    let main_agent_prompt = SettingsService::new(config_dir.clone())
+        .load_agent_prompts()
+        .map_err(err_str)?
+        .main_agent;
+    let prompt = codex_main_prompt(
+        &history,
+        &task,
+        &message,
+        prepared_attachments.as_ref(),
+        &main_agent_prompt,
+    );
     append_user_content_with_mode(
         &session_store,
         &branch.storage_id,
@@ -8502,10 +9224,26 @@ async fn start_codex_main_with_resources(
         SubagentAccessMode::FullAccess
     };
     run.routing_reason = Some("该会话已显式选择 Codex 作为主 Agent".to_string());
+    let pending_snapshot = capture_workspace_snapshot(&db, &task);
     let cancellation = external_agents.reserve(&task.id, &run.id, &run.id).await?;
     if let Err(error) = AgentRunRepository::new(&db).create(&run).map_err(err_str) {
         external_agents.remove(&run.id).await;
         return Err(error);
+    }
+    if let Some(snapshot) = pending_snapshot {
+        if let Err(error) = ChangeService::new(&db, PathBuf::new()).save_run_workspace_snapshot(
+            NewRunWorkspaceSnapshot {
+                run_id: &run.id,
+                task_id: &task.id,
+                repo_root: &snapshot.repo_root,
+                workspace_root: &snapshot.workspace_root,
+                entry_head_tree: snapshot.entry_head_tree.as_deref(),
+                entry_index_tree: &snapshot.entry_index_tree,
+                entry_worktree_tree: &snapshot.entry_worktree_tree,
+            },
+        ) {
+            tracing::warn!(run_id = %run.id, "failed to persist Codex workspace snapshot: {error}");
+        }
     }
     TaskRepository::new(&db)
         .update_state(&task.id, TaskState::InProgress)
@@ -8545,6 +9283,7 @@ async fn start_codex_main_with_resources(
         agent,
         external_agents,
         db,
+        blobs_dir,
         sessions_dir,
         config_dir,
         tool_gateway,
@@ -10005,6 +10744,7 @@ fn spawn_codex_main(
     agent: Arc<tokio::sync::Mutex<AgentBridge>>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
+    blobs_dir: PathBuf,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
@@ -10059,6 +10799,10 @@ fn spawn_codex_main(
         if let Some(summary) = completion.summary.as_deref() {
             let summary = bounded_text(summary, CODEX_EXEC_MAX_SUMMARY_CHARS);
             let _ = repository.set_summary(&run.id, Some(&summary));
+        }
+
+        if let Err(error) = finalize_workspace_snapshot(&db, &blobs_dir, &run.id).await {
+            tracing::warn!(run_id = %run.id, "failed to finalize Codex workspace snapshot: {error}");
         }
 
         let (review_state, final_state, final_detail) = if completion.cancelled {
@@ -10141,8 +10885,11 @@ fn spawn_codex_main(
             agent,
             external_agents,
             db,
-            sessions_dir,
-            config_dir,
+            AgentRuntimePaths {
+                blobs_dir,
+                sessions_dir,
+                config_dir,
+            },
             tool_gateway,
             sink,
         )
@@ -10509,7 +11256,14 @@ pub async fn agent_delegate_codex(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(&goal, permissions),
+        build_codex_delegation_prompt(
+            &goal,
+            permissions,
+            &SettingsService::new(state.config_dir.clone())
+                .load_agent_prompts()
+                .map_err(err_str)?
+                .subagent,
+        ),
         cli.path,
         permissions,
         state.permission_engine.clone(),
@@ -10647,7 +11401,14 @@ pub async fn agent_delegate_codex_mcp(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(&goal, permissions),
+        build_codex_delegation_prompt(
+            &goal,
+            permissions,
+            &SettingsService::new(state.config_dir.clone())
+                .load_agent_prompts()
+                .map_err(err_str)?
+                .subagent,
+        ),
         cli.path,
         permissions,
         cancellation,
@@ -10699,6 +11460,30 @@ pub async fn settings_set(
 ) -> Result<(), String> {
     let settings = SettingsService::new(state.config_dir.clone());
 
+    // 可编辑 Prompt 使用独立的用户级文件，绝不进入项目 `.r-code/config.toml`。
+    // `agent_prompts = null` 表示恢复内置默认值。
+    if key == "agent_prompts" {
+        if !value.is_null() {
+            return Err("恢复内置 Prompt 时 agent_prompts 必须为 null".to_string());
+        }
+        settings.reset_agent_prompts().map_err(err_str)?;
+        return Ok(());
+    }
+    if let Some(field) = key.strip_prefix("agent_prompts.") {
+        let text = value
+            .as_str()
+            .ok_or_else(|| "Agent Prompt 必须是字符串".to_string())?
+            .to_string();
+        let mut prompts = settings.load_agent_prompts().map_err(err_str)?;
+        match field {
+            "main_agent" => prompts.main_agent = text,
+            "subagent" => prompts.subagent = text,
+            _ => return Err(format!("未知 Agent Prompt 字段：{field}")),
+        }
+        settings.save_agent_prompts(&prompts).map_err(err_str)?;
+        return Ok(());
+    }
+
     // 宽松加载：不经 validate（配置不完整/损坏时也必须能通过 UI 修复）。
     // 文件按 toml::Value 解析（允许部分字段缺失），再转 JSON 供点分写入。
     let mut config_json = load_config_json_for_editing(state)?;
@@ -10735,8 +11520,20 @@ pub async fn settings_set(
     set_nested_value(&mut config_json, key, value)?;
 
     // 反序列化回 Config 并保存
-    let config = serde_json::from_value(config_json).map_err(|e| e.to_string())?;
+    let config: hermes_config::Config =
+        serde_json::from_value(config_json).map_err(|e| e.to_string())?;
+    let live_codex_setting = (key == "orchestration.allow_cross_engine_delegation")
+        .then_some(config.orchestration.allow_cross_engine_delegation);
     settings.save_global(&config).map_err(err_str)?;
+    if let Some(enabled) = live_codex_setting {
+        // 不重启当前 provider runtime，也不中断已经启动的 Codex 子代理。所有之后
+        // 发生的路由会读取共享原子门，并在关闭时平滑回退到 R-Code。
+        state
+            .agent
+            .lock()
+            .await
+            .set_cross_engine_delegation_enabled(enabled);
+    }
     Ok(())
 }
 
@@ -10835,6 +11632,54 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let state = CommandState::in_memory(dir.path()).unwrap();
         (dir, state)
+    }
+
+    #[tokio::test]
+    async fn legacy_reconciliation_cache_only_freezes_stable_classifications() {
+        let (dir, state) = setup_state();
+        let repository = TaskRepository::new(&state.db);
+
+        let chat = Task::new(None, "Chat", "no workspace audit", TaskMode::Ask);
+        repository.create(&chat).unwrap();
+        assert_eq!(
+            reconcile_legacy_task_changes(&state, &chat.id)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            reconcile_legacy_task_changes(&state, &chat.id)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let workspace_path = dir.path().to_string_lossy().to_string();
+        let workspace = Task::new(
+            Some(workspace_path),
+            "Workspace",
+            "run has not started",
+            TaskMode::Edit,
+        );
+        repository.create(&workspace).unwrap();
+        assert_eq!(
+            reconcile_legacy_task_changes(&state, &workspace.id)
+                .await
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            reconcile_legacy_task_changes(&state, &workspace.id)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let cache = state.legacy_reconciliation.lock().await;
+        assert_eq!(cache.uncached_runs.get(&chat.id), Some(&1));
+        assert!(cache.completed.contains(&chat.id));
+        assert_eq!(cache.uncached_runs.get(&workspace.id), Some(&2));
+        assert!(!cache.completed.contains(&workspace.id));
     }
 
     /// 构造一个“上次进程退出前仍在运行”的文件数据库。
@@ -11081,6 +11926,24 @@ mod tests {
             .unwrap();
         assert!(activity.items.iter().any(|item| item.task_id == task.id));
         assert!(activity.next_cursor.is_some());
+
+        task_archive(&state, &task.id).await.unwrap();
+        let archived_dashboard = workspace_dashboard(&state, &workspace).await.unwrap();
+        assert!(archived_dashboard.tasks.is_empty());
+        assert_eq!(archived_dashboard.archived.len(), 1);
+        assert_eq!(archived_dashboard.archived[0].id, task.id);
+        assert_eq!(archived_dashboard.metrics.task_count, 0);
+        assert_eq!(archived_dashboard.metrics.archived_task_count, 1);
+        let archived_activity = project_activity_list(&state, &workspace, None, 20)
+            .await
+            .unwrap();
+        assert!(archived_activity.items.is_empty());
+
+        let restored = task_restore(&state, &task.id).await.unwrap();
+        assert_eq!(restored.state, TaskState::Idle);
+        let restored_dashboard = workspace_dashboard(&state, &workspace).await.unwrap();
+        assert_eq!(restored_dashboard.tasks.len(), 1);
+        assert!(restored_dashboard.archived.is_empty());
     }
 
     #[tokio::test]
@@ -11400,6 +12263,79 @@ mod tests {
             1,
             "子代理工具结果不能污染主分支时间锚点"
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_subagent_closes_tool_calls_missing_a_result_event() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let scope = AgentEventScope {
+            run_id: "child-with-missing-result".to_string(),
+            agent_id: "child-agent".to_string(),
+            parent_run_id: Some(parent.id.clone()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: Some("检查生命周期".to_string()),
+            delegated_by_tool_call_id: None,
+            runtime_kind: AgentRunRuntimeKind::CodexExec,
+            model: Some("codex-cli".to_string()),
+            access_mode: SubagentAccessMode::ReadOnly,
+            routing_reason: Some("生命周期回归测试".to_string()),
+        };
+        let mut pending_text = HashMap::new();
+
+        for event in [
+            AgentEvent::Scoped {
+                scope: scope.clone(),
+                event: Box::new(AgentEvent::SubagentLifecycle {
+                    state: SubagentState::Running,
+                    detail: Some("正在运行".to_string()),
+                }),
+            },
+            AgentEvent::Scoped {
+                scope: scope.clone(),
+                event: Box::new(AgentEvent::ToolCall {
+                    name: "bash".to_string(),
+                    input: serde_json::json!({ "command": "rg --files" }),
+                    call_id: "orphaned-child-tool".to_string(),
+                }),
+            },
+            AgentEvent::Scoped {
+                scope,
+                event: Box::new(AgentEvent::SubagentLifecycle {
+                    state: SubagentState::Completed,
+                    detail: Some("子代理已完成".to_string()),
+                }),
+            },
+        ] {
+            persist_runtime_event(
+                &state.db,
+                &state.session_store,
+                &state.sessions_dir,
+                &task.id,
+                &branch.id,
+                &parent.id,
+                &branch.storage_id,
+                &event,
+                &mut pending_text,
+            )
+            .await;
+        }
+
+        let conn = state.db.conn().unwrap();
+        let (status, ended_at): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM tool_calls WHERE id = 'orphaned-child-tool'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "error");
+        assert!(ended_at.is_some());
     }
 
     #[tokio::test]
@@ -12259,6 +13195,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settings_agent_prompts_roundtrip_without_entering_project_config() {
+        let (_dir, state) = setup_state();
+        settings_set(
+            &state,
+            "agent_prompts.main_agent",
+            serde_json::json!("main custom"),
+        )
+        .await
+        .unwrap();
+        settings_set(
+            &state,
+            "agent_prompts.subagent",
+            serde_json::json!("child custom"),
+        )
+        .await
+        .unwrap();
+
+        let payload = settings_get(&state).await.unwrap();
+        assert_eq!(
+            payload["config"]["agent_prompts"]["main_agent"],
+            "main custom"
+        );
+        assert_eq!(
+            payload["config"]["agent_prompts"]["subagent"],
+            "child custom"
+        );
+        assert!(state.config_dir.join("agent-prompts.toml").exists());
+
+        settings_set(&state, "agent_prompts", serde_json::Value::Null)
+            .await
+            .unwrap();
+        let reset = settings_get(&state).await.unwrap();
+        assert_ne!(
+            reset["config"]["agent_prompts"]["main_agent"],
+            "main custom"
+        );
+    }
+
+    #[tokio::test]
     async fn settings_set_creates_new_provider_incrementally() {
         let (_dir, state) = setup_state();
         // 逐键写入一个新 provider（每次单键，最终条目必须完整可用）
@@ -12364,6 +13339,72 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(bridge.kind, AgentRuntimeKind::Real(_)));
+        SettingsService::new(state.config_dir.clone())
+            .set_provider_secret(&provider_name, "")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn codex_delegation_setting_hot_updates_the_existing_runtime() {
+        let (_dir, state) = setup_state();
+        let provider_name = format!("r-code-hot-toggle-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_name.clone(),
+                base_url: "https://api.example.com/v1".into(),
+                model: "test-model".into(),
+                api_key: Some("sk-hot-toggle-test".into()),
+                max_tokens: Some(2048),
+                temperature: Some(0.2),
+                protocol: None,
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+
+        {
+            let mut bridge = state.agent.lock().await;
+            ensure_real_runtime(&state.config_dir, &state.tool_gateway, &mut bridge, None)
+                .await
+                .unwrap();
+            let AgentRuntimeKind::Real(runtime) = &bridge.kind else {
+                panic!("expected real runtime");
+            };
+            assert!(runtime.cross_engine_delegation_enabled());
+        }
+
+        settings_set(
+            &state,
+            "orchestration.allow_cross_engine_delegation",
+            serde_json::json!(false),
+        )
+        .await
+        .unwrap();
+        {
+            let bridge = state.agent.lock().await;
+            let AgentRuntimeKind::Real(runtime) = &bridge.kind else {
+                panic!("expected real runtime");
+            };
+            assert!(!runtime.cross_engine_delegation_enabled());
+        }
+
+        settings_set(
+            &state,
+            "orchestration.allow_cross_engine_delegation",
+            serde_json::json!(true),
+        )
+        .await
+        .unwrap();
+        {
+            let bridge = state.agent.lock().await;
+            let AgentRuntimeKind::Real(runtime) = &bridge.kind else {
+                panic!("expected real runtime");
+            };
+            assert!(runtime.cross_engine_delegation_enabled());
+        }
+
         SettingsService::new(state.config_dir.clone())
             .set_provider_secret(&provider_name, "")
             .unwrap();
@@ -12979,6 +14020,33 @@ mod tests {
         assert!(val.get("db_stats").is_some());
     }
 
+    #[test]
+    fn support_output_dir_defaults_to_a_user_writable_system_location() {
+        let resolved = resolve_support_output_dir("  ").unwrap();
+        assert!(!resolved.as_os_str().is_empty());
+        assert!(resolved.is_absolute());
+    }
+
+    #[test]
+    fn support_output_dir_expands_home_without_assuming_windows_appdata() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(resolve_support_output_dir("~").unwrap(), home);
+            assert_eq!(
+                resolve_support_output_dir("~/r-code/support").unwrap(),
+                home.join("r-code/support")
+            );
+        }
+        assert_eq!(
+            resolve_support_output_dir("relative/support").unwrap(),
+            PathBuf::from("relative/support")
+        );
+    }
+
+    #[test]
+    fn support_output_dir_rejects_nul_characters() {
+        assert!(resolve_support_output_dir("safe\0unsafe").is_err());
+    }
+
     #[tokio::test]
     async fn file_read_within_root() {
         let (_dir, state) = setup_state();
@@ -13141,6 +14209,9 @@ mod tests {
         let archived = task_archive(&state, &task.id).await.unwrap();
         assert_eq!(archived.state, TaskState::Archived);
         assert!(agent_send(&state, &task.id, "继续").await.is_err());
+
+        let restored = task_restore(&state, &task.id).await.unwrap();
+        assert_eq!(restored.state, TaskState::Idle);
     }
 
     #[tokio::test]
@@ -13574,6 +14645,30 @@ command = "r-code-host"
     }
 
     #[test]
+    fn macos_login_terminal_uses_fixed_arguments_and_quotes_executable_paths() {
+        let executable = Path::new("/Applications/Codex Tool's/bin/codex");
+        let browser = macos_codex_login_shell_script(executable, CodexLoginMode::Browser).unwrap();
+        let device =
+            macos_codex_login_shell_script(executable, CodexLoginMode::DeviceCode).unwrap();
+
+        assert!(browser.contains("PATH='/Applications/Codex Tool'\"'\"'s/bin':\"$PATH\""));
+        assert!(browser.contains("'/Applications/Codex Tool'\"'\"'s/bin/codex' login"));
+        assert!(!browser.contains("--device-auth"));
+        assert!(device.contains("login --device-auth"));
+        assert!(device.contains("if [ \"$status\" -eq 0 ]; then exit 0; fi"));
+        assert!(device.contains("IFS= read -r _"));
+    }
+
+    #[test]
+    fn macos_login_terminal_rejects_control_characters_in_paths() {
+        assert!(macos_codex_login_shell_script(
+            Path::new("/tmp/codex\nmalicious"),
+            CodexLoginMode::Browser,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn npm_installer_only_targets_the_official_codex_package() {
         let npm_path = if cfg!(windows) {
             Path::new(r"C:\Program Files\nodejs\npm.exe")
@@ -13714,6 +14809,21 @@ command = "r-code-host"
     fn windows_mcp_config_rejects_cmd_metacharacters_in_paths() {
         assert!(windows_cmd_safe_path(Path::new(r"C:\Program Files\R-Code\R-Code.exe")).is_ok());
         assert!(windows_cmd_safe_path(Path::new(r"C:\bad&path\R-Code.exe")).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_login_terminal_closes_on_success_and_pauses_only_on_failure() {
+        let executable = Path::new(r"C:\Program Files\Codex\codex.cmd");
+        let browser = codex_login_shell_script(executable, CodexLoginMode::Browser).unwrap();
+        let device = codex_login_shell_script(executable, CodexLoginMode::DeviceCode).unwrap();
+
+        assert!(browser.starts_with(r#"call "C:\Program Files\Codex\codex.cmd" login"#));
+        assert!(!browser.contains("--device-auth"));
+        assert!(device.contains("login --device-auth"));
+        assert!(device.contains("if errorlevel 1"));
+        assert!(device.contains("pause"));
+        assert!(!device.contains("/K"));
     }
 
     #[cfg(windows)]
@@ -14161,6 +15271,33 @@ input.on('line', (line) => {
         )
         .expect_err("an unknown cmd shim must not receive a delegated prompt");
         assert!(error.contains("npm"));
+    }
+
+    #[test]
+    fn codex_prompts_prefer_safe_parallel_commands_for_main_and_subagents() {
+        let delegated = build_codex_delegation_prompt(
+            "Inspect two independent modules",
+            CodexDelegationPermissions::read_only(),
+            &r_code_agent_worker::AgentPromptPolicy::default().subagent,
+        );
+        assert!(delegated.contains("Prefer parallel execution for independent operations"));
+        assert!(delegated.contains("Keep writes and result-dependent steps sequential"));
+
+        let task = Task::new(
+            None,
+            "Parallel check",
+            "Inspect the workspace",
+            TaskMode::Ask,
+        );
+        let main = codex_main_prompt(
+            &[],
+            &task,
+            "Inspect two independent modules",
+            None,
+            &r_code_agent_worker::AgentPromptPolicy::default().main_agent,
+        );
+        assert!(main.contains("Prefer parallel execution for independent operations"));
+        assert!(main.contains("Keep writes and result-dependent steps sequential"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useTasksStore } from "./tasks";
 
 /**
  * 全局应用状态（Zustand）。
@@ -14,8 +15,15 @@ export type Scene =
   | "room"
   | "inbox"
   | "projects"
+  | "knowledge"
   | "editor"
   | "settings";
+
+export interface NavigationEntry {
+  scene: Scene;
+  currentTaskId: string | null;
+  workspacePath: string | null;
+}
 
 /** 外观模式：亮 / 暗 / 跟随系统。 */
 export type ThemeMode = "light" | "dark" | "system";
@@ -42,10 +50,16 @@ export interface WorkbenchFileNavigation {
   column: number | null;
   requestId: number;
 }
+export interface TaskFileReferenceRequest {
+  requestId: number;
+  path: string;
+}
 export type SettingsPane = "providers" | "agents" | "preferences" | "diagnostics" | "codex";
 
 interface AppState {
   scene: Scene;
+  navigationBack: NavigationEntry[];
+  navigationForward: NavigationEntry[];
   /** 当前 Room 打开的任务 */
   currentTaskId: string | null;
   /** Room 画布激活页签 */
@@ -56,6 +70,8 @@ interface AppState {
   workbenches: Record<string, TaskWorkbenchState>;
   /** Model/file-link navigation requests, isolated by task just like the workbench itself. */
   workbenchFiles: Record<string, WorkbenchFileNavigation>;
+  /** Pending unsent Composer insertions, isolated by destination task. */
+  taskFileReferences: Record<string, TaskFileReferenceRequest>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
   /** Ctrl K 搜索 overlay */
@@ -74,13 +90,18 @@ interface AppState {
   accessibleDiffMode: boolean;
 
   setScene: (scene: Scene) => void;
+  goBack: () => void;
+  goForward: () => void;
+  forgetTaskNavigation: (taskId: string) => void;
   goHome: () => void;
-  openDashboard: () => void;
+  openDashboard: (workspacePath?: string) => void;
   openConversations: () => void;
   openDeck: () => void;
   openRoom: (taskId: string, tab?: CanvasTab) => void;
   setCanvasTab: (tab: CanvasTab) => void;
   openWorkbenchFile: (taskId: string, path: string, line?: number | null, column?: number | null) => void;
+  queueTaskFileReference: (taskId: string, path: string) => void;
+  acknowledgeTaskFileReference: (taskId: string, requestId: number) => void;
   closeWorkbenchTab: (tab?: CanvasTab) => void;
   showWorkbenchLauncher: () => void;
   closeWorkbenchLauncher: () => void;
@@ -105,6 +126,7 @@ interface AppState {
 const RAIL_KEY = "r-code.rail.collapsed";
 const THEME_KEY = "r-code.theme.mode";
 let fileNavigationSequence = 0;
+let fileReferenceSequence = 0;
 
 function createWorkbenchState(tab: CanvasTab = "summary"): TaskWorkbenchState {
   return {
@@ -163,14 +185,73 @@ function readThemeMode(): ThemeMode {
   return "dark";
 }
 
-export const useAppStore = create<AppState>((set) => ({
+const NAVIGATION_LIMIT = 80;
+
+function currentLocation(state: AppState): NavigationEntry {
+  return {
+    scene: state.scene,
+    currentTaskId: state.scene === "room" ? state.currentTaskId : null,
+    workspacePath: useTasksStore.getState().currentProjectId,
+  };
+}
+
+function sameLocation(left: NavigationEntry, right: NavigationEntry): boolean {
+  return left.scene === right.scene
+    && left.currentTaskId === right.currentTaskId
+    && left.workspacePath === right.workspacePath;
+}
+
+function navigateTo(state: AppState, destination: NavigationEntry): Partial<AppState> {
+  const current = currentLocation(state);
+  if (sameLocation(current, destination)) {
+    return {
+      scene: destination.scene,
+      ...(destination.scene === "room" ? { currentTaskId: destination.currentTaskId } : {}),
+    };
+  }
+  return {
+    scene: destination.scene,
+    ...(destination.scene === "room" ? { currentTaskId: destination.currentTaskId } : {}),
+    navigationBack: [...state.navigationBack, current].slice(-NAVIGATION_LIMIT),
+    navigationForward: [],
+  };
+}
+
+function restoreLocation(
+  state: AppState,
+  destination: NavigationEntry,
+  navigationBack: NavigationEntry[],
+  navigationForward: NavigationEntry[],
+): Partial<AppState> {
+  const patch: Partial<AppState> = {
+    scene: destination.scene,
+    navigationBack,
+    navigationForward,
+  };
+  if (destination.scene !== "room" || !destination.currentTaskId) return patch;
+
+  const saved = state.workbenches[destination.currentTaskId] ?? createWorkbenchState();
+  return {
+    ...patch,
+    currentTaskId: destination.currentTaskId,
+    canvasTab: saved.tab,
+    workbenchMode: saved.mode,
+    workbenchLauncherOpen: saved.launcherOpen,
+    workbenches: { ...state.workbenches, [destination.currentTaskId]: saved },
+  };
+}
+
+export const useAppStore = create<AppState>((set, get) => ({
   scene: "home",
+  navigationBack: [],
+  navigationForward: [],
   currentTaskId: null,
   canvasTab: "summary",
   workbenchMode: "docked",
   workbenchLauncherOpen: true,
   workbenches: {},
   workbenchFiles: {},
+  taskFileReferences: {},
   settingsPane: "providers",
   searchOpen: false,
   editorFile: null,
@@ -180,11 +261,65 @@ export const useAppStore = create<AppState>((set) => ({
   zoomLevel: 100,
   accessibleDiffMode: false,
 
-  setScene: (scene) => set({ scene }),
-  goHome: () => set({ scene: "home" }),
-  openDashboard: () => set({ scene: "dashboard" }),
-  openConversations: () => set({ scene: "conversations" }),
-  openDeck: () => set({ scene: "deck" }),
+  setScene: (scene) => set((state) => navigateTo(state, {
+    scene,
+    currentTaskId: scene === "room" ? state.currentTaskId : null,
+    workspacePath: useTasksStore.getState().currentProjectId,
+  })),
+  goBack: () => {
+    const state = get();
+    const destination = state.navigationBack[state.navigationBack.length - 1];
+    if (!destination) return;
+    const current = currentLocation(state);
+    useTasksStore.getState().setCurrentProject(destination.workspacePath);
+    set(restoreLocation(
+      state,
+      destination,
+      state.navigationBack.slice(0, -1),
+      [...state.navigationForward, current].slice(-NAVIGATION_LIMIT),
+    ));
+  },
+  goForward: () => {
+    const state = get();
+    const destination = state.navigationForward[state.navigationForward.length - 1];
+    if (!destination) return;
+    const current = currentLocation(state);
+    useTasksStore.getState().setCurrentProject(destination.workspacePath);
+    set(restoreLocation(
+      state,
+      destination,
+      [...state.navigationBack, current].slice(-NAVIGATION_LIMIT),
+      state.navigationForward.slice(0, -1),
+    ));
+  },
+  forgetTaskNavigation: (taskId) => set((state) => ({
+    navigationBack: state.navigationBack.filter((entry) => entry.currentTaskId !== taskId),
+    navigationForward: state.navigationForward.filter((entry) => entry.currentTaskId !== taskId),
+  })),
+  goHome: () => set((state) => navigateTo(state, {
+    scene: "home",
+    currentTaskId: null,
+    workspacePath: useTasksStore.getState().currentProjectId,
+  })),
+  openDashboard: (workspacePath) => {
+    const destinationPath = workspacePath ?? useTasksStore.getState().currentProjectId;
+    set((state) => navigateTo(state, {
+      scene: "dashboard",
+      currentTaskId: null,
+      workspacePath: destinationPath,
+    }));
+    if (workspacePath !== undefined) useTasksStore.getState().setCurrentProject(workspacePath);
+  },
+  openConversations: () => set((state) => navigateTo(state, {
+    scene: "conversations",
+    currentTaskId: null,
+    workspacePath: useTasksStore.getState().currentProjectId,
+  })),
+  openDeck: () => set((state) => navigateTo(state, {
+    scene: "deck",
+    currentTaskId: null,
+    workspacePath: useTasksStore.getState().currentProjectId,
+  })),
   openRoom: (taskId, requestedTab) =>
     set((state) => {
       const saved = state.workbenches[taskId] ?? createWorkbenchState(requestedTab ?? "summary");
@@ -199,6 +334,11 @@ export const useAppStore = create<AppState>((set) => ({
           }
         : saved;
       return {
+        ...navigateTo(state, {
+          scene: "room",
+          currentTaskId: taskId,
+          workspacePath: useTasksStore.getState().currentProjectId,
+        }),
         scene: "room",
         currentTaskId: taskId,
         canvasTab: next.tab,
@@ -228,6 +368,11 @@ export const useAppStore = create<AppState>((set) => ({
         launcherOpen: false,
       };
       return {
+        ...navigateTo(state, {
+          scene: "room",
+          currentTaskId: taskId,
+          workspacePath: useTasksStore.getState().currentProjectId,
+        }),
         scene: "room",
         currentTaskId: taskId,
         canvasTab: "files",
@@ -245,6 +390,18 @@ export const useAppStore = create<AppState>((set) => ({
         },
       };
     }),
+  queueTaskFileReference: (taskId, path) => set((state) => ({
+    taskFileReferences: {
+      ...state.taskFileReferences,
+      [taskId]: { requestId: ++fileReferenceSequence, path },
+    },
+  })),
+  acknowledgeTaskFileReference: (taskId, requestId) => set((state) => {
+    if (state.taskFileReferences[taskId]?.requestId !== requestId) return state;
+    const taskFileReferences = { ...state.taskFileReferences };
+    delete taskFileReferences[taskId];
+    return { taskFileReferences };
+  }),
   closeWorkbenchTab: (requestedTab) =>
     set((state) => withCurrentWorkbench(state, (current) => {
       const closing = workbenchToolTab(requestedTab ?? current.tab);
@@ -317,7 +474,14 @@ export const useAppStore = create<AppState>((set) => ({
       mode: "docked",
       launcherOpen: false,
     }))),
-  setSettingsPane: (settingsPane) => set({ settingsPane, scene: "settings" }),
+  setSettingsPane: (settingsPane) => set((state) => ({
+    ...navigateTo(state, {
+      scene: "settings",
+      currentTaskId: null,
+      workspacePath: useTasksStore.getState().currentProjectId,
+    }),
+    settingsPane,
+  })),
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setEditorFile: (editorFile) => set({ editorFile }),

@@ -30,6 +30,7 @@ pub mod skills;
 pub mod support_bundle;
 pub mod system_integration;
 pub mod work_card;
+pub mod workflow_skills;
 
 // 重新导出核心类型
 pub use commands::{
@@ -55,6 +56,10 @@ pub use support_bundle::{BundleContents, ConfigSummary, DbStats, LogEntry, Suppo
 pub use work_card::{
     EvidenceItem, FailureState, RequiredTest, RollbackPlan, TestStatus, TestType, WorkCard,
     WorkCardBoundary, WorkCardContract,
+};
+pub use workflow_skills::{
+    SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
+    WorkflowSkillSource,
 };
 
 /// 初始化结构化日志框架。

@@ -142,7 +142,7 @@ impl std::fmt::Display for TaskMode {
 ///
 /// 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`；
 /// 用户可将运行转为 `Interrupted`，后续可直接分发排队消息。
-/// 任意状态可以 `-> Archived`。
+/// 任意状态可以 `-> Archived`，归档后可由用户显式还原为 `Idle`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
@@ -157,7 +157,7 @@ pub enum TaskState {
     Interrupted,
     /// 待审查（Agent 完成一轮，等待用户接受/回滚）
     ReviewReady,
-    /// 已归档（不可再操作）
+    /// 已归档（只读；还原后可继续操作）
     Archived,
 }
 

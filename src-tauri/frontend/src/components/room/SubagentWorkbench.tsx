@@ -5,7 +5,6 @@ import {
   IconActivity,
   IconCheck,
   IconChevronDown,
-  IconChevronLeft,
   IconClose,
   IconMaximize,
   IconMinimize,
@@ -31,8 +30,10 @@ interface Props {
   activity: ActivityTraceState;
   runs: readonly AgentRun[];
   selectedSubagentId: string | null;
+  openSubagentIds: readonly string[];
   onSelect: (subagentId: string) => void;
   onBack: () => void;
+  onCloseTab: (subagentId: string) => void;
   onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -76,8 +77,8 @@ interface SessionToolGroupEntry {
 type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroupEntry;
 
 /**
- * 子智能体是工作台内的一条完整导航链，而不是一个覆盖其他工具的临时详情：
- * 列表负责总览，详情负责单个会话，返回键始终回列表。
+ * 子智能体总览和每个子智能体会话都是独立标签页。
+ * 标签以稳定的运行 ID 去重；重新打开已有会话时只切换激活项。
  */
 export function SubagentWorkbench({
   taskId,
@@ -85,8 +86,10 @@ export function SubagentWorkbench({
   activity,
   runs,
   selectedSubagentId,
+  openSubagentIds,
   onSelect,
   onBack,
+  onCloseTab,
   onClose,
   onOpenLauncher,
   onHide,
@@ -100,6 +103,10 @@ export function SubagentWorkbench({
   );
   const selectedIndex = children.findIndex((child) => child.id === selectedSubagentId);
   const selected = selectedIndex >= 0 ? children[selectedIndex] : undefined;
+  const openedChildren = openSubagentIds.flatMap((id) => {
+    const index = children.findIndex((child) => child.id === id);
+    return index >= 0 ? [{ child: children[index], index }] : [];
+  });
 
   return (
     <div
@@ -107,34 +114,42 @@ export function SubagentWorkbench({
       data-testid={selected ? "subagent-detail" : "subagent-list"}
       data-subagent-view={selected ? "detail" : "list"}
     >
-      {selected ? (
-        <>
-          <SubagentDetailHeader child={selected} index={selectedIndex} onBack={onBack} />
-          <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
-        </>
-      ) : (
-        <>
-          <SubagentListHeader
-            onClose={onClose}
-            onOpenLauncher={onOpenLauncher}
-            onHide={onHide}
-            onToggleFocus={onToggleFocus}
-            focused={focused}
-          />
-          <SubagentList children={children} onSelect={onSelect} />
-        </>
-      )}
+      <SubagentTabsHeader
+        openedChildren={openedChildren}
+        selectedSubagentId={selected?.id ?? null}
+        onSelect={onSelect}
+        onSelectOverview={onBack}
+        onCloseTab={onCloseTab}
+        onClose={onClose}
+        onOpenLauncher={onOpenLauncher}
+        onHide={onHide}
+        onToggleFocus={onToggleFocus}
+        focused={focused}
+      />
+      {selected
+        ? <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
+        : <SubagentList children={children} onSelect={onSelect} />}
     </div>
   );
 }
 
-function SubagentListHeader({
+function SubagentTabsHeader({
+  openedChildren,
+  selectedSubagentId,
+  onSelect,
+  onSelectOverview,
+  onCloseTab,
   onClose,
   onOpenLauncher,
   onHide,
   onToggleFocus,
   focused,
 }: {
+  openedChildren: readonly { child: ActivitySubagent; index: number }[];
+  selectedSubagentId: string | null;
+  onSelect: (subagentId: string) => void;
+  onSelectOverview: () => void;
+  onCloseTab: (subagentId: string) => void;
   onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -142,22 +157,72 @@ function SubagentListHeader({
   focused: boolean;
 }) {
   return (
-    <header className="subagent-page-header workbench-head subagent-list-header">
+    <header className="subagent-page-header workbench-head subagent-tabs-header">
       <div className="workbench-tabs" role="tablist" aria-label="子智能体工作台">
-        <div className="workbench-tab workbench-active-tab" role="tab" aria-selected="true">
+        <div
+          className={`workbench-tab${selectedSubagentId == null ? " workbench-active-tab" : ""}`}
+          role="tab"
+          tabIndex={selectedSubagentId == null ? 0 : -1}
+          aria-selected={selectedSubagentId == null}
+          aria-label="子智能体"
+          onClick={onSelectOverview}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            onSelectOverview();
+          }}
+        >
           <SubagentAvatar index={0} size="xs" />
           <strong>子智能体</strong>
           <button
             type="button"
             className="workbench-tab-close"
             data-testid="subagent-tab-close"
-            onClick={onClose}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
             aria-label="关闭子智能体标签页"
             title="关闭子智能体"
           >
             <IconClose width={13} height={13} />
           </button>
         </div>
+        {openedChildren.map(({ child, index }) => {
+          const selected = selectedSubagentId === child.id;
+          return (
+            <div
+              key={child.id}
+              className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              aria-selected={selected}
+              aria-label={child.label}
+              data-subagent-id={child.id}
+              onClick={() => onSelect(child.id)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                onSelect(child.id);
+              }}
+            >
+              <SubagentAvatar index={index} identity={child.id} size="xs" />
+              <strong title={child.label}>{child.label}</strong>
+              <button
+                type="button"
+                className="workbench-tab-close"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTab(child.id);
+                }}
+                aria-label={`关闭${child.label}标签页`}
+                title={`关闭${child.label}`}
+              >
+                <IconClose width={13} height={13} />
+              </button>
+            </div>
+          );
+        })}
       </div>
       <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开工具启动器" title="新增扩展">
         <IconPlus width={16} height={16} />
@@ -169,31 +234,6 @@ function SubagentListHeader({
       <button type="button" className="subagent-page-icon-button" onClick={onHide} aria-label="隐藏工作台" title="隐藏工作台">
         <IconSidebar width={16} height={16} />
       </button>
-    </header>
-  );
-}
-
-function SubagentDetailHeader({
-  child,
-  index,
-  onBack,
-}: {
-  child: ActivitySubagent;
-  index: number;
-  onBack: () => void;
-}) {
-  return (
-    <header className="subagent-page-header">
-      <button type="button" className="subagent-page-icon-button" onClick={onBack} aria-label="返回子智能体列表" title="返回子智能体列表">
-        <IconChevronLeft width={17} height={17} />
-      </button>
-      <SubagentAvatar index={index} identity={child.id} />
-      <strong title={child.label}>{child.label}</strong>
-      <span className="subagent-page-header-spacer" />
-      <span className={`subagent-page-status status-${child.status}`}>
-        <SubagentStateMark status={child.status} />
-        <span>{statusLabel(child.status)}</span>
-      </span>
     </header>
   );
 }

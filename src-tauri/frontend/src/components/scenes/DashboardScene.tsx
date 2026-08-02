@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { permissionApprove } from "../../lib/ipc";
+import { permissionApprove, taskDelete, taskRestore } from "../../lib/ipc";
 import { elapsedMinutes, elapsedSince, permissionRiskLabel } from "../../lib/format";
 import { taskTitle } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
+import { pushToast } from "../../store/toast";
 import type {
   DashboardAttentionItem,
   DashboardTaskSummary,
@@ -13,14 +14,15 @@ import type {
   Task,
 } from "../../lib/types";
 import {
-  IconActivity,
   IconArrowRight,
-  IconCheck,
   IconEditor,
   IconFile,
   IconProjects,
+  IconRestore,
   IconShield,
+  IconTrash,
 } from "../icons";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 
 /** 项目仪表盘：唯一包含「项目动态」右栏的场景，数据来自 cmd_workspace_dashboard。 */
 export function DashboardScene() {
@@ -57,7 +59,6 @@ export function DashboardScene() {
         <div className="dashboard-empty">
           <span className="dashboard-empty-icon"><IconProjects width={26} height={26} /></span>
           <div>
-            <p className="page-kicker">PROJECT DASHBOARD</p>
             <h1>先选择一个项目。</h1>
             <p>每个项目都有自己的任务概览、待处理事项和项目动态。</p>
           </div>
@@ -70,7 +71,7 @@ export function DashboardScene() {
   const metrics = dashboard?.metrics;
   const taskSummaries = dashboard?.tasks ?? [];
   const attention = dashboard?.attention ?? [];
-  const completed = dashboard?.completed ?? [];
+  const archived = dashboard?.archived ?? [];
 
   return (
     <div className="scene scene-dashboard">
@@ -79,9 +80,9 @@ export function DashboardScene() {
           <header className="dashboard-header">
             <div className="dashboard-project-mark"><IconProjects width={20} height={20} /></div>
             <div>
-              <p className="page-kicker">PROJECT DASHBOARD</p>
+              <span className="dashboard-context-label">项目概览</span>
               <h1>{workspace.display_name}</h1>
-              <p>任务、变更与验证都围绕这个项目展开。</p>
+              <p>查看正在推进的任务、需要处理的事项与归档记录。</p>
             </div>
             <div className="dashboard-header-actions">
               <button className="rc-button rc-button-quiet" onClick={() => setScene("editor")}><IconEditor width={15} height={15} />项目文件</button>
@@ -93,7 +94,7 @@ export function DashboardScene() {
             <Metric label="待处理" value={(metrics?.pending_permission_count ?? 0) + (metrics?.review_ready_count ?? 0)} tone={(metrics?.pending_permission_count ?? 0) + (metrics?.review_ready_count ?? 0) > 0 ? "warm" : undefined} />
             <Metric label="运行中" value={metrics?.running_task_count ?? 0} tone="success" />
             <Metric label="子代理" value={metrics?.active_subagent_count ?? 0} />
-            <Metric label="近 1 小时完成" value={metrics?.completed_last_hour_count ?? 0} />
+            <Metric label="已归档" value={metrics?.archived_task_count ?? 0} />
           </section>
 
           {error && <div className="dashboard-error" role="alert">{error}</div>}
@@ -101,7 +102,7 @@ export function DashboardScene() {
           {attention.length > 0 && (
             <section className="dashboard-section dashboard-attention-section">
               <div className="dashboard-section-title">
-                <div><p className="section-kicker">NEEDS YOU</p><h2>需要你处理</h2></div>
+                <div><h2>需要你处理</h2><p>这些任务在等待你的决定。</p></div>
                 <button className="text-link" onClick={() => setScene("inbox")}>查看全部 <IconArrowRight width={14} height={14} /></button>
               </div>
               <div className="dashboard-attention-list">
@@ -116,11 +117,13 @@ export function DashboardScene() {
 
           <section className="dashboard-section">
             <div className="dashboard-section-title">
-              <div><p className="section-kicker">TASKS</p><h2>项目任务</h2></div>
+              <div><h2>项目任务</h2><p>当前项目中未归档的对话。</p></div>
               <span className="section-meta">{metrics?.task_count ?? taskSummaries.length} 个任务</span>
             </div>
             {taskSummaries.length === 0 ? (
-              <div className="dashboard-blank-row">这个项目还没有任务。创建一个任务，仪表盘会在这里开始积累进度。</div>
+              <div className="dashboard-blank-row">
+                {archived.length > 0 ? "当前没有未归档任务。你可以从下方还原对话，或新建一个任务。" : "这个项目还没有任务。创建一个任务，仪表盘会在这里开始积累进度。"}
+              </div>
             ) : (
               <div className="dashboard-task-table" role="table" aria-label="项目任务">
                 <div className="dashboard-task-head" role="row">
@@ -133,23 +136,21 @@ export function DashboardScene() {
             )}
           </section>
 
-          <section className="dashboard-section dashboard-completed-section">
+          <section className="dashboard-section dashboard-archived-section">
             <div className="dashboard-section-title">
-              <div><p className="section-kicker">VERIFICATION</p><h2>最近完成</h2></div>
+              <div><h2>已归档</h2><p>归档对话不会出现在项目任务与项目动态中。</p></div>
+              <span className="section-meta">{metrics?.archived_task_count ?? archived.length} 个归档</span>
             </div>
-            <div className="dashboard-completed-list">
-              {completed.slice(0, 3).map((summary) => {
-                const latest = summary.latest_verification;
-                return (
-                  <button className="completed-row" key={summary.task.id} onClick={() => openRoom(summary.task.id)}>
-                    <IconCheck width={16} height={16} />
-                    <strong>{taskTitle(summary.task)}</strong>
-                    <span>{latest ? `${latest.command} · ${latest.status === "passed" ? "已通过" : latest.status}` : "任务已完成"}</span>
-                    <time>{elapsedMinutes(summary.task.updated_at)}</time>
-                  </button>
-                );
-              })}
-              {!completed.length && <div className="dashboard-blank-row compact">最近还没有完成记录。</div>}
+            <div className="dashboard-archived-list" role="table" aria-label="已归档对话">
+              {archived.length > 0 && (
+                <div className="dashboard-archived-head" role="row">
+                  <span>对话</span><span>归档时间</span><span>操作</span>
+                </div>
+              )}
+              {archived.map((task) => (
+                <ArchivedTaskRow key={task.id} task={task} onChanged={refresh} onError={setError} />
+              ))}
+              {!archived.length && <div className="dashboard-blank-row compact">还没有归档对话。</div>}
             </div>
           </section>
         </div>
@@ -192,6 +193,100 @@ function TaskRow({ summary, onOpen }: { summary: DashboardTaskSummary; onOpen: (
       <span className="dashboard-task-diff">{stat.files ? <><b>+{stat.created + stat.modified}</b><em>−{stat.removed}</em></> : "—"}</span>
       <time>{elapsedMinutes(summary.task.updated_at)}</time>
     </button>
+  );
+}
+
+function archivedAt(iso: string): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return "—";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(value);
+}
+
+function ArchivedTaskRow({
+  task,
+  onChanged,
+  onError,
+}: {
+  task: Task;
+  onChanged: () => Promise<void>;
+  onError: (message: string | null) => void;
+}) {
+  const openRoom = useAppStore((s) => s.openRoom);
+  const forgetTaskNavigation = useAppStore((s) => s.forgetTaskNavigation);
+  const [busy, setBusy] = useState<"restore" | "delete" | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const title = taskTitle(task);
+
+  const restore = async () => {
+    if (busy) return;
+    setBusy("restore");
+    onError(null);
+    try {
+      await taskRestore(task.id);
+      await onChanged();
+      pushToast({ kind: "success", title: "对话已还原", body: title });
+    } catch (cause) {
+      const message = `无法还原对话：${String(cause)}`;
+      onError(message);
+      pushToast({ kind: "error", title: "无法还原对话", body: String(cause) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const remove = async () => {
+    if (busy) return;
+    setBusy("delete");
+    onError(null);
+    try {
+      await taskDelete(task.id);
+      forgetTaskNavigation(task.id);
+      await onChanged();
+      setConfirmDelete(false);
+      pushToast({ kind: "success", title: "对话已永久删除", body: title });
+    } catch (cause) {
+      const message = `无法删除对话：${String(cause)}`;
+      onError(message);
+      pushToast({ kind: "error", title: "无法删除对话", body: String(cause) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <div className="dashboard-archived-row" role="row">
+        <button className="dashboard-archived-main" type="button" onClick={() => openRoom(task.id)}>
+          <strong>{title}</strong>
+          <small>打开只读历史</small>
+        </button>
+        <time dateTime={task.updated_at}>{archivedAt(task.updated_at)}</time>
+        <div className="dashboard-archived-actions">
+          <button className="archived-action restore" type="button" disabled={busy != null} onClick={() => void restore()}>
+            <IconRestore width={14} height={14} />{busy === "restore" ? "还原中" : "还原"}
+          </button>
+          <button className="archived-action danger" type="button" disabled={busy != null} onClick={() => setConfirmDelete(true)} aria-label={`永久删除 ${title}`}>
+            <IconTrash width={14} height={14} />删除
+          </button>
+        </div>
+      </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        title="永久删除这段对话？"
+        description={`“${title}”的消息、运行记录与审计历史会被永久删除。项目目录和其中的文件不会被删除。`}
+        confirmLabel="永久删除"
+        busy={busy === "delete"}
+        onCancel={() => {
+          if (!busy) setConfirmDelete(false);
+        }}
+        onConfirm={() => void remove()}
+      />
+    </>
   );
 }
 
@@ -259,15 +354,21 @@ function activityTone(item: ProjectActivityItem): "running" | "attention" | "rev
 
 function ProjectActivityRail({ items }: { items: ProjectActivityItem[] }) {
   const openRoom = useAppStore((s) => s.openRoom);
-  // 仪表盘只保留能改变任务判断的节点；逐次工具调用仍可在任务详情和全局活动页查看。
-  // 若后端暂时只返回底层事件，则回退显示最近几条，避免产生错误的空态。
+  // 仪表盘为每段未归档对话只保留最新关键节点；完整事件仍在任务详情和全局活动页。
   const significant = items.filter((item) => !["state_changed", "queue_dispatched", "tool_call", "tool_result", "system"].includes(item.kind));
-  const visibleItems = (significant.length > 0 ? significant : items).slice(0, 8);
+  const visibleItems: ProjectActivityItem[] = [];
+  const seenTasks = new Set<string>();
+  for (const item of significant) {
+    if (seenTasks.has(item.task_id)) continue;
+    seenTasks.add(item.task_id);
+    visibleItems.push(item);
+    if (visibleItems.length === 5) break;
+  }
   return (
     <aside className="project-activity-rail" aria-label="项目动态">
-      <div className="project-activity-head"><div><p className="section-kicker">PROJECT ACTIVITY</p><h2>项目动态</h2></div><IconActivity width={18} height={18} /></div>
+      <div className="project-activity-head"><div><h2>项目动态</h2><p>每个对话的最新关键节点</p></div></div>
       <div className="project-activity-list">
-        {visibleItems.length === 0 ? <p className="project-activity-empty">任务产生运行、变更或验证后，动态会显示在这里。</p> : visibleItems.map((item) => (
+        {visibleItems.length === 0 ? <p className="project-activity-empty">还没有可显示的关键动态。</p> : visibleItems.map((item) => (
           <button className="project-activity-item" key={item.id} onClick={() => openRoom(item.task_id)}>
             <i className={`task-state-dot ${activityTone(item)}`} />
             <span><strong>{item.summary}</strong><small>{item.task_title}{item.actor ? ` · ${item.actor}` : ""}</small></span>

@@ -7,8 +7,8 @@
 //! 1. 调用 `provider.stream(request)` 获取事件流。
 //! 2. `TextDelta` -> 累积文本，emit `AgentEvent::Message { delta: true }`。
 //! 3. `ToolUseStart` / `ToolUseDelta` -> 跟踪工具调用与输入 JSON 累积。
-//! 4. `ToolUseComplete` -> 调用带 ID 的 `tool_host.call_with_id()`，emit `AgentEvent::ToolCall` +
-//!    `AgentEvent::ToolResult`，并将 `ToolResult` 块收集起来。
+//! 4. `ToolUseComplete` -> 收集同一轮工具调用；可证明安全的只读调用按最多 4 路并发执行，
+//!    其余保持串行。每个调用 emit `AgentEvent::ToolCall` + `AgentEvent::ToolResult`。
 //! 5. `Stop` -> 结束本次迭代。
 //! 6. 追加 assistant 消息（含 Text + ToolUse 块）；若因工具调用停止，
 //!    追加 user 消息（含 ToolResult 块）。
@@ -34,6 +34,87 @@ use r_code_core::error::ProductError;
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
+}
+
+const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
+
+#[derive(Debug, Clone)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    input: serde_json::Value,
+}
+
+fn is_parallel_read_tool(tools: &[ToolSpec], name: &str) -> bool {
+    matches!(
+        name,
+        "read_file" | "list_files" | "search" | "glob" | "git_status"
+    ) && tools
+        .iter()
+        .find(|tool| tool.name == name)
+        .is_some_and(|tool| !tool.requires_confirmation)
+}
+
+async fn execute_pending_tools(
+    tool_host: &dyn ToolHost,
+    tools: &[ToolSpec],
+    calls: &[PendingToolCall],
+    abort: Option<&AtomicBool>,
+) -> Result<Vec<hermes_core::ToolCallOutcome>, ProductError> {
+    let can_run_in_parallel = calls.len() > 1
+        && calls
+            .iter()
+            .all(|call| is_parallel_read_tool(tools, &call.name));
+
+    if !can_run_in_parallel {
+        let mut outcomes = Vec::with_capacity(calls.len());
+        for call in calls {
+            if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                outcomes.push(cancelled_tool_outcome(call));
+                continue;
+            }
+            outcomes.push(
+                tool_host
+                    .call_with_id(&call.id, &call.name, call.input.clone())
+                    .await
+                    .map_err(map_hermes_err)?,
+            );
+        }
+        return Ok(outcomes);
+    }
+
+    let mut outcomes = Vec::with_capacity(calls.len());
+    for batch in calls.chunks(MAX_PARALLEL_READ_TOOL_CALLS) {
+        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            outcomes.extend(batch.iter().map(cancelled_tool_outcome));
+            continue;
+        }
+        let results = futures::future::join_all(
+            batch
+                .iter()
+                .map(|call| tool_host.call_with_id(&call.id, &call.name, call.input.clone())),
+        )
+        .await;
+        for result in results {
+            outcomes.push(result.map_err(map_hermes_err)?);
+        }
+    }
+    Ok(outcomes)
+}
+
+fn cancelled_tool_outcome(call: &PendingToolCall) -> hermes_core::ToolCallOutcome {
+    hermes_core::ToolCallOutcome {
+        content: serde_json::json!({
+            "status": "cancelled",
+            "reason": format!(
+                "{} was not started because the agent run was interrupted",
+                call.name
+            )
+        })
+        .to_string(),
+        is_error: true,
+        metadata: None,
+    }
 }
 
 /// 修复旧版本在中断工具期间可能留下的悬空 `ToolUse`。
@@ -226,6 +307,7 @@ where
     let mut current_text = String::new();
     // id -> (name, 累积的 input_json 片段)
     let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
+    let mut tool_calls: Vec<PendingToolCall> = Vec::new();
     let mut tool_results: Vec<ContentBlock> = Vec::new();
     let mut total_usage = Usage::default();
     let mut streaming_started = false;
@@ -298,29 +380,7 @@ where
                     input: input.clone(),
                     call_id: id.clone(),
                 });
-                // 调用工具主机
-                let outcome = tool_host
-                    .call_with_id(&id, &name, input)
-                    .await
-                    .map_err(map_hermes_err)?;
-                // 工具已经返回后必须先闭合 ToolUse/ToolResult 协议对，再响应取消。
-                // 否则 history snapshot 会永久带着悬空 tool call，后续请求都会被拒绝。
-                let abort_after_tool = abort.is_some_and(|flag| flag.load(Ordering::Relaxed));
-                let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
-                    .unwrap_or(serde_json::Value::String(outcome.content.clone()));
-                emit(AgentEvent::ToolResult {
-                    call_id: id.clone(),
-                    output: output_val,
-                    is_error: outcome.is_error,
-                });
-                tool_results.push(ContentBlock::ToolResult {
-                    tool_use_id: id,
-                    content: outcome.content,
-                    is_error: outcome.is_error,
-                });
-                if abort_after_tool {
-                    break;
-                }
+                tool_calls.push(PendingToolCall { id, name, input });
             }
             StreamEvent::Stop { .. } => {
                 break;
@@ -332,6 +392,26 @@ where
     }
 
     flush_text(&mut current_text, &mut assistant_blocks);
+
+    if !tool_calls.is_empty() {
+        let outcomes = execute_pending_tools(tool_host, tools, &tool_calls, abort).await?;
+        for (call, outcome) in tool_calls.into_iter().zip(outcomes) {
+            // 一旦 assistant 已经声明了一组 ToolUse，就必须为每个调用闭合协议对；
+            // 即使并发期间收到中断，也会为未启动调用合成可记录的取消结果。
+            let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
+                .unwrap_or(serde_json::Value::String(outcome.content.clone()));
+            emit(AgentEvent::ToolResult {
+                call_id: call.id.clone(),
+                output: output_val,
+                is_error: outcome.is_error,
+            });
+            tool_results.push(ContentBlock::ToolResult {
+                tool_use_id: call.id,
+                content: outcome.content,
+                is_error: outcome.is_error,
+            });
+        }
+    }
 
     // 追加 assistant 消息（含 Text + ToolUse 块）
     if !assistant_blocks.is_empty() {
@@ -400,9 +480,10 @@ mod tests {
     use hermes_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::AgentEvent;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
+    use std::time::Duration;
 
     use super::{
         run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
@@ -451,6 +532,55 @@ mod tests {
     struct AbortDuringToolHost {
         tools: Vec<ToolSpec>,
         abort: Arc<AtomicBool>,
+        calls: AtomicUsize,
+    }
+
+    struct ConcurrencyToolHost {
+        tools: Vec<ToolSpec>,
+        in_flight: AtomicUsize,
+        max_in_flight: AtomicUsize,
+    }
+
+    impl ConcurrencyToolHost {
+        fn new(tool_name: &str) -> Self {
+            Self::with_tools(&[tool_name])
+        }
+
+        fn with_tools(tool_names: &[&str]) -> Self {
+            Self {
+                tools: tool_names
+                    .iter()
+                    .map(|tool_name| ToolSpec {
+                        name: (*tool_name).to_string(),
+                        description: "concurrency probe".to_string(),
+                        input_schema: serde_json::json!({"type": "object"}),
+                        source: ToolSource::Builtin,
+                        requires_confirmation: false,
+                    })
+                    .collect(),
+                in_flight: AtomicUsize::new(0),
+                max_in_flight: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ToolHost for ConcurrencyToolHost {
+        async fn list_tools(&self) -> Result<Vec<ToolSpec>> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call(&self, _name: &str, args: serde_json::Value) -> Result<ToolCallOutcome> {
+            let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_in_flight.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            self.in_flight.fetch_sub(1, Ordering::SeqCst);
+            Ok(ToolCallOutcome {
+                content: args.to_string(),
+                is_error: false,
+                metadata: None,
+            })
+        }
     }
 
     #[async_trait]
@@ -460,6 +590,7 @@ mod tests {
         }
 
         async fn call(&self, _name: &str, _args: serde_json::Value) -> Result<ToolCallOutcome> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             self.abort.store(true, Ordering::Relaxed);
             Ok(ToolCallOutcome {
                 content: serde_json::json!({
@@ -617,6 +748,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn independent_read_tools_from_one_model_turn_execute_concurrently() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "read-a".to_string(),
+                name: "read_file".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "read-a".to_string(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+            StreamEvent::ToolUseStart {
+                id: "read-b".to_string(),
+                name: "read_file".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "read-b".to_string(),
+                input: serde_json::json!({"path": "b.rs"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let tool_host = ConcurrencyToolHost::new("read_file");
+        let mut messages = vec![Message::user_text("inspect both")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &tools)
+                .await
+                .unwrap();
+
+        assert_eq!(tool_host.max_in_flight.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+                .count(),
+            2,
+        );
+    }
+
+    #[tokio::test]
+    async fn mixed_read_and_write_tools_from_one_model_turn_remain_sequential() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "read-a".to_string(),
+                name: "read_file".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "read-a".to_string(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+            StreamEvent::ToolUseStart {
+                id: "edit-a".to_string(),
+                name: "edit".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "edit-a".to_string(),
+                input: serde_json::json!({"path": "a.rs", "old": "a", "new": "b"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let tool_host = ConcurrencyToolHost::with_tools(&["read_file", "edit"]);
+        let mut messages = vec![Message::user_text("inspect then edit")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &tools)
+                .await
+                .unwrap();
+
+        assert_eq!(tool_host.max_in_flight.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+                .count(),
+            2,
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_read_tools_are_bounded_to_four_at_a_time() {
+        let provider = MockProvider::new("mock");
+        let mut stream_events = Vec::new();
+        for index in 0..5 {
+            let id = format!("read-{index}");
+            stream_events.push(StreamEvent::ToolUseStart {
+                id: id.clone(),
+                name: "read_file".to_string(),
+            });
+            stream_events.push(StreamEvent::ToolUseComplete {
+                id,
+                input: serde_json::json!({"path": format!("{index}.rs")}),
+            });
+        }
+        stream_events.push(StreamEvent::Stop {
+            reason: StopReason::ToolUse,
+        });
+        provider.push_turn(RecordedTurn::ok(stream_events));
+        let tool_host = ConcurrencyToolHost::new("read_file");
+        let mut messages = vec![Message::user_text("inspect five files")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &tools)
+            .await
+            .unwrap();
+
+        assert_eq!(tool_host.max_in_flight.load(Ordering::SeqCst), 4);
+    }
+
+    #[tokio::test]
     async fn abort_during_tool_call_preserves_the_matching_tool_result() {
         let provider = MockProvider::new("mock");
         provider.push_turn(RecordedTurn::ok(vec![
@@ -642,6 +889,7 @@ mod tests {
                 requires_confirmation: false,
             }],
             abort: abort.clone(),
+            calls: AtomicUsize::new(0),
         };
         let mut messages = vec![Message::user_text("start")];
         let tools = tool_host.list_tools().await.unwrap();
@@ -672,6 +920,67 @@ mod tests {
             [ContentBlock::ToolResult { tool_use_id, is_error: true, .. }]
                 if tool_use_id == "interrupted-tool"
         ));
+    }
+
+    #[tokio::test]
+    async fn abort_during_a_write_skips_later_declared_writes_but_closes_results() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "edit-a".to_string(),
+                name: "edit".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "edit-a".to_string(),
+                input: serde_json::json!({"path": "a.rs"}),
+            },
+            StreamEvent::ToolUseStart {
+                id: "edit-b".to_string(),
+                name: "edit".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "edit-b".to_string(),
+                input: serde_json::json!({"path": "b.rs"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let abort = Arc::new(AtomicBool::new(false));
+        let tool_host = AbortDuringToolHost {
+            tools: vec![ToolSpec {
+                name: "edit".to_string(),
+                description: "edit a file".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                requires_confirmation: false,
+            }],
+            abort: abort.clone(),
+            calls: AtomicUsize::new(0),
+        };
+        let mut messages = vec![Message::user_text("edit two files")];
+        let tools = tool_host.list_tools().await.unwrap();
+
+        let events = run_agent_loop_iteration_with_abort(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            Some(abort.as_ref()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tool_host.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::ToolResult { .. }))
+                .count(),
+            2,
+        );
+        assert_eq!(messages.len(), 3, "every declared tool use must be closed");
     }
 
     #[tokio::test]

@@ -28,6 +28,8 @@ import { IconAlert, IconCheck, IconClose } from "../icons";
 
 /** 退场动画时长，与 components.css 的 toastOut 保持一致。 */
 const EXIT_MS = 150;
+/** 可见倒计时刷新频率；用绝对时间计算，避免后台降频后越走越慢。 */
+const COUNTDOWN_TICK_MS = 250;
 
 function prefersReducedMotion(): boolean {
   return (
@@ -69,6 +71,7 @@ function ToastCard({ toast }: { toast: Toast }) {
   const timeout = toast.timeout ?? 0;
   /** 剩余可见时长；hover 暂停后从这里续，不是每次都从头开始 */
   const remaining = useRef(timeout);
+  const [remainingMs, setRemainingMs] = useState(timeout);
 
   const beginDismiss = useCallback(() => {
     if (leaveTimer.current != null) return;
@@ -94,6 +97,7 @@ function ToastCard({ toast }: { toast: Toast }) {
   // 计时 effect 的清理会先扣掉已用时间，这里再覆盖回满值。
   useEffect(() => {
     remaining.current = timeout;
+    setRemainingMs(timeout);
     if (leaveTimer.current != null) {
       window.clearTimeout(leaveTimer.current);
       leaveTimer.current = null;
@@ -105,15 +109,22 @@ function ToastCard({ toast }: { toast: Toast }) {
   useEffect(() => {
     if (timeout <= 0 || paused || leaving) return;
     const startedAt = Date.now();
-    const timer = window.setTimeout(beginDismiss, remaining.current);
+    const startingRemaining = remaining.current;
+    const updateCountdown = () => {
+      setRemainingMs(Math.max(0, startingRemaining - (Date.now() - startedAt)));
+    };
+    const countdownTimer = window.setInterval(updateCountdown, COUNTDOWN_TICK_MS);
+    const timer = window.setTimeout(beginDismiss, startingRemaining);
     return () => {
       window.clearTimeout(timer);
-      remaining.current = Math.max(0, remaining.current - (Date.now() - startedAt));
+      window.clearInterval(countdownTimer);
+      remaining.current = Math.max(0, startingRemaining - (Date.now() - startedAt));
     };
   }, [timeout, paused, leaving, toast.createdAt, beginDismiss]);
 
   const isError = toast.kind === "error";
   const action = toast.action;
+  const remainingSeconds = timeout > 0 ? Math.max(0, Math.ceil(remainingMs / 1000)) : null;
 
   return (
     <div
@@ -148,9 +159,20 @@ function ToastCard({ toast }: { toast: Toast }) {
           </button>
         )}
       </div>
-      <button type="button" className="iconbtn toast-close" onClick={beginDismiss} aria-label="关闭通知">
-        <IconClose width={12} height={12} />
-      </button>
+      <div className="toast-controls">
+        {remainingSeconds != null && (
+          <span
+            className="toast-countdown"
+            aria-hidden="true"
+            title={paused ? "自动关闭倒计时已暂停" : `${remainingSeconds} 秒后自动关闭`}
+          >
+            {remainingSeconds}s
+          </span>
+        )}
+        <button type="button" className="iconbtn toast-close" onClick={beginDismiss} aria-label="关闭通知">
+          <IconClose width={12} height={12} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -175,13 +197,16 @@ const TERMINAL_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   "archived",
 ]);
 
+/** 中止可从会话中回看，不应像不可恢复错误一样永久占住界面。 */
+const INTERRUPTED_TOAST_TIMEOUT_MS = 5000;
+
 /** 与 Rail / Canvas 一致的任务显示名。 */
 function taskLabel(task: Task): string {
   return task.title.trim() || task.goal.trim() || "未命名会话";
 }
 
 /** 终结态 → 播报内容；返回 null 表示这个状态不值得打扰用户。 */
-function completionToast(task: Task): { kind: ToastKind; title: string; body: string } | null {
+function completionToast(task: Task): { kind: ToastKind; title: string; body: string; timeout?: number } | null {
   const label = taskLabel(task);
   switch (task.state) {
     case "review_ready":
@@ -189,7 +214,12 @@ function completionToast(task: Task): { kind: ToastKind; title: string; body: st
     case "idle":
       return null;
     case "interrupted":
-      return { kind: "error", title: `已中止：${label}`, body: "运行被打断，回到会话可以看最后一步。" };
+      return {
+        kind: "error",
+        title: `已中止：${label}`,
+        body: "运行被打断，回到会话可以看最后一步。",
+        timeout: INTERRUPTED_TOAST_TIMEOUT_MS,
+      };
     default:
       return null;
   }

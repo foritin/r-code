@@ -281,6 +281,9 @@
 .field select.input { flex:none; min-width:160px; }
 .field input[type='range'] { flex: 1; min-width: 120px; accent-color: var(--accent); }
 .field.export-row { margin-top:var(--sp-5); }
+.field.agent-prompt-field { align-items:flex-start; }
+.field.agent-prompt-field textarea.input { min-height:132px; resize:vertical; line-height:1.55; font-family:var(--font-mono); font-size:var(--text-sm); }
+.field.agent-prompt-field .hint { flex-basis:100%; margin-left:132px; }
 
 .footbar { display: flex; align-items: center; gap:var(--sp-5); margin-top:var(--sp-5); }
 
@@ -288,6 +291,7 @@
   .settings-layout { grid-template-columns:1fr; gap:var(--sp-8); }
   .settings-nav { position:static; grid-template-columns:repeat(5,max-content); overflow-x:auto; padding-bottom:var(--sp-3); }
   .settings-nav button { padding:0 var(--sp-6); white-space:nowrap; }
+  .field.agent-prompt-field .hint { margin-left:0; }
 }
 
 .orchestration-cards { display:grid; gap:var(--sp-3); }
@@ -539,3 +543,29 @@
 .legacy-memory-status.unknown { border-style:dashed; }
 .editor-gate { display:flex; flex-direction:column; align-items:flex-start; gap:var(--sp-5); max-width:530px; margin:auto; padding:var(--sp-9); border:1px solid var(--border); border-radius: var(--radius-md); background:var(--bg-panel); color:var(--fg-muted); }.editor-gate h2 { margin:0; color:var(--fg); font:500 var(--text-2xl) var(--font-display); }.editor-gate p { margin:0 0 var(--sp-3); font-size:var(--text-base); line-height:1.65; }
 @media (max-width:760px) { .workspace-hero,.workspace-row { align-items:flex-start; flex-direction:column; }.workspace-actions { width:100%; justify-content:space-between; }.workspace-memory { grid-template-columns:1fr; gap:var(--sp-7); }.projects-scroll { padding:var(--sp-9) var(--sp-8); } }
+.workflow-skills-settings { gap: var(--sp-4); }
+.workflow-skills-title,
+.workflow-skills-tabs,
+.workflow-skill-enabled { display: flex; align-items: center; }
+.workflow-skills-title { justify-content: space-between; gap: var(--sp-5); }
+.workflow-skills-title h3 { margin-bottom: var(--sp-1); }
+.workflow-skills-tabs { gap: var(--sp-2); border-bottom: 1px solid var(--border); }
+.workflow-skills-tabs button { padding: var(--sp-3) var(--sp-4); border: 0; border-bottom: 2px solid transparent; color: var(--fg-muted); }
+.workflow-skills-tabs button.on { border-bottom-color: var(--accent); color: var(--fg); }
+.workflow-skills-tabs span { color: var(--fg-faint); }
+.workflow-skills-manager { display: grid; grid-template-columns: minmax(190px, .72fr) minmax(0, 1.8fr); min-height: 420px; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+.workflow-skills-list { display: flex; flex-direction: column; gap: var(--sp-1); padding: var(--sp-2); border-right: 1px solid var(--border); background: var(--bg-panel); overflow-y: auto; }
+.workflow-skills-list > p { padding: var(--sp-4); color: var(--fg-muted); font-size: var(--text-sm); line-height: 1.5; }
+.workflow-skills-list button { display: grid; gap: var(--sp-1); width: 100%; padding: var(--sp-3); border: 0; border-radius: var(--radius-sm); text-align: left; }
+.workflow-skills-list button:hover,
+.workflow-skills-list button.selected { background: var(--bg-hover); }
+.workflow-skills-list strong { color: var(--fg); font-family: var(--font-mono); }
+.workflow-skills-list span,
+.workflow-skills-list small { color: var(--fg-faint); font-size: var(--text-meta); }
+.workflow-skills-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-skill-editor { display: flex; flex-direction: column; gap: var(--sp-4); min-width: 0; padding: var(--sp-5); }
+.workflow-skill-enabled { gap: var(--sp-2); color: var(--fg-muted); }
+@media (max-width: 860px) {
+  .workflow-skills-manager { grid-template-columns: 1fr; }
+  .workflow-skills-list { max-height: 190px; border-right: 0; border-bottom: 1px solid var(--border); }
+}

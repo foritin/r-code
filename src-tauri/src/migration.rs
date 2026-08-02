@@ -345,6 +345,14 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 15,
+            to_version: 16,
+            description: "Run workspace snapshots and idempotent review change materialization"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

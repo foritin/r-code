@@ -22,6 +22,7 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
   const refreshTasks = useTasksStore((state) => state.refreshTasks);
   const currentTaskId = useAppStore((state) => state.currentTaskId);
   const openConversations = useAppStore((state) => state.openConversations);
+  const forgetTaskNavigation = useAppStore((state) => state.forgetTaskNavigation);
   const [busy, setBusy] = useState<"archive" | "delete" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const live = isTaskLive(task, detail);
@@ -55,6 +56,7 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
       await refreshTasks();
       setConfirmDelete(false);
       leaveRemovedRoom();
+      forgetTaskNavigation(task.id);
       onChanged?.();
       pushToast({ kind: "success", title: "对话已永久删除", body: title });
     } catch (cause) {
@@ -62,7 +64,7 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
     } finally {
       setBusy(null);
     }
-  }, [busy, leaveRemovedRoom, live, onChanged, refreshTasks, task.id, title]);
+  }, [busy, forgetTaskNavigation, leaveRemovedRoom, live, onChanged, refreshTasks, task.id, title]);
 
   const blockedHint = live ? "先停止当前运行" : undefined;
 

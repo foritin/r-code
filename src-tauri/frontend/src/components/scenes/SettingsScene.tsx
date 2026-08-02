@@ -18,6 +18,10 @@ import {
   settingsSet,
   supportBundle,
   supportPreview,
+  workflowSkillDelete,
+  workflowSkillReset,
+  workflowSkillSave,
+  workflowSkillsList,
 } from "../../lib/ipc";
 import type {
   AppConfig,
@@ -32,10 +36,14 @@ import type {
   ProviderProtocol,
   ProviderStatus,
   SupportBundlePreview,
+  WorkflowSkill,
+  WorkflowSkillDraft,
+  WorkflowSkillSource,
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
 import { catalogPresets, loadCatalog, presetOf, providerLabel } from "../../lib/provider";
 import { useCodexCliGate } from "../codex/CodexCliGate";
+import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
 import { IconCheck, IconRefresh } from "../icons";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
@@ -222,7 +230,7 @@ export function SettingsScene() {
               <p>{pane.description}</p>
             </header>
 
-            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics") && (
+            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics" || activePane === "codex") && (
               <div className="errbar" role="alert">
                 读取配置失败：{configErr}
                 <span className="spacer" />
@@ -275,7 +283,7 @@ export function SettingsScene() {
 
             {activePane === "codex" && (
               <div className="settings-sheet">
-                <CodexIntegrationSection />
+                <CodexIntegrationSection config={config} reloadConfig={loadConfig} />
               </div>
             )}
           </div>
@@ -875,8 +883,8 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
         : "每次委派会记录执行器选择和路由原因，并显示在子智能体详情中。",
     },
     {
-      title: "最小权限委派",
-      state: policy.allow_cross_engine_delegation ? "跨引擎" : "同引擎",
+      title: "Codex 子代理",
+      state: policy.allow_cross_engine_delegation ? "可调用" : "已关闭",
       detail: "子智能体默认只读；只有父任务明确授权时才能提升到完整访问，项目审批策略仍然生效。",
     },
     {
@@ -928,7 +936,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
           </select>
         </div>
         <div className="field">
-          <label htmlFor="set-cross-agent">跨引擎委派</label>
+          <label htmlFor="set-cross-agent">允许 Codex 子代理</label>
           <input
             id="set-cross-agent"
             className="switch"
@@ -938,7 +946,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
             disabled={busy != null}
             onChange={(event) => void save("allow_cross_engine_delegation", event.target.checked)}
           />
-          <span className="hint">允许 R-Code 调用 Codex，也允许 Codex 通过本机 MCP 调用 R-Code。</span>
+          <span className="hint">关闭后新的 Codex 委派会自动回退 R-Code；已经启动的 Codex 子代理继续完成。</span>
         </div>
       </section>
 
@@ -1001,6 +1009,240 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
         </div>
       </section>
     </>
+  );
+}
+
+export function AgentPromptsSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
+  const prompts = config.agent_prompts ?? { main_agent: "", subagent: "" };
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState(prompts);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDraft(prompts);
+  }, [prompts.main_agent, prompts.subagent]);
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      // 两个字段顺序落盘，避免并发改写同一份用户级配置文件。
+      await settingsSet("agent_prompts.main_agent", draft.main_agent);
+      await settingsSet("agent_prompts.subagent", draft.subagent);
+      await reload();
+      setNotice("协作 Prompt 已保存并应用");
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await settingsSet("agent_prompts", null);
+      await reload();
+      setNotice("已恢复内置协作 Prompt");
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="settings-block knowledge-prompt-settings">
+      <h3>协作 Prompt</h3>
+      <p className="desc">
+        作为用户级补充规则应用于主 Agent 与子代理。Prompt 保存在 R-Code AppData，
+        不会写入项目或 Git；工作区权限、显式“不要使用子代理”等运行时硬边界不可被覆盖。
+      </p>
+      {error && <div className="errbar" role="alert">保存协作 Prompt 失败：{error}</div>}
+      {notice && <div className="notebar" role="status">{notice}</div>}
+      <div className="field agent-prompt-field">
+        <label htmlFor="set-main-agent-prompt">主 Agent 协作 Prompt</label>
+        <textarea id="set-main-agent-prompt" className="input" rows={7} value={draft.main_agent} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, main_agent: event.target.value }))} />
+        <span className="hint">说明何时委派、如何汇总，以及主 Agent 对最终结果的责任。</span>
+      </div>
+      <div className="field agent-prompt-field">
+        <label htmlFor="set-subagent-prompt">子代理协作 Prompt</label>
+        <textarea id="set-subagent-prompt" className="input" rows={7} value={draft.subagent} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, subagent: event.target.value }))} />
+        <span className="hint">约束子代理的任务边界、输出格式与验证责任。</span>
+      </div>
+      <div className="footbar">
+        <span className="spacer" />
+        <button className="btn" disabled={busy} onClick={() => void reset()}>恢复内置 Prompt</button>
+        <button className="btn accent" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用 Prompt"}</button>
+      </div>
+    </section>
+  );
+}
+
+export function WorkflowSkillsSection() {
+  const [skills, setSkills] = useState<WorkflowSkill[]>([]);
+  const [source, setSource] = useState<WorkflowSkillSource>("builtin");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<WorkflowSkillDraft | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const load = useCallback(async (preferredId?: string) => {
+    const loaded = await workflowSkillsList();
+    setSkills(loaded);
+    const selected = loaded.find((skill) => skill.id === preferredId)
+      ?? loaded.find((skill) => skill.source === source)
+      ?? loaded[0];
+    if (selected) {
+      setSelectedId(selected.id);
+      setSource(selected.source);
+      setDraft({
+        id: selected.id,
+        name: selected.name,
+        description: selected.description,
+        instructions: selected.instructions,
+        source: selected.source,
+        enabled: selected.enabled,
+      });
+    }
+  }, [source]);
+
+  useEffect(() => {
+    void load().catch((cause) => setError(errText(cause)));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const select = (skill: WorkflowSkill) => {
+    setSelectedId(skill.id);
+    setSource(skill.source);
+    setDraft({
+      id: skill.id,
+      name: skill.name,
+      description: skill.description,
+      instructions: skill.instructions,
+      source: skill.source,
+      enabled: skill.enabled,
+    });
+    setConfirmDelete(false);
+    setNotice(null);
+  };
+
+  const switchSource = (nextSource: WorkflowSkillSource) => {
+    setSource(nextSource);
+    const next = skills.find((skill) => skill.source === nextSource);
+    if (next) {
+      select(next);
+      return;
+    }
+    setSelectedId(null);
+    setDraft(null);
+    setConfirmDelete(false);
+    setNotice(null);
+  };
+
+  const startCustom = () => {
+    setSource("custom");
+    setSelectedId(null);
+    setDraft({
+      name: "",
+      description: "",
+      instructions: "",
+      source: "custom",
+      enabled: true,
+    });
+    setConfirmDelete(false);
+  };
+
+  const save = async () => {
+    if (!draft || busy) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const saved = await workflowSkillSave(draft);
+      await load(saved.id);
+      setNotice(saved.source === "builtin" ? "已保存内置 Skill 的用户级覆盖。" : "自定义 Skill 已保存并可立即通过 / 调用。" );
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reset = async () => {
+    if (!draft?.id || draft.source !== "builtin" || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const restored = await workflowSkillReset(draft.id);
+      await load(restored.id);
+      setNotice("已恢复随应用发布的默认 Skill。" );
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async () => {
+    if (!draft?.id || draft.source !== "custom" || busy) return;
+    if (!confirmDelete) {
+      setConfirmDelete(true);
+      window.setTimeout(() => setConfirmDelete(false), 5000);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await workflowSkillDelete(draft.id);
+      setDraft(null);
+      setSelectedId(null);
+      await load();
+      setNotice("自定义 Skill 已删除。" );
+    } catch (cause) {
+      setError(errText(cause));
+    } finally {
+      setBusy(false);
+      setConfirmDelete(false);
+    }
+  };
+
+  const visible = skills.filter((skill) => skill.source === source);
+  return (
+    <section className="settings-block workflow-skills-settings">
+      <div className="workflow-skills-title">
+        <div><h3>工作流 Skills</h3><p className="desc">保存在 R-Code AppData，与项目和 Git 隔离；内置与自定义分开管理。</p></div>
+        <button className="btn accent" type="button" onClick={startCustom}>新建自定义 Skill</button>
+      </div>
+      {error && <div className="errbar" role="alert">{error}</div>}
+      {notice && <div className="notebar" role="status">{notice}</div>}
+      <div className="workflow-skills-tabs" role="tablist" aria-label="Skill 来源">
+        <button role="tab" aria-selected={source === "builtin"} className={source === "builtin" ? "on" : ""} onClick={() => switchSource("builtin")}>内置 <span>{skills.filter((skill) => skill.source === "builtin").length}</span></button>
+        <button role="tab" aria-selected={source === "custom"} className={source === "custom" ? "on" : ""} onClick={() => switchSource("custom")}>自定义 <span>{skills.filter((skill) => skill.source === "custom").length}</span></button>
+      </div>
+      <div className="workflow-skills-manager">
+        <nav className="workflow-skills-list" aria-label={source === "builtin" ? "内置 Skills" : "自定义 Skills"}>
+          {visible.length === 0 && <p>还没有自定义 Skill。可以在这里创建，也可以调用 /skill-creator 让模型设计并注册。</p>}
+          {visible.map((skill) => <button key={skill.id} className={selectedId === skill.id ? "selected" : ""} onClick={() => select(skill)}><strong>/{skill.name}</strong><span>{skill.enabled ? "已启用" : "已停用"}{skill.overridden ? " · 已覆盖" : ""}</span><small>{skill.description}</small></button>)}
+        </nav>
+        <div className="workflow-skill-editor">
+          {!draft ? <div className="empty">选择一个 Skill，或新建自定义 Skill。</div> : <>
+            <div className="field"><label htmlFor="workflow-skill-name">调用名</label><input id="workflow-skill-name" className="input" value={draft.name} disabled={busy || draft.source === "builtin"} placeholder="例如 release-check" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><span className="hint">使用小写字母、数字与单连字符；调用方式为 /{draft.name || "skill-name"}。</span></div>
+            <div className="field"><label htmlFor="workflow-skill-description">简介</label><textarea id="workflow-skill-description" className="input" rows={3} value={draft.description} disabled={busy} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
+            <div className="field agent-prompt-field"><label htmlFor="workflow-skill-instructions">Skill 指令</label><textarea id="workflow-skill-instructions" className="input" rows={10} value={draft.instructions} disabled={busy} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} /></div>
+            <label className="workflow-skill-enabled"><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />在 / 补全中启用</label>
+            <div className="footbar"><span className="spacer" />{draft.source === "builtin" ? <button className="btn" disabled={busy || !draft.id} onClick={() => void reset()}>恢复默认</button> : draft.id ? <button className={"btn danger" + (confirmDelete ? " confirm" : "")} disabled={busy} onClick={() => void remove()}>{confirmDelete ? "再次点击确认删除" : "删除"}</button> : null}<button className="btn accent" disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用"}</button></div>
+          </>}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1185,7 +1427,7 @@ function LogSection() {
 
 function SupportSection() {
   const [preview, setPreview] = useState<SupportBundlePreview | null>(null);
-  const [outDir, setOutDir] = useState("%APPDATA%/r-code/support");
+  const [outDir, setOutDir] = useState("");
   const [bundlePath, setBundlePath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1204,7 +1446,6 @@ function SupportSection() {
 
   const doExport = async () => {
     const dir = outDir.trim();
-    if (!dir) return;
     setBusy(true);
     setErr(null);
     setBundlePath(null);
@@ -1246,8 +1487,8 @@ function SupportSection() {
       )}
       <div className="field export-row">
         <label htmlFor="set-output-dir">输出目录</label>
-        <input id="set-output-dir" className="input" value={outDir} onChange={(e) => setOutDir(e.target.value)} />
-        <button className="btn accent" disabled={busy || !outDir.trim()} onClick={() => void doExport()}>
+        <input id="set-output-dir" className="input" value={outDir} onChange={(e) => setOutDir(e.target.value)} placeholder="留空则导出到系统下载目录" />
+        <button className="btn accent" disabled={busy} onClick={() => void doExport()}>
           导出
         </button>
       </div>
@@ -1347,7 +1588,13 @@ function uniqueReasoningOptions(models: CodexModelOption[]) {
   });
 }
 
-function CodexRuntimePreferences() {
+function CodexRuntimePreferences({
+  codexDelegationEnabled,
+  reloadConfig,
+}: {
+  codexDelegationEnabled: boolean | null;
+  reloadConfig: () => Promise<void>;
+}) {
   const [preferences, setPreferences] = useState<CodexCliPreferences | null>(null);
   const [draft, setDraft] = useState<CodexPreferenceDraft>({
     model: "",
@@ -1357,8 +1604,14 @@ function CodexRuntimePreferences() {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [delegationSaving, setDelegationSaving] = useState(false);
+  const [delegationEnabled, setDelegationEnabled] = useState(codexDelegationEnabled ?? true);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (codexDelegationEnabled != null) setDelegationEnabled(codexDelegationEnabled);
+  }, [codexDelegationEnabled]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1426,6 +1679,27 @@ function CodexRuntimePreferences() {
     }
   };
 
+  const toggleCodexDelegation = async (enabled: boolean) => {
+    if (delegationSaving || codexDelegationEnabled == null) return;
+    const previous = delegationEnabled;
+    setDelegationEnabled(enabled);
+    setDelegationSaving(true);
+    setErr(null);
+    setNotice(null);
+    try {
+      await settingsSet("orchestration.allow_cross_engine_delegation", enabled);
+      await reloadConfig();
+      setNotice(enabled
+        ? "Codex 子代理已开启；之后的新委派可以使用 Codex。"
+        : "Codex 子代理已关闭；之后的新委派会自动改用 R-Code。");
+    } catch (e) {
+      setDelegationEnabled(previous);
+      setErr(errText(e));
+    } finally {
+      setDelegationSaving(false);
+    }
+  };
+
   return (
     <div className="codex-runtime-preferences">
       <div className="codex-runtime-head">
@@ -1436,6 +1710,24 @@ function CodexRuntimePreferences() {
         <button className="quiet-link" disabled={loading || saving} onClick={() => void load()}>
           重新读取
         </button>
+      </div>
+
+      <div className="settings-control-list codex-delegation-list">
+        <label className="settings-control-row" htmlFor="codex-subagent-enabled">
+          <span>
+            <strong>允许 Codex 子代理</strong>
+            <small>关闭后仅阻止新的 Codex 委派，并自动改用 R-Code；已启动的 Codex 子代理不会被中断。</small>
+          </span>
+          <input
+            id="codex-subagent-enabled"
+            className="switch"
+            type="checkbox"
+            role="switch"
+            checked={delegationEnabled}
+            disabled={delegationSaving || codexDelegationEnabled == null}
+            onChange={(event) => void toggleCodexDelegation(event.target.checked)}
+          />
+        </label>
       </div>
 
       {loading && <div className="settings-loading">正在读取 Codex 可用模型…</div>}
@@ -1564,7 +1856,13 @@ function CodexRuntimePreferences() {
   );
 }
 
-function CodexIntegrationSection() {
+function CodexIntegrationSection({
+  config,
+  reloadConfig,
+}: {
+  config: AppConfig | null;
+  reloadConfig: () => Promise<void>;
+}) {
   const { runWithCodexCli } = useCodexCliGate();
   const [status, setStatus] = useState<CodexIntegrationStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1572,6 +1870,7 @@ function CodexIntegrationSection() {
   const [awaitingLogin, setAwaitingLogin] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const loginStartedAtRef = useRef(0);
   const setupState: CodexSetupState | "loading" = status ? resolveCodexSetupState(status) : "loading";
 
   const refresh = useCallback(async (quiet = false) => {
@@ -1596,24 +1895,41 @@ function CodexIntegrationSection() {
   useEffect(() => {
     if (!awaitingLogin) return;
     let active = true;
-    let attempts = 0;
+    let timer: number | undefined;
+    const startedAt = loginStartedAtRef.current || Date.now();
+    loginStartedAtRef.current = startedAt;
+
+    const finishWithTimeout = () => {
+      if (!active) return;
+      loginStartedAtRef.current = 0;
+      setAwaitingLogin(false);
+      setNotice(`${CODEX_LOGIN_WAIT_MINUTES} 分钟内未检测到登录完成。可重新检测、重新打开浏览器，或改用设备码。`);
+    };
+    const scheduleNext = () => {
+      if (!active) return;
+      const delay = nextCodexLoginPollDelay(startedAt);
+      if (delay === null) {
+        finishWithTimeout();
+        return;
+      }
+      timer = window.setTimeout(() => void check(), delay);
+    };
     const check = async () => {
-      attempts += 1;
       const next = await refresh(true);
       if (!active) return;
       if (next?.auth_status === "authenticated") {
+        loginStartedAtRef.current = 0;
         setAwaitingLogin(false);
         setNotice("已确认 Codex 登录，下一步可以完成协作配置。");
-      } else if (attempts >= 60) {
-        setAwaitingLogin(false);
-        setNotice("暂时没有检测到登录完成；你可以稍后点击重新检测。");
+        return;
       }
+      scheduleNext();
     };
-    void check();
-    const timer = window.setInterval(() => void check(), 2_000);
+
+    scheduleNext();
     return () => {
       active = false;
-      window.clearInterval(timer);
+      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [awaitingLogin, refresh]);
 
@@ -1625,8 +1941,9 @@ function CodexIntegrationSection() {
       await runWithCodexCli({ feature: "Codex 登录" }, async () => {
         if (mode === "browser") await codexStartLogin();
         else await codexStartDeviceLogin();
+        loginStartedAtRef.current = Date.now();
         setAwaitingLogin(true);
-        setNotice("等待 Codex 完成登录；R-Code 会自动检测，不需要手动刷新。");
+        setNotice(`等待 Codex 完成登录；R-Code 会自动检测 ${CODEX_LOGIN_WAIT_MINUTES} 分钟，不需要手动刷新。`);
       });
     } catch (e) {
       setErr(errText(e));
@@ -1745,7 +2062,12 @@ function CodexIntegrationSection() {
       {notice && <p className="codex-inline-note" role="status"><IconCheck width={14} height={14} />{notice}</p>}
       {status?.cli_error && setupState === "install_cli" && <p className="codex-inline-warning">{status.cli_error}</p>}
 
-      {setupState === "ready" && <CodexRuntimePreferences />}
+      {setupState === "ready" && (
+        <CodexRuntimePreferences
+          codexDelegationEnabled={config?.orchestration?.allow_cross_engine_delegation ?? null}
+          reloadConfig={reloadConfig}
+        />
+      )}
 
       {status && (
         <details className="codex-advanced">

@@ -1,35 +1,160 @@
-import { useEffect, useMemo, useState } from "react";
-import { acceptTask, changeRequest, permissionApprove, rollbackTask } from "../../lib/ipc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  acceptTask,
+  changeRequest,
+  permissionApprove,
+  reviewAcceptAll,
+  reviewAcceptFile,
+  reviewGitStatus,
+  REVIEW_STATUS_CHANGED_EVENT,
+  rollbackTask,
+} from "../../lib/ipc";
 import { elapsedSince, permissionAttribution, permissionRiskLabel } from "../../lib/format";
 import { taskTitle, workspaceName } from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
 import { selectNeedsYou, useTasksStore, type NeedsYouItem } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
-import type { PermissionDecision } from "../../lib/types";
-import { IconArrowRight, IconChevronLeft, IconCheck, IconClose, IconFile, IconInbox, IconShield } from "../icons";
+import type { PermissionDecision, ReviewGitStatus } from "../../lib/types";
+import {
+  IconArrowRight,
+  IconChevronLeft,
+  IconCheck,
+  IconClose,
+  IconFile,
+  IconFolderOpen,
+  IconRefresh,
+  IconShield,
+} from "../icons";
 
 type InspectorKind = "permission" | "review_ready";
 
+interface ReviewStatusEntry {
+  status: ReviewGitStatus | null;
+  error: string | null;
+}
+
+interface InboxProjectGroup {
+  key: string;
+  name: string;
+  path: string | null;
+  items: NeedsYouItem[];
+  permissionCount: number;
+  reviewCount: number;
+  pendingFileCount: number;
+}
+
 const itemKey = (item: NeedsYouItem) => item.kind === "permission" ? `permission:${item.permission!.id}` : `review:${item.task.id}`;
 
+function reviewStatusSignature(entry: ReviewStatusEntry | undefined): string {
+  if (!entry) return "missing";
+  const status = entry.status;
+  if (!status) return `error:${entry.error ?? "loading"}`;
+  return [
+    status.git_repository,
+    status.staged_count,
+    status.remaining_count,
+    status.conflict_count,
+    status.can_accept_all,
+    entry.error ?? "",
+    ...status.paths.map((path) => `${path.path}:${path.staged}:${path.remaining}:${path.conflict}:${path.safe_to_accept}:${path.blocker ?? ""}`),
+  ].join("|");
+}
+
+function sameReviewStatuses(left: Record<string, ReviewStatusEntry>, right: Record<string, ReviewStatusEntry>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length
+    && rightKeys.every((key) => reviewStatusSignature(left[key]) === reviewStatusSignature(right[key]));
+}
+
 /**
- * 跨项目待处理页。右侧是当前条目的详情（权限详情 / 审核摘要），不是项目动态。
- * 点击关闭会将当前详情收成一条可展开的 rail，展开后恢复同一张可关闭详情卡。
+ * 跨项目待处理页：任务状态决定“是否需要决策”，Git 审核状态决定“哪些文件尚待接受”。
+ * 两者刻意分离，避免在任务审核页暂存文件后，这里仍把已接受文件当作待处理项。
  */
 export function InboxScene() {
   const items = useTasksStore(selectNeedsYou);
+  const details = useTasksStore((s) => s.details);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshDetails = useTasksStore((s) => s.refreshDetails);
   const workspaces = useTasksStore((s) => s.workspaces);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [reviewStatuses, setReviewStatuses] = useState<Record<string, ReviewStatusEntry>>({});
+  const [hydrated, setHydrated] = useState(false);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const refreshFlight = useRef<Promise<void> | null>(null);
 
-  usePoll(async () => {
-    await refreshTasks();
-    const ids = useTasksStore.getState().tasks.filter((task) => task.state !== "idle" && task.state !== "archived").map((task) => task.id);
-    if (ids.length) await refreshDetails(ids);
-  }, 2000);
+  const syncReviewStatuses = useCallback(async (taskIds: string[]) => {
+    const results = await Promise.all(taskIds.map(async (taskId) => {
+      try {
+        return { taskId, status: await reviewGitStatus(taskId), error: null };
+      } catch (cause) {
+        return { taskId, status: null, error: String(cause) };
+      }
+    }));
+    setReviewStatuses((current) => {
+      const next: Record<string, ReviewStatusEntry> = {};
+      for (const result of results) {
+        next[result.taskId] = result.status
+          ? { status: result.status, error: null }
+          : { status: current[result.taskId]?.status ?? null, error: result.error };
+      }
+      return sameReviewStatuses(current, next) ? current : next;
+    });
+  }, []);
+
+  const refreshInbox = useCallback((): Promise<void> => {
+    if (refreshFlight.current) return refreshFlight.current;
+    const operation = (async () => {
+      await refreshTasks();
+      const state = useTasksStore.getState();
+      const detailIds = state.tasks
+        .filter((task) => task.state !== "idle" && task.state !== "archived")
+        .map((task) => task.id);
+      if (detailIds.length) await refreshDetails(detailIds);
+      const reviewIds = useTasksStore.getState().tasks
+        .filter((task) => task.state === "review_ready")
+        .map((task) => task.id);
+      await syncReviewStatuses(reviewIds);
+    })();
+    refreshFlight.current = operation;
+    const finish = () => {
+      if (refreshFlight.current === operation) refreshFlight.current = null;
+      setHydrated(true);
+    };
+    void operation.then(finish, finish);
+    return operation;
+  }, [refreshDetails, refreshTasks, syncReviewStatuses]);
+
+  const refreshReviewStatus = useCallback(async (taskId: string) => {
+    try {
+      const status = await reviewGitStatus(taskId);
+      setReviewStatuses((current) => {
+        const next = { ...current, [taskId]: { status, error: null } };
+        return sameReviewStatuses(current, next) ? current : next;
+      });
+    } catch (cause) {
+      setReviewStatuses((current) => ({
+        ...current,
+        [taskId]: { status: current[taskId]?.status ?? null, error: String(cause) },
+      }));
+      throw cause;
+    }
+  }, []);
+
+  usePoll(refreshInbox, 2000);
+
+  useEffect(() => {
+    const onReviewStatusChanged = (event: Event) => {
+      const taskId = (event as CustomEvent<{ taskId?: string }>).detail?.taskId;
+      if (taskId && useTasksStore.getState().tasks.some((task) => task.id === taskId && task.state === "review_ready")) {
+        void refreshReviewStatus(taskId).catch(() => undefined);
+      }
+    };
+    window.addEventListener(REVIEW_STATUS_CHANGED_EVENT, onReviewStatusChanged);
+    return () => window.removeEventListener(REVIEW_STATUS_CHANGED_EVENT, onReviewStatusChanged);
+  }, [refreshReviewStatus]);
 
   useEffect(() => {
     if (items.length === 0) {
@@ -41,10 +166,61 @@ export function InboxScene() {
   }, [items, selectedKey]);
 
   const selected = useMemo(() => items.find((item) => itemKey(item) === selectedKey) ?? null, [items, selectedKey]);
+  const groups = useMemo<InboxProjectGroup[]>(() => {
+    const byPath = new Map<string, InboxProjectGroup>();
+    for (const item of items) {
+      const path = item.task.workspace_path;
+      const key = path ?? "__unassigned__";
+      let group = byPath.get(key);
+      if (!group) {
+        group = {
+          key,
+          name: workspaceName(path, workspaces),
+          path,
+          items: [],
+          permissionCount: 0,
+          reviewCount: 0,
+          pendingFileCount: 0,
+        };
+        byPath.set(key, group);
+      }
+      group.items.push(item);
+      if (item.kind === "permission") {
+        group.permissionCount += 1;
+      } else {
+        group.reviewCount += 1;
+        group.pendingFileCount += reviewStatuses[item.task.id]?.status?.remaining_count
+          ?? details[item.task.id]?.changes.length
+          ?? 0;
+      }
+    }
+    const workspaceOrder = new Map(workspaces.map((workspace, index) => [workspace.canonical_path, index]));
+    return [...byPath.values()].sort((left, right) => {
+      const leftOrder = left.path ? workspaceOrder.get(left.path) ?? Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+      const rightOrder = right.path ? workspaceOrder.get(right.path) ?? Number.MAX_SAFE_INTEGER : Number.MAX_SAFE_INTEGER;
+      return leftOrder - rightOrder || left.name.localeCompare(right.name);
+    });
+  }, [details, items, reviewStatuses, workspaces]);
   const kind: InspectorKind = selected?.kind ?? "permission";
+  const permissionCount = items.filter((item) => item.kind === "permission").length;
+  const reviewCount = items.length - permissionCount;
+  const pendingFileCount = groups.reduce((count, group) => count + group.pendingFileCount, 0);
+
   const choose = (key: string) => {
     setSelectedKey(key);
     setInspectorCollapsed(false);
+  };
+  const manualRefresh = async () => {
+    if (manualRefreshing) return;
+    setManualRefreshing(true);
+    setError(null);
+    try {
+      await refreshInbox();
+    } catch (cause) {
+      setError(`刷新待处理失败：${String(cause)}`);
+    } finally {
+      setManualRefreshing(false);
+    }
   };
 
   return (
@@ -55,27 +231,62 @@ export function InboxScene() {
             <div>
               <p className="page-kicker">NEEDS YOU</p>
               <h1>待处理</h1>
-              <p>需要你授权、审核或决定的事项集中在这里。</p>
+              <p>跨项目同步权限请求与审核变更，处理结果会实时回流。</p>
             </div>
-            <span className="inbox-count">{items.length} 项</span>
+            <div className="inbox-header-actions">
+              <span className="inbox-live"><i />实时同步</span>
+              <span className="inbox-count">{items.length} 项</span>
+              <button className={`inbox-refresh${manualRefreshing ? " refreshing" : ""}`} onClick={() => void manualRefresh()} disabled={manualRefreshing} aria-label="刷新待处理" title="立即刷新">
+                <IconRefresh width={15} height={15} />
+              </button>
+            </div>
           </header>
 
+          {items.length > 0 && (
+            <div className="inbox-overview" aria-label="待处理概览">
+              <span><strong>{groups.length}</strong> 个项目</span>
+              <span><strong>{permissionCount}</strong> 项授权</span>
+              <span><strong>{reviewCount}</strong> 项审核</span>
+              <span><strong>{pendingFileCount}</strong> 个文件待接受</span>
+            </div>
+          )}
           {error && <div className="inbox-error" role="alert">{error}</div>}
 
-          {items.length === 0 ? (
+          {!hydrated && items.length === 0 ? (
+            <div className="inbox-empty inbox-loading"><IconRefresh width={24} height={24} /><h2>正在同步待处理事项</h2><p>正在读取各项目的权限与审核状态。</p></div>
+          ) : items.length === 0 ? (
             <div className="inbox-empty"><IconCheck width={24} height={24} /><h2>暂时没有待处理事项</h2><p>权限请求和待审核变更会在出现时显示在这里。</p></div>
           ) : (
-            <section className="inbox-list" aria-label="待处理事项">
-              {items.map((item) => (
-                <InboxRow
-                  key={itemKey(item)}
-                  item={item}
-                  selected={itemKey(item) === selectedKey}
-                  projectName={workspaceName(item.task.workspace_path, workspaces)}
-                  onSelect={() => choose(itemKey(item))}
-                />
+            <div className="inbox-projects" aria-label="按项目分组的待处理事项">
+              {groups.map((group, index) => (
+                <section className="inbox-project-group" key={group.key} data-project-path={group.path ?? ""} aria-labelledby={`inbox-project-${index}`}>
+                  <header className="inbox-project-head">
+                    <span className="inbox-project-mark"><IconFolderOpen width={17} height={17} /></span>
+                    <div>
+                      <h2 id={`inbox-project-${index}`}>{group.name}</h2>
+                      <p>{group.path ?? "未归属本地项目"}</p>
+                    </div>
+                    <span className="inbox-project-summary">
+                      {group.permissionCount > 0 && <b>{group.permissionCount} 授权</b>}
+                      {group.reviewCount > 0 && <b>{group.reviewCount} 审核</b>}
+                      {group.pendingFileCount > 0 && <b>{group.pendingFileCount} 文件</b>}
+                    </span>
+                  </header>
+                  <div className="inbox-list">
+                    {group.items.map((item) => (
+                      <InboxRow
+                        key={itemKey(item)}
+                        item={item}
+                        selected={itemKey(item) === selectedKey}
+                        detailChanges={details[item.task.id]?.changes.length ?? 0}
+                        reviewEntry={reviewStatuses[item.task.id]}
+                        onSelect={() => choose(itemKey(item))}
+                      />
+                    ))}
+                  </div>
+                </section>
               ))}
-            </section>
+            </div>
           )}
         </div>
       </div>
@@ -89,7 +300,13 @@ export function InboxScene() {
           ) : kind === "permission" ? (
             <PermissionInspector item={selected} onError={setError} onCollapse={() => setInspectorCollapsed(true)} />
           ) : (
-            <ReviewInspector item={selected} onError={setError} onCollapse={() => setInspectorCollapsed(true)} />
+            <ReviewInspector
+              item={selected}
+              reviewEntry={reviewStatuses[selected.task.id]}
+              onRefreshStatus={refreshReviewStatus}
+              onError={setError}
+              onCollapse={() => setInspectorCollapsed(true)}
+            />
           )}
         </aside>
       )}
@@ -97,14 +314,37 @@ export function InboxScene() {
   );
 }
 
-function InboxRow({ item, selected, projectName, onSelect }: { item: NeedsYouItem; selected: boolean; projectName: string; onSelect: () => void }) {
+function InboxRow({
+  item,
+  selected,
+  detailChanges,
+  reviewEntry,
+  onSelect,
+}: {
+  item: NeedsYouItem;
+  selected: boolean;
+  detailChanges: number;
+  reviewEntry?: ReviewStatusEntry;
+  onSelect: () => void;
+}) {
   const label = item.kind === "permission" ? "权限请求" : "等待审核";
-  const description = item.kind === "permission" ? item.permission!.tool_name : "变更已准备好验收";
+  let description = item.kind === "permission" ? item.permission!.tool_name : `${detailChanges} 个文件变更`;
+  if (item.kind === "review_ready") {
+    if (reviewEntry?.status?.git_repository) {
+      description = reviewEntry.status.remaining_count > 0
+        ? `${reviewEntry.status.remaining_count} 个文件待接受`
+        : "文件已全部接受 · 待确认完成";
+    } else if (reviewEntry?.error) {
+      description = "审核状态同步失败 · 可打开详情重试";
+    } else if (!reviewEntry) {
+      description = "正在同步审核状态";
+    }
+  }
   return (
-    <button className={`inbox-row${selected ? " selected" : ""}`} onClick={onSelect}>
+    <button className={`inbox-row${selected ? " selected" : ""}`} data-task-id={item.task.id} onClick={onSelect}>
       <span className={`inbox-row-icon ${item.kind}`}>{item.kind === "permission" ? <IconShield width={17} height={17} /> : <IconFile width={17} height={17} />}</span>
       <span className="inbox-row-copy"><small>{label}</small><strong>{taskTitle(item.task)}</strong><em>{description}</em></span>
-      <span className="inbox-row-project">{projectName}</span>
+      <span className={`inbox-row-state ${item.kind}`}>{item.kind === "permission" ? "待授权" : reviewEntry?.status?.remaining_count === 0 ? "待完成" : "待审核"}</span>
       <time>等待 {elapsedSince(item.since)}</time>
       <IconArrowRight className="inbox-row-arrow" width={16} height={16} />
     </button>
@@ -156,29 +396,84 @@ function PermissionInspector({ item, onError, onCollapse }: { item: NeedsYouItem
   );
 }
 
-function ReviewInspector({ item, onError, onCollapse }: { item: NeedsYouItem; onError: (text: string | null) => void; onCollapse: () => void }) {
+function ReviewInspector({
+  item,
+  reviewEntry,
+  onRefreshStatus,
+  onError,
+  onCollapse,
+}: {
+  item: NeedsYouItem;
+  reviewEntry?: ReviewStatusEntry;
+  onRefreshStatus: (taskId: string) => Promise<void>;
+  onError: (text: string | null) => void;
+  onCollapse: () => void;
+}) {
   const detail = useTasksStore((s) => s.details[item.task.id]);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const openRoom = useAppStore((s) => s.openRoom);
-  const [busy, setBusy] = useState(false);
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [requestingChanges, setRequestingChanges] = useState(false);
   const [feedback, setFeedback] = useState("");
+  const busy = busyAction !== null;
   const changes = detail?.changes ?? [];
+  const changeByPath = useMemo(() => new Map(changes.map((change) => [change.path, change])), [changes]);
   const verify = detail?.verifications.slice(-1)[0];
+  const status = reviewEntry?.status ?? null;
+  const pendingPaths = status?.git_repository ? status.paths.filter((path) => path.remaining) : [];
   const open = (tab: "review" | "changes") => openRoom(item.task.id, tab);
-  const run = async (action: "accept" | "rollback") => {
+
+  const finishReview = async () => {
     if (busy) return;
-    setBusy(true);
+    setBusyAction("finish");
     onError(null);
     try {
-      if (action === "accept") await acceptTask(item.task.id);
-      else await rollbackTask(item.task.id);
+      await acceptTask(item.task.id);
       await refreshTasks();
     } catch (cause) {
-      onError(`${action === "accept" ? "接受变更" : "回滚"}失败：${String(cause)}`);
+      onError(`完成审核失败：${String(cause)}`);
     } finally {
-      setBusy(false);
+      setBusyAction(null);
+    }
+  };
+  const rollback = async () => {
+    if (busy) return;
+    setBusyAction("rollback");
+    onError(null);
+    try {
+      await rollbackTask(item.task.id);
+      await refreshTasks();
+    } catch (cause) {
+      onError(`回滚失败：${String(cause)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+  const acceptFile = async (path: string) => {
+    if (busy) return;
+    setBusyAction(`file:${path}`);
+    onError(null);
+    try {
+      await reviewAcceptFile(item.task.id, path);
+      await onRefreshStatus(item.task.id);
+    } catch (cause) {
+      onError(`接受文件失败：${String(cause)}`);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+  const acceptAllFiles = async () => {
+    if (busy) return;
+    setBusyAction("all-files");
+    onError(null);
+    try {
+      await reviewAcceptAll(item.task.id);
+      await onRefreshStatus(item.task.id);
+    } catch (cause) {
+      onError(`接受全部文件失败：${String(cause)}`);
+    } finally {
+      setBusyAction(null);
     }
   };
   const requestChanges = async () => {
@@ -188,7 +483,7 @@ function ReviewInspector({ item, onError, onCollapse }: { item: NeedsYouItem; on
       return;
     }
     if (busy) return;
-    setBusy(true);
+    setBusyAction("request-changes");
     onError(null);
     try {
       await changeRequest(item.task.id, message);
@@ -198,17 +493,47 @@ function ReviewInspector({ item, onError, onCollapse }: { item: NeedsYouItem; on
     } catch (cause) {
       onError(`请求修改失败：${String(cause)}`);
     } finally {
-      setBusy(false);
+      setBusyAction(null);
     }
   };
+
+  const fileSummary = !reviewEntry
+    ? "正在同步文件状态"
+    : reviewEntry.error && !status
+      ? "文件状态暂不可用"
+      : status?.git_repository
+        ? status.remaining_count === 0 ? "文件已全部接受" : `${status.remaining_count} 个文件待接受`
+        : `${changes.length} 个文件变更`;
+
   return (
     <div className="inspector-card">
       <InspectorHead title="审核摘要" subtitle={taskTitle(item.task)} onCollapse={onCollapse} />
       <div className="inspector-body">
-        <div className="inspector-callout review"><IconFile width={19} height={19} /><div><strong>{changes.length} 个文件变更</strong><span>{verify ? `${verify.command} · ${verify.status === "passed" ? "验证通过" : verify.status}` : "尚未记录验证"}</span></div></div>
-        <div className="inspector-file-list">
-          {changes.length === 0 ? <p>变更明细读取中，或当前没有可展示的文件。</p> : changes.slice(0, 5).map((change) => <span key={change.id}><IconFile width={14} height={14} />{change.path}<b>{change.change_type}</b></span>)}
+        <div className="inspector-callout review"><IconFile width={19} height={19} /><div><strong>{fileSummary}</strong><span>{verify ? `${verify.command} · ${verify.status === "passed" ? "验证通过" : verify.status}` : "尚未记录验证"}</span></div></div>
+        {reviewEntry?.error && <div className="inspector-sync-warning" role="status">状态同步暂时失败，仍显示最近一次结果。<button className="text-link" disabled={busy} onClick={() => void onRefreshStatus(item.task.id).catch(() => undefined)}>重试</button></div>}
+        <div className="inspector-file-list" aria-label="待接受文件">
+          {!reviewEntry ? (
+            <p>正在读取 Git 审核状态…</p>
+          ) : status?.git_repository && pendingPaths.length === 0 ? (
+            <div className="review-files-complete"><IconCheck width={16} height={16} /><span><strong>文件已全部接受</strong><small>请确认验证结果后完成审核。</small></span></div>
+          ) : status?.git_repository ? (
+            pendingPaths.map((pathStatus) => {
+              const change = changeByPath.get(pathStatus.path);
+              return (
+                <div className={`inspector-review-file${pathStatus.conflict ? " conflict" : ""}`} key={pathStatus.path}>
+                  <IconFile width={14} height={14} />
+                  <span><strong>{pathStatus.path}</strong><small>{pathStatus.conflict ? pathStatus.blocker ?? "存在冲突" : change?.change_type ?? "变更"}</small></span>
+                  <button className="rc-button rc-button-quiet" disabled={busy || !pathStatus.safe_to_accept} onClick={() => void acceptFile(pathStatus.path)} aria-label={`接受文件 ${pathStatus.path}`}>{busyAction === `file:${pathStatus.path}` ? "接受中…" : "接受"}</button>
+                </div>
+              );
+            })
+          ) : changes.length === 0 ? (
+            <p>变更明细读取中，或当前没有可展示的文件。</p>
+          ) : (
+            changes.map((change) => <div className="inspector-review-file readonly" key={change.id}><IconFile width={14} height={14} /><span><strong>{change.path}</strong><small>{change.change_type}</small></span></div>)
+          )}
         </div>
+        {status?.git_repository && status.staged_count > 0 && <p className="review-accepted-note">已接受 {status.staged_count} 个文件；列表仅显示仍待处理的文件。</p>}
         {requestingChanges && (
           <div className="review-request-form">
             <label htmlFor={`change-request-${item.task.id}`}>修改说明</label>
@@ -218,11 +543,12 @@ function ReviewInspector({ item, onError, onCollapse }: { item: NeedsYouItem; on
         )}
       </div>
       <footer className="inspector-actions review-actions">
-        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void run("accept")}>接受变更</button>
-        <button className="rc-button" onClick={() => open("review")}>查看审核</button>
+        <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void finishReview()}>{busyAction === "finish" ? "正在完成…" : "完成审核"}</button>
+        {status?.git_repository && status.remaining_count > 0 && <button className="rc-button" disabled={busy || !status.can_accept_all} onClick={() => void acceptAllFiles()}>{busyAction === "all-files" ? "接受中…" : "接受全部文件"}</button>}
+        <button className="rc-button" onClick={() => open("review")}>完整审核</button>
         <button className="rc-button" disabled={busy} onClick={() => setRequestingChanges((open) => !open)}>{requestingChanges ? "收起修改说明" : "请求修改"}</button>
-        <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void run("rollback")}>回滚</button>
-        <button className="text-link inspector-open-task" onClick={() => open("changes")}>查看变更 <IconArrowRight width={14} height={14} /></button>
+        <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void rollback()}>{busyAction === "rollback" ? "回滚中…" : "回滚"}</button>
+        <button className="text-link inspector-open-task" onClick={() => open("changes")}>打开任务变更 <IconArrowRight width={14} height={14} /></button>
       </footer>
     </div>
   );
