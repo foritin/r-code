@@ -748,3 +748,112 @@ UI 和日志只显示 job id、provider/model、状态、计数、错误码，�
 - provider-specific memory、按主 Provider 分叉/迁移记忆或每 Provider 一份授权存储。
 - 首版导入/导出、workspace memory 关联/迁移、Git remote/inode/content fingerprint 自动识别。
 - 首版 SQLCipher 或仅 memory 单表加密。
+
+## 20. T1 工程审视（2026-08-01）
+
+### Scope challenge
+
+T1 只新增 `r-code-core` 的纯合同模块并从 `lib.rs` 重导出，不创建 repository、worker、IPC command、数据库表或网络调用。它复用 workspace 014 的稳定 UUID、现有 Serde/Chrono/UUID 依赖与 core DTO 风格；不修改 vendored Hermes。类型数量较多是领域状态的必要展开，不等同于新增服务层。
+
+### What already exists
+
+- `r-code-core::dto` 已提供 Rust/JSON DTO 的命名、时间和枚举约定；T1 复用，不建立第二套序列化框架。
+- workspace 014 已提供稳定 `id`、`memory_mode` 和单调 `memory_generation`；T1 只引用稳定 id，不再从路径推导 owner。
+- `ProductError` 已承担进程内错误；T1 另外冻结可跨 IPC 的稳定 `MemoryMutationErrorCode`，不把内部错误字符串当合同。
+- T0L1/T0L2 已移除 workspace file writer/editor；T1 没有任何路径或文件字段。
+
+### Contract boundary
+
+```text
+SQLite record DTO ──map/validate──> host domain DTO ──project──> provider wire DTO
+       │                         │                         │
+       │ stable ids/generations  │ ordinal maps           │ 1..N ordinals only
+       │ retention/audit fields  │ not Serialize          │ no ids/path/provider config
+       └─────────────────────────┴─────────────────────────┘
+
+provider output DTO ──strict validate/map ordinals──> deterministic host route
+                                               ├── global -> pending candidate only
+                                               ├── project -> frozen source workspace only
+                                               └── skip/invalid -> no正文 outcome
+```
+
+实现时必须把以下约束落到类型而非注释：
+
+1. `MemoryOwner` 与 `FrozenReviewSource` 使用 tagged variants，不能表达 project 缺 workspace、pure-chat 带 workspace generation 或 project 指向模型自选 workspace。
+2. entry 的 global authorization 与 project origin 分型；不存在 `global + automatic_review` 组合。
+3. settings 分为内部 record、WebView view 和带 `expected_version` 的 update request；retention high-water/cleanup epoch 不能被序列化到 WebView，也不能被客户端回写。
+4. `MemorySnapshotLoadOutcome` 明确区分 disabled、ready（允许为空）和 unavailable；只有 ready 可注入。
+5. `MemoryReviewOutput` 与逐 proposal validation error code 一并冻结；operation/target、scope/context、ordinal、长度、重复 evidence 和 batch cap 都有确定结果。
+6. history page 的 cursor 仍代表真实 exclusive SQLite sequence，但 wire 表示为经校验的不透明十进制字符串，避免 JavaScript `number` 精度成为隐含上限。
+7. content/hash 合同带版本标识；正文规范化、hash 与 Unicode scalar 计数由后续 policy task 用固定 vectors 实现，不能由 Rust/TypeScript 各自猜测。
+
+### Test coverage diagram
+
+```text
+memory contract fixtures
+├── settings missing fields -> disabled safe default
+├── every enum/record round-trip + unknown field/enum rejection
+├── owner/source tagged variants -> forbidden nullable combinations unrepresentable
+├── candidate pending body / terminal scrubbed body invariants
+├── job legal transitions + interrupted/retry/attempt rules
+├── load outcome disabled / ready-empty / ready-nonempty / unavailable
+├── sequence cursor first/next/invalid/overflow/exclusive semantics
+├── reviewer input sentinel -> no host id/path/generation/provider value in JSON
+├── reviewer output add/replace/noop + invalid target/evidence/scope combinations
+├── global route -> candidate only; project route -> frozen source only
+└── constants -> caps, cadence, retention and schema/hash versions
+```
+
+T1 使用 Rust unit/integration fixtures。SQL CHECK/FK 由 T2，Rust/TypeScript 共用 fixtures 由 T16A1，external Release 状态机由 T1X/T2X 验证，避免重复假集成测试。
+
+### Failure modes
+
+| Failure | Contract response | Covered in T1 |
+|---|---|---|
+| 旧客户端缺 memory 字段 | 反序列化为 disabled，不能继承 live enabled 设置 | fixture |
+| provider 返回未知字段/枚举 | fail closed；envelope 或单 proposal 按稳定 code 拒绝 | fixture |
+| ordinal 为 0、越界、跨 scope 或重复 | validator 拒绝，不映射持久 id | fixture |
+| snapshot store 读取失败 | `unavailable`，主 run 可继续但不能注入 | fixture |
+| running job 重启 | 只允许转 `interrupted`，不能自动回到 queued | transition fixture |
+| terminal candidate 仍带正文 | 类型/validation 拒绝 | fixture |
+
+没有“无测试 + 无错误处理 + 静默失败”的 T1 codepath。
+
+### NOT in scope
+
+- SQL columns/CHECK/FK/index：T2/T2X 冻结并测试，T1 不连接数据库。
+- TypeScript types、IPC wrappers 与 cross-language fixtures：T16A1 实施；T1 先冻结权威 Rust JSON fixtures。
+- provider resolver、sanitizer、parser 执行与策略写入：分别由 T5/T6/T7/T8A 实施。
+- host-signed/MAC confirmation ticket：当前本机可信 WebView threat model 保留绑定 disclosure/content/owner/target/version 的 typed confirmation；若未来引入远程或不可信客户端，再单独设计一次性签发与消费协议。
+- external process containment/Release：T1X/T2X 处理；T1 只保留 native 基线状态。
+
+### Parallelization
+
+T1 production 集中在同一 core module，顺序实现，没有独立 production worktree lane。测试文件可由独立 QA 同步设计，但必须等 production wire shape 稳定后执行；Engineer 不修改测试，QA 不修改 production。
+
+### Implementation Tasks
+
+- [x] **T1-A (P1)** — core contracts — 用 owner/source/state tagged variants 和 settings record/view/update 分层冻结不可表达的非法状态。
+  - Verify: `cargo test -p r-code-core --test memory_contracts`
+- [x] **T1-B (P1)** — provider boundary — 冻结严格 input/output、ordinal map、JS-safe sequence cursor、stable validation/mutation codes。
+  - Verify: sentinel JSON 与 invalid fixture matrix 全部通过。
+- [x] **T1-C (P1)** — lifecycle contracts — 冻结 candidate scrub、job transition、snapshot load 与 native injection invariants。
+  - Verify: targeted fixtures、fmt、clippy 和 workspace regression。
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | 产品决策已由逐项讨论确认 |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | ABSORBED | 有效类型边界硬化纳入 T1；后续任务项未重复前移 |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 0 unresolved，0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | T1 无 UI |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | 非 T1 范围 |
+
+**CODEX:** 要求强化 owner/source/settings/output/cursor 合同；已吸收与既定产品边界一致的部分，SQL、TS、external lifecycle 保持原依赖任务承接。
+
+**CROSS-MODEL:** 双方同意用显式 tagged types、严格 Serde 与 sentinel fixtures 防止 host identity 和非法自动 global route；外部复核因截断上下文而重复提出的 T2/T16A1/T1X 工作未前移。
+
+**VERDICT:** ENG CLEARED — T1 可实施。
+
+NO UNRESOLVED DECISIONS

@@ -76,7 +76,8 @@ pub enum QualityReviewer {
     Codex,
 }
 
-/// 运行时编排策略快照。设置在每次重建 provider runtime 时读取，运行中保持稳定。
+/// 运行时编排策略。路由与复核策略在重建 provider runtime 时读取；Codex 委派开关
+/// 会另外复制到共享原子门，在运行中也能即时更新。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrchestrationPolicy {
     pub delegation_router: DelegationRouterMode,
@@ -84,6 +85,43 @@ pub struct OrchestrationPolicy {
     pub quality_loop: QualityLoopMode,
     pub quality_reviewer: QualityReviewer,
     pub max_review_rounds: u8,
+}
+
+/// 用户可编辑的 Agent 协作提示。它只补充角色分工，不替代工具权限、工作区范围或
+/// 本轮显式禁用子代理等宿主硬边界。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AgentPromptPolicy {
+    #[serde(default = "default_main_agent_prompt")]
+    pub main_agent: String,
+    #[serde(default = "default_subagent_prompt")]
+    pub subagent: String,
+}
+
+pub const DEFAULT_MAIN_AGENT_PROMPT: &str = "You are the main agent and own the final result. \
+Solve the task directly when delegation would not add clear value. Delegate only bounded, \
+independent work, avoid duplicate investigations, and integrate every child result into your own \
+verified final answer. An explicit user request not to use subagents or external agent CLIs takes \
+priority over automatic routing.";
+
+pub const DEFAULT_SUBAGENT_PROMPT: &str = "You are a delegated child agent. Stay within the \
+assignment from the parent, do not create further agents, avoid duplicating the parent's work, and \
+return a concise factual result with relevant verification evidence.";
+
+fn default_main_agent_prompt() -> String {
+    DEFAULT_MAIN_AGENT_PROMPT.to_string()
+}
+
+fn default_subagent_prompt() -> String {
+    DEFAULT_SUBAGENT_PROMPT.to_string()
+}
+
+impl Default for AgentPromptPolicy {
+    fn default() -> Self {
+        Self {
+            main_agent: default_main_agent_prompt(),
+            subagent: default_subagent_prompt(),
+        }
+    }
 }
 
 impl Default for OrchestrationPolicy {
@@ -118,7 +156,37 @@ identically on Windows, macOS and Linux, while shell commands differ per platfor
 rewriting a whole file wastes tokens and silently discards concurrent changes.\n\
 - Reserve `bash` for builds, tests, linters, git and package managers. Every command needs user \
 approval, and some (privilege escalation, `git push`, publishing) are refused outright — \
-if you need one of those, ask the user to run it themselves.";
+if you need one of those, ask the user to run it themselves.\n\
+\n\
+Execution order matters:\n\
+- When several inspections are independent, issue independent read-only tool calls together in \
+the same turn so R-Code can execute them concurrently.\n\
+- R-Code only parallelizes side-effect-free reads in bounded batches. Keep writes, shell commands, \
+and result-dependent work sequential.";
+
+const LIVE_GUIDANCE_PREFIX: &str =
+    "[system] Live guidance for the current run (supplemental guidance, not a replacement).";
+const LIVE_GUIDANCE_MARKER: &str = "\n\nAccepted live guidance:\n";
+
+/// `steer` is an in-flight constraint on the current run, not an ordinary next-turn user goal.
+/// Keep the raw text in the host event/store for faithful UI replay, but wrap the copy injected
+/// into the model history so a short side question cannot silently replace the original task.
+fn format_live_guidance(text: &str) -> String {
+    format!(
+        "{LIVE_GUIDANCE_PREFIX}\n\
+Preserve and complete the current user task. Apply this text as an added constraint or brief side \
+question, then resume the original work. Only replace or cancel the current task when this guidance \
+explicitly asks to do so.{LIVE_GUIDANCE_MARKER}{}",
+        text.trim()
+    )
+}
+
+fn parse_live_guidance(text: &str) -> Option<&str> {
+    text.strip_prefix(LIVE_GUIDANCE_PREFIX)?
+        .split_once(LIVE_GUIDANCE_MARKER)
+        .map(|(_, guidance)| guidance.trim())
+        .filter(|guidance| !guidance.is_empty())
+}
 
 /// 构建每轮请求的系统提示。客户端本地时间是纯聊天回答“今天/星期几”的可信来源，
 /// 不需要为此开放终端、文件系统或外部插件。
@@ -140,9 +208,29 @@ fn build_system_prompt(has_workspace_tools: bool) -> String {
     build_system_prompt_at(has_workspace_tools, Local::now().fixed_offset())
 }
 
+fn append_editable_prompt(mut base: String, label: &str, prompt: &str) -> String {
+    let prompt = prompt.trim();
+    if !prompt.is_empty() {
+        base.push_str("\n\n");
+        base.push_str(label);
+        base.push('\n');
+        base.push_str(prompt);
+    }
+    base
+}
+
+fn build_main_system_prompt(has_workspace_tools: bool, prompts: &AgentPromptPolicy) -> String {
+    append_editable_prompt(
+        build_system_prompt(has_workspace_tools),
+        "User-configured main/subagent coordination guidance:",
+        &prompts.main_agent,
+    )
+}
+
 fn build_subagent_system_prompt(
     has_workspace_tools: bool,
     access_mode: SubagentAccessMode,
+    editable_prompt: &str,
 ) -> String {
     let base = if has_workspace_tools {
         WORKSPACE_SYSTEM_PROMPT
@@ -153,10 +241,133 @@ fn build_subagent_system_prompt(
         SubagentAccessMode::ReadOnly => "You are a read-only delegated subagent. Investigate the assigned question and use only the provided read-only tools. Do not edit files or run terminal commands.",
         SubagentAccessMode::FullAccess => "The parent agent explicitly delegated this task with full workspace access. You may edit files and run commands when they are necessary for the assignment, but stay inside the attached workspace and make only task-scoped changes.",
     };
-    format!(
-        "{base}\n\n{capability} Return a concise factual summary for the parent agent. \
+    append_editable_prompt(
+        format!(
+            "{base}\n\n{capability} Return a concise factual summary for the parent agent. \
 Do not create further subagents or expose private chain-of-thought."
+        ),
+        "User-configured subagent guidance:",
+        editable_prompt,
     )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelegationDirective {
+    Automatic,
+    Disabled,
+}
+
+fn delegation_directive_for_text(text: &str) -> DelegationDirective {
+    let normalized = text
+        .to_lowercase()
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let disabled = [
+        "不使用子代理",
+        "不用子代理",
+        "不要使用子代理",
+        "不要再使用子代理",
+        "不要调用子代理",
+        "不要再调用子代理",
+        "别用子代理",
+        "禁止使用子代理",
+        "不需要子代理",
+        "不使用子智能体",
+        "不用子智能体",
+        "不要使用子智能体",
+        "不要调用子智能体",
+        "不要委派",
+        "不委派",
+        "不要调用codex",
+        "不要再调用codex",
+        "不要使用codex",
+        "不使用codex",
+        "不用codex",
+        "不要调用claude",
+        "donotusesubagents",
+        "don'tusesubagents",
+        "nosubagents",
+        "donotdelegate",
+        "don'tdelegate",
+        "donotusecodex",
+        "don'tusecodex",
+    ]
+    .iter()
+    .any(|pattern| normalized.contains(pattern));
+    if disabled {
+        DelegationDirective::Disabled
+    } else {
+        DelegationDirective::Automatic
+    }
+}
+
+fn delegation_directive(messages: &[Message]) -> DelegationDirective {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == hermes_core::Role::User)
+        .map(Message::text_content)
+        .map(|text| delegation_directive_for_text(&text))
+        .unwrap_or(DelegationDirective::Automatic)
+}
+
+fn external_agent_executable(token: &str) -> bool {
+    let token = token.trim_matches(|character: char| {
+        matches!(
+            character,
+            '\'' | '"' | '`' | '(' | ')' | '{' | '}' | '[' | ']'
+        )
+    });
+    let base = token
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    let stem = base
+        .strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".cmd"))
+        .or_else(|| base.strip_suffix(".bat"))
+        .unwrap_or(&base);
+    matches!(stem, "codex" | "claude")
+}
+
+/// 检测 shell 串是否把外部 Agent CLI 放在任一命令位置。分隔符内的普通参数（例如
+/// `echo codex`）不会误判；嵌套 PowerShell/cmd 的参数仍会被扫描，以防绕开委派门禁。
+fn command_invokes_external_agent(command: &str) -> bool {
+    command
+        .split([';', '|', '&', '\n', '\r'])
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .any(|segment| {
+            let tokens = segment.split_whitespace().collect::<Vec<_>>();
+            let Some(head) = tokens.first() else {
+                return false;
+            };
+            if external_agent_executable(head) {
+                return true;
+            }
+            let wrapper = head
+                .trim_matches(['\'', '"'])
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(head)
+                .to_ascii_lowercase();
+            matches!(
+                wrapper.as_str(),
+                "pwsh"
+                    | "pwsh.exe"
+                    | "powershell"
+                    | "powershell.exe"
+                    | "cmd"
+                    | "cmd.exe"
+                    | "bash"
+                    | "sh"
+            ) && tokens
+                .iter()
+                .skip(1)
+                .any(|token| external_agent_executable(token))
+        })
 }
 
 const DELEGATION_PROMPT_HINT: &str = "\n\nFor independent investigation, you may call \
@@ -228,7 +439,9 @@ pub struct LlmAgentRuntime {
     running: Arc<AtomicBool>,
     aborted: Arc<AtomicBool>,
     codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
+    cross_engine_delegation_enabled: Arc<AtomicBool>,
     orchestration: OrchestrationPolicy,
+    agent_prompts: AgentPromptPolicy,
 }
 
 struct SessionState {
@@ -248,6 +461,9 @@ struct SessionState {
     accepting_steer: bool,
     /// 当前 run 的中止标志
     abort: Arc<AtomicBool>,
+    /// 用户在当前运行中显式关闭委派后立即锁存；工具执行阶段再次检查，避免 steer
+    /// 与同一轮 provider 工具调用之间的竞态。
+    delegation_disabled: Arc<AtomicBool>,
     /// 工作区作用域。None 即纯聊天；附加后始终通过 PathGuard 限制本地工具。
     workspace_scope: Option<WorkspaceScope>,
     /// 当前主运行所拥有的子代理监督器；仅在运行期间存在。
@@ -302,7 +518,9 @@ impl LlmAgentRuntime {
             running: Arc::new(AtomicBool::new(false)),
             aborted: Arc::new(AtomicBool::new(false)),
             codex_subagent_runner: None,
+            cross_engine_delegation_enabled: Arc::new(AtomicBool::new(true)),
             orchestration: OrchestrationPolicy::default(),
+            agent_prompts: AgentPromptPolicy::default(),
         }
     }
 
@@ -315,7 +533,26 @@ impl LlmAgentRuntime {
     /// 应用用户在设置页保存的编排策略。轮数在这里再次收紧，避免损坏配置失控。
     pub fn with_orchestration_policy(mut self, mut policy: OrchestrationPolicy) -> Self {
         policy.max_review_rounds = policy.max_review_rounds.clamp(1, 3);
+        self.cross_engine_delegation_enabled
+            .store(policy.allow_cross_engine_delegation, Ordering::SeqCst);
         self.orchestration = policy;
+        self
+    }
+
+    /// 热切换新的 Codex 子代理委派。监督器共享同一原子门，因此已经启动的子代理
+    /// 继续完成，而之后的显式或自动 Codex 路由会立即改用 R-Code。
+    pub fn set_cross_engine_delegation_enabled(&self, enabled: bool) {
+        self.cross_engine_delegation_enabled
+            .store(enabled, Ordering::SeqCst);
+    }
+
+    pub fn cross_engine_delegation_enabled(&self) -> bool {
+        self.cross_engine_delegation_enabled.load(Ordering::SeqCst)
+    }
+
+    /// 应用保存在用户级 AppData 中的可编辑协作提示。
+    pub fn with_agent_prompts(mut self, prompts: AgentPromptPolicy) -> Self {
+        self.agent_prompts = prompts;
         self
     }
 
@@ -351,6 +588,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 steer_queue: VecDeque::new(),
                 accepting_steer: false,
                 abort: Arc::new(AtomicBool::new(false)),
+                delegation_disabled: Arc::new(AtomicBool::new(false)),
                 workspace_scope,
                 supervisor: None,
                 active_run_id: None,
@@ -370,13 +608,16 @@ impl AgentRuntime for LlmAgentRuntime {
         message: Message,
     ) -> Result<String, ProductError> {
         let run_id = Uuid::new_v4();
-        let (task_id, model, inference, mode, abort, workspace_scope) = {
+        let (task_id, model, inference, mode, abort, delegation_disabled, workspace_scope) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
                 .get_mut(session_id)
                 .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+            let disable_delegation = delegation_directive_for_text(&message.text_content())
+                == DelegationDirective::Disabled;
             session.messages.push(message);
             session.abort.store(false, Ordering::Relaxed);
+            session.delegation_disabled = Arc::new(AtomicBool::new(disable_delegation));
             session.accepting_steer = true;
             (
                 session.task_id.clone(),
@@ -384,6 +625,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.inference.clone(),
                 session.mode,
                 session.abort.clone(),
+                session.delegation_disabled.clone(),
                 session.workspace_scope.clone(),
             )
         };
@@ -408,7 +650,9 @@ impl AgentRuntime for LlmAgentRuntime {
             abort.clone(),
             workspace_scope.clone(),
             self.codex_subagent_runner.clone(),
+            self.cross_engine_delegation_enabled.clone(),
             self.orchestration,
+            self.agent_prompts.clone(),
         ));
         {
             let mut sessions = self.sessions.lock().await;
@@ -436,11 +680,13 @@ impl AgentRuntime for LlmAgentRuntime {
             temperature: self.temperature,
             inference,
             abort,
+            delegation_disabled,
             workspace_scope,
             supervisor,
             policy,
             allows_delegation,
             orchestration: self.orchestration,
+            agent_prompts: self.agent_prompts.clone(),
         }));
 
         Ok(run_id_text)
@@ -454,6 +700,8 @@ impl AgentRuntime for LlmAgentRuntime {
         if !self.running.load(Ordering::Relaxed) {
             return Ok(SteerResult::RunFinished);
         }
+        let disable_delegation =
+            delegation_directive_for_text(message) == DelegationDirective::Disabled;
         let mut sessions = self.sessions.lock().await;
         let session = sessions
             .get_mut(session_id)
@@ -462,7 +710,16 @@ impl AgentRuntime for LlmAgentRuntime {
             return Ok(SteerResult::RunFinished);
         }
         session.steer_queue.push_back(message.to_string());
+        if disable_delegation {
+            session.delegation_disabled.store(true, Ordering::SeqCst);
+        }
+        let supervisor = disable_delegation
+            .then(|| session.supervisor.clone())
+            .flatten();
         drop(sessions);
+        if let Some(supervisor) = supervisor {
+            supervisor.abort_all().await;
+        }
         let _ = self.event_tx.send(AgentEvent::Activity {
             phase: r_code_core::dto::AgentActivityPhase::SteerAccepted,
             detail: None,
@@ -584,11 +841,13 @@ struct RunLoopCtx {
     temperature: Option<f32>,
     inference: InferenceOptions,
     abort: Arc<AtomicBool>,
+    delegation_disabled: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
     policy: ToolPolicy,
     allows_delegation: bool,
     orchestration: OrchestrationPolicy,
+    agent_prompts: AgentPromptPolicy,
 }
 
 /// 将常见的服务端参数错误转换为可操作的界面提示；原始错误仍会写入 tracing 日志，
@@ -637,7 +896,9 @@ async fn run_loop(ctx: RunLoopCtx) {
             };
             let mut applied_steers = 0usize;
             while let Some(text) = session.steer_queue.pop_front() {
-                session.messages.push(Message::user_text(text));
+                session
+                    .messages
+                    .push(Message::user_text(format_live_guidance(&text)));
                 applied_steers += 1;
             }
             (session.messages.clone(), applied_steers)
@@ -651,6 +912,9 @@ async fn run_loop(ctx: RunLoopCtx) {
         }
         emit_activity(&ctx.event_tx, AgentActivityPhase::Requesting, None);
 
+        let delegation_allowed = ctx.allows_delegation
+            && !ctx.delegation_disabled.load(Ordering::SeqCst)
+            && delegation_directive(&messages) != DelegationDirective::Disabled;
         let tool_host = SessionToolHost {
             gateway: ctx.gateway.clone(),
             task_id: ctx.task_id.clone(),
@@ -659,19 +923,28 @@ async fn run_loop(ctx: RunLoopCtx) {
             workspace_scope: ctx.workspace_scope.clone(),
             policy: ctx.policy,
             caller: "agent".to_string(),
-            delegation: ctx.allows_delegation.then(|| ctx.supervisor.clone()),
+            delegation: delegation_allowed.then(|| ctx.supervisor.clone()),
+            delegation_disabled: ctx.delegation_disabled.clone(),
         };
         let tools = tool_host.tool_specs();
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
         // run_child 中的 build_subagent_system_prompt。
-        let mut system_prompt = build_system_prompt(ctx.workspace_scope.is_some());
-        if ctx.allows_delegation {
+        let mut system_prompt =
+            build_main_system_prompt(ctx.workspace_scope.is_some(), &ctx.agent_prompts);
+        if delegation_allowed {
             system_prompt.push_str(DELEGATION_PROMPT_HINT);
             if ctx.supervisor.codex_available() {
                 system_prompt.push_str(CODEX_DELEGATION_PROMPT_HINT);
             }
         } else if ctx.supervisor.codex_configured() {
-            system_prompt.push_str(CODEX_WORKSPACE_REQUIRED_PROMPT_HINT);
+            if ctx.workspace_scope.is_none() {
+                system_prompt.push_str(CODEX_WORKSPACE_REQUIRED_PROMPT_HINT);
+            } else {
+                system_prompt.push_str(
+                    "\n\nThe current user turn explicitly disables subagents and external agent \
+CLIs. Work directly and do not delegate or invoke Codex/Claude through shell commands.",
+                );
+            }
         }
         let request = CompletionRequest {
             model: ctx.model.clone(),
@@ -738,6 +1011,8 @@ async fn run_loop(ctx: RunLoopCtx) {
                     // 注入历史，让模型有机会在下一轮汇总。
                     if terminal_err.is_none()
                         && !ctx.abort.load(Ordering::Relaxed)
+                        && delegation_allowed
+                        && !ctx.delegation_disabled.load(Ordering::SeqCst)
                         && ctx.supervisor.has_children().await
                     {
                         emit_activity(
@@ -768,6 +1043,8 @@ Please summarize and present these results.\n\n{}",
                     }
                     if terminal_err.is_none()
                         && !ctx.abort.load(Ordering::Relaxed)
+                        && delegation_allowed
+                        && !ctx.delegation_disabled.load(Ordering::SeqCst)
                         && quality_rounds < ctx.orchestration.max_review_rounds
                         && should_run_quality_review(
                             ctx.orchestration.quality_loop,
@@ -777,6 +1054,7 @@ Please summarize and present these results.\n\n{}",
                     {
                         let draft = final_visible_response(&messages);
                         if !draft.is_empty() {
+                            let review_packet = current_run_review_packet(&messages);
                             quality_rounds += 1;
                             emit_activity(
                                 &ctx.event_tx,
@@ -786,7 +1064,11 @@ Please summarize and present these results.\n\n{}",
                                     ctx.orchestration.max_review_rounds
                                 )),
                             );
-                            match ctx.supervisor.quality_review(quality_rounds, &draft).await {
+                            match ctx
+                                .supervisor
+                                .quality_review(quality_rounds, &review_packet, &draft)
+                                .await
+                            {
                                 Ok(QualityReviewResult::Passed(summary)) => {
                                     emit_activity(
                                         &ctx.event_tx,
@@ -896,6 +1178,7 @@ struct SessionToolHost {
     policy: ToolPolicy,
     caller: String,
     delegation: Option<Arc<SubagentSupervisor>>,
+    delegation_disabled: Arc<AtomicBool>,
 }
 
 /// Agent 可见工具的能力边界。子代理不能再次委派；默认只读，显式提权后才开放写工具。
@@ -922,6 +1205,63 @@ fn final_visible_response(messages: &[Message]) -> String {
         .map(Message::text_content)
         .filter(|text| !text.trim().is_empty())
         .unwrap_or_default()
+}
+
+/// Build a bounded acceptance packet for the automatic reviewer from the current run only.
+/// Synthetic tool/subagent collection messages intentionally use a `[system]` prefix even though
+/// the provider message role is `user`; exclude those so the reviewer sees the user's actual goal.
+fn current_run_review_packet(messages: &[Message]) -> String {
+    let mut current_goal = None;
+    let mut live_guidance = Vec::new();
+
+    for message in messages.iter().rev() {
+        if message.role != hermes_core::Role::User {
+            continue;
+        }
+        let text = message.text_content();
+        if let Some(guidance) = parse_live_guidance(&text) {
+            live_guidance.push(short_summary(guidance, 1_500));
+            continue;
+        }
+        if text.trim_start().starts_with("[system]") {
+            continue;
+        }
+        current_goal = Some(short_summary(&text, 4_000));
+        break;
+    }
+
+    live_guidance.reverse();
+    let goal = current_goal.unwrap_or_else(|| "(current user task unavailable)".to_string());
+    if live_guidance.is_empty() {
+        format!("Current user task:\n{goal}\n\nAccepted live guidance:\n(none)")
+    } else {
+        let guidance = live_guidance
+            .iter()
+            .enumerate()
+            .map(|(index, item)| format!("{}. {item}", index + 1))
+            .collect::<Vec<_>>()
+            .join("\n");
+        short_summary(
+            &format!("Current user task:\n{goal}\n\nAccepted live guidance:\n{guidance}"),
+            6_000,
+        )
+    }
+}
+
+fn build_quality_review_goal(review_packet: &str, draft: &str) -> String {
+    let review_packet = short_summary(review_packet, 6_000);
+    let draft = short_summary(draft, 6_000);
+    format!(
+        "Act as a fast, read-only release gate for the parent agent. Review the provisional draft \
+against the supplied user task and accepted guidance. Check correctness, completeness, unsupported \
+claims, missed validation, and unsafe changes. The packet is the primary evidence. Do not load skills \
+or broadly rescan the repository, and do not rerun checks already reported in the draft. Use at most \
+two targeted read-only workspace checks only when a specific material claim cannot be judged from the \
+packet. Do not edit files. Return `PASS` on the first line when no correction is needed; otherwise \
+return `REVISE` followed by concise, actionable findings. Do not expose private chain-of-thought.\n\n\
+User task and accepted live guidance:\n{review_packet}\n\n\
+Provisional draft (not yet delivered):\n{draft}"
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -960,8 +1300,10 @@ impl SessionToolHost {
                 .collect(),
             _ => Vec::new(),
         };
-        if let Some(supervisor) = &self.delegation {
-            tools.extend(delegation_tool_specs(supervisor.codex_available()));
+        if !self.delegation_disabled.load(Ordering::SeqCst) {
+            if let Some(supervisor) = &self.delegation {
+                tools.extend(delegation_tool_specs(supervisor.codex_available()));
+            }
         }
         tools
     }
@@ -1001,6 +1343,23 @@ impl SessionToolHost {
         name: &str,
         args: serde_json::Value,
     ) -> hermes_error::Result<ToolCallOutcome> {
+        let delegation_disabled = self.delegation_disabled.load(Ordering::SeqCst);
+        if delegation_disabled && matches!(name, "delegate_task" | "collect_subagents") {
+            return Err(hermes_error::Error::ToolHost(
+                "本轮用户已明确关闭子代理；运行时拒绝了委派调用".to_string(),
+            ));
+        }
+        if delegation_disabled
+            && name == "bash"
+            && args
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(command_invokes_external_agent)
+        {
+            return Err(hermes_error::Error::ToolHost(
+                "本轮用户已明确关闭子代理；运行时拒绝了外部 Agent CLI 命令".to_string(),
+            ));
+        }
         if name == "delegate_task" {
             let supervisor = self.delegation.as_ref().ok_or_else(|| {
                 hermes_error::Error::ToolHost(
@@ -1375,9 +1734,11 @@ struct SubagentSupervisor {
     parent_abort: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
+    cross_engine_delegation_enabled: Arc<AtomicBool>,
     semaphore: Arc<Semaphore>,
     children: Arc<Mutex<HashMap<String, SubagentHandle>>>,
     orchestration: OrchestrationPolicy,
+    agent_prompts: AgentPromptPolicy,
 }
 
 #[derive(Clone)]
@@ -1413,7 +1774,9 @@ impl SubagentSupervisor {
         parent_abort: Arc<AtomicBool>,
         workspace_scope: Option<WorkspaceScope>,
         codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
+        cross_engine_delegation_enabled: Arc<AtomicBool>,
         orchestration: OrchestrationPolicy,
+        agent_prompts: AgentPromptPolicy,
     ) -> Self {
         Self {
             provider,
@@ -1428,14 +1791,16 @@ impl SubagentSupervisor {
             parent_abort,
             workspace_scope,
             codex_subagent_runner,
+            cross_engine_delegation_enabled,
             semaphore: Arc::new(Semaphore::new(MAX_PARALLEL_SUBAGENTS)),
             children: Arc::new(Mutex::new(HashMap::new())),
             orchestration,
+            agent_prompts,
         }
     }
 
     fn codex_available(&self) -> bool {
-        self.orchestration.allow_cross_engine_delegation
+        self.cross_engine_delegation_enabled.load(Ordering::SeqCst)
             && self.codex_configured()
             && self.workspace_scope.is_some()
     }
@@ -1455,10 +1820,13 @@ impl SubagentSupervisor {
                 "主智能体显式选择 R-Code 子智能体".to_string(),
             )),
             "codex" | "codex_cli" => {
-                if !self.orchestration.allow_cross_engine_delegation {
-                    return Err(ProductError::Other(
-                        "设置中已关闭跨引擎委派，不能启动 Codex 子智能体".to_string(),
-                    ));
+                if !self.codex_available() {
+                    let reason = if !self.cross_engine_delegation_enabled.load(Ordering::SeqCst) {
+                        "Codex 子代理已在设置中关闭，本次委派已回退 R-Code"
+                    } else {
+                        "Codex 子代理当前不可用，本次委派已回退 R-Code"
+                    };
+                    return Ok((SubagentBackend::RCode, reason.to_string()));
                 }
                 Ok((
                     SubagentBackend::Codex,
@@ -1530,16 +1898,11 @@ impl SubagentSupervisor {
     async fn quality_review(
         &self,
         round: u8,
+        review_packet: &str,
         draft: &str,
     ) -> Result<QualityReviewResult, ProductError> {
         let (backend, routing_reason) = self.quality_backend();
-        let draft = short_summary(draft, 6_000);
-        let goal = format!(
-            "Review the main agent's visible draft against the user's task and any available workspace evidence. \
-Check correctness, completeness, unsupported claims, missed validation, and unsafe changes. Do not edit files. \
-Return `PASS` on the first line when no correction is needed; otherwise return `REVISE` followed by concise, actionable findings. \
-Do not expose private chain-of-thought.\n\nVisible draft:\n{draft}"
-        );
+        let goal = build_quality_review_goal(review_packet, draft);
         let queued = self
             .spawn(
                 backend,
@@ -1935,6 +2298,7 @@ Do not expose private chain-of-thought.\n\nVisible draft:\n{draft}"
             },
             caller: format!("subagent:{}", scope.agent_id),
             delegation: None,
+            delegation_disabled: Arc::new(AtomicBool::new(true)),
         };
         let tools = tool_host.tool_specs();
         let mut messages = vec![Message::user_text(goal)];
@@ -1957,6 +2321,7 @@ Do not expose private chain-of-thought.\n\nVisible draft:\n{draft}"
                 system: Some(build_subagent_system_prompt(
                     !tools.is_empty(),
                     scope.access_mode,
+                    &self.agent_prompts.subagent,
                 )),
                 messages: Vec::new(),
                 tools: Vec::new(),
@@ -2136,6 +2501,11 @@ mod tests {
         calls: AtomicUsize,
     }
 
+    struct GatedQualityRunner {
+        started: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
     #[async_trait]
     impl CodexSubagentRunner for RecordingCodexRunner {
         async fn run(
@@ -2154,6 +2524,23 @@ mod tests {
             });
             Ok(CodexSubagentOutcome::Completed(
                 "Codex 返回的只读结论".to_string(),
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl CodexSubagentRunner for GatedQualityRunner {
+        async fn run(
+            &self,
+            request: CodexSubagentRequest,
+        ) -> Result<CodexSubagentOutcome, ProductError> {
+            assert!(request
+                .goal
+                .contains("Provisional draft (not yet delivered)"));
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(CodexSubagentOutcome::Completed(
+                "PASS\n验收包与草稿一致".to_string(),
             ))
         }
     }
@@ -2299,7 +2686,9 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             None,
             None,
+            Arc::new(AtomicBool::new(true)),
             OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
         )
     }
 
@@ -2334,6 +2723,82 @@ mod tests {
         )));
         assert!(events.iter().any(|e| matches!(
             e,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn parent_result_is_not_delivered_before_quality_gate_finishes() {
+        let directory = TempDir::new().unwrap();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("待复核草稿", hermes_core::Usage::default());
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        )
+        .with_orchestration_policy(OrchestrationPolicy {
+            quality_loop: QualityLoopMode::Always,
+            quality_reviewer: QualityReviewer::Codex,
+            ..OrchestrationPolicy::default()
+        })
+        .with_codex_subagent_runner(Arc::new(GatedQualityRunner {
+            started: started.clone(),
+            release: release.clone(),
+        }));
+        let session = runtime
+            .create_session(CreateSessionInput {
+                workspace_path: Some(directory.path().to_string_lossy().into_owned()),
+                ..input()
+            })
+            .await
+            .unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "检查项目并给出结论")
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .expect("质量复核应在草稿生成后启动");
+
+        let before_gate = runtime.poll_events().await.unwrap();
+        assert!(runtime.is_running());
+        assert!(before_gate.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, .. } if text.contains("待复核草稿")
+        )));
+        assert!(before_gate.iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity {
+                phase: AgentActivityPhase::Reviewing,
+                ..
+            }
+        )));
+        assert!(!before_gate.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+
+        release.notify_one();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(!runtime.is_running());
+        let after_gate = runtime.poll_events().await.unwrap();
+        assert!(after_gate.iter().any(|event| matches!(
+            event,
             AgentEvent::State {
                 state: TaskState::ReviewReady
             }
@@ -2471,6 +2936,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn explicit_opt_out_hides_delegation_tools_even_with_codex_and_workspace() {
+        let directory = TempDir::new().unwrap();
+        let release = Arc::new(Notify::new());
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let provider = DelayedProvider::new(
+            vec![(
+                false,
+                vec![
+                    StreamEvent::TextDelta {
+                        text: "我会直接完成".to_string(),
+                    },
+                    StreamEvent::Stop {
+                        reason: StopReason::EndTurn,
+                    },
+                ],
+            )],
+            release,
+            requests.clone(),
+        );
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        )
+        .with_codex_subagent_runner(Arc::new(RecordingCodexRunner {
+            calls: AtomicUsize::new(0),
+        }));
+
+        let session = runtime.create_session(input()).await.unwrap();
+        runtime
+            .update_workspace_scope(
+                &session.meta.id,
+                Some(directory.path().to_string_lossy().into_owned()),
+                ProjectAccessMode::RequestApproval,
+            )
+            .await
+            .unwrap();
+        runtime
+            .start_run(
+                &session.meta.id,
+                "这个任务你自己完成，不使用子代理，也不要调用 Codex CLI。",
+            )
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        let requests = requests.lock().unwrap();
+        let request = requests.first().unwrap();
+        assert!(request
+            .system
+            .as_deref()
+            .unwrap()
+            .contains("explicitly disables subagents"));
+        assert!(!request
+            .tools
+            .iter()
+            .any(|tool| matches!(tool.name.as_str(), "delegate_task" | "collect_subagents")));
+    }
+
+    #[tokio::test]
+    async fn stale_tool_calls_cannot_bypass_the_delegation_latch() {
+        let disabled = Arc::new(AtomicBool::new(true));
+        let tool_host = SessionToolHost {
+            gateway: test_gateway(),
+            task_id: "task-1".to_string(),
+            run_id: "parent-run".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: None,
+            policy: ToolPolicy::Main,
+            caller: "agent".to_string(),
+            delegation: None,
+            delegation_disabled: disabled,
+        };
+
+        let delegate_error = tool_host
+            .call_inner(
+                Some("late-delegate"),
+                "delegate_task",
+                serde_json::json!({"goal": "inspect", "agent": "codex"}),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(delegate_error.contains("运行时拒绝了委派调用"));
+
+        let shell_error = tool_host
+            .call_inner(
+                Some("late-shell"),
+                "bash",
+                serde_json::json!({"command": "codex login status 2>&1"}),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(shell_error.contains("运行时拒绝了外部 Agent CLI 命令"));
+    }
+
+    #[tokio::test]
     async fn codex_delegation_without_workspace_fails_before_queueing_a_child() {
         let runner = Arc::new(RecordingCodexRunner {
             calls: AtomicUsize::new(0),
@@ -2489,7 +3059,9 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             None,
             Some(runner.clone()),
+            Arc::new(AtomicBool::new(true)),
             OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
         );
 
         let error = supervisor
@@ -2664,10 +3236,39 @@ mod tests {
 
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
-        assert!(requests[1]
+        let applied = requests[1]
             .messages
             .iter()
-            .any(|message| message.text_content() == "改为检查边界"));
+            .map(Message::text_content)
+            .find(|text| text.contains("改为检查边界"))
+            .expect("下一轮请求必须包含已接纳的引导");
+        assert!(applied.contains("supplemental guidance"));
+        assert!(applied.contains("Preserve and complete the current user task"));
+        assert!(applied.contains("Only replace or cancel"));
+    }
+
+    #[test]
+    fn quality_review_packet_contains_the_current_goal_and_live_guidance() {
+        let messages = vec![
+            Message::user_text("检查整个项目并给出架构结论"),
+            Message::assistant_text("我先读取关键模块。"),
+            Message::user_text(format_live_guidance("先回答一下今天星期几")),
+            Message::user_text(
+                "[system] Delegated subagents have completed. Internal collection payload.",
+            ),
+            Message::assistant_text("今天是星期日；下面继续给出架构结论。"),
+        ];
+
+        let packet = current_run_review_packet(&messages);
+        assert!(packet.contains("检查整个项目并给出架构结论"));
+        assert!(packet.contains("先回答一下今天星期几"));
+        assert!(!packet.contains("Internal collection payload"));
+
+        let goal = build_quality_review_goal(&packet, "最终草稿");
+        assert!(goal.contains("User task and accepted live guidance"));
+        assert!(goal.contains("Provisional draft (not yet delivered)"));
+        assert!(goal.contains("Do not load skills or broadly rescan the repository"));
+        assert!(goal.contains("最终草稿"));
     }
 
     #[tokio::test]
@@ -2695,7 +3296,9 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
             Some(workspace_scope.clone()),
             Some(runner.clone()),
+            Arc::new(AtomicBool::new(true)),
             OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
         ));
         let tool_host = SessionToolHost {
             gateway: test_gateway(),
@@ -2706,6 +3309,7 @@ mod tests {
             policy: ToolPolicy::Main,
             caller: "agent".to_string(),
             delegation: Some(supervisor),
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
         };
 
         let delegate_spec = tool_host
@@ -2779,6 +3383,38 @@ mod tests {
                         } if detail == "Codex 正在读取边界文件"
                     )
         )));
+    }
+
+    #[test]
+    fn explicit_codex_request_falls_back_when_cross_engine_delegation_is_disabled() {
+        let provider = MockProvider::new("mock");
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let gate = Arc::new(AtomicBool::new(true));
+        let supervisor = SubagentSupervisor::new(
+            Arc::new(provider),
+            test_gateway(),
+            event_tx,
+            "task-1".to_string(),
+            "parent-run".to_string(),
+            "mock-model".to_string(),
+            512,
+            None,
+            InferenceOptions::default(),
+            Arc::new(AtomicBool::new(false)),
+            None,
+            None,
+            gate.clone(),
+            OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
+        );
+        gate.store(false, Ordering::SeqCst);
+
+        let (backend, reason) = supervisor
+            .route_backend("codex", TaskComplexity::Complex)
+            .expect("关闭 Codex 后应平滑回退，而不是让主代理报错");
+
+        assert_eq!(backend, SubagentBackend::RCode);
+        assert!(reason.contains("回退 R-Code"));
     }
 
     #[tokio::test]
@@ -3029,27 +3665,35 @@ mod tests {
     }
 
     #[test]
-    fn git_status_falls_back_to_the_workspace_root() {
+    fn registered_git_status_defaults_to_the_attached_workspace_root() {
         let dir = tempfile::TempDir::new().unwrap();
-        let guard = PathGuard::new(dir.path().to_path_buf()).unwrap();
-        let bound = bind_workspace_paths(
-            "git_status",
-            fallback_bindings("git_status"),
-            serde_json::json!({}),
-            &guard,
-            true,
-        )
-        .unwrap();
-        assert!(bound["path"].as_str().is_some());
-        // 其他工具没有这个豁免
-        assert!(bind_workspace_paths(
-            "read_file",
-            fallback_bindings("read_file"),
-            serde_json::json!({}),
-            &guard,
-            true,
-        )
-        .is_err());
+        let expected_root = dir.path().canonicalize().unwrap();
+        let engine = Arc::new(PermissionEngine::new());
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(r_code_gateway::GitStatusTool));
+        let host = SessionToolHost {
+            gateway: Arc::new(gateway),
+            task_id: "task-1".to_string(),
+            run_id: "run-1".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: Some(WorkspaceScope {
+                guard: PathGuard::new(dir.path().to_path_buf()).unwrap(),
+                access_mode: ProjectAccessMode::RequestApproval,
+            }),
+            policy: ToolPolicy::Main,
+            caller: "agent".to_string(),
+            delegation: None,
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
+        };
+
+        let bound = host
+            .scoped_input("git_status", serde_json::json!({}))
+            .unwrap();
+
+        assert_eq!(
+            PathBuf::from(bound["path"].as_str().unwrap()),
+            expected_root
+        );
     }
 
     #[test]
@@ -3072,5 +3716,53 @@ mod tests {
         assert!(prompt.contains("2026-07-26T13:20:00+08:00"));
         assert!(prompt.contains("Sunday"));
         assert!(prompt.contains("ordinary, non-programming questions"));
+    }
+
+    #[test]
+    fn workspace_prompts_prefer_parallel_independent_reads() {
+        let prompt = build_system_prompt(true);
+        assert!(prompt.contains("issue independent read-only tool calls together"));
+        assert!(
+            prompt.contains("Keep writes, shell commands, and result-dependent work sequential")
+        );
+
+        let child = build_subagent_system_prompt(
+            true,
+            SubagentAccessMode::ReadOnly,
+            DEFAULT_SUBAGENT_PROMPT,
+        );
+        assert!(child.contains("issue independent read-only tool calls together"));
+    }
+
+    #[test]
+    fn explicit_user_delegation_opt_out_is_a_hard_runtime_boundary() {
+        let messages = vec![Message::user_text(
+            "这个任务由你自己完成，不要使用子代理，也不要调用 Codex CLI。",
+        )];
+
+        assert_eq!(
+            delegation_directive(&messages),
+            DelegationDirective::Disabled
+        );
+        assert!(command_invokes_external_agent("codex login status 2>&1"));
+        assert!(command_invokes_external_agent("claude --version"));
+        assert!(!command_invokes_external_agent("cargo test -p r-code-core"));
+    }
+
+    #[test]
+    fn custom_agent_prompts_are_layered_without_replacing_safety_prompt() {
+        let prompts = AgentPromptPolicy {
+            main_agent: "MAIN CUSTOM RELATIONSHIP".to_string(),
+            subagent: "CHILD CUSTOM RELATIONSHIP".to_string(),
+        };
+
+        let main = build_main_system_prompt(true, &prompts);
+        assert!(main.contains("All file paths are relative to the attached workspace"));
+        assert!(main.contains("MAIN CUSTOM RELATIONSHIP"));
+
+        let child =
+            build_subagent_system_prompt(true, SubagentAccessMode::ReadOnly, &prompts.subagent);
+        assert!(child.contains("read-only delegated subagent"));
+        assert!(child.contains("CHILD CUSTOM RELATIONSHIP"));
     }
 }

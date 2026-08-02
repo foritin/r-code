@@ -14,6 +14,7 @@
 pub mod dto;
 pub mod error;
 pub mod ids;
+mod memory;
 pub mod process;
 pub mod secret;
 pub mod security;
@@ -28,3 +29,4 @@ pub use hermes_core::{
     SessionMeta, SessionStatus, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
 };
 pub use hermes_error::{Error, Result, ResultExt};
+pub use memory::*;

@@ -46,6 +46,14 @@ fn main() {
         }
     }
 
+    // Finder/Dock 启动的 macOS GUI 不会读取用户的登录 shell 配置。Codex、Node、
+    // npm 和项目工具常由 Homebrew/nvm 安装；在任何 CLI 探测前恢复同一份 PATH。
+    // 失败不阻断 R-Code 启动，设置页的诊断仍会给出具体的 CLI 缺失提示。
+    #[cfg(target_os = "macos")]
+    if let Err(error) = fix_path_env::fix() {
+        eprintln!("R-Code could not import the macOS login-shell PATH: {error}");
+    }
+
     r_code_host::init_logging();
     tracing::info!("R-Code Host starting (Tauri shell)...");
 
@@ -117,6 +125,7 @@ fn main() {
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_task_list,
             tauri_commands::cmd_task_archive,
+            tauri_commands::cmd_task_restore,
             tauri_commands::cmd_task_delete,
             tauri_commands::cmd_task_set_workspace,
             tauri_commands::cmd_task_set_agent_engine,
@@ -146,6 +155,18 @@ fn main() {
             tauri_commands::cmd_rollback_file,
             tauri_commands::cmd_rollback_task,
             tauri_commands::cmd_accept_task,
+            tauri_commands::cmd_review_git_status,
+            tauri_commands::cmd_review_accept_line,
+            tauri_commands::cmd_review_accept_file,
+            tauri_commands::cmd_review_accept_all,
+            tauri_commands::cmd_git_delivery_status,
+            tauri_commands::cmd_git_suggest_commit_message,
+            tauri_commands::cmd_git_commit_task,
+            tauri_commands::cmd_git_push_task,
+            tauri_commands::cmd_workflow_skills_list,
+            tauri_commands::cmd_workflow_skill_save,
+            tauri_commands::cmd_workflow_skill_reset,
+            tauri_commands::cmd_workflow_skill_delete,
             tauri_commands::cmd_change_request,
             tauri_commands::cmd_run_verification,
             tauri_commands::cmd_verification_list,
@@ -184,8 +205,7 @@ fn main() {
             tauri_commands::cmd_replay,
             tauri_commands::cmd_session_messages,
             tauri_commands::cmd_subagent_session_messages,
-            tauri_commands::cmd_memory_get,
-            tauri_commands::cmd_memory_set,
+            tauri_commands::cmd_legacy_memory_status,
             tauri_commands::cmd_logs_tail,
             tauri_commands::cmd_settings_get,
             tauri_commands::cmd_provider_catalog,

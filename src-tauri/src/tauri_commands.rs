@@ -63,6 +63,15 @@ pub async fn cmd_task_archive(
     r_code_host::commands::task_archive(&state, &task_id).await
 }
 
+/// 将归档会话还原到项目任务列表。
+#[tauri::command]
+pub async fn cmd_task_restore(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Task, String> {
+    r_code_host::commands::task_restore(&state, &task_id).await
+}
+
 /// 切换空闲会话的主 Agent；下一次运行使用 R-Code provider 或 Codex CLI。
 #[tauri::command]
 pub async fn cmd_task_set_agent_engine(
@@ -346,6 +355,117 @@ pub async fn cmd_accept_task(
     task_id: String,
 ) -> Result<(), String> {
     r_code_host::commands::accept_task(&state, &task_id).await
+}
+
+/// 获取任务路径在 Git 暂存区中的审核状态。
+#[tauri::command]
+pub async fn cmd_review_git_status(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::ReviewGitStatus, String> {
+    r_code_host::commands::review_git_status(&state, &task_id)
+}
+
+/// 接受一条新增或删除行到 Git 暂存区。
+#[tauri::command]
+pub async fn cmd_review_accept_line(
+    state: State<'_, CommandState>,
+    task_id: String,
+    path: String,
+    line_id: String,
+) -> Result<r_code_store::ReviewAcceptResult, String> {
+    r_code_host::commands::review_accept_line(&state, &task_id, &path, &line_id)
+}
+
+/// 接受一个任务文件到 Git 暂存区。
+#[tauri::command]
+pub async fn cmd_review_accept_file(
+    state: State<'_, CommandState>,
+    task_id: String,
+    path: String,
+) -> Result<r_code_store::ReviewAcceptResult, String> {
+    r_code_host::commands::review_accept_file(&state, &task_id, &path)
+}
+
+/// 接受该任务的全部安全路径到 Git 暂存区。
+#[tauri::command]
+pub async fn cmd_review_accept_all(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::ReviewAcceptResult, String> {
+    r_code_host::commands::review_accept_all(&state, &task_id)
+}
+
+/// 获取审核页 Git 提交与推送状态。
+#[tauri::command]
+pub async fn cmd_git_delivery_status(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::GitDeliveryStatus, String> {
+    r_code_host::commands::git_delivery_status(&state, &task_id)
+}
+
+/// 生成可编辑的提交信息建议。
+#[tauri::command]
+pub async fn cmd_git_suggest_commit_message(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<String, String> {
+    r_code_host::commands::git_suggest_commit_message(&state, &task_id)
+}
+
+/// 提交本任务已经接受到暂存区的内容。
+#[tauri::command]
+pub async fn cmd_git_commit_task(
+    state: State<'_, CommandState>,
+    task_id: String,
+    message: String,
+) -> Result<r_code_store::GitCommitResult, String> {
+    r_code_host::commands::git_commit_task(&state, &task_id, &message)
+}
+
+/// 将当前分支普通推送到已有 upstream。
+#[tauri::command]
+pub async fn cmd_git_push_task(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::GitPushResult, String> {
+    r_code_host::commands::git_push_task(&state, &task_id)
+}
+
+/// 列出可调用的内置与自定义工作流 Skill。
+#[tauri::command]
+pub async fn cmd_workflow_skills_list(
+    state: State<'_, CommandState>,
+) -> Result<Vec<r_code_host::WorkflowSkill>, String> {
+    r_code_host::commands::workflow_skills_list(&state)
+}
+
+/// 新建或保存一条 Skill；内置 Skill 保存为用户级覆盖。
+#[tauri::command]
+pub async fn cmd_workflow_skill_save(
+    state: State<'_, CommandState>,
+    draft: r_code_host::WorkflowSkillDraft,
+) -> Result<r_code_host::WorkflowSkill, String> {
+    r_code_host::commands::workflow_skill_save(&state, draft)
+}
+
+/// 将内置 Skill 恢复为随应用发布的默认内容。
+#[tauri::command]
+pub async fn cmd_workflow_skill_reset(
+    state: State<'_, CommandState>,
+    id: String,
+) -> Result<r_code_host::WorkflowSkill, String> {
+    r_code_host::commands::workflow_skill_reset(&state, &id)
+}
+
+/// 删除自定义 Skill。内置 Skill 会被拒绝。
+#[tauri::command]
+pub async fn cmd_workflow_skill_delete(
+    state: State<'_, CommandState>,
+    id: String,
+) -> Result<(), String> {
+    r_code_host::commands::workflow_skill_delete(&state, &id)
 }
 
 /// 在审核阶段提出修改请求，启动下一轮 Agent 运行。
@@ -654,23 +774,13 @@ pub async fn cmd_subagent_session_messages(
     r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id).await
 }
 
-/// 读取项目记忆（`<project_root>/.r-code/memory.md`）。
+/// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
 #[tauri::command]
-pub async fn cmd_memory_get(
+pub async fn cmd_legacy_memory_status(
     state: State<'_, CommandState>,
     workspace_path: String,
-) -> Result<String, String> {
-    r_code_host::commands::memory_get(&state, &workspace_path).await
-}
-
-/// 写入项目记忆（三投影：memory.md / CLAUDE.md / AGENTS.md 由调用方另行同步）。
-#[tauri::command]
-pub async fn cmd_memory_set(
-    state: State<'_, CommandState>,
-    workspace_path: String,
-    content: String,
-) -> Result<(), String> {
-    r_code_host::commands::memory_set(&state, &workspace_path, &content).await
+) -> Result<r_code_host::LegacyMemoryStatus, String> {
+    r_code_host::commands::legacy_memory_status(&state, &workspace_path).await
 }
 
 /// 读取最近的日志条目（环形缓冲；level 过滤如 "error"/"warn"）。

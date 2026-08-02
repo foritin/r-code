@@ -45,6 +45,8 @@ interface Props {
   cur: number | null;
   /** 运行期间不能改写历史分支，避免上下文竞争。 */
   running: boolean;
+  /** 质量门禁仍在检查最新草稿；此时可见文本尚不是正式交付。 */
+  reviewing: boolean;
   /** 透传流式事件给 Room 的可观察活动 reducer。 */
   onAgentEvent?: (event: AgentEvent) => void;
   /** 点击内联子代理芯片后在任务工作台打开公开运行详情。 */
@@ -129,7 +131,7 @@ function runDurationLabel(startedAt: string, endedAt: string | null): string {
 }
 
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
-  { taskId, workspacePath, cur, running, onAgentEvent, onInspectSubagent, selectedSubagentId },
+  { taskId, workspacePath, cur, running, reviewing, onAgentEvent, onInspectSubagent, selectedSubagentId },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -346,6 +348,16 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     }
   }, [editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
   const turns = useMemo(() => buildTimelineTurns(items), [items]);
+  const provisionalAgentId = useMemo(() => {
+    if (!reviewing) return null;
+    for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
+      const turnItems = turns[turnIndex].items;
+      for (let itemIndex = turnItems.length - 1; itemIndex >= 0; itemIndex--) {
+        if (turnItems[itemIndex].kind === "agent") return turnItems[itemIndex].id;
+      }
+    }
+    return null;
+  }, [reviewing, turns]);
   type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
 
   const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
@@ -471,13 +483,20 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         );
       }
       case "agent":
+        const provisional = it.id === provisionalAgentId;
         return (
           <div
-            className={`agent${finalResponse ? " timeline-final-response" : ""}${dim(it.t)}`}
+            className={`agent${finalResponse ? " timeline-final-response" : ""}${provisional ? " is-provisional" : ""}${dim(it.t)}`}
             data-t={it.t}
             key={it.id}
           >
             <div className="who">R-CODE</div>
+            {provisional && (
+              <div className="agent-delivery-state" role="status">
+                <span>草稿</span>
+                质量复核进行中，尚未正式交付
+              </div>
+            )}
             <Markdown text={it.text} streaming={it.streaming} taskId={taskId} workspacePath={workspacePath} />
           </div>
         );
@@ -565,7 +584,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
 
   return (
     <div
-      className="timeline"
+      className={`timeline${turns.length >= 80 ? " is-long" : ""}`}
       ref={scrollRef}
       onScroll={(e) => {
         const el = e.currentTarget;

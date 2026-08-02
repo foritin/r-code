@@ -25,16 +25,22 @@ const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOStri
 
 export const browserMockWorkspaces: Workspace[] = [
   {
+    id: "7f4d622084db4d359fb2f50c9780a1ad",
     canonical_path: "D:/project/rust/r-code",
     display_name: "r-code",
     access_mode: "risk_based",
     last_opened_at: at(2),
+    memory_mode: "inherit",
+    memory_generation: 1,
   },
   {
+    id: "a49332f6079b4b629aee49ed1bfe8e71",
     canonical_path: "D:/project/rust/api-server",
     display_name: "api-server",
     access_mode: "request_approval",
     last_opened_at: at(46),
+    memory_mode: "inherit",
+    memory_generation: 1,
   },
 ];
 
@@ -238,6 +244,10 @@ export const browserMockSettings: SettingsResponse = {
       quality_loop: "auto",
       quality_reviewer: "auto",
       max_review_rounds: 1,
+    },
+    agent_prompts: {
+      main_agent: "主 Agent 对最终结果负责；只在委派有明确收益时拆分边界清晰的子任务。",
+      subagent: "子代理只完成父 Agent 指定的任务，不再委派，并返回可核验的简洁摘要。",
     },
   },
   validation: null,
@@ -697,7 +707,11 @@ function mockTaskSummary(task: Task): DashboardTaskSummary {
 /** 与真实 cmd_workspace_dashboard 同形状的浏览器预览数据。 */
 export function browserMockWorkspaceDashboard(workspacePath: string): WorkspaceDashboard {
   const workspace = browserMockWorkspaces.find((item) => item.canonical_path === workspacePath) ?? browserMockWorkspaces[0];
-  const tasks = browserMockTasks.filter((task) => task.workspace_path === workspace.canonical_path).map(mockTaskSummary);
+  const projectTasks = browserMockTasks.filter((task) => task.workspace_path === workspace.canonical_path);
+  const archived = projectTasks
+    .filter((task) => task.state === "archived")
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  const tasks = projectTasks.filter((task) => task.state !== "archived").map(mockTaskSummary);
   const attention: DashboardAttentionItem[] = [];
   for (const summary of tasks) {
     const detail = browserMockDetails[summary.task.id];
@@ -710,22 +724,20 @@ export function browserMockWorkspaceDashboard(workspacePath: string): WorkspaceD
     const rank = (item: DashboardTaskSummary) => item.pending_permission_count ? 0 : item.task.state === "review_ready" ? 1 : item.active_run?.ended_at === null ? 2 : item.task.state === "idle" ? 4 : 3;
     return rank(left) - rank(right) || right.task.updated_at.localeCompare(left.task.updated_at);
   });
-  const hourAgo = Date.now() - 60 * 60_000;
-  const completed = tasks.filter((item) => item.task.state === "idle" && Date.parse(item.task.updated_at) >= hourAgo);
   return {
     workspace,
     generated_at: new Date().toISOString(),
     metrics: {
       task_count: tasks.length,
+      archived_task_count: archived.length,
       pending_permission_count: attention.filter((item) => item.kind === "permission").length,
       review_ready_count: attention.filter((item) => item.kind === "review_ready").length,
       running_task_count: tasks.filter((item) => item.pending_permission_count === 0 && item.active_run?.ended_at === null).length,
       active_subagent_count: tasks.reduce((count, item) => count + (browserMockDetails[item.task.id]?.runs.filter((run) => run.agent_kind === "subagent" && run.ended_at === null).length ?? 0), 0),
-      completed_last_hour_count: completed.length,
     },
     tasks,
     attention,
-    completed,
+    archived,
   };
 }
 
@@ -745,7 +757,7 @@ function mockEventLabel(kind: ProjectActivityItem["kind"]): string {
 
 export function browserMockActivityList(workspacePath?: string | null): ProjectActivityPage {
   const items: ProjectActivityItem[] = browserMockTasks
-    .filter((task) => !workspacePath || task.workspace_path === workspacePath)
+    .filter((task) => !workspacePath || (task.workspace_path === workspacePath && task.state !== "archived"))
     .flatMap((task) => (browserMockDetails[task.id]?.events ?? []).map((event) => ({
       id: `${task.id}:${event.id}`,
       at: event.created_at,

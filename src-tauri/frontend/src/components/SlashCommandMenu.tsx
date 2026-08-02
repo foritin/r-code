@@ -1,4 +1,5 @@
-import type { RefObject } from "react";
+import { useEffect, type RefObject } from "react";
+import type { WorkflowSkill } from "../lib/types";
 import type { SlashCommandDefinition, SlashCommandContext } from "../lib/slash-commands";
 import {
   CATEGORY_LABELS,
@@ -11,6 +12,7 @@ interface Props {
   anchorRef: RefObject<HTMLElement | null>;
   value: string;
   context: SlashCommandContext;
+  skills?: readonly WorkflowSkill[];
   activeIndex: number;
   onActiveIndexChange: (index: number) => void;
   onPick: (command: SlashCommandDefinition) => void;
@@ -21,12 +23,20 @@ export function SlashCommandMenu({
   anchorRef,
   value,
   context,
+  skills = [],
   activeIndex,
   onActiveIndexChange,
   onPick,
   onDismiss,
 }: Props) {
-  const commands = matchingSlashCommands(value, context);
+  const commands = matchingSlashCommands(value, context, skills);
+  const activeCommand = commands[Math.min(activeIndex, Math.max(0, commands.length - 1))];
+
+  useEffect(() => {
+    document
+      .getElementById(`slash-command-option-${activeIndex}`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, activeCommand?.name, commands.length]);
   if (commands.length === 0) return null;
 
   let lastCategory: SlashCommandDefinition["category"] | null = null;
@@ -79,6 +89,12 @@ export function SlashCommandMenu({
           );
         })}
       </div>
+      {activeCommand?.skill && (
+        <div className="slash-menu-skill-detail" role="note">
+          <span>{activeCommand.skill.source === "builtin" ? "内置 Skill" : "自定义 Skill"}</span>
+          <p>{activeCommand.skill.description}</p>
+        </div>
+      )}
     </AnchoredSurface>
   );
 }

@@ -331,6 +331,28 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 13,
+            to_version: 14,
+            description: "Stable workspace identity and local memory mode".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 14,
+            to_version: 15,
+            description: "Repair missing notification schema in legacy databases".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 15,
+            to_version: 16,
+            description: "Run workspace snapshots and idempotent review change materialization"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

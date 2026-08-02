@@ -94,6 +94,45 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
+      - name: Validate Apple signing and notarization secrets
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=()
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing required macOS release secrets: %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Import Apple Developer ID certificate
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          certificate_path="$RUNNER_TEMP/r-code-developer-id.p12"
+          keychain_path="$RUNNER_TEMP/r-code-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          printf '%s' "$APPLE_CERTIFICATE" | openssl base64 -d -A -out "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple: -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
       # tauri-action publishes installers, updater bundles, signatures and latest.json.
       - name: Build and publish release
         uses: tauri-apps/tauri-action@v1
@@ -101,6 +140,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.platform == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
         with:
           projectPath: src-tauri
           tauriScript: cargo tauri
@@ -116,6 +159,22 @@ jobs:
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: true
 
+      - name: Verify signed and notarized macOS bundles
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          bundle_root="target/${{ matrix.rust-target }}/release/bundle"
+          shopt -s nullglob
+          apps=("$bundle_root/macos/"*.app)
+          dmgs=("$bundle_root/dmg/"*.dmg)
+          [[ ${#apps[@]} -eq 1 && ${#dmgs[@]} -eq 1 ]]
+          app_path="${apps[0]}"
+          dmg_path="${dmgs[0]}"
+          codesign --verify --deep --strict --verbose=2 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          xcrun stapler validate "$dmg_path"
+
       - name: Build branded Windows installer
         if: matrix.platform == 'windows-latest'
         shell: pwsh
@@ -130,6 +189,13 @@ jobs:
           $installer = Get-ChildItem "target/${{ matrix.rust-target }}/release/bundle/branded" -Filter "R-Code_*-installer.exe" -File
           if ($installer.Count -ne 1) { throw "Expected one branded installer, found $($installer.Count)" }
           gh release upload "$env:RELEASE_TAG" $installer[0].FullName --clobber
+
+      - name: Remove temporary Apple signing keychain
+        if: always() && matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/r-code-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/r-code-developer-id.p12"
 
   finalize:
     name: Publish completed release

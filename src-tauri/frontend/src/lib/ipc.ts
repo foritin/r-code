@@ -46,6 +46,7 @@ import type {
   CodexIntegrationStatus,
   ContextCompactionResult,
   InferenceOptions,
+  LegacyMemoryStatus,
 } from "./types";
 import {
   browserMockDetails,
@@ -99,6 +100,9 @@ export const taskList = (workspacePath?: string, includeArchived = false) =>
 
 export const taskArchive = (taskId: string) =>
   ipc<Task>("cmd_task_archive", { taskId });
+
+export const taskRestore = (taskId: string) =>
+  ipc<Task>("cmd_task_restore", { taskId });
 
 export const taskDelete = (taskId: string) =>
   ipc<void>("cmd_task_delete", { taskId });
@@ -232,6 +236,59 @@ export const rollbackTask = (taskId: string) =>
   ipc<string[]>("cmd_rollback_task", { taskId });
 
 export const acceptTask = (taskId: string) => ipc<void>("cmd_accept_task", { taskId });
+
+export const reviewGitStatus = (taskId: string) =>
+  ipc<import("./types").ReviewGitStatus>("cmd_review_git_status", { taskId });
+
+export const REVIEW_STATUS_CHANGED_EVENT = "r-code:review-status-changed";
+
+function announceReviewStatusChanged(taskId: string): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(REVIEW_STATUS_CHANGED_EVENT, { detail: { taskId } }));
+  }
+}
+
+export async function reviewAcceptLine(taskId: string, path: string, lineId: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_line", { taskId, path, lineId });
+  announceReviewStatusChanged(taskId);
+  return result;
+}
+
+export async function reviewAcceptFile(taskId: string, path: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_file", { taskId, path });
+  announceReviewStatusChanged(taskId);
+  return result;
+}
+
+export async function reviewAcceptAll(taskId: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_all", { taskId });
+  announceReviewStatusChanged(taskId);
+  return result;
+}
+
+export const gitDeliveryStatus = (taskId: string) =>
+  ipc<import("./types").GitDeliveryStatus>("cmd_git_delivery_status", { taskId });
+
+export const gitSuggestCommitMessage = (taskId: string) =>
+  ipc<string>("cmd_git_suggest_commit_message", { taskId });
+
+export const gitCommitTask = (taskId: string, message: string) =>
+  ipc<import("./types").GitCommitResult>("cmd_git_commit_task", { taskId, message });
+
+export const gitPushTask = (taskId: string) =>
+  ipc<import("./types").GitPushResult>("cmd_git_push_task", { taskId });
+
+export const workflowSkillsList = () =>
+  ipc<import("./types").WorkflowSkill[]>("cmd_workflow_skills_list");
+
+export const workflowSkillSave = (draft: import("./types").WorkflowSkillDraft) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_save", { draft });
+
+export const workflowSkillReset = (id: string) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_reset", { id });
+
+export const workflowSkillDelete = (id: string) =>
+  ipc<void>("cmd_workflow_skill_delete", { id });
 
 export const changeRequest = async (taskId: string, message: string) => {
   try {
@@ -494,11 +551,9 @@ export const subagentSessionMessages = async (taskId: string, subagentId: string
   }
 };
 
-// ---------- 项目记忆 ----------
-export const memoryGet = (workspacePath: string) => ipc<string>("cmd_memory_get", { workspacePath });
-
-export const memorySet = (workspacePath: string, content: string) =>
-  ipc<void>("cmd_memory_set", { workspacePath, content });
+// ---------- 旧版项目记忆文件风险状态 ----------
+export const legacyMemoryStatus = (workspacePath: string) =>
+  ipc<LegacyMemoryStatus>("cmd_legacy_memory_status", { workspacePath });
 
 // ---------- 设置 ----------
 export const settingsGet = async () => {
