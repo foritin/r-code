@@ -30,7 +30,7 @@
 - `source/layers/background-rounded-plate-1024.png`：透明画布圆角底板。
 - `source/layers/foreground-mark-1024.png`：独立前景标记。
 
-当前发布图标使用亮橙底与近黑标记，让 16–32 像素的小图在 Windows 深色任务栏中仍有足够的有效面积和对比度。Windows / Linux 使用满铺母版，避免系统不会自动套遮罩时主体显得过小；macOS 的 `icon.icns` 使用内缩母版，以保留系统图标网格所需的留白。
+当前发布图标使用亮橙底与近黑标记。Windows `16 / 20 / 24` 像素帧只保留像素对齐的粗体 `R`，`32` 像素帧增加简化代码括号；从 `40` 像素起恢复完整的窗口、圆点和括号构图。这样可避免把复杂 1024 像素母版直接压缩到任务栏尺寸时产生的拥挤与模糊。Windows / Linux 大尺寸资源继续使用满铺母版；macOS 的 `icon.icns` 使用内缩母版，以保留系统图标网格所需的留白。
 
 修改母版后，在仓库根目录执行以下命令同步全部发布文件：
 
@@ -38,7 +38,13 @@
 .\scripts\generate-app-icons.ps1
 ```
 
-脚本会同步应用、Windows 安装/卸载程序、品牌安装器和 macOS 图标。Windows `icon.ico` 固定包含 16、20、24、32、40、48、64、96、128、256 像素帧，以覆盖常见显示缩放档位。
+脚本会先通过 Tauri 生成完整大图，再调用 `scripts/render-small-app-icons.mjs` 覆盖像素对齐的小尺寸帧，最后同步应用、Windows 安装/卸载程序、品牌安装器和 macOS 图标。Windows `icon.ico` 固定包含 16、20、24、32、40、48、64、96、128、256 像素帧，以覆盖常见显示缩放档位。
+
+只调整 Windows / Linux 小图、不需要重写 macOS `icns` 时，可使用 `-WindowsOnly`：
+
+```powershell
+.\scripts\generate-app-icons.ps1 -WindowsOnly
+```
 
 ## 替换与验证
 
