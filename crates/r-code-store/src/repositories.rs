@@ -11,10 +11,10 @@ use r_code_core::dto::{
     AgentEngine, AgentKind, AgentRun, AgentRunRuntimeKind, Notification, NotificationKind,
     ProjectAccessMode, QueuedMessage, QueuedMessageState, ReviewState, SessionBranch,
     SubagentAccessMode, Task, TaskEvent, TaskEventType, TaskMode, TaskState, ToolCall,
-    ToolCallStatus, Workspace,
+    ToolCallStatus, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 
 use crate::Database;
 
@@ -109,6 +109,27 @@ fn parse_access_mode(s: &str) -> Result<ProjectAccessMode, ProductError> {
         "full_access" => Ok(ProjectAccessMode::FullAccess),
         _ => Err(ProductError::DatabaseError(format!(
             "invalid project access mode: {s}"
+        ))),
+    }
+}
+
+/// 将 `WorkspaceMemoryMode` 转换为存储字符串。
+fn workspace_memory_mode_str(mode: WorkspaceMemoryMode) -> &'static str {
+    match mode {
+        WorkspaceMemoryMode::Inherit => "inherit",
+        WorkspaceMemoryMode::ReadOnly => "read_only",
+        WorkspaceMemoryMode::Off => "off",
+    }
+}
+
+/// 解析 `WorkspaceMemoryMode` 字符串。
+fn parse_workspace_memory_mode(value: &str) -> Result<WorkspaceMemoryMode, ProductError> {
+    match value {
+        "inherit" => Ok(WorkspaceMemoryMode::Inherit),
+        "read_only" => Ok(WorkspaceMemoryMode::ReadOnly),
+        "off" => Ok(WorkspaceMemoryMode::Off),
+        _ => Err(ProductError::DatabaseError(format!(
+            "invalid workspace memory mode: {value}"
         ))),
     }
 }
@@ -243,18 +264,28 @@ fn row_to_queued_message(row: &rusqlite::Row<'_>) -> Result<QueuedMessage, Produ
 
 /// 将数据库行映射为 `Workspace`。
 ///
-/// 列顺序：canonical_path, display_name, access_mode, last_opened_at
+/// 列顺序：id, canonical_path, display_name, access_mode, last_opened_at,
+/// memory_mode, memory_generation。
 fn row_to_workspace(row: &rusqlite::Row<'_>) -> Result<Workspace, ProductError> {
-    let access_mode_str: String = row.get(2).map_err(db_err)?;
+    let access_mode_str: String = row.get(3).map_err(db_err)?;
     let access_mode = parse_access_mode(&access_mode_str)?;
-    let last_opened_str: String = row.get(3).map_err(db_err)?;
+    let last_opened_str: String = row.get(4).map_err(db_err)?;
     let last_opened_at = parse_ts(&last_opened_str)?;
+    let memory_mode_str: String = row.get(5).map_err(db_err)?;
+    let memory_mode = parse_workspace_memory_mode(&memory_mode_str)?;
+    let memory_generation: i64 = row.get(6).map_err(db_err)?;
+    let memory_generation = u64::try_from(memory_generation).map_err(|_| {
+        ProductError::DatabaseError("workspace memory_generation must be non-negative".into())
+    })?;
 
     Ok(Workspace {
-        canonical_path: row.get(0).map_err(db_err)?,
-        display_name: row.get(1).map_err(db_err)?,
+        id: row.get(0).map_err(db_err)?,
+        canonical_path: row.get(1).map_err(db_err)?,
+        display_name: row.get(2).map_err(db_err)?,
         access_mode,
         last_opened_at,
+        memory_mode,
+        memory_generation,
     })
 }
 
@@ -863,6 +894,31 @@ impl<'a> ToolCallRepository<'a> {
         .map_err(db_err)?;
         Ok(())
     }
+
+    /// 子运行已经进入终态、但外部事件流没有为部分工具发出结果时，立即关闭这些
+    /// 残留审计行。它们不能继续显示为“运行中”，也不能被误记为成功。
+    pub fn finish_running_for_run_as_error(
+        &self,
+        run_id: &str,
+        output: &serde_json::Value,
+    ) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let updated = conn
+            .execute(
+                "UPDATE tool_calls \
+                 SET output_json = COALESCE(output_json, ?1), status = ?2, ended_at = ?3 \
+                 WHERE run_id = ?4 AND status = ?5",
+                params![
+                    output.to_string(),
+                    ToolCallStatus::Error.to_string(),
+                    Utc::now().to_rfc3339(),
+                    run_id,
+                    ToolCallStatus::Running.to_string(),
+                ],
+            )
+            .map_err(db_err)?;
+        Ok(updated as u64)
+    }
 }
 
 // ============================================================================
@@ -1025,7 +1081,7 @@ impl<'a> TaskEventStore<'a> {
                 "SELECT event.id, event.task_id, event.branch_id, event.event_type, event.created_at \
                  FROM task_events AS event \
                  INNER JOIN tasks AS task ON task.id = event.task_id \
-                 WHERE task.workspace_path = ?1 AND event.id < ?2 \
+                 WHERE task.workspace_path = ?1 AND task.state != 'archived' AND event.id < ?2 \
                  ORDER BY event.id DESC LIMIT ?3",
             )
             .map_err(db_err)?;
@@ -1543,20 +1599,57 @@ impl<'a> WorkspaceRepository<'a> {
         Self { db }
     }
 
-    /// 插入或替换 Workspace。
-    pub fn upsert(&self, ws: &Workspace) -> Result<(), ProductError> {
+    /// 按 canonical path 插入或更新 Workspace，并返回数据库中的最终所有者记录。
+    ///
+    /// 冲突分支不会写 `id`、`memory_mode` 或 `memory_generation`，因此并发首次打开
+    /// 的失败竞争者也会拿到赢家已经持久化的稳定 id。
+    pub fn upsert_and_get(
+        &self,
+        candidate_id: &str,
+        canonical_path: &str,
+        display_name: &str,
+        access_mode: ProjectAccessMode,
+        last_opened_at: DateTime<Utc>,
+    ) -> Result<Workspace, ProductError> {
         let conn = self.db.conn()?;
-        conn.execute(
-            "INSERT OR REPLACE INTO workspaces (canonical_path, display_name, access_mode, last_opened_at) \
-             VALUES (?1, ?2, ?3, ?4)",
-            params![
-                ws.canonical_path,
-                ws.display_name,
-                access_mode_str(ws.access_mode),
-                ws.last_opened_at.to_rfc3339(),
-            ],
-        )
-        .map_err(db_err)?;
+        let mut statement = conn
+            .prepare(
+                "INSERT INTO workspaces (id, canonical_path, display_name, access_mode, last_opened_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(canonical_path) DO UPDATE SET \
+                     display_name = excluded.display_name, \
+                     access_mode = excluded.access_mode, \
+                     last_opened_at = excluded.last_opened_at \
+                 RETURNING id, canonical_path, display_name, access_mode, last_opened_at, \
+                           memory_mode, memory_generation",
+            )
+            .map_err(db_err)?;
+        let mut rows = statement
+            .query(params![
+                candidate_id,
+                canonical_path,
+                display_name,
+                access_mode_str(access_mode),
+                last_opened_at.to_rfc3339(),
+            ])
+            .map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => row_to_workspace(row),
+            None => Err(ProductError::DatabaseError(
+                "workspace upsert returned no row".into(),
+            )),
+        }
+    }
+
+    /// 兼容需要提交完整 DTO 的调用方；稳定字段仍由数据库冲突分支保护。
+    pub fn upsert(&self, ws: &Workspace) -> Result<(), ProductError> {
+        self.upsert_and_get(
+            &ws.id,
+            &ws.canonical_path,
+            &ws.display_name,
+            ws.access_mode,
+            ws.last_opened_at,
+        )?;
         Ok(())
     }
 
@@ -1565,11 +1658,29 @@ impl<'a> WorkspaceRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT canonical_path, display_name, access_mode, last_opened_at \
+                "SELECT id, canonical_path, display_name, access_mode, last_opened_at, \
+                        memory_mode, memory_generation \
                  FROM workspaces WHERE canonical_path = ?1",
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![canonical_path]).map_err(db_err)?;
+        match rows.next().map_err(db_err)? {
+            Some(row) => Ok(Some(row_to_workspace(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// 按稳定 owner id 获取 Workspace。
+    pub fn get_by_id(&self, id: &str) -> Result<Option<Workspace>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut statement = conn
+            .prepare(
+                "SELECT id, canonical_path, display_name, access_mode, last_opened_at, \
+                        memory_mode, memory_generation \
+                 FROM workspaces WHERE id = ?1",
+            )
+            .map_err(db_err)?;
+        let mut rows = statement.query(params![id]).map_err(db_err)?;
         match rows.next().map_err(db_err)? {
             Some(row) => Ok(Some(row_to_workspace(row)?)),
             None => Ok(None),
@@ -1581,7 +1692,8 @@ impl<'a> WorkspaceRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT canonical_path, display_name, access_mode, last_opened_at \
+                "SELECT id, canonical_path, display_name, access_mode, last_opened_at, \
+                        memory_mode, memory_generation \
                  FROM workspaces ORDER BY last_opened_at DESC LIMIT ?1",
             )
             .map_err(db_err)?;
@@ -1644,6 +1756,42 @@ impl<'a> WorkspaceRepository<'a> {
         Ok(())
     }
 
+    /// 以 generation CAS 更新项目记忆模式，并返回递增后的 generation。
+    pub fn update_memory_mode(
+        &self,
+        id: &str,
+        expected_generation: u64,
+        memory_mode: WorkspaceMemoryMode,
+    ) -> Result<u64, ProductError> {
+        let expected_generation = i64::try_from(expected_generation).map_err(|_| {
+            ProductError::DatabaseError("workspace memory_generation exceeds SQLite range".into())
+        })?;
+        let conn = self.db.conn()?;
+        let next: Option<i64> = conn
+            .query_row(
+                "UPDATE workspaces \
+                 SET memory_mode = ?1, memory_generation = memory_generation + 1 \
+                 WHERE id = ?2 AND memory_generation = ?3 \
+                 RETURNING memory_generation",
+                params![
+                    workspace_memory_mode_str(memory_mode),
+                    id,
+                    expected_generation
+                ],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+        let next = next.ok_or_else(|| {
+            ProductError::DatabaseError(format!(
+                "workspace memory mode conflict for id {id} at generation {expected_generation}"
+            ))
+        })?;
+        u64::try_from(next).map_err(|_| {
+            ProductError::DatabaseError("workspace memory_generation must be non-negative".into())
+        })
+    }
+
     /// 更新最后打开时间。
     pub fn touch(&self, canonical_path: &str) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
@@ -1663,7 +1811,9 @@ impl<'a> WorkspaceRepository<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::{ProjectAccessMode, ReviewState, TaskEventType, TaskMode, TaskState};
+    use r_code_core::dto::{
+        ProjectAccessMode, ReviewState, TaskEventType, TaskMode, TaskState, WorkspaceMemoryMode,
+    };
     use tempfile::TempDir;
 
     /// 创建内存数据库用于测试。
@@ -2382,31 +2532,83 @@ mod tests {
         repo.upsert(&ws).unwrap();
 
         let fetched = repo.get("/home/user/project").unwrap().unwrap();
+        assert_eq!(fetched.id, ws.id);
         assert_eq!(fetched.canonical_path, "/home/user/project");
         assert_eq!(fetched.display_name, "My Project");
         assert_eq!(fetched.access_mode, ProjectAccessMode::RequestApproval);
         assert_eq!(fetched.last_opened_at, ws.last_opened_at);
+        assert_eq!(fetched.memory_mode, WorkspaceMemoryMode::Inherit);
+        assert_eq!(fetched.memory_generation, 1);
     }
 
     #[test]
-    fn test_workspace_upsert_replaces() {
+    fn test_workspace_upsert_updates_mutable_fields_without_replacing_memory_owner() {
         let db = setup_db();
         let repo = WorkspaceRepository::new(&db);
 
         let ws = Workspace::new("/proj", "Original");
         repo.upsert(&ws).unwrap();
+        assert_eq!(
+            repo.update_memory_mode(&ws.id, 1, WorkspaceMemoryMode::ReadOnly)
+                .unwrap(),
+            2
+        );
 
-        let updated = Workspace {
-            canonical_path: "/proj".to_string(),
-            display_name: "Updated Name".to_string(),
-            access_mode: ProjectAccessMode::FullAccess,
-            last_opened_at: Utc::now(),
-        };
+        let mut updated = Workspace::new("/proj", "Updated Name");
+        let losing_candidate_id = updated.id.clone();
+        updated.access_mode = ProjectAccessMode::FullAccess;
+        updated.memory_mode = WorkspaceMemoryMode::Off;
+        updated.memory_generation = 99;
         repo.upsert(&updated).unwrap();
 
         let fetched = repo.get("/proj").unwrap().unwrap();
+        assert_eq!(fetched.id, ws.id);
         assert_eq!(fetched.display_name, "Updated Name");
         assert_eq!(fetched.access_mode, ProjectAccessMode::FullAccess);
+        assert_eq!(fetched.memory_mode, WorkspaceMemoryMode::ReadOnly);
+        assert_eq!(fetched.memory_generation, 2);
+        assert_eq!(repo.get_by_id(&ws.id).unwrap(), Some(fetched));
+        assert!(repo.get_by_id(&losing_candidate_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_workspace_memory_mode_generation_cas_and_reads() {
+        let db = setup_db();
+        let repo = WorkspaceRepository::new(&db);
+        let ws = Workspace::new("/cas", "CAS");
+        repo.upsert(&ws).unwrap();
+
+        let before = repo.get_by_id(&ws.id).unwrap().unwrap();
+        assert_eq!(before.memory_generation, 1);
+        assert_eq!(
+            repo.update_memory_mode(&ws.id, 1, WorkspaceMemoryMode::ReadOnly)
+                .unwrap(),
+            2
+        );
+
+        assert!(repo
+            .update_memory_mode(&ws.id, 1, WorkspaceMemoryMode::Off)
+            .is_err());
+        assert!(repo
+            .update_memory_mode("unknown-owner", 1, WorkspaceMemoryMode::Off)
+            .is_err());
+        let after_conflicts = repo.get("/cas").unwrap().unwrap();
+        assert_eq!(after_conflicts.memory_mode, WorkspaceMemoryMode::ReadOnly);
+        assert_eq!(after_conflicts.memory_generation, 2);
+
+        assert_eq!(repo.list_recent(1).unwrap()[0].memory_generation, 2);
+        assert_eq!(
+            repo.get_by_id(&ws.id).unwrap().unwrap().memory_generation,
+            2
+        );
+        assert_eq!(
+            repo.update_memory_mode(&ws.id, 2, WorkspaceMemoryMode::Off)
+                .unwrap(),
+            3
+        );
+        let final_state = repo.get_by_id(&ws.id).unwrap().unwrap();
+        assert_eq!(final_state.memory_mode, WorkspaceMemoryMode::Off);
+        assert_eq!(final_state.memory_generation, 3);
     }
 
     #[test]
@@ -2467,11 +2669,16 @@ mod tests {
 
         let ws = Workspace::new("/proj", "Touch Test");
         repo.upsert(&ws).unwrap();
+        repo.update_memory_mode(&ws.id, 1, WorkspaceMemoryMode::ReadOnly)
+            .unwrap();
 
         let original = repo.get("/proj").unwrap().unwrap();
         repo.touch("/proj").unwrap();
         let fetched = repo.get("/proj").unwrap().unwrap();
         assert!(fetched.last_opened_at >= original.last_opened_at);
+        assert_eq!(fetched.id, original.id);
+        assert_eq!(fetched.memory_mode, WorkspaceMemoryMode::ReadOnly);
+        assert_eq!(fetched.memory_generation, 2);
     }
 
     #[test]

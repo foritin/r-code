@@ -107,14 +107,20 @@ npm run build
 # 如需单独构建原始 NSIS / MSI
 cargo tauri build --bundles nsis,msi
 
-# macOS
-cargo tauri build --bundles app,dmg
+# macOS：默认生成仅供本机测试的 ad-hoc 签名 Apple Silicon app/dmg
+bash ./scripts/build-macos.sh
+
+# Intel Mac 本地包（当前 GitHub Release 目标仍为 Apple Silicon）
+bash ./scripts/build-macos.sh --target x86_64-apple-darwin
+
+# macOS 正式分发：使用 Keychain 中的 Developer ID，并完成 notarization/stapling
+bash ./scripts/build-macos.sh --signed
 
 # Linux
 cargo tauri build --bundles appimage,deb
 ```
 
-Windows 最终安装器位于 `target/release/bundle/branded/`。其他产物位于 `target/release/bundle/`；指定 `--target` 时位于 `target/<triple>/release/bundle/`。
+Windows 最终安装器位于 `target/release/bundle/branded/`。macOS 脚本默认输出到 `target/aarch64-apple-darwin/release/bundle/`；其他产物位于 `target/release/bundle/`，指定 `--target` 时位于 `target/<triple>/release/bundle/`。`--signed` 所需 Apple 环境变量见发布手册。
 
 ## 发布
 

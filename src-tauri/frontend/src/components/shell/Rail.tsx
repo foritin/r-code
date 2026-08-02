@@ -6,11 +6,10 @@ import { elapsedMinutes } from "../../lib/format";
 import { keyLabel } from "../../lib/keys";
 import { isTaskLive, taskStateLabel, taskTitle, visualTaskState } from "../../lib/presentation";
 import type { Task, Workspace } from "../../lib/types";
+import { ProjectActionsMenu } from "../ProjectActionsMenu";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 import {
   IconActivity,
-  IconChevronRight,
-  IconEditor,
   IconFolderOpen,
   IconHistory,
   IconInbox,
@@ -18,6 +17,7 @@ import {
   IconSearch,
   IconSettings,
   IconSidebar,
+  IconText,
 } from "../icons";
 
 interface ProjectNode {
@@ -30,6 +30,7 @@ export function Rail() {
   const scene = useAppStore((s) => s.scene);
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
+  const openDashboard = useAppStore((s) => s.openDashboard);
   const openRoom = useAppStore((s) => s.openRoom);
   const currentTaskId = useAppStore((s) => s.currentTaskId);
   const collapsed = useAppStore((s) => s.railCollapsed);
@@ -48,8 +49,11 @@ export function Rail() {
 
   usePoll(async () => {
     await refreshTasks();
-    const activeIds = useTasksStore.getState().tasks
-      .filter((task) => task.state !== "idle" && task.state !== "archived")
+    const snapshot = useTasksStore.getState();
+    const activeIds = snapshot.tasks
+      .filter((task) => isTaskLive(task, snapshot.details[task.id]))
+      // RoomScene already owns a faster detail poll for the visible task.
+      .filter((task) => !(scene === "room" && task.id === currentTaskId))
       .map((task) => task.id);
     if (activeIds.length > 0) await refreshDetails(activeIds);
   }, 2500);
@@ -76,8 +80,7 @@ export function Rail() {
   }, [details, tasks, workspaces]);
 
   const openProject = (workspacePath: string) => {
-    setCurrentWorkspace(workspacePath);
-    setScene("dashboard");
+    openDashboard(workspacePath);
   };
 
   return (
@@ -105,16 +108,16 @@ export function Rail() {
         <NavItem icon={<IconHistory />} label="对话" active={scene === "home" || scene === "conversations" || scene === "room"} onClick={() => setScene("conversations")} />
         <NavItem icon={<IconInbox />} label="待处理" active={scene === "inbox"} count={needsCount} onClick={() => setScene("inbox")} />
         <NavItem icon={<IconActivity />} label="活动" active={scene === "deck"} onClick={() => setScene("deck")} />
-        <NavItem icon={<IconEditor />} label="项目文件" active={scene === "editor"} onClick={() => setScene("editor")} />
+        <NavItem icon={<IconText />} label="知识与指令" active={scene === "knowledge"} onClick={() => setScene("knowledge")} />
       </nav>
 
       <div className="sidebar-projects">
         <div className="sidebar-section-head">
           <span className="rail-label">项目</span>
           {runningCount > 0 && <small className="rail-label">{runningCount} 运行中</small>}
-          <button className="sidebar-project-manage" onClick={() => setScene("projects")} aria-label="管理项目" title="管理项目：添加或清除项目">
-            <IconSettings width={13} height={13} />
-            <span className="rail-label">管理</span>
+          <button className="sidebar-project-manage" onClick={() => setScene("projects")} aria-label="添加项目" title="添加本地项目">
+            <IconPlus width={13} height={13} />
+            <span className="rail-label">添加</span>
           </button>
         </div>
         <div className="sidebar-project-list">
@@ -127,12 +130,14 @@ export function Rail() {
             const current = workspace.canonical_path === currentWorkspacePath && scene === "dashboard";
             return (
               <section className={`sidebar-project${current ? " selected" : ""}`} key={workspace.canonical_path}>
-                <button className="sidebar-project-head" onClick={() => openProject(workspace.canonical_path)} title={`打开 ${workspace.display_name} 仪表盘`}>
-                  <IconFolderOpen width={16} height={16} />
-                  <span className="rail-label">{workspace.display_name}</span>
-                  {projectTasks.some((task) => isTaskLive(task, details[task.id])) && <i className="sidebar-live" aria-label="有任务运行中" />}
-                  <IconChevronRight className="sidebar-project-arrow" width={14} height={14} />
-                </button>
+                <div className="sidebar-project-row">
+                  <button className="sidebar-project-head" onClick={() => openProject(workspace.canonical_path)} title={`打开 ${workspace.display_name} 项目概览`}>
+                    <IconFolderOpen width={16} height={16} />
+                    <span className="rail-label">{workspace.display_name}</span>
+                    {projectTasks.some((task) => isTaskLive(task, details[task.id])) && <i className="sidebar-live" aria-label="有任务运行中" />}
+                  </button>
+                  <ProjectActionsMenu workspace={workspace} />
+                </div>
                 <div className="sidebar-task-list">
                   {projectTasks.slice(0, 6).map((task) => {
                     const state = visualTaskState(task, details[task.id]);
@@ -142,8 +147,8 @@ export function Rail() {
                         <button
                           className={`sidebar-task${active ? " active" : ""}`}
                           onClick={() => {
-                            if (task.workspace_path) setCurrentWorkspace(task.workspace_path);
                             openRoom(task.id);
+                            if (task.workspace_path) setCurrentWorkspace(task.workspace_path);
                           }}
                           title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
                         >

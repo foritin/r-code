@@ -248,7 +248,17 @@ svg { flex: none; }
 .lamp.fail { background: var(--danger); }
 
 /* ---------- 打字光标 ---------- */
-.caret { display: inline-block; width: 6px; height: 12px; background: var(--accent); animation: blink 1.1s steps(1) infinite; }
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 0.95em;
+  margin-inline-start: 0.14em;
+  border-radius: 1px;
+  vertical-align: -0.08em;
+  background: var(--accent);
+  pointer-events: none;
+  animation: blink 1.15s steps(1, end) infinite;
+}
 
 /* ---------- 快捷键提示（纯文本，无键帽边框） ----------
    注意：home.css 曾重定义同名类并加上键帽边框 + 10px 字号，全局劫持了本规则。

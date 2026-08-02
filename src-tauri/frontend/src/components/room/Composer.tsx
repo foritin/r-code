@@ -1,5 +1,5 @@
 /**
- * Room 输入区 —— Enter 发送 / Shift+Enter 换行；运行中以引导为主动作。
+ * Room 输入区 —— Enter 按当前选择发送 / Shift+Enter 换行；运行中可选择排队、引导或立即发送。
  * `@` 触发 quickOpen 文件下拉，选中后插入 @path 文本。
  *
  * 输入区脚下现在镜像了「模型」与「权限」两个控件（与新对话页同构）。原先这里
@@ -7,8 +7,6 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  agentDelegateCodex,
-  agentDelegateCodexMcp,
   agentQueueRemove,
   agentSend,
   quickOpen,
@@ -19,6 +17,7 @@ import {
   taskForkContext,
   taskRename,
   taskSetModel,
+  workflowSkillsList,
 } from "../../lib/ipc";
 import type {
   AgentSendMode,
@@ -29,9 +28,11 @@ import type {
   QueuedMessage,
   SessionAttachmentMeta,
   TaskAgentEngine,
+  WorkflowSkill,
 } from "../../lib/types";
 import { resolveActive, type ProviderChoice } from "../../lib/provider";
-import { useArmedAction, useAsyncAction } from "../../lib/hooks";
+import { useAsyncAction } from "../../lib/hooks";
+import { usePoll } from "../../lib/poll";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import { Menu, MenuItem } from "../ui/Menu";
@@ -55,7 +56,6 @@ import {
   codexImageCapability,
   imageCapabilityFor,
 } from "./model-capabilities";
-import { useCodexCliGate } from "../codex/CodexCliGate";
 import { SlashCommandMenu } from "../SlashCommandMenu";
 import {
   SLASH_COMMANDS,
@@ -68,6 +68,20 @@ import {
   type ParsedSlashCommand,
   type SlashCommandDefinition,
 } from "../../lib/slash-commands";
+
+function sameWorkflowSkillCatalog(left: WorkflowSkill[], right: WorkflowSkill[]): boolean {
+  return left.length === right.length && left.every((skill, index) => {
+    const next = right[index];
+    return next != null
+      && skill.id === next.id
+      && skill.name === next.name
+      && skill.description === next.description
+      && skill.instructions === next.instructions
+      && skill.source === next.source
+      && skill.enabled === next.enabled
+      && skill.overridden === next.overridden;
+  });
+}
 
 interface Props {
   taskId: string;
@@ -99,6 +113,35 @@ interface AtState {
   items: string[];
   active: number;
   error?: string;
+}
+
+function fileReferenceText(path: string): string {
+  if (!/\s/.test(path)) return `@${path}`;
+  return `@"${path.replace(/"/g, '\\"')}"`;
+}
+
+type RunningSendMode = Extract<AgentSendMode, "queue" | "steer" | "send_now">;
+
+function runningSendModeLabel(mode: RunningSendMode): string {
+  switch (mode) {
+    case "steer":
+      return "引导";
+    case "send_now":
+      return "立即发送";
+    default:
+      return "排队";
+  }
+}
+
+function runningSendModeTitle(mode: RunningSendMode): string {
+  switch (mode) {
+    case "steer":
+      return "把消息补充到当前运行，不替换原任务";
+    case "send_now":
+      return "中断当前运行并立即处理这条消息";
+    default:
+      return "当前运行结束后再发送这条消息";
+  }
 }
 
 export function Composer({
@@ -135,9 +178,16 @@ export function Composer({
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
   const [codexPreferences, setCodexPreferences] = useState<CodexCliPreferences | null>(null);
+  const [runningSendMode, setRunningSendMode] = useState<RunningSendMode>("queue");
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [workflowSkills, setWorkflowSkills] = useState<WorkflowSkill[]>([]);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const compBoxRef = useRef<HTMLDivElement>(null);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyIndexRef = useRef<number | null>(null);
+  const historyDraftRef = useRef("");
+  const initializedTaskRef = useRef<string | null>(null);
+  const consumedFileReferencesRef = useRef(new Set<string>());
 
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
@@ -150,7 +200,8 @@ export function Composer({
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
-  const { runWithCodexCli } = useCodexCliGate();
+  const taskFileReference = useAppStore((s) => s.taskFileReferences[taskId]);
+  const acknowledgeTaskFileReference = useAppStore((s) => s.acknowledgeTaskFileReference);
   const attachments = useAttachments();
   const activeModel = resolveActive(providerChoices, providerFallback, providerName, model);
   const imageCapability = agentEngine === "codex"
@@ -183,7 +234,7 @@ export function Composer({
     workspaceAttached,
     running,
   };
-  const slashItems = slashDismissed ? [] : matchingSlashCommands(text, slashContext);
+  const slashItems = slashDismissed ? [] : matchingSlashCommands(text, slashContext, workflowSkills);
   const slashOpen = slashItems.length > 0;
 
   useEffect(() => () => {
@@ -191,14 +242,96 @@ export function Composer({
   }, []);
 
   useEffect(() => {
+    // React Strict Mode replays mount effects. Reset only for a genuine task transition,
+    // otherwise the replay can erase a file reference that the following effect consumed.
+    if (initializedTaskRef.current === taskId) return;
+    initializedTaskRef.current = taskId;
     setText("");
+    setInputHistory([]);
+    historyIndexRef.current = null;
+    historyDraftRef.current = "";
     setError(null);
     setNotice(null);
     setAt(null);
     setSlashActive(0);
     setSlashDismissed(false);
+    setRunningSendMode("queue");
     attachments.clear();
   }, [taskId, attachments.clear]);
+
+  useEffect(() => {
+    // 每轮运行重新从最安全的“排队”开始；用户仍可在当前运行内显式切换。
+    if (!running) setRunningSendMode("queue");
+  }, [running]);
+
+  useEffect(() => {
+    if (!taskFileReference) return;
+    const requestKey = `${taskId}:${taskFileReference.requestId}`;
+    if (consumedFileReferencesRef.current.has(requestKey)) return;
+    consumedFileReferencesRef.current.add(requestKey);
+    const reference = fileReferenceText(taskFileReference.path);
+    setText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${reference}`);
+    setAt(null);
+    setSlashDismissed(true);
+    requestAnimationFrame(() => {
+      const textarea = taRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+    acknowledgeTaskFileReference(taskId, taskFileReference.requestId);
+  }, [acknowledgeTaskFileReference, taskFileReference, taskId]);
+
+  useEffect(() => {
+    let current = true;
+    void sessionMessages(taskId)
+      .then((messages) => {
+        if (!current) return;
+        setInputHistory(messages.flatMap((message) => {
+          const value = message.kind === "message" && message.role === "user"
+            ? message.text?.trim()
+            : null;
+          return value && !value.startsWith("[system]") ? [value] : [];
+        }));
+      })
+      .catch(() => {
+        // 时间线仍会显示加载错误；输入历史只是增强能力，不应阻断发送。
+      });
+    return () => {
+      current = false;
+    };
+  }, [taskId]);
+
+  const leaveInputHistory = useCallback(() => {
+    historyIndexRef.current = null;
+    historyDraftRef.current = "";
+  }, []);
+
+  // `save_skill` can be called by the running model. Refresh the user catalog while this
+  // composer is visible so a newly registered Skill appears in `/` completion without a
+  // reload or a new conversation.
+  usePoll(async () => {
+    const skills = await workflowSkillsList();
+    setWorkflowSkills((current) => sameWorkflowSkillCatalog(current, skills) ? current : skills);
+  }, 2000);
+
+  const rememberInput = useCallback((value: string) => {
+    const normalized = value.trim();
+    if (normalized) setInputHistory((history) => [...history, normalized]);
+    leaveInputHistory();
+  }, [leaveInputHistory]);
+
+  const showHistoryValue = useCallback((value: string) => {
+    setText(value);
+    setAt(null);
+    setSlashDismissed(true);
+    requestAnimationFrame(() => {
+      const textarea = taRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(value.length, value.length);
+    });
+  }, []);
 
   useEffect(() => {
     if (slashActive < slashItems.length) return;
@@ -272,9 +405,7 @@ export function Composer({
       await agentSend(taskId, message, mode, files);
       // IPC 成功后才把引导标为"已接纳"，失败时由下方 catch 回滚时间线。
       onActivitySent(mode);
-      setText("");
-      setAt(null);
-      setSlashDismissed(false);
+      rememberInput(message);
       await refreshDetail(taskId);
       return true;
     } catch (e) {
@@ -285,7 +416,7 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [sending, taskId, onSent, onSendFailed, onActivitySent, refreshDetail]);
+  }, [sending, taskId, onSent, onSendFailed, onActivitySent, refreshDetail, rememberInput]);
 
   const executeSlash = useCallback(async (
     parsed: ParsedSlashCommand,
@@ -460,7 +591,7 @@ export function Composer({
         return;
       case "memory":
         setCurrentProject(workspacePath);
-        setScene("projects");
+        setScene("knowledge");
         return;
       case "theme": {
         const requested = parsed.args.toLowerCase();
@@ -487,13 +618,6 @@ export function Composer({
       case "help":
         setNotice("会话：/clear /resume /compact /fork /rename /context /usage /copy /export /stop；控制：/search /pending /activity /projects /model /permissions /agents /diff /undo /files /terminal /review /verify；输入 / 可搜索工作流和扩展。");
         return;
-      case "codex":
-        await runWithCodexCli({ feature: "Codex 快速子代理", requireAuth: true }, async () => {
-          await agentDelegateCodex(taskId, parsed.args, "Codex 调查");
-          await refreshDetail(taskId);
-          onShowSubagents();
-        });
-        return;
       default:
         throw new Error(`命令 /${command.name} 尚未接入当前页面`);
     }
@@ -507,7 +631,6 @@ export function Composer({
     queuedMessages.length,
     refreshDetail,
     refreshTasks,
-    runWithCodexCli,
     running,
     setCanvasTab,
     setCurrentProject,
@@ -527,16 +650,24 @@ export function Composer({
   ]);
 
   const send = useCallback(async (mode: AgentSendMode = "auto") => {
+    const draft = text;
     const msg = text.trim();
     if (attachmentBlockedReason) {
       setError(attachmentBlockedReason);
       return;
     }
     if ((!msg && sendableAttachments.length === 0) || sending || commandBusy) return;
-    const parsed = msg ? parseSlashCommand(msg) : null;
+    const parsed = msg ? parseSlashCommand(msg, workflowSkills) : null;
+    // 提交动作在前端被接纳时就清空受控草稿，不能让 IPC/Agent 启动时延把旧文本
+    // 留在输入框里；失败时仅在用户尚未开始新草稿的情况下恢复。
+    setText("");
+    setAt(null);
+    setSlashDismissed(false);
+    leaveInputHistory();
     if (!parsed) {
       const sent = await transmit(msg, mode, sendableAttachments);
       if (sent && attachments.attachments.length > 0) attachments.clear();
+      if (!sent) setText((current) => current.length > 0 ? current : draft);
       return;
     }
 
@@ -545,11 +676,9 @@ export function Composer({
     setNotice(null);
     try {
       await executeSlash(parsed, mode);
-      setText("");
-      setAt(null);
-      setSlashDismissed(false);
     } catch (cause) {
       setError(String(cause));
+      setText((current) => current.length > 0 ? current : draft);
     } finally {
       setCommandBusy(false);
     }
@@ -559,50 +688,18 @@ export function Composer({
     attachments.clear,
     commandBusy,
     executeSlash,
+    leaveInputHistory,
     sendableAttachments,
     sending,
     text,
     transmit,
+    workflowSkills,
   ]);
-
-  // 立即发送会打断当前运行，保留二次确认（原先是本地手写的 4s 计时器）
-  const sendNow = useArmedAction(() => void send("send_now"));
-  const disarmSendNow = sendNow.disarm;
-  useEffect(() => {
-    if (!running) disarmSendNow();
-  }, [running, disarmSendNow]);
 
   const removeQueued = useAsyncAction(async (queueId: string) => {
     await agentQueueRemove(taskId, queueId);
     await refreshDetail(taskId);
   }, { label: "移除队列消息" });
-
-  // 复用当前草稿作为子任务，而不是把它同时送进主 Agent。这样用户可以在运行中
-  // 临时请 Codex 做独立任务；实际权限由设置中的 Codex 配置决定，主会话历史不会被
-  // 一条“请另一个 Agent 查一下”污染。
-  const delegateCodex = useAsyncAction(async () => {
-    const goal = text.trim();
-    if (!goal) return;
-    await runWithCodexCli({ feature: "Codex 快速子代理", requireAuth: true }, async () => {
-      await agentDelegateCodex(taskId, goal, "Codex 调查");
-      setText("");
-      setAt(null);
-      await refreshDetail(taskId);
-    });
-  }, { label: "委派 Codex 子代理" });
-
-  // MCP 会话会保留 Codex thread ID，适合需要在同一外部上下文中继续追问。
-  // 它和快速 exec 委派都使用当前草稿，并读取同一份 Codex 权限配置。
-  const delegateCodexMcp = useAsyncAction(async () => {
-    const goal = text.trim();
-    if (!goal) return;
-    await runWithCodexCli({ feature: "Codex MCP 子代理", requireAuth: true }, async () => {
-      await agentDelegateCodexMcp(taskId, goal, "会话调查");
-      setText("");
-      setAt(null);
-      await refreshDetail(taskId);
-    });
-  }, { label: "以 MCP 会话委派 Codex 子代理" });
 
   const abort = useAsyncAction(onAbort, { label: "中断" });
 
@@ -621,6 +718,7 @@ export function Composer({
   }, []);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return;
     if (slashOpen) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -671,15 +769,36 @@ export function Composer({
         return;
       }
     }
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const browsing = historyIndexRef.current != null;
+      const selectionCollapsed = e.currentTarget.selectionStart === e.currentTarget.selectionEnd;
+      const multiline = e.currentTarget.value.includes("\n");
+      const atFirstCharacter = e.currentTarget.selectionStart === 0;
+      const canStartBrowsing = e.key === "ArrowUp"
+        && selectionCollapsed
+        && (!multiline || atFirstCharacter);
+      if (inputHistory.length > 0 && (browsing || canStartBrowsing)) {
+        e.preventDefault();
+        if (!browsing) {
+          historyDraftRef.current = text;
+          historyIndexRef.current = inputHistory.length - 1;
+        } else if (e.key === "ArrowUp") {
+          historyIndexRef.current = Math.max(0, (historyIndexRef.current ?? 0) - 1);
+        } else if ((historyIndexRef.current ?? 0) < inputHistory.length - 1) {
+          historyIndexRef.current = (historyIndexRef.current ?? 0) + 1;
+        } else {
+          const draft = historyDraftRef.current;
+          leaveInputHistory();
+          showHistoryValue(draft);
+          return;
+        }
+        showHistoryValue(inputHistory[historyIndexRef.current ?? 0]);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (running) {
-        if (e.ctrlKey || e.metaKey) sendNow.trigger();
-        else if (e.altKey) void send("queue");
-        else void send("steer");
-      } else {
-        void send();
-      }
+      void send(running ? runningSendMode : "auto");
     }
   };
 
@@ -695,16 +814,6 @@ export function Composer({
           {abort.error}
         </StatusBar>
       )}
-      {delegateCodex.error && (
-        <StatusBar kind="error" compact onDismiss={delegateCodex.clearError}>
-          {delegateCodex.error}
-        </StatusBar>
-      )}
-      {delegateCodexMcp.error && (
-        <StatusBar kind="error" compact onDismiss={delegateCodexMcp.clearError}>
-          {delegateCodexMcp.error}
-        </StatusBar>
-      )}
       {notice && (
         <StatusBar kind="info" compact onDismiss={() => setNotice(null)}>
           {notice}
@@ -715,6 +824,7 @@ export function Composer({
           anchorRef={compBoxRef}
           value={text}
           context={slashContext}
+          skills={workflowSkills}
           activeIndex={slashActive}
           onActiveIndexChange={setSlashActive}
           onPick={pickSlash}
@@ -773,6 +883,7 @@ export function Composer({
               : "回复、提问或补充上下文…（输入 @ 引用文件）"
           }
           onChange={(e) => {
+            leaveInputHistory();
             setText(e.target.value);
             setSlashActive(0);
             setSlashDismissed(false);
@@ -855,25 +966,68 @@ export function Composer({
 
         {running && (
           <div className="run-command-bar" aria-label="运行中消息操作">
-            <button
-              className="run-command-action primary"
-              type="button"
-              disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-              onClick={() => void send("steer")}
-              title="作为引导注入当前运行（Enter）"
-            >
-              <IconSend width={11} height={11} />
-              引导 <kbd>Enter</kbd>
-            </button>
-            <button
-              className="run-command-action"
-              type="button"
-              disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-              onClick={() => void send("queue")}
-              title="当前消息将在本轮结束后发送（Alt+Enter）"
-            >
-              排队 <kbd>Alt+Enter</kbd>
-            </button>
+            <div className={`run-send-split mode-${runningSendMode}`}>
+              <button
+                className="run-command-action primary run-send-primary"
+                type="button"
+                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
+                onClick={() => void send(runningSendMode)}
+                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
+                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
+              >
+                <IconSend width={11} height={11} />
+                <span>{runningSendModeLabel(runningSendMode)}</span>
+                <kbd>Enter</kbd>
+              </button>
+              <Menu
+                className="run-send-mode-menu-root"
+                label="选择发送方式"
+                placement="up"
+                align="left"
+                menuClassName="comp-more-menu"
+                trigger={
+                  <button
+                    className="run-command-more run-send-mode-trigger"
+                    type="button"
+                    disabled={sending || commandBusy}
+                    aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
+                    title="选择 Enter 的发送方式"
+                  >
+                    <IconChevronDown width={12} height={12} />
+                  </button>
+                }
+              >
+                {({ close }) => (
+                  <>
+                    <MenuItem
+                      close={close}
+                      checked={runningSendMode === "queue"}
+                      hint="当前运行结束后发送，不打断这一轮"
+                      onSelect={() => setRunningSendMode("queue")}
+                    >
+                      排队发送
+                    </MenuItem>
+                    <MenuItem
+                      close={close}
+                      checked={runningSendMode === "steer"}
+                      hint="补充到当前运行，原任务与上下文保持不变"
+                      onSelect={() => setRunningSendMode("steer")}
+                    >
+                      引导当前运行
+                    </MenuItem>
+                    <MenuItem
+                      close={close}
+                      checked={runningSendMode === "send_now"}
+                      className="is-destructive"
+                      hint="中断当前运行，优先处理这条消息"
+                      onSelect={() => setRunningSendMode("send_now")}
+                    >
+                      立即发送
+                    </MenuItem>
+                  </>
+                )}
+              </Menu>
+            </div>
 
             <Menu
               role="dialog"
@@ -915,62 +1069,6 @@ export function Composer({
             </Menu>
 
             <span className="run-command-spacer" />
-
-            <Menu
-              label="更多发送方式"
-              placement="up"
-              align="right"
-              menuClassName="comp-more-menu"
-              trigger={
-                <button
-                  className="run-command-more"
-                  type="button"
-                  disabled={!text.trim() || sending || commandBusy}
-                  aria-label="更多运行中发送操作"
-                  title="更多操作"
-                >
-                  <IconChevronDown width={12} height={12} />
-                </button>
-              }
-            >
-              {({ close }) => (
-                <>
-                  <MenuItem
-                    close={close}
-                    closeOnSelect={false}
-                    className={sendNow.armed ? "confirm is-destructive" : "is-destructive"}
-                    shortcut="Ctrl+Enter"
-                    onSelect={() => {
-                      sendNow.trigger();
-                      if (sendNow.armed) close();
-                    }}
-                  >
-                    {sendNow.armed ? "确认立即发送" : "立即发送"}
-                  </MenuItem>
-                  {sendNow.armed && (
-                    <p className="comp-send-now-note" role="status">
-                      将停止当前运行；再次点击或按 Ctrl+Enter 确认
-                    </p>
-                  )}
-                  <MenuItem
-                    close={close}
-                    disabled={!workspaceAttached || delegateCodex.busy}
-                    hint={workspaceAttached ? "使用 Codex 已配置的权限独立处理当前工作区" : "先附加本地工作区后才能使用"}
-                    onSelect={() => void delegateCodex.run()}
-                  >
-                    {delegateCodex.busy ? "正在委派 Codex…" : "委派给 Codex（快速）"}
-                  </MenuItem>
-                  <MenuItem
-                    close={close}
-                    disabled={!workspaceAttached || delegateCodexMcp.busy}
-                    hint={workspaceAttached ? "保留 Codex 外部会话，可用于后续续接" : "先附加本地工作区后才能使用"}
-                    onSelect={() => void delegateCodexMcp.run()}
-                  >
-                    {delegateCodexMcp.busy ? "正在建立 Codex MCP 会话…" : "委派给 Codex（MCP 会话）"}
-                  </MenuItem>
-                </>
-              )}
-            </Menu>
 
             <button
               className="run-command-stop is-destructive"
