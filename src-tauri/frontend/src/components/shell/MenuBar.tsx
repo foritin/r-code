@@ -86,7 +86,7 @@ export function MenuBar() {
 
   return (
     <header className="menubar app-topbar">
-      <button className="top-icon desktop-sidebar-toggle" onClick={toggleRail} aria-label={railCollapsed ? "展开侧边栏" : "收起侧边栏"} title={railCollapsed ? "展开侧边栏" : "收起侧边栏"}>
+      <button type="button" className="top-icon desktop-sidebar-toggle" onClick={toggleRail} aria-label={railCollapsed ? "展开侧边栏" : "收起侧边栏"} title={railCollapsed ? "展开侧边栏" : "收起侧边栏"}>
         <IconSidebar width={16} height={16} />
       </button>
       <nav className="desktop-navigation" aria-label="桌面导航">

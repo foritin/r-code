@@ -99,7 +99,7 @@ export function Rail() {
           <IconPlus width={17} height={17} />
           <span className="rail-label">新对话</span>
         </button>
-        <button className="sidebar-collapse" onClick={toggleRail} aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"} title={collapsed ? "展开侧边栏" : "收起侧边栏"}>
+        <button type="button" className="sidebar-collapse" onClick={toggleRail} aria-label={collapsed ? "展开侧边栏" : "收起侧边栏"} title={collapsed ? "展开侧边栏" : "收起侧边栏"}>
           <IconSidebar width={17} height={17} />
         </button>
       </div>

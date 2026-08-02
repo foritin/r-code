@@ -1,9 +1,10 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, type CSSProperties } from "react";
 import { useAppStore } from "./store/app";
 import { useTasksStore } from "./store/tasks";
 import { isMacPlatform, useGlobalKeys } from "./lib/keys";
 import { MenuBar } from "./components/shell/MenuBar";
 import { Rail } from "./components/shell/Rail";
+import { RailResizeHandle } from "./components/shell/RailResizeHandle";
 import { HomeScene } from "./components/scenes/HomeScene";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
@@ -52,6 +53,7 @@ export default function App() {
   const zoomLevel = useAppStore((s) => s.zoomLevel);
   const searchOpen = useAppStore((s) => s.searchOpen);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
+  const railWidth = useAppStore((s) => s.railWidth);
   const toggleRail = useAppStore((s) => s.toggleRail);
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
@@ -102,11 +104,16 @@ export default function App() {
     <div
       id="app"
       className={`app-shell r-code-signature scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}${isMacPlatform() ? " platform-macos" : ""}`}
-      style={{ zoom: appScale, height: `${100 / appScale}vh` }}
+      style={{
+        zoom: appScale,
+        height: `${100 / appScale}vh`,
+        "--rc-rail-w": `${railWidth}px`,
+      } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">跳到主内容</a>
       <MenuBar />
       <Rail />
+      <RailResizeHandle />
       <main className="main" id="main-content" role="main" tabIndex={-1}>
         <Suspense fallback={<div className="scene empty" role="status">正在打开…</div>}>
           {scene === "home" && <HomeScene />}
