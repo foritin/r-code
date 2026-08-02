@@ -42,7 +42,7 @@ import { ProjectAccessSelector, projectAccessModeLabel } from "../ProjectAccessS
 import { ModelSwitcher } from "./ModelSwitcher";
 import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
 import { CodexModelConfiguration } from "./CodexModelConfiguration";
-import { IconChevronDown, IconSend, IconStop } from "../icons";
+import { IconChevronDown, IconRefresh, IconSend, IconStop } from "../icons";
 import {
   AttachmentButton,
   AttachmentTray,
@@ -122,6 +122,8 @@ function fileReferenceText(path: string): string {
 
 type RunningSendMode = Extract<AgentSendMode, "queue" | "steer" | "send_now">;
 
+const RUNNING_SEND_MODE_ORDER: readonly RunningSendMode[] = ["queue", "steer", "send_now"];
+
 function runningSendModeLabel(mode: RunningSendMode): string {
   switch (mode) {
     case "steer":
@@ -142,6 +144,11 @@ function runningSendModeTitle(mode: RunningSendMode): string {
     default:
       return "当前运行结束后再发送这条消息";
   }
+}
+
+function nextRunningSendMode(mode: RunningSendMode): RunningSendMode {
+  const index = RUNNING_SEND_MODE_ORDER.indexOf(mode);
+  return RUNNING_SEND_MODE_ORDER[(index + 1) % RUNNING_SEND_MODE_ORDER.length];
 }
 
 export function Composer({
@@ -945,9 +952,93 @@ export function Composer({
             )}
           </div>
           <span className="spacer" />
-          {!running && (
+          {running ? (
+            <div className="running-send-actions" aria-label="运行中消息操作">
+              <div className={`run-send-mode-control mode-${runningSendMode}`}>
+                <button
+                  className="run-send-mode-label run-send-primary"
+                  type="button"
+                  disabled={sending || commandBusy}
+                  onClick={() => setRunningSendMode(nextRunningSendMode(runningSendMode))}
+                  aria-label={
+                    `当前发送方式：${runningSendModeLabel(runningSendMode)}。` +
+                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
+                  }
+                  title={
+                    `${runningSendModeTitle(runningSendMode)}；` +
+                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
+                  }
+                >
+                  <span className="run-send-mode-dot" aria-hidden="true" />
+                  <span>{runningSendModeLabel(runningSendMode)}</span>
+                  <IconRefresh className="run-send-mode-cycle" width={11} height={11} aria-hidden="true" />
+                  <kbd className="sr-only">Enter</kbd>
+                </button>
+                <Menu
+                  className="run-send-mode-menu-root"
+                  label="选择发送方式"
+                  placement="up"
+                  align="right"
+                  menuClassName="comp-more-menu"
+                  trigger={
+                    <button
+                      className="run-send-mode-trigger"
+                      type="button"
+                      disabled={sending || commandBusy}
+                      aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
+                      title="直接选择发送方式"
+                    >
+                      <IconChevronDown width={11} height={11} />
+                    </button>
+                  }
+                >
+                  {({ close }) => (
+                    <>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "queue"}
+                        hint="当前运行结束后发送，不打断这一轮"
+                        onSelect={() => setRunningSendMode("queue")}
+                      >
+                        排队发送
+                      </MenuItem>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "steer"}
+                        hint="补充到当前运行，原任务与上下文保持不变"
+                        onSelect={() => setRunningSendMode("steer")}
+                      >
+                        引导当前运行
+                      </MenuItem>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "send_now"}
+                        className="is-destructive"
+                        hint="中断当前运行，优先处理这条消息"
+                        onSelect={() => setRunningSendMode("send_now")}
+                      >
+                        立即发送
+                      </MenuItem>
+                    </>
+                  )}
+                </Menu>
+              </div>
+              <button
+                className={`send running-send-button mode-${runningSendMode}`}
+                type="button"
+                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
+                onClick={() => void send(runningSendMode)}
+                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
+                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
+              >
+                <IconSend width={15} height={15} />
+                <span>{sending ? "发送中" : "发送"}</span>
+              </button>
+            </div>
+          ) : (
             <button
               className="send"
+              type="button"
               disabled={
                 (!text.trim() && sendableAttachments.length === 0)
                 || Boolean(attachmentBlockedReason)
@@ -965,70 +1056,7 @@ export function Composer({
         </div>
 
         {running && (
-          <div className="run-command-bar" aria-label="运行中消息操作">
-            <div className={`run-send-split mode-${runningSendMode}`}>
-              <button
-                className="run-command-action primary run-send-primary"
-                type="button"
-                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-                onClick={() => void send(runningSendMode)}
-                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
-                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
-              >
-                <IconSend width={11} height={11} />
-                <span>{runningSendModeLabel(runningSendMode)}</span>
-                <kbd>Enter</kbd>
-              </button>
-              <Menu
-                className="run-send-mode-menu-root"
-                label="选择发送方式"
-                placement="up"
-                align="left"
-                menuClassName="comp-more-menu"
-                trigger={
-                  <button
-                    className="run-command-more run-send-mode-trigger"
-                    type="button"
-                    disabled={sending || commandBusy}
-                    aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
-                    title="选择 Enter 的发送方式"
-                  >
-                    <IconChevronDown width={12} height={12} />
-                  </button>
-                }
-              >
-                {({ close }) => (
-                  <>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "queue"}
-                      hint="当前运行结束后发送，不打断这一轮"
-                      onSelect={() => setRunningSendMode("queue")}
-                    >
-                      排队发送
-                    </MenuItem>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "steer"}
-                      hint="补充到当前运行，原任务与上下文保持不变"
-                      onSelect={() => setRunningSendMode("steer")}
-                    >
-                      引导当前运行
-                    </MenuItem>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "send_now"}
-                      className="is-destructive"
-                      hint="中断当前运行，优先处理这条消息"
-                      onSelect={() => setRunningSendMode("send_now")}
-                    >
-                      立即发送
-                    </MenuItem>
-                  </>
-                )}
-              </Menu>
-            </div>
-
+          <div className="run-command-bar" aria-label="队列与运行控制">
             <Menu
               role="dialog"
               label="待发送队列"
