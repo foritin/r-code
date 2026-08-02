@@ -357,7 +357,7 @@ pub async fn cmd_accept_task(
     r_code_host::commands::accept_task(&state, &task_id).await
 }
 
-/// 获取任务路径在 Git 暂存区中的审核状态。
+/// 获取应用内持久化审核状态（与 Git 暂存区无关）。
 #[tauri::command]
 pub async fn cmd_review_git_status(
     state: State<'_, CommandState>,
@@ -366,7 +366,7 @@ pub async fn cmd_review_git_status(
     r_code_host::commands::review_git_status(&state, &task_id)
 }
 
-/// 接受一条新增或删除行到 Git 暂存区。
+/// 接受一条新增或删除行；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_line(
     state: State<'_, CommandState>,
@@ -377,7 +377,7 @@ pub async fn cmd_review_accept_line(
     r_code_host::commands::review_accept_line(&state, &task_id, &path, &line_id)
 }
 
-/// 接受一个任务文件到 Git 暂存区。
+/// 接受一个任务文件；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_file(
     state: State<'_, CommandState>,
@@ -387,13 +387,23 @@ pub async fn cmd_review_accept_file(
     r_code_host::commands::review_accept_file(&state, &task_id, &path)
 }
 
-/// 接受该任务的全部安全路径到 Git 暂存区。
+/// 接受该任务的全部待审核路径；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_all(
     state: State<'_, CommandState>,
     task_id: String,
 ) -> Result<r_code_store::ReviewAcceptResult, String> {
     r_code_host::commands::review_accept_all(&state, &task_id)
+}
+
+/// 拒绝一个文件并安全恢复其任务前内容。
+#[tauri::command]
+pub async fn cmd_review_reject_file(
+    state: State<'_, CommandState>,
+    task_id: String,
+    path: String,
+) -> Result<r_code_store::ReviewAcceptResult, String> {
+    r_code_host::commands::review_reject_file(&state, &task_id, &path).await
 }
 
 /// 获取审核页 Git 提交与推送状态。
@@ -405,6 +415,15 @@ pub async fn cmd_git_delivery_status(
     r_code_host::commands::git_delivery_status(&state, &task_id)
 }
 
+/// 显式将审核中保留的文件加入 Git 暂存区。
+#[tauri::command]
+pub async fn cmd_git_stage_accepted(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::GitDeliveryStatus, String> {
+    r_code_host::commands::git_stage_accepted(&state, &task_id)
+}
+
 /// 生成可编辑的提交信息建议。
 #[tauri::command]
 pub async fn cmd_git_suggest_commit_message(
@@ -414,7 +433,7 @@ pub async fn cmd_git_suggest_commit_message(
     r_code_host::commands::git_suggest_commit_message(&state, &task_id)
 }
 
-/// 提交本任务已经接受到暂存区的内容。
+/// 提交用户已显式加入暂存区的任务内容。
 #[tauri::command]
 pub async fn cmd_git_commit_task(
     state: State<'_, CommandState>,

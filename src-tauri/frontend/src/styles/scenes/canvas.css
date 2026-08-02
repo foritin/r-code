@@ -77,6 +77,7 @@ button.ver-row {
 
 .chg-accept,
 .chg-accepted,
+.chg-rejected,
 .chg-blocked {
   flex: none;
   border: 0;
@@ -90,6 +91,7 @@ button.ver-row {
 .chg-accept { cursor: pointer; }
 .chg-accept:hover { color: var(--accent); }
 .chg-blocked { color: var(--warning); }
+.chg-rejected { color: var(--danger); }
 
 .review-accept-actions {
   display: inline-flex;
@@ -140,6 +142,7 @@ button.ver-row {
 
 .review-git-head,
 .review-git-actions,
+.review-git-stage,
 .review-git-message {
   display: flex;
   align-items: center;
@@ -150,7 +153,9 @@ button.ver-row {
 .review-git-head div { display: flex; gap: var(--sp-2); align-items: baseline; }
 .review-git-head span,
 .review-git-head small,
+.review-git-stage > span,
 .review-git-actions > span { color: var(--fg-muted); font-size: var(--text-meta); }
+.review-git-stage > span { margin-left: var(--sp-2); }
 .review-git-message .input { flex: 1; min-width: 0; }
 .review-git-actions > span { margin-left: auto; }
 .review-git-blockers { display: grid; gap: 2px; color: var(--warning); font-size: var(--text-meta); }

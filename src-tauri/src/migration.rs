@@ -353,6 +353,13 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 16,
+            to_version: 17,
+            description: "Persistent application review sessions and decisions".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

@@ -62,9 +62,10 @@ use r_code_store::review::ReviewAction;
 use r_code_store::{
     AgentRunRepository, BlobStore, ChangeService, Database, GitCommitResult, GitDeliveryStatus,
     GitPushResult, GitService, GitTreeChangeKind, NewRunWorkspaceSnapshot, NotificationRepository,
-    QueuedMessageRepository, ReviewAcceptResult, ReviewDiffLineKind, ReviewGitService,
-    ReviewGitStatus, ReviewService, SessionBranchRepository, TaskEventStore, TaskRepository,
-    ToolCallRepository, VerificationConfig, VerificationService, WorkspaceService,
+    QueuedMessageRepository, ReviewAcceptResult, ReviewDecision, ReviewDiffLineKind,
+    ReviewGitService, ReviewGitStatus, ReviewService, RollbackResult, SessionBranchRepository,
+    TaskEventStore, TaskRepository, ToolCallRepository, VerificationConfig, VerificationService,
+    WorkspaceService,
 };
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
 pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
@@ -843,6 +844,9 @@ pub struct ChangeDiffLine {
     /// 可用于接受单行的稳定标识；上下文与分隔行没有标识。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line_id: Option<String>,
+    /// 当前审核账本中的决策；上下文与分隔行没有决策。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review_state: Option<ReviewDecision>,
     /// 行类型
     pub kind: ChangeDiffLineKind,
     /// 行文本（不含换行符）
@@ -4531,32 +4535,111 @@ pub async fn rollback_file(
 ) -> Result<String, String> {
     let svc = ChangeService::new(&state.db, state.blobs_dir.clone());
     let root = attached_task_workspace_root(state, task_id)?;
-    let (path_key, physical_path) = rollback_target(&svc, task_id, &root, path).await?;
-    let result = svc
-        .rollback_file_at(task_id, &path_key, &physical_path)
-        .await
-        .map_err(err_str)?;
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let requested_physical = resolve_workspace_path(&root, path)?;
+    let mut snapshot = review.file_snapshot(task_id, path).map_err(err_str)?;
+    if snapshot.is_none() {
+        // Historical callers may use an absolute/canonical spelling while the review ledger
+        // keeps a workspace-relative path. Resolve both through PathGuard before matching.
+        let status = review.status(task_id).map_err(err_str)?;
+        if let Some(equivalent) = status.paths.iter().find(|candidate| {
+            resolve_workspace_path(&root, &candidate.path)
+                .is_ok_and(|physical| physical == requested_physical)
+        }) {
+            snapshot = review
+                .file_snapshot(task_id, &equivalent.path)
+                .map_err(err_str)?;
+        }
+    }
+
+    let (path_key, result) = if let Some(snapshot) = snapshot {
+        let physical_path = resolve_workspace_path(&root, &snapshot.path)?;
+        let result = svc
+            .restore_snapshot_at(
+                &snapshot.path,
+                &physical_path,
+                snapshot.before_hash.as_deref(),
+                snapshot.after_hash.as_deref(),
+            )
+            .await
+            .map_err(err_str)?;
+        (snapshot.path, result)
+    } else {
+        let (path_key, physical_path) = rollback_target(&svc, task_id, &root, path).await?;
+        let result = svc
+            .rollback_file_at(task_id, &path_key, &physical_path)
+            .await
+            .map_err(err_str)?;
+        (path_key, result)
+    };
+    if review
+        .file_snapshot(task_id, &path_key)
+        .map_err(err_str)?
+        .is_some()
+    {
+        match &result {
+            RollbackResult::Restored { .. } | RollbackResult::AlreadyClean { .. } => {
+                review.reject_file(task_id, &path_key).map_err(err_str)?;
+            }
+            RollbackResult::ConflictDetected { reason, .. } => {
+                review
+                    .mark_conflict(task_id, &path_key, reason)
+                    .map_err(err_str)?;
+                return Err(reason.clone());
+            }
+            RollbackResult::NoBaseline { path } => {
+                return Err(format!("无法拒绝 {path}：缺少可恢复基线"));
+            }
+        }
+    }
     Ok(format!("{result:?}"))
 }
 
 pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<String>, String> {
     let svc = ChangeService::new(&state.db, state.blobs_dir.clone());
     let root = attached_task_workspace_root(state, task_id)?;
-    let changes = svc.list_changes(task_id).await.map_err(err_str)?;
-    let mut paths: Vec<String> = Vec::new();
-    for change in changes.into_iter().rev() {
-        if !paths.contains(&change.path) {
-            paths.push(change.path);
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let review_status = review.status(task_id).map_err(err_str)?;
+    let mut rendered_results = Vec::new();
+
+    if review_status.paths.is_empty() {
+        // Compatibility path for pre-ledger tasks.
+        let changes = svc.list_changes(task_id).await.map_err(err_str)?;
+        let mut paths: Vec<String> = Vec::new();
+        for change in changes.into_iter().rev() {
+            if !paths.contains(&change.path) {
+                paths.push(change.path);
+            }
         }
-    }
-    let mut results = Vec::with_capacity(paths.len());
-    for path in paths {
-        let (path_key, physical_path) = rollback_target(&svc, task_id, &root, &path).await?;
-        results.push(
-            svc.rollback_file_at(task_id, &path_key, &physical_path)
-                .await
-                .map_err(err_str)?,
-        );
+        let mut results = Vec::with_capacity(paths.len());
+        for path in paths {
+            let (path_key, physical_path) = rollback_target(&svc, task_id, &root, &path).await?;
+            results.push(
+                svc.rollback_file_at(task_id, &path_key, &physical_path)
+                    .await
+                    .map_err(err_str)?,
+            );
+        }
+        if results.iter().any(|result| {
+            matches!(
+                result,
+                RollbackResult::ConflictDetected { .. } | RollbackResult::NoBaseline { .. }
+            )
+        }) {
+            return Err("部分文件存在外部修改或缺少基线，任务回滚未完成".into());
+        }
+        rendered_results.extend(results.into_iter().map(|result| format!("{result:?}")));
+    } else {
+        let mut failures = Vec::new();
+        for path in review_status.paths.iter().filter(|path| !path.rejected) {
+            match rollback_file(state, task_id, &path.path).await {
+                Ok(result) => rendered_results.push(result),
+                Err(error) => failures.push(format!("{}：{error}", path.path)),
+            }
+        }
+        if !failures.is_empty() {
+            return Err(format!("部分审核文件未能安全恢复：{}", failures.join("；")));
+        }
     }
 
     // 与 accept 对称：回滚后把最新主 run 标为 RolledBack，并把任务放回 idle。
@@ -4582,14 +4665,14 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
 
     mark_current_review_notification_read(state, task_id)?;
 
-    Ok(results.into_iter().map(|r| format!("{r:?}")).collect())
+    Ok(rendered_results)
 }
 
 pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), String> {
-    let git_review = ReviewGitService::new(&state.db);
-    let git_status = git_review.status(task_id).map_err(err_str)?;
-    if git_status.git_repository && !git_status.paths.is_empty() {
-        git_review.accept_all(task_id).map_err(err_str)?;
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let status = review.status(task_id).map_err(err_str)?;
+    if !status.paths.is_empty() {
+        review.accept_all(task_id).map_err(err_str)?;
     }
     let svc = ReviewService::new(&state.db, state.blobs_dir.clone());
     svc.apply_action(task_id, ReviewAction::AcceptAll)
@@ -4603,7 +4686,7 @@ pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), Stri
 }
 
 pub fn review_git_status(state: &CommandState, task_id: &str) -> Result<ReviewGitStatus, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .status(task_id)
         .map_err(err_str)
 }
@@ -4614,7 +4697,7 @@ pub fn review_accept_line(
     path: &str,
     line_id: &str,
 ) -> Result<ReviewAcceptResult, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .accept_line(task_id, path, line_id)
         .map_err(err_str)
 }
@@ -4624,7 +4707,7 @@ pub fn review_accept_file(
     task_id: &str,
     path: &str,
 ) -> Result<ReviewAcceptResult, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .accept_file(task_id, path)
         .map_err(err_str)
 }
@@ -4633,8 +4716,26 @@ pub fn review_accept_all(
     state: &CommandState,
     task_id: &str,
 ) -> Result<ReviewAcceptResult, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .accept_all(task_id)
+        .map_err(err_str)
+}
+
+pub async fn review_reject_file(
+    state: &CommandState,
+    task_id: &str,
+    path: &str,
+) -> Result<ReviewAcceptResult, String> {
+    rollback_file(state, task_id, path).await?;
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
+        .status(task_id)
+        .map(|status| ReviewAcceptResult {
+            path: Some(path.to_string()),
+            accepted_count: status.accepted_count,
+            rejected_count: status.rejected_count,
+            remaining_count: status.remaining_count,
+            fully_accepted: status.remaining_count == 0 && status.conflict_count == 0,
+        })
         .map_err(err_str)
 }
 
@@ -4642,13 +4743,22 @@ pub fn git_delivery_status(
     state: &CommandState,
     task_id: &str,
 ) -> Result<GitDeliveryStatus, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .delivery_status(task_id)
         .map_err(err_str)
 }
 
+pub fn git_stage_accepted(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<GitDeliveryStatus, String> {
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
+        .stage_accepted(task_id)
+        .map_err(err_str)
+}
+
 pub fn git_suggest_commit_message(state: &CommandState, task_id: &str) -> Result<String, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .suggest_commit_message(task_id)
         .map_err(err_str)
 }
@@ -4658,13 +4768,13 @@ pub fn git_commit_task(
     task_id: &str,
     message: &str,
 ) -> Result<GitCommitResult, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .commit_task(task_id, message)
         .map_err(err_str)
 }
 
 pub fn git_push_task(state: &CommandState, task_id: &str) -> Result<GitPushResult, String> {
-    ReviewGitService::new(&state.db)
+    ReviewGitService::new(&state.db, state.blobs_dir.clone())
         .push_task(task_id)
         .map_err(err_str)
 }
@@ -4757,6 +4867,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         for (i, l) in old.iter().take(MAX_DIFF_LINES).enumerate() {
             lines.push(ChangeDiffLine {
                 line_id: None,
+                review_state: None,
                 kind: ChangeDiffLineKind::Del,
                 text: (*l).into(),
                 old_no: Some(i + 1),
@@ -4766,6 +4877,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         for (i, l) in new.iter().take(MAX_DIFF_LINES).enumerate() {
             lines.push(ChangeDiffLine {
                 line_id: None,
+                review_state: None,
                 kind: ChangeDiffLineKind::Add,
                 text: (*l).into(),
                 old_no: None,
@@ -4846,6 +4958,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
             if !in_gap {
                 lines.push(ChangeDiffLine {
                     line_id: None,
+                    review_state: None,
                     kind: ChangeDiffLineKind::Hunk,
                     text: "···".into(),
                     old_no: None,
@@ -4859,6 +4972,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
         match *op {
             Op::Ctx(o, nn) => lines.push(ChangeDiffLine {
                 line_id: None,
+                review_state: None,
                 kind: ChangeDiffLineKind::Ctx,
                 text: old[o].into(),
                 old_no: Some(o + 1),
@@ -4866,6 +4980,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
             }),
             Op::Del(o) => lines.push(ChangeDiffLine {
                 line_id: None,
+                review_state: None,
                 kind: ChangeDiffLineKind::Del,
                 text: old[o].into(),
                 old_no: Some(o + 1),
@@ -4873,6 +4988,7 @@ fn build_diff_lines(before: &str, after: &str) -> (Vec<ChangeDiffLine>, bool) {
             }),
             Op::Add(nn) => lines.push(ChangeDiffLine {
                 line_id: None,
+                review_state: None,
                 kind: ChangeDiffLineKind::Add,
                 text: new[nn].into(),
                 old_no: None,
@@ -4888,16 +5004,33 @@ pub async fn change_diff(
     task_id: &str,
     path: &str,
 ) -> Result<ChangeDiff, String> {
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let snapshot = review.file_snapshot(task_id, path).map_err(err_str)?;
     let changes = ChangeService::new(&state.db, state.blobs_dir.clone())
         .list_changes(task_id)
         .await
         .map_err(err_str)?;
 
-    // 宽松匹配：绝对路径相等，或以相对路径结尾
-    let change = changes
-        .iter()
-        .find(|c| c.path == path || c.path.ends_with(path) || path.ends_with(&c.path))
+    // Prefer the current run-scoped review snapshot. The audit table can contain several runs;
+    // falling back to its newest matching row keeps live/legacy previews useful without showing
+    // an obsolete first edit forever.
+    let change = changes.iter().rev().find(|change| {
+        change.path == path || change.path.ends_with(path) || path.ends_with(&change.path)
+    });
+    let display_path = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.path.clone())
+        .or_else(|| change.map(|change| change.path.clone()))
         .ok_or_else(|| format!("no change recorded for path: {path}"))?;
+    let before_hash = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.before_hash.clone())
+        .unwrap_or_else(|| change.and_then(|change| change.before_hash.clone()));
+    let after_hash = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.after_hash.clone())
+        .unwrap_or_else(|| change.and_then(|change| change.after_hash.clone()));
+    let change_type = change.map(|change| change.change_type);
 
     let blobs = BlobStore::new(&state.db, state.blobs_dir.clone());
     let read_blob = |hash: &Option<String>| -> Result<Option<String>, String> {
@@ -4912,17 +5045,17 @@ pub async fn change_diff(
                 .unwrap_or(Ok(None)),
         }
     };
-    let before = read_blob(&change.before_hash)?;
-    let after = read_blob(&change.after_hash)?;
+    let before = read_blob(&before_hash)?;
+    let after = read_blob(&after_hash)?;
 
     // 两侧内容都拿不到 → 降级为仅元信息
     if before.is_none() && after.is_none() {
         return Ok(ChangeDiff {
             supported: false,
-            path: change.path.clone(),
-            change_type: Some(change.change_type),
-            before_hash: change.before_hash.clone(),
-            after_hash: change.after_hash.clone(),
+            path: display_path,
+            change_type,
+            before_hash,
+            after_hash,
             lines: None,
             truncated: None,
         });
@@ -4932,6 +5065,9 @@ pub async fn change_diff(
         before.as_deref().unwrap_or(""),
         after.as_deref().unwrap_or(""),
     );
+    let decisions = review
+        .line_decisions(task_id, &display_path)
+        .map_err(err_str)?;
     for line in &mut lines {
         let kind = match line.kind {
             ChangeDiffLineKind::Add => Some(ReviewDiffLineKind::Add),
@@ -4940,13 +5076,17 @@ pub async fn change_diff(
         };
         line.line_id = kind
             .map(|kind| r_code_store::review_line_id(kind, line.old_no, line.new_no, &line.text));
+        line.review_state = line
+            .line_id
+            .as_ref()
+            .and_then(|line_id| decisions.get(line_id).copied());
     }
     Ok(ChangeDiff {
         supported: true,
-        path: change.path.clone(),
-        change_type: Some(change.change_type),
-        before_hash: change.before_hash.clone(),
-        after_hash: change.after_hash.clone(),
+        path: display_path,
+        change_type,
+        before_hash,
+        after_hash,
         lines: Some(lines),
         truncated: if truncated { Some(true) } else { None },
     })
@@ -12464,6 +12604,45 @@ mod tests {
             std::fs::read_to_string(&file_path).unwrap(),
             "original content"
         );
+    }
+
+    #[tokio::test]
+    async fn review_reject_created_file_uses_the_current_run_snapshot() {
+        let (_dir, state) = setup_state();
+        let workspace_path = scoped_test_workspace(&state).await;
+        let task = task_create(&state, Some(&workspace_path), "T", "g", "edit")
+            .await
+            .unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+
+        let file_path = state.project_root.join("created-by-run.txt");
+        std::fs::write(&file_path, b"created\n").unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .record_snapshot_change(
+                &run.id,
+                &task.id,
+                "created-by-run.txt",
+                FileChangeType::Create,
+                None,
+                Some(b"created\n"),
+            )
+            .await
+            .unwrap();
+        AgentRunRepository::new(&state.db)
+            .update_review_state(&run.id, ReviewState::Answered)
+            .unwrap();
+
+        let before = review_git_status(&state, &task.id).unwrap();
+        assert_eq!(before.remaining_count, 1);
+        review_reject_file(&state, &task.id, "created-by-run.txt")
+            .await
+            .unwrap();
+
+        assert!(!file_path.exists());
+        let after = review_git_status(&state, &task.id).unwrap();
+        assert_eq!(after.rejected_count, 1);
+        assert_eq!(after.remaining_count, 0);
     }
 
     #[tokio::test]

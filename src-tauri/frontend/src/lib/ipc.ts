@@ -242,32 +242,41 @@ export const reviewGitStatus = (taskId: string) =>
 
 export const REVIEW_STATUS_CHANGED_EVENT = "r-code:review-status-changed";
 
-function announceReviewStatusChanged(taskId: string): void {
+function announceReviewStatusChanged(taskId: string, result?: import("./types").ReviewAcceptResult): void {
   if (typeof window !== "undefined") {
-    window.dispatchEvent(new CustomEvent(REVIEW_STATUS_CHANGED_EVENT, { detail: { taskId } }));
+    window.dispatchEvent(new CustomEvent(REVIEW_STATUS_CHANGED_EVENT, { detail: { taskId, result } }));
   }
 }
 
 export async function reviewAcceptLine(taskId: string, path: string, lineId: string) {
   const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_line", { taskId, path, lineId });
-  announceReviewStatusChanged(taskId);
+  announceReviewStatusChanged(taskId, result);
   return result;
 }
 
 export async function reviewAcceptFile(taskId: string, path: string) {
   const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_file", { taskId, path });
-  announceReviewStatusChanged(taskId);
+  announceReviewStatusChanged(taskId, result);
   return result;
 }
 
 export async function reviewAcceptAll(taskId: string) {
   const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_all", { taskId });
-  announceReviewStatusChanged(taskId);
+  announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+export async function reviewRejectFile(taskId: string, path: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_reject_file", { taskId, path });
+  announceReviewStatusChanged(taskId, result);
   return result;
 }
 
 export const gitDeliveryStatus = (taskId: string) =>
   ipc<import("./types").GitDeliveryStatus>("cmd_git_delivery_status", { taskId });
+
+export const gitStageAccepted = (taskId: string) =>
+  ipc<import("./types").GitDeliveryStatus>("cmd_git_stage_accepted", { taskId });
 
 export const gitSuggestCommitMessage = (taskId: string) =>
   ipc<string>("cmd_git_suggest_commit_message", { taskId });

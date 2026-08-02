@@ -51,12 +51,13 @@ function reviewStatusSignature(entry: ReviewStatusEntry | undefined): string {
   if (!status) return `error:${entry.error ?? "loading"}`;
   return [
     status.git_repository,
-    status.staged_count,
+    status.accepted_count,
+    status.rejected_count,
     status.remaining_count,
     status.conflict_count,
     status.can_accept_all,
     entry.error ?? "",
-    ...status.paths.map((path) => `${path.path}:${path.staged}:${path.remaining}:${path.conflict}:${path.safe_to_accept}:${path.blocker ?? ""}`),
+    ...status.paths.map((path) => `${path.path}:${path.accepted}:${path.rejected}:${path.remaining}:${path.conflict}:${path.safe_to_accept}:${path.blocker ?? ""}`),
   ].join("|");
 }
 
@@ -68,8 +69,8 @@ function sameReviewStatuses(left: Record<string, ReviewStatusEntry>, right: Reco
 }
 
 /**
- * 跨项目待处理页：任务状态决定“是否需要决策”，Git 审核状态决定“哪些文件尚待接受”。
- * 两者刻意分离，避免在任务审核页暂存文件后，这里仍把已接受文件当作待处理项。
+ * 跨项目待处理页：任务状态决定“是否需要决策”，应用审核账本决定“哪些文件尚待处理”。
+ * Git 交付是后续独立步骤，不参与这里的实时同步。
  */
 export function InboxScene() {
   const items = useTasksStore(selectNeedsYou);
@@ -247,7 +248,7 @@ export function InboxScene() {
               <span><strong>{groups.length}</strong> 个项目</span>
               <span><strong>{permissionCount}</strong> 项授权</span>
               <span><strong>{reviewCount}</strong> 项审核</span>
-              <span><strong>{pendingFileCount}</strong> 个文件待接受</span>
+              <span><strong>{pendingFileCount}</strong> 个文件待处理</span>
             </div>
           )}
           {error && <div className="inbox-error" role="alert">{error}</div>}
@@ -330,10 +331,10 @@ function InboxRow({
   const label = item.kind === "permission" ? "权限请求" : "等待审核";
   let description = item.kind === "permission" ? item.permission!.tool_name : `${detailChanges} 个文件变更`;
   if (item.kind === "review_ready") {
-    if (reviewEntry?.status?.git_repository) {
+    if (reviewEntry?.status) {
       description = reviewEntry.status.remaining_count > 0
-        ? `${reviewEntry.status.remaining_count} 个文件待接受`
-        : "文件已全部接受 · 待确认完成";
+        ? `${reviewEntry.status.remaining_count} 个文件待处理`
+        : "审核项已全部处理 · 待确认完成";
     } else if (reviewEntry?.error) {
       description = "审核状态同步失败 · 可打开详情重试";
     } else if (!reviewEntry) {
@@ -414,6 +415,7 @@ function ReviewInspector({
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const openRoom = useAppStore((s) => s.openRoom);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<Set<string>>(new Set());
   const [requestingChanges, setRequestingChanges] = useState(false);
   const [feedback, setFeedback] = useState("");
   const busy = busyAction !== null;
@@ -421,7 +423,7 @@ function ReviewInspector({
   const changeByPath = useMemo(() => new Map(changes.map((change) => [change.path, change])), [changes]);
   const verify = detail?.verifications.slice(-1)[0];
   const status = reviewEntry?.status ?? null;
-  const pendingPaths = status?.git_repository ? status.paths.filter((path) => path.remaining) : [];
+  const pendingPaths = status ? status.paths.filter((path) => path.remaining) : [];
   const open = (tab: "review" | "changes") => openRoom(item.task.id, tab);
 
   const finishReview = async () => {
@@ -451,8 +453,8 @@ function ReviewInspector({
     }
   };
   const acceptFile = async (path: string) => {
-    if (busy) return;
-    setBusyAction(`file:${path}`);
+    if (busy || pendingFiles.has(path)) return;
+    setPendingFiles((current) => new Set(current).add(path));
     onError(null);
     try {
       await reviewAcceptFile(item.task.id, path);
@@ -460,7 +462,11 @@ function ReviewInspector({
     } catch (cause) {
       onError(`接受文件失败：${String(cause)}`);
     } finally {
-      setBusyAction(null);
+      setPendingFiles((current) => {
+        const next = new Set(current);
+        next.delete(path);
+        return next;
+      });
     }
   };
   const acceptAllFiles = async () => {
@@ -501,8 +507,8 @@ function ReviewInspector({
     ? "正在同步文件状态"
     : reviewEntry.error && !status
       ? "文件状态暂不可用"
-      : status?.git_repository
-        ? status.remaining_count === 0 ? "文件已全部接受" : `${status.remaining_count} 个文件待接受`
+      : status
+        ? status.remaining_count === 0 ? "审核项已全部处理" : `${status.remaining_count} 个文件待处理`
         : `${changes.length} 个文件变更`;
 
   return (
@@ -511,19 +517,19 @@ function ReviewInspector({
       <div className="inspector-body">
         <div className="inspector-callout review"><IconFile width={19} height={19} /><div><strong>{fileSummary}</strong><span>{verify ? `${verify.command} · ${verify.status === "passed" ? "验证通过" : verify.status}` : "尚未记录验证"}</span></div></div>
         {reviewEntry?.error && <div className="inspector-sync-warning" role="status">状态同步暂时失败，仍显示最近一次结果。<button className="text-link" disabled={busy} onClick={() => void onRefreshStatus(item.task.id).catch(() => undefined)}>重试</button></div>}
-        <div className="inspector-file-list" aria-label="待接受文件">
+        <div className="inspector-file-list" aria-label="待处理文件">
           {!reviewEntry ? (
-            <p>正在读取 Git 审核状态…</p>
-          ) : status?.git_repository && pendingPaths.length === 0 ? (
-            <div className="review-files-complete"><IconCheck width={16} height={16} /><span><strong>文件已全部接受</strong><small>请确认验证结果后完成审核。</small></span></div>
-          ) : status?.git_repository ? (
+            <p>正在读取应用审核状态…</p>
+          ) : status && pendingPaths.length === 0 ? (
+            <div className="review-files-complete"><IconCheck width={16} height={16} /><span><strong>审核项已全部处理</strong><small>请确认验证结果后完成审核。</small></span></div>
+          ) : status ? (
             pendingPaths.map((pathStatus) => {
               const change = changeByPath.get(pathStatus.path);
               return (
                 <div className={`inspector-review-file${pathStatus.conflict ? " conflict" : ""}`} key={pathStatus.path}>
                   <IconFile width={14} height={14} />
                   <span><strong>{pathStatus.path}</strong><small>{pathStatus.conflict ? pathStatus.blocker ?? "存在冲突" : change?.change_type ?? "变更"}</small></span>
-                  <button className="rc-button rc-button-quiet" disabled={busy || !pathStatus.safe_to_accept} onClick={() => void acceptFile(pathStatus.path)} aria-label={`接受文件 ${pathStatus.path}`}>{busyAction === `file:${pathStatus.path}` ? "接受中…" : "接受"}</button>
+                  <button className="rc-button rc-button-quiet" disabled={busy || pendingFiles.has(pathStatus.path) || !pathStatus.safe_to_accept} onClick={() => void acceptFile(pathStatus.path)} aria-label={`接受文件 ${pathStatus.path}`}>{pendingFiles.has(pathStatus.path) ? "接受中…" : "接受"}</button>
                 </div>
               );
             })
@@ -533,7 +539,7 @@ function ReviewInspector({
             changes.map((change) => <div className="inspector-review-file readonly" key={change.id}><IconFile width={14} height={14} /><span><strong>{change.path}</strong><small>{change.change_type}</small></span></div>)
           )}
         </div>
-        {status?.git_repository && status.staged_count > 0 && <p className="review-accepted-note">已接受 {status.staged_count} 个文件；列表仅显示仍待处理的文件。</p>}
+        {status && (status.accepted_count > 0 || status.rejected_count > 0) && <p className="review-accepted-note">已接受 {status.accepted_count} 个文件，已拒绝 {status.rejected_count} 个文件；列表仅显示仍待处理的文件。</p>}
         {requestingChanges && (
           <div className="review-request-form">
             <label htmlFor={`change-request-${item.task.id}`}>修改说明</label>
@@ -544,7 +550,7 @@ function ReviewInspector({
       </div>
       <footer className="inspector-actions review-actions">
         <button className="rc-button rc-button-primary" disabled={busy} onClick={() => void finishReview()}>{busyAction === "finish" ? "正在完成…" : "完成审核"}</button>
-        {status?.git_repository && status.remaining_count > 0 && <button className="rc-button" disabled={busy || !status.can_accept_all} onClick={() => void acceptAllFiles()}>{busyAction === "all-files" ? "接受中…" : "接受全部文件"}</button>}
+        {status && status.remaining_count > 0 && <button className="rc-button" disabled={busy || !status.can_accept_all} onClick={() => void acceptAllFiles()}>{busyAction === "all-files" ? "接受中…" : "接受全部文件"}</button>}
         <button className="rc-button" onClick={() => open("review")}>完整审核</button>
         <button className="rc-button" disabled={busy} onClick={() => setRequestingChanges((open) => !open)}>{requestingChanges ? "收起修改说明" : "请求修改"}</button>
         <button className="rc-button rc-button-quiet" disabled={busy} onClick={() => void rollback()}>{busyAction === "rollback" ? "回滚中…" : "回滚"}</button>

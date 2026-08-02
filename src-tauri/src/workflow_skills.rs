@@ -360,12 +360,12 @@ fn builtins() -> Vec<WorkflowSkill> {
         builtin(
             "review-changes",
             "审核本任务产生的文件差异，并安全地接受单行、单文件或全部任务变更。",
-            "只审核 R-Code 为当前任务归集的路径。先检查冲突、任务开始前已有脏改动和验证结果；逐项解释关键差异。按用户选择接受单行、单个文件或全部任务路径，不得使用 git add -A，也不得把无关工作区改动混入暂存区。遇到 preexisting_dirty 或 conflict 必须停下并说明。",
+            "只审核 R-Code 为当前任务归集、且未被 .gitignore 或生成物规则排除的路径。先检查冲突、任务开始前已有脏改动和验证结果；逐项解释关键差异。按用户选择在应用审核账本中接受单行、单个文件或全部任务路径；接受不等于 Git 暂存，不得在审核阶段执行 git add。拒绝文件时只在当前内容仍匹配任务产物时恢复任务前快照。遇到 preexisting_dirty 或 conflict 必须停下并说明。",
         ),
         builtin(
             "git-commit-push",
             "为已接受的任务变更生成提交信息、提交，并在明确确认后推送已有 upstream。",
-            "先确认审核页中的任务变更已经接受到 Git 暂存区，再检查暂存区没有任务外路径。生成简洁、可编辑的提交信息建议；只有用户执行提交操作后才 commit。推送前展示 branch、upstream、ahead/behind，并要求显式确认；只执行普通 git push，不设置 upstream、不修改远端、不使用 force。",
+            "先确认审核账本没有未决项，再由用户显式执行“暂存已接受文件”；只暂存本次审核中已接受的路径，禁止 git add -A，并拒绝混入任务外暂存内容。生成简洁、可编辑的提交信息建议；只有用户执行提交操作后才 commit。推送前展示 branch、upstream、ahead/behind，并要求显式确认；只执行普通 git push，不设置 upstream、不修改远端、不使用 force。",
         ),
     ]
 }
