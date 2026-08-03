@@ -331,6 +331,7 @@ async fn execute_command(
             bytes
         })
     });
+    #[cfg(windows)]
     let pid = child.id();
     let timeout_dur = std::time::Duration::from_secs(config.timeout_secs);
     let (exit_code, status, timeout_message) =
