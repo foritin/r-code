@@ -193,6 +193,8 @@ export function Composer({
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyIndexRef = useRef<number | null>(null);
   const historyDraftRef = useRef("");
+  const historyLoadedTaskRef = useRef<string | null>(null);
+  const historyRequestRef = useRef<{ taskId: string; promise: Promise<string[]> } | null>(null);
   const initializedTaskRef = useRef<string | null>(null);
   const consumedFileReferencesRef = useRef(new Set<string>());
 
@@ -257,6 +259,8 @@ export function Composer({
     setInputHistory([]);
     historyIndexRef.current = null;
     historyDraftRef.current = "";
+    historyLoadedTaskRef.current = null;
+    historyRequestRef.current = null;
     setError(null);
     setNotice(null);
     setAt(null);
@@ -289,17 +293,29 @@ export function Composer({
     acknowledgeTaskFileReference(taskId, taskFileReference.requestId);
   }, [acknowledgeTaskFileReference, taskFileReference, taskId]);
 
+  const loadInputHistory = useCallback(() => {
+    const inFlight = historyRequestRef.current;
+    if (inFlight?.taskId === taskId) return inFlight.promise;
+    const promise = sessionMessages(taskId).then((messages) => messages.flatMap((message) => {
+      const value = message.kind === "message" && message.role === "user"
+        ? message.text?.trim()
+        : null;
+      return value && !value.startsWith("[system]") ? [value] : [];
+    }));
+    historyRequestRef.current = { taskId, promise };
+    void promise.catch(() => {
+      if (historyRequestRef.current?.promise === promise) historyRequestRef.current = null;
+    });
+    return promise;
+  }, [taskId]);
+
   useEffect(() => {
     let current = true;
-    void sessionMessages(taskId)
-      .then((messages) => {
+    void loadInputHistory()
+      .then((history) => {
         if (!current) return;
-        setInputHistory(messages.flatMap((message) => {
-          const value = message.kind === "message" && message.role === "user"
-            ? message.text?.trim()
-            : null;
-          return value && !value.startsWith("[system]") ? [value] : [];
-        }));
+        historyLoadedTaskRef.current = taskId;
+        setInputHistory(history);
       })
       .catch(() => {
         // 时间线仍会显示加载错误；输入历史只是增强能力，不应阻断发送。
@@ -307,7 +323,7 @@ export function Composer({
     return () => {
       current = false;
     };
-  }, [taskId]);
+  }, [loadInputHistory, taskId]);
 
   const leaveInputHistory = useCallback(() => {
     historyIndexRef.current = null;
@@ -784,6 +800,28 @@ export function Composer({
       const canStartBrowsing = e.key === "ArrowUp"
         && selectionCollapsed
         && (!multiline || atFirstCharacter);
+      if (
+        e.key === "ArrowUp"
+        && canStartBrowsing
+        && inputHistory.length === 0
+        && historyLoadedTaskRef.current !== taskId
+      ) {
+        e.preventDefault();
+        const draft = e.currentTarget.value;
+        void loadInputHistory().then((history) => {
+          if (history.length === 0) return;
+          historyLoadedTaskRef.current = taskId;
+          setInputHistory(history);
+          const textarea = taRef.current;
+          if (!textarea || textarea.value !== draft || historyIndexRef.current != null) return;
+          historyDraftRef.current = draft;
+          historyIndexRef.current = history.length - 1;
+          showHistoryValue(history[history.length - 1]);
+        }).catch(() => {
+          // A failed enhancement read leaves the draft untouched and may be retried.
+        });
+        return;
+      }
       if (inputHistory.length > 0 && (browsing || canStartBrowsing)) {
         e.preventDefault();
         if (!browsing) {

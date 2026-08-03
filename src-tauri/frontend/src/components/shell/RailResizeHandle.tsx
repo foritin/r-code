@@ -7,10 +7,26 @@ import {
   useAppStore,
 } from "../../store/app";
 
-const MIN_MAIN_WIDTH = 420;
+export const MIN_MAIN_WIDTH = 420;
+
+export function railWidthForViewport(
+  preferredWidth: number,
+  renderedViewportWidth: number,
+  scale = 1,
+): number {
+  const safeScale = Math.max(scale, 0.01);
+  const logicalMaximum = (renderedViewportWidth - MIN_MAIN_WIDTH) / safeScale;
+  const maximum = Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, logicalMaximum));
+  return Math.min(clampRailWidth(preferredWidth), maximum);
+}
 
 function viewportMaximum(): number {
-  return Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, window.innerWidth - MIN_MAIN_WIDTH));
+  const app = document.getElementById("app");
+  const rect = app?.getBoundingClientRect();
+  const scale = rect && app && rect.width > 0 && app.clientWidth > 0
+    ? rect.width / app.clientWidth
+    : 1;
+  return railWidthForViewport(MAX_RAIL_WIDTH, window.innerWidth, scale);
 }
 
 function pointerRailWidth(clientX: number): number {
@@ -25,7 +41,7 @@ function pointerRailWidth(clientX: number): number {
 
 function previewRailWidth(width: number): number {
   const next = Math.min(clampRailWidth(width), viewportMaximum());
-  document.getElementById("app")?.style.setProperty("--rc-rail-w", `${next}px`);
+  document.getElementById("app")?.style.setProperty("--rc-rail-preferred-w", `${next}px`);
   return next;
 }
 
@@ -39,17 +55,6 @@ export function RailResizeHandle() {
 
   useEffect(() => {
     previewWidth.current = railWidth;
-  }, [railWidth]);
-
-  useEffect(() => {
-    const fitToViewport = () => {
-      // Keep the main workspace usable when the window narrows without overwriting
-      // the user's saved width. Expanding the window restores the preference.
-      previewRailWidth(railWidth);
-    };
-    fitToViewport();
-    window.addEventListener("resize", fitToViewport);
-    return () => window.removeEventListener("resize", fitToViewport);
   }, [railWidth]);
 
   useEffect(() => () => {

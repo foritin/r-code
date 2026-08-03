@@ -1,7 +1,7 @@
 /**
  * 单任务对话：聊天不依赖工作区；工作区范围可以在对话过程中按需附加。
  */
-import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
@@ -110,17 +110,33 @@ export function RoomScene() {
   const [roomWidth, setRoomWidth] = useState(0);
   const [roomSplitPct, setRoomSplitPct] = useState(() => roomSplitRef.current);
   const [isSplitDragging, setIsSplitDragging] = useState(false);
-  const running = detail?.runs.some((run) => run.ended_at === null) ?? false;
-  const queuedMessages = detail?.queued_messages ?? [];
-  const pendingPermissions = detail?.permissions.filter((permission) => permission.decision === "pending") ?? [];
-  const queueStamp = queuedMessages.map((message) => `${message.id}:${message.state}`).join("|");
-  const permissionStamp = pendingPermissions.map((permission) => permission.id).join("|");
-  const runsStamp = (detail?.runs ?? [])
-    .map(
-      (run) =>
-        `${run.id}:${run.agent_kind}:${run.agent_label ?? ""}:${run.review_state}:${run.ended_at ?? ""}:${run.summary ?? ""}`
-    )
-    .join("|");
+  const {
+    running,
+    queuedMessages,
+    pendingPermissions,
+    queueStamp,
+    permissionStamp,
+    runsStamp,
+  } = useMemo(() => {
+    const runs = detail?.runs ?? [];
+    const queuedMessages = detail?.queued_messages ?? [];
+    const pendingPermissions = detail?.permissions.filter(
+      (permission) => permission.decision === "pending",
+    ) ?? [];
+    return {
+      running: runs.some((run) => run.ended_at === null),
+      queuedMessages,
+      pendingPermissions,
+      queueStamp: queuedMessages.map((message) => `${message.id}:${message.state}`).join("|"),
+      permissionStamp: pendingPermissions.map((permission) => permission.id).join("|"),
+      runsStamp: runs
+        .map(
+          (run) =>
+            `${run.id}:${run.agent_kind}:${run.agent_label ?? ""}:${run.review_state}:${run.ended_at ?? ""}:${run.summary ?? ""}`,
+        )
+        .join("|"),
+    };
+  }, [detail]);
 
   // A docked tool should gain horizontal room first. The host preserves the left edge whenever
   // the active monitor has space on the right and no-ops for maximized/fullscreen windows.

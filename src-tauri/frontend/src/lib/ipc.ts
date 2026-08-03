@@ -37,7 +37,7 @@ import type {
   TerminalRawBatch,
   TerminalRawSnapshot,
   VerificationRecord,
-  ProjectAccessMode, Workspace,
+  ProjectAccessMode, Workspace, WorkspaceMemoryMode,
   ProviderSettingsInput,
   ProviderCatalog,
   ProviderModelsInput,
@@ -47,6 +47,21 @@ import type {
   ContextCompactionResult,
   InferenceOptions,
   LegacyMemoryStatus,
+  McpCredentialStatus,
+  McpLaunchPreview,
+  McpManagerSnapshot,
+  McpMarketInstallRequest,
+  McpMarketPage,
+  McpServerView,
+  McpToggleResult,
+  McpToolDescriptor,
+  McpUpsertRequest,
+  MemoryEntry,
+  MemoryEntryDraft,
+  MemoryEntryEdit,
+  MemoryOverview,
+  MemoryReviewSettingsUpdate,
+  MemoryReviewSettingsView,
 } from "./types";
 import {
   browserMockDetails,
@@ -432,6 +447,16 @@ export const workspaceChoose = () => ipc<Workspace | null>("cmd_workspace_choose
 export const workspaceSetAccessMode = (workspacePath: string, accessMode: ProjectAccessMode) =>
   ipc<Workspace>("cmd_workspace_set_access_mode", { workspacePath, accessMode });
 
+export const workspaceSetMemoryMode = (
+  workspaceId: string,
+  expectedGeneration: number,
+  memoryMode: WorkspaceMemoryMode,
+) => ipc<Workspace>("cmd_workspace_set_memory_mode", {
+  workspaceId,
+  expectedGeneration,
+  memoryMode,
+});
+
 export const workspaceDashboard = async (workspacePath: string) => {
   try {
     return await ipc<WorkspaceDashboard>("cmd_workspace_dashboard", { workspacePath });
@@ -561,6 +586,39 @@ export const subagentSessionMessages = async (taskId: string, subagentId: string
 };
 
 // ---------- 旧版项目记忆文件风险状态 ----------
+export const memoryOverview = () => ipc<MemoryOverview>("cmd_memory_overview");
+
+export const memoryUpdateSettings = (update: MemoryReviewSettingsUpdate) =>
+  ipc<MemoryReviewSettingsView>("cmd_memory_update_settings", { update });
+
+export const memoryReviewNow = (taskId: string) =>
+  ipc<string | null>("cmd_memory_review_now", { taskId });
+
+export const memoryRetryJob = (jobId: string) =>
+  ipc<void>("cmd_memory_retry_job", { jobId });
+
+export const memoryCancelJob = (jobId: string) =>
+  ipc<void>("cmd_memory_cancel_job", { jobId });
+
+export const memoryAddEntry = (draft: MemoryEntryDraft) =>
+  ipc<MemoryEntry>("cmd_memory_add_entry", { draft });
+
+export const memoryEditEntry = (entryId: string, edit: MemoryEntryEdit) =>
+  ipc<MemoryEntry>("cmd_memory_edit_entry", { entryId, edit });
+
+export const memoryDeleteEntry = (entryId: string, expectedVersion: number) =>
+  ipc<void>("cmd_memory_delete_entry", { entryId, expectedVersion });
+
+export const memoryApproveCandidate = (candidateId: string, editedContent: string | null = null) =>
+  ipc<MemoryEntry>("cmd_memory_approve_candidate", { candidateId, editedContent });
+
+export const memoryRejectCandidate = (candidateId: string) =>
+  ipc<void>("cmd_memory_reject_candidate", { candidateId });
+
+export const memoryClearAll = () =>
+  ipc<MemoryReviewSettingsView>("cmd_memory_clear_all");
+
+// ---------- 旧版项目记忆文件风险状态 ----------
 export const legacyMemoryStatus = (workspacePath: string) =>
   ipc<LegacyMemoryStatus>("cmd_legacy_memory_status", { workspacePath });
 
@@ -572,6 +630,49 @@ export const settingsGet = async () => {
     if (!shouldUseBrowserMock()) throw error;
     return browserMockSettings;
   }
+};
+
+// ---------- MCP / native web ----------
+export const mcpSnapshot = () => ipc<McpManagerSnapshot>("cmd_mcp_snapshot");
+
+export const mcpUpsert = (request: McpUpsertRequest) =>
+  ipc<McpServerView>("cmd_mcp_upsert", { request });
+
+export const mcpRemove = (serverId: string) =>
+  ipc<void>("cmd_mcp_remove", { serverId });
+
+export const mcpToggle = (serverId: string, enabled: boolean, confirmationToken: string | null = null) =>
+  ipc<McpToggleResult>("cmd_mcp_toggle", { serverId, enabled, confirmationToken });
+
+export const mcpTestConnection = (serverId: string) =>
+  ipc<McpToolDescriptor[]>("cmd_mcp_test_connection", { serverId });
+
+export const mcpCredentialStatus = (serverId: string) =>
+  ipc<McpCredentialStatus[]>("cmd_mcp_credential_status", { serverId });
+
+export const mcpSetCredential = (serverId: string, name: string, value: string) =>
+  ipc<void>("cmd_mcp_set_credential", { serverId, name, value });
+
+export const mcpDeleteCredential = (serverId: string, name: string) =>
+  ipc<void>("cmd_mcp_delete_credential", { serverId, name });
+
+export const mcpMarketSearch = (query: string | null = null, cursor: string | null = null, limit = 20) =>
+  ipc<McpMarketPage>("cmd_mcp_market_search", { query, cursor, limit });
+
+export const mcpMarketPrepareInstall = (request: McpMarketInstallRequest) =>
+  ipc<McpLaunchPreview>("cmd_mcp_market_prepare_install", { request });
+
+export const mcpMarketInstall = (request: McpMarketInstallRequest, confirmationToken: string) =>
+  ipc<McpServerView>("cmd_mcp_market_install", { request, confirmationToken });
+
+export const onMcpStatus = (
+  handler: (statuses: Array<Pick<McpServerView, "id" | "state" | "tool_count" | "error_code">>) => void,
+): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<Array<Pick<McpServerView, "id" | "state" | "tool_count" | "error_code">>>(
+    "mcp-status",
+    (event) => handler(event.payload),
+  );
 };
 
 /** 内置模型服务目录。编译期常量，进程内只需拉一次。 */

@@ -1,13 +1,18 @@
 import { lazy, Suspense, useEffect, type CSSProperties } from "react";
-import { useAppStore } from "./store/app";
+import { MAX_RAIL_WIDTH, MIN_RAIL_WIDTH, useAppStore } from "./store/app";
 import { useTasksStore } from "./store/tasks";
 import { isMacPlatform, useGlobalKeys } from "./lib/keys";
 import { MenuBar } from "./components/shell/MenuBar";
 import { Rail } from "./components/shell/Rail";
-import { RailResizeHandle } from "./components/shell/RailResizeHandle";
+import {
+  MIN_MAIN_WIDTH,
+  RailResizeHandle,
+} from "./components/shell/RailResizeHandle";
+import { SyncHealthBanner } from "./components/shell/SyncHealthBanner";
 import { HomeScene } from "./components/scenes/HomeScene";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
+import { clearSyncFailure, reportSyncFailure } from "./store/sync-health";
 
 const DashboardScene = lazy(() =>
   import("./components/scenes/DashboardScene").then((module) => ({ default: module.DashboardScene })),
@@ -61,7 +66,6 @@ export default function App() {
   const zoomIn = useAppStore((s) => s.zoomIn);
   const zoomOut = useAppStore((s) => s.zoomOut);
   const zoomReset = useAppStore((s) => s.zoomReset);
-
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
 
@@ -91,8 +95,21 @@ export default function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    void refreshWorkspaces().catch(() => {});
-    void refreshTasks().catch(() => {});
+    const refreshStartupData = () => {
+      void refreshWorkspaces()
+        .then(() => clearSyncFailure("startup-workspaces"))
+        .catch((cause) => reportSyncFailure("startup-workspaces", "项目列表", cause));
+      void refreshTasks()
+        .then(() => clearSyncFailure("startup-tasks"))
+        .catch((cause) => reportSyncFailure("startup-tasks", "会话列表", cause));
+    };
+    refreshStartupData();
+    window.addEventListener("r-code:refresh-now", refreshStartupData);
+    return () => {
+      window.removeEventListener("r-code:refresh-now", refreshStartupData);
+      clearSyncFailure("startup-workspaces");
+      clearSyncFailure("startup-tasks");
+    };
   }, [refreshWorkspaces, refreshTasks]);
 
   // 后台任务跑完 / 权限卡住时播报（不在场就完全无感的那部分）
@@ -107,7 +124,11 @@ export default function App() {
       style={{
         zoom: appScale,
         height: `${100 / appScale}vh`,
-        "--rc-rail-w": `${railWidth}px`,
+        "--rc-app-scale": appScale,
+        "--rc-rail-preferred-w": `${railWidth}px`,
+        // The browser resolves this against the grid's current inline size, so resize
+        // restoration is immediate and independent of React's resize-event scheduling.
+        "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px / var(--rc-app-scale))))`,
       } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">跳到主内容</a>
@@ -135,6 +156,7 @@ export default function App() {
       )}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
+      <SyncHealthBanner />
       <OnboardingCampaign />
     </div>
   );

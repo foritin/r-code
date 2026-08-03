@@ -715,6 +715,7 @@ function ChangesPanel({
   const [sel, setSel] = useState<string | null>(session?.selectedPath ?? null);
   const [diff, setDiff] = useState<ChangeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reviewStatusError, setReviewStatusError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmPath, setConfirmPath] = useState<string | null>(null);
   const [rowFocus, setRowFocus] = useState(-1);
@@ -741,10 +742,16 @@ function ChangesPanel({
     const sequence = ++statusRefreshSequenceRef.current;
     try {
       const next = await reviewGitStatus(taskId);
-      if (sequence === statusRefreshSequenceRef.current) setGitStatus(next);
+      if (sequence === statusRefreshSequenceRef.current) {
+        setGitStatus(next);
+        setReviewStatusError(null);
+      }
       return next;
-    } catch {
-      if (sequence === statusRefreshSequenceRef.current) setGitStatus(null);
+    } catch (cause) {
+      if (sequence === statusRefreshSequenceRef.current) {
+        setGitStatus(null);
+        setReviewStatusError(`无法刷新审核范围：${String(cause)}`);
+      }
       return null;
     }
   }, [taskId]);
@@ -1049,6 +1056,7 @@ function ChangesPanel({
         )}
       </div>
       <div className="changes-view">
+        {reviewStatusError && <div className="panel-error" role="alert">{reviewStatusError}</div>}
         {error && <div className="panel-error">{error}</div>}
         {notice && <div className="panel-note">{notice}</div>}
         {!path && <div className="empty">没有可查看的变更。</div>}
