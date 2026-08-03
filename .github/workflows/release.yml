@@ -53,26 +53,34 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
+          required=(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY)
+          if [[ "$RELEASE_TAG" != *-unsigned.* ]]; then
+            required+=(
+              WINDOWS_CERTIFICATE
+              WINDOWS_CERTIFICATE_PASSWORD
+              WINDOWS_TIMESTAMP_URL
+              APPLE_CERTIFICATE
+              APPLE_CERTIFICATE_PASSWORD
+              APPLE_SIGNING_IDENTITY
+              APPLE_ID
+              APPLE_PASSWORD
+              APPLE_TEAM_ID
+            )
+          fi
+
           missing=()
-          for name in \
-            PAT_TOKEN \
-            TAURI_SIGNING_PRIVATE_KEY \
-            WINDOWS_CERTIFICATE \
-            WINDOWS_CERTIFICATE_PASSWORD \
-            WINDOWS_TIMESTAMP_URL \
-            APPLE_CERTIFICATE \
-            APPLE_CERTIFICATE_PASSWORD \
-            APPLE_SIGNING_IDENTITY \
-            APPLE_ID \
-            APPLE_PASSWORD \
-            APPLE_TEAM_ID; do
+          for name in "${required[@]}"; do
             if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
           done
           if (( ${#missing[@]} > 0 )); then
             printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
             exit 1
           fi
-          echo "Release credentials are configured."
+          if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
+            echo "Unsigned prerelease credentials are configured. Platform code signing is intentionally disabled."
+          else
+            echo "Signed release credentials are configured."
+          fi
 
   supply-chain:
     name: Generate SBOM and license inventory
@@ -169,7 +177,7 @@ jobs:
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
       - name: Validate and import Windows Authenticode certificate
-        if: matrix.platform == 'windows-x64'
+        if: matrix.platform == 'windows-x64' && !contains(env.RELEASE_TAG, '-unsigned.')
         shell: pwsh
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
@@ -205,7 +213,7 @@ jobs:
           $config | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "src-tauri/tauri.release-windows.conf.json" -Encoding utf8
 
       - name: Validate Apple signing and notarization secrets
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -225,7 +233,7 @@ jobs:
           fi
 
       - name: Import Apple Developer ID certificate
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.')
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -250,27 +258,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_TEAM_ID || '' }}
         with:
           projectPath: src-tauri
           tauriScript: cargo tauri
           args: ${{ matrix.args }} --target ${{ matrix.rust-target }}
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: R-Code ${{ env.RELEASE_TAG }}
+          releaseName: ${{ contains(env.RELEASE_TAG, '-unsigned.') && format('R-Code {0} (unsigned prerelease)', env.RELEASE_TAG) || format('R-Code {0}', env.RELEASE_TAG) }}
           generateReleaseNotes: true
           # All matrix jobs upload into one draft. The finalize job publishes only
           # after every platform has succeeded, so a partial release is never latest.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ contains(env.RELEASE_TAG, '-unsigned.') }}
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: true
 
       - name: Verify signed and notarized macOS bundles
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.')
         shell: bash
         run: |
           bundle_root="target/${{ matrix.rust-target }}/release/bundle"
@@ -291,7 +299,7 @@ jobs:
         run: ./scripts/build-branded-installer.ps1 -SkipInnerBuild -Target ${{ matrix.rust-target }}
 
       - name: Sign and verify Windows release artifacts
-        if: matrix.platform == 'windows-x64'
+        if: matrix.platform == 'windows-x64' && !contains(env.RELEASE_TAG, '-unsigned.')
         shell: pwsh
         env:
           WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
@@ -353,6 +361,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
@@ -371,7 +380,9 @@ jobs:
           node -e '
             const fs = require("node:fs");
             const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const expectedVersion = process.env.RELEASE_TAG.replace(/^v/, "");
+            const expectedVersion = process.env.RELEASE_TAG
+              .replace(/^v/, "")
+              .replace(/-unsigned\.\d+$/, "");
             if (manifest.version !== expectedVersion && manifest.version !== process.env.RELEASE_TAG) {
               throw new Error(`latest.json version ${manifest.version} does not match ${process.env.RELEASE_TAG}`);
             }
@@ -379,4 +390,21 @@ jobs:
               if (!manifest.platforms?.[platform]) throw new Error(`latest.json is missing ${platform}`);
             }
           ' "$RUNNER_TEMP/release-manifest/latest.json"
-          gh release edit "$RELEASE_TAG" --draft=false --latest
+          if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
+            notes_file="$RUNNER_TEMP/release-manifest/unsigned-release-notes.md"
+            existing_body="$(gh release view "$RELEASE_TAG" --json body --jq .body)"
+            {
+              printf '%s\n' '> [!WARNING]'
+              printf '%s\n' '> **这是未签名预发布版本，仅用于测试。** Windows 会显示 SmartScreen 警告，macOS 会触发 Gatekeeper；请勿将其用于生产环境。'
+              printf '%s\n' '> 此版本不会标记为 Latest，也不会进入正式自动更新通道。'
+              printf '\n%s\n' "$existing_body"
+            } > "$notes_file"
+            gh release edit "$RELEASE_TAG" \
+              --draft=false \
+              --prerelease \
+              --title "R-Code $RELEASE_TAG (unsigned prerelease)" \
+              --notes-file "$notes_file" \
+              --verify-tag
+          else
+            gh release edit "$RELEASE_TAG" --draft=false --latest --verify-tag
+          fi

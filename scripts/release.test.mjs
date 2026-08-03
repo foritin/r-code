@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { replaceWorkspaceVersion, stampChangelog } from "./release.mjs";
+import { parseReleaseTag, replaceWorkspaceVersion, stampChangelog } from "./release.mjs";
 import { collectComponents, createArtifacts } from "./generate-supply-chain.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -62,7 +62,7 @@ test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
   assert.doesNotMatch(script, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
 });
 
-test("release workflow refuses unsigned releases and verifies platform signatures", () => {
+test("release workflow isolates unsigned prereleases while signed releases stay fail-closed", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
@@ -87,6 +87,13 @@ test("release workflow refuses unsigned releases and verifies platform signature
   assert.match(workflow, /WINDOWS_CERTIFICATE/);
   assert.match(workflow, /Import-PfxCertificate/);
   assert.match(workflow, /signtool[\s\S]*verify/);
+  assert.match(workflow, /required=\(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY\)/);
+  assert.match(workflow, /if \[\[ "\$RELEASE_TAG" != \*-unsigned\.\* \]\]/);
+  assert.match(workflow, /prerelease: \$\{\{ contains\(env\.RELEASE_TAG, '-unsigned\.'\) \}\}/);
+  assert.match(workflow, /这是未签名预发布版本，仅用于测试/);
+  assert.match(workflow, /--prerelease/);
+  assert.match(workflow, /--draft=false --latest --verify-tag/);
+  assert.match(workflow, /GH_REPO: \$\{\{ github\.repository \}\}/);
   assert.match(workflow, /r-code-sbom\.cdx\.json/);
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
   assert.match(workflow, /Verify release credentials are configured/);
@@ -102,6 +109,22 @@ test("release workflow refuses unsigned releases and verifies platform signature
     "authenticated checkout must own release submodule initialization",
   );
   assert.doesNotMatch(workflow, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
+});
+
+test("release tags distinguish signed releases from numbered unsigned prereleases", () => {
+  assert.deepEqual(parseReleaseTag("v0.1.0"), {
+    version: "0.1.0",
+    unsignedPrerelease: false,
+    sequence: null,
+  });
+  assert.deepEqual(parseReleaseTag("v0.1.0-unsigned.1"), {
+    version: "0.1.0",
+    unsignedPrerelease: true,
+    sequence: 1,
+  });
+  assert.equal(parseReleaseTag("v0.1.0-unsigned.0"), null);
+  assert.equal(parseReleaseTag("v0.1.0-beta.1"), null);
+  assert.equal(parseReleaseTag("0.1.0-unsigned.1"), null);
 });
 
 test("CI authenticates every private agent-core checkout", () => {
