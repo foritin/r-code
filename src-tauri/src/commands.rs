@@ -15100,10 +15100,13 @@ mod tests {
             .await
             .unwrap();
 
-        // 跑一条真实命令（Windows: cmd /c echo）
-        let rec = run_verification(&state, &task.id, "cmd /c echo hello-verify")
-            .await
-            .unwrap();
+        #[cfg(windows)]
+        let command = "cmd /c echo hello-verify";
+        #[cfg(not(windows))]
+        let command = "printf 'hello-verify\n'";
+
+        // 跑一条真实命令，验证输出持久化在各桌面平台保持一致。
+        let rec = run_verification(&state, &task.id, command).await.unwrap();
         let out = verification_output(&state, &rec.id).await.unwrap();
         assert!(
             out.contains("hello-verify"),
