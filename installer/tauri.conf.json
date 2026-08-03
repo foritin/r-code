@@ -33,6 +33,8 @@
     "publisher": "R-Code Team",
     "copyright": "Copyright © 2026 R-Code Team",
     "icon": [
+      "../icons/icon.png",
+      "../icons/icon.icns",
       "../icons/icon.ico"
     ]
   }

@@ -114,6 +114,24 @@ test("CI authenticates every private agent-core checkout", () => {
   const privateTokens = workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? [];
   assert.equal(submoduleInitializers.length, 6);
   assert.equal(privateTokens.length, submoduleInitializers.length);
+  assert.match(
+    workflow,
+    /name: Clippy[\s\S]*name: Install Linux dependencies[\s\S]*libwebkit2gtk-4\.1-dev/,
+    "Linux clippy must install the native libraries required by the Tauri host crate",
+  );
+  assert.match(
+    workflow,
+    /name: Test[\s\S]*fail-fast:\s*false[\s\S]*macos-latest, windows-latest/,
+    "one platform failure must not cancel the other platform test result",
+  );
+
+  const installerConfig = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "installer", "tauri.conf.json"), "utf8"),
+  );
+  assert.ok(
+    installerConfig.bundle.icon.includes("../icons/icon.png"),
+    "the installer needs a portable PNG icon so generate_context works on macOS/Linux",
+  );
 });
 
 test("supply-chain generator emits CycloneDX and separates workspace packages", () => {

@@ -7875,14 +7875,20 @@ fn codex_cli_names() -> &'static [&'static str] {
 }
 
 fn codex_cli_paths() -> Vec<PathBuf> {
-    let mut found = executable_paths(codex_cli_names());
-    #[cfg(windows)]
-    if let Some(app_data) = std::env::var_os("APPDATA") {
-        // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
-        let npm_prefix = Path::new(&app_data).join("npm");
-        push_executable_candidates(&mut found, &npm_prefix, codex_cli_names());
+    #[cfg(not(windows))]
+    {
+        executable_paths(codex_cli_names())
     }
-    found
+    #[cfg(windows)]
+    {
+        let mut found = executable_paths(codex_cli_names());
+        if let Some(app_data) = std::env::var_os("APPDATA") {
+            // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
+            let npm_prefix = Path::new(&app_data).join("npm");
+            push_executable_candidates(&mut found, &npm_prefix, codex_cli_names());
+        }
+        found
+    }
 }
 
 fn npm_cli_paths() -> Vec<PathBuf> {
@@ -10191,7 +10197,7 @@ fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String
 /// 构造 Codex 非交互进程。任务文本作为位置参数直接传给已验证的 CLI，绝不进入
 /// shell 命令串。权限参数只会来自 [`CodexDelegationPermissions`] 的受限枚举，绝不
 /// 接受 WebView 或 config.toml 的原始命令片段。
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 fn codex_exec_command_with_permissions(
     cli_path: Option<PathBuf>,
     workspace: &Path,
@@ -10298,7 +10304,7 @@ async fn terminate_codex_child(child: &mut tokio::process::Child) {
     let _ = child.kill().await;
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 async fn run_codex_exec_process(
     workspace: &Path,
     prompt: &str,
@@ -11035,7 +11041,7 @@ async fn observe_codex_app_server_event(
 
 /// 用 App Server 执行一轮 Codex 子代理。只在 `请求批准` 预设下使用；其他预设
 /// 继续走轻量的 `codex exec --json` 路径。
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 #[allow(clippy::too_many_arguments)]
 async fn run_codex_app_server_process(
     workspace: &Path,
