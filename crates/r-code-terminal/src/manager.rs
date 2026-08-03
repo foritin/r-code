@@ -151,6 +151,12 @@ impl TerminalManager {
     ) -> Result<TerminalId, ProductError> {
         let id = uuid::Uuid::new_v4().to_string();
         let shell = resolve_shell(shell)?;
+        // `Path::canonicalize` uses Win32's verbatim form (`\\?\C:\...`) on Windows.
+        // That spelling is useful for containment checks, but PowerShell exposes it as a
+        // provider-qualified location and then fails to resolve ordinary relative `cd` paths.
+        // Keep the canonical path inside the security boundary and hand the interactive shell
+        // its equivalent DOS/UNC spelling only at the process-launch boundary.
+        let launch_working_dir = shell_working_dir(working_dir);
 
         let pair = {
             let pty_system = self.pty_system.lock().expect("pty_system mutex poisoned");
@@ -161,12 +167,12 @@ impl TerminalManager {
 
         let integration = shell_integration_spawn(&ShellIntegrationConfig {
             shell: shell.clone(),
-            working_dir: working_dir.to_path_buf(),
+            working_dir: launch_working_dir.clone(),
             enabled: true,
         });
 
         let mut cmd = CommandBuilder::new(&shell);
-        cmd.cwd(working_dir);
+        cmd.cwd(&launch_working_dir);
         for arg in &initial_args {
             cmd.arg(arg);
         }
@@ -237,7 +243,7 @@ impl TerminalManager {
             id: id.clone(),
             state: TerminalState::Idle,
             shell,
-            working_dir: working_dir.to_path_buf(),
+            working_dir: launch_working_dir,
             scrollback: Vec::new(),
             raw_scrollback: Vec::new(),
             raw_output_cursor: 0,
@@ -537,6 +543,29 @@ fn cleanup_integration_dir(path: Option<&Path>) {
     }
 }
 
+/// Convert Windows' canonical verbatim spelling into the path form expected by interactive
+/// shells. Security checks continue to use the canonical path before this launch-only step.
+fn shell_working_dir(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let rendered = path.to_string_lossy();
+        if let Some(rest) = rendered.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        if let Some(rest) = rendered.strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/')
+            {
+                return PathBuf::from(rest);
+            }
+        }
+    }
+    path.to_path_buf()
+}
+
 impl Default for TerminalManager {
     fn default() -> Self {
         Self::new()
@@ -687,6 +716,23 @@ mod tests {
         let input = b"\x1b[31mred text\x1b[0m";
         let output = strip_ansi(input);
         assert_eq!(output, b"red text");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_working_dir_uses_regular_drive_and_unc_paths() {
+        assert_eq!(
+            shell_working_dir(Path::new(r"\\?\D:\project\rust\demo")),
+            PathBuf::from(r"D:\project\rust\demo")
+        );
+        assert_eq!(
+            shell_working_dir(Path::new(r"\\?\UNC\server\share\project")),
+            PathBuf::from(r"\\server\share\project")
+        );
+        assert_eq!(
+            shell_working_dir(Path::new(r"D:\project\rust\demo")),
+            PathBuf::from(r"D:\project\rust\demo")
+        );
     }
 
     #[test]
