@@ -5,6 +5,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { replaceWorkspaceVersion, stampChangelog } from "./release.mjs";
+import { collectComponents, createArtifacts } from "./generate-supply-chain.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -61,13 +62,14 @@ test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
   assert.doesNotMatch(script, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
 });
 
-test("release workflow refuses unsigned macOS releases and verifies notarization", () => {
+test("release workflow refuses unsigned releases and verifies platform signatures", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
   );
 
-  assert.match(workflow, /platform: macos-latest[\s\S]*args: "--bundles app,dmg"/);
+  assert.match(workflow, /runner: macos-latest[\s\S]*rust-target: aarch64-apple-darwin/);
+  assert.match(workflow, /runner: macos-15-intel[\s\S]*rust-target: x86_64-apple-darwin/);
   for (const secret of [
     "APPLE_CERTIFICATE",
     "APPLE_CERTIFICATE_PASSWORD",
@@ -82,5 +84,33 @@ test("release workflow refuses unsigned macOS releases and verifies notarization
   assert.match(workflow, /Verify signed and notarized macOS bundles/);
   assert.match(workflow, /spctl --assess --type execute/);
   assert.match(workflow, /xcrun stapler validate/);
+  assert.match(workflow, /WINDOWS_CERTIFICATE/);
+  assert.match(workflow, /Import-PfxCertificate/);
+  assert.match(workflow, /signtool[\s\S]*verify/);
+  assert.match(workflow, /r-code-sbom\.cdx\.json/);
+  assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
   assert.doesNotMatch(workflow, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
+});
+
+test("supply-chain generator emits CycloneDX and separates workspace packages", () => {
+  const components = collectComponents({
+    workspace_members: ["local 1.0.0"],
+    packages: [
+      { id: "local 1.0.0", name: "local", version: "1.0.0", license: "MIT" },
+      { id: "dep 2.0.0", name: "dep", version: "2.0.0", license: "Apache-2.0", source: "registry+https://example.test/index" },
+    ],
+  }, {
+    packages: {
+      "": { name: "frontend", version: "1.0.0" },
+      "node_modules/react": { version: "18.3.1", license: "MIT", resolved: "https://example.test/react.tgz" },
+    },
+  });
+  const result = createArtifacts({ components, version: "1.0.0", timestamp: "2026-08-03T00:00:00.000Z" });
+
+  assert.equal(result.sbom.bomFormat, "CycloneDX");
+  assert.equal(result.sbom.specVersion, "1.5");
+  assert.equal(result.sbom.components.length, 3);
+  assert.equal(result.unknown.length, 0);
+  assert.match(result.licenses, /\| cargo \| dep \| 2\.0\.0 \| Apache-2\.0 \|/);
+  assert.doesNotMatch(result.licenses, /\| cargo \| local \|/);
 });
