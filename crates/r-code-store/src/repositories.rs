@@ -1423,9 +1423,37 @@ impl<'a> QueuedMessageRepository<'a> {
 
     /// 取得全局调度器下一条消息，并把它原子地标记为 dispatching。
     pub fn take_next(&self) -> Result<Option<QueuedMessage>, ProductError> {
+        self.take_next_matching(None)
+    }
+
+    /// 取得指定任务的下一条消息，并把它原子地标记为 dispatching。
+    ///
+    /// Native runtime 按任务隔离后，每个完成回调只能推进自己的队列；否则一个
+    /// 快任务可能抢走仍在运行任务的消息，造成同一会话并发和上下文串线。
+    pub fn take_next_for_task(&self, task_id: &str) -> Result<Option<QueuedMessage>, ProductError> {
+        self.take_next_matching(Some(task_id))
+    }
+
+    fn take_next_matching(
+        &self,
+        task_id: Option<&str>,
+    ) -> Result<Option<QueuedMessage>, ProductError> {
         let mut conn = self.db.conn()?;
         let tx = conn.transaction().map_err(db_err)?;
-        let candidate = {
+        let candidate = if let Some(task_id) = task_id {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
+                     FROM queued_messages WHERE state = 'queued' AND task_id = ?1 \
+                     ORDER BY priority DESC, created_at ASC LIMIT 1",
+                )
+                .map_err(db_err)?;
+            let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
+            match rows.next().map_err(db_err)? {
+                Some(row) => Some(row_to_queued_message(row)?),
+                None => None,
+            }
+        } else {
             let mut stmt = tx
                 .prepare(
                     "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
@@ -2517,6 +2545,26 @@ mod tests {
         let pending = repo.list_pending(&task.id, &branch.id).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, normal.id);
+    }
+
+    #[test]
+    fn queued_messages_dispatch_is_scoped_to_the_requested_task() {
+        let db = setup_db();
+        let first_task = create_test_task(&db, "/proj-a", "first queue");
+        let second_task = create_test_task(&db, "/proj-b", "second queue");
+        let branches = SessionBranchRepository::new(&db);
+        let first_branch = branches.ensure_active(&first_task.id).unwrap();
+        let second_branch = branches.ensure_active(&second_task.id).unwrap();
+        let repo = QueuedMessageRepository::new(&db);
+        let first = QueuedMessage::new(&first_task.id, &first_branch.id, "first", 0);
+        let second = QueuedMessage::new(&second_task.id, &second_branch.id, "second", 1_000);
+        repo.enqueue(&first).unwrap();
+        repo.enqueue(&second).unwrap();
+
+        let claimed_first = repo.take_next_for_task(&first_task.id).unwrap().unwrap();
+        assert_eq!(claimed_first.id, first.id);
+        let claimed_second = repo.take_next_for_task(&second_task.id).unwrap().unwrap();
+        assert_eq!(claimed_second.id, second.id);
     }
 
     // --------------------------------------------------------------------------

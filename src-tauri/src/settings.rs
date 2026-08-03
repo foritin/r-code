@@ -34,6 +34,11 @@ impl SettingsService {
         Self { config_dir }
     }
 
+    /// Product-owned MCP metadata is stored beside the other user-level settings.
+    pub fn mcp_settings(&self) -> crate::mcp_settings::McpSettingsService {
+        crate::mcp_settings::McpSettingsService::new(self.config_dir.clone())
+    }
+
     /// 全局配置文件路径：`config_dir/config.toml`。
     pub fn config_path(&self) -> PathBuf {
         self.config_dir.join("config.toml")

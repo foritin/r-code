@@ -9,6 +9,7 @@
 //! 所有调用（含被拒绝 / 待审批）入 `ledger`，含调用者身份。
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -441,6 +442,123 @@ impl ToolGateway {
                 audit.fail(err.to_string());
                 self.ledger.write().await.push(audit);
                 Err(err)
+            }
+        }
+    }
+
+    /// Authorize, execute and audit a dynamic external tool without registering one schema per
+    /// remote MCP tool. The caller supplies the already-classified risk and an execution closure;
+    /// the permission and ledger behavior is otherwise identical to built-in tools.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_external_with_wait<F, Fut>(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        call_id: Option<&str>,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        input_summary: &str,
+        abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        access_mode: ProjectAccessMode,
+        risk_level: RiskLevel,
+        execute: F,
+    ) -> Result<ToolCallOutcome, ProductError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<ToolCallOutcome, ProductError>>,
+    {
+        let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
+        if let Some(call_id) = call_id {
+            audit.id = call_id.to_string();
+        }
+        audit.caller = caller.map(ToOwned::to_owned);
+
+        if is_subagent_caller(caller)
+            && access_mode != ProjectAccessMode::FullAccess
+            && !matches!(risk_level, RiskLevel::R0 | RiskLevel::R1)
+        {
+            let reason = format!(
+                "read-only subagent may not execute state-changing external tool: {tool_name}"
+            );
+            audit.deny(&reason);
+            self.ledger.write().await.push(audit);
+            return Err(ProductError::PermissionError(reason));
+        }
+
+        let check_result = self
+            .permission_engine
+            .check_detailed_with_access_mode(
+                task_id,
+                &audit.id,
+                Some(run_id),
+                caller,
+                tool_name,
+                risk_level,
+                input_summary,
+                None,
+                access_mode,
+            )
+            .await;
+
+        match check_result {
+            PermissionCheckResult::Allowed => {}
+            PermissionCheckResult::Denied(reason) => {
+                audit.deny(&reason);
+                self.ledger.write().await.push(audit);
+                return Err(ProductError::PermissionError(reason));
+            }
+            PermissionCheckResult::NeedsApproval(request) => {
+                let timeout = std::time::Duration::from_secs(600);
+                let poll = std::time::Duration::from_millis(150);
+                let start = std::time::Instant::now();
+                loop {
+                    if abort_flag
+                        .as_ref()
+                        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        let message = format!("tool {tool_name} cancelled while awaiting approval");
+                        audit.fail(&message);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(message));
+                    }
+                    if let Some(decision) = self.permission_engine.try_decision(&request.id).await {
+                        match decision {
+                            PermissionDecision::Allow | PermissionDecision::AllowAlways => break,
+                            PermissionDecision::Deny => {
+                                let message = format!("tool {tool_name} denied by user");
+                                audit.deny(&message);
+                                self.ledger.write().await.push(audit);
+                                return Err(ProductError::PermissionError(message));
+                            }
+                            PermissionDecision::Pending => {}
+                        }
+                    }
+                    if start.elapsed() >= timeout {
+                        let message = format!("tool {tool_name} approval timed out");
+                        audit.fail(&message);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(message));
+                    }
+                    tokio::time::sleep(poll).await;
+                }
+            }
+        }
+
+        match execute().await {
+            Ok(outcome) => {
+                if outcome.is_error {
+                    audit.fail(&outcome.content);
+                } else {
+                    audit.succeed(&outcome.content);
+                }
+                self.ledger.write().await.push(audit);
+                Ok(outcome)
+            }
+            Err(error) => {
+                audit.fail(error.to_string());
+                self.ledger.write().await.push(audit);
+                Err(error)
             }
         }
     }

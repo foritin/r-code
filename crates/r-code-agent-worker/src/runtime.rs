@@ -102,6 +102,16 @@ pub trait AgentRuntime: Send + Sync {
         Ok(())
     }
 
+    /// 冻结下一次主运行及其子代理可见的记忆快照。宿主必须在每次启动前显式设置
+    /// `Some` 或 `None`；真实 runtime 在启动时消费一次，避免后续记忆变更污染当前运行。
+    async fn set_next_memory_context(
+        &mut self,
+        _session_id: &str,
+        _context: Option<String>,
+    ) -> Result<(), ProductError> {
+        Ok(())
+    }
+
     /// 获取当前 run 的事件（ drain 语义：取出后清空）。
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError>;
 }

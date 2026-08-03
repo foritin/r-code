@@ -211,3 +211,94 @@ fn release_evidence_completeness() {
 
     assert_eq!(checklist.len(), 7, "All release evidence items present");
 }
+
+/// Native/MCP control-plane acceptance stays offline: construction is lazy, the bundled service
+/// can be disabled live, Registry installation is inert, and no project file is created.
+#[tokio::test]
+async fn mcp_control_plane_is_local_lazy_and_user_controlled() {
+    use r_code_host::mcp_manager::{McpManager, McpMarketInstallRequest};
+    use r_code_host::mcp_settings::RESEARCH_SERVER_ID;
+    use r_code_mcp::{
+        ExternalToolHost, MarketInstallOption, MarketInstallTransport, MarketPackageKind,
+        MarketServer, McpServerState,
+    };
+    use serde_json::json;
+
+    let temp = tempfile::tempdir().unwrap();
+    let app_data = temp.path().join("app-data");
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let manager = McpManager::new(app_data.clone());
+
+    let initial = manager.snapshot().await;
+    assert_eq!(initial.servers.len(), 1);
+    assert_eq!(initial.servers[0].id, RESEARCH_SERVER_ID);
+    assert!(initial.servers[0].enabled);
+    assert_eq!(initial.servers[0].state, McpServerState::Stopped);
+
+    manager
+        .toggle(RESEARCH_SERVER_ID, false, None)
+        .await
+        .unwrap();
+    let disabled = manager
+        .call(
+            "mcp_call",
+            json!({
+                "server_id": RESEARCH_SERVER_ID,
+                "tool": "deep_research",
+                "arguments": {"queries": ["offline fixture"]}
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(disabled.is_error);
+    assert_eq!(disabled.metadata.unwrap()["reason"], "disabled");
+
+    let market_server = MarketServer {
+        name: "io.example/offline".to_string(),
+        title: "Offline fixture".to_string(),
+        description: "Registry install acceptance fixture".to_string(),
+        version: "1.0.0".to_string(),
+        status: "active".to_string(),
+        is_latest: true,
+        suggested_id: "offline-fixture".to_string(),
+        repository_url: Some("https://github.com/example/offline".to_string()),
+        install_options: vec![MarketInstallOption {
+            id: "npm".to_string(),
+            label: "npm".to_string(),
+            transport: MarketInstallTransport::Stdio {
+                package_kind: MarketPackageKind::Npm,
+                executable: "npx".to_string(),
+                args: vec!["--yes".to_string(), "@example/offline@1.0.0".to_string()],
+                environment: Vec::new(),
+            },
+        }],
+    };
+    let request = McpMarketInstallRequest {
+        server: market_server,
+        option_id: "npm".to_string(),
+        server_id: "offline-fixture".to_string(),
+    };
+    let preview = manager.prepare_market_install(&request).unwrap();
+    let installed = manager
+        .install_market(&request, &preview.token)
+        .await
+        .unwrap();
+    assert!(!installed.enabled);
+    assert_eq!(installed.state, McpServerState::Disabled);
+
+    let suggestion = manager
+        .call(
+            "suggest_mcp",
+            json!({"market_query": "github", "reason": "需要认证数据源"}),
+        )
+        .await
+        .unwrap();
+    assert!(suggestion.content.contains("open_mcp_settings"));
+
+    let saved = std::fs::read_to_string(app_data.join("mcp-servers.toml")).unwrap();
+    assert!(saved.contains("offline-fixture"));
+    assert!(!saved.contains("token="));
+    assert!(std::fs::read_dir(&workspace).unwrap().next().is_none());
+    manager.shutdown().await.unwrap();
+}
