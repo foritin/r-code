@@ -44,23 +44,18 @@ impl SecretStore {
         }
     }
 
-    /// 将 `value` 以 `key` 存入 OS keychain。
-    pub fn store(&self, key: &str, value: &str) -> Result<(), ProductError> {
-        let entry = Entry::new(&self.service_name, key).map_err(|e| {
-            ProductError::SecretError(format!("keychain entry creation failed: {e}"))
-        })?;
+    fn entry(&self, key: &str) -> Result<Entry, ProductError> {
+        Entry::new(&self.service_name, key)
+            .map_err(|e| ProductError::SecretError(format!("keychain entry creation failed: {e}")))
+    }
+
+    fn store_entry(entry: &Entry, value: &str) -> Result<(), ProductError> {
         entry
             .set_password(value)
             .map_err(|e| ProductError::SecretError(format!("keychain store failed: {e}")))
     }
 
-    /// 从 OS keychain 读取 `key`。
-    ///
-    /// 若 key 不存在（`NoEntry`），返回 `Ok(None)` 而非错误。
-    pub fn get(&self, key: &str) -> Result<Option<String>, ProductError> {
-        let entry = Entry::new(&self.service_name, key).map_err(|e| {
-            ProductError::SecretError(format!("keychain entry creation failed: {e}"))
-        })?;
+    fn get_entry(entry: &Entry) -> Result<Option<String>, ProductError> {
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
             Err(keyring::Error::NoEntry) => Ok(None),
@@ -70,20 +65,32 @@ impl SecretStore {
         }
     }
 
-    /// 从 OS keychain 删除 `key`。
-    ///
-    /// 若 key 不存在（`NoEntry`），视为已删除成功，返回 `Ok(())`。
-    pub fn delete(&self, key: &str) -> Result<(), ProductError> {
-        let entry = Entry::new(&self.service_name, key).map_err(|e| {
-            ProductError::SecretError(format!("keychain entry creation failed: {e}"))
-        })?;
+    fn delete_entry(entry: &Entry) -> Result<(), ProductError> {
         match entry.delete_credential() {
-            Ok(()) => Ok(()),
-            Err(keyring::Error::NoEntry) => Ok(()),
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(e) => Err(ProductError::SecretError(format!(
                 "keychain delete failed: {e}"
             ))),
         }
+    }
+
+    /// 将 `value` 以 `key` 存入 OS keychain。
+    pub fn store(&self, key: &str, value: &str) -> Result<(), ProductError> {
+        Self::store_entry(&self.entry(key)?, value)
+    }
+
+    /// 从 OS keychain 读取 `key`。
+    ///
+    /// 若 key 不存在（`NoEntry`），返回 `Ok(None)` 而非错误。
+    pub fn get(&self, key: &str) -> Result<Option<String>, ProductError> {
+        Self::get_entry(&self.entry(key)?)
+    }
+
+    /// 从 OS keychain 删除 `key`。
+    ///
+    /// 若 key 不存在（`NoEntry`），视为已删除成功，返回 `Ok(())`。
+    pub fn delete(&self, key: &str) -> Result<(), ProductError> {
+        Self::delete_entry(&self.entry(key)?)
     }
 }
 
@@ -261,30 +268,23 @@ mod tests {
         assert_eq!(store.service_name, "r-code-prod");
     }
 
-    // OS keychain 在无 D-Bus Secret Service 的 Linux CI 中不可用，且 D-Bus
-    // 调用可能阻塞。将真正的 keychain 往返测试限制在非 Linux 平台。
-    #[cfg(not(target_os = "linux"))]
     #[test]
-    fn secret_store_round_trip() {
-        let store = SecretStore::new("r-code-test");
-        let key = "r-code-core-secret-roundtrip";
+    fn secret_entry_round_trip_uses_a_deterministic_backend() {
+        // A headless runner is not a valid integration environment for macOS
+        // Keychain, Windows Credential Manager, or Linux Secret Service. Use
+        // keyring's entry-scoped in-memory credential to verify our mapping
+        // and idempotent-delete semantics without reading/writing real secrets.
+        let entry = Entry::new_with_credential(Box::new(keyring::mock::MockCredential::default()));
 
-        // 清理可能残留的旧条目，忽略错误。
-        let _ = store.delete(key);
-
-        store
-            .store(key, "super-secret-value")
-            .expect("store should succeed");
-        let got = store.get(key).expect("get should succeed after store");
+        SecretStore::store_entry(&entry, "super-secret-value").expect("store should succeed");
+        let got = SecretStore::get_entry(&entry).expect("get should succeed after store");
         assert_eq!(got.as_deref(), Some("super-secret-value"));
 
-        store.delete(key).expect("delete should succeed");
-        let after = store.get(key).expect("get after delete should not error");
+        SecretStore::delete_entry(&entry).expect("delete should succeed");
+        let after = SecretStore::get_entry(&entry).expect("get after delete should not error");
         assert_eq!(after, None);
 
         // 删除不存在的 key 应返回 Ok(()) 而非错误（幂等删除）。
-        store
-            .delete(key)
-            .expect("delete of missing key should be Ok");
+        SecretStore::delete_entry(&entry).expect("delete of missing key should be Ok");
     }
 }
