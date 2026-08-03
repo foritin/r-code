@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-08-03
+
 ### Added
 
 - 基于 Tauri 2、Rust、React 和 TypeScript 的跨平台 AI 编程桌面工作台。
@@ -32,3 +34,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 - 自动更新源与 Cargo 仓库元数据改为当前 GitHub 仓库，避免客户端从错误仓库查询 `latest.json`。
 - Windows 安装器、卸载器与应用程序使用 R-Code 图标，release 启动不再打开命令行窗口。
+
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
