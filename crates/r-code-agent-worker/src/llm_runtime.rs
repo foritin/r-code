@@ -18,8 +18,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
 use hermes_core::{
-    CompletionRequest, InferenceOptions, LlmProvider, Message, Session, SessionMeta,
-    ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
+    CompletionRequest, HostedToolSpec, InferenceOptions, LlmProvider, Message, Session,
+    SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
@@ -413,7 +413,10 @@ to obtain their concise findings.";
 const CODEX_DELEGATION_PROMPT_HINT: &str = " When the user explicitly asks for Codex, call \
 `delegate_task` with `agent` set to `codex`; do not substitute an internal R-Code subagent and do \
 not claim Codex is unsupported before trying the tool. Codex runs through the user's installed and \
-authenticated Codex CLI using the permission profile configured in Codex; setup failures are returned as tool errors.";
+authenticated Codex CLI using the permission profile configured in Codex; setup failures are returned as tool errors. \
+If native `web_search` fails or is unavailable, no installed MCP search can satisfy the request, \
+and current public information is required, you may use a read-only Codex subagent as the final \
+web-research fallback. Give it a precise search goal and ask it to return source links, then collect its result.";
 
 const CODEX_WORKSPACE_REQUIRED_PROMPT_HINT: &str = "\n\nCodex CLI delegation requires an attached \
 workspace. If the user asks you to invoke Codex while no workspace is attached, tell them to attach \
@@ -464,6 +467,7 @@ pub trait CodexSubagentRunner: Send + Sync {
 pub struct LlmAgentRuntime {
     provider: Arc<dyn LlmProvider>,
     model: String,
+    hosted_tools: Vec<HostedToolSpec>,
     gateway: Arc<ToolGateway>,
     external_tools: Option<Arc<dyn ExternalToolHost>>,
     max_tokens: u32,
@@ -546,6 +550,7 @@ impl LlmAgentRuntime {
         Self {
             provider: Arc::from(provider),
             model,
+            hosted_tools: Vec::new(),
             gateway,
             external_tools: None,
             max_tokens: max_tokens.unwrap_or(8192),
@@ -571,6 +576,12 @@ impl LlmAgentRuntime {
     /// Attach native web and managed MCP controls to every session, including pure chat.
     pub fn with_external_tools(mut self, host: Arc<dyn ExternalToolHost>) -> Self {
         self.external_tools = Some(host);
+        self
+    }
+
+    /// Attach tools executed by the selected model provider itself.
+    pub fn with_hosted_tools(mut self, tools: Vec<HostedToolSpec>) -> Self {
+        self.hosted_tools = tools;
         self
     }
 
@@ -711,6 +722,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 self.orchestration,
                 self.agent_prompts.clone(),
             )
+            .with_hosted_tools(self.hosted_tools.clone())
             .with_memory_context(memory_context.clone()),
         );
         {
@@ -730,6 +742,7 @@ impl AgentRuntime for LlmAgentRuntime {
             running: self.running.clone(),
             aborted_flag: self.aborted.clone(),
             provider: self.provider.clone(),
+            hosted_tools: self.hosted_tools.clone(),
             gateway: self.gateway.clone(),
             external_tools: self.external_tools.clone(),
             session_id: session_id.to_string(),
@@ -906,6 +919,7 @@ struct RunLoopCtx {
     running: Arc<AtomicBool>,
     aborted_flag: Arc<AtomicBool>,
     provider: Arc<dyn LlmProvider>,
+    hosted_tools: Vec<HostedToolSpec>,
     gateway: Arc<ToolGateway>,
     external_tools: Option<Arc<dyn ExternalToolHost>>,
     session_id: String,
@@ -1003,7 +1017,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             delegation: delegation_allowed.then(|| ctx.supervisor.clone()),
             delegation_disabled: ctx.delegation_disabled.clone(),
         };
-        let tools = tool_host.tool_specs();
+        let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools);
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
         // run_child 中的 build_subagent_system_prompt。
         let mut system_prompt =
@@ -1029,6 +1043,7 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
             system: Some(system_prompt),
             messages: Vec::new(), // 由 run_agent_loop_iteration 同步
             tools: Vec::new(),    // 同上
+            hosted_tools: ctx.hosted_tools.clone(),
             max_tokens: ctx.max_tokens,
             temperature: ctx.temperature,
             // 纯聊天没有长系统提示或工具定义可复用，关闭缓存可避免部分兼容接口
@@ -1366,6 +1381,19 @@ fn tool_policy_for_task_mode(mode: TaskMode) -> ToolPolicy {
     } else {
         ToolPolicy::Main
     }
+}
+
+/// A hosted web-search declaration and a client function with the same name are different
+/// protocol concepts, but providers place both in one `tools` array. Keep exactly one
+/// `web_search` entry so the server executes it and the local fallback is not called twice.
+fn client_tools_for_hosted_tools(
+    mut tools: Vec<ToolSpec>,
+    hosted_tools: &[HostedToolSpec],
+) -> Vec<ToolSpec> {
+    if hosted_tools.iter().any(HostedToolSpec::is_web_search) {
+        tools.retain(|tool| tool.name != "web_search");
+    }
+    tools
 }
 
 impl SessionToolHost {
@@ -1853,6 +1881,7 @@ fn truncate_summary(text: &str) -> String {
 #[derive(Clone)]
 struct SubagentSupervisor {
     provider: Arc<dyn LlmProvider>,
+    hosted_tools: Vec<HostedToolSpec>,
     gateway: Arc<ToolGateway>,
     external_tools: Option<Arc<dyn ExternalToolHost>>,
     event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
@@ -1913,6 +1942,7 @@ impl SubagentSupervisor {
     ) -> Self {
         Self {
             provider,
+            hosted_tools: Vec::new(),
             gateway,
             external_tools,
             event_tx,
@@ -1936,6 +1966,11 @@ impl SubagentSupervisor {
 
     fn with_memory_context(mut self, memory_context: Option<String>) -> Self {
         self.memory_context = memory_context;
+        self
+    }
+
+    fn with_hosted_tools(mut self, tools: Vec<HostedToolSpec>) -> Self {
+        self.hosted_tools = tools;
         self
     }
 
@@ -2441,7 +2476,7 @@ impl SubagentSupervisor {
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
         };
-        let tools = tool_host.tool_specs();
+        let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &self.hosted_tools);
         let mut messages = vec![Message::user_text(goal)];
         let mut terminal_error: Option<String> = None;
 
@@ -2469,6 +2504,7 @@ impl SubagentSupervisor {
                 )),
                 messages: Vec::new(),
                 tools: Vec::new(),
+                hosted_tools: self.hosted_tools.clone(),
                 max_tokens: self.max_tokens,
                 temperature: self.temperature,
                 enable_caching: !tools.is_empty(),
@@ -3062,6 +3098,7 @@ mod tests {
         let system = request.system.as_deref().unwrap();
         assert!(system.contains("coding agent working inside a user-approved workspace"));
         assert!(system.contains("When the user explicitly asks for Codex"));
+        assert!(system.contains("final web-research fallback"));
         assert!(!system.contains("You are a read-only delegated subagent"));
         assert!(request.tools.iter().any(|tool| tool.name == "read_file"));
         let delegate = request
@@ -3884,6 +3921,27 @@ mod tests {
         assert!(child.contains("use native `web_search` and `web_fetch` first"));
         assert!(child.contains("`mcp_discover` inspects local installed services only"));
         assert!(child.contains("call `suggest_mcp`"));
+    }
+
+    #[test]
+    fn hosted_web_search_removes_only_the_client_name_collision() {
+        let spec = |name: &str| ToolSpec {
+            name: name.to_string(),
+            description: name.to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            source: ToolSource::Builtin,
+            requires_confirmation: false,
+        };
+        let tools = client_tools_for_hosted_tools(
+            vec![spec("web_search"), spec("web_fetch"), spec("read_file")],
+            &[HostedToolSpec::web_search()],
+        );
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["web_fetch", "read_file"]);
     }
 
     #[test]

@@ -89,6 +89,7 @@ async fn execute_claim(
                 "Review this sanitized memory envelope and return only the required JSON object:\n{input}"
             ))],
             tools: Vec::new(),
+            hosted_tools: Vec::new(),
             max_tokens: REVIEW_MAX_TOKENS,
             temperature: Some(0.1),
             enable_caching: false,
