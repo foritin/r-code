@@ -781,8 +781,26 @@ export interface ProviderPreset {
   note: string | null;
 }
 
+export type HostedWebFormat = "standard" | "dash_scope" | "open_router";
+export type HostedWebRead = "none" | "via_search" | "dedicated";
+
+/** 后端已验证并接线的一条厂商托管联网线路。 */
+export interface HostedWebRoute {
+  provider_id: string;
+  provider_label: string;
+  host_pattern: string;
+  path: string;
+  protocol: ProviderProtocol;
+  model_patterns: string[];
+  format: HostedWebFormat;
+  read: HostedWebRead;
+  docs_url: string;
+  docs_label: string;
+}
+
 export interface ProviderCatalog {
   presets: ProviderPreset[];
+  hosted_web_routes: HostedWebRoute[];
 }
 
 export interface ProviderModelsInput {
@@ -897,6 +915,9 @@ export interface AppConfig {
 
 export interface ReviewPathStatus {
   path: string;
+  /** Current-run changes are actionable; other Git worktree changes are context-only. */
+  scope?: "task" | "workspace";
+  change_type?: ChangeType | null;
   accepted: boolean;
   rejected: boolean;
   remaining: boolean;

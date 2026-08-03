@@ -64,6 +64,8 @@ interface Props {
   scroll?: boolean;
   /** 补全列表等场景需要与触发器等宽 */
   matchAnchorWidth?: boolean;
+  /** 触发器与浮层的间距 */
+  gap?: number;
   onOpenChange?: (open: boolean) => void;
   /** 递增该值可从斜杠命令等外部入口打开菜单。 */
   openRequest?: number;
@@ -81,6 +83,7 @@ export function Menu({
   className,
   scroll = false,
   matchAnchorWidth = false,
+  gap,
   onOpenChange,
   openRequest,
 }: Props) {
@@ -235,6 +238,7 @@ export function Menu({
           placement={placement}
           align={align}
           matchAnchorWidth={matchAnchorWidth}
+          gap={gap}
           className={
             "popover" +
             (scroll ? " popover--scroll" : "") +
