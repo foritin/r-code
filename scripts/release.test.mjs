@@ -89,8 +89,14 @@ test("release workflow isolates unsigned prereleases while signed releases stay 
   assert.match(workflow, /signtool[\s\S]*verify/);
   assert.match(workflow, /required=\(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY\)/);
   assert.match(workflow, /if \[\[ "\$RELEASE_TAG" != \*-unsigned\.\* \]\]/);
-  assert.match(workflow, /prerelease: \$\{\{ contains\(env\.RELEASE_TAG, '-unsigned\.'\) \}\}/);
-  assert.match(workflow, /contains\(env\.RELEASE_TAG, '-unsigned\.'\) && '-' \|\| secrets\.APPLE_SIGNING_IDENTITY/);
+  const unsignedStep = workflow.match(
+    /- name: Build and publish unsigned prerelease([\s\S]*?)(?=\n      - name:)/,
+  )?.[1];
+  assert.ok(unsignedStep, "unsigned prerelease build step must exist");
+  assert.match(unsignedStep, /if: contains\(env\.RELEASE_TAG, '-unsigned\.'\)/);
+  assert.match(unsignedStep, /APPLE_SIGNING_IDENTITY: .*&& '-' \|\| ''/);
+  assert.match(unsignedStep, /prerelease: true/);
+  assert.doesNotMatch(unsignedStep, /APPLE_ID|APPLE_PASSWORD|APPLE_TEAM_ID/);
   assert.match(workflow, /这是未签名预发布版本，仅用于测试/);
   assert.match(workflow, /--prerelease/);
   assert.match(workflow, /--draft=false --latest --verify-tag/);
