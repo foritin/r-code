@@ -62,6 +62,13 @@ import type {
   MemoryOverview,
   MemoryReviewSettingsUpdate,
   MemoryReviewSettingsView,
+  AnswerPlanQuestionsInput,
+  EnhancedReviewTarget,
+  EnhancedReviewView,
+  PlanRejectResult,
+  PlanReviewDecision,
+  PlanView,
+  UpdatePlanItemInput,
 } from "./types";
 import {
   browserMockDetails,
@@ -141,6 +148,42 @@ export const taskSetInference = (taskId: string, inference: InferenceOptions) =>
 
 export const taskRename = (taskId: string, title: string) =>
   ipc<Task>("cmd_task_rename", { taskId, title });
+
+/** Update or clear the durable task goal used by the Plan aggregate and subsequent turns. */
+export const taskUpdateGoal = (taskId: string, goal: string) =>
+  ipc<Task>("cmd_task_update_goal", { taskId, goal });
+
+/** Switch the task policy; Plan mode is enforced by the native R-Code runtime. */
+export const taskSetMode = (taskId: string, mode: TaskMode) =>
+  ipc<Task>("cmd_task_set_mode", { taskId, mode });
+
+// ---------- Plan / Human in the loop ----------
+export const planGet = (taskId: string) =>
+  ipc<PlanView | null>("cmd_plan_get", { taskId });
+
+export const planCreate = (taskId: string) =>
+  ipc<PlanView>("cmd_plan_create", { taskId });
+
+export const planAnswer = (taskId: string, input: AnswerPlanQuestionsInput) =>
+  ipc<PlanView>("cmd_plan_answer", { taskId, input });
+
+export const planRetryContinuation = (taskId: string, questionSetId: string) =>
+  ipc<PlanView>("cmd_plan_retry_continuation", { taskId, questionSetId });
+
+export const planApprove = (taskId: string, planId: string, expectedRevision: number) =>
+  ipc<PlanView>("cmd_plan_approve", { taskId, planId, expectedRevision });
+
+export const planRetryImplementation = (taskId: string, planId: string) =>
+  ipc<PlanView>("cmd_plan_retry_implementation", { taskId, planId });
+
+export const planCancel = (taskId: string, planId: string, expectedRevision: number) =>
+  ipc<PlanView>("cmd_plan_cancel", { taskId, planId, expectedRevision });
+
+export const planRepairProjection = (taskId: string, planId: string) =>
+  ipc<PlanView>("cmd_plan_repair_projection", { taskId, planId });
+
+export const planUpdateItem = (taskId: string, input: UpdatePlanItemInput) =>
+  ipc<PlanView>("cmd_plan_update_item", { taskId, input });
 
 export const taskForkContext = (taskId: string) =>
   ipc<SessionBranch>("cmd_task_fork_context", { taskId });
@@ -284,6 +327,34 @@ export async function reviewAcceptAll(taskId: string) {
 export async function reviewRejectFile(taskId: string, path: string) {
   const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_reject_file", { taskId, path });
   announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+/** Current Plan revision grouped by feature ownership; independent from the Git review ledger. */
+export const planReviewStatus = (taskId: string) =>
+  ipc<EnhancedReviewView | null>("cmd_plan_review_status", { taskId });
+
+export async function planReviewAcceptFile(target: EnhancedReviewTarget) {
+  const result = await ipc<PlanReviewDecision>("cmd_plan_review_accept_file", { target });
+  announceReviewStatusChanged(target.task_id);
+  return result;
+}
+
+export async function planReviewAcceptFeature(target: EnhancedReviewTarget) {
+  const result = await ipc<PlanReviewDecision>("cmd_plan_review_accept_feature", { target });
+  announceReviewStatusChanged(target.task_id);
+  return result;
+}
+
+export async function planReviewRejectFile(target: EnhancedReviewTarget) {
+  const result = await ipc<PlanRejectResult>("cmd_plan_review_reject_file", { target });
+  announceReviewStatusChanged(target.task_id);
+  return result;
+}
+
+export async function planReviewRejectFeature(target: EnhancedReviewTarget) {
+  const result = await ipc<PlanRejectResult>("cmd_plan_review_reject_feature", { target });
+  announceReviewStatusChanged(target.task_id);
   return result;
 }
 
