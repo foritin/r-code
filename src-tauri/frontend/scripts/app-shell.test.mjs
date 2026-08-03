@@ -1650,7 +1650,7 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   await workbench.waitFor({ state: "visible" });
   await workbench.getByRole("tab", { name: /变更/ }).waitFor({ state: "visible" });
   await workbench.getByRole("button", { name: "接受文件", exact: true }).waitFor({ state: "visible" });
-  await workbench.getByRole("button", { name: "接受全部", exact: true }).waitFor({ state: "visible" });
+  await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).waitFor({ state: "visible" });
   await page.waitForFunction(
     (root) => root.querySelectorAll(".chg-row").length === 1,
     await workbench.elementHandle(),
@@ -1700,6 +1700,50 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
 
   await delivery.getByRole("button", { name: "推送到 upstream", exact: true }).click();
   await delivery.getByRole("button", { name: "5s 后可确认", exact: true }).waitFor({ state: "visible" });
+
+  await page.close();
+});
+
+test("review rejection animates resolved rows away and exposes guarded bulk reject", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    useAppStore.getState().openRoom("mock-task-review", "changes");
+  });
+
+  const workbench = page.getByTestId("workbench-panel");
+  await workbench.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    (root) => root.querySelectorAll(".chg-row").length === 2,
+    await workbench.elementHandle(),
+  );
+  await workbench.getByRole("button", { name: "拒绝并恢复本轮全部文件", exact: true }).waitFor({ state: "visible" });
+
+  const rejectedRow = workbench.locator(".chg-row").filter({ hasText: "src/error.rs" });
+  await rejectedRow.getByRole("button", { name: "拒绝并恢复 src/error.rs", exact: true }).click();
+  await rejectedRow.getByRole("button", { name: "再次确认，拒绝 src/error.rs", exact: true }).click();
+  await page.waitForFunction(
+    (root) => root.querySelector(".chg-row.is-exiting") !== null,
+    await workbench.elementHandle(),
+  );
+  assert.match(
+    await rejectedRow.evaluate((element) => getComputedStyle(element).animationName),
+    /review-row-exit/,
+  );
+  await rejectedRow.waitFor({ state: "detached" });
+  assert.equal(await workbench.locator(".chg-row").count(), 1, "a rejected file must not keep a placeholder row");
+
+  await workbench.getByRole("button", { name: "拒绝并恢复本轮全部文件", exact: true }).click();
+  await workbench.getByRole("button", { name: "再次确认，拒绝本轮全部文件", exact: true }).click();
+  await page.waitForFunction(
+    (root) => root.querySelectorAll(".chg-row").length === 0,
+    await workbench.elementHandle(),
+  );
+  await workbench.getByText("工作区原有变更未受影响", { exact: false }).waitFor({ state: "visible" });
 
   await page.close();
 });

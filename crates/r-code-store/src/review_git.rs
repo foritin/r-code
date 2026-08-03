@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
+use r_code_core::dto::FileChangeType;
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -23,6 +24,12 @@ const SYNTHETIC_ITEM_PREFIX: &str = "file:";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReviewPathStatus {
     pub path: String,
+    /// `task` paths belong to the current run and can be accepted/rejected. `workspace` paths
+    /// are other Git changes surfaced for context and must remain read-only in review.
+    #[serde(default)]
+    pub scope: ReviewPathScope,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_type: Option<FileChangeType>,
     pub accepted: bool,
     pub rejected: bool,
     pub remaining: bool,
@@ -32,6 +39,14 @@ pub struct ReviewPathStatus {
     pub accepted_items: usize,
     pub rejected_items: usize,
     pub remaining_items: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewPathScope {
+    #[default]
+    Task,
+    Workspace,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -845,30 +860,41 @@ impl<'a> ReviewLedgerService<'a> {
         let conn = self.db.conn()?;
         let mut statement = conn
             .prepare(
-                "SELECT rf.path, rf.state, rf.blocker, \
+                "SELECT rf.path, rf.state, rf.blocker, rf.before_hash, rf.after_hash, \
                         SUM(CASE WHEN ri.state = 'accepted' THEN 1 ELSE 0 END), \
                         SUM(CASE WHEN ri.state = 'rejected' THEN 1 ELSE 0 END), \
                         SUM(CASE WHEN ri.state = 'pending' THEN 1 ELSE 0 END) \
                  FROM review_files rf \
                  JOIN review_items ri ON ri.review_file_id = rf.id \
                  WHERE rf.session_id = ?1 \
-                 GROUP BY rf.id, rf.path, rf.state, rf.blocker ORDER BY rf.path",
+                 GROUP BY rf.id, rf.path, rf.state, rf.blocker, rf.before_hash, rf.after_hash \
+                 ORDER BY rf.path",
             )
             .map_err(db_err)?;
         let rows = statement
             .query_map(params![context.id], |row| {
                 let state: String = row.get(1)?;
-                let remaining_items = usize::try_from(row.get::<_, i64>(5)?).unwrap_or(0);
+                let before_hash = row.get::<_, Option<String>>(3)?;
+                let after_hash = row.get::<_, Option<String>>(4)?;
+                let change_type = match (before_hash.is_some(), after_hash.is_some()) {
+                    (false, true) => Some(FileChangeType::Create),
+                    (true, false) => Some(FileChangeType::Delete),
+                    (true, true) => Some(FileChangeType::Modify),
+                    (false, false) => None,
+                };
+                let remaining_items = usize::try_from(row.get::<_, i64>(7)?).unwrap_or(0);
                 Ok(ReviewPathStatus {
                     path: row.get(0)?,
+                    scope: ReviewPathScope::Task,
+                    change_type,
                     accepted: state == "accepted",
                     rejected: state == "rejected",
                     remaining: state == "pending" || state == "conflict" || remaining_items > 0,
                     conflict: state == "conflict",
                     safe_to_accept: state != "conflict",
                     blocker: row.get(2)?,
-                    accepted_items: usize::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
-                    rejected_items: usize::try_from(row.get::<_, i64>(4)?).unwrap_or(0),
+                    accepted_items: usize::try_from(row.get::<_, i64>(5)?).unwrap_or(0),
+                    rejected_items: usize::try_from(row.get::<_, i64>(6)?).unwrap_or(0),
                     remaining_items,
                 })
             })

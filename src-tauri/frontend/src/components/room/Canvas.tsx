@@ -1,7 +1,7 @@
 /**
  * Room 右列画布 —— Summary / Changes·n / Terminal / Review 四页签。
  * 激活页签来自 store.app.canvasTab（页签点击或 视图 菜单切换）。
- * Changes 的文件列表直接用 detail.changes(随 RoomScene 2s 轮询自动刷新,与 changesList 同源)。
+ * Changes 以本轮记录为可操作范围，并合并当前项目的 Git 未提交变更作为只读上下文。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
@@ -229,6 +229,9 @@ export function Canvas({
   const toggleFocus = useAppStore((s) => s.toggleWorkbenchFocus);
   const expandReview = useAppStore((s) => s.expandReview);
   const detail = useTasksStore((s) => s.details[taskId]);
+  const [reviewChangeCount, setReviewChangeCount] = useState<number | null>(null);
+  useEffect(() => setReviewChangeCount(null), [taskId]);
+  const displayedReviewChangeCount = reviewChangeCount ?? detail?.changes.length ?? 0;
   const workspace = useTasksStore((s) =>
     workspacePath ? s.workspaces.find((item) => item.canonical_path === workspacePath) : undefined,
   );
@@ -279,7 +282,7 @@ export function Canvas({
     return (
       <aside className="workbench-review-rail" data-testid="review-collapsed" aria-label="审核工作台已收起">
         <button type="button" className="workbench-review-rail-button" onClick={expandReview} aria-label="展开审核工作台">
-          <span className="workbench-review-rail-icon"><IconShield width={19} height={19} /><b>{detail?.changes.length ?? 0}</b></span>
+          <span className="workbench-review-rail-icon"><IconShield width={19} height={19} /><b>{displayedReviewChangeCount}</b></span>
           <span>审核</span>
         </button>
         <span className="workbench-review-rail-spacer" />
@@ -432,7 +435,7 @@ export function Canvas({
                   >
                     <span className="workbench-launcher-glyph"><ToolIcon tab={tool.id} width={17} height={17} /></span>
                     <span><strong>{tool.label}</strong><small>{tool.description}</small></span>
-                    {tool.id === "review" && <em>{detail?.changes.length ?? 0}</em>}
+                    {tool.id === "review" && <em>{displayedReviewChangeCount}</em>}
                     <kbd>{tool.shortcut}</kbd>
                   </button>
                 </li>
@@ -472,12 +475,12 @@ export function Canvas({
                 requestAnimationFrame(() => document.getElementById(`review-view-${next}`)?.focus());
               }}
             >
-              <button id="review-view-changes" type="button" role="tab" aria-selected={tab === "changes"} tabIndex={tab === "changes" ? 0 : -1} onClick={() => setTab("changes")}>变更 <span>{detail?.changes.length ?? 0}</span></button>
+              <button id="review-view-changes" type="button" role="tab" aria-selected={tab === "changes"} tabIndex={tab === "changes" ? 0 : -1} onClick={() => setTab("changes")}>变更 <span>{displayedReviewChangeCount}</span></button>
               <button id="review-view-review" type="button" role="tab" aria-selected={tab === "review"} tabIndex={tab === "review" ? 0 : -1} onClick={() => setTab("review")}>验证与决策</button>
             </div>
             <div className="workbench-review-panel" role="tabpanel">
               {tab === "changes"
-                ? <ChangesPanel key={`${taskId}:changes`} taskId={taskId} running={running} detail={detail} />
+                ? <ChangesPanel key={`${taskId}:changes`} taskId={taskId} running={running} detail={detail} onVisibleCountChange={setReviewChangeCount} />
                 : <ReviewPanel key={`${taskId}:review`} taskId={taskId} />}
             </div>
           </div>
@@ -701,10 +704,12 @@ function ChangesPanel({
   taskId,
   running,
   detail,
+  onVisibleCountChange,
 }: {
   taskId: string;
   running: boolean;
   detail: TaskDetail | undefined;
+  onVisibleCountChange: (count: number) => void;
 }) {
   const changes = useMemo(() => detail?.changes ?? [], [detail]);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
@@ -721,22 +726,16 @@ function ChangesPanel({
   const [rowFocus, setRowFocus] = useState(-1);
   const [gitStatus, setGitStatus] = useState<ReviewGitStatus | null>(null);
   const [pendingAccepts, setPendingAccepts] = useState<Set<string>>(new Set());
+  const [pendingRejects, setPendingRejects] = useState<Set<string>>(new Set());
+  const [exitingPaths, setExitingPaths] = useState<Set<string>>(new Set());
+  const [confirmRejectAll, setConfirmRejectAll] = useState(false);
   const [acceptedLineKeys, setAcceptedLineKeys] = useState<Set<string>>(new Set());
   const pendingAcceptKeysRef = useRef<Set<string>>(new Set());
+  const pendingRejectKeysRef = useRef<Set<string>>(new Set());
   const statusRefreshSequenceRef = useRef(0);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const visibleChanges = useMemo(() => {
-    if (!gitStatus || (running && gitStatus.paths.length === 0)) return changes;
-    const currentPaths = new Set(gitStatus.paths.map((item) => item.path));
-    return changes.filter((change) => currentPaths.has(change.path));
-  }, [changes, gitStatus, running]);
-  const path = sel && visibleChanges.some((change) => change.path === sel)
-    ? sel
-    : visibleChanges[0]?.path ?? null;
-  const selIndex = visibleChanges.findIndex((item) => item.path === path);
-  const rovingIndex = rovingIndexOf(rowFocus, selIndex, visibleChanges.length);
-  const changeStamp = changes.map((change) => `${change.id}:${change.after_hash ?? ""}`).join("|");
+  const confirmAllTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const exitTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   const refreshGitStatus = useCallback(async () => {
     const sequence = ++statusRefreshSequenceRef.current;
@@ -756,9 +755,48 @@ function ChangesPanel({
     }
   }, [taskId]);
 
-  useEffect(() => {
-    void refreshGitStatus();
-  }, [changeStamp, refreshGitStatus]);
+  usePoll(async () => {
+    await refreshGitStatus();
+  }, 2000, true, "审核变更");
+
+  useEffect(() => () => {
+    if (confirmTimer.current) clearTimeout(confirmTimer.current);
+    if (confirmAllTimer.current) clearTimeout(confirmAllTimer.current);
+    for (const timer of exitTimersRef.current) clearTimeout(timer);
+    exitTimersRef.current.clear();
+  }, []);
+
+  const visibleChanges = useMemo(() => {
+    if (!gitStatus || running) return changes;
+    const recordedByPath = new Map(changes.map((change) => [change.path, change]));
+    const visible = gitStatus.paths
+      .filter((status) => status.scope === "workspace" || !status.rejected || exitingPaths.has(status.path))
+      .map((status): FileChange => recordedByPath.get(status.path) ?? {
+        id: `workspace-git:${status.path}`,
+        task_id: taskId,
+        tool_call_id: null,
+        path: status.path,
+        change_type: status.change_type ?? "modify",
+        before_hash: null,
+        after_hash: null,
+        old_path: null,
+        created_at: "",
+      });
+    // A fast status refresh may already omit a successfully rejected path. Keep its old row for
+    // the short exit animation, then let it leave the active list.
+    for (const exitingPath of exitingPaths) {
+      if (visible.some((change) => change.path === exitingPath)) continue;
+      const recorded = recordedByPath.get(exitingPath);
+      if (recorded) visible.push(recorded);
+    }
+    return visible;
+  }, [changes, exitingPaths, gitStatus, running, taskId]);
+  useEffect(() => onVisibleCountChange(visibleChanges.length), [onVisibleCountChange, visibleChanges.length]);
+  const path = sel && visibleChanges.some((change) => change.path === sel)
+    ? sel
+    : visibleChanges[0]?.path ?? null;
+  const selIndex = visibleChanges.findIndex((item) => item.path === path);
+  const rovingIndex = rovingIndexOf(rowFocus, selIndex, visibleChanges.length);
 
   const pathStatus = useMemo(
     () => new Map(gitStatus?.paths.map((item) => [item.path, item]) ?? []),
@@ -782,6 +820,34 @@ function ChangesPanel({
     pendingAcceptKeysRef.current.delete(key);
     setPendingAccepts(new Set(pendingAcceptKeysRef.current));
   };
+  const beginReject = (key: string) => {
+    if (pendingRejectKeysRef.current.has(key)) return false;
+    pendingRejectKeysRef.current.add(key);
+    setPendingRejects(new Set(pendingRejectKeysRef.current));
+    return true;
+  };
+  const finishReject = (key: string) => {
+    pendingRejectKeysRef.current.delete(key);
+    setPendingRejects(new Set(pendingRejectKeysRef.current));
+  };
+  const animateRejectedPaths = useCallback((paths: string[]) => new Promise<void>((resolve) => {
+    if (paths.length === 0) {
+      resolve();
+      return;
+    }
+    setExitingPaths((current) => new Set([...current, ...paths]));
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    const timer = setTimeout(() => {
+      exitTimersRef.current.delete(timer);
+      setExitingPaths((current) => {
+        const next = new Set(current);
+        for (const path of paths) next.delete(path);
+        return next;
+      });
+      resolve();
+    }, reducedMotion ? 0 : 180);
+    exitTimersRef.current.add(timer);
+  }), []);
   const runAccept = (
     key: string,
     operation: () => Promise<void>,
@@ -868,7 +934,7 @@ function ChangesPanel({
     return () => {
       dead = true;
     };
-  }, [taskId, path, changes]);
+  }, [taskId, path, changes, gitStatus]);
 
   const doRollback = async (p: string) => {
     if (confirmPath !== p) {
@@ -877,6 +943,8 @@ function ChangesPanel({
       confirmTimer.current = setTimeout(() => setConfirmPath(null), 3000);
       return;
     }
+    const key = `file:${p}`;
+    if (!beginReject(key)) return;
     setConfirmPath(null);
     setError(null);
     setNotice(null);
@@ -884,11 +952,54 @@ function ChangesPanel({
       const result = await reviewRejectFile(taskId, p);
       setGitStatus((current) => current ? optimisticallyResolvePath(current, p, "rejected") : current);
       setNotice(`已拒绝 ${p}；文件已安全恢复。`);
+      await animateRejectedPaths([p]);
       await Promise.all([refreshDetail(taskId), refreshGitStatus()]);
     } catch (e) {
       setError(String(e));
+    } finally {
+      finishReject(key);
     }
   };
+
+  const rejectAllChanges = async () => {
+    if (!confirmRejectAll) {
+      setConfirmRejectAll(true);
+      if (confirmAllTimer.current) clearTimeout(confirmAllTimer.current);
+      confirmAllTimer.current = setTimeout(() => setConfirmRejectAll(false), 3500);
+      return;
+    }
+    if (!beginReject("all")) return;
+    setConfirmRejectAll(false);
+    setError(null);
+    setNotice(null);
+    const targets = (gitStatus?.paths ?? [])
+      .filter((status) => status.scope !== "workspace" && !status.rejected)
+      .map((status) => status.path);
+    try {
+      await rollbackTask(taskId);
+      setGitStatus((current) => {
+        if (!current) return current;
+        return targets.reduce(
+          (next, targetPath) => optimisticallyResolvePath(next, targetPath, "rejected"),
+          current,
+        );
+      });
+      setNotice(`已拒绝本轮 ${targets.length} 个文件；工作区原有变更未受影响。`);
+      await animateRejectedPaths(targets);
+      await Promise.all([refreshDetail(taskId), refreshGitStatus()]);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      finishReject("all");
+    }
+  };
+
+  const taskPathStatuses = gitStatus?.paths.filter((status) => status.scope !== "workspace") ?? [];
+  const selectedPathStatus = path ? pathStatus.get(path) : undefined;
+  const selectedWorkspaceOnly = selectedPathStatus?.scope === "workspace";
+  const selectedPathExiting = path ? exitingPaths.has(path) : false;
+  const rejectableTaskCount = taskPathStatuses.filter((status) => !status.rejected).length;
+  const globalDecisionPending = pendingAccepts.has("all") || pendingRejects.has("all");
 
   const lines = diff?.supported ? (diff.lines ?? []) : [];
   const adds = lines.filter((l) => l.kind === "add").length;
@@ -993,65 +1104,150 @@ function ChangesPanel({
     return end;
   }, [freshFrom, lines]);
 
+  const reviewActions = path ? (
+    <span className="review-accept-actions">
+      {selectedWorkspaceOnly ? (
+        <span className="chg-workspace-note" title={selectedPathStatus?.blocker ?? undefined}>
+          工作区未提交 · 仅查看
+        </span>
+      ) : (
+        <button
+          className="btn sm"
+          disabled={
+            globalDecisionPending
+            || pendingAccepts.has(fileAcceptKey(path))
+            || pendingRejects.has(`file:${path}`)
+            || selectedPathStatus?.safe_to_accept === false
+            || isPathFullyAccepted(path)
+            || isPathRejected(path)
+            || selectedPathExiting
+          }
+          onClick={() => void acceptFileChange(path)}
+        >
+          {selectedPathExiting || isPathRejected(path)
+            ? "已拒绝文件"
+            : isPathFullyAccepted(path)
+              ? "已接受文件"
+              : pendingAccepts.has(fileAcceptKey(path))
+                ? "接受中…"
+                : "接受文件"}
+        </button>
+      )}
+      {taskPathStatuses.length > 0 && (
+        <>
+          <button
+            className="btn accent sm"
+            disabled={globalDecisionPending || pendingRejects.size > 0 || gitStatus?.can_accept_all === false}
+            onClick={() => void acceptAllChanges()}
+          >
+            {pendingAccepts.has("all") ? "接受中…" : "接受本轮全部"}
+          </button>
+          <button
+            className={"btn sm review-reject-all" + (confirmRejectAll ? " confirm" : "")}
+            disabled={globalDecisionPending || pendingAccepts.size > 0 || rejectableTaskCount === 0}
+            aria-label={confirmRejectAll ? "再次确认，拒绝本轮全部文件" : "拒绝并恢复本轮全部文件"}
+            onClick={() => void rejectAllChanges()}
+          >
+            {pendingRejects.has("all") ? "恢复中…" : confirmRejectAll ? "确认拒绝本轮?" : "拒绝本轮全部"}
+          </button>
+        </>
+      )}
+    </span>
+  ) : null;
+
   return (
     <div className="changes-wrap">
       <div className="changes-list">
-        {visibleChanges.length === 0 && <div className="empty">还没有文件变更。</div>}
+        {visibleChanges.length === 0 && (
+          <div className="empty">
+            {gitStatus && gitStatus.accepted_count + gitStatus.rejected_count > 0
+              ? "本轮变更已处理完，工作区没有其他未提交变更。"
+              : "工作区没有未提交变更。"}
+          </div>
+        )}
         {visibleChanges.length > 0 && (
           <div className="chg-options" role="grid" aria-label="变更文件">
-            {visibleChanges.map((c, index) => (
-              <div
-                key={c.id}
-                id={chgRowId(index)}
-                role="row"
-                aria-selected={path === c.path}
-                tabIndex={index === rovingIndex ? 0 : -1}
-                className={"chg-row ring-inset" + (path === c.path ? " sel" : "")}
-                onFocus={() => setRowFocus(index)}
-                onClick={() => setSel(c.path)}
-                onKeyDown={(event) => {
-                  if (moveRowFocus(event, index, visibleChanges.length, chgRowId)) return;
-                  if (!isRowActivate(event)) return;
-                  event.preventDefault();
-                  setSel(c.path);
-                }}
-              >
-                <span className="rcell rcell-main" role="gridcell">
-                  {/* new/mod/del/ren 三字母缩写只有视觉意义，读屏走后面的完整中文 */}
-                  <span className={"chg-type t-" + c.change_type} aria-hidden="true">
-                    {typeLabel(c)}
+            {visibleChanges.map((c, index) => {
+              const status = pathStatus.get(c.path);
+              const workspaceOnly = status?.scope === "workspace";
+              const exiting = exitingPaths.has(c.path);
+              return (
+                <div
+                  key={c.id}
+                  id={chgRowId(index)}
+                  role="row"
+                  aria-selected={path === c.path}
+                  aria-busy={exiting || pendingRejects.has(`file:${c.path}`)}
+                  tabIndex={index === rovingIndex ? 0 : -1}
+                  className={
+                    "chg-row ring-inset"
+                    + (path === c.path ? " sel" : "")
+                    + (workspaceOnly ? " workspace-only" : "")
+                    + (exiting ? " is-exiting" : "")
+                  }
+                  onFocus={() => setRowFocus(index)}
+                  onClick={() => setSel(c.path)}
+                  onKeyDown={(event) => {
+                    if (moveRowFocus(event, index, visibleChanges.length, chgRowId)) return;
+                    if (!isRowActivate(event)) return;
+                    event.preventDefault();
+                    setSel(c.path);
+                  }}
+                >
+                  <span className="rcell rcell-main" role="gridcell">
+                    {/* new/mod/del/ren 三字母缩写只有视觉意义，读屏走后面的完整中文 */}
+                    <span className={"chg-type t-" + c.change_type} aria-hidden="true">
+                      {typeLabel(c)}
+                    </span>
+                    <span className="sr-only">{typeFullLabel(c)}</span>
+                    <span className="chg-path" title={c.path}>
+                      {c.path}
+                    </span>
                   </span>
-                  <span className="sr-only">{typeFullLabel(c)}</span>
-                  <span className="chg-path" title={c.path}>
-                    {c.path}
+                  <span className="rcell" role="gridcell">
+                    {exiting ? (
+                      <span className="chg-rejected">已拒绝</span>
+                    ) : workspaceOnly ? (
+                      <span className={"chg-workspace" + (status?.conflict ? " conflict" : "")} title={status?.blocker ?? undefined}>
+                        {status?.conflict ? "Git 冲突" : "工作区"}
+                      </span>
+                    ) : status?.accepted && !status.remaining ? (
+                      <span className="chg-accepted">已接受</span>
+                    ) : status?.rejected ? (
+                      <span className="chg-rejected">已拒绝</span>
+                    ) : status?.blocker ? (
+                      <span className="chg-blocked" title={status.blocker}>需处理</span>
+                    ) : (
+                      <button
+                        className="chg-accept"
+                        tabIndex={index === rovingIndex ? 0 : -1}
+                        disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(c.path)) || pendingRejects.has(`file:${c.path}`)}
+                        title={`接受 ${c.path}`}
+                        onClick={(event) => { event.stopPropagation(); void acceptFileChange(c.path); }}
+                      >{pendingAccepts.has(fileAcceptKey(c.path)) ? "…" : "接受"}</button>
+                    )}
+                    {!workspaceOnly && !exiting && (
+                      <button
+                        className={"chg-rb" + (confirmPath === c.path ? " confirm" : "")}
+                        // 只有 roving 落点那一行的行内按钮进 tab 序，否则 Tab 会把整列按钮走一遍
+                        tabIndex={index === rovingIndex ? 0 : -1}
+                        disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(c.path)) || pendingRejects.has(`file:${c.path}`)}
+                        title={confirmPath === c.path ? "再次点击确认拒绝" : "拒绝并恢复此文件"}
+                        aria-label={
+                          confirmPath === c.path ? `再次确认，拒绝 ${c.path}` : `拒绝并恢复 ${c.path}`
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void doRollback(c.path);
+                        }}
+                      >
+                        {pendingRejects.has(`file:${c.path}`) ? "…" : confirmPath === c.path ? "确认?" : "拒绝"}
+                      </button>
+                    )}
                   </span>
-                </span>
-                <span className="rcell" role="gridcell">
-                  {pathStatus.get(c.path)?.accepted && !pathStatus.get(c.path)?.remaining ? <span className="chg-accepted">已接受</span> : pathStatus.get(c.path)?.rejected ? <span className="chg-rejected">已拒绝</span> : pathStatus.get(c.path)?.blocker ? <span className="chg-blocked" title={pathStatus.get(c.path)?.blocker ?? undefined}>需处理</span> : <button
-                    className="chg-accept"
-                    tabIndex={index === rovingIndex ? 0 : -1}
-                    disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(c.path)) || isPathRejected(c.path)}
-                    title={`接受 ${c.path}`}
-                    onClick={(event) => { event.stopPropagation(); void acceptFileChange(c.path); }}
-                  >{pendingAccepts.has(fileAcceptKey(c.path)) ? "…" : "接受"}</button>}
-                  <button
-                    className={"chg-rb" + (confirmPath === c.path ? " confirm" : "")}
-                    // 只有 roving 落点那一行的行内按钮进 tab 序，否则 Tab 会把整列按钮走一遍
-                    tabIndex={index === rovingIndex ? 0 : -1}
-                    title={confirmPath === c.path ? "再次点击确认拒绝" : "拒绝并恢复此文件"}
-                    aria-label={
-                      confirmPath === c.path ? `再次确认，拒绝 ${c.path}` : `拒绝并恢复 ${c.path}`
-                    }
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void doRollback(c.path);
-                    }}
-                  >
-                    {confirmPath === c.path ? "确认?" : "拒绝"}
-                  </button>
-                </span>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -1064,8 +1260,7 @@ function ChangesPanel({
           <div className="chg-meta">
             <div className="canvas-head">
               <span className="path">{diff.path}</span>
-              <button className="btn sm" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || pathStatus.get(path)?.safe_to_accept === false || isPathRejected(path)} onClick={() => void acceptFileChange(path)}>{pendingAccepts.has(fileAcceptKey(path)) ? "接受中…" : "接受文件"}</button>
-              <button className="btn accent sm" disabled={pendingAccepts.has("all") || gitStatus?.can_accept_all === false} onClick={() => void acceptAllChanges()}>{pendingAccepts.has("all") ? "接受中…" : "接受全部"}</button>
+              {reviewActions}
             </div>
             <div className="empty">
               此文件不支持行级 diff(blob 缺失或二进制)。
@@ -1073,14 +1268,15 @@ function ChangesPanel({
               类型:{diff.change_type ?? "—"} · before {shortHash(diff.before_hash)} → after{" "}
               {shortHash(diff.after_hash)}
             </div>
-            <div className="chg-meta-actions">
+            {!selectedWorkspaceOnly && !selectedPathExiting && <div className="chg-meta-actions">
               <button
                 className={"btn danger sm" + (confirmPath === path ? " confirm" : "")}
+                disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`)}
                 onClick={() => void doRollback(path)}
               >
-                {confirmPath === path ? "确认拒绝?" : "拒绝并恢复"}
+                {pendingRejects.has(`file:${path}`) ? "恢复中…" : confirmPath === path ? "确认拒绝?" : "拒绝并恢复"}
               </button>
-            </div>
+            </div>}
           </div>
         )}
         {path && diff?.supported && (
@@ -1105,10 +1301,7 @@ function ChangesPanel({
                   live following
                 </span>
               )}
-              <span className="review-accept-actions">
-                <button className="btn sm" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || pathStatus.get(path)?.safe_to_accept === false || isPathFullyAccepted(path) || isPathRejected(path)} onClick={() => void acceptFileChange(path)}>{isPathRejected(path) ? "已拒绝文件" : isPathFullyAccepted(path) ? "已接受文件" : pendingAccepts.has(fileAcceptKey(path)) ? "接受中…" : "接受文件"}</button>
-                <button className="btn accent sm" disabled={pendingAccepts.has("all") || gitStatus?.can_accept_all === false} onClick={() => void acceptAllChanges()}>{pendingAccepts.has("all") ? "接受中…" : "接受全部"}</button>
-              </span>
+              {reviewActions}
             </div>
             <div
               // 无障碍模式下整块是可聚焦的滚动区（键盘能滚），ring-inset 避免焦点环被裁
@@ -1171,8 +1364,8 @@ function ChangesPanel({
                                 )}
                               </span>
                               <span className="dla-code">{line.text}</span>
-                              {(line.kind === "add" || line.kind === "del") && line.line_id && (
-                                <button className="diff-line-accept" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || line.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, line.line_id!)}>{line.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
+                              {(line.kind === "add" || line.kind === "del") && line.line_id && !selectedWorkspaceOnly && !selectedPathExiting && (
+                                <button className="diff-line-accept" disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`) || acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || line.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, line.line_id!)}>{line.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
                               )}
                             </li>
                           );
@@ -1202,8 +1395,8 @@ function ChangesPanel({
                       >
                         <span className="no">{l.new_no ?? l.old_no ?? ""}</span>
                         <span className="code">{l.text}</span>
-                        {(l.kind === "add" || l.kind === "del") && l.line_id && (
-                          <button className="diff-line-accept" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || l.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, l.line_id!)}>{l.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
+                        {(l.kind === "add" || l.kind === "del") && l.line_id && !selectedWorkspaceOnly && !selectedPathExiting && (
+                          <button className="diff-line-accept" disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`) || acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || l.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, l.line_id!)}>{l.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
                         )}
                       </div>
                     )
@@ -1234,10 +1427,11 @@ function typeLabel(c: FileChange): string {
 }
 
 function withReviewCounts(status: ReviewGitStatus, paths: ReviewGitStatus["paths"]): ReviewGitStatus {
-  const acceptedCount = paths.filter((path) => path.accepted).length;
-  const rejectedCount = paths.filter((path) => path.rejected).length;
-  const remainingCount = paths.filter((path) => path.remaining).length;
-  const conflictCount = paths.filter((path) => path.conflict).length;
+  const taskPaths = paths.filter((path) => path.scope !== "workspace");
+  const acceptedCount = taskPaths.filter((path) => path.accepted).length;
+  const rejectedCount = taskPaths.filter((path) => path.rejected).length;
+  const remainingCount = taskPaths.filter((path) => path.remaining).length;
+  const conflictCount = taskPaths.filter((path) => path.conflict).length;
   return {
     ...status,
     paths,
@@ -1270,7 +1464,9 @@ function optimisticallyResolvePath(
 function optimisticallyAcceptAll(status: ReviewGitStatus): ReviewGitStatus {
   let next = status;
   for (const path of status.paths) {
-    if (path.remaining && !path.conflict) next = optimisticallyResolvePath(next, path.path, "accepted");
+    if (path.scope !== "workspace" && path.remaining && !path.conflict) {
+      next = optimisticallyResolvePath(next, path.path, "accepted");
+    }
   }
   return next;
 }

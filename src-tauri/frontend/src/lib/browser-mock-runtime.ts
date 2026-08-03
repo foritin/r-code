@@ -886,6 +886,8 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         repo_root: "D:/demo/r-code",
         paths: changes.map((change) => ({
           path: change.path,
+          scope: "task",
+          change_type: change.change_type,
           accepted: accepted.has(change.path),
           rejected: rejected.has(change.path),
           remaining: !accepted.has(change.path) && !rejected.has(change.path),
