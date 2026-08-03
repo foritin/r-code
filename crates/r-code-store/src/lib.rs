@@ -18,19 +18,31 @@ pub mod change_service;
 pub mod database;
 pub mod document_store;
 pub mod git_service;
+pub mod memory_store;
 pub mod migrations;
 pub mod patch_engine;
 pub mod repositories;
 pub mod review;
+pub mod review_git;
 pub mod verification;
 pub mod workspace_service;
 
 // 重新导出核心类型
 pub use backup::BackupManager;
-pub use change_service::{ChangeService, ChangeSet, ChangeSetEntry, RollbackResult};
+pub use change_service::{
+    ChangeService, ChangeSet, ChangeSetEntry, NewRunWorkspaceSnapshot, RollbackResult,
+    RunWorkspaceSnapshot,
+};
 pub use database::Database;
 pub use document_store::{BomKind, ConflictStatus, DocumentEntry, DocumentStore};
-pub use git_service::{GitDiffResult, GitFileStatus, GitService, GitStatusKind};
+pub use git_service::{
+    GitDiffResult, GitFileStatus, GitService, GitStatusKind, GitTreeChange, GitTreeChangeKind,
+};
+pub use memory_store::{
+    render_snapshot, sanitize_review_text, CapturedMemoryTurn, LoadedMemorySnapshot,
+    MemoryCandidateView, MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryReviewClaim,
+    MemoryReviewJobView, MemoryStore,
+};
 pub use patch_engine::{apply_patch, hash_content, PatchError};
 pub use repositories::{
     AgentRunRepository, BlobStore, NotificationRepository, QueuedMessageRepository,
@@ -39,6 +51,11 @@ pub use repositories::{
 };
 pub use review::{
     AcceptReadiness, ReviewAction, ReviewActionResult, ReviewReadiness, ReviewService,
+};
+pub use review_git::{
+    review_line_id, GitCommitResult, GitDeliveryStatus, GitPushResult, ReviewAcceptResult,
+    ReviewDecision, ReviewDiffLine, ReviewDiffLineKind, ReviewFileSnapshot, ReviewGitService,
+    ReviewGitStatus, ReviewLedgerService, ReviewPathStatus, ReviewStatus,
 };
 pub use verification::{VerificationConfig, VerificationService};
 pub use workspace_service::WorkspaceService;

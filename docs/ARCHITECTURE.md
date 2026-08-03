@@ -6,7 +6,7 @@
 
 R-Code 是一个 session-first 的 AI 编程桌面应用。核心原则是：对话是长期会话，模型执行是可审计的 Run，本地改动必须经过统一工具边界，用户可以在任务、分支、变更、验证和回放之间追溯完整因果链。
 
-正常桌面模式下，Host、原生 Agent runtime、Tool Gateway 和存储服务是同一 Rust 进程内的逻辑模块；React 运行在 Tauri WebView 中。Codex CLI、Codex MCP stdio server 等外部集成才会创建额外进程。因此，不应再把当前实现描述为固定的“Host / Worker / Renderer 三独立进程”。
+正常桌面模式下，Host、原生 Agent runtime、Tool Gateway 和存储服务是同一 Rust 进程内的逻辑模块；React 运行在 Tauri WebView 中。Codex CLI、面向 Codex 的 MCP stdio server、启用后的本地 stdio MCP 等外部集成才会创建额外进程。因此，不应再把当前实现描述为固定的“Host / Worker / Renderer 三独立进程”。
 
 ```mermaid
 flowchart LR
@@ -17,12 +17,15 @@ flowchart LR
     Native <-->|"流式模型协议"| Provider["LLM Provider"]
     Native --> Gateway["ToolGateway"]
     Gateway --> Tools["文件 / 搜索 / Git / Shell 工具"]
+    Gateway --> External["原生 Web / MCP ToolHost"]
+    External --> Web["公开 Web"]
+    External --> McpClient["内置 / 本地 / 远程 MCP"]
     Host --> Terminal["PTY TerminalManager"]
     Host --> SQLite["SQLite 产品状态"]
     Host --> JSONL["JSONL 会话事件"]
     Host --> Blobs["内容寻址 Blob"]
     Bridge -.->|"可选外部进程"| Codex["Codex CLI"]
-    Codex <-->|"stdio JSON-RPC"| MCP["r-code-host mcp-server"]
+    Codex <-->|"stdio JSON-RPC"| CodexMCP["r-code-host mcp-server"]
 ```
 
 ### 1.1 运行边界
@@ -33,6 +36,7 @@ flowchart LR
 | 应用服务 | `src-tauri/src/commands.rs` 及同目录模块 | 任务编排、Provider、Codex、MCP、恢复、搜索、设置等产品逻辑 |
 | 原生 Agent | `crates/r-code-agent-worker/` | 多轮模型循环、Steer、子智能体、质量复核 |
 | 工具安全边界 | `crates/r-code-gateway/` | 工具注册、路径绑定、风险分类、权限等待、审计 |
+| 联网与 MCP 客户端 | `crates/r-code-mcp/`、`src-tauri/src/mcp_manager.rs` | 安全网页访问、MCP 协议客户端、Registry、凭据引用、惰性连接与生命周期 |
 | 产品存储 | `crates/r-code-store/` | SQLite、变更基线、Blob、Git、验证、审核和备份 |
 | 终端 | `crates/r-code-terminal/` | PTY、OSC 133、增量输出、外部 CLI transcript |
 | 产品 DTO 与安全 | `crates/r-code-core/` | 状态机、请求/响应类型、密钥、路径边界 |
@@ -49,15 +53,16 @@ flowchart LR
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
 4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库。
-5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 13。
+5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 18。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
-7. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
-8. 启用真实 Provider runtime；没有有效配置时，发送消息会返回可见错误。
-9. 后台启动兼容性 `hermes_ipc::IpcServer`。它当前使用内存数据库，只注册 `ping` 和 `task.create`，不是桌面主数据通路。
+7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
+8. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
+9. 启用真实 Provider runtime；没有有效配置时，发送消息会返回可见错误。
+10. 后台启动兼容性 `hermes_ipc::IpcServer`。它当前使用内存数据库，只注册 `ping` 和 `task.create`，不是桌面主数据通路。
 
 应用数据目录由 Tauri 的 `app_data_dir` 决定，而不是仓库目录。卸载、备份或问题排查时要区分用户数据与工作区源代码。
 
-### 2.2 MCP stdio 模式
+### 2.2 面向 Codex 的 MCP stdio 模式
 
 以下命令会在日志初始化前切换到纯 stdio MCP server：
 
@@ -66,6 +71,8 @@ r-code-host mcp-server [--data-dir <path>]
 ```
 
 该顺序是协议不变量：stdout 上任何普通日志都可能破坏 JSON-RPC。这个模式主要由 Codex 配置和拉起，入口位于 `src-tauri/src/mcp_server.rs`。
+
+它与 R-Code 作为 MCP **客户端**连接第三方服务是两个独立方向。通用 MCP 客户端由 `r-code-mcp` 和 `McpManager` 提供，支持内置服务、stdio 与 streamable HTTP；配置、Registry 和安全边界见 [联网工具与 MCP](./mcp.md)。
 
 ## 3. Rust workspace 分层
 
@@ -77,8 +84,10 @@ flowchart TD
     Host --> Store["r-code-store"]
     Host --> Gateway["r-code-gateway"]
     Host --> Terminal["r-code-terminal"]
+    Host --> MCPClient["r-code-mcp"]
     Worker --> Gateway
     Worker --> Core["r-code-core"]
+    Worker --> MCPClient
     Store --> Core
     Gateway --> Core
     Terminal --> Gateway
@@ -101,9 +110,10 @@ flowchart TD
 - Provider 配置目录和当前项目根；
 - `AgentBridge`，维护任务到 runtime session、活动分支和存储 ID 的映射；
 - 外部 Agent、Codex MCP 连接和启动恢复状态；
+- 共享 `McpManager`，负责原生联网、MCP 配置、Registry、凭据引用、状态和有界关闭；
 - 向 WebView 发送 `agent-event` 的回调。
 
-初始化时注册的模型工具包括 `read_file`、`list_files`、`search`、`glob`、`git_status`、`load_skill`、`edit`、`apply_patch`、`create_file`、`delete_file` 和 `bash`。所有调用都必须走 Gateway；直接在 Agent loop 中访问文件系统会绕过路径、审批和审计不变量。
+初始化时注册的工作区模型工具包括 `read_file`、`list_files`、`search`、`glob`、`git_status`、`load_skill`、`edit`、`apply_patch`、`create_file`、`delete_file` 和 `bash`。无工作区会话仍拥有固定的 `web_search`、`web_fetch`、`mcp_discover`、`mcp_call` 与 `suggest_mcp`；安装 MCP 不会动态增加模型工具 schema。所有实际调用都必须走权限与审计边界；直接在 Agent loop 中访问文件系统或外部服务会绕过不变量。
 
 ## 4. Renderer 与 Host 通信
 
@@ -133,7 +143,7 @@ sequenceDiagram
 - `store/app.ts`：纯 UI 状态，如 scene、当前 Room、工作台 tab、主题、缩放和搜索。
 - `store/tasks.ts`：任务、详情、工作区、仪表盘和活动流缓存；权威数据仍在 Host。
 
-运行中的文本和工具事件通过 `agent-event` 低延迟推送；任务状态、权限、审核等权威聚合通过 IPC 重新拉取。`usePoll` 只在窗口可见且聚焦时运行，并防止重入；Room、Deck、Dashboard 等场景按各自节奏补偿丢失事件或后台变化。浏览器原型环境可切换到 `browser-mock-runtime.ts`，但正式构建使用 Tauri IPC。
+运行中的文本和工具事件通过 `agent-event` 低延迟推送；任务状态、权限、审核等权威聚合通过 IPC 重新拉取。`usePoll` 只在窗口可见且聚焦时运行，并防止重入；所有订阅共享一个最近到期定时器和一套窗口生命周期监听，Room、Deck、Dashboard 等场景仍按各自节奏补偿丢失事件或后台变化。运行时长与相对时间统一订阅 `shared-clock.ts`，同一 WebView 只保留一个按需调频的时钟，失焦后停止；`store/tasks.ts` 的跨场景派生选择器按不可变输入引用缓存，避免无关 store 更新扩散为整棵界面重渲染。浏览器原型环境可切换到 `browser-mock-runtime.ts`，但正式构建使用 Tauri IPC。
 
 ## 5. 任务、会话与 Run 模型
 
@@ -178,11 +188,11 @@ Run 与 Task 状态不同：一个 Task 可以包含多个主 Run 和子 Run，�
 
 - 编辑或重发旧消息时创建子分支，保留父分支 JSONL，不原地改写历史。
 - 每个分支拥有独立 storage ID；主 Run、子 Run和队列项都带 branch ID。
-- 原生 Provider 的物理 runtime 当前在整个应用内串行化，避免多个任务共用事件队列时串流。
-- 忙碌时消息可按 `Auto`、`Steer`、`Queue` 或 `SendNow` 处理。队列按优先级和创建时间取下一条；切换到新分支时旧分支待处理消息会取消。
+- 原生 Provider 按 Task 分配独立 runtime 与事件通道：同一 Task 严格串行，不同 Task 可并行，流事件不会跨会话混合。
+- 忙碌时消息可按 `Auto`、`Steer`、`Queue` 或 `SendNow` 处理。每个 Task 只领取自己的队列，内部再按优先级和创建时间排序；切换到新分支时旧分支待处理消息会取消。
 - 附件只允许在启动新 Run 时进入，数量和总体积均有限制，并执行扩展名、MIME 与 magic bytes 校验。
 
-这一串行约束只针对应用内原生主 runtime；外部 Codex 子任务有自己的进程和生命周期。
+同一会话的串行约束同时适用于原生主 runtime；外部 Codex 子任务拥有独立进程和生命周期，不会占用其他 Task 的 Native bridge。
 
 ## 6. 原生 Agent 执行链路
 
@@ -191,7 +201,7 @@ Run 与 Task 状态不同：一个 Task 可以包含多个主 Run 和子 Run，�
 ```mermaid
 sequenceDiagram
     participant UI as WebView
-    participant Host as AgentBridge
+    participant Host as AgentRuntimePool / AgentBridge
     participant Session as SessionStore
     participant Runtime as LlmAgentRuntime
     participant LLM as Provider
@@ -316,7 +326,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages` 和 `notifications`。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，以及 schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes` 和 `memory_injections`。
 
 新增 migration 时必须：
 
@@ -327,6 +337,14 @@ flowchart TD
 5. 在破坏性数据变更前使用 `BackupManager` 验证备份。
 
 当前没有自动 downgrade migration。发布后如需回退应用，应确认新 schema 能被旧二进制读取，否则只能前滚修复。
+
+### 9.2 演进记忆纵向链路
+
+记忆默认关闭。开启后，Host 在每个顶层 Run 开始前从 `MemoryStore` 加载并冻结全局/项目快照，把同一快照注入主 Agent 与其子代理；成功结束后只把可见用户文本和最终助手文本交给脱敏缓冲。默认累计 10 个有效轮次触发一次复盘，可配置为 5–50；明确的“请记住”前缀可立即触发，管理页也能手动触发。
+
+后台 `memory_runtime` 使用用户选定的轻量 Reviewer Provider 做无工具、非流式结构化总结。模型只能提出 proposal：项目 proposal 经确定性校验后自动写回冻结 workspace，全局 proposal 必须进入待审批列表。Reviewer Provider 不是记忆 owner，更换 Provider 不会分叉记忆。运行中切换设置或项目模式会通过 generation 使旧任务失效；应用重启会把遗留 Reviewer lease 标记为 `interrupted`。
+
+临时轮次、正文、候选与注入引用都只进入 AppData SQLite，不写项目目录。详细触发条件、清理策略、表结构和安全边界见 [演进记忆](./memory.md)。
 
 ## 10. 文件变更、审核与验证
 
@@ -411,17 +429,17 @@ npm run test:popover
 npm run build
 ```
 
-CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows 运行 Rust workspace 测试。发布工作流会再次验证 tag、版本与 CHANGELOG，然后在三个平台构建安装包。
+CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows 运行 Rust workspace 测试。发布工作流会再次验证 tag、版本与 CHANGELOG，然后构建 Windows x64、macOS arm64/x64 与 Linux x64 安装包。
 
 ## 15. 已知约束与维护风险
 
 - `src-tauri/src/commands.rs` 同时承载大量应用服务和 Codex 适配，文件体积较大；新增领域优先拆到专用模块，避免继续集中。
-- 原生 Provider 主 Run 目前全局串行，适合保证事件隔离，但会限制多任务并发吞吐。
+- 原生 Provider 为活跃 Task 保留独立 runtime；归档、删除会话或清除项目时会释放对应 bridge。大量同时活跃会话会按并发数增加 Provider client 与事件通道资源占用。
 - 后台 `hermes_ipc` server 是兼容路径，只有少量 handler，不能视为完整远程控制 API。
 - SQLite migration 只前滚；发布 schema 后必须把兼容性纳入回退方案。
-- 发布矩阵当前只覆盖 Windows x64、macOS Apple Silicon、Linux x64；新增架构需要同时更新构建、updater manifest 和文档。
-- updater 签名与操作系统代码签名是两套机制。当前仓库能生成 Tauri updater 签名，但生产环境的 Apple notarization / Windows publisher signing 仍依赖维护者配置证书和 Secrets，详见 [RELEASING.md](./RELEASING.md)。
-- `packaging.rs` 已有 SPDX/许可证 inventory 生成器，但尚未接入发布产物；公开分发前需要完成 SBOM 和第三方 notices 链路。
+- 发布矩阵当前覆盖 Windows x64、macOS Apple Silicon/Intel、Linux x64；新增架构需要同时更新构建、updater manifest 和文档。
+- updater 签名与操作系统代码签名是两套机制。Release 对 Apple notarization 和 Windows Authenticode 均采用缺少 Secrets 即失败的门禁，详见 [RELEASING.md](./RELEASING.md)。
+- Release 会从锁定的 Cargo/npm 依赖图生成 CycloneDX SBOM 和第三方许可证清单；缺失许可证声明时发布失败。
 
 ## 16. 代码导航索引
 
@@ -436,7 +454,8 @@ CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows �
 | SQLite schema | `crates/r-code-store/src/migrations.rs` |
 | 双存储说明 | `crates/r-code-store/src/lib.rs` |
 | 会话回放 | `src-tauri/src/replay.rs` |
-| Codex/MCP | `src-tauri/src/commands.rs`、`codex_mcp.rs`、`mcp_server.rs` |
+| Codex 及其 MCP server | `src-tauri/src/commands.rs`、`codex_mcp.rs`、`mcp_server.rs` |
+| 通用联网与 MCP 客户端 | `crates/r-code-mcp/`、`src-tauri/src/mcp_manager.rs`、`mcp_settings.rs` |
 | PTY 与 OSC 133 | `crates/r-code-terminal/src/manager.rs`、`block.rs` |
 | 前端 IPC | `src-tauri/frontend/src/lib/ipc.ts` |
 | 前端状态 | `src-tauri/frontend/src/store/app.ts`、`tasks.ts` |

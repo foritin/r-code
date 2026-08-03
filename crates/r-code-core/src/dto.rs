@@ -142,7 +142,7 @@ impl std::fmt::Display for TaskMode {
 ///
 /// 状态机：`Idle -> Exploring -> InProgress -> ReviewReady -> Idle (accept/rollback)`；
 /// 用户可将运行转为 `Interrupted`，后续可直接分发排队消息。
-/// 任意状态可以 `-> Archived`。
+/// 任意状态可以 `-> Archived`，归档后可由用户显式还原为 `Idle`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskState {
@@ -157,7 +157,7 @@ pub enum TaskState {
     Interrupted,
     /// 待审查（Agent 完成一轮，等待用户接受/回滚）
     ReviewReady,
-    /// 已归档（不可再操作）
+    /// 已归档（只读；还原后可继续操作）
     Archived,
 }
 
@@ -889,10 +889,25 @@ pub enum ProjectAccessMode {
     FullAccess,
 }
 
+/// 项目记忆相对全局设置的生效模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMemoryMode {
+    /// 跟随全局记忆开关与策略。
+    #[default]
+    Inherit,
+    /// 允许读取已有记忆，但不再从该项目产生新记忆。
+    ReadOnly,
+    /// 该项目完全不读取也不产生记忆。
+    Off,
+}
+
 /// Workspace 记录。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
-    /// canonical path（主键）
+    /// 不随路径变化的本地 owner key。
+    pub id: String,
+    /// canonical path（唯一查找键，不作为 memory owner key）
     pub canonical_path: String,
     /// 显示名称
     pub display_name: String,
@@ -900,16 +915,29 @@ pub struct Workspace {
     pub access_mode: ProjectAccessMode,
     /// 最后打开时间
     pub last_opened_at: DateTime<Utc>,
+    /// 项目记忆模式。
+    #[serde(default)]
+    pub memory_mode: WorkspaceMemoryMode,
+    /// 项目记忆失效屏障；模式变化时单调递增。
+    #[serde(default = "initial_memory_generation")]
+    pub memory_generation: u64,
+}
+
+const fn initial_memory_generation() -> u64 {
+    1
 }
 
 impl Workspace {
     /// 创建新的 workspace 记录
     pub fn new(canonical_path: impl Into<String>, display_name: impl Into<String>) -> Self {
         Self {
+            id: uuid::Uuid::new_v4().simple().to_string(),
             canonical_path: canonical_path.into(),
             display_name: display_name.into(),
             access_mode: ProjectAccessMode::RequestApproval,
             last_opened_at: Utc::now(),
+            memory_mode: WorkspaceMemoryMode::Inherit,
+            memory_generation: initial_memory_generation(),
         }
     }
 }
@@ -931,6 +959,10 @@ pub enum NotificationKind {
     ReviewReady,
     /// 用户已对审查结果提出修改要求。
     ChangeRequested,
+    /// 全局记忆候选等待用户明确批准。
+    MemoryApprovalRequired,
+    /// 项目记忆已经由复盘任务自动更新。
+    MemoryProjectUpdated,
 }
 
 impl std::fmt::Display for NotificationKind {
@@ -939,6 +971,8 @@ impl std::fmt::Display for NotificationKind {
             Self::PermissionRequested => write!(f, "permission_requested"),
             Self::ReviewReady => write!(f, "review_ready"),
             Self::ChangeRequested => write!(f, "change_requested"),
+            Self::MemoryApprovalRequired => write!(f, "memory_approval_required"),
+            Self::MemoryProjectUpdated => write!(f, "memory_project_updated"),
         }
     }
 }
@@ -950,6 +984,8 @@ impl NotificationKind {
             "permission_requested" => Some(Self::PermissionRequested),
             "review_ready" => Some(Self::ReviewReady),
             "change_requested" => Some(Self::ChangeRequested),
+            "memory_approval_required" => Some(Self::MemoryApprovalRequired),
+            "memory_project_updated" => Some(Self::MemoryProjectUpdated),
             _ => None,
         }
     }
@@ -1808,6 +1844,41 @@ mod tests {
             QueuedMessageState::try_from_str("dispatching"),
             Some(QueuedMessageState::Dispatching)
         );
+    }
+
+    #[test]
+    fn workspace_memory_mode_serde_defaults_and_identity_are_stable() {
+        for (mode, encoded) in [
+            (WorkspaceMemoryMode::Inherit, "inherit"),
+            (WorkspaceMemoryMode::ReadOnly, "read_only"),
+            (WorkspaceMemoryMode::Off, "off"),
+        ] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), encoded);
+            assert_eq!(
+                serde_json::from_value::<WorkspaceMemoryMode>(encoded.into()).unwrap(),
+                mode
+            );
+        }
+
+        let legacy: Workspace = serde_json::from_str(
+            r#"{
+                "id": "00112233445566778899aabbccddeeff",
+                "canonical_path": "/legacy",
+                "display_name": "Legacy",
+                "access_mode": "request_approval",
+                "last_opened_at": "2025-01-01T00:00:00Z"
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.memory_mode, WorkspaceMemoryMode::Inherit);
+        assert_eq!(legacy.memory_generation, 1);
+
+        let created = Workspace::new("/new", "New");
+        let id = uuid::Uuid::parse_str(&created.id).unwrap();
+        assert_eq!(created.id.len(), 32);
+        assert_eq!(id.get_version(), Some(uuid::Version::Random));
+        assert_eq!(created.memory_mode, WorkspaceMemoryMode::Inherit);
+        assert_eq!(created.memory_generation, 1);
     }
 
     #[test]

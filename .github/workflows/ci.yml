@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -28,9 +28,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: src-tauri/frontend
         run: npm ci
-      - name: Test frontend tooling
+      - name: Test frontend
         working-directory: src-tauri/frontend
-        run: npm run test:dev-server && npm run test:popover
+        run: npm test
       - name: Build frontend
         working-directory: src-tauri/frontend
         run: npm run build

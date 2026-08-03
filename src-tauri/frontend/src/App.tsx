@@ -1,27 +1,56 @@
-import { useEffect } from "react";
-import { useAppStore } from "./store/app";
+import { lazy, Suspense, useEffect, type CSSProperties } from "react";
+import { MAX_RAIL_WIDTH, MIN_RAIL_WIDTH, useAppStore } from "./store/app";
 import { useTasksStore } from "./store/tasks";
-import { useGlobalKeys } from "./lib/keys";
+import { isMacPlatform, useGlobalKeys } from "./lib/keys";
 import { MenuBar } from "./components/shell/MenuBar";
 import { Rail } from "./components/shell/Rail";
+import {
+  MIN_MAIN_WIDTH,
+  RailResizeHandle,
+} from "./components/shell/RailResizeHandle";
+import { SyncHealthBanner } from "./components/shell/SyncHealthBanner";
 import { HomeScene } from "./components/scenes/HomeScene";
-import { DashboardScene } from "./components/scenes/DashboardScene";
-import { ConversationsScene } from "./components/scenes/ConversationsScene";
-import { ActivityScene } from "./components/scenes/ActivityScene";
-import { RoomScene } from "./components/scenes/RoomScene";
-import { InboxScene } from "./components/scenes/InboxScene";
-import { ProjectsScene } from "./components/scenes/ProjectsScene";
-import { EditorScene } from "./components/scenes/EditorScene";
-import { SettingsScene } from "./components/scenes/SettingsScene";
-import { SearchOverlay } from "./components/SearchOverlay";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
+import { clearSyncFailure, reportSyncFailure } from "./store/sync-health";
+
+const DashboardScene = lazy(() =>
+  import("./components/scenes/DashboardScene").then((module) => ({ default: module.DashboardScene })),
+);
+const ConversationsScene = lazy(() =>
+  import("./components/scenes/ConversationsScene").then((module) => ({ default: module.ConversationsScene })),
+);
+const ActivityScene = lazy(() =>
+  import("./components/scenes/ActivityScene").then((module) => ({ default: module.ActivityScene })),
+);
+const RoomScene = lazy(() =>
+  import("./components/scenes/RoomScene").then((module) => ({ default: module.RoomScene })),
+);
+const InboxScene = lazy(() =>
+  import("./components/scenes/InboxScene").then((module) => ({ default: module.InboxScene })),
+);
+const ProjectsScene = lazy(() =>
+  import("./components/scenes/ProjectsScene").then((module) => ({ default: module.ProjectsScene })),
+);
+const KnowledgeScene = lazy(() =>
+  import("./components/scenes/KnowledgeScene").then((module) => ({ default: module.KnowledgeScene })),
+);
+const EditorScene = lazy(() =>
+  import("./components/scenes/EditorScene").then((module) => ({ default: module.EditorScene })),
+);
+const SettingsScene = lazy(() =>
+  import("./components/scenes/SettingsScene").then((module) => ({ default: module.SettingsScene })),
+);
+const SearchOverlay = lazy(() =>
+  import("./components/SearchOverlay").then((module) => ({ default: module.SearchOverlay })),
+);
 
 /**
  * R-Code 应用根组件。
  * 紧凑标题栏 / 单一会话侧栏 / 主工作区（场景切换）。
  * 主题（亮/暗/跟随系统）解析后写入 <html data-theme>。
- * 界面缩放同步补偿根节点尺寸，避免放大后底栏和侧栏页脚被视口裁掉。
+ * CSS zoom 会自动重排块级宽度，但会把显式的 100vh 再缩放一次；因此宽度保持
+ * auto，仅用反向 vh 补偿高度，让根节点在 80%-200% 都铺满 WebView。
  */
 export default function App() {
   const scene = useAppStore((s) => s.scene);
@@ -29,6 +58,7 @@ export default function App() {
   const zoomLevel = useAppStore((s) => s.zoomLevel);
   const searchOpen = useAppStore((s) => s.searchOpen);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
+  const railWidth = useAppStore((s) => s.railWidth);
   const toggleRail = useAppStore((s) => s.toggleRail);
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
@@ -36,7 +66,6 @@ export default function App() {
   const zoomIn = useAppStore((s) => s.zoomIn);
   const zoomOut = useAppStore((s) => s.zoomOut);
   const zoomReset = useAppStore((s) => s.zoomReset);
-
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
 
@@ -66,8 +95,21 @@ export default function App() {
   }, [themeMode]);
 
   useEffect(() => {
-    void refreshWorkspaces().catch(() => {});
-    void refreshTasks().catch(() => {});
+    const refreshStartupData = () => {
+      void refreshWorkspaces()
+        .then(() => clearSyncFailure("startup-workspaces"))
+        .catch((cause) => reportSyncFailure("startup-workspaces", "项目列表", cause));
+      void refreshTasks()
+        .then(() => clearSyncFailure("startup-tasks"))
+        .catch((cause) => reportSyncFailure("startup-tasks", "会话列表", cause));
+    };
+    refreshStartupData();
+    window.addEventListener("r-code:refresh-now", refreshStartupData);
+    return () => {
+      window.removeEventListener("r-code:refresh-now", refreshStartupData);
+      clearSyncFailure("startup-workspaces");
+      clearSyncFailure("startup-tasks");
+    };
   }, [refreshWorkspaces, refreshTasks]);
 
   // 后台任务跑完 / 权限卡住时播报（不在场就完全无感的那部分）
@@ -78,30 +120,43 @@ export default function App() {
   return (
     <div
       id="app"
-      className={`app-shell r-code-signature scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}`}
+      className={`app-shell r-code-signature scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}${isMacPlatform() ? " platform-macos" : ""}`}
       style={{
         zoom: appScale,
-        width: `${100 / appScale}%`,
-        height: `${100 / appScale}%`,
-      }}
+        height: `${100 / appScale}vh`,
+        "--rc-app-scale": appScale,
+        "--rc-rail-preferred-w": `${railWidth}px`,
+        // The browser resolves this against the grid's current inline size, so resize
+        // restoration is immediate and independent of React's resize-event scheduling.
+        "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px / var(--rc-app-scale))))`,
+      } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">跳到主内容</a>
       <MenuBar />
       <Rail />
+      <RailResizeHandle />
       <main className="main" id="main-content" role="main" tabIndex={-1}>
-        {scene === "home" && <HomeScene />}
-        {scene === "dashboard" && <DashboardScene />}
-        {scene === "conversations" && <ConversationsScene />}
-        {scene === "deck" && <ActivityScene />}
-        {scene === "room" && <RoomScene />}
-        {scene === "inbox" && <InboxScene />}
-        {scene === "projects" && <ProjectsScene />}
-        {scene === "editor" && <EditorScene />}
-        {scene === "settings" && <SettingsScene />}
+        <Suspense fallback={<div className="scene empty" role="status">正在打开…</div>}>
+          {scene === "home" && <HomeScene />}
+          {scene === "dashboard" && <DashboardScene />}
+          {scene === "conversations" && <ConversationsScene />}
+          {scene === "deck" && <ActivityScene />}
+          {scene === "room" && <RoomScene />}
+          {scene === "inbox" && <InboxScene />}
+          {scene === "projects" && <ProjectsScene />}
+          {scene === "knowledge" && <KnowledgeScene />}
+          {scene === "editor" && <EditorScene />}
+          {scene === "settings" && <SettingsScene />}
+        </Suspense>
       </main>
-      {searchOpen && <SearchOverlay />}
+      {searchOpen && (
+        <Suspense fallback={null}>
+          <SearchOverlay />
+        </Suspense>
+      )}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
+      <SyncHealthBanner />
       <OnboardingCampaign />
     </div>
   );

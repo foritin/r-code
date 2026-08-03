@@ -223,11 +223,11 @@ export interface DashboardAttentionItem {
 
 export interface WorkspaceDashboardMetrics {
   task_count: number;
+  archived_task_count: number;
   pending_permission_count: number;
   review_ready_count: number;
   running_task_count: number;
   active_subagent_count: number;
-  completed_last_hour_count: number;
 }
 
 export interface WorkspaceDashboard {
@@ -236,7 +236,7 @@ export interface WorkspaceDashboard {
   metrics: WorkspaceDashboardMetrics;
   tasks: DashboardTaskSummary[];
   attention: DashboardAttentionItem[];
-  completed: DashboardTaskSummary[];
+  archived: Task[];
 }
 
 export interface ProjectActivityItem {
@@ -258,7 +258,12 @@ export interface ProjectActivityPage {
 }
 
 // ---------- 通知中心 ----------
-export type NotificationKind = "permission_requested" | "review_ready" | "change_requested";
+export type NotificationKind =
+  | "permission_requested"
+  | "review_ready"
+  | "change_requested"
+  | "memory_approval_required"
+  | "memory_project_updated";
 
 export interface Notification {
   id: string;
@@ -305,12 +310,124 @@ export interface QueuedMessage {
 
 // ---------- Workspace ----------
 export type ProjectAccessMode = "request_approval" | "risk_based" | "full_access";
+export type WorkspaceMemoryMode = "inherit" | "read_only" | "off";
+export type LegacyMemoryGitTracking = "tracked" | "untracked" | "unknown";
+
+export interface LegacyMemoryStatus {
+  exists: boolean;
+  git_tracking: LegacyMemoryGitTracking;
+}
 
 export interface Workspace {
+  id: string;
   canonical_path: string;
   display_name: string;
   access_mode: ProjectAccessMode;
   last_opened_at: string;
+  memory_mode: WorkspaceMemoryMode;
+  memory_generation: number;
+}
+
+// ---------- 演进记忆 ----------
+export type MemoryKind = "preference" | "constraint" | "convention" | "decision" | "pitfall";
+export type ProjectNotificationMode = "off" | "on" | "verbose";
+
+export type MemoryOwner =
+  | { scope: "global"; authorization: "manual" | "approved_candidate" }
+  | { scope: "project"; workspace_id: string; origin: "manual" | "automatic_review" | "undo" };
+
+export interface MemoryEntry {
+  id: string;
+  owner: MemoryOwner;
+  kind: MemoryKind;
+  content: string;
+  normalized_hash: string;
+  version: number;
+  pinned: boolean;
+  source_job_id: string | null;
+  source_candidate_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewerSelection {
+  provider_name: string;
+  model: string;
+}
+
+export interface MemoryReviewSettingsView {
+  enabled: boolean;
+  reviewer: ReviewerSelection | null;
+  trigger_every_turns: number;
+  explicit_remember_immediate: boolean;
+  project_notification_mode: ProjectNotificationMode;
+  version: number;
+  review_generation: number;
+  physical_cleanup_pending: boolean;
+  updated_at: string;
+}
+
+export interface MemoryReviewSettingsUpdate {
+  expected_version: number;
+  enabled: boolean;
+  reviewer: ReviewerSelection | null;
+  trigger_every_turns: number;
+  explicit_remember_immediate: boolean;
+  project_notification_mode: ProjectNotificationMode;
+}
+
+export interface MemoryCandidateView {
+  sequence: string;
+  id: string;
+  kind: MemoryKind;
+  operation: "add" | "replace";
+  target_entry_id: string | null;
+  target_version: number | null;
+  source_task_id: string | null;
+  source_workspace_id: string | null;
+  proposed_content: string;
+  reason: string;
+  confidence: number;
+  created_at: string;
+}
+
+export interface MemoryReviewJobView {
+  sequence: string;
+  id: string;
+  task_id: string;
+  source_workspace_id: string | null;
+  trigger: "cadence" | "manual" | "explicit_remember";
+  status: "queued" | "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
+  provider_name: string;
+  model: string;
+  attempt: number;
+  suppressed_turn_count: number;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemoryOverview {
+  settings: MemoryReviewSettingsView;
+  global_entries: MemoryEntry[];
+  project_entries: MemoryEntry[];
+  pending_candidates: MemoryCandidateView[];
+  recent_jobs: MemoryReviewJobView[];
+}
+
+export interface MemoryEntryDraft {
+  scope: "global" | "project";
+  workspace_id: string | null;
+  kind: MemoryKind;
+  content: string;
+  pinned: boolean;
+}
+
+export interface MemoryEntryEdit {
+  expected_version: number;
+  kind: MemoryKind;
+  content: string;
+  pinned: boolean;
 }
 
 // ---------- 搜索 ----------
@@ -424,6 +541,136 @@ export interface AgentEventEnvelope {
   event: AgentEvent;
 }
 
+// ---------- MCP / native web ----------
+export type McpServerState = "disabled" | "stopped" | "starting" | "running" | "error";
+
+export type McpServerSource =
+  | { kind: "builtin" }
+  | { kind: "user" }
+  | {
+      kind: "registry";
+      registry_url: string;
+      name: string;
+      version: string;
+      repository_url?: string;
+    };
+
+export type McpTransportView =
+  | { type: "builtin" }
+  | { type: "stdio"; executable: string; args: string[]; environment_names: string[] }
+  | { type: "streamable_http"; url: string; header_names: string[] };
+
+export interface McpServerView {
+  id: string;
+  display_name: string;
+  description: string;
+  enabled: boolean;
+  builtin: boolean;
+  source: McpServerSource;
+  transport: McpTransportView;
+  state: McpServerState;
+  tool_count: number;
+  error_code?: string;
+  launch_approved: boolean;
+}
+
+export interface McpManagerSnapshot {
+  servers: McpServerView[];
+  settings_error?: string;
+}
+
+export type McpEditableTransport =
+  | { type: "stdio"; executable: string; args: string[]; environment_names: string[] }
+  | { type: "streamable_http"; url: string; header_names: string[] };
+
+export interface McpUpsertRequest {
+  id: string;
+  display_name: string;
+  description: string;
+  transport: McpEditableTransport;
+}
+
+export type McpLaunchPreviewTransport =
+  | { type: "stdio"; executable: string; args: string[]; environment_names: string[] }
+  | { type: "streamable_http"; url: string; header_names: string[] };
+
+export interface McpLaunchPreview {
+  token: string;
+  server_id: string;
+  fingerprint: string;
+  transport: McpLaunchPreviewTransport;
+  expires_at: string;
+}
+
+export interface McpToggleResult {
+  server: McpServerView;
+  confirmation?: McpLaunchPreview;
+}
+
+export interface McpToolDescriptor {
+  server_id: string;
+  name: string;
+  description: string;
+  input_schema: unknown;
+  read_only: boolean;
+}
+
+export interface McpCredentialStatus {
+  name: string;
+  configured: boolean;
+}
+
+export interface McpMarketEnvironmentVariable {
+  name: string;
+  description: string;
+  required: boolean;
+  secret: boolean;
+  default_value?: string;
+}
+
+export type McpMarketInstallTransport =
+  | {
+      type: "stdio";
+      package_kind: "npm" | "pypi";
+      executable: string;
+      args: string[];
+      environment: McpMarketEnvironmentVariable[];
+    }
+  | { type: "streamable_http"; url: string; headers: McpMarketEnvironmentVariable[] };
+
+export interface McpMarketInstallOption {
+  id: string;
+  label: string;
+  transport: McpMarketInstallTransport;
+}
+
+export interface McpMarketServer {
+  name: string;
+  title: string;
+  description: string;
+  version: string;
+  status: string;
+  is_latest: boolean;
+  suggested_id: string;
+  repository_url?: string;
+  install_options: McpMarketInstallOption[];
+}
+
+export interface McpMarketPage {
+  servers: McpMarketServer[];
+  next_cursor?: string;
+  stale: boolean;
+  fetched_at: string;
+  registry_preview: boolean;
+  registry_unreviewed: boolean;
+}
+
+export interface McpMarketInstallRequest {
+  server: McpMarketServer;
+  option_id: string;
+  server_id: string;
+}
+
 // ---------- 日志（cmd_logs_tail 返回） ----------
 export interface LogEntry {
   timestamp: string;
@@ -459,6 +706,8 @@ export interface SessionMessage {
 
 // ---------- 变更 diff（cmd_change_diff 返回） ----------
 export interface ChangeDiffLine {
+  line_id?: string;
+  review_state?: "pending" | "accepted" | "rejected";
   kind: "ctx" | "add" | "del" | "hunk";
   text: string;
   old_no?: number;
@@ -640,8 +889,95 @@ export interface AppConfig {
   storage?: Record<string, unknown>;
   compaction?: Record<string, unknown>;
   orchestration?: OrchestrationConfig;
+  /** 用户级协作提示，保存在 R-Code AppData，不进入任何项目。 */
+  agent_prompts?: AgentPromptConfig;
   tauri?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+export interface ReviewPathStatus {
+  path: string;
+  accepted: boolean;
+  rejected: boolean;
+  remaining: boolean;
+  conflict: boolean;
+  safe_to_accept: boolean;
+  blocker?: string | null;
+  accepted_items: number;
+  rejected_items: number;
+  remaining_items: number;
+}
+
+export interface ReviewStatus {
+  git_repository: boolean;
+  repo_root?: string | null;
+  paths: ReviewPathStatus[];
+  accepted_count: number;
+  rejected_count: number;
+  remaining_count: number;
+  conflict_count: number;
+  can_accept_all: boolean;
+}
+
+/** @deprecated command compatibility name; review state is application-owned, not Git state. */
+export type ReviewGitStatus = ReviewStatus;
+
+export interface ReviewAcceptResult {
+  path?: string | null;
+  accepted_count: number;
+  rejected_count: number;
+  remaining_count: number;
+  fully_accepted: boolean;
+}
+
+export interface GitDeliveryStatus {
+  branch?: string | null;
+  upstream?: string | null;
+  ahead: number;
+  behind: number;
+  staged_task_paths: string[];
+  staged_other_paths: string[];
+  can_stage: boolean;
+  can_commit: boolean;
+  can_push: boolean;
+  blockers: string[];
+}
+
+export interface GitCommitResult {
+  sha: string;
+  message: string;
+}
+
+export interface GitPushResult {
+  sha: string;
+  branch: string;
+  upstream: string;
+}
+
+export type WorkflowSkillSource = "builtin" | "custom";
+
+export interface WorkflowSkill {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  source: WorkflowSkillSource;
+  enabled: boolean;
+  overridden: boolean;
+}
+
+export interface WorkflowSkillDraft {
+  id?: string | null;
+  name: string;
+  description: string;
+  instructions: string;
+  source: WorkflowSkillSource;
+  enabled: boolean;
+}
+
+export interface AgentPromptConfig {
+  main_agent: string;
+  subagent: string;
 }
 
 export interface OrchestrationConfig {

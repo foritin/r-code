@@ -7,8 +7,10 @@
     "predev": "node scripts/check-loopback.mjs",
     "dev": "node scripts/tauri-dev-server.mjs",
     "dev:vite": "vite",
+    "test": "node scripts/run-tests.mjs",
     "test:dev-server": "node --test scripts/tauri-dev-server.test.mjs",
     "test:popover": "node --test scripts/popover-viewport.test.mjs",
+    "test:mcp": "node --test scripts/mcp-management.test.mjs",
     "test:onboarding": "node --test scripts/onboarding-campaign.test.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview"

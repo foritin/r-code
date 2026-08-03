@@ -10,7 +10,19 @@ import type {
   ChangeDiff,
   AttachmentInput,
   InferenceOptions,
+  LegacyMemoryStatus,
   LogEntry,
+  McpCredentialStatus,
+  McpLaunchPreview,
+  McpManagerSnapshot,
+  McpMarketInstallRequest,
+  McpMarketPage,
+  McpServerView,
+  McpUpsertRequest,
+  MemoryEntryDraft,
+  MemoryEntryEdit,
+  MemoryOverview,
+  MemoryReviewSettingsUpdate,
   ProjectAccessMode,
   ProviderModelsInput,
   ProviderModelsResponse,
@@ -25,6 +37,9 @@ import type {
   TerminalInfo,
   VerificationRecord,
   Workspace,
+  WorkspaceMemoryMode,
+  WorkflowSkill,
+  WorkflowSkillDraft,
 } from "./types";
 import {
   browserMockAbortSubagent,
@@ -58,13 +73,111 @@ import {
 type MockArgs = Record<string, unknown>;
 
 let sequence = 0;
-const memoryByWorkspace = new Map<string, string>([
-  ["D:/project/rust/r-code", "# 项目记忆\n\n- Rust + Tauri v2 桌面应用\n- 前端位于 `src-tauri/frontend`\n- 提交前运行前端构建与 Rust 测试\n"],
-  ["D:/project/rust/api-server", "# 项目记忆\n\n- API 服务优先保持向后兼容\n- 新增中间件必须包含边界测试\n"],
+let mockMemoryOverview: MemoryOverview = {
+  settings: {
+    enabled: false,
+    reviewer: null,
+    trigger_every_turns: 10,
+    explicit_remember_immediate: true,
+    project_notification_mode: "on",
+    version: 1,
+    review_generation: 1,
+    physical_cleanup_pending: false,
+    updated_at: new Date().toISOString(),
+  },
+  global_entries: [],
+  project_entries: [],
+  pending_candidates: [],
+  recent_jobs: [],
+};
+let mockMcpServers: McpServerView[] = [
+  {
+    id: "r-code-research",
+    display_name: "R-Code 深度调研",
+    description: "内置多来源证据收集；需要完整调研时由主 Agent 选择。",
+    enabled: true,
+    builtin: true,
+    source: { kind: "builtin" },
+    transport: { type: "builtin" },
+    state: "stopped",
+    tool_count: 3,
+    launch_approved: true,
+  },
+];
+const mockMcpCredentials = new Map<string, Set<string>>();
+
+const mockMcpMarket: McpMarketPage = {
+  servers: [{
+    name: "io.example/demo-search",
+    title: "Demo Search MCP",
+    description: "浏览器 Demo 中的 Registry 条目。",
+    version: "1.0.0",
+    status: "active",
+    is_latest: true,
+    suggested_id: "demo-search",
+    install_options: [{
+      id: "npm:demo-search@1.0.0",
+      label: "npm · demo-search@1.0.0",
+      transport: {
+        type: "stdio",
+        package_kind: "npm",
+        executable: "npx",
+        args: ["-y", "demo-search@1.0.0"],
+        environment: [{ name: "DEMO_TOKEN", description: "访问令牌", required: true, secret: true }],
+      },
+    }],
+  }],
+  stale: false,
+  fetched_at: new Date().toISOString(),
+  registry_preview: true,
+  registry_unreviewed: true,
+};
+const defaultWorkflowSkills: WorkflowSkill[] = [
+  {
+    id: "builtin:skill-creator",
+    name: "skill-creator",
+    description: "创建并注册 R-Code 自定义 Skill。",
+    instructions: "设计 Skill 后必须调用 save_skill 工具保存。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+  {
+    id: "builtin:review-changes",
+    name: "review-changes",
+    description: "安全审核并接受任务变更。",
+    instructions: "只审核当前任务路径。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+  {
+    id: "builtin:git-commit-push",
+    name: "git-commit-push",
+    description: "提交并推送已接受的任务变更。",
+    instructions: "不得 force push。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
+];
+let workflowSkills = defaultWorkflowSkills.map((skill) => ({ ...skill }));
+const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
+  ["D:/project/rust/r-code", { exists: true, git_tracking: "tracked" }],
+  ["D:/project/rust/api-server", { exists: true, git_tracking: "untracked" }],
+  ["D:/project/rust/legacy-unknown", { exists: true, git_tracking: "unknown" }],
+  ["D:/project/rust/legacy-deleted-tracked", { exists: false, git_tracking: "tracked" }],
+  ["D:/project/rust/legacy-absent", { exists: false, git_tracking: "untracked" }],
 ]);
 const verificationOutputs = new Map<string, string>();
 const terminalOutputs = new Map<string, string>();
 const terminalInputs = new Map<string, string>();
+/** Browser QA mirrors the desktop's application-owned review ledger. */
+const acceptedReviewPaths = new Map<string, Set<string>>();
+const partiallyAcceptedReviewPaths = new Map<string, Set<string>>();
+const rejectedReviewPaths = new Map<string, Set<string>>();
+/** Git staging is an explicit delivery step and never changes review decisions. */
+const stagedReviewPaths = new Map<string, Set<string>>();
 const terminals: TerminalInfo[] = [
   { id: "demo-terminal-main", state: "idle", shell: "PowerShell", is_busy: false },
 ];
@@ -87,6 +200,41 @@ function nowIso(): string {
 function nextId(prefix: string): string {
   sequence += 1;
   return `demo-${prefix}-${Date.now().toString(36)}-${sequence}`;
+}
+
+function newWorkspaceId(): string {
+  return globalThis.crypto.randomUUID().replaceAll("-", "");
+}
+
+function isWorkspaceMemoryMode(value: unknown): value is Workspace["memory_mode"] {
+  return value === "inherit" || value === "read_only" || value === "off";
+}
+
+function normalizeWorkspace(workspace: Workspace): Workspace {
+  const legacy = workspace as unknown as {
+    id?: unknown;
+    memory_mode?: unknown;
+    memory_generation?: unknown;
+  };
+
+  if (legacy.id === undefined) workspace.id = newWorkspaceId();
+  else if (typeof legacy.id !== "string" || legacy.id.length === 0) throw new Error("Demo workspace id 无效");
+
+  if (legacy.memory_mode === undefined) workspace.memory_mode = "inherit";
+  else if (!isWorkspaceMemoryMode(legacy.memory_mode)) {
+    throw new Error(`Demo workspace memory_mode 无效: ${String(legacy.memory_mode)}`);
+  }
+
+  if (legacy.memory_generation === undefined) workspace.memory_generation = 1;
+  else if (
+    typeof legacy.memory_generation !== "number"
+    || !Number.isSafeInteger(legacy.memory_generation)
+    || legacy.memory_generation < 1
+  ) {
+    throw new Error("Demo workspace memory_generation 无效");
+  }
+
+  return workspace;
 }
 
 function stringArg(args: MockArgs, key: string): string {
@@ -115,7 +263,7 @@ function detailById(taskId: string): TaskDetail {
 function workspaceByPath(path: string): Workspace {
   const workspace = browserMockWorkspaces.find((item) => item.canonical_path === path);
   if (!workspace) throw new Error(`Demo 中不存在项目 ${path}`);
-  return workspace;
+  return normalizeWorkspace(workspace);
 }
 
 function addEvent(detail: TaskDetail, eventType: TaskDetail["events"][number]["event_type"]): void {
@@ -400,12 +548,20 @@ function diffFor(path: string): ChangeDiff {
     lines: [
       { kind: "hunk", text: "@@ -1,3 +1,4 @@" },
       { kind: "ctx", text: first, old_no: 1, new_no: 1 },
-      { kind: "del", text: "// previous demo implementation", old_no: 2 },
-      { kind: "add", text: "// complete interactive demo implementation", new_no: 2 },
-      { kind: "add", text: "// shares the production React UI", new_no: 3 },
+      { kind: "del", text: "// previous demo implementation", old_no: 2, line_id: "del:2:demo-previous" },
+      { kind: "add", text: "// complete interactive demo implementation", new_no: 2, line_id: "add:2:demo-complete" },
+      { kind: "add", text: "// shares the production React UI", new_no: 3, line_id: "add:3:demo-shared" },
     ],
     truncated: false,
   };
+}
+
+function reviewChanges(taskId: string) {
+  const excluded = new Set(
+    (globalThis as { __rCodeBrowserMockExcludedReviewPaths?: string[] })
+      .__rCodeBrowserMockExcludedReviewPaths ?? [],
+  );
+  return detailById(taskId).changes.filter((change) => !excluded.has(change.path));
 }
 
 function runVerification(args: MockArgs): VerificationRecord {
@@ -495,6 +651,13 @@ function sendTerminalInput(id: string, text: string): void {
 }
 
 function setConfigValue(key: string, value: unknown): void {
+  if (key === "agent_prompts" && value == null) {
+    browserMockSettings.config.agent_prompts = {
+      main_agent: "主 Agent 对最终结果负责；只在委派有明确收益时拆分边界清晰的子任务。",
+      subagent: "子代理只完成父 Agent 指定的任务，不再委派，并返回可核验的简洁摘要。",
+    };
+    return;
+  }
   const parts = key.split(".").filter(Boolean);
   let target = browserMockSettings.config as Record<string, unknown>;
   while (parts.length > 1) {
@@ -573,8 +736,57 @@ async function browserMockImagePreview(): Promise<ArrayBuffer> {
   return blob.arrayBuffer();
 }
 
+function mockMcpPreview(server: McpServerView): McpLaunchPreview {
+  const transport = server.transport.type === "stdio"
+    ? {
+        type: "stdio" as const,
+        executable: server.transport.executable,
+        args: server.transport.args,
+        environment_names: server.transport.environment_names,
+      }
+    : server.transport.type === "streamable_http"
+      ? {
+          type: "streamable_http" as const,
+          url: server.transport.url,
+          header_names: server.transport.header_names,
+        }
+      : { type: "stdio" as const, executable: "builtin", args: [], environment_names: [] };
+  return {
+    token: `demo-approval-${server.id}`,
+    server_id: server.id,
+    fingerprint: `demo-${server.id}`,
+    transport,
+    expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+  };
+}
+
+function mockMcpViewFromRequest(request: McpUpsertRequest): McpServerView {
+  return {
+    id: request.id,
+    display_name: request.display_name,
+    description: request.description,
+    enabled: false,
+    builtin: false,
+    source: { kind: "user" },
+    transport: request.transport,
+    state: "disabled",
+    tool_count: 0,
+    launch_approved: false,
+  };
+}
+
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
+  (globalThis as { __rCodePerformanceIpcProbe?: (name: string, args: MockArgs) => void })
+    .__rCodePerformanceIpcProbe?.(command, args);
+  const delayMs = (globalThis as { __rCodeBrowserMockDelayMs?: Record<string, number> })
+    .__rCodeBrowserMockDelayMs?.[command] ?? 0;
+  if (delayMs > 0) {
+    await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+  }
+  const forcedFailure = (globalThis as { __rCodeBrowserMockFailures?: Record<string, string> })
+    .__rCodeBrowserMockFailures?.[command];
+  if (forcedFailure) throw new Error(forcedFailure);
   switch (command) {
     case "ping": return true;
 
@@ -588,9 +800,21 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_task_archive": {
       const task = taskById(stringArg(args, "taskId"));
+      if (task.state === "exploring" || task.state === "in_progress") {
+        throw new Error("会话仍在运行，请先停止后归档");
+      }
       task.state = "archived";
       touchTask(task);
       if (browserMockDetails[task.id]) browserMockDetails[task.id].task = copy(task);
+      return copy(task);
+    }
+    case "cmd_task_restore": {
+      const task = taskById(stringArg(args, "taskId"));
+      if (task.state === "archived") {
+        task.state = "idle";
+        touchTask(task);
+        if (browserMockDetails[task.id]) browserMockDetails[task.id].task = copy(task);
+      }
       return copy(task);
     }
     case "cmd_task_delete": {
@@ -650,6 +874,154 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_notification_mark_all_read": return browserMockMarkAllNotificationsRead();
 
     case "cmd_changes_list": return copy(detailById(stringArg(args, "taskId")).changes);
+    case "cmd_review_git_status": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const remainingCount = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path)).length;
+      return {
+        git_repository: true,
+        repo_root: "D:/demo/r-code",
+        paths: changes.map((change) => ({
+          path: change.path,
+          accepted: accepted.has(change.path),
+          rejected: rejected.has(change.path),
+          remaining: !accepted.has(change.path) && !rejected.has(change.path),
+          conflict: false,
+          safe_to_accept: true,
+          blocker: null,
+          accepted_items: accepted.has(change.path) ? 1 : partiallyAccepted.has(change.path) ? 1 : 0,
+          rejected_items: rejected.has(change.path) ? 1 : 0,
+          remaining_items: accepted.has(change.path) || rejected.has(change.path) ? 0 : 1,
+        })),
+        accepted_count: changes.filter((change) => accepted.has(change.path)).length,
+        rejected_count: changes.filter((change) => rejected.has(change.path)).length,
+        remaining_count: remainingCount,
+        conflict_count: 0,
+        can_accept_all: remainingCount > 0,
+      };
+    }
+    case "cmd_review_accept_line":
+    case "cmd_review_accept_file":
+    case "cmd_review_accept_all":
+    case "cmd_review_reject_file": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const partiallyAccepted = partiallyAcceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      if (command === "cmd_review_accept_all") {
+        for (const change of changes) {
+          accepted.add(change.path);
+          partiallyAccepted.delete(change.path);
+          rejected.delete(change.path);
+        }
+      } else if (command === "cmd_review_accept_file" && typeof args.path === "string") {
+        accepted.add(args.path);
+        partiallyAccepted.delete(args.path);
+        rejected.delete(args.path);
+      } else if (command === "cmd_review_accept_line" && typeof args.path === "string") {
+        partiallyAccepted.add(args.path);
+      } else if (command === "cmd_review_reject_file" && typeof args.path === "string") {
+        rejected.add(args.path);
+        accepted.delete(args.path);
+        partiallyAccepted.delete(args.path);
+      }
+      acceptedReviewPaths.set(taskId, accepted);
+      partiallyAcceptedReviewPaths.set(taskId, partiallyAccepted);
+      rejectedReviewPaths.set(taskId, rejected);
+      const remainingCount = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path)).length;
+      return {
+        path: typeof args.path === "string" ? args.path : null,
+        accepted_count: changes.filter((change) => accepted.has(change.path)).length,
+        rejected_count: changes.filter((change) => rejected.has(change.path)).length,
+        remaining_count: remainingCount,
+        fully_accepted: remainingCount === 0,
+      };
+    }
+    case "cmd_git_delivery_status": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const staged = stagedReviewPaths.get(taskId) ?? new Set<string>();
+      const unresolved = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path));
+      const acceptedPaths = changes.filter((change) => accepted.has(change.path)).map((change) => change.path);
+      return {
+        branch: "codex/demo",
+        upstream: "origin/codex/demo",
+        ahead: 1,
+        behind: 0,
+        staged_task_paths: [...staged],
+        staged_other_paths: [],
+        can_stage: unresolved.length === 0 && acceptedPaths.some((path) => !staged.has(path)),
+        can_commit: staged.size > 0,
+        can_push: true,
+        blockers: unresolved.length > 0 ? ["请先处理完所有审核项，再将已接受文件加入暂存区"] : [],
+      };
+    }
+    case "cmd_git_stage_accepted": {
+      const taskId = stringArg(args, "taskId");
+      const changes = reviewChanges(taskId);
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const unresolved = changes.filter((change) => !accepted.has(change.path) && !rejected.has(change.path));
+      if (unresolved.length > 0) throw new Error("请先处理完所有审核项，再将已接受文件加入暂存区");
+      const staged = new Set(changes.filter((change) => accepted.has(change.path)).map((change) => change.path));
+      stagedReviewPaths.set(taskId, staged);
+      return {
+        branch: "codex/demo",
+        upstream: "origin/codex/demo",
+        ahead: 1,
+        behind: 0,
+        staged_task_paths: [...staged],
+        staged_other_paths: [],
+        can_stage: false,
+        can_commit: staged.size > 0,
+        can_push: true,
+        blockers: [],
+      };
+    }
+    case "cmd_git_suggest_commit_message": return "feat: update reviewed task files";
+    case "cmd_git_commit_task": return {
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      message: stringArg(args, "message"),
+    };
+    case "cmd_git_push_task": return {
+      sha: "0123456789abcdef0123456789abcdef01234567",
+      branch: "codex/demo",
+      upstream: "origin/codex/demo",
+    };
+    case "cmd_workflow_skills_list": return copy(workflowSkills);
+    case "cmd_workflow_skill_save": {
+      const draft = args.draft as WorkflowSkillDraft;
+      const id = draft.id ?? `custom:${globalThis.crypto.randomUUID()}`;
+      const saved: WorkflowSkill = {
+        ...draft,
+        id,
+        overridden: draft.source === "builtin",
+      };
+      const index = workflowSkills.findIndex((skill) => skill.id === id);
+      if (index >= 0) workflowSkills[index] = saved;
+      else workflowSkills.push(saved);
+      return copy(saved);
+    }
+    case "cmd_workflow_skill_reset": {
+      const id = stringArg(args, "id");
+      const restored = defaultWorkflowSkills.find((skill) => skill.id === id);
+      if (!restored) throw new Error(`Unknown built-in Skill: ${id}`);
+      const index = workflowSkills.findIndex((skill) => skill.id === id);
+      if (index >= 0) workflowSkills[index] = { ...restored };
+      else workflowSkills.push({ ...restored });
+      return copy(restored);
+    }
+    case "cmd_workflow_skill_delete": {
+      const id = stringArg(args, "id");
+      workflowSkills = workflowSkills.filter((skill) => skill.id !== id || skill.source === "builtin");
+      return null;
+    }
     case "cmd_rollback_file": {
       const detail = detailById(stringArg(args, "taskId"));
       const path = stringArg(args, "path");
@@ -724,12 +1096,20 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_prepare_workbench_window": return false;
 
-    case "cmd_workspace_list": return copy(browserMockWorkspaces);
+    case "cmd_workspace_list": return copy(browserMockWorkspaces.map(normalizeWorkspace));
     case "cmd_workspace_open": {
       const path = stringArg(args, "path");
       const existing = browserMockWorkspaces.find((item) => item.canonical_path === path);
-      if (existing) return copy(existing);
-      const workspace: Workspace = { canonical_path: path, display_name: path.split(/[\\/]/).filter(Boolean).pop() ?? path, access_mode: "request_approval", last_opened_at: nowIso() };
+      if (existing) return copy(normalizeWorkspace(existing));
+      const workspace: Workspace = {
+        id: newWorkspaceId(),
+        canonical_path: path,
+        display_name: path.split(/[\\/]/).filter(Boolean).pop() ?? path,
+        access_mode: "request_approval",
+        last_opened_at: nowIso(),
+        memory_mode: "inherit",
+        memory_generation: 1,
+      };
       browserMockWorkspaces.unshift(workspace);
       return copy(workspace);
     }
@@ -758,7 +1138,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return { removed: index >= 0, removed_sessions: removedTaskIds.length };
     }
     case "cmd_workspace_choose": {
-      const workspace = browserMockWorkspaces[0];
+      const workspace = normalizeWorkspace(browserMockWorkspaces[0]);
       workspace.last_opened_at = nowIso();
       return copy(workspace);
     }
@@ -766,6 +1146,15 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const workspace = workspaceByPath(stringArg(args, "workspacePath"));
       workspace.access_mode = args.accessMode as ProjectAccessMode;
       workspace.last_opened_at = nowIso();
+      return copy(workspace);
+    }
+    case "cmd_workspace_set_memory_mode": {
+      const workspace = browserMockWorkspaces.find((item) => item.id === stringArg(args, "workspaceId"));
+      if (!workspace) throw new Error("项目不存在");
+      const expected = typeof args.expectedGeneration === "number" ? args.expectedGeneration : 0;
+      if (workspace.memory_generation !== expected) throw new Error("项目记忆设置已在其他位置更新");
+      workspace.memory_mode = args.memoryMode as WorkspaceMemoryMode;
+      workspace.memory_generation += 1;
       return copy(workspace);
     }
     case "cmd_workspace_dashboard": return copy(browserMockWorkspaceDashboard(stringArg(args, "workspacePath")));
@@ -807,7 +1196,10 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
 
     case "cmd_recovery_data": return { interrupted_tasks: [], orphaned_permissions: 0 };
     case "cmd_recovery_cleanup": return { runs_closed: 0, tasks_interrupted: 0, permissions_denied: 0, tool_calls_closed: 0 };
-    case "cmd_support_bundle": return `${stringArg(args, "outputDir").replace(/[\\/]+$/, "")}/r-code-support-demo.json`;
+    case "cmd_support_bundle": {
+      const outputDir = stringArg(args, "outputDir").replace(/[\\/]+$/, "");
+      return `${outputDir || "Downloads"}/r-code-support-demo.json`;
+    }
     case "cmd_support_preview": return {
       version: "0.1.0-demo",
       platform: navigator.platform || "browser",
@@ -823,9 +1215,186 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_session_messages": return copy(browserMockMessages(stringArg(args, "taskId")));
     case "cmd_subagent_session_messages": return copy(browserMockSubagentMessages(stringArg(args, "taskId"), stringArg(args, "subagentId")));
 
-    case "cmd_memory_get": return memoryByWorkspace.get(stringArg(args, "workspacePath")) ?? "";
-    case "cmd_memory_set": memoryByWorkspace.set(stringArg(args, "workspacePath"), stringArg(args, "content")); return undefined;
+    case "cmd_memory_overview": return copy(mockMemoryOverview);
+    case "cmd_memory_update_settings": {
+      const update = args.update as MemoryReviewSettingsUpdate;
+      if (update.expected_version !== mockMemoryOverview.settings.version) throw new Error("记忆设置已在其他位置更新");
+      const selectionChanged = mockMemoryOverview.settings.enabled !== update.enabled
+        || JSON.stringify(mockMemoryOverview.settings.reviewer) !== JSON.stringify(update.reviewer);
+      mockMemoryOverview.settings = {
+        ...mockMemoryOverview.settings,
+        ...update,
+        version: mockMemoryOverview.settings.version + 1,
+        review_generation: mockMemoryOverview.settings.review_generation + (selectionChanged ? 1 : 0),
+        updated_at: nowIso(),
+      };
+      return copy(mockMemoryOverview.settings);
+    }
+    case "cmd_memory_review_now": {
+      if (!mockMemoryOverview.settings.enabled || !mockMemoryOverview.settings.reviewer) return null;
+      const id = `memory-job-${++sequence}`;
+      mockMemoryOverview.recent_jobs.unshift({
+        sequence: String(sequence), id, task_id: stringArg(args, "taskId"), source_workspace_id: null,
+        trigger: "manual", status: "queued", provider_name: mockMemoryOverview.settings.reviewer.provider_name,
+        model: mockMemoryOverview.settings.reviewer.model, attempt: 0, suppressed_turn_count: 0,
+        error_code: null, created_at: nowIso(), updated_at: nowIso(),
+      });
+      return id;
+    }
+    case "cmd_memory_retry_job": {
+      const job = mockMemoryOverview.recent_jobs.find((item) => item.id === stringArg(args, "jobId"));
+      if (job) { job.status = "queued"; job.error_code = null; job.updated_at = nowIso(); }
+      return undefined;
+    }
+    case "cmd_memory_cancel_job": {
+      const job = mockMemoryOverview.recent_jobs.find((item) => item.id === stringArg(args, "jobId"));
+      if (job) { job.status = "cancelled"; job.updated_at = nowIso(); }
+      return undefined;
+    }
+    case "cmd_memory_add_entry": {
+      const draft = args.draft as MemoryEntryDraft;
+      const id = `memory-entry-${++sequence}`;
+      const entry = {
+        id,
+        owner: draft.scope === "global"
+          ? { scope: "global" as const, authorization: "manual" as const }
+          : { scope: "project" as const, workspace_id: draft.workspace_id ?? "", origin: "manual" as const },
+        kind: draft.kind,
+        content: draft.content,
+        normalized_hash: `demo-${sequence}`,
+        version: 1,
+        pinned: draft.pinned,
+        source_job_id: null,
+        source_candidate_id: null,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      };
+      (draft.scope === "global" ? mockMemoryOverview.global_entries : mockMemoryOverview.project_entries).unshift(entry);
+      return copy(entry);
+    }
+    case "cmd_memory_edit_entry": {
+      const edit = args.edit as MemoryEntryEdit;
+      const entry = [...mockMemoryOverview.global_entries, ...mockMemoryOverview.project_entries]
+        .find((item) => item.id === stringArg(args, "entryId"));
+      if (!entry) throw new Error("记忆不存在");
+      if (entry.version !== edit.expected_version) throw new Error("记忆已在其他位置更新");
+      Object.assign(entry, { kind: edit.kind, content: edit.content, pinned: edit.pinned, version: entry.version + 1, updated_at: nowIso() });
+      return copy(entry);
+    }
+    case "cmd_memory_delete_entry": {
+      const id = stringArg(args, "entryId");
+      mockMemoryOverview.global_entries = mockMemoryOverview.global_entries.filter((entry) => entry.id !== id);
+      mockMemoryOverview.project_entries = mockMemoryOverview.project_entries.filter((entry) => entry.id !== id);
+      return undefined;
+    }
+    case "cmd_memory_approve_candidate": {
+      const id = stringArg(args, "candidateId");
+      const candidate = mockMemoryOverview.pending_candidates.find((item) => item.id === id);
+      if (!candidate) throw new Error("候选不存在");
+      mockMemoryOverview.pending_candidates = mockMemoryOverview.pending_candidates.filter((item) => item.id !== id);
+      const content = optionalStringArg(args, "editedContent") ?? candidate.proposed_content;
+      const entry = {
+        id: `memory-entry-${++sequence}`, owner: { scope: "global" as const, authorization: "approved_candidate" as const },
+        kind: candidate.kind, content, normalized_hash: `demo-${sequence}`, version: 1, pinned: false,
+        source_job_id: null, source_candidate_id: candidate.id, created_at: nowIso(), updated_at: nowIso(),
+      };
+      mockMemoryOverview.global_entries.unshift(entry);
+      return copy(entry);
+    }
+    case "cmd_memory_reject_candidate": {
+      const id = stringArg(args, "candidateId");
+      mockMemoryOverview.pending_candidates = mockMemoryOverview.pending_candidates.filter((item) => item.id !== id);
+      return undefined;
+    }
+    case "cmd_memory_clear_all": {
+      mockMemoryOverview = {
+        ...mockMemoryOverview,
+        settings: { ...mockMemoryOverview.settings, enabled: false, reviewer: null, version: mockMemoryOverview.settings.version + 1, review_generation: mockMemoryOverview.settings.review_generation + 1, updated_at: nowIso() },
+        global_entries: [], project_entries: [], pending_candidates: [], recent_jobs: [],
+      };
+      return copy(mockMemoryOverview.settings);
+    }
+    case "cmd_legacy_memory_status": return copy(
+      legacyMemoryStatusByWorkspace.get(stringArg(args, "workspacePath"))
+        ?? { exists: false, git_tracking: "unknown" },
+    );
     case "cmd_settings_get": return copy(browserMockSettings);
+    case "cmd_mcp_snapshot": return copy({ servers: mockMcpServers } satisfies McpManagerSnapshot);
+    case "cmd_mcp_upsert": {
+      const request = args.request as McpUpsertRequest;
+      const server = mockMcpViewFromRequest(request);
+      mockMcpServers = [...mockMcpServers.filter((item) => item.id !== server.id), server];
+      return copy(server);
+    }
+    case "cmd_mcp_remove": {
+      const id = stringArg(args, "serverId");
+      mockMcpServers = mockMcpServers.filter((server) => server.id !== id || server.builtin);
+      return undefined;
+    }
+    case "cmd_mcp_toggle": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server) throw new Error(`未找到 MCP 服务：${id}`);
+      const enabled = args.enabled === true;
+      const confirmation = optionalStringArg(args, "confirmationToken");
+      if (enabled && !server.builtin && !server.launch_approved && !confirmation) {
+        return copy({ server, confirmation: mockMcpPreview(server) });
+      }
+      server.enabled = enabled;
+      server.state = enabled ? "stopped" : "disabled";
+      if (confirmation) server.launch_approved = true;
+      return copy({ server });
+    }
+    case "cmd_mcp_test_connection": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server?.enabled) throw new Error("请先启用该 MCP 服务");
+      server.state = "running";
+      server.tool_count = Math.max(1, server.tool_count);
+      return [{ server_id: id, name: "demo_tool", description: "Demo tool", input_schema: { type: "object" }, read_only: true }];
+    }
+    case "cmd_mcp_credential_status": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server) throw new Error(`未找到 MCP 服务：${id}`);
+      const names = server.transport.type === "stdio"
+        ? server.transport.environment_names
+        : server.transport.type === "streamable_http" ? server.transport.header_names : [];
+      const configured = mockMcpCredentials.get(id) ?? new Set<string>();
+      return copy(names.map((name): McpCredentialStatus => ({ name, configured: configured.has(name) })));
+    }
+    case "cmd_mcp_set_credential": {
+      const id = stringArg(args, "serverId");
+      const configured = mockMcpCredentials.get(id) ?? new Set<string>();
+      if (stringArg(args, "value")) configured.add(stringArg(args, "name"));
+      mockMcpCredentials.set(id, configured);
+      return undefined;
+    }
+    case "cmd_mcp_delete_credential": {
+      mockMcpCredentials.get(stringArg(args, "serverId"))?.delete(stringArg(args, "name"));
+      return undefined;
+    }
+    case "cmd_mcp_market_search": return copy(mockMcpMarket);
+    case "cmd_mcp_market_prepare_install": {
+      const request = args.request as McpMarketInstallRequest;
+      const option = request.server.install_options.find((item) => item.id === request.option_id);
+      if (!option) throw new Error("所选启动方案不存在");
+      const transport = option.transport.type === "stdio"
+        ? { type: "stdio" as const, executable: option.transport.executable, args: option.transport.args, environment_names: option.transport.environment.map((item) => item.name) }
+        : { type: "streamable_http" as const, url: option.transport.url, header_names: option.transport.headers.map((item) => item.name) };
+      return copy({ token: `demo-install-${request.server_id}`, server_id: request.server_id, fingerprint: `demo-${request.server_id}`, transport, expires_at: new Date(Date.now() + 300_000).toISOString() });
+    }
+    case "cmd_mcp_market_install": {
+      const request = args.request as McpMarketInstallRequest;
+      const option = request.server.install_options.find((item) => item.id === request.option_id);
+      if (!option) throw new Error("所选启动方案不存在");
+      const transport = option.transport.type === "stdio"
+        ? { type: "stdio" as const, executable: option.transport.executable, args: option.transport.args, environment_names: option.transport.environment.map((item) => item.name) }
+        : { type: "streamable_http" as const, url: option.transport.url, header_names: option.transport.headers.map((item) => item.name) };
+      const server: McpServerView = { id: request.server_id, display_name: request.server.title, description: request.server.description, enabled: false, builtin: false, source: { kind: "registry", registry_url: "https://registry.modelcontextprotocol.io/v0.1/servers", name: request.server.name, version: request.server.version }, transport, state: "disabled", tool_count: 0, launch_approved: false };
+      mockMcpServers = [...mockMcpServers.filter((item) => item.id !== server.id), server];
+      return copy(server);
+    }
     case "cmd_provider_catalog": return copy(browserMockProviderCatalog);
     case "cmd_provider_models": return copy(providerModels(args.request as ProviderModelsInput));
     case "cmd_settings_set": setConfigValue(stringArg(args, "key"), args.value); return undefined;

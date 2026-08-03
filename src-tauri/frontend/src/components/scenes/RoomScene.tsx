@@ -1,7 +1,7 @@
 /**
  * 单任务对话：聊天不依赖工作区；工作区范围可以在对话过程中按需附加。
  */
-import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
@@ -34,6 +34,7 @@ const MIN_CANVAS_WIDTH = 300;
 interface TaskSubagentView {
   open: boolean;
   selectedId: string | null;
+  openIds: string[];
 }
 const taskSubagentViews = new Map<string, TaskSubagentView>();
 
@@ -98,8 +99,9 @@ export function RoomScene() {
   );
   const providers = useProviders([currentTaskId, boundProvider]);
   const [activity, dispatchActivity] = useReducer(activityTraceReducer, createActivityTraceState());
-  const [subagentPanelOpen, setSubagentPanelOpen] = useState(false);
-  const [selectedSubagentId, setSelectedSubagentId] = useState<string | null>(null);
+  const [subagentView, setSubagentView] = useState<TaskSubagentView>({ open: false, selectedId: null, openIds: [] });
+  const subagentPanelOpen = subagentView.open;
+  const selectedSubagentId = subagentView.selectedId;
   const tlRef = useRef<TimelineHandle>(null);
   const roomRef = useRef<HTMLElement>(null);
   const convoRef = useRef<HTMLDivElement>(null);
@@ -108,17 +110,33 @@ export function RoomScene() {
   const [roomWidth, setRoomWidth] = useState(0);
   const [roomSplitPct, setRoomSplitPct] = useState(() => roomSplitRef.current);
   const [isSplitDragging, setIsSplitDragging] = useState(false);
-  const running = detail?.runs.some((run) => run.ended_at === null) ?? false;
-  const queuedMessages = detail?.queued_messages ?? [];
-  const pendingPermissions = detail?.permissions.filter((permission) => permission.decision === "pending") ?? [];
-  const queueStamp = queuedMessages.map((message) => `${message.id}:${message.state}`).join("|");
-  const permissionStamp = pendingPermissions.map((permission) => permission.id).join("|");
-  const runsStamp = (detail?.runs ?? [])
-    .map(
-      (run) =>
-        `${run.id}:${run.agent_kind}:${run.agent_label ?? ""}:${run.review_state}:${run.ended_at ?? ""}:${run.summary ?? ""}`
-    )
-    .join("|");
+  const {
+    running,
+    queuedMessages,
+    pendingPermissions,
+    queueStamp,
+    permissionStamp,
+    runsStamp,
+  } = useMemo(() => {
+    const runs = detail?.runs ?? [];
+    const queuedMessages = detail?.queued_messages ?? [];
+    const pendingPermissions = detail?.permissions.filter(
+      (permission) => permission.decision === "pending",
+    ) ?? [];
+    return {
+      running: runs.some((run) => run.ended_at === null),
+      queuedMessages,
+      pendingPermissions,
+      queueStamp: queuedMessages.map((message) => `${message.id}:${message.state}`).join("|"),
+      permissionStamp: pendingPermissions.map((permission) => permission.id).join("|"),
+      runsStamp: runs
+        .map(
+          (run) =>
+            `${run.id}:${run.agent_kind}:${run.agent_label ?? ""}:${run.review_state}:${run.ended_at ?? ""}:${run.summary ?? ""}`,
+        )
+        .join("|"),
+    };
+  }, [detail]);
 
   // A docked tool should gain horizontal room first. The host preserves the left edge whenever
   // the active monitor has space on the right and no-ops for maximized/fullscreen windows.
@@ -129,35 +147,51 @@ export function RoomScene() {
     });
   }, [workbenchMode]);
 
-  const saveSubagentView = useCallback((open: boolean, selectedId: string | null) => {
-    if (currentTaskId) taskSubagentViews.set(currentTaskId, { open, selectedId });
-    setSubagentPanelOpen(open);
-    setSelectedSubagentId(selectedId);
+  const updateSubagentView = useCallback((update: (current: TaskSubagentView) => TaskSubagentView) => {
+    setSubagentView((current) => {
+      const next = update(current);
+      if (currentTaskId) taskSubagentViews.set(currentTaskId, next);
+      return next;
+    });
   }, [currentTaskId]);
 
   const inspectSubagent = useCallback((subagentId: string) => {
-    saveSubagentView(true, subagentId);
+    updateSubagentView((current) => ({
+      open: true,
+      selectedId: subagentId,
+      openIds: current.openIds.includes(subagentId) ? current.openIds : [...current.openIds, subagentId],
+    }));
     setCanvasTab("summary");
-  }, [saveSubagentView, setCanvasTab]);
+  }, [setCanvasTab, updateSubagentView]);
 
   const showSubagentList = useCallback(() => {
-    saveSubagentView(true, null);
+    updateSubagentView((current) => ({ ...current, open: true, selectedId: null }));
     setCanvasTab("summary");
-  }, [saveSubagentView, setCanvasTab]);
+  }, [setCanvasTab, updateSubagentView]);
 
   const closeSubagentView = useCallback(() => {
-    saveSubagentView(false, null);
-  }, [saveSubagentView]);
+    updateSubagentView((current) => ({ ...current, open: false, selectedId: null }));
+  }, [updateSubagentView]);
 
   const backToSubagentList = useCallback(() => {
-    saveSubagentView(true, null);
-  }, [saveSubagentView]);
+    updateSubagentView((current) => ({ ...current, open: true, selectedId: null }));
+  }, [updateSubagentView]);
+
+  const closeSubagentTab = useCallback((subagentId: string) => {
+    updateSubagentView((current) => {
+      const closingIndex = current.openIds.indexOf(subagentId);
+      if (closingIndex < 0) return current;
+      const openIds = current.openIds.filter((id) => id !== subagentId);
+      if (current.selectedId !== subagentId) return { ...current, openIds };
+      const selectedId = openIds[Math.min(Math.max(closingIndex - 1, 0), openIds.length - 1)] ?? null;
+      return { ...current, openIds, selectedId };
+    });
+  }, [updateSubagentView]);
 
   useEffect(() => {
     dispatchActivity({ type: "reset" });
     const saved = currentTaskId ? taskSubagentViews.get(currentTaskId) : undefined;
-    setSubagentPanelOpen(saved?.open ?? false);
-    setSelectedSubagentId(saved?.selectedId ?? null);
+    setSubagentView(saved ?? { open: false, selectedId: null, openIds: [] });
   }, [currentTaskId]);
 
   useEffect(() => {
@@ -439,12 +473,13 @@ export function RoomScene() {
           workspacePath={workspacePath}
           cur={null}
           running={running}
+          reviewing={running && activity.phase === "reviewing"}
           onAgentEvent={observeAgentEvent}
           selectedSubagentId={selectedSubagentId}
           onInspectSubagent={inspectSubagent}
         />
         {archived ? (
-          <div className="room-archived-note">此对话已归档，只能查看历史。可通过右上角对话选项永久删除。</div>
+          <div className="room-archived-note">此对话已归档，只能查看历史。可在项目概览中还原，或通过右上角对话选项永久删除。</div>
         ) : (
           <>
             <ActivityStrip state={activity} running={running} />
@@ -507,8 +542,10 @@ export function RoomScene() {
         workspaceAttached={workspaceAttached}
         subagentPanelOpen={subagentPanelOpen}
         selectedSubagentId={selectedSubagentId}
+        openSubagentIds={subagentView.openIds}
         onInspectSubagent={inspectSubagent}
         onBackToSubagents={backToSubagentList}
+        onCloseSubagentTab={closeSubagentTab}
         onCloseSubagents={closeSubagentView}
         onAbortSubagent={abortSubagent}
       />

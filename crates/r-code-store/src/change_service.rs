@@ -34,6 +34,29 @@ pub struct ChangeService<'a> {
     blobs_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunWorkspaceSnapshot {
+    pub run_id: String,
+    pub task_id: String,
+    pub repo_root: String,
+    pub workspace_root: String,
+    pub entry_head_tree: Option<String>,
+    pub entry_index_tree: String,
+    pub entry_worktree_tree: String,
+    pub exit_worktree_tree: Option<String>,
+}
+
+/// Borrowed input used when persisting the immutable entry snapshot for a run.
+pub struct NewRunWorkspaceSnapshot<'a> {
+    pub run_id: &'a str,
+    pub task_id: &'a str,
+    pub repo_root: &'a Path,
+    pub workspace_root: &'a Path,
+    pub entry_head_tree: Option<&'a str>,
+    pub entry_index_tree: &'a str,
+    pub entry_worktree_tree: &'a str,
+}
+
 impl<'a> ChangeService<'a> {
     /// 创建 ChangeService。
     ///
@@ -41,6 +64,225 @@ impl<'a> ChangeService<'a> {
     /// - `blobs_dir`：Blob 存储目录（与 BlobStore 一致）
     pub fn new(db: &'a Database, blobs_dir: PathBuf) -> Self {
         Self { db, blobs_dir }
+    }
+
+    pub fn save_run_workspace_snapshot(
+        &self,
+        snapshot: NewRunWorkspaceSnapshot<'_>,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO run_workspace_snapshots \
+             (run_id, task_id, repo_root, workspace_root, entry_head_tree, entry_index_tree, \
+              entry_worktree_tree, captured_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                snapshot.run_id,
+                snapshot.task_id,
+                snapshot.repo_root.to_string_lossy(),
+                snapshot.workspace_root.to_string_lossy(),
+                snapshot.entry_head_tree,
+                snapshot.entry_index_tree,
+                snapshot.entry_worktree_tree,
+                Utc::now().to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    pub fn get_run_workspace_snapshot(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<RunWorkspaceSnapshot>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT run_id, task_id, repo_root, workspace_root, entry_head_tree, entry_index_tree, entry_worktree_tree, \
+                        exit_worktree_tree \
+                 FROM run_workspace_snapshots WHERE run_id = ?1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![run_id]).map_err(db_err)?;
+        let Some(row) = rows.next().map_err(db_err)? else {
+            return Ok(None);
+        };
+        Ok(Some(RunWorkspaceSnapshot {
+            run_id: row.get(0).map_err(db_err)?,
+            task_id: row.get(1).map_err(db_err)?,
+            repo_root: row.get(2).map_err(db_err)?,
+            workspace_root: row.get(3).map_err(db_err)?,
+            entry_head_tree: row.get(4).map_err(db_err)?,
+            entry_index_tree: row.get(5).map_err(db_err)?,
+            entry_worktree_tree: row.get(6).map_err(db_err)?,
+            exit_worktree_tree: row.get(7).map_err(db_err)?,
+        }))
+    }
+
+    pub fn task_has_workspace_snapshot(&self, task_id: &str) -> Result<bool, ProductError> {
+        let conn = self.db.conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM run_workspace_snapshots WHERE task_id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        Ok(count > 0)
+    }
+
+    pub fn finalize_run_workspace_snapshot(
+        &self,
+        run_id: &str,
+        exit_worktree_tree: &str,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE run_workspace_snapshots \
+             SET exit_worktree_tree = ?1, finalized_at = ?2 \
+             WHERE run_id = ?3 AND exit_worktree_tree IS NULL",
+            params![exit_worktree_tree, Utc::now().to_rfc3339(), run_id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Persist one net path change from a run snapshot. The `(run_id, path)` unique index
+    /// makes drain retries and crash recovery idempotent.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn record_snapshot_change(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        path: &str,
+        change_type: FileChangeType,
+        before_content: Option<&[u8]>,
+        after_content: Option<&[u8]>,
+    ) -> Result<FileChange, ProductError> {
+        if let Some(existing) = self.snapshot_change(run_id, path)? {
+            return Ok(existing);
+        }
+        if let Some(before) = before_content {
+            self.capture_baseline_bytes(task_id, path, before)?;
+        }
+
+        let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+        let before_hash = store_blob(&blob_store, before_content)?;
+        let after_hash = store_blob(&blob_store, after_content)?;
+        let mut change = FileChange::new(task_id, path, change_type);
+        change.before_hash = before_hash.clone();
+        change.after_hash = after_hash.clone();
+
+        let inserted = {
+            let mut conn = self.db.conn()?;
+            let tx = conn.transaction().map_err(db_err)?;
+            tx.execute(
+                "INSERT INTO file_changes \
+                 (id, task_id, tool_call_id, path, change_type, before_hash, after_hash, \
+                  old_path, created_at) \
+                 VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, NULL, ?7)",
+                params![
+                    change.id,
+                    task_id,
+                    path,
+                    change_type.to_string(),
+                    before_hash,
+                    after_hash,
+                    change.created_at.to_rfc3339(),
+                ],
+            )
+            .map_err(db_err)?;
+            let linked = tx
+                .execute(
+                    "INSERT OR IGNORE INTO run_snapshot_changes (run_id, path, file_change_id) \
+                     VALUES (?1, ?2, ?3)",
+                    params![run_id, path, change.id],
+                )
+                .map_err(db_err)?;
+            if linked == 0 {
+                tx.rollback().map_err(db_err)?;
+                0
+            } else {
+                tx.commit().map_err(db_err)?;
+                1
+            }
+        };
+        if inserted == 0 {
+            if let Some(hash) = before_hash.as_deref() {
+                blob_store.decrement_ref(hash)?;
+            }
+            if let Some(hash) = after_hash.as_deref() {
+                blob_store.decrement_ref(hash)?;
+            }
+            return self.snapshot_change(run_id, path)?.ok_or_else(|| {
+                ProductError::DatabaseError("snapshot change disappeared after conflict".into())
+            });
+        }
+        Ok(change)
+    }
+
+    fn snapshot_change(
+        &self,
+        run_id: &str,
+        path: &str,
+    ) -> Result<Option<FileChange>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT fc.id, fc.task_id, fc.tool_call_id, fc.path, fc.change_type, \
+                        fc.before_hash, fc.after_hash, fc.old_path, fc.created_at \
+                 FROM file_changes fc \
+                 JOIN run_snapshot_changes rsc ON rsc.file_change_id = fc.id \
+                 WHERE rsc.run_id = ?1 AND rsc.path = ?2",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![run_id, path]).map_err(db_err)?;
+        rows.next().map_err(db_err)?.map(row_to_change).transpose()
+    }
+
+    fn capture_baseline_bytes(
+        &self,
+        task_id: &str,
+        path: &str,
+        content: &[u8],
+    ) -> Result<(), ProductError> {
+        let exists: i64 = {
+            let conn = self.db.conn()?;
+            conn.query_row(
+                "SELECT COUNT(*) FROM file_baselines WHERE task_id = ?1 AND path = ?2",
+                params![task_id, path],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?
+        };
+        if exists > 0 {
+            return Ok(());
+        }
+
+        let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+        let hash = blob_store.put(content)?;
+        blob_store.increment_ref(&hash)?;
+        let baseline = FileBaseline::new(task_id, path, hash.clone());
+        let conn = self.db.conn()?;
+        let inserted = conn
+            .execute(
+                "INSERT OR IGNORE INTO file_baselines \
+                 (id, task_id, path, content_hash, blob_key, captured_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    baseline.id,
+                    task_id,
+                    path,
+                    baseline.content_hash,
+                    baseline.blob_key,
+                    baseline.captured_at.to_rfc3339(),
+                ],
+            )
+            .map_err(db_err)?;
+        if inserted == 0 {
+            blob_store.decrement_ref(&hash)?;
+        }
+        Ok(())
     }
 
     /// 捕获文件基线（capture-once 语义）。
@@ -255,6 +497,63 @@ impl<'a> ChangeService<'a> {
         self.rollback_file_at(task_id, &path_key, path).await
     }
 
+    /// Restore a file to a run-scoped review snapshot.
+    ///
+    /// Unlike [`rollback_file_at`](Self::rollback_file_at), this does not use the task's oldest
+    /// capture-once baseline. It restores exactly the `before_hash` of the current review session
+    /// and only when the disk still matches that session's `after_hash`. This keeps a rejected
+    /// second run from erasing changes that were accepted in the first run.
+    pub async fn restore_snapshot_at(
+        &self,
+        path_key: &str,
+        physical_path: &Path,
+        before_hash: Option<&str>,
+        after_hash: Option<&str>,
+    ) -> Result<RollbackResult, ProductError> {
+        let path = path_key.to_string();
+        let actual_hash = if physical_path.exists() {
+            Some(hash_content(&std::fs::read(physical_path)?))
+        } else {
+            None
+        };
+
+        // A repeated reject is idempotent even though the file no longer matches `after_hash`.
+        if actual_hash.as_deref() == before_hash {
+            return Ok(RollbackResult::AlreadyClean { path });
+        }
+        if actual_hash.as_deref() != after_hash {
+            return Ok(RollbackResult::ConflictDetected {
+                path,
+                reason: format!(
+                    "external modification (expected: {}, actual: {})",
+                    after_hash.unwrap_or("absent"),
+                    actual_hash.as_deref().unwrap_or("absent")
+                ),
+            });
+        }
+
+        match before_hash {
+            Some(hash) => {
+                let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+                let content = blob_store.get(hash)?.ok_or_else(|| {
+                    ProductError::RollbackError(format!("review snapshot blob not found: {hash}"))
+                })?;
+                if hash_content(&content) != hash {
+                    return Err(ProductError::RollbackError(format!(
+                        "review snapshot blob is corrupted: {hash}"
+                    )));
+                }
+                if let Some(parent) = physical_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(physical_path, content)?;
+            }
+            None if physical_path.exists() => std::fs::remove_file(physical_path)?,
+            None => {}
+        }
+        Ok(RollbackResult::Restored { path })
+    }
+
     /// 使用持久化路径键回滚一个文件。
     ///
     /// `path_key` 用于关联历史 baseline / change 记录，`physical_path` 才是实际
@@ -268,9 +567,48 @@ impl<'a> ChangeService<'a> {
     ) -> Result<RollbackResult, ProductError> {
         let path_str = path_key.to_string();
 
+        // Read the recorded tail first. A newly created file deliberately has no baseline; it
+        // is still fully reversible by deleting it when its current hash matches our last write.
+        let changes = self.list_changes(task_id).await?;
+        let path_changes: Vec<&FileChange> = changes
+            .iter()
+            .filter(|change| change.path == path_str)
+            .collect();
+
         // 1. 获取基线
         let baseline = match self.get_baseline(task_id, &path_str).await? {
             Some(b) => b,
+            None if !path_changes.is_empty() && path_changes[0].before_hash.is_none() => {
+                let expected_hash = path_changes
+                    .last()
+                    .and_then(|change| change.after_hash.as_deref());
+                let actual_hash = if physical_path.exists() {
+                    Some(hash_content(&std::fs::read(physical_path)?))
+                } else {
+                    None
+                };
+                return match (expected_hash, actual_hash.as_deref()) {
+                    (Some(expected), Some(actual)) if expected == actual => {
+                        std::fs::remove_file(physical_path)?;
+                        Ok(RollbackResult::Restored { path: path_str })
+                    }
+                    (Some(_), None) | (None, None) => {
+                        Ok(RollbackResult::AlreadyClean { path: path_str })
+                    }
+                    (Some(expected), Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "external modification (expected: {expected}, actual: {actual})"
+                        ),
+                    }),
+                    (None, Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "file exists but the task expected it to be absent (actual: {actual})"
+                        ),
+                    }),
+                };
+            }
             None => return Ok(RollbackResult::NoBaseline { path: path_str }),
         };
 
@@ -282,10 +620,6 @@ impl<'a> ChangeService<'a> {
 
         // 3. 确定预期哈希（我们以为磁盘上的内容）
         //    无变更 -> 基线 content_hash；有变更 -> 最后一次变更的 after_hash
-        let changes = self.list_changes(task_id).await?;
-        let path_changes: Vec<&FileChange> =
-            changes.iter().filter(|c| c.path == path_str).collect();
-
         let expected_hash: Option<&str> = if path_changes.is_empty() {
             Some(&baseline.content_hash)
         } else {
@@ -466,6 +800,18 @@ fn fold_changes(changes: &[FileChange]) -> Vec<ChangeSetEntry> {
 // ============================================================================
 // 辅助函数
 // ============================================================================
+
+fn store_blob(
+    store: &BlobStore<'_>,
+    content: Option<&[u8]>,
+) -> Result<Option<String>, ProductError> {
+    let Some(content) = content else {
+        return Ok(None);
+    };
+    let hash = store.put(content)?;
+    store.increment_ref(&hash)?;
+    Ok(Some(hash))
+}
 
 /// 将 rusqlite 错误转换为 ProductError。
 fn db_err(e: rusqlite::Error) -> ProductError {

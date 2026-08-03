@@ -75,6 +75,91 @@ button.ver-row {
   opacity: 1;
 }
 
+.chg-accept,
+.chg-accepted,
+.chg-rejected,
+.chg-blocked {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--success);
+  font: inherit;
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.chg-accept { cursor: pointer; }
+.chg-accept:hover { color: var(--accent); }
+.chg-blocked { color: var(--warning); }
+.chg-rejected { color: var(--danger); }
+
+.review-accept-actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+  margin-left: auto;
+}
+
+.diff-line-accept {
+  flex: none;
+  align-self: center;
+  margin: 1px var(--sp-2);
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-faint);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: var(--text-meta);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.dl:hover .diff-line-accept,
+.dla:hover .diff-line-accept,
+.diff-line-accept:focus-visible,
+.diff-line-accept:disabled {
+  opacity: 1;
+}
+
+.diff-line-accept:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--success);
+  background: var(--bg-panel);
+}
+
+.diff-line-accept:disabled { cursor: default; }
+
+.review-git {
+  display: grid;
+  gap: var(--sp-3);
+  margin: var(--sp-4) var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.review-git-head,
+.review-git-actions,
+.review-git-stage,
+.review-git-message {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.review-git-head { justify-content: space-between; }
+.review-git-head div { display: flex; gap: var(--sp-2); align-items: baseline; }
+.review-git-head span,
+.review-git-head small,
+.review-git-stage > span,
+.review-git-actions > span { color: var(--fg-muted); font-size: var(--text-meta); }
+.review-git-stage > span { margin-left: var(--sp-2); }
+.review-git-message .input { flex: 1; min-width: 0; }
+.review-git-actions > span { margin-left: auto; }
+.review-git-blockers { display: grid; gap: 2px; color: var(--warning); font-size: var(--text-meta); }
+
 /* ============================================================================
    二、Files：未保存切文件的 armed 二次确认（取代 window.confirm）
    ============================================================================ */

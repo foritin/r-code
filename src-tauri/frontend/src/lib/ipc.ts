@@ -37,7 +37,7 @@ import type {
   TerminalRawBatch,
   TerminalRawSnapshot,
   VerificationRecord,
-  ProjectAccessMode, Workspace,
+  ProjectAccessMode, Workspace, WorkspaceMemoryMode,
   ProviderSettingsInput,
   ProviderCatalog,
   ProviderModelsInput,
@@ -46,6 +46,22 @@ import type {
   CodexIntegrationStatus,
   ContextCompactionResult,
   InferenceOptions,
+  LegacyMemoryStatus,
+  McpCredentialStatus,
+  McpLaunchPreview,
+  McpManagerSnapshot,
+  McpMarketInstallRequest,
+  McpMarketPage,
+  McpServerView,
+  McpToggleResult,
+  McpToolDescriptor,
+  McpUpsertRequest,
+  MemoryEntry,
+  MemoryEntryDraft,
+  MemoryEntryEdit,
+  MemoryOverview,
+  MemoryReviewSettingsUpdate,
+  MemoryReviewSettingsView,
 } from "./types";
 import {
   browserMockDetails,
@@ -99,6 +115,9 @@ export const taskList = (workspacePath?: string, includeArchived = false) =>
 
 export const taskArchive = (taskId: string) =>
   ipc<Task>("cmd_task_archive", { taskId });
+
+export const taskRestore = (taskId: string) =>
+  ipc<Task>("cmd_task_restore", { taskId });
 
 export const taskDelete = (taskId: string) =>
   ipc<void>("cmd_task_delete", { taskId });
@@ -233,6 +252,68 @@ export const rollbackTask = (taskId: string) =>
 
 export const acceptTask = (taskId: string) => ipc<void>("cmd_accept_task", { taskId });
 
+export const reviewGitStatus = (taskId: string) =>
+  ipc<import("./types").ReviewGitStatus>("cmd_review_git_status", { taskId });
+
+export const REVIEW_STATUS_CHANGED_EVENT = "r-code:review-status-changed";
+
+function announceReviewStatusChanged(taskId: string, result?: import("./types").ReviewAcceptResult): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(REVIEW_STATUS_CHANGED_EVENT, { detail: { taskId, result } }));
+  }
+}
+
+export async function reviewAcceptLine(taskId: string, path: string, lineId: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_line", { taskId, path, lineId });
+  announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+export async function reviewAcceptFile(taskId: string, path: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_file", { taskId, path });
+  announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+export async function reviewAcceptAll(taskId: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_accept_all", { taskId });
+  announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+export async function reviewRejectFile(taskId: string, path: string) {
+  const result = await ipc<import("./types").ReviewAcceptResult>("cmd_review_reject_file", { taskId, path });
+  announceReviewStatusChanged(taskId, result);
+  return result;
+}
+
+export const gitDeliveryStatus = (taskId: string) =>
+  ipc<import("./types").GitDeliveryStatus>("cmd_git_delivery_status", { taskId });
+
+export const gitStageAccepted = (taskId: string) =>
+  ipc<import("./types").GitDeliveryStatus>("cmd_git_stage_accepted", { taskId });
+
+export const gitSuggestCommitMessage = (taskId: string) =>
+  ipc<string>("cmd_git_suggest_commit_message", { taskId });
+
+export const gitCommitTask = (taskId: string, message: string) =>
+  ipc<import("./types").GitCommitResult>("cmd_git_commit_task", { taskId, message });
+
+export const gitPushTask = (taskId: string) =>
+  ipc<import("./types").GitPushResult>("cmd_git_push_task", { taskId });
+
+export const workflowSkillsList = () =>
+  ipc<import("./types").WorkflowSkill[]>("cmd_workflow_skills_list");
+
+export const workflowSkillSave = (draft: import("./types").WorkflowSkillDraft) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_save", { draft });
+
+export const workflowSkillReset = (id: string) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_reset", { id });
+
+export const workflowSkillDelete = (id: string) =>
+  ipc<void>("cmd_workflow_skill_delete", { id });
+
 export const changeRequest = async (taskId: string, message: string) => {
   try {
     return await ipc<void>("cmd_change_request", { taskId, message });
@@ -366,6 +447,16 @@ export const workspaceChoose = () => ipc<Workspace | null>("cmd_workspace_choose
 export const workspaceSetAccessMode = (workspacePath: string, accessMode: ProjectAccessMode) =>
   ipc<Workspace>("cmd_workspace_set_access_mode", { workspacePath, accessMode });
 
+export const workspaceSetMemoryMode = (
+  workspaceId: string,
+  expectedGeneration: number,
+  memoryMode: WorkspaceMemoryMode,
+) => ipc<Workspace>("cmd_workspace_set_memory_mode", {
+  workspaceId,
+  expectedGeneration,
+  memoryMode,
+});
+
 export const workspaceDashboard = async (workspacePath: string) => {
   try {
     return await ipc<WorkspaceDashboard>("cmd_workspace_dashboard", { workspacePath });
@@ -494,11 +585,42 @@ export const subagentSessionMessages = async (taskId: string, subagentId: string
   }
 };
 
-// ---------- 项目记忆 ----------
-export const memoryGet = (workspacePath: string) => ipc<string>("cmd_memory_get", { workspacePath });
+// ---------- 旧版项目记忆文件风险状态 ----------
+export const memoryOverview = () => ipc<MemoryOverview>("cmd_memory_overview");
 
-export const memorySet = (workspacePath: string, content: string) =>
-  ipc<void>("cmd_memory_set", { workspacePath, content });
+export const memoryUpdateSettings = (update: MemoryReviewSettingsUpdate) =>
+  ipc<MemoryReviewSettingsView>("cmd_memory_update_settings", { update });
+
+export const memoryReviewNow = (taskId: string) =>
+  ipc<string | null>("cmd_memory_review_now", { taskId });
+
+export const memoryRetryJob = (jobId: string) =>
+  ipc<void>("cmd_memory_retry_job", { jobId });
+
+export const memoryCancelJob = (jobId: string) =>
+  ipc<void>("cmd_memory_cancel_job", { jobId });
+
+export const memoryAddEntry = (draft: MemoryEntryDraft) =>
+  ipc<MemoryEntry>("cmd_memory_add_entry", { draft });
+
+export const memoryEditEntry = (entryId: string, edit: MemoryEntryEdit) =>
+  ipc<MemoryEntry>("cmd_memory_edit_entry", { entryId, edit });
+
+export const memoryDeleteEntry = (entryId: string, expectedVersion: number) =>
+  ipc<void>("cmd_memory_delete_entry", { entryId, expectedVersion });
+
+export const memoryApproveCandidate = (candidateId: string, editedContent: string | null = null) =>
+  ipc<MemoryEntry>("cmd_memory_approve_candidate", { candidateId, editedContent });
+
+export const memoryRejectCandidate = (candidateId: string) =>
+  ipc<void>("cmd_memory_reject_candidate", { candidateId });
+
+export const memoryClearAll = () =>
+  ipc<MemoryReviewSettingsView>("cmd_memory_clear_all");
+
+// ---------- 旧版项目记忆文件风险状态 ----------
+export const legacyMemoryStatus = (workspacePath: string) =>
+  ipc<LegacyMemoryStatus>("cmd_legacy_memory_status", { workspacePath });
 
 // ---------- 设置 ----------
 export const settingsGet = async () => {
@@ -508,6 +630,49 @@ export const settingsGet = async () => {
     if (!shouldUseBrowserMock()) throw error;
     return browserMockSettings;
   }
+};
+
+// ---------- MCP / native web ----------
+export const mcpSnapshot = () => ipc<McpManagerSnapshot>("cmd_mcp_snapshot");
+
+export const mcpUpsert = (request: McpUpsertRequest) =>
+  ipc<McpServerView>("cmd_mcp_upsert", { request });
+
+export const mcpRemove = (serverId: string) =>
+  ipc<void>("cmd_mcp_remove", { serverId });
+
+export const mcpToggle = (serverId: string, enabled: boolean, confirmationToken: string | null = null) =>
+  ipc<McpToggleResult>("cmd_mcp_toggle", { serverId, enabled, confirmationToken });
+
+export const mcpTestConnection = (serverId: string) =>
+  ipc<McpToolDescriptor[]>("cmd_mcp_test_connection", { serverId });
+
+export const mcpCredentialStatus = (serverId: string) =>
+  ipc<McpCredentialStatus[]>("cmd_mcp_credential_status", { serverId });
+
+export const mcpSetCredential = (serverId: string, name: string, value: string) =>
+  ipc<void>("cmd_mcp_set_credential", { serverId, name, value });
+
+export const mcpDeleteCredential = (serverId: string, name: string) =>
+  ipc<void>("cmd_mcp_delete_credential", { serverId, name });
+
+export const mcpMarketSearch = (query: string | null = null, cursor: string | null = null, limit = 20) =>
+  ipc<McpMarketPage>("cmd_mcp_market_search", { query, cursor, limit });
+
+export const mcpMarketPrepareInstall = (request: McpMarketInstallRequest) =>
+  ipc<McpLaunchPreview>("cmd_mcp_market_prepare_install", { request });
+
+export const mcpMarketInstall = (request: McpMarketInstallRequest, confirmationToken: string) =>
+  ipc<McpServerView>("cmd_mcp_market_install", { request, confirmationToken });
+
+export const onMcpStatus = (
+  handler: (statuses: Array<Pick<McpServerView, "id" | "state" | "tool_count" | "error_code">>) => void,
+): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<Array<Pick<McpServerView, "id" | "state" | "tool_count" | "error_code">>>(
+    "mcp-status",
+    (event) => handler(event.payload),
+  );
 };
 
 /** 内置模型服务目录。编译期常量，进程内只需拉一次。 */

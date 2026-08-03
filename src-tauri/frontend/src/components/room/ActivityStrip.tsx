@@ -3,7 +3,7 @@
  * 逐条工具动作由时间线（verb + target + 结果）承担，此处不再重复罗列，
  * 避免同一件事在时间线、活动条、画布 live 标签里各说一遍。
  */
-import { useEffect, useState } from "react";
+import { useSharedNow } from "../../lib/shared-clock";
 import type { ActivityTraceState } from "./activity";
 
 interface Props {
@@ -12,14 +12,7 @@ interface Props {
 }
 
 export function ActivityStrip({ state, running }: Props) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!running || state.startedAt == null) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [running, state.startedAt]);
+  const now = useSharedNow(running && state.startedAt != null ? 1000 : null);
 
   if (!running) return null;
 

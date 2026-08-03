@@ -56,6 +56,11 @@ export const KEYMAP: Record<KeyAction, KeyBinding> = {
 
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform || navigator.userAgent);
 
+/** 统一的平台判断，供原生标题栏留白和快捷键文案共用。 */
+export function isMacPlatform(): boolean {
+  return IS_MAC;
+}
+
 /** 修饰键的平台化标签：macOS 上是 ⌘，其余是 Ctrl。 */
 export function modLabel(): string {
   return IS_MAC ? "⌘" : "Ctrl";
@@ -81,7 +86,9 @@ export function useGlobalKeys(handlers: GlobalKeyHandlers): void {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return;
+      // macOS 以 Command 为应用快捷键修饰键，Control 必须保留给终端和文本
+      // 编辑；Windows/Linux 则只接受 Ctrl，避免把 Meta 误当成应用命令。
+      if (IS_MAC ? !e.metaKey : !e.ctrlKey) return;
       // 缩放是窗口级操作，输入态下也允许；其余快捷键必须让位给原生文本编辑。
       const key = e.key.toLowerCase();
       const typing = isTypingTarget(e.target);

@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -45,6 +46,8 @@ interface Props {
   cur: number | null;
   /** 运行期间不能改写历史分支，避免上下文竞争。 */
   running: boolean;
+  /** 质量门禁仍在检查最新草稿；此时可见文本尚不是正式交付。 */
+  reviewing: boolean;
   /** 透传流式事件给 Room 的可观察活动 reducer。 */
   onAgentEvent?: (event: AgentEvent) => void;
   /** 点击内联子代理芯片后在任务工作台打开公开运行详情。 */
@@ -129,7 +132,7 @@ function runDurationLabel(startedAt: string, endedAt: string | null): string {
 }
 
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
-  { taskId, workspacePath, cur, running, onAgentEvent, onInspectSubagent, selectedSubagentId },
+  { taskId, workspacePath, cur, running, reviewing, onAgentEvent, onInspectSubagent, selectedSubagentId },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -139,18 +142,21 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const [editError, setEditError] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
+  const [visibleTurnLimit, setVisibleTurnLimit] = useState(80);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const eventsLen = useTasksStore((s) =>
     s.details[taskId]?.task.id === taskId ? s.details[taskId].events.length : 0
   );
-  const runsStamp = useTasksStore((s) =>
-    [...(s.details[taskId]?.runs ?? [])]
+  const taskRuns = useTasksStore((s) => s.details[taskId]?.runs);
+  const runsStamp = useMemo(
+    () => [...(taskRuns ?? [])]
       .sort((a, b) => a.started_at.localeCompare(b.started_at) || a.id.localeCompare(b.id))
       .map(
         (run) =>
           `${run.id}:${run.started_at}:${run.ended_at ?? ""}:${run.review_state}:${run.model}:${run.agent_kind}:${run.agent_label ?? ""}:${run.access_mode}:${run.routing_reason ?? ""}:${run.summary ?? ""}`
       )
-      .join("|")
+      .join("|"),
+    [taskRuns],
   );
 
   const liveRef = useRef(false);
@@ -159,6 +165,15 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const scrollRef = useRef<HTMLDivElement>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
   const pinnedRef = useRef(true);
+  const prependScrollHeightRef = useRef<number | null>(null);
+  const previousTurnCountRef = useRef(0);
+
+  useEffect(() => {
+    setVisibleTurnLimit(80);
+    previousTurnCountRef.current = 0;
+    prependScrollHeightRef.current = null;
+    pinnedRef.current = true;
+  }, [taskId]);
 
   const nid = useCallback(() => `live-${++idRef.current}`, []);
   const nowSec = useCallback(() => Math.max(0, (Date.now() - startRef.current) / 1000), []);
@@ -199,6 +214,8 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setEditError(null);
     setResending(false);
     setExpandedRunIds(new Set());
+    setVisibleTurnLimit(80);
+    previousTurnCountRef.current = 0;
     void reload();
   }, [reload]);
 
@@ -346,6 +363,45 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     }
   }, [editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
   const turns = useMemo(() => buildTimelineTurns(items), [items]);
+  const visibleTurns = useMemo(
+    () => turns.length > visibleTurnLimit ? turns.slice(turns.length - visibleTurnLimit) : turns,
+    [turns, visibleTurnLimit]
+  );
+  const hiddenTurnCount = turns.length - visibleTurns.length;
+
+  // When the user is reading above the live edge, retain the currently mounted window as new
+  // turns arrive. At the live edge the fixed tail window can advance without growing the DOM.
+  useEffect(() => {
+    const previous = previousTurnCountRef.current;
+    const added = Math.max(0, turns.length - previous);
+    previousTurnCountRef.current = turns.length;
+    if (added > 0 && !pinnedRef.current) setVisibleTurnLimit((current) => current + added);
+  }, [turns.length]);
+
+  useLayoutEffect(() => {
+    const previousHeight = prependScrollHeightRef.current;
+    const element = scrollRef.current;
+    if (previousHeight == null || !element) return;
+    element.scrollTop += element.scrollHeight - previousHeight;
+    prependScrollHeightRef.current = null;
+  }, [visibleTurnLimit]);
+
+  const loadEarlierTurns = useCallback(() => {
+    const element = scrollRef.current;
+    if (element) prependScrollHeightRef.current = element.scrollHeight;
+    pinnedRef.current = false;
+    setVisibleTurnLimit((current) => Math.min(turns.length, current + 80));
+  }, [turns.length]);
+  const provisionalAgentId = useMemo(() => {
+    if (!reviewing) return null;
+    for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
+      const turnItems = turns[turnIndex].items;
+      for (let itemIndex = turnItems.length - 1; itemIndex >= 0; itemIndex--) {
+        if (turnItems[itemIndex].kind === "agent") return turnItems[itemIndex].id;
+      }
+    }
+    return null;
+  }, [reviewing, turns]);
   type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
 
   const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
@@ -471,13 +527,20 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         );
       }
       case "agent":
+        const provisional = it.id === provisionalAgentId;
         return (
           <div
-            className={`agent${finalResponse ? " timeline-final-response" : ""}${dim(it.t)}`}
+            className={`agent${finalResponse ? " timeline-final-response" : ""}${provisional ? " is-provisional" : ""}${dim(it.t)}`}
             data-t={it.t}
             key={it.id}
           >
             <div className="who">R-CODE</div>
+            {provisional && (
+              <div className="agent-delivery-state" role="status">
+                <span>草稿</span>
+                质量复核进行中，尚未正式交付
+              </div>
+            )}
             <Markdown text={it.text} streaming={it.streaming} taskId={taskId} workspacePath={workspacePath} />
           </div>
         );
@@ -565,7 +628,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
 
   return (
     <div
-      className="timeline"
+      className={`timeline${visibleTurns.length >= 80 ? " is-long" : ""}`}
       ref={scrollRef}
       onScroll={(e) => {
         const el = e.currentTarget;
@@ -580,7 +643,8 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           在下方输入第一句话,运行中再发即为 steer。
         </div>
       )}
-      {turns.map((turn) => {
+      {hiddenTurnCount > 0 && <button type="button" className="timeline-load-earlier" onClick={loadEarlierTurns}>加载更早的 {Math.min(80, hiddenTurnCount)} 轮 · 尚有 {hiddenTurnCount} 轮</button>}
+      {visibleTurns.map((turn) => {
         const lastActivity = turn.items.reduce(
           (last, item, index) =>
             item.kind === "tool_group" || item.kind === "subagent_group" || item.kind === "context"
