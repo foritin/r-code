@@ -89,6 +89,20 @@ async function assertBounded(locator, { scrollable = false, innerSelector } = {}
   }
 }
 
+async function rect(locator) {
+  return locator.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return {
+      top: bounds.top,
+      right: bounds.right,
+      bottom: bounds.bottom,
+      left: bounds.left,
+      width: bounds.width,
+      height: bounds.height,
+    };
+  });
+}
+
 let server;
 let browser;
 let baseUrl;
@@ -146,6 +160,73 @@ test("floating surfaces stay inside a very small viewport and scroll internally"
   await notificationDialog.waitFor({ state: "visible" });
   await page.waitForTimeout(100);
   await assertBounded(notificationDialog, { scrollable: true, innerSelector: ".notification-menu-list" });
+
+  assert.deepEqual(runtimeErrors, []);
+  await page.close();
+});
+
+test("sidebar project and conversation actions share one compact side-menu pattern", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const sidebar = page.locator(".app-sidebar");
+  const sidebarRect = await rect(sidebar);
+
+  assert.equal(await page.locator(".sidebar-live").count(), 0, "projects must not duplicate the running marker");
+  assert.ok(await page.locator(".sidebar-task .task-state-dot.running").count() > 0, "running sessions keep their status dot");
+
+  const projectTrigger = page.getByRole("button", { name: "r-code 项目操作", exact: true });
+  await projectTrigger.click();
+  const projectMenu = page.getByRole("menu", { name: "r-code 项目操作", exact: true });
+  await projectMenu.waitFor({ state: "visible" });
+  const projectRect = await rect(projectMenu);
+  assert.ok(
+    projectRect.left >= sidebarRect.right + 3,
+    `project menu ${JSON.stringify(projectRect)} must open beside sidebar ${JSON.stringify(sidebarRect)}`,
+  );
+  assert.equal(await projectMenu.locator(".menu-item small").count(), 0, "project actions stay compact");
+  const projectStyle = await projectMenu.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { borderRadius: style.borderRadius, padding: style.padding };
+  });
+
+  await page.keyboard.press("Escape");
+  assert.equal(await projectMenu.count(), 0, "Escape must dismiss the project menu");
+  assert.equal(await projectTrigger.evaluate((element) => document.activeElement === element), true, "focus returns to the project trigger");
+
+  const taskRow = page.locator(".sidebar-task-row").filter({ hasText: "更新依赖并修复告警" });
+  await taskRow.hover();
+  const taskTrigger = taskRow.getByRole("button", { name: "管理对话：更新依赖并修复告警", exact: true });
+  await taskTrigger.click();
+  const taskMenu = page.getByRole("menu", { name: "管理对话：更新依赖并修复告警", exact: true });
+  await taskMenu.waitFor({ state: "visible" });
+  const taskRect = await rect(taskMenu);
+  assert.ok(
+    taskRect.left >= sidebarRect.right + 3,
+    `conversation menu ${JSON.stringify(taskRect)} must open beside sidebar ${JSON.stringify(sidebarRect)}`,
+  );
+  assert.ok(
+    Math.abs(taskRect.width - projectRect.width) < 1,
+    `project ${JSON.stringify(projectRect)} and conversation ${JSON.stringify(taskRect)} menus use the same width`,
+  );
+  assert.equal(await taskMenu.locator(".menu-item small").count(), 0, "conversation actions stay compact");
+
+  const taskStyle = await taskMenu.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { borderRadius: style.borderRadius, padding: style.padding };
+  });
+  assert.deepEqual(taskStyle, projectStyle, "both sidebar menus use the same surface treatment");
+
+  await page.keyboard.press("Escape");
+  await projectTrigger.click();
+  await projectMenu.getByRole("menuitem", { name: "新建对话", exact: true }).click();
+  await page.locator("#main-content > .scene-home").waitFor({ state: "visible" });
+  assert.match(await page.locator(".scope-pill").innerText(), /r-code/, "project-scoped new conversation keeps the project attached");
 
   assert.deepEqual(runtimeErrors, []);
   await page.close();

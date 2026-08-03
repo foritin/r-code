@@ -5,7 +5,7 @@ import type { Workspace } from "../lib/types";
 import { useAppStore } from "../store/app";
 import { useTasksStore } from "../store/tasks";
 import { pushToast } from "../store/toast";
-import { IconEditor, IconFolderOpen, IconMore, IconText, IconTrash } from "./icons";
+import { IconEditor, IconFolderOpen, IconMore, IconPlus, IconText, IconTrash } from "./icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Menu, MenuItem, MenuSeparator } from "./ui/Menu";
 
@@ -23,6 +23,7 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
   const refreshActivity = useTasksStore((state) => state.refreshActivity);
   const setCurrentProject = useTasksStore((state) => state.setCurrentProject);
   const scene = useAppStore((state) => state.scene);
+  const openNewConversation = useAppStore((state) => state.openNewConversation);
   const openDashboard = useAppStore((state) => state.openDashboard);
   const openConversations = useAppStore((state) => state.openConversations);
   const setScene = useAppStore((state) => state.setScene);
@@ -41,6 +42,10 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
     setCurrentProject(workspace.canonical_path);
     setScene("editor");
   }, [setCurrentProject, setScene, workspace.canonical_path]);
+
+  const createConversation = useCallback(() => {
+    openNewConversation(workspace.canonical_path);
+  }, [openNewConversation, workspace.canonical_path]);
 
   const openKnowledge = useCallback(() => {
     setCurrentProject(workspace.canonical_path);
@@ -85,8 +90,8 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
     <>
       <Menu
         className="sidebar-project-actions"
-        placement="down"
-        align="right"
+        placement="right"
+        gap={18}
         label={`${workspace.display_name} 项目操作`}
         disabled={checking || removing}
         menuClassName="project-actions-popover"
@@ -103,6 +108,11 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
         )}
       >
         {({ close }) => <>
+          <MenuItem close={close} onSelect={createConversation}>
+            <IconPlus width={15} height={15} />
+            新建对话
+          </MenuItem>
+          <MenuSeparator />
           <MenuItem close={close} onSelect={() => openDashboard(workspace.canonical_path)}>
             <IconFolderOpen width={15} height={15} />
             打开项目

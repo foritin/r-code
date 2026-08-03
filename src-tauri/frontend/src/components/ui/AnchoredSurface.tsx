@@ -13,10 +13,10 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export type SurfacePlacement = "up" | "down";
+export type SurfacePlacement = "up" | "down" | "left" | "right";
 export type SurfaceAlign = "left" | "right";
 
-const GAP = 6;
+const DEFAULT_GAP = 6;
 const MARGIN = 8;
 
 interface SurfaceRect {
@@ -40,6 +40,7 @@ export interface SurfacePositionInput {
   viewport: ViewportRect;
   placement: SurfacePlacement;
   align: SurfaceAlign;
+  gap?: number;
 }
 
 export interface SurfacePosition {
@@ -67,15 +68,42 @@ export function calculateSurfacePosition({
   viewport,
   placement,
   align,
+  gap = DEFAULT_GAP,
 }: SurfacePositionInput): SurfacePosition {
   const viewportTop = viewport.top + MARGIN;
   const viewportLeft = viewport.left + MARGIN;
   const viewportBottom = Math.max(viewportTop, viewport.top + viewport.height - MARGIN);
   const viewportRight = Math.max(viewportLeft, viewport.left + viewport.width - MARGIN);
-  const maxWidth = Math.max(0, viewportRight - viewportLeft);
+  const viewportWidth = Math.max(0, viewportRight - viewportLeft);
 
-  const aboveEdge = clamp(anchor.top - GAP, viewportTop, viewportBottom);
-  const belowEdge = clamp(anchor.bottom + GAP, viewportTop, viewportBottom);
+  if (placement === "left" || placement === "right") {
+    const leftEdge = clamp(anchor.left - gap, viewportLeft, viewportRight);
+    const rightEdge = clamp(anchor.right + gap, viewportLeft, viewportRight);
+    const spaceLeft = Math.max(0, leftEdge - viewportLeft);
+    const spaceRight = Math.max(0, viewportRight - rightEdge);
+
+    let useRight = placement === "right";
+    const preferredSpace = useRight ? spaceRight : spaceLeft;
+    const alternateSpace = useRight ? spaceLeft : spaceRight;
+    if (preferredSpace < surfaceWidth && alternateSpace > preferredSpace) useRight = !useRight;
+
+    const maxWidth = useRight ? spaceRight : spaceLeft;
+    const maxHeight = Math.max(0, viewportBottom - viewportTop);
+    const fittedWidth = Math.min(Math.max(0, surfaceWidth), maxWidth);
+    const fittedHeight = Math.min(Math.max(0, surfaceHeight), maxHeight);
+    const rawLeft = useRight ? rightEdge : leftEdge - fittedWidth;
+
+    return {
+      top: clamp(anchor.top, viewportTop, viewportBottom - fittedHeight),
+      left: clamp(rawLeft, viewportLeft, viewportRight - fittedWidth),
+      maxHeight,
+      maxWidth,
+      placement: useRight ? "right" : "left",
+    };
+  }
+
+  const aboveEdge = clamp(anchor.top - gap, viewportTop, viewportBottom);
+  const belowEdge = clamp(anchor.bottom + gap, viewportTop, viewportBottom);
   const spaceAbove = Math.max(0, aboveEdge - viewportTop);
   const spaceBelow = Math.max(0, viewportBottom - belowEdge);
 
@@ -86,7 +114,7 @@ export function calculateSurfacePosition({
 
   const maxHeight = useUp ? spaceAbove : spaceBelow;
   const fittedHeight = Math.min(Math.max(0, surfaceHeight), maxHeight);
-  const fittedWidth = Math.min(Math.max(0, surfaceWidth), maxWidth);
+  const fittedWidth = Math.min(Math.max(0, surfaceWidth), viewportWidth);
   const edge = useUp ? aboveEdge : belowEdge;
   const rawTop = useUp ? edge - fittedHeight : edge;
   const rawLeft = align === "right" ? anchor.right - fittedWidth : anchor.left;
@@ -95,7 +123,7 @@ export function calculateSurfacePosition({
     top: clamp(rawTop, viewportTop, viewportBottom - fittedHeight),
     left: clamp(rawLeft, viewportLeft, viewportRight - fittedWidth),
     maxHeight,
-    maxWidth,
+    maxWidth: viewportWidth,
     placement: useUp ? "up" : "down",
   };
 }
@@ -110,6 +138,8 @@ interface Props {
   role?: AriaRole;
   label?: string;
   matchAnchorWidth?: boolean;
+  /** 触发器与浮层的间距；侧栏菜单可用更大间距跨过侧栏内边距。 */
+  gap?: number;
   surfaceRef?: Ref<HTMLDivElement>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   onDismiss?: () => void;
@@ -144,6 +174,7 @@ export function AnchoredSurface({
   role,
   label,
   matchAnchorWidth = false,
+  gap = DEFAULT_GAP,
   surfaceRef,
   onKeyDown,
   onDismiss,
@@ -190,6 +221,7 @@ export function AnchoredSurface({
       viewport,
       placement,
       align,
+      gap,
     });
     const width = matchAnchorWidth ? Math.min(anchorRect.width, next.maxWidth) : undefined;
     const nextStyle: CSSProperties = {
@@ -212,7 +244,7 @@ export function AnchoredSurface({
         ? current
         : nextStyle,
     );
-  }, [align, anchorRef, matchAnchorWidth, placement]);
+  }, [align, anchorRef, gap, matchAnchorWidth, placement]);
 
   useLayoutEffect(() => {
     let frame = 0;
