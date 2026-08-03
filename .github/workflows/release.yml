@@ -123,7 +123,8 @@ jobs:
         include:
           - platform: windows-x64
             runner: windows-latest
-            args: "--bundles nsis,msi --config tauri.release-windows.conf.json"
+            args: "--bundles nsis,msi"
+            signed_config: "--config tauri.release-windows.conf.json"
             rust-target: x86_64-pc-windows-msvc
           - platform: macos-arm64
             runner: macos-latest
@@ -267,7 +268,7 @@ jobs:
         with:
           projectPath: src-tauri
           tauriScript: cargo tauri
-          args: ${{ matrix.args }} --target ${{ matrix.rust-target }}
+          args: ${{ matrix.args }} ${{ matrix.signed_config }} --target ${{ matrix.rust-target }}
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: R-Code ${{ env.RELEASE_TAG }}
           generateReleaseNotes: true
