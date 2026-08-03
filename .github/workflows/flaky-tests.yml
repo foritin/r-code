@@ -1,0 +1,87 @@
+name: Flaky Test Report
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Avoid the top of the hour, when GitHub's scheduled runner queue is busiest.
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flaky-test-report-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  frontend:
+    name: Frontend repeated tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: src-tauri/frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: src-tauri/frontend
+        run: npm ci
+      - name: Verify flaky-test reporter
+        run: node --test scripts/flaky-test-report.test.mjs
+      - name: Repeat frontend test suite five times
+        run: >-
+          node scripts/flaky-test-report.mjs
+          --name frontend
+          --attempts 5
+          --cwd src-tauri/frontend
+          --timeout-ms 1200000
+          -- npm test
+      - name: Upload frontend report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-report-frontend
+          path: target/flaky-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+  rust:
+    name: Rust repeated tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The repository token cannot read the private agent-core submodule.
+          token: ${{ secrets.PAT_TOKEN }}
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Repeat Rust workspace tests three times
+        run: >-
+          node scripts/flaky-test-report.mjs
+          --name rust-${{ runner.os }}
+          --attempts 3
+          --timeout-ms 3600000
+          -- cargo test --workspace --all-features
+      - name: Upload Rust report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flaky-report-rust-${{ runner.os }}
+          path: target/flaky-report
+          if-no-files-found: ignore
+          retention-days: 14
