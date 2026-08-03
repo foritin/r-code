@@ -6,6 +6,7 @@
  * 只有一个只读的模型状态芯片，想换模型或改权限必须回到会话顶栏找。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   agentQueueRemove,
   agentSend,
@@ -345,15 +346,18 @@ export function Composer({
   }, [leaveInputHistory]);
 
   const showHistoryValue = useCallback((value: string) => {
-    setText(value);
-    setAt(null);
-    setSlashDismissed(true);
-    requestAnimationFrame(() => {
-      const textarea = taRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(value.length, value.length);
+    // History navigation and the next keystroke can happen in adjacent browser tasks.
+    // Commit the controlled value before returning from the key handler so a fast edit
+    // cannot race React's batched render and append to the value being restored.
+    flushSync(() => {
+      setText(value);
+      setAt(null);
+      setSlashDismissed(true);
     });
+    const textarea = taRef.current;
+    if (!textarea) return;
+    textarea.focus();
+    textarea.setSelectionRange(value.length, value.length);
   }, []);
 
   useEffect(() => {
