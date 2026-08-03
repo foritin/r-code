@@ -201,7 +201,6 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .sidebar-project-head { display: flex; align-items: center; width: 100%; min-height: 34px; gap: 9px; padding: 0 9px; border-radius: 6px; color: var(--fg-muted); text-align: left; font-size: 13px; font-weight: 600; }
 .sidebar-project-row:hover .sidebar-project-head, .sidebar-project.selected .sidebar-project-head { color: var(--fg); }
 .sidebar-project-head .rail-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-live { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--success); }
 .sidebar-task-list { display: grid; gap: 1px; padding: 3px 0 0; }
 .sidebar-task-row { position: relative; min-width: 0; border-radius: 5px; }
 .sidebar-task { display: flex; align-items: center; min-width: 0; min-height: 30px; width: 100%; gap: 8px; padding: 0 8px 0 16px; border-radius: 5px; color: var(--fg-muted); text-align: left; font-size: 12px; }

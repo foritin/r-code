@@ -148,8 +148,15 @@ test("an empty provider form applies the complete first preset and keeps the pri
     model: "gpt-5.6-sol",
   });
 
+  const webCapability = page.getByLabel("当前模型服务的联网能力");
+  assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
+  await webCapability.getByText(/线路协议切换为 Responses/).waitFor();
+
   await page.locator("#set-preset").selectOption("deepseek");
   assert.equal(await page.locator("#set-profile-name").inputValue(), "deepseek");
+  assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
+  await webCapability.getByText("需切换线路", { exact: true }).waitFor();
+  await webCapability.getByText(/Chat 只有普通 Tool Call/).waitFor();
   assert.deepEqual(
     await page.locator("#set-protocol option").evaluateAll((options) =>
       options.map((option) => option.value)
@@ -192,13 +199,25 @@ test("an empty provider form applies the complete first preset and keeps the pri
   await page.getByRole("button", { name: "Anthropic 兼容口" }).click();
   assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com/anthropic");
   assert.equal(await page.locator("#set-protocol").inputValue(), "anthropic_messages");
+  assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
+  await webCapability.getByText("DeepSeek 托管", { exact: true }).waitFor();
+  await webCapability.getByText(/DeepSeek 服务端 Web Search/).waitFor();
   await page.getByRole("button", { name: "主入口" }).click();
   assert.equal(await page.locator("#set-base-url").inputValue(), "https://api.deepseek.com");
   assert.equal(await page.locator("#set-protocol").inputValue(), "openai_chat");
 
-  await page.locator("#set-model").fill("deepseek-v4-pro");
+  await page.locator("#set-base-url").fill("http://api.deepseek.com");
+  assert.equal(await webCapability.getAttribute("data-search-state"), "gateway");
+  await webCapability.getByText("能力未确认", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "主入口" }).click();
+
   await page.locator("#set-protocol").selectOption("openai_responses");
+  assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
+  await webCapability.getByText(/DeepSeek 服务端 Web Search/).waitFor();
+  await page.locator("#set-model").fill("deepseek-v4-pro");
   await page.getByText(/Responses 仅支持 deepseek-v4-flash/).waitFor({ state: "visible" });
+  assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
+  await webCapability.getByText("需切换线路", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
   await page.close();
 });

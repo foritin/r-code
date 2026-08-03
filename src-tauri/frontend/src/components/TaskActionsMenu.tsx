@@ -7,13 +7,14 @@ import { pushToast } from "../store/toast";
 import type { Task, TaskDetail } from "../lib/types";
 import { IconArchive, IconMore, IconTrash } from "./icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
+import type { SurfacePlacement } from "./ui/AnchoredSurface";
 import { Menu, MenuItem, MenuSeparator } from "./ui/Menu";
 
 interface Props {
   task: Task;
   detail?: TaskDetail;
   className?: string;
-  placement?: "up" | "down";
+  placement?: SurfacePlacement;
   onChanged?: () => void;
 }
 
@@ -66,13 +67,12 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
     }
   }, [busy, forgetTaskNavigation, leaveRemovedRoom, live, onChanged, refreshTasks, task.id, title]);
 
-  const blockedHint = live ? "先停止当前运行" : undefined;
-
   return (
     <>
       <Menu
         className={className}
         placement={placement}
+        gap={placement === "left" || placement === "right" ? 18 : undefined}
         align="right"
         label={`管理对话：${title}`}
         disabled={busy != null}
@@ -93,7 +93,6 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
           <>
             <MenuItem
               disabled={live || task.state === "archived"}
-              hint={blockedHint ?? "从项目列表移出，保留历史记录"}
               close={close}
               onSelect={() => void archive()}
             >
@@ -104,7 +103,6 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
             <MenuItem
               className="danger"
               disabled={live}
-              hint={blockedHint ?? "永久删除对话与审计记录，不删除项目文件"}
               closeOnSelect={false}
               onSelect={() => {
                 close();

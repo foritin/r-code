@@ -22,7 +22,7 @@
 //!
 //! [doc-09] [doc-11]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -34,8 +34,8 @@ use std::os::windows::process::CommandExt;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use hermes_core::{
-    CompletionRequest, ContentBlock, FileSource, HostedToolSpec, InferenceOptions, Message, Role,
-    SessionEvent, SessionMeta,
+    CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
+    InferenceOptions, Message, Role, SessionEvent, SessionMeta,
 };
 use hermes_store::SessionStore;
 use r_code_agent_worker::{
@@ -65,12 +65,12 @@ use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
     AgentRunRepository, BlobStore, CapturedMemoryTurn, ChangeService, Database, GitCommitResult,
-    GitDeliveryStatus, GitPushResult, GitService, GitTreeChangeKind, MemoryEntryDraft,
-    MemoryEntryEdit, MemoryOverview, MemoryStore, NewRunWorkspaceSnapshot, NotificationRepository,
-    QueuedMessageRepository, ReviewAcceptResult, ReviewDecision, ReviewDiffLineKind,
-    ReviewGitService, ReviewGitStatus, ReviewService, RollbackResult, SessionBranchRepository,
-    TaskEventStore, TaskRepository, ToolCallRepository, VerificationConfig, VerificationService,
-    WorkspaceService,
+    GitDeliveryStatus, GitPushResult, GitService, GitStatusKind, GitTreeChangeKind,
+    MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryStore, NewRunWorkspaceSnapshot,
+    NotificationRepository, QueuedMessageRepository, ReviewAcceptResult, ReviewDecision,
+    ReviewDiffLineKind, ReviewGitService, ReviewGitStatus, ReviewPathStatus, ReviewService,
+    RollbackResult, SessionBranchRepository, TaskEventStore, TaskRepository, ToolCallRepository,
+    VerificationConfig, VerificationService, WorkspaceService,
 };
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
 pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
@@ -4958,10 +4958,132 @@ pub async fn accept_task(state: &CommandState, task_id: &str) -> Result<(), Stri
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+struct WorkspaceGitChange {
+    display_path: String,
+    repo_path: String,
+    physical_path: PathBuf,
+    status: GitStatusKind,
+}
+
+fn workspace_git_changes(workspace_root: &Path) -> Result<Vec<WorkspaceGitChange>, String> {
+    let git = GitService::new(workspace_root.to_path_buf());
+    let repo_root = git
+        .repo_root()
+        .map_err(err_str)?
+        .canonicalize()
+        .map_err(err_str)?;
+    let workspace_root = workspace_root.canonicalize().map_err(err_str)?;
+    let mut changes = Vec::new();
+    for change in git.status().map_err(err_str)? {
+        let repo_relative = Path::new(&change.path);
+        if repo_relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            continue;
+        }
+        let physical_path = repo_root.join(repo_relative);
+        let Ok(workspace_relative) = physical_path.strip_prefix(&workspace_root) else {
+            continue;
+        };
+        let display_path = workspace_relative.to_string_lossy().replace('\\', "/");
+        if display_path.is_empty() {
+            continue;
+        }
+        changes.push(WorkspaceGitChange {
+            display_path,
+            repo_path: change.path,
+            physical_path,
+            status: change.status,
+        });
+    }
+    changes.sort_by(|left, right| left.display_path.cmp(&right.display_path));
+    Ok(changes)
+}
+
+fn git_status_change_type(status: GitStatusKind) -> FileChangeType {
+    match status {
+        GitStatusKind::Untracked | GitStatusKind::Added => FileChangeType::Create,
+        GitStatusKind::Deleted => FileChangeType::Delete,
+        GitStatusKind::Modified | GitStatusKind::Renamed | GitStatusKind::Conflicted => {
+            FileChangeType::Modify
+        }
+    }
+}
+
+fn workspace_only_review_path(change: WorkspaceGitChange) -> ReviewPathStatus {
+    let conflict = change.status == GitStatusKind::Conflicted;
+    ReviewPathStatus {
+        path: change.display_path,
+        scope: r_code_store::review_git::ReviewPathScope::Workspace,
+        change_type: Some(git_status_change_type(change.status)),
+        accepted: false,
+        rejected: false,
+        remaining: false,
+        conflict,
+        safe_to_accept: false,
+        blocker: Some(if conflict {
+            "该路径存在 Git 冲突，不属于本轮 Agent 的安全恢复范围".to_string()
+        } else {
+            "工作区中已有的未提交变更；这里只展示，不会随本轮接受或拒绝而改写".to_string()
+        }),
+        accepted_items: 0,
+        rejected_items: 0,
+        remaining_items: 0,
+    }
+}
+
 pub fn review_git_status(state: &CommandState, task_id: &str) -> Result<ReviewGitStatus, String> {
-    ReviewGitService::new(&state.db, state.blobs_dir.clone())
-        .status(task_id)
-        .map_err(err_str)
+    let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
+    let mut status = review.status(task_id).map_err(err_str)?;
+    if !status.git_repository {
+        return Ok(status);
+    }
+
+    // While a run is active, the entry/exit snapshot has not been finalized yet. Treating live
+    // writes as unrelated workspace changes would disable their review controls mid-stream.
+    if AgentRunRepository::new(&state.db)
+        .get_latest_main_run(task_id)
+        .map_err(err_str)?
+        .is_some_and(|run| run.ended_at.is_none())
+    {
+        return Ok(status);
+    }
+
+    let workspace_root = attached_task_workspace_root(state, task_id)?;
+    let mut workspace_changes: BTreeMap<String, WorkspaceGitChange> =
+        workspace_git_changes(&workspace_root)?
+            .into_iter()
+            .map(|change| (change.display_path.clone(), change))
+            .collect();
+    let mut merged = Vec::with_capacity(status.paths.len() + workspace_changes.len());
+    for mut path in status.paths.drain(..) {
+        if let Some(change) = workspace_changes.remove(&path.path) {
+            if path.rejected {
+                // Reject restores the run-entry content. If that content was already dirty
+                // relative to HEAD, keep showing it as an unrelated workspace change instead of
+                // leaving a rejected task placeholder behind.
+                merged.push(workspace_only_review_path(change));
+                continue;
+            }
+            if path.change_type.is_none() {
+                path.change_type = Some(git_status_change_type(change.status));
+            }
+        } else if path.rejected {
+            // A fully restored path has left the Git worktree and the active review list.
+            continue;
+        }
+        merged.push(path);
+    }
+    merged.extend(
+        workspace_changes
+            .into_values()
+            .map(workspace_only_review_path),
+    );
+    merged.sort_by(|left, right| left.path.cmp(&right.path));
+    status.paths = merged;
+    Ok(status)
 }
 
 pub fn review_accept_line(
@@ -5290,6 +5412,9 @@ pub async fn change_diff(
     let change = changes.iter().rev().find(|change| {
         change.path == path || change.path.ends_with(path) || path.ends_with(&change.path)
     });
+    if snapshot.is_none() && change.is_none() {
+        return workspace_git_change_diff(state, task_id, path);
+    }
     let display_path = snapshot
         .as_ref()
         .map(|snapshot| snapshot.path.clone())
@@ -5363,6 +5488,86 @@ pub async fn change_diff(
         lines: Some(lines),
         truncated: if truncated { Some(true) } else { None },
     })
+}
+
+fn workspace_git_change_diff(
+    state: &CommandState,
+    task_id: &str,
+    requested_path: &str,
+) -> Result<ChangeDiff, String> {
+    let workspace_root = attached_task_workspace_root(state, task_id)?;
+    let normalized = requested_path.replace('\\', "/");
+    let change = workspace_git_changes(&workspace_root)?
+        .into_iter()
+        .find(|change| change.display_path == normalized)
+        .ok_or_else(|| format!("path is not an uncommitted workspace change: {requested_path}"))?;
+    let git = GitService::new(workspace_root.clone());
+    let before = git
+        .head_tree()
+        .map_err(err_str)?
+        .map(|tree| git.blob_at_tree(&tree, &change.repo_path))
+        .transpose()
+        .map_err(err_str)?
+        .flatten();
+    let after = read_workspace_git_blob(&workspace_root, &change.physical_path)?;
+    let before_hash = before.as_deref().map(r_code_store::hash_content);
+    let after_hash = after.as_deref().map(r_code_store::hash_content);
+    let change_type = Some(git_status_change_type(change.status));
+
+    if before.is_none() && after.is_none() {
+        return Ok(ChangeDiff {
+            supported: false,
+            path: change.display_path,
+            change_type,
+            before_hash,
+            after_hash,
+            lines: None,
+            truncated: None,
+        });
+    }
+
+    let before_text = before
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    let after_text = after
+        .as_deref()
+        .map(String::from_utf8_lossy)
+        .unwrap_or_default();
+    let (lines, truncated) = build_diff_lines(&before_text, &after_text);
+    Ok(ChangeDiff {
+        supported: true,
+        path: change.display_path,
+        change_type,
+        before_hash,
+        after_hash,
+        lines: Some(lines),
+        truncated: truncated.then_some(true),
+    })
+}
+
+/// Read the worktree side of a Git change without following a tracked symlink outside the
+/// attached workspace. Git stores a symlink's target text as its blob, not the target file's
+/// contents, so mirroring that representation is both safer and more accurate.
+fn read_workspace_git_blob(
+    workspace_root: &Path,
+    physical_path: &Path,
+) -> Result<Option<Vec<u8>>, String> {
+    let metadata = match std::fs::symlink_metadata(physical_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(err_str(error)),
+    };
+    if metadata.file_type().is_symlink() {
+        let target = std::fs::read_link(physical_path).map_err(err_str)?;
+        return Ok(Some(target.to_string_lossy().into_owned().into_bytes()));
+    }
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    let guard = PathGuard::new(workspace_root.to_path_buf()).map_err(err_str)?;
+    let safe_path = guard.resolve_existing(physical_path).map_err(err_str)?;
+    std::fs::read(safe_path).map(Some).map_err(err_str)
 }
 
 // ============================================================================
@@ -7072,33 +7277,33 @@ fn resolve_effective_protocol(
         .unwrap_or_else(|| infer_protocol_never_responses(name, &pcfg.base_url))
 }
 
-/// Enable DeepSeek's provider-hosted search only on its official Anthropic endpoint.
-/// Anthropic-compatible URLs from other vendors share the wire protocol but not this service.
+/// Enable provider-hosted web tools only for catalog routes whose endpoint, protocol and model
+/// have all been verified. Wire compatibility alone never implies server-tool compatibility.
 fn hosted_tools_for_provider(
     name: &str,
     pcfg: &hermes_config::ProviderConfig,
 ) -> Vec<HostedToolSpec> {
-    if resolve_effective_protocol(name, pcfg) != ProviderProtocol::AnthropicMessages {
-        return Vec::new();
-    }
+    let protocol = resolve_effective_protocol(name, pcfg);
     let configured = pcfg.base_url.trim();
     let base_url = if configured.is_empty() {
         provider_preset(name).map_or("", |preset| preset.base_url)
     } else {
         configured
     };
-    let Ok(url) = url::Url::parse(base_url) else {
+    let Some(route) = crate::provider_catalog::hosted_web_route(base_url, protocol, &pcfg.model)
+    else {
         return Vec::new();
     };
-    if url.host_str() != Some("api.deepseek.com") {
-        return Vec::new();
+    let format = match route.format {
+        crate::provider_catalog::HostedWebFormat::Standard => HostedToolFormat::Standard,
+        crate::provider_catalog::HostedWebFormat::DashScope => HostedToolFormat::DashScope,
+        crate::provider_catalog::HostedWebFormat::OpenRouter => HostedToolFormat::OpenRouter,
+    };
+    let mut tools = vec![HostedToolSpec::web_search_with_format(format)];
+    if route.read == crate::provider_catalog::HostedWebRead::Dedicated {
+        tools.push(HostedToolSpec::web_fetch_with_format(format));
     }
-    let path = url.path().trim_end_matches('/');
-    let path = path.strip_suffix("/v1").unwrap_or(path);
-    if !path.ends_with("/anthropic") {
-        return Vec::new();
-    }
-    vec![HostedToolSpec::web_search()]
+    tools
 }
 
 /// 没存过 protocol 时的推断规则，**唯一实现**。
@@ -13289,6 +13494,138 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn review_surfaces_all_git_changes_but_bulk_reject_restores_only_the_run() {
+        let (_dir, state) = setup_state();
+        let repo = state.project_root.join("review-workspace");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "review@example.test"]);
+        git(&["config", "user.name", "Review Test"]);
+        std::fs::write(repo.join("task.txt"), b"baseline\n").unwrap();
+        git(&["add", "task.txt"]);
+        git(&["commit", "--quiet", "-m", "baseline"]);
+
+        // This file predates the Agent run. It must be visible, but bulk reject must preserve it.
+        std::fs::write(repo.join("user.txt"), b"user work\n").unwrap();
+        let workspace = workspace_open(&state, &repo).await.unwrap();
+        let task = task_create(
+            &state,
+            Some(&workspace.canonical_path),
+            "Review",
+            "edit task file",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        let git_service = GitService::new(repo.clone());
+        let entry_index = git_service.index_snapshot().unwrap().unwrap();
+        let entry_worktree = git_service.entry_snapshot().unwrap().unwrap();
+        let entry_head = git_service.head_tree().unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .save_run_workspace_snapshot(NewRunWorkspaceSnapshot {
+                run_id: &run.id,
+                task_id: &task.id,
+                repo_root: &repo,
+                workspace_root: &repo,
+                entry_head_tree: entry_head.as_deref(),
+                entry_index_tree: &entry_index,
+                entry_worktree_tree: &entry_worktree,
+            })
+            .unwrap();
+
+        std::fs::write(repo.join("task.txt"), b"agent edit\n").unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .record_snapshot_change(
+                &run.id,
+                &task.id,
+                "task.txt",
+                FileChangeType::Modify,
+                Some(b"baseline\n"),
+                Some(b"agent edit\n"),
+            )
+            .await
+            .unwrap();
+        AgentRunRepository::new(&state.db)
+            .update_review_state(&run.id, ReviewState::Answered)
+            .unwrap();
+
+        let status = review_git_status(&state, &task.id).unwrap();
+        let task_path = status
+            .paths
+            .iter()
+            .find(|path| path.path == "task.txt")
+            .unwrap();
+        assert_eq!(
+            task_path.scope,
+            r_code_store::review_git::ReviewPathScope::Task
+        );
+        let workspace_path = status
+            .paths
+            .iter()
+            .find(|path| path.path == "user.txt")
+            .unwrap();
+        assert_eq!(
+            workspace_path.scope,
+            r_code_store::review_git::ReviewPathScope::Workspace
+        );
+        assert!(!workspace_path.safe_to_accept);
+        assert!(!workspace_path.remaining);
+
+        let workspace_diff = change_diff(&state, &task.id, "user.txt").await.unwrap();
+        assert!(workspace_diff.supported);
+        assert_eq!(workspace_diff.change_type, Some(FileChangeType::Create));
+
+        rollback_task(&state, &task.id).await.unwrap();
+        assert_eq!(std::fs::read(repo.join("task.txt")).unwrap(), b"baseline\n");
+        assert_eq!(
+            std::fs::read(repo.join("user.txt")).unwrap(),
+            b"user work\n",
+            "bulk reject must never discard work that predates the Agent run"
+        );
+        let after = review_git_status(&state, &task.id).unwrap();
+        assert!(after.paths.iter().all(|path| path.path != "task.txt"));
+        assert_eq!(after.paths.len(), 1);
+        assert_eq!(after.paths[0].path, "user.txt");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_review_reads_a_symlink_blob_without_following_its_target() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("secret.txt");
+        std::fs::write(&secret, b"outside secret").unwrap();
+        let link = workspace.path().join("linked.txt");
+        symlink(&secret, &link).unwrap();
+
+        let blob = read_workspace_git_blob(workspace.path(), &link)
+            .unwrap()
+            .expect("symlink blob");
+
+        assert_eq!(blob, secret.to_string_lossy().as_bytes());
+        assert_ne!(blob, b"outside secret");
+    }
+
+    #[tokio::test]
     async fn agent_send_creates_session() {
         let (_dir, state) = setup_state();
         let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
@@ -14413,7 +14750,23 @@ mod tests {
     }
 
     #[test]
-    fn provider_hosted_search_is_limited_to_official_deepseek_anthropic() {
+    fn provider_hosted_web_tools_match_only_verified_routes() {
+        let anthropic = provider_cfg_with(
+            "https://api.anthropic.com",
+            "claude-sonnet-5",
+            ProviderProtocol::AnthropicMessages,
+        );
+        let anthropic_tools = hosted_tools_for_provider("anthropic", &anthropic);
+        assert_eq!(anthropic_tools.len(), 2);
+        assert!(anthropic_tools.iter().any(HostedToolSpec::is_web_fetch));
+
+        let openai = provider_cfg_with(
+            "https://api.openai.com/v1",
+            "gpt-5.6-sol",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert_eq!(hosted_tools_for_provider("openai", &openai).len(), 1);
+
         let deepseek = provider_cfg_with(
             "https://api.deepseek.com/anthropic",
             "deepseek-v4-pro",
@@ -14421,12 +14774,65 @@ mod tests {
         );
         assert_eq!(hosted_tools_for_provider("deepseek", &deepseek).len(), 1);
 
+        let deepseek_responses = provider_cfg_with(
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert_eq!(
+            hosted_tools_for_provider("deepseek", &deepseek_responses).len(),
+            1
+        );
+
+        let unsupported_responses_model = provider_cfg_with(
+            "https://api.deepseek.com",
+            "deepseek-v4-pro",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert!(hosted_tools_for_provider("deepseek", &unsupported_responses_model).is_empty());
+
         let deepseek_chat = provider_cfg_with(
             "https://api.deepseek.com",
             "deepseek-v4-pro",
             ProviderProtocol::OpenAiChat,
         );
         assert!(hosted_tools_for_provider("deepseek", &deepseek_chat).is_empty());
+
+        let dashscope = provider_cfg_with(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.7-max",
+            ProviderProtocol::OpenAiResponses,
+        );
+        let dashscope_tools = hosted_tools_for_provider("dashscope", &dashscope);
+        assert_eq!(dashscope_tools.len(), 2);
+        assert!(dashscope_tools.iter().any(HostedToolSpec::is_web_fetch));
+
+        let dashscope_qwen38 = provider_cfg_with(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert_eq!(
+            hosted_tools_for_provider("dashscope", &dashscope_qwen38).len(),
+            2
+        );
+
+        let unsupported_qwen = provider_cfg_with(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3-coder-plus",
+            ProviderProtocol::OpenAiResponses,
+        );
+        assert!(hosted_tools_for_provider("dashscope", &unsupported_qwen).is_empty());
+
+        let openrouter = provider_cfg_with(
+            "https://openrouter.ai/api/v1",
+            "anthropic/claude-sonnet-5",
+            ProviderProtocol::OpenAiChat,
+        );
+        assert_eq!(
+            hosted_tools_for_provider("openrouter", &openrouter).len(),
+            2
+        );
 
         let other_anthropic = provider_cfg_with(
             "https://api.moonshot.cn/anthropic",

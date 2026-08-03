@@ -28,6 +28,7 @@ import type {
   CodexCliPreferences,
   CodexIntegrationStatus,
   CodexModelOption,
+  HostedWebRoute,
   LogEntry,
   OrchestrationConfig,
   ProviderCategory,
@@ -41,10 +42,16 @@ import type {
   WorkflowSkillSource,
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
-import { catalogPresets, loadCatalog, presetOf, providerLabel } from "../../lib/provider";
+import {
+  catalogHostedWebRoutes,
+  catalogPresets,
+  loadCatalog,
+  presetOf,
+  providerLabel,
+} from "../../lib/provider";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
-import { IconCheck, IconRefresh } from "../icons";
+import { IconCheck, IconRefresh, IconSearch } from "../icons";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -166,6 +173,292 @@ function displayNumber(value: number | undefined) {
 function isDeepSeekV4(baseUrl: string, model: string, preset: string) {
   return (preset === "deepseek" || baseUrl.includes("api.deepseek.com")) &&
     model.trim().toLowerCase().startsWith("deepseek-v4-");
+}
+
+type ProviderWebGuidance = {
+  state: "hosted" | "client" | "attention" | "gateway";
+  badge: string;
+  description: string;
+  docsUrl?: string;
+  docsLabel?: string;
+};
+
+type ParsedProviderUrl = {
+  host: string;
+  path: string;
+  isOfficialTransport: boolean;
+};
+
+function parsedProviderUrl(baseUrl: string): ParsedProviderUrl | null {
+  try {
+    const url = new URL(baseUrl.trim());
+    return {
+      host: url.hostname.toLowerCase(),
+      path: url.pathname.replace(/\/+$/, ""),
+      isOfficialTransport:
+        url.protocol === "https:" &&
+        (url.port === "" || url.port === "443") &&
+        url.username === "" &&
+        url.password === "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function routeHostMatches(pattern: string, host: string) {
+  const normalized = pattern.toLowerCase();
+  if (!normalized.startsWith("*.")) return host === normalized;
+  const suffix = normalized.slice(1);
+  return host.endsWith(suffix) && host.length > suffix.length;
+}
+
+function routeEndpointMatches(route: HostedWebRoute, baseUrl: string) {
+  const parsed = parsedProviderUrl(baseUrl);
+  return Boolean(
+    parsed &&
+      parsed.isOfficialTransport &&
+      routeHostMatches(route.host_pattern, parsed.host) &&
+      route.path === parsed.path
+  );
+}
+
+function routeModelMatches(patterns: string[], model: string) {
+  if (patterns.length === 0) return true;
+  const normalized = model.trim().toLowerCase();
+  return patterns.some((pattern) => {
+    const candidate = pattern.toLowerCase();
+    if (candidate === "*") return true;
+    return candidate.endsWith("*")
+      ? normalized.startsWith(candidate.slice(0, -1))
+      : normalized === candidate;
+  });
+}
+
+const PROVIDER_HOSTED_ROUTE_HINTS: Record<string, string> = {
+  openai: "请把线路协议切换为 Responses。Chat Completions 仍只使用 R-Code / MCP 工具。",
+  xai: "请把线路协议切换为 Responses，才能启用 xAI 服务端 Web Search。",
+  azure_openai:
+    "请切换为 Responses；此外 Azure 订阅管理员必须允许 Web Search，当前鉴权仍需 Entra Token。",
+  deepseek:
+    "可用组合是 Responses + deepseek-v4-flash，或 Anthropic 兼容口 + DeepSeek V4。Chat 只有普通 Tool Call。",
+  ark: "请切换为 Responses，并使用已支持内置搜索的 Doubao Seed 2 系列模型。Coding Plan 线路不在此范围。",
+  dashscope:
+    "请切换为 Responses，并使用 qwen3.8 / qwen3.7 / qwen3.6 / qwen3.5 或 qwen3-max 系列；Coder 候选未在官方支持清单中。",
+  openrouter:
+    "请切换到 https://openrouter.ai/api/v1 的 Chat 或 Responses 线路；Anthropic 兼容口不使用 OpenRouter Server Tools。",
+};
+
+const PROVIDER_WEB_ALTERNATIVES: Record<
+  string,
+  { badge?: string; description: string; docsUrl: string; docsLabel: string }
+> = {
+  kimi: {
+    description:
+      "Kimi 另有 Chat 的 $web_search 与 Formula 的 search/fetch 工具，但当前 Anthropic 兼容口不是同一套协议，R-Code 不会直接注入。当前对话仍走 R-Code / MCP 工具。",
+    docsUrl: "https://platform.kimi.com/docs/guide/use-official-tools",
+    docsLabel: "查看 Kimi 官方工具",
+  },
+  kimi_coding: {
+    description:
+      "Kimi 另有 Formula search/fetch 工具；Coding 订阅口未确认兼容这套服务端工作流，当前仍走 R-Code / MCP 工具。",
+    docsUrl: "https://platform.kimi.com/docs/guide/use-official-tools",
+    docsLabel: "查看 Kimi 官方工具",
+  },
+  zhipu: {
+    description:
+      "智谱主 Chat API 支持厂商 Web Search，但当前 Anthropic 兼容口不是该请求结构。R-Code 不会把协议兼容误当成服务端工具兼容。",
+    docsUrl: "https://docs.bigmodel.cn/cn/guide/tools/web-search",
+    docsLabel: "查看智谱 Web Search",
+  },
+  zhipu_coding: {
+    description:
+      "智谱另有 Web Search API / Chat 工具；Coding Plan 线路未确认支持相同参数，当前仍走 R-Code / MCP 工具。",
+    docsUrl: "https://docs.bigmodel.cn/cn/guide/tools/web-search",
+    docsLabel: "查看智谱 Web Search",
+  },
+  zai: {
+    description:
+      "智谱系另有 Web Search API / Chat 工具；当前 Z.ai Anthropic / Coding 线路未确认支持相同参数，当前仍走 R-Code / MCP 工具。",
+    docsUrl: "https://docs.bigmodel.cn/cn/guide/tools/web-search",
+    docsLabel: "查看智谱 Web Search",
+  },
+  ark_coding: {
+    badge: "按量线路另有能力",
+    description:
+      "火山方舟按量 API 的 Responses + Doubao Seed 2 支持内置 Web Search；Coding Plan 是另一条计费与协议线路，不能直接注入。需要厂商托管搜索时请改用“火山方舟（按量 API）”。",
+    docsUrl: "https://www.volcengine.com/docs/82379/1958524?lang=zh",
+    docsLabel: "查看方舟 Responses 内置工具",
+  },
+  ark_coding_openai: {
+    badge: "按量线路另有能力",
+    description:
+      "当前 Coding Plan OpenAI 口只有 Chat Completions；内置 Web Search 位于方舟按量 API 的 Responses + Doubao Seed 2 组合，不能跨线路套用。",
+    docsUrl: "https://www.volcengine.com/docs/82379/1958524?lang=zh",
+    docsLabel: "查看方舟 Responses 内置工具",
+  },
+  byteplus: {
+    badge: "可接远程 MCP",
+    description:
+      "BytePlus 按量 ModelArk Responses 支持远程 MCP，但当前预设是 Coding Plan，官方未确认它带内置 Web Search / Fetch。当前继续使用 R-Code / MCP，不自动注入厂商工具。",
+    docsUrl: "https://docs.byteplus.com/en/docs/modelark/1585128",
+    docsLabel: "查看 ModelArk Responses 工具",
+  },
+  bailian: {
+    badge: "Responses 线路另有能力",
+    description:
+      "百炼 OpenAI 兼容 Responses 可声明 Web Search 与 Web Extractor；当前 Anthropic 兼容口不是同一请求结构。需要托管联网时请改用“阿里百炼（OpenAI 兼容）”并选择受支持的 Qwen 模型。",
+    docsUrl: "https://help.aliyun.com/zh/model-studio/web-search/",
+    docsLabel: "查看百炼联网搜索",
+  },
+  bailian_coding: {
+    badge: "可配置搜索 MCP",
+    description:
+      "百炼 Coding Plan 官方通过 Web Search MCP 扩展联网，并要求单独的通用百炼 API Key；套餐模型口本身不会继承按量 Responses 的 Web Search / Extractor。",
+    docsUrl: "https://help.aliyun.com/zh/model-studio/web-search-mcp",
+    docsLabel: "查看百炼 Web Search MCP",
+  },
+  stepfun: {
+    description:
+      "阶跃标准 Chat API 有托管 Web Search，StepSearch MCP 同时提供 web_search / web_fetch；当前 Step Plan Anthropic 线路不直接注入这些参数。",
+    docsUrl: "https://platform.stepfun.com/docs/zh/step-plan/integrations/search-mcp",
+    docsLabel: "查看 StepSearch MCP",
+  },
+  longcat: {
+    badge: "官方要求关闭",
+    description:
+      "LongCat 官方 Codex 配置明确设置 web_search = disabled；当前线路只按普通 Tool Call 使用 R-Code / MCP，不声明厂商托管搜索。",
+    docsUrl: "https://longcat.chat/platform/docs/zh/Codex.html",
+    docsLabel: "查看 LongCat Codex 配置",
+  },
+  xiaomi_mimo: {
+    description:
+      "小米官方目前明确记录的是 mimo-v2-flash 联网插件；当前 v2.5 模型与线路未确认同样可用，因此仍走 R-Code / MCP 工具。",
+    docsUrl: "https://platform.xiaomimimo.com/docs/zh-CN/news/previous-news/news20260303",
+    docsLabel: "查看 MiMo 联网说明",
+  },
+  xiaomi_mimo_plan: {
+    description:
+      "小米官方目前明确记录的是 mimo-v2-flash 联网插件；Token Plan 的 v2.5 线路未确认同样可用，因此仍走 R-Code / MCP 工具。",
+    docsUrl: "https://platform.xiaomimimo.com/docs/zh-CN/news/previous-news/news20260303",
+    docsLabel: "查看 MiMo 联网说明",
+  },
+  minimax: {
+    description:
+      "MiniMax 官方提供的是独立 Web Search MCP，不是当前 Anthropic 模型请求里的厂商托管工具；可安装 MCP，未安装时使用 R-Code 工具。",
+    docsUrl: "https://platform.minimax.io/docs/token-plan/mcp-guide",
+    docsLabel: "查看 MiniMax MCP",
+  },
+  minimax_intl: {
+    description:
+      "MiniMax 官方提供的是独立 Web Search MCP，不是当前 Anthropic 模型请求里的厂商托管工具；可安装 MCP，未安装时使用 R-Code 工具。",
+    docsUrl: "https://platform.minimax.io/docs/token-plan/mcp-guide",
+    docsLabel: "查看 MiniMax MCP",
+  },
+  qianfan_coding: {
+    description:
+      "百度千帆提供独立 AI Search API，但它使用单独端点与应用凭据，不是 Coding Plan 模型内置工具；当前仍走 R-Code / MCP 工具。",
+    docsUrl: "https://cloud.baidu.com/doc/qianfan-api/s/Wmbq4z7e5",
+    docsLabel: "查看千帆 Search API",
+  },
+  bedrock: {
+    description:
+      "Anthropic 官方 Web Search / Fetch 不在 Amazon Bedrock 提供；该线路使用 R-Code / MCP 工具。",
+    docsUrl: "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool",
+    docsLabel: "查看 Anthropic 可用范围",
+  },
+};
+
+/**
+ * 只把后端目录中已验证、已接线的组合显示为“厂商托管”。模型会普通 Tool Call
+ * 不代表厂商会替客户端执行搜索，这是 401 误判最常见的来源。
+ */
+function providerWebGuidance(
+  preset: ProviderPreset | undefined,
+  baseUrl: string,
+  protocol: ProviderProtocol,
+  model: string,
+  routes: HostedWebRoute[]
+): ProviderWebGuidance {
+  const matched = routes.find(
+    (route) =>
+      routeEndpointMatches(route, baseUrl) &&
+      route.protocol === protocol &&
+      routeModelMatches(route.model_patterns, model)
+  );
+  if (matched) {
+    const description = matched.read === "dedicated"
+      ? matched.format === "dash_scope"
+        ? "当前线路会声明 Web Search 与 Web Extractor，搜索和指定网页读取都由阿里百炼执行，无需另配搜索服务密钥；调用可能另行计费。"
+        : `当前线路会声明 Web Search 与 Web Fetch，两者都由 ${matched.provider_label} 服务端执行，无需另配搜索服务密钥；调用可能另行计费。`
+      : matched.read === "via_search"
+        ? `当前线路会启用 ${matched.provider_label} Web Search；打开网页和页内查找由同一托管工具完成，不需要独立 Web Fetch。`
+        : `当前线路会启用 ${matched.provider_label} 服务端 Web Search。厂商未确认独立 Web Fetch，读取指定 URL 时仍由 R-Code / MCP 工具处理。`;
+    return {
+      state: "hosted",
+      badge: `${matched.provider_label} 托管`,
+      description,
+      docsUrl: matched.docs_url,
+      docsLabel: matched.docs_label,
+    };
+  }
+
+  const endpointRoutes = routes.filter((route) => routeEndpointMatches(route, baseUrl));
+  const presetRoutes = preset
+    ? routes.filter((route) => route.provider_id === preset.id)
+    : [];
+  if (endpointRoutes.length > 0 || presetRoutes.length > 0) {
+    const knownPresetUrl = Boolean(
+      preset &&
+        [preset.base_url, ...preset.endpoint_candidates.map((candidate) => candidate.url)]
+          .some((url) => normalizeUrl(url) === normalizeUrl(baseUrl))
+    );
+    if (endpointRoutes.length > 0 || knownPresetUrl || preset?.template_vars.length) {
+      const reference = endpointRoutes[0] ?? presetRoutes[0];
+      return {
+        state: "attention",
+        badge: "需切换线路",
+        description:
+          PROVIDER_HOSTED_ROUTE_HINTS[preset?.id ?? reference.provider_id] ??
+          "厂商端点已识别，但当前协议或模型不在 R-Code 已接入的托管联网组合中；当前仍使用 R-Code / MCP 工具。",
+        docsUrl: reference.docs_url,
+        docsLabel: reference.docs_label,
+      };
+    }
+    return {
+      state: "gateway",
+      badge: "能力未确认",
+      description:
+        "当前地址不是目录中已验证的官方联网端点，因此不会自动注入厂商工具。兼容协议只代表请求格式相近；搜索与网页读取继续走 R-Code / MCP。",
+    };
+  }
+
+  const alternative = preset ? PROVIDER_WEB_ALTERNATIVES[preset.id] : undefined;
+  if (alternative) {
+    return {
+      state: "attention",
+      badge: alternative.badge ?? "厂商另有接口",
+      ...alternative,
+    };
+  }
+
+  if (!preset) {
+    return {
+      state: "gateway",
+      badge: "能力未确认",
+      description:
+        "自建服务的厂商托管工具能力无法从兼容协议推断。当前使用 R-Code 的 web_search / web_fetch 或已安装的 MCP。",
+    };
+  }
+
+  return {
+    state: "client",
+    badge: "R-Code / MCP",
+    description:
+      "当前线路未启用厂商托管联网。模型仍可调用 R-Code 的 web_search / web_fetch 或已安装的 MCP；普通 Tool Call 能力不等于厂商自带搜索服务。",
+    docsUrl: preset.website_url,
+    docsLabel: "查看厂商接口说明",
+  };
 }
 
 function providerStateLabel(status: ProviderStatus | undefined) {
@@ -308,6 +601,7 @@ function ProviderSection({
   const providers = config.providers ?? EMPTY_PROVIDERS;
   const names = Object.keys(providers).sort((a, b) => a.localeCompare(b));
   const [catalog, setCatalog] = useState<ProviderPreset[]>([]);
+  const [hostedWebRoutes, setHostedWebRoutes] = useState<HostedWebRoute[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [presetName, setPresetName] = useState(CUSTOM_PRESET);
   const [profileName, setProfileName] = useState("");
@@ -337,6 +631,7 @@ function ProviderSection({
       if (!alive) return;
       const presets = catalogPresets();
       setCatalog(presets);
+      setHostedWebRoutes(catalogHostedWebRoutes());
     });
     return () => {
       alive = false;
@@ -518,6 +813,13 @@ function ProviderSection({
   const protocolMismatch = Boolean(
     allowedProtocolOptions && !allowedProtocolOptions.includes(fields.protocol)
   );
+  const webGuidance = providerWebGuidance(
+    activePreset,
+    fields.base_url,
+    fields.protocol,
+    fields.model,
+    hostedWebRoutes
+  );
   const advancedMustOpen =
     presetName === CUSTOM_PRESET ||
     pendingVars.length > 0 ||
@@ -682,6 +984,29 @@ function ProviderSection({
                 {modelsError && <span className="provider-field-warning" role="alert">{modelsError}</span>}
               </div>
             </div>
+
+            <aside
+              className={`provider-search-capability is-${webGuidance.state}`}
+              aria-label="当前模型服务的联网能力"
+              aria-live="polite"
+              data-search-state={webGuidance.state}
+            >
+              <span className="provider-search-capability-icon" aria-hidden="true">
+                <IconSearch width={15} height={15} />
+              </span>
+              <div className="provider-search-capability-copy">
+                <div className="provider-search-capability-head">
+                  <strong>联网能力</strong>
+                  <span>{webGuidance.badge}</span>
+                </div>
+                <p>{webGuidance.description}</p>
+                {webGuidance.docsUrl && webGuidance.docsLabel && (
+                  <a href={webGuidance.docsUrl} target="_blank" rel="noreferrer">
+                    {webGuidance.docsLabel}
+                  </a>
+                )}
+              </div>
+            </aside>
 
             <details className="provider-advanced" open={advancedMustOpen || undefined}>
               <summary>

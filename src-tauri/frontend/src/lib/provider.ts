@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { providerCatalog, settingsGet } from "./ipc";
 import { errText } from "./format";
-import type { ProviderPreset, ProviderProtocol } from "./types";
+import type { HostedWebRoute, ProviderPreset, ProviderProtocol } from "./types";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "./onboarding";
 
 export interface ProviderChoice {
@@ -32,12 +32,14 @@ export interface ProviderChoice {
  */
 const catalogById = new Map<string, ProviderPreset>();
 let catalogOrder: ProviderPreset[] = [];
+let hostedWebRoutes: HostedWebRoute[] = [];
 let catalogPromise: Promise<void> | null = null;
 
 export function loadCatalog(): Promise<void> {
   catalogPromise ??= providerCatalog()
     .then((catalog) => {
       catalogOrder = catalog.presets;
+      hostedWebRoutes = catalog.hosted_web_routes ?? [];
       for (const preset of catalog.presets) catalogById.set(preset.id, preset);
     })
     .catch(() => {
@@ -58,6 +60,11 @@ export function presetOf(name: string): ProviderPreset | undefined {
 /** 全部预设，顺序即后端声明的展示顺序。目录未加载时为空数组。 */
 export function catalogPresets(): ProviderPreset[] {
   return catalogOrder;
+}
+
+/** 已由后端接线的厂商托管联网线路；设置页据此展示当前表单的真实能力。 */
+export function catalogHostedWebRoutes(): HostedWebRoute[] {
+  return hostedWebRoutes;
 }
 
 export function providerLabel(name: string): string {

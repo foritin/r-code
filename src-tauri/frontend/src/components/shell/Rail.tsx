@@ -134,7 +134,6 @@ export function Rail() {
                   <button className="sidebar-project-head" onClick={() => openProject(workspace.canonical_path)} title={`打开 ${workspace.display_name} 项目概览`}>
                     <IconFolderOpen width={16} height={16} />
                     <span className="rail-label">{workspace.display_name}</span>
-                    {projectTasks.some((task) => isTaskLive(task, details[task.id])) && <i className="sidebar-live" aria-label="有任务运行中" />}
                   </button>
                   <ProjectActionsMenu workspace={workspace} />
                 </div>
@@ -160,7 +159,7 @@ export function Rail() {
                           task={task}
                           detail={details[task.id]}
                           className="sidebar-task-actions"
-                          placement="up"
+                          placement="right"
                         />
                       </div>
                     );

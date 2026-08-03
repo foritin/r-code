@@ -115,6 +115,48 @@ pub struct Endpoint {
     pub label: &'static str,
 }
 
+/// 服务端联网工具的请求格式。它只描述厂商实际接受的 wire schema，不等于普通
+/// Function Calling；后者仍需要 R-Code 在客户端执行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedWebFormat {
+    Standard,
+    DashScope,
+    OpenRouter,
+}
+
+/// 指定 URL 读取能力的实现方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedWebRead {
+    /// 官方只确认了搜索；读取指定 URL 继续由 R-Code / MCP 执行。
+    None,
+    /// 搜索工具自身包含 open-page / find-in-page，无独立 fetch 声明。
+    ViaSearch,
+    /// 厂商提供独立的 Web Fetch / Web Extractor 服务端工具。
+    Dedicated,
+}
+
+/// 一条经过官方文档确认、R-Code 也已实现协议适配的托管联网线路。
+///
+/// `host_pattern` 只允许精确主机，或以 `*.` 开头的受控子域后缀；不能用字符串
+/// `contains`，否则 `api.openai.com.example` 这类地址会被误判为官方服务。
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct HostedWebRoute {
+    pub provider_id: &'static str,
+    pub provider_label: &'static str,
+    pub host_pattern: &'static str,
+    /// 去除末尾 `/` 后的精确路径；根路径写空串。
+    pub path: &'static str,
+    pub protocol: Protocol,
+    /// 空数组表示不限；末尾 `*` 表示前缀匹配。
+    pub model_patterns: &'static [&'static str],
+    pub format: HostedWebFormat,
+    pub read: HostedWebRead,
+    pub docs_url: &'static str,
+    pub docs_label: &'static str,
+}
+
 /// 一条预设。
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct Preset {
@@ -870,13 +912,180 @@ pub const PRESETS: &[Preset] = &[
         endpoint_candidates: &[Endpoint {
             url: "https://openrouter.ai/api/v1",
             protocol: Protocol::OpenAiChat,
-            native: P_C,
-            label: "OpenAI 兼容口",
+            native: P_CR,
+            label: "OpenAI Chat / Responses",
         }],
         template_vars: &[],
         max_output_tokens: None,
         context_window: None,
-        note: Some("模型名带厂商前缀，不要做归一化"),
+        note: Some("模型名带厂商前缀，不要做归一化；Server Tools 目前为 Beta，联网调用可能另行计费"),
+    },
+];
+
+/// 已接线的厂商托管联网工具。文档只证明“厂商有能力”还不够：端点、协议、模型和
+/// R-Code 适配器必须同时命中，运行时才会移除同名客户端工具并声明服务端工具。
+pub const HOSTED_WEB_ROUTES: &[HostedWebRoute] = &[
+    HostedWebRoute {
+        provider_id: "anthropic",
+        provider_label: "Anthropic",
+        host_pattern: "api.anthropic.com",
+        path: "",
+        protocol: Protocol::AnthropicMessages,
+        model_patterns: &["claude-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::Dedicated,
+        docs_url: "https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool",
+        docs_label: "查看 Anthropic Web Search / Fetch",
+    },
+    HostedWebRoute {
+        provider_id: "openai",
+        provider_label: "OpenAI",
+        host_pattern: "api.openai.com",
+        path: "/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["gpt-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::ViaSearch,
+        docs_url: "https://developers.openai.com/api/docs/guides/tools-web-search",
+        docs_label: "查看 OpenAI Web Search",
+    },
+    HostedWebRoute {
+        provider_id: "xai",
+        provider_label: "xAI",
+        host_pattern: "api.x.ai",
+        path: "/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["grok-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::ViaSearch,
+        docs_url: "https://docs.x.ai/developers/tools/web-search",
+        docs_label: "查看 xAI Web Search",
+    },
+    HostedWebRoute {
+        provider_id: "azure_openai",
+        provider_label: "Azure OpenAI",
+        host_pattern: "*.openai.azure.com",
+        path: "/openai/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["gpt-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::ViaSearch,
+        docs_url: "https://learn.microsoft.com/azure/foundry/openai/how-to/web-search",
+        docs_label: "查看 Azure Web Search",
+    },
+    HostedWebRoute {
+        provider_id: "deepseek",
+        provider_label: "DeepSeek",
+        host_pattern: "api.deepseek.com",
+        path: "",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["deepseek-v4-flash"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://api-docs.deepseek.com/guides/responses_api/",
+        docs_label: "查看 DeepSeek Responses",
+    },
+    HostedWebRoute {
+        provider_id: "deepseek",
+        provider_label: "DeepSeek",
+        host_pattern: "api.deepseek.com",
+        path: "/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["deepseek-v4-flash"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://api-docs.deepseek.com/guides/responses_api/",
+        docs_label: "查看 DeepSeek Responses",
+    },
+    HostedWebRoute {
+        provider_id: "deepseek",
+        provider_label: "DeepSeek",
+        host_pattern: "api.deepseek.com",
+        path: "/anthropic",
+        protocol: Protocol::AnthropicMessages,
+        model_patterns: &["deepseek-v4-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/",
+        docs_label: "查看 DeepSeek Anthropic Web Search",
+    },
+    HostedWebRoute {
+        provider_id: "deepseek",
+        provider_label: "DeepSeek",
+        host_pattern: "api.deepseek.com",
+        path: "/anthropic/v1",
+        protocol: Protocol::AnthropicMessages,
+        model_patterns: &["deepseek-v4-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://api-docs.deepseek.com/quick_start/agent_integrations/claude_code/",
+        docs_label: "查看 DeepSeek Anthropic Web Search",
+    },
+    HostedWebRoute {
+        provider_id: "ark",
+        provider_label: "火山方舟",
+        host_pattern: "ark.cn-beijing.volces.com",
+        path: "/api/v3",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["doubao-seed-2-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://www.volcengine.com/docs/82379/1958524?lang=zh",
+        docs_label: "查看方舟 Responses 内置工具",
+    },
+    HostedWebRoute {
+        provider_id: "ark",
+        provider_label: "火山方舟",
+        host_pattern: "ark.cn-shanghai.volces.com",
+        path: "/api/v3",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["doubao-seed-2-*"],
+        format: HostedWebFormat::Standard,
+        read: HostedWebRead::None,
+        docs_url: "https://www.volcengine.com/docs/82379/1958524?lang=zh",
+        docs_label: "查看方舟 Responses 内置工具",
+    },
+    HostedWebRoute {
+        provider_id: "dashscope",
+        provider_label: "阿里百炼",
+        host_pattern: "dashscope.aliyuncs.com",
+        path: "/compatible-mode/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &[
+            "qwen3.8-*",
+            "qwen3.7-*",
+            "qwen3.6-*",
+            "qwen3.5-*",
+            "qwen3-max*",
+        ],
+        format: HostedWebFormat::DashScope,
+        read: HostedWebRead::Dedicated,
+        docs_url: "https://help.aliyun.com/zh/model-studio/web-search/",
+        docs_label: "查看百炼联网搜索与网页抓取",
+    },
+    HostedWebRoute {
+        provider_id: "openrouter",
+        provider_label: "OpenRouter",
+        host_pattern: "openrouter.ai",
+        path: "/api/v1",
+        protocol: Protocol::OpenAiChat,
+        model_patterns: &["*"],
+        format: HostedWebFormat::OpenRouter,
+        read: HostedWebRead::Dedicated,
+        docs_url: "https://openrouter.ai/docs/guides/features/server-tools",
+        docs_label: "查看 OpenRouter Server Tools",
+    },
+    HostedWebRoute {
+        provider_id: "openrouter",
+        provider_label: "OpenRouter",
+        host_pattern: "openrouter.ai",
+        path: "/api/v1",
+        protocol: Protocol::OpenAiResponses,
+        model_patterns: &["*"],
+        format: HostedWebFormat::OpenRouter,
+        read: HostedWebRead::Dedicated,
+        docs_url: "https://openrouter.ai/docs/guides/features/server-tools",
+        docs_label: "查看 OpenRouter Server Tools",
     },
 ];
 
@@ -891,6 +1100,60 @@ pub fn find(id: &str) -> Option<&'static Preset> {
 
 fn normalize_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn hosted_web_host_matches(pattern: &str, host: &str) -> bool {
+    let pattern = pattern.to_ascii_lowercase();
+    let host = host.to_ascii_lowercase();
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        return host.len() > suffix.len()
+            && host.ends_with(suffix)
+            && host.as_bytes()[host.len() - suffix.len() - 1] == b'.';
+    }
+    host == pattern
+}
+
+fn hosted_web_model_matches(patterns: &[&str], model: &str) -> bool {
+    if patterns.is_empty() {
+        return true;
+    }
+    let model = model.trim().to_ascii_lowercase();
+    patterns.iter().any(|pattern| {
+        let pattern = pattern.to_ascii_lowercase();
+        if pattern == "*" {
+            true
+        } else if let Some(prefix) = pattern.strip_suffix('*') {
+            model.starts_with(prefix)
+        } else {
+            model == pattern
+        }
+    })
+}
+
+/// 返回当前端点、协议和模型实际命中的厂商托管联网线路。
+pub fn hosted_web_route(
+    base_url: &str,
+    protocol: Protocol,
+    model: &str,
+) -> Option<&'static HostedWebRoute> {
+    let url = url::Url::parse(base_url.trim()).ok()?;
+    // “主机名相同”还不等于官方 HTTPS 入口：非默认端口、userinfo 和明文 HTTP
+    // 都不应获得厂商托管能力声明，否则 UI 会把代理或异常地址误标为官方线路。
+    if url.scheme() != "https"
+        || url.port_or_known_default() != Some(443)
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    let host = url.host_str()?;
+    let path = url.path().trim_end_matches('/');
+    HOSTED_WEB_ROUTES.iter().find(|route| {
+        route.protocol == protocol
+            && hosted_web_host_matches(route.host_pattern, host)
+            && route.path == path
+            && hosted_web_model_matches(route.model_patterns, model)
+    })
 }
 
 /// 该地址在目录里对应的**具体入口**：命中的预设，以及那个入口实际说的协议。
@@ -996,6 +1259,7 @@ pub fn resolve_reasoning_replay(id: &str, base_url: &str) -> bool {
 #[derive(Debug, Serialize)]
 pub struct CatalogDto {
     pub presets: Vec<&'static Preset>,
+    pub hosted_web_routes: Vec<&'static HostedWebRoute>,
 }
 
 /// 由 `commands.rs::provider_catalog()` 经 IPC 命令 `cmd_provider_catalog` 下发，
@@ -1006,6 +1270,7 @@ pub fn catalog_dto() -> CatalogDto {
             .iter()
             .filter(|preset| preset.id != "deepseek_anthropic")
             .collect(),
+        hosted_web_routes: HOSTED_WEB_ROUTES.iter().collect(),
     }
 }
 
@@ -1057,6 +1322,84 @@ mod tests {
             assert_eq!(serde_json::to_value(protocol).unwrap(), expected);
             assert_eq!(Protocol::parse(expected), Some(protocol));
         }
+    }
+
+    #[test]
+    fn hosted_web_routes_require_exact_official_endpoint_protocol_and_model() {
+        let anthropic = hosted_web_route(
+            "https://api.anthropic.com",
+            Protocol::AnthropicMessages,
+            "claude-sonnet-5",
+        )
+        .expect("official Anthropic route");
+        assert_eq!(anthropic.read, HostedWebRead::Dedicated);
+
+        let dashscope = hosted_web_route(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1/",
+            Protocol::OpenAiResponses,
+            "qwen3.7-max-2026-05-17",
+        )
+        .expect("DashScope Responses route");
+        assert_eq!(dashscope.format, HostedWebFormat::DashScope);
+        assert!(hosted_web_route(
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            Protocol::OpenAiResponses,
+            "qwen3.8-max",
+        )
+        .is_some());
+
+        assert!(hosted_web_route(
+            "https://api.deepseek.com",
+            Protocol::OpenAiResponses,
+            "deepseek-v4-pro",
+        )
+        .is_none());
+        assert!(hosted_web_route(
+            "https://api.deepseek.com",
+            Protocol::OpenAiChat,
+            "deepseek-v4-flash",
+        )
+        .is_none());
+        assert!(hosted_web_route(
+            "https://api.openai.com.example/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.6-sol",
+        )
+        .is_none());
+        assert!(hosted_web_route(
+            "http://api.openai.com/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.6-sol",
+        )
+        .is_none());
+        assert!(hosted_web_route(
+            "https://api.openai.com:8443/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.6-sol",
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn hosted_web_routes_support_controlled_cloud_subdomains() {
+        assert!(hosted_web_route(
+            "https://my-team.openai.azure.com/openai/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.5",
+        )
+        .is_some());
+        assert!(hosted_web_route(
+            "https://openai.azure.com/openai/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.5",
+        )
+        .is_none());
+        assert!(hosted_web_route(
+            "https://my-team.openai.azure.com.example/openai/v1",
+            Protocol::OpenAiResponses,
+            "gpt-5.5",
+        )
+        .is_none());
     }
 
     #[test]

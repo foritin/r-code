@@ -1383,17 +1383,39 @@ fn tool_policy_for_task_mode(mode: TaskMode) -> ToolPolicy {
     }
 }
 
-/// A hosted web-search declaration and a client function with the same name are different
-/// protocol concepts, but providers place both in one `tools` array. Keep exactly one
-/// `web_search` entry so the server executes it and the local fallback is not called twice.
+/// Hosted web declarations and client functions with the same names are different protocol
+/// concepts, but providers place both in one `tools` array. Keep only the server-executed entry
+/// so a configured native tool cannot silently fall back to the local 401/redirect-prone path.
+///
+/// DeepSeek Responses also reserves the plain function name `search` whenever server-side
+/// `web_search` is present. Keep workspace content search available under an unambiguous
+/// model-facing alias and translate it back before dispatching to the gateway.
+const HOSTED_WEB_FILE_SEARCH_ALIAS: &str = "search_files";
+
 fn client_tools_for_hosted_tools(
     mut tools: Vec<ToolSpec>,
     hosted_tools: &[HostedToolSpec],
 ) -> Vec<ToolSpec> {
     if hosted_tools.iter().any(HostedToolSpec::is_web_search) {
         tools.retain(|tool| tool.name != "web_search");
+        for tool in &mut tools {
+            if tool.name == "search" {
+                tool.name = HOSTED_WEB_FILE_SEARCH_ALIAS.to_string();
+            }
+        }
+    }
+    if hosted_tools.iter().any(HostedToolSpec::is_web_fetch) {
+        tools.retain(|tool| tool.name != "web_fetch");
     }
     tools
+}
+
+fn canonical_client_tool_name(name: &str) -> &str {
+    if name == HOSTED_WEB_FILE_SEARCH_ALIAS {
+        "search"
+    } else {
+        name
+    }
 }
 
 impl SessionToolHost {
@@ -1453,6 +1475,7 @@ impl SessionToolHost {
         name: &str,
         args: serde_json::Value,
     ) -> hermes_error::Result<ToolCallOutcome> {
+        let name = canonical_client_tool_name(name);
         if let Some(external) = &self.external_tools {
             if external.owns_tool(name) {
                 let access_mode = if self.policy == ToolPolicy::FullAccess {
@@ -3924,7 +3947,7 @@ mod tests {
     }
 
     #[test]
-    fn hosted_web_search_removes_only_the_client_name_collision() {
+    fn hosted_web_tools_remove_their_client_name_collisions() {
         let spec = |name: &str| ToolSpec {
             name: name.to_string(),
             description: name.to_string(),
@@ -3933,7 +3956,12 @@ mod tests {
             requires_confirmation: false,
         };
         let tools = client_tools_for_hosted_tools(
-            vec![spec("web_search"), spec("web_fetch"), spec("read_file")],
+            vec![
+                spec("web_search"),
+                spec("web_fetch"),
+                spec("search"),
+                spec("read_file"),
+            ],
             &[HostedToolSpec::web_search()],
         );
         let names = tools
@@ -3941,7 +3969,26 @@ mod tests {
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(names, ["web_fetch", "read_file"]);
+        assert_eq!(names, ["web_fetch", "search_files", "read_file"]);
+        assert_eq!(canonical_client_tool_name("search_files"), "search");
+
+        let tools = client_tools_for_hosted_tools(
+            vec![
+                spec("web_search"),
+                spec("web_fetch"),
+                spec("search"),
+                spec("read_file"),
+            ],
+            &[HostedToolSpec::web_search(), HostedToolSpec::web_fetch()],
+        );
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["search_files", "read_file"]);
+
+        let tools = client_tools_for_hosted_tools(vec![spec("search")], &[]);
+        assert_eq!(tools[0].name, "search");
     }
 
     #[test]
