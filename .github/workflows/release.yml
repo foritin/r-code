@@ -251,30 +251,53 @@ jobs:
           security list-keychains -d user -s "$keychain_path"
           security default-keychain -d user -s "$keychain_path"
 
-      # tauri-action publishes installers, updater bundles, signatures and latest.json.
-      - name: Build and publish release
+      # Keep signed and unsigned environments separate. Empty Apple notarization variables still
+      # opt Tauri into notarization, so an unsigned prerelease must not export them at all.
+      - name: Build and publish signed release
+        if: "!contains(env.RELEASE_TAG, '-unsigned.')"
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Tauri requires macOS app bundles to be signed. Unsigned prereleases use Apple's
-          # standard ad-hoc identity (`-`), which needs no certificate and is never notarized.
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && (contains(env.RELEASE_TAG, '-unsigned.') && '-' || secrets.APPLE_SIGNING_IDENTITY) || '' }}
-          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && secrets.APPLE_TEAM_ID || '' }}
         with:
           projectPath: src-tauri
           tauriScript: cargo tauri
           args: ${{ matrix.args }} --target ${{ matrix.rust-target }}
           tagName: ${{ env.RELEASE_TAG }}
-          releaseName: ${{ contains(env.RELEASE_TAG, '-unsigned.') && format('R-Code {0} (unsigned prerelease)', env.RELEASE_TAG) || format('R-Code {0}', env.RELEASE_TAG) }}
+          releaseName: R-Code ${{ env.RELEASE_TAG }}
           generateReleaseNotes: true
           # All matrix jobs upload into one draft. The finalize job publishes only
           # after every platform has succeeded, so a partial release is never latest.
           releaseDraft: true
-          prerelease: ${{ contains(env.RELEASE_TAG, '-unsigned.') }}
+          prerelease: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          uploadWorkflowArtifacts: true
+
+      - name: Build and publish unsigned prerelease
+        if: contains(env.RELEASE_TAG, '-unsigned.')
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS requires a signature to package the app. `-` is the local ad-hoc identity and
+          # does not need a Developer ID certificate. Notarization variables are omitted above.
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && '-' || '' }}
+        with:
+          projectPath: src-tauri
+          tauriScript: cargo tauri
+          args: ${{ matrix.args }} --target ${{ matrix.rust-target }}
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: R-Code ${{ env.RELEASE_TAG }} (unsigned prerelease)
+          generateReleaseNotes: true
+          releaseDraft: true
+          prerelease: true
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: true
