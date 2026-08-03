@@ -404,7 +404,23 @@ fn f21_branded_installer_contract() {
         serde_json::from_str(&std::fs::read_to_string(installer.join("tauri.conf.json")).unwrap())
             .unwrap();
     assert_eq!(config["app"]["windows"][0]["decorations"], false);
-    assert_eq!(config["bundle"]["icon"][0], "../icons/icon.ico");
+    let bundle_icons = config["bundle"]["icon"]
+        .as_array()
+        .expect("installer bundle icons must be configured");
+    for relative in [
+        "../icons/icon.png",
+        "../icons/icon.icns",
+        "../icons/icon.ico",
+    ] {
+        assert!(
+            bundle_icons.iter().any(|icon| icon == relative),
+            "missing cross-platform installer icon: {relative}"
+        );
+        assert!(
+            installer.join(relative).is_file(),
+            "configured installer icon does not exist: {relative}"
+        );
+    }
 
     assert!(repository
         .join("scripts/build-branded-installer.ps1")
