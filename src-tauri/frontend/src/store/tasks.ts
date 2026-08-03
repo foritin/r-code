@@ -59,6 +59,142 @@ interface TasksState {
   setCurrentProject: (projectId: string | null) => void;
 }
 
+/** Polling returns fresh JSON graphs. Compare compact product revisions rather than serializing
+ * every nested payload (large event histories made that second serialization visible in the UI). */
+const signatureCache = new WeakMap<object, string>();
+
+function cachedSignature(value: object, build: () => string) {
+  const known = signatureCache.get(value);
+  if (known !== undefined) return known;
+  const next = build();
+  signatureCache.set(value, next);
+  return next;
+}
+
+function taskStamp(task: Task) {
+  return `${task.id}:${task.updated_at}:${task.state}:${task.workspace_path ?? ""}:${task.provider_name ?? ""}:${task.model ?? ""}:${task.agent_engine}:${task.mode}`;
+}
+
+function tasksSignature(tasks: Task[]) {
+  return cachedSignature(tasks, () => tasks.map(taskStamp).join("\u001e"));
+}
+
+function workspacesSignature(workspaces: Workspace[]) {
+  return cachedSignature(workspaces, () => workspaces.map((workspace) =>
+    `${workspace.id}:${workspace.last_opened_at}:${workspace.canonical_path}:${workspace.display_name}:${workspace.access_mode}:${workspace.memory_mode}:${workspace.memory_generation}`
+  ).join("\u001e"));
+}
+
+function detailSignature(detail: TaskDetail | undefined) {
+  if (!detail) return "";
+  return cachedSignature(detail, () => [
+    taskStamp(detail.task),
+    `active:${detail.active_branch.id}`,
+    `branches:${detail.branches.map((item) => `${item.id}:${item.is_active}`).join(",")}`,
+    `runs:${detail.runs.map((item) => `${item.id}:${item.started_at}:${item.ended_at ?? ""}:${item.review_state}:${item.summary ?? ""}`).join(",")}`,
+    `events:${detail.events.map((item) => `${item.id}:${item.event_type}:${item.created_at}`).join(",")}`,
+    `changes:${detail.changes.map((item) => `${item.id}:${item.change_type}:${item.path}:${item.before_hash ?? ""}:${item.after_hash ?? ""}`).join(",")}`,
+    `permissions:${detail.permissions.map((item) => `${item.id}:${item.decision}:${item.decided_at ?? ""}`).join(",")}`,
+    `verifications:${detail.verifications.map((item) => `${item.id}:${item.status}:${item.exit_code ?? ""}:${item.ended_at ?? ""}`).join(",")}`,
+    `queue:${detail.queued_messages.map((item) => `${item.id}:${item.state}:${item.priority}:${item.updated_at}`).join(",")}`,
+  ].join("\u001f"));
+}
+
+function dashboardSignature(dashboard: WorkspaceDashboard | undefined) {
+  if (!dashboard) return "";
+  return cachedSignature(dashboard, () => [
+    `${dashboard.workspace.id}:${dashboard.workspace.memory_generation}:${dashboard.workspace.access_mode}`,
+    Object.values(dashboard.metrics).join(":"),
+    dashboard.tasks.map((item) => `${taskStamp(item.task)}:${item.activity}:${item.pending_permission_count}:${item.active_run?.id ?? ""}:${item.active_run?.ended_at ?? ""}:${Object.values(item.change_summary).join(",")}:${item.latest_verification?.id ?? ""}:${item.latest_verification?.status ?? ""}`).join("\u001e"),
+    dashboard.attention.map((item) => `${item.kind}:${item.task.id}:${item.permission?.id ?? ""}:${item.permission?.decision ?? ""}:${item.since}`).join("\u001e"),
+    dashboard.archived.map(taskStamp).join("\u001e"),
+  ].join("\u001f"));
+}
+
+function activitySignature(page: ProjectActivityPage | null | undefined) {
+  if (!page) return "";
+  return cachedSignature(page, () => `${page.next_cursor ?? ""}\u001f${page.items.map((item) => `${item.id}:${item.at}:${item.kind}:${item.task_id}`).join("\u001e")}`);
+}
+
+function mergeChangedDetails(
+  current: Record<string, TaskDetail>,
+  incoming: Record<string, TaskDetail>,
+): Record<string, TaskDetail> {
+  let next = current;
+  for (const [taskId, detail] of Object.entries(incoming)) {
+    if (detailSignature(current[taskId]) === detailSignature(detail)) continue;
+    if (next === current) next = { ...current };
+    next[taskId] = detail;
+  }
+  return next;
+}
+
+const detailRequests = new Map<string, Promise<TaskDetail>>();
+
+interface TaskListResult {
+  tasks: Task[];
+  fallbackDetails: Record<string, TaskDetail> | null;
+}
+
+let tasksRequest: Promise<TaskListResult> | null = null;
+let workspacesRequest: Promise<Workspace[]> | null = null;
+
+async function loadTasks(): Promise<TaskListResult> {
+  try {
+    return { tasks: await ipc.taskList(undefined, false), fallbackDetails: null };
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return { tasks: browserMockTasks, fallbackDetails: browserMockDetails };
+  }
+}
+
+function requestTasks(): Promise<TaskListResult> {
+  if (tasksRequest) return tasksRequest;
+  const request = loadTasks().finally(() => {
+    if (tasksRequest === request) tasksRequest = null;
+  });
+  tasksRequest = request;
+  return request;
+}
+
+async function loadWorkspaces(): Promise<Workspace[]> {
+  try {
+    return await ipc.workspaceList();
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return browserMockWorkspaces;
+  }
+}
+
+function requestWorkspaces(): Promise<Workspace[]> {
+  if (workspacesRequest) return workspacesRequest;
+  const request = loadWorkspaces().finally(() => {
+    if (workspacesRequest === request) workspacesRequest = null;
+  });
+  workspacesRequest = request;
+  return request;
+}
+
+async function loadTaskDetail(taskId: string): Promise<TaskDetail> {
+  try {
+    return await ipc.taskDetail(taskId);
+  } catch (error) {
+    if (!shouldUseBrowserMock() || !browserMockDetails[taskId]) throw error;
+    return browserMockDetails[taskId];
+  }
+}
+
+function requestTaskDetail(taskId: string): Promise<TaskDetail> {
+  const pending = detailRequests.get(taskId);
+  if (pending) return pending;
+
+  const request = loadTaskDetail(taskId).finally(() => {
+    if (detailRequests.get(taskId) === request) detailRequests.delete(taskId);
+  });
+  detailRequests.set(taskId, request);
+  return request;
+}
+
 export const useTasksStore = create<TasksState>((set, get) => ({
   tasks: [],
   details: {},
@@ -70,41 +206,36 @@ export const useTasksStore = create<TasksState>((set, get) => ({
   refreshedAt: 0,
 
   refreshTasks: async () => {
-    try {
-      const tasks = await ipc.taskList(undefined, false);
-      set({ tasks, refreshedAt: Date.now() });
-    } catch (error) {
-      if (!shouldUseBrowserMock()) throw error;
-      set({ tasks: browserMockTasks, details: browserMockDetails, refreshedAt: Date.now() });
-    }
+    const { tasks, fallbackDetails } = await requestTasks();
+    set((s) => {
+      const nextTasks = tasksSignature(s.tasks) === tasksSignature(tasks) ? s.tasks : tasks;
+      const nextDetails = fallbackDetails
+        ? mergeChangedDetails(s.details, fallbackDetails)
+        : s.details;
+      if (nextTasks === s.tasks && nextDetails === s.details) return s;
+      return { tasks: nextTasks, details: nextDetails, refreshedAt: Date.now() };
+    });
   },
 
   refreshWorkspaces: async () => {
-    let workspaces: Workspace[];
-    try {
-      workspaces = await ipc.workspaceList();
-    } catch (error) {
-      if (!shouldUseBrowserMock()) throw error;
-      workspaces = browserMockWorkspaces;
-    }
-    set((s) => ({
-      workspaces,
+    const workspaces = await requestWorkspaces();
+    set((s) => {
       // 不能因为存在最近项目就自动把它附加到新对话：默认应是纯聊天。
-      currentProjectId: workspaces.some((w) => w.canonical_path === s.currentProjectId)
+      const currentProjectId = workspaces.some((w) => w.canonical_path === s.currentProjectId)
         ? s.currentProjectId
-        : null,
-    }));
+        : null;
+      const nextWorkspaces = workspacesSignature(s.workspaces) === workspacesSignature(workspaces) ? s.workspaces : workspaces;
+      if (nextWorkspaces === s.workspaces && currentProjectId === s.currentProjectId) return s;
+      return { workspaces: nextWorkspaces, currentProjectId };
+    });
   },
 
   refreshDetail: async (taskId) => {
-    let detail: TaskDetail;
-    try {
-      detail = await ipc.taskDetail(taskId);
-    } catch (error) {
-      if (!shouldUseBrowserMock() || !browserMockDetails[taskId]) throw error;
-      detail = browserMockDetails[taskId];
-    }
-    set((s) => ({ details: { ...s.details, [taskId]: detail } }));
+    const detail = await requestTaskDetail(taskId);
+    set((s) => {
+      if (detailSignature(s.details[taskId]) === detailSignature(detail)) return s;
+      return { details: { ...s.details, [taskId]: detail } };
+    });
   },
 
   refreshDetails: async (taskIds) => {
@@ -113,54 +244,107 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     try {
       const batch = await ipc.taskDetailBatch(ids);
       const details = Object.fromEntries(batch.details.map((detail) => [detail.task.id, detail]));
-      set((s) => ({ details: { ...s.details, ...details } }));
+      set((s) => {
+        const nextDetails = mergeChangedDetails(s.details, details);
+        return nextDetails === s.details ? s : { details: nextDetails };
+      });
     } catch {
       // 批量接口在旧桌面端不可用时，保留逐项降级，避免一次升级影响现有会话。
       const results: Record<string, TaskDetail> = {};
       for (const id of ids) {
         try {
-          results[id] = await ipc.taskDetail(id);
+          results[id] = await requestTaskDetail(id);
         } catch {
           if (shouldUseBrowserMock() && browserMockDetails[id]) results[id] = browserMockDetails[id];
         }
       }
-      if (Object.keys(results).length) set((s) => ({ details: { ...s.details, ...results } }));
+      if (Object.keys(results).length) {
+        set((s) => {
+          const nextDetails = mergeChangedDetails(s.details, results);
+          return nextDetails === s.details ? s : { details: nextDetails };
+        });
+      }
     }
   },
 
   refreshDashboard: async (workspacePath) => {
     const dashboard = await ipc.workspaceDashboard(workspacePath);
-    set((s) => ({ dashboards: { ...s.dashboards, [workspacePath]: dashboard } }));
+    set((s) =>
+      dashboardSignature(s.dashboards[workspacePath]) === dashboardSignature(dashboard)
+        ? s
+        : { dashboards: { ...s.dashboards, [workspacePath]: dashboard } }
+    );
   },
 
   refreshProjectActivity: async (workspacePath) => {
     const page = await ipc.projectActivityList(workspacePath);
-    set((s) => ({ projectActivities: { ...s.projectActivities, [workspacePath]: page } }));
+    set((s) =>
+      activitySignature(s.projectActivities[workspacePath]) === activitySignature(page)
+        ? s
+        : { projectActivities: { ...s.projectActivities, [workspacePath]: page } }
+    );
   },
 
   refreshActivity: async () => {
     const activityPage = await ipc.activityList();
-    set({ activityPage });
+    set((s) => (activitySignature(s.activityPage) === activitySignature(activityPage) ? s : { activityPage }));
   },
 
-  setCurrentProject: (currentProjectId) => set({ currentProjectId }),
+  setCurrentProject: (currentProjectId) =>
+    set((s) => (s.currentProjectId === currentProjectId ? s : { currentProjectId })),
 }));
 
 // ---------- 派生选择器 ----------
 
-export const selectRunning = (s: TasksState): Task[] =>
-  s.tasks.filter(
+interface TaskDetailSelectorCache<T> {
+  tasks: Task[] | null;
+  details: TasksState["details"] | null;
+  value: T;
+}
+
+let runningCache: TaskDetailSelectorCache<Task[]> = { tasks: null, details: null, value: [] };
+let reviewReadyCache: { tasks: Task[] | null; value: Task[] } = { tasks: null, value: [] };
+let pendingPermissionsCache: TaskDetailSelectorCache<NeedsYouItem[]> = { tasks: null, details: null, value: [] };
+let needsYouCache: {
+  permissions: NeedsYouItem[] | null;
+  reviewTasks: Task[] | null;
+  value: NeedsYouItem[];
+} = { permissions: null, reviewTasks: null, value: [] };
+let needsYouTaskIdsCache: {
+  permissions: NeedsYouItem[] | null;
+  reviewTasks: Task[] | null;
+  value: Set<string>;
+} = { permissions: null, reviewTasks: null, value: new Set() };
+
+export const selectRunning = (s: TasksState): Task[] => {
+  if (runningCache.tasks === s.tasks && runningCache.details === s.details) {
+    return runningCache.value;
+  }
+  const value = s.tasks.filter(
     (t) =>
       t.state === "in_progress" ||
       t.state === "exploring" ||
       s.details[t.id]?.runs.some((run) => run.ended_at == null) === true
   );
+  runningCache = { tasks: s.tasks, details: s.details, value };
+  return value;
+};
 
-export const selectReviewReady = (s: TasksState): Task[] =>
-  s.tasks.filter((t) => t.state === "review_ready");
+export const selectReviewReady = (s: TasksState): Task[] => {
+  if (reviewReadyCache.tasks === s.tasks) return reviewReadyCache.value;
+  const value = s.tasks.filter((t) => t.state === "review_ready");
+  reviewReadyCache = { tasks: s.tasks, value };
+  return value;
+};
 
 /** 待批权限（依赖 details 已加载）。 */
 export const selectPendingPermissions = (s: TasksState): NeedsYouItem[] => {
+  if (
+    pendingPermissionsCache.tasks === s.tasks
+    && pendingPermissionsCache.details === s.details
+  ) {
+    return pendingPermissionsCache.value;
+  }
   const items: NeedsYouItem[] = [];
   for (const t of s.tasks) {
     const d = s.details[t.id];
@@ -171,23 +355,39 @@ export const selectPendingPermissions = (s: TasksState): NeedsYouItem[] => {
       }
     }
   }
+  pendingPermissionsCache = { tasks: s.tasks, details: s.details, value: items };
   return items;
 };
 
 /** Needs You 全集 = 待批权限 + review_ready 任务。 */
 export const selectNeedsYou = (s: TasksState): NeedsYouItem[] => {
   const perms = selectPendingPermissions(s);
-  const reviews = selectReviewReady(s).map((t) => ({
+  const reviewTasks = selectReviewReady(s);
+  if (needsYouCache.permissions === perms && needsYouCache.reviewTasks === reviewTasks) {
+    return needsYouCache.value;
+  }
+  const reviews = reviewTasks.map((t) => ({
     kind: "review_ready" as const,
     task: t,
     since: t.updated_at,
   }));
-  return [...perms, ...reviews].sort((a, b) => a.since.localeCompare(b.since));
+  const value = [...perms, ...reviews].sort((a, b) => a.since.localeCompare(b.since));
+  needsYouCache = { permissions: perms, reviewTasks, value };
+  return value;
 };
 
 /** 任务是否有待决项（rail 灯用）。 */
 export const selectNeedsYouTaskIds = (s: TasksState): Set<string> => {
-  const ids = new Set(selectPendingPermissions(s).map((i) => i.task.id));
-  for (const t of selectReviewReady(s)) ids.add(t.id);
+  const permissions = selectPendingPermissions(s);
+  const reviewTasks = selectReviewReady(s);
+  if (
+    needsYouTaskIdsCache.permissions === permissions
+    && needsYouTaskIdsCache.reviewTasks === reviewTasks
+  ) {
+    return needsYouTaskIdsCache.value;
+  }
+  const ids = new Set(permissions.map((i) => i.task.id));
+  for (const t of reviewTasks) ids.add(t.id);
+  needsYouTaskIdsCache = { permissions, reviewTasks, value: ids };
   return ids;
 };

@@ -8,8 +8,9 @@
 //! [doc-06 §3.8] [doc-13]
 
 use chrono::Utc;
-use r_code_core::dto::{ProjectAccessMode, Workspace};
+use r_code_core::dto::{ProjectAccessMode, Workspace, WorkspaceMemoryMode};
 use r_code_core::error::ProductError;
+use uuid::Uuid;
 
 use crate::repositories::WorkspaceRepository;
 use crate::Database;
@@ -40,16 +41,14 @@ impl<'a> WorkspaceService<'a> {
             .get(canonical_path)?
             .map(|w| w.access_mode)
             .unwrap_or_default();
-        let ws = Workspace {
-            canonical_path: canonical_path.to_string(),
-            display_name: display_name.to_string(),
+        let candidate_id = Uuid::new_v4().simple().to_string();
+        self.repo.upsert_and_get(
+            &candidate_id,
+            canonical_path,
+            display_name,
             access_mode,
-            last_opened_at: Utc::now(),
-        };
-        self.repo.upsert(&ws)?;
-        // upsert 已写入 last_opened_at = now，touch 再次刷新以显式表达“open”语义
-        self.repo.touch(canonical_path)?;
-        Ok(ws)
+            Utc::now(),
+        )
     }
 
     /// 关闭 workspace（仅 touch `last_opened_at`）。
@@ -83,6 +82,22 @@ impl<'a> WorkspaceService<'a> {
     pub fn get(&self, canonical_path: &str) -> Result<Option<Workspace>, ProductError> {
         self.repo.get(canonical_path)
     }
+
+    /// 按稳定 owner id 获取 workspace。
+    pub fn get_by_id(&self, id: &str) -> Result<Option<Workspace>, ProductError> {
+        self.repo.get_by_id(id)
+    }
+
+    /// 以 generation CAS 更新项目记忆模式。
+    pub fn set_memory_mode(
+        &self,
+        id: &str,
+        expected_generation: u64,
+        memory_mode: WorkspaceMemoryMode,
+    ) -> Result<u64, ProductError> {
+        self.repo
+            .update_memory_mode(id, expected_generation, memory_mode)
+    }
 }
 
 // ============================================================================
@@ -92,7 +107,9 @@ impl<'a> WorkspaceService<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use r_code_core::dto::ProjectAccessMode;
+    use r_code_core::dto::{ProjectAccessMode, WorkspaceMemoryMode};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use tempfile::TempDir;
 
     fn setup() -> Database {
@@ -157,6 +174,27 @@ mod tests {
 
         let fetched = svc.get("/proj").unwrap().unwrap();
         assert!(fetched.last_opened_at >= first.last_opened_at);
+    }
+
+    #[test]
+    fn test_reopen_and_close_preserve_memory_owner_and_generation() {
+        let db = setup();
+        let svc = WorkspaceService::new(&db);
+
+        let opened = svc.open("/memory-owner", "Original").unwrap();
+        assert_eq!(
+            svc.set_memory_mode(&opened.id, 1, WorkspaceMemoryMode::ReadOnly)
+                .unwrap(),
+            2
+        );
+        svc.close("/memory-owner").unwrap();
+        let reopened = svc.open("/memory-owner", "Renamed").unwrap();
+
+        assert_eq!(reopened.id, opened.id);
+        assert_eq!(reopened.display_name, "Renamed");
+        assert_eq!(reopened.memory_mode, WorkspaceMemoryMode::ReadOnly);
+        assert_eq!(reopened.memory_generation, 2);
+        assert_eq!(svc.get_by_id(&opened.id).unwrap(), Some(reopened));
     }
 
     #[test]
@@ -257,6 +295,52 @@ mod tests {
 
         let recent = svc.list_recent(10).unwrap();
         assert_eq!(recent.len(), 1);
+    }
+
+    #[test]
+    fn test_canonical_path_case_is_not_normalized_by_storage() {
+        let db = setup();
+        let svc = WorkspaceService::new(&db);
+
+        let upper = svc.open("/Repo/Case", "Upper").unwrap();
+        let lower = svc.open("/repo/case", "Lower").unwrap();
+
+        assert_ne!(upper.id, lower.id);
+        assert_eq!(svc.list_recent(10).unwrap().len(), 2);
+        assert_eq!(svc.get("/Repo/Case").unwrap().unwrap().id, upper.id);
+        assert_eq!(svc.get("/repo/case").unwrap().unwrap().id, lower.id);
+    }
+
+    #[test]
+    fn test_two_services_concurrently_open_one_persisted_owner() {
+        let directory = TempDir::new().unwrap();
+        let database_path = directory.path().join("concurrent-workspace.sqlite");
+        let first_database = Database::open(&database_path).unwrap();
+        let second_database = Database::open(&database_path).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let first_barrier = Arc::clone(&barrier);
+        let first = thread::spawn(move || {
+            let service = WorkspaceService::new(&first_database);
+            first_barrier.wait();
+            service.open("/shared/project", "First").unwrap()
+        });
+        let second_barrier = Arc::clone(&barrier);
+        let second = thread::spawn(move || {
+            let service = WorkspaceService::new(&second_database);
+            second_barrier.wait();
+            service.open("/shared/project", "Second").unwrap()
+        });
+
+        let first = first.join().unwrap();
+        let second = second.join().unwrap();
+        assert_eq!(first.id, second.id);
+
+        let verification_database = Database::open(&database_path).unwrap();
+        let service = WorkspaceService::new(&verification_database);
+        let persisted = service.get("/shared/project").unwrap().unwrap();
+        assert_eq!(persisted.id, first.id);
+        assert_eq!(service.list_recent(10).unwrap().len(), 1);
     }
 
     #[test]

@@ -7,6 +7,8 @@ R-Code 把对话、模型执行、工具审批、文件变更、验证和回放�
 ## 能力概览
 
 - 原生模型 Provider 与可选 Codex CLI/MCP 协作；
+- 默认关闭、仅存 AppData 的演进记忆；支持全局审批、项目自动复盘和冻结快照注入；
+- 无密钥原生联网、可关闭的内置深度调研 MCP、第三方 MCP 管理与官方 Registry 市场；
 - 会话分支、重发、Steer、消息队列和流式时间线；
 - R-Code/Codex 子智能体委派与可选质量复核；
 - 工作区内文件、搜索、Git、Shell 工具及统一审计；
@@ -19,19 +21,20 @@ R-Code 把对话、模型执行、工具审批、文件变更、验证和回放�
 | 平台 | 当前发布目标 | 安装包 |
 | --- | --- | --- |
 | Windows | x86_64 MSVC | 品牌安装器 `.exe`、NSIS updater `.exe`、WiX `.msi` |
-| macOS | Apple Silicon | `.app`、`.dmg` |
+| macOS | Apple Silicon、Intel | 各架构 `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
 安装包由 `v*` tag 的 GitHub Actions 构建。平台代码签名、首次发布和自动更新要求见 [发布手册](./docs/RELEASING.md)。
 
 ## 架构
 
-正常桌面模式不是三个固定独立进程：Tauri Host、原生 Agent runtime、Tool Gateway 和存储服务位于同一 Rust 进程的逻辑层，React 运行在 WebView；Codex CLI/MCP 等可选集成会额外创建进程。
+正常桌面模式不是三个固定独立进程：Tauri Host、原生 Agent runtime、Tool Gateway 和存储服务位于同一 Rust 进程的逻辑层，React 运行在 WebView；Codex CLI、面向 Codex 的 MCP server 和启用后的本地 stdio MCP 等可选集成会额外创建进程。
 
 | 层 | 位置 | 职责 |
 | --- | --- | --- |
 | Desktop Host | `src-tauri/` | Tauri 壳、IPC、Run 编排、Provider/Codex 集成与系统服务 |
 | Agent runtime | `crates/r-code-agent-worker/` | 多轮模型循环、Steer、子智能体与质量复核 |
+| Web / MCP client | `crates/r-code-mcp/` | 安全网页访问、MCP 客户端、Registry、惰性会话与生命周期 |
 | Tool/security | `crates/r-code-gateway/`、`r-code-core/` | 工具执行、路径边界、风险、权限、DTO 与密钥 |
 | Persistence | `crates/r-code-store/` | SQLite、JSONL 投影、Blob、变更、审核与验证 |
 | Terminal | `crates/r-code-terminal/` | PTY、OSC 133、原始输出与外部 CLI 回放 |
@@ -95,6 +98,7 @@ cd src-tauri/frontend
 npm ci
 npm run test:dev-server
 npm run test:popover
+npm run test:mcp
 npm run build
 ```
 
@@ -107,14 +111,20 @@ npm run build
 # 如需单独构建原始 NSIS / MSI
 cargo tauri build --bundles nsis,msi
 
-# macOS
-cargo tauri build --bundles app,dmg
+# macOS：默认生成仅供本机测试的 ad-hoc 签名 Apple Silicon app/dmg
+bash ./scripts/build-macos.sh
+
+# Intel Mac 本地包（GitHub Release 同时提供此架构）
+bash ./scripts/build-macos.sh --target x86_64-apple-darwin
+
+# macOS 正式分发：使用 Keychain 中的 Developer ID，并完成 notarization/stapling
+bash ./scripts/build-macos.sh --signed
 
 # Linux
 cargo tauri build --bundles appimage,deb
 ```
 
-Windows 最终安装器位于 `target/release/bundle/branded/`。其他产物位于 `target/release/bundle/`；指定 `--target` 时位于 `target/<triple>/release/bundle/`。
+Windows 最终安装器位于 `target/release/bundle/branded/`。macOS 脚本默认输出到 `target/aarch64-apple-darwin/release/bundle/`；其他产物位于 `target/release/bundle/`，指定 `--target` 时位于 `target/<triple>/release/bundle/`。`--signed` 所需 Apple 环境变量见发布手册。
 
 ## 发布
 
@@ -151,6 +161,8 @@ r-code/
 
 - [文档索引](./docs/README.md)
 - [架构与实现细节](./docs/ARCHITECTURE.md)
+- [联网工具与 MCP](./docs/mcp.md)
+- [演进记忆](./docs/memory.md)
 - [发布手册](./docs/RELEASING.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)

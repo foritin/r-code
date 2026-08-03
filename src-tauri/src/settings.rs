@@ -13,10 +13,13 @@
 use std::path::PathBuf;
 
 use hermes_config::Config;
+use r_code_agent_worker::AgentPromptPolicy;
 use r_code_core::error::ProductError;
 use r_code_core::secret::SecretStore;
 
 const SECRET_SERVICE: &str = "r-code";
+const AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
+const MAX_AGENT_PROMPT_CHARS: usize = 20_000;
 
 /// 设置服务 -- 管理全局配置 + 工作区覆盖。
 ///
@@ -31,9 +34,69 @@ impl SettingsService {
         Self { config_dir }
     }
 
+    /// Product-owned MCP metadata is stored beside the other user-level settings.
+    pub fn mcp_settings(&self) -> crate::mcp_settings::McpSettingsService {
+        crate::mcp_settings::McpSettingsService::new(self.config_dir.clone())
+    }
+
     /// 全局配置文件路径：`config_dir/config.toml`。
     pub fn config_path(&self) -> PathBuf {
         self.config_dir.join("config.toml")
+    }
+
+    /// 用户级 Agent 协作 Prompt 独立保存在 AppData，不参与工作区配置合并，也不会
+    /// 写进项目目录或 Git 工作树。
+    pub fn agent_prompts_path(&self) -> PathBuf {
+        self.config_dir.join(AGENT_PROMPTS_FILE)
+    }
+
+    pub fn load_agent_prompts(&self) -> Result<AgentPromptPolicy, ProductError> {
+        let path = self.agent_prompts_path();
+        if !path.exists() {
+            return Ok(AgentPromptPolicy::default());
+        }
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            ProductError::ConfigError(format!("read {}: {error}", path.display()))
+        })?;
+        let prompts: AgentPromptPolicy = toml::from_str(&content).map_err(|error| {
+            ProductError::ConfigError(format!("parse {}: {error}", path.display()))
+        })?;
+        Self::validate_agent_prompts(&prompts)?;
+        Ok(prompts)
+    }
+
+    pub fn save_agent_prompts(&self, prompts: &AgentPromptPolicy) -> Result<(), ProductError> {
+        Self::validate_agent_prompts(prompts)?;
+        std::fs::create_dir_all(&self.config_dir)?;
+        let content = toml::to_string_pretty(prompts)
+            .map_err(|error| ProductError::ConfigError(format!("serialize prompts: {error}")))?;
+        std::fs::write(self.agent_prompts_path(), content)?;
+        Ok(())
+    }
+
+    pub fn reset_agent_prompts(&self) -> Result<AgentPromptPolicy, ProductError> {
+        let prompts = AgentPromptPolicy::default();
+        self.save_agent_prompts(&prompts)?;
+        Ok(prompts)
+    }
+
+    fn validate_agent_prompts(prompts: &AgentPromptPolicy) -> Result<(), ProductError> {
+        for (label, value) in [
+            ("main_agent", prompts.main_agent.as_str()),
+            ("subagent", prompts.subagent.as_str()),
+        ] {
+            if value.contains('\0') {
+                return Err(ProductError::ConfigError(format!(
+                    "agent prompt '{label}' contains a null character"
+                )));
+            }
+            if value.chars().count() > MAX_AGENT_PROMPT_CHARS {
+                return Err(ProductError::ConfigError(format!(
+                    "agent prompt '{label}' exceeds {MAX_AGENT_PROMPT_CHARS} characters"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// 加载全局配置。
@@ -315,6 +378,27 @@ memories_dir = "{m}"
             svc.config_path(),
             PathBuf::from("/tmp/r-code-cfg/config.toml")
         );
+    }
+
+    #[test]
+    fn agent_prompts_roundtrip_in_user_config_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = SettingsService::new(tmp.path().to_path_buf());
+        let custom = AgentPromptPolicy {
+            main_agent: "main custom".to_string(),
+            subagent: "child custom".to_string(),
+        };
+
+        svc.save_agent_prompts(&custom).unwrap();
+        assert_eq!(svc.load_agent_prompts().unwrap(), custom);
+        assert_eq!(
+            svc.agent_prompts_path(),
+            tmp.path().join(AGENT_PROMPTS_FILE)
+        );
+
+        let reset = svc.reset_agent_prompts().unwrap();
+        assert_eq!(reset, AgentPromptPolicy::default());
+        assert_eq!(svc.load_agent_prompts().unwrap(), reset);
     }
 
     #[test]

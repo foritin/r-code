@@ -16,6 +16,7 @@ use rusqlite::Connection;
 /// All sensitive data (API keys, tokens, passwords) is redacted.
 pub struct SupportBundle {
     output_dir: PathBuf,
+    mcp_servers: Vec<McpServerSupportSummary>,
 }
 
 /// 支持包内容。
@@ -53,10 +54,21 @@ pub struct LogEntry {
 pub struct ConfigSummary {
     /// 默认 provider 名称（不含 API key）
     pub default_provider: String,
-    /// 已配置的 MCP server 名称列表
-    pub mcp_servers: Vec<String>,
+    /// 已配置 MCP 的最小诊断状态；不包含命令、参数、URL、请求头或凭据引用。
+    pub mcp_servers: Vec<McpServerSupportSummary>,
     /// 存储目录路径
     pub storage_dir: String,
+}
+
+/// MCP 支持信息的严格白名单。字段只能描述状态，不能承载启动配置或秘密。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct McpServerSupportSummary {
+    pub id: String,
+    pub transport_kind: String,
+    pub enabled: bool,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_class: Option<String>,
 }
 
 /// 数据库统计。
@@ -76,7 +88,18 @@ const MAX_LOG_LINES: usize = 200;
 impl SupportBundle {
     /// 创建支持包生成器。`output_dir` 为生成的 JSON 包输出目录。
     pub fn new(output_dir: PathBuf) -> Self {
-        Self { output_dir }
+        Self {
+            output_dir,
+            mcp_servers: Vec::new(),
+        }
+    }
+
+    /// Attach an already-redacted MCP status snapshot. This API intentionally accepts only the
+    /// whitelist DTO above, making it impossible for launch arguments or credential values to
+    /// enter a support bundle through the MCP configuration object.
+    pub fn with_mcp_servers(mut self, servers: Vec<McpServerSupportSummary>) -> Self {
+        self.mcp_servers = servers;
+        self
     }
 
     /// 生成支持包，写入 JSON 文件。
@@ -158,7 +181,7 @@ impl SupportBundle {
             .unwrap_or_else(|| "<unknown>".to_string());
         ConfigSummary {
             default_provider,
-            mcp_servers: Vec::new(),
+            mcp_servers: self.mcp_servers.clone(),
             storage_dir,
         }
     }
@@ -351,6 +374,28 @@ mod tests {
         assert!(!cs.default_provider.contains("sk-"));
         assert!(cs.mcp_servers.is_empty());
         assert!(!cs.storage_dir.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mcp_support_summary_is_status_only() {
+        let (dir, db_path, _db) = setup_db_with_data();
+        let bundle = SupportBundle::new(dir.path().to_path_buf()).with_mcp_servers(vec![
+            McpServerSupportSummary {
+                id: "sample".to_string(),
+                transport_kind: "stdio".to_string(),
+                enabled: true,
+                state: "error".to_string(),
+                error_class: Some("connect_failed".to_string()),
+            },
+        ]);
+        let contents = bundle.preview(&db_path).await.unwrap();
+        let json = serde_json::to_string(&contents).unwrap();
+
+        assert!(json.contains("sample"));
+        assert!(json.contains("connect_failed"));
+        assert!(!json.contains("executable"));
+        assert!(!json.contains("environment"));
+        assert!(!json.contains("credential"));
     }
 
     // ── 降级 ──────────────────────────────────────────────────────

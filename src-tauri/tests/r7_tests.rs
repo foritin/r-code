@@ -9,7 +9,9 @@
 //!
 //! 运行：`cargo test -p r-code-host --test r7_tests`
 
-use r_code_core::dto::{FileChangeType, ProjectAccessMode, RiskLevel, TaskMode, TaskState};
+use r_code_core::dto::{
+    AgentRun, FileChangeType, ProjectAccessMode, RiskLevel, TaskMode, TaskState,
+};
 use r_code_host::commands::{
     accept_task, agent_send, changes_list, permission_approve, permission_pending, recovery_data,
     rollback_file, task_create, task_detail, task_list, workspace_open, workspace_set_access_mode,
@@ -17,6 +19,7 @@ use r_code_host::commands::{
 };
 use r_code_store::{AgentRunRepository, ChangeService, TaskRepository};
 use std::path::Path;
+use std::process::Command;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -28,6 +31,21 @@ fn setup_state() -> (TempDir, CommandState) {
     let dir = TempDir::new().unwrap();
     let state = CommandState::in_memory(dir.path()).unwrap();
     (dir, state)
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git should launch");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 async fn scoped_workspace(state: &CommandState) -> String {
@@ -244,6 +262,93 @@ async fn r7_t3_e2e_rollback() {
         original_content,
         "file should be restored to original content"
     );
+}
+
+#[tokio::test]
+async fn legacy_review_reconciles_missing_successful_mutations_without_duplicates() {
+    let (dir, state) = setup_state();
+    git(dir.path(), &["init", "-q"]);
+    git(dir.path(), &["config", "user.email", "review@example.test"]);
+    git(dir.path(), &["config", "user.name", "Review Test"]);
+    git(dir.path(), &["config", "core.autocrlf", "false"]);
+    std::fs::write(dir.path().join("tracked.txt"), b"before\n").unwrap();
+    git(dir.path(), &["add", "tracked.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "baseline"]);
+
+    let workspace_path = scoped_workspace(&state).await;
+    let task = task_create(
+        &state,
+        Some(&workspace_path),
+        "Legacy review repair",
+        "record all successful file mutations",
+        "edit",
+    )
+    .await
+    .unwrap();
+    let mut run = AgentRun::new(&task.id, "legacy-model");
+    run.ended_at = Some(chrono::Utc::now());
+    AgentRunRepository::new(&state.db).create(&run).unwrap();
+
+    std::fs::write(dir.path().join("tracked.txt"), b"after\n").unwrap();
+    std::fs::write(dir.path().join("created.md"), b"created\n").unwrap();
+    ChangeService::new(&state.db, state.blobs_dir.clone())
+        .record_change(
+            &task.id,
+            Path::new("tracked.txt"),
+            FileChangeType::Modify,
+            None,
+            Some(b"before\n"),
+            Some(b"after\n"),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = state.db.conn().unwrap();
+    conn.execute(
+        "INSERT INTO tool_calls \
+         (id, run_id, task_id, tool_name, input_json, risk_level, status, started_at, ended_at) \
+         VALUES (?1, ?2, ?3, 'edit', ?4, 'r2', 'ok', ?5, ?5)",
+        rusqlite::params![
+            "legacy-edit",
+            run.id,
+            task.id,
+            r#"{"path":"tracked.txt"}"#,
+            now,
+        ],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO tool_calls \
+         (id, run_id, task_id, tool_name, input_json, risk_level, status, started_at, ended_at) \
+         VALUES (?1, ?2, ?3, 'create_file', ?4, 'r2', 'ok', ?5, ?5)",
+        rusqlite::params![
+            "legacy-create",
+            run.id,
+            task.id,
+            r#"{"path":"created.md"}"#,
+            now,
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let first = changes_list(&state, &task.id).await.unwrap();
+    let second = changes_list(&state, &task.id).await.unwrap();
+    assert_eq!(first.len(), 2);
+    assert_eq!(second.len(), 2, "repair must be idempotent");
+    assert_eq!(
+        first
+            .iter()
+            .filter(|change| change.path == "tracked.txt")
+            .count(),
+        1,
+        "an already-recorded mutation must not be duplicated"
+    );
+    assert!(first.iter().any(|change| {
+        change.path == "created.md" && change.change_type == FileChangeType::Create
+    }));
 }
 
 // ============================================================================
@@ -466,7 +571,7 @@ fn r7_t4_desktop_verification_app_wiring() {
         "cmd_terminal_raw_since",
         "cmd_replay",
         "cmd_session_messages",
-        "cmd_memory_get",
+        "cmd_legacy_memory_status",
         "cmd_recovery_cleanup",
         "cmd_support_preview",
         "cmd_logs_tail",

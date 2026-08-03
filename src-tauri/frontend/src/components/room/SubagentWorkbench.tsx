@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { subagentSessionMessages } from "../../lib/ipc";
+import { usePoll } from "../../lib/poll";
+import { useSharedNow } from "../../lib/shared-clock";
 import type { AgentRun, SessionMessage, SubagentAccessMode } from "../../lib/types";
 import {
   IconActivity,
   IconCheck,
   IconChevronDown,
-  IconChevronLeft,
   IconClose,
   IconMaximize,
   IconMinimize,
@@ -31,8 +32,10 @@ interface Props {
   activity: ActivityTraceState;
   runs: readonly AgentRun[];
   selectedSubagentId: string | null;
+  openSubagentIds: readonly string[];
   onSelect: (subagentId: string) => void;
   onBack: () => void;
+  onCloseTab: (subagentId: string) => void;
   onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -76,8 +79,8 @@ interface SessionToolGroupEntry {
 type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroupEntry;
 
 /**
- * 子智能体是工作台内的一条完整导航链，而不是一个覆盖其他工具的临时详情：
- * 列表负责总览，详情负责单个会话，返回键始终回列表。
+ * 子智能体总览和每个子智能体会话都是独立标签页。
+ * 标签以稳定的运行 ID 去重；重新打开已有会话时只切换激活项。
  */
 export function SubagentWorkbench({
   taskId,
@@ -85,8 +88,10 @@ export function SubagentWorkbench({
   activity,
   runs,
   selectedSubagentId,
+  openSubagentIds,
   onSelect,
   onBack,
+  onCloseTab,
   onClose,
   onOpenLauncher,
   onHide,
@@ -98,8 +103,21 @@ export function SubagentWorkbench({
     () => mergeSubagents(activity.subagents, runs),
     [activity.subagents, runs],
   );
-  const selectedIndex = children.findIndex((child) => child.id === selectedSubagentId);
+  const childIndexById = useMemo(
+    () => new Map(children.map((child, index) => [child.id, index])),
+    [children],
+  );
+  const selectedIndex = selectedSubagentId == null
+    ? -1
+    : (childIndexById.get(selectedSubagentId) ?? -1);
   const selected = selectedIndex >= 0 ? children[selectedIndex] : undefined;
+  const openedChildren = useMemo(
+    () => openSubagentIds.flatMap((id) => {
+      const index = childIndexById.get(id) ?? -1;
+      return index >= 0 ? [{ child: children[index], index }] : [];
+    }),
+    [childIndexById, children, openSubagentIds],
+  );
 
   return (
     <div
@@ -107,34 +125,42 @@ export function SubagentWorkbench({
       data-testid={selected ? "subagent-detail" : "subagent-list"}
       data-subagent-view={selected ? "detail" : "list"}
     >
-      {selected ? (
-        <>
-          <SubagentDetailHeader child={selected} index={selectedIndex} onBack={onBack} />
-          <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
-        </>
-      ) : (
-        <>
-          <SubagentListHeader
-            onClose={onClose}
-            onOpenLauncher={onOpenLauncher}
-            onHide={onHide}
-            onToggleFocus={onToggleFocus}
-            focused={focused}
-          />
-          <SubagentList children={children} onSelect={onSelect} />
-        </>
-      )}
+      <SubagentTabsHeader
+        openedChildren={openedChildren}
+        selectedSubagentId={selected?.id ?? null}
+        onSelect={onSelect}
+        onSelectOverview={onBack}
+        onCloseTab={onCloseTab}
+        onClose={onClose}
+        onOpenLauncher={onOpenLauncher}
+        onHide={onHide}
+        onToggleFocus={onToggleFocus}
+        focused={focused}
+      />
+      {selected
+        ? <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
+        : <SubagentList children={children} onSelect={onSelect} />}
     </div>
   );
 }
 
-function SubagentListHeader({
+function SubagentTabsHeader({
+  openedChildren,
+  selectedSubagentId,
+  onSelect,
+  onSelectOverview,
+  onCloseTab,
   onClose,
   onOpenLauncher,
   onHide,
   onToggleFocus,
   focused,
 }: {
+  openedChildren: readonly { child: ActivitySubagent; index: number }[];
+  selectedSubagentId: string | null;
+  onSelect: (subagentId: string) => void;
+  onSelectOverview: () => void;
+  onCloseTab: (subagentId: string) => void;
   onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -142,22 +168,72 @@ function SubagentListHeader({
   focused: boolean;
 }) {
   return (
-    <header className="subagent-page-header workbench-head subagent-list-header">
+    <header className="subagent-page-header workbench-head subagent-tabs-header">
       <div className="workbench-tabs" role="tablist" aria-label="子智能体工作台">
-        <div className="workbench-tab workbench-active-tab" role="tab" aria-selected="true">
+        <div
+          className={`workbench-tab${selectedSubagentId == null ? " workbench-active-tab" : ""}`}
+          role="tab"
+          tabIndex={selectedSubagentId == null ? 0 : -1}
+          aria-selected={selectedSubagentId == null}
+          aria-label="子智能体"
+          onClick={onSelectOverview}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+            event.preventDefault();
+            onSelectOverview();
+          }}
+        >
           <SubagentAvatar index={0} size="xs" />
           <strong>子智能体</strong>
           <button
             type="button"
             className="workbench-tab-close"
             data-testid="subagent-tab-close"
-            onClick={onClose}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
             aria-label="关闭子智能体标签页"
             title="关闭子智能体"
           >
             <IconClose width={13} height={13} />
           </button>
         </div>
+        {openedChildren.map(({ child, index }) => {
+          const selected = selectedSubagentId === child.id;
+          return (
+            <div
+              key={child.id}
+              className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              aria-selected={selected}
+              aria-label={child.label}
+              data-subagent-id={child.id}
+              onClick={() => onSelect(child.id)}
+              onKeyDown={(event) => {
+                if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                event.preventDefault();
+                onSelect(child.id);
+              }}
+            >
+              <SubagentAvatar index={index} identity={child.id} size="xs" />
+              <strong title={child.label}>{child.label}</strong>
+              <button
+                type="button"
+                className="workbench-tab-close"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCloseTab(child.id);
+                }}
+                aria-label={`关闭${child.label}标签页`}
+                title={`关闭${child.label}`}
+              >
+                <IconClose width={13} height={13} />
+              </button>
+            </div>
+          );
+        })}
       </div>
       <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开工具启动器" title="新增扩展">
         <IconPlus width={16} height={16} />
@@ -173,31 +249,6 @@ function SubagentListHeader({
   );
 }
 
-function SubagentDetailHeader({
-  child,
-  index,
-  onBack,
-}: {
-  child: ActivitySubagent;
-  index: number;
-  onBack: () => void;
-}) {
-  return (
-    <header className="subagent-page-header">
-      <button type="button" className="subagent-page-icon-button" onClick={onBack} aria-label="返回子智能体列表" title="返回子智能体列表">
-        <IconChevronLeft width={17} height={17} />
-      </button>
-      <SubagentAvatar index={index} identity={child.id} />
-      <strong title={child.label}>{child.label}</strong>
-      <span className="subagent-page-header-spacer" />
-      <span className={`subagent-page-status status-${child.status}`}>
-        <SubagentStateMark status={child.status} />
-        <span>{statusLabel(child.status)}</span>
-      </span>
-    </header>
-  );
-}
-
 function SubagentList({
   children,
   onSelect,
@@ -205,24 +256,21 @@ function SubagentList({
   children: readonly ActivitySubagent[];
   onSelect: (subagentId: string) => void;
 }) {
-  const attention = children.filter((child) => child.status === "waiting_permission");
-  const active = children
-    .filter((child) => child.status === "queued" || child.status === "running")
-    .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
-  const completed = children
-    .filter((child) => child.status === "completed")
-    .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt));
-  const incomplete = children
-    .filter((child) => child.status === "failed" || child.status === "cancelled")
-    .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt));
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const live = active.length + attention.length > 0;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), live ? 1000 : 60_000);
-    return () => window.clearInterval(timer);
-  }, [active.length, attention.length]);
+  const { attention, active, completed, incomplete, indexById } = useMemo(() => ({
+    attention: children.filter((child) => child.status === "waiting_permission"),
+    active: children
+      .filter((child) => child.status === "queued" || child.status === "running")
+      .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id)),
+    completed: children
+      .filter((child) => child.status === "completed")
+      .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt)),
+    incomplete: children
+      .filter((child) => child.status === "failed" || child.status === "cancelled")
+      .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt)),
+    indexById: new Map(children.map((child, index) => [child.id, index])),
+  }), [children]);
+  const live = active.length + attention.length > 0;
+  const now = useSharedNow(children.length === 0 ? null : live ? 1000 : 60_000);
 
   if (children.length === 0) {
     return (
@@ -236,16 +284,16 @@ function SubagentList({
   return (
     <div className="subagent-workbench-list" aria-label="子智能体列表">
       {attention.length > 0 && (
-        <SubagentListSection title="需要处理" children={attention} allChildren={children} now={now} onSelect={onSelect} />
+        <SubagentListSection title="需要处理" children={attention} indexById={indexById} now={now} onSelect={onSelect} />
       )}
       {active.length > 0 && (
-        <SubagentListSection title="进行中" children={active} allChildren={children} now={now} onSelect={onSelect} />
+        <SubagentListSection title="进行中" children={active} indexById={indexById} now={now} onSelect={onSelect} />
       )}
       {completed.length > 0 && (
-        <SubagentListSection title="已完成" children={completed} allChildren={children} now={now} onSelect={onSelect} />
+        <SubagentListSection title="已完成" children={completed} indexById={indexById} now={now} onSelect={onSelect} />
       )}
       {incomplete.length > 0 && (
-        <SubagentListSection title="未完成" children={incomplete} allChildren={children} now={now} onSelect={onSelect} />
+        <SubagentListSection title="未完成" children={incomplete} indexById={indexById} now={now} onSelect={onSelect} />
       )}
     </div>
   );
@@ -254,13 +302,13 @@ function SubagentList({
 function SubagentListSection({
   title,
   children,
-  allChildren,
+  indexById,
   now,
   onSelect,
 }: {
   title: string;
   children: readonly ActivitySubagent[];
-  allChildren: readonly ActivitySubagent[];
+  indexById: ReadonlyMap<string, number>;
   now: number;
   onSelect: (subagentId: string) => void;
 }) {
@@ -269,7 +317,7 @@ function SubagentListSection({
       <h3><span>{title}<b> · {String(children.length).padStart(2, "0")}</b></span></h3>
       <div className="subagent-list-rows">
         {children.map((child) => {
-          const index = Math.max(0, allChildren.findIndex((item) => item.id === child.id));
+          const index = indexById.get(child.id) ?? 0;
           return (
             <button
               type="button"
@@ -316,45 +364,51 @@ function SubagentInspector({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [stopping, setStopping] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
+  const sessionGenerationRef = useRef(0);
+  const requestSequenceRef = useRef(0);
   const active = isActive(child.status);
+  const now = useSharedNow(active ? 1000 : null);
+
+  const load = useCallback(async () => {
+    const generation = sessionGenerationRef.current;
+    const requestSequence = ++requestSequenceRef.current;
+    try {
+      const items = await subagentSessionMessages(taskId, child.id);
+      if (
+        generation === sessionGenerationRef.current
+        && requestSequence === requestSequenceRef.current
+      ) {
+        setMessages(items);
+        setError(null);
+        setLoading(false);
+      }
+    } catch (cause) {
+      if (
+        generation === sessionGenerationRef.current
+        && requestSequence === requestSequenceRef.current
+      ) {
+        setError(String(cause));
+        setLoading(false);
+      }
+    }
+  }, [child.id, taskId]);
 
   useEffect(() => {
+    sessionGenerationRef.current += 1;
     setMessages([]);
     setLoading(true);
     setError(null);
     setExpanded(true);
-    let dead = false;
-    const load = () => {
-      subagentSessionMessages(taskId, child.id)
-        .then((items) => {
-          if (!dead) {
-            setMessages(items);
-            setError(null);
-            setLoading(false);
-          }
-        })
-        .catch((cause) => {
-          if (!dead) {
-            setError(String(cause));
-            setLoading(false);
-          }
-        });
-    };
-    load();
-    const timer = active ? window.setInterval(load, 1600) : null;
     return () => {
-      dead = true;
-      if (timer != null) window.clearInterval(timer);
+      sessionGenerationRef.current += 1;
     };
-  }, [active, child.id, taskId]);
+  }, [load]);
+
+  usePoll(load, 1600, active, "子代理会话");
 
   useEffect(() => {
-    if (!active) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [active]);
+    if (!active) void load();
+  }, [active, load]);
 
   const persistedEntries = useMemo(() => buildPersistedEntries(messages), [messages]);
   const liveEntries = useMemo(() => buildLiveEntries(child.events), [child.events]);
@@ -362,11 +416,22 @@ function SubagentInspector({
     () => mergeSessionEntries(persistedEntries, liveEntries),
     [liveEntries, persistedEntries],
   );
-  const runtimeEntries = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
-  const transcriptEntries = entries.filter((entry): entry is SessionMessageEntry | SessionToolEntry => entry.kind !== "status");
-  const transcriptBlocks = useMemo(() => groupTranscriptEntries(transcriptEntries), [transcriptEntries]);
-  const failedToolCount = transcriptEntries.filter((entry) => entry.kind === "tool" && entry.state === "fail").length;
-  const accessMode = resolveSessionAccessMode(messages, child.accessMode);
+  const { runtimeEntries, transcriptEntries, transcriptBlocks, failedToolCount } = useMemo(() => {
+    const runtime = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
+    const transcript = entries.filter(
+      (entry): entry is SessionMessageEntry | SessionToolEntry => entry.kind !== "status",
+    );
+    return {
+      runtimeEntries: runtime,
+      transcriptEntries: transcript,
+      transcriptBlocks: groupTranscriptEntries(transcript),
+      failedToolCount: transcript.filter((entry) => entry.kind === "tool" && entry.state === "fail").length,
+    };
+  }, [entries]);
+  const accessMode = useMemo(
+    () => resolveSessionAccessMode(messages, child.accessMode),
+    [child.accessMode, messages],
+  );
 
   const stop = async () => {
     if (stopping || !active) return;

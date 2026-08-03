@@ -14,8 +14,18 @@ import {
   fileList,
   fileRead,
   fileWrite,
-  rollbackFile,
+  gitCommitTask,
+  gitDeliveryStatus,
+  gitPushTask,
+  gitStageAccepted,
+  gitSuggestCommitMessage,
   rollbackTask,
+  reviewAcceptAll,
+  reviewAcceptFile,
+  reviewAcceptLine,
+  reviewGitStatus,
+  reviewRejectFile,
+  REVIEW_STATUS_CHANGED_EVENT,
   runVerification,
   sessionMessages,
   terminalCreate,
@@ -35,7 +45,9 @@ import type {
   ChangeDiff,
   ChangeDiffLine,
   FileChange,
+  GitDeliveryStatus,
   ProjectAccessMode,
+  ReviewGitStatus,
   SessionMessage,
   TaskDetail,
   TerminalInfo,
@@ -76,6 +88,7 @@ import {
   IconMaximize,
   IconPlus,
   IconProjects,
+  IconRefresh,
   IconShield,
   IconSidebar,
   IconTerminal,
@@ -83,6 +96,8 @@ import {
 import { Menu, MenuItem } from "../ui/Menu";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
 import { useCodexCliGate } from "../codex/CodexCliGate";
+import { FileCodePreview } from "../files/FileCodePreview";
+import { FileContextMenu, type FileContextMenuTarget } from "../files/FileContextMenu";
 
 interface Props {
   taskId: string;
@@ -92,8 +107,10 @@ interface Props {
   workspaceAttached: boolean;
   subagentPanelOpen: boolean;
   selectedSubagentId: string | null;
+  openSubagentIds: readonly string[];
   onInspectSubagent: (subagentId: string) => void;
   onBackToSubagents: () => void;
+  onCloseSubagentTab: (subagentId: string) => void;
   onCloseSubagents: () => void;
   onAbortSubagent: (subagentId: string) => Promise<void>;
 }
@@ -137,21 +154,13 @@ function ToolIcon({ tab, ...props }: { tab: CanvasTab; width?: number; height?: 
 }
 
 // ---------- 列表键盘导航（三个面板共用） ----------
-//
-// Changes / Terminal / Review 三个列表原本是纯 `<div onClick>`，键盘完全够不着。
-// 这里沿用本文件顶部 tablist 已有的 roving tabindex 约定：整个列表只有一行进
-// tab 序（tabIndex=0），其余 -1，方向键在行间移动 DOM 焦点。
-//
-// Changes / Terminal 的行里嵌了 回滚 / 终止 按钮，button 不能套 button；listbox
-// 同样不行 —— ARIA 1.2 给 role=option 规定了 Children Presentational: True，行的
-// 子节点会被整个剥离出无障碍树，那两个按钮虽然进了 tab 序，读屏却拿不到它们的
-// aria-label。所以这两个列表走 grid：gridcell 明确允许交互式子节点，role=row 又
-// 保留了 aria-selected（选中语义不丢），焦点落在行上是 APG 布局网格允许的形态。
-// 行内只有两格：主格（类型 + 路径 / 图标 + id + 状态灯）和操作格（那颗按钮）。
-// Review 行没有内嵌按钮，直接用真 `<button>`（同时是展开输出的 disclosure）。
-//
-// 三个列表都不用 aria-activedescendant：它只在持有该属性的元素自己拿到 DOM 焦点
-// 时才有意义，而这里焦点在行上；APG 也把它和 roving tabindex 列为二选一。
+// 三个列表使用 roving tabindex：仅一行 tabIndex=0，方向键移动 DOM 焦点。
+
+// Changes / Terminal 行内含操作按钮；listbox option 的子项会变成 presentational，
+// 不适合承载交互控件，因此使用允许交互式 gridcell 的 grid / row 结构。
+// Review 没有行内按钮，直接使用真正的 button。
+
+// 焦点落在行本身，所以选择 roving tabindex，不再使用二选一的 aria-activedescendant。
 
 const chgRowId = (index: number) => `chg-row-${index}`;
 const termRowId = (index: number) => `term-row-${index}`;
@@ -201,8 +210,10 @@ export function Canvas({
   workspaceAttached,
   subagentPanelOpen,
   selectedSubagentId,
+  openSubagentIds,
   onInspectSubagent,
   onBackToSubagents,
+  onCloseSubagentTab,
   onCloseSubagents,
   onAbortSubagent,
 }: Props) {
@@ -332,8 +343,10 @@ export function Canvas({
           activity={activity}
           runs={detail?.runs ?? []}
           selectedSubagentId={selectedSubagentId}
+          openSubagentIds={openSubagentIds}
           onSelect={onInspectSubagent}
           onBack={onBackToSubagents}
+          onCloseTab={onCloseSubagentTab}
           onClose={onCloseSubagents}
           onOpenLauncher={openLauncher}
           onHide={hideWorkbenchPanel}
@@ -702,14 +715,138 @@ function ChangesPanel({
   const [sel, setSel] = useState<string | null>(session?.selectedPath ?? null);
   const [diff, setDiff] = useState<ChangeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reviewStatusError, setReviewStatusError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmPath, setConfirmPath] = useState<string | null>(null);
   const [rowFocus, setRowFocus] = useState(-1);
+  const [gitStatus, setGitStatus] = useState<ReviewGitStatus | null>(null);
+  const [pendingAccepts, setPendingAccepts] = useState<Set<string>>(new Set());
+  const [acceptedLineKeys, setAcceptedLineKeys] = useState<Set<string>>(new Set());
+  const pendingAcceptKeysRef = useRef<Set<string>>(new Set());
+  const statusRefreshSequenceRef = useRef(0);
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const path = sel ?? changes[0]?.path ?? null;
-  const selIndex = changes.findIndex((item) => item.path === path);
-  const rovingIndex = rovingIndexOf(rowFocus, selIndex, changes.length);
+  const visibleChanges = useMemo(() => {
+    if (!gitStatus || (running && gitStatus.paths.length === 0)) return changes;
+    const currentPaths = new Set(gitStatus.paths.map((item) => item.path));
+    return changes.filter((change) => currentPaths.has(change.path));
+  }, [changes, gitStatus, running]);
+  const path = sel && visibleChanges.some((change) => change.path === sel)
+    ? sel
+    : visibleChanges[0]?.path ?? null;
+  const selIndex = visibleChanges.findIndex((item) => item.path === path);
+  const rovingIndex = rovingIndexOf(rowFocus, selIndex, visibleChanges.length);
+  const changeStamp = changes.map((change) => `${change.id}:${change.after_hash ?? ""}`).join("|");
+
+  const refreshGitStatus = useCallback(async () => {
+    const sequence = ++statusRefreshSequenceRef.current;
+    try {
+      const next = await reviewGitStatus(taskId);
+      if (sequence === statusRefreshSequenceRef.current) {
+        setGitStatus(next);
+        setReviewStatusError(null);
+      }
+      return next;
+    } catch (cause) {
+      if (sequence === statusRefreshSequenceRef.current) {
+        setGitStatus(null);
+        setReviewStatusError(`无法刷新审核范围：${String(cause)}`);
+      }
+      return null;
+    }
+  }, [taskId]);
+
+  useEffect(() => {
+    void refreshGitStatus();
+  }, [changeStamp, refreshGitStatus]);
+
+  const pathStatus = useMemo(
+    () => new Map(gitStatus?.paths.map((item) => [item.path, item]) ?? []),
+    [gitStatus]
+  );
+
+  const fileAcceptKey = (targetPath: string) => `file:${targetPath}`;
+  const lineAcceptKey = (targetPath: string, lineId: string) => `line:${targetPath}:${lineId}`;
+  const isPathFullyAccepted = (targetPath: string) => {
+    const status = pathStatus.get(targetPath);
+    return status?.accepted === true && status.remaining === false;
+  };
+  const isPathRejected = (targetPath: string) => pathStatus.get(targetPath)?.rejected === true;
+  const beginAccept = (key: string) => {
+    if (pendingAcceptKeysRef.current.has(key)) return false;
+    pendingAcceptKeysRef.current.add(key);
+    setPendingAccepts(new Set(pendingAcceptKeysRef.current));
+    return true;
+  };
+  const finishAccept = (key: string) => {
+    pendingAcceptKeysRef.current.delete(key);
+    setPendingAccepts(new Set(pendingAcceptKeysRef.current));
+  };
+  const runAccept = (
+    key: string,
+    operation: () => Promise<void>,
+    onFailure?: () => void,
+  ) => {
+    void (async () => {
+      try {
+        await operation();
+        // SQLite decisions are independent, so unrelated accepts never wait behind this one.
+        // Reconciliation is authoritative but stays off the interaction critical path.
+        void refreshGitStatus();
+      } catch (cause) {
+        onFailure?.();
+        setError(String(cause));
+      } finally {
+        finishAccept(key);
+      }
+    })();
+  };
+
+  const acceptFileChange = async (targetPath: string) => {
+    const key = fileAcceptKey(targetPath);
+    if (!beginAccept(key)) return;
+    setError(null);
+    setNotice(null);
+    setGitStatus((current) => current ? optimisticallyResolvePath(current, targetPath, "accepted") : current);
+    runAccept(key, async () => {
+      const result = await reviewAcceptFile(taskId, targetPath);
+      setNotice(`已接受 ${targetPath}；还有 ${result.remaining_count} 个文件未完全接受。`);
+    }, () => void refreshGitStatus());
+  };
+
+  const acceptAllChanges = async () => {
+    const key = "all";
+    if (!beginAccept(key)) return;
+    setError(null);
+    setNotice(null);
+    setGitStatus((current) => current ? optimisticallyAcceptAll(current) : current);
+    runAccept(key, async () => {
+      const result = await reviewAcceptAll(taskId);
+      setNotice(result.fully_accepted ? "已接受本任务的全部文件。" : `仍有 ${result.remaining_count} 个文件待处理。`);
+    }, () => void refreshGitStatus());
+  };
+
+  const acceptDiffLine = async (targetPath: string, lineId: string) => {
+    const key = lineAcceptKey(targetPath, lineId);
+    if (!beginAccept(key)) return;
+    setAcceptedLineKeys((current) => new Set(current).add(key));
+    setError(null);
+    setNotice(null);
+    setDiff((current) => current ? {
+      ...current,
+      lines: current.lines?.map((line) => line.line_id === lineId ? { ...line, review_state: "accepted" } : line),
+    } : current);
+    runAccept(key, async () => {
+      const result = await reviewAcceptLine(taskId, targetPath, lineId);
+      setNotice(result.fully_accepted ? `已接受 ${targetPath} 的全部变更。` : "已接受这一行。" );
+    }, () => {
+      setAcceptedLineKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
+    });
+  };
 
   // detail 每 2s 刷新 → diff 跟随(运行中即 live following)
   useEffect(() => {
@@ -744,9 +881,10 @@ function ChangesPanel({
     setError(null);
     setNotice(null);
     try {
-      const result = await rollbackFile(taskId, p);
-      setNotice(`已回滚 ${p}(${result})`);
-      await refreshDetail(taskId);
+      const result = await reviewRejectFile(taskId, p);
+      setGitStatus((current) => current ? optimisticallyResolvePath(current, p, "rejected") : current);
+      setNotice(`已拒绝 ${p}；文件已安全恢复。`);
+      await Promise.all([refreshDetail(taskId), refreshGitStatus()]);
     } catch (e) {
       setError(String(e));
     }
@@ -858,10 +996,10 @@ function ChangesPanel({
   return (
     <div className="changes-wrap">
       <div className="changes-list">
-        {changes.length === 0 && <div className="empty">还没有文件变更。</div>}
-        {changes.length > 0 && (
+        {visibleChanges.length === 0 && <div className="empty">还没有文件变更。</div>}
+        {visibleChanges.length > 0 && (
           <div className="chg-options" role="grid" aria-label="变更文件">
-            {changes.map((c, index) => (
+            {visibleChanges.map((c, index) => (
               <div
                 key={c.id}
                 id={chgRowId(index)}
@@ -872,7 +1010,7 @@ function ChangesPanel({
                 onFocus={() => setRowFocus(index)}
                 onClick={() => setSel(c.path)}
                 onKeyDown={(event) => {
-                  if (moveRowFocus(event, index, changes.length, chgRowId)) return;
+                  if (moveRowFocus(event, index, visibleChanges.length, chgRowId)) return;
                   if (!isRowActivate(event)) return;
                   event.preventDefault();
                   setSel(c.path);
@@ -889,20 +1027,27 @@ function ChangesPanel({
                   </span>
                 </span>
                 <span className="rcell" role="gridcell">
+                  {pathStatus.get(c.path)?.accepted && !pathStatus.get(c.path)?.remaining ? <span className="chg-accepted">已接受</span> : pathStatus.get(c.path)?.rejected ? <span className="chg-rejected">已拒绝</span> : pathStatus.get(c.path)?.blocker ? <span className="chg-blocked" title={pathStatus.get(c.path)?.blocker ?? undefined}>需处理</span> : <button
+                    className="chg-accept"
+                    tabIndex={index === rovingIndex ? 0 : -1}
+                    disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(c.path)) || isPathRejected(c.path)}
+                    title={`接受 ${c.path}`}
+                    onClick={(event) => { event.stopPropagation(); void acceptFileChange(c.path); }}
+                  >{pendingAccepts.has(fileAcceptKey(c.path)) ? "…" : "接受"}</button>}
                   <button
                     className={"chg-rb" + (confirmPath === c.path ? " confirm" : "")}
                     // 只有 roving 落点那一行的行内按钮进 tab 序，否则 Tab 会把整列按钮走一遍
                     tabIndex={index === rovingIndex ? 0 : -1}
-                    title={confirmPath === c.path ? "再次点击确认回滚" : "回滚此文件"}
+                    title={confirmPath === c.path ? "再次点击确认拒绝" : "拒绝并恢复此文件"}
                     aria-label={
-                      confirmPath === c.path ? `再次确认，回滚 ${c.path}` : `回滚 ${c.path}`
+                      confirmPath === c.path ? `再次确认，拒绝 ${c.path}` : `拒绝并恢复 ${c.path}`
                     }
                     onClick={(e) => {
                       e.stopPropagation();
                       void doRollback(c.path);
                     }}
                   >
-                    {confirmPath === c.path ? "确认?" : "回滚"}
+                    {confirmPath === c.path ? "确认?" : "拒绝"}
                   </button>
                 </span>
               </div>
@@ -911,6 +1056,7 @@ function ChangesPanel({
         )}
       </div>
       <div className="changes-view">
+        {reviewStatusError && <div className="panel-error" role="alert">{reviewStatusError}</div>}
         {error && <div className="panel-error">{error}</div>}
         {notice && <div className="panel-note">{notice}</div>}
         {!path && <div className="empty">没有可查看的变更。</div>}
@@ -918,6 +1064,8 @@ function ChangesPanel({
           <div className="chg-meta">
             <div className="canvas-head">
               <span className="path">{diff.path}</span>
+              <button className="btn sm" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || pathStatus.get(path)?.safe_to_accept === false || isPathRejected(path)} onClick={() => void acceptFileChange(path)}>{pendingAccepts.has(fileAcceptKey(path)) ? "接受中…" : "接受文件"}</button>
+              <button className="btn accent sm" disabled={pendingAccepts.has("all") || gitStatus?.can_accept_all === false} onClick={() => void acceptAllChanges()}>{pendingAccepts.has("all") ? "接受中…" : "接受全部"}</button>
             </div>
             <div className="empty">
               此文件不支持行级 diff(blob 缺失或二进制)。
@@ -930,7 +1078,7 @@ function ChangesPanel({
                 className={"btn danger sm" + (confirmPath === path ? " confirm" : "")}
                 onClick={() => void doRollback(path)}
               >
-                {confirmPath === path ? "确认回滚?" : "回滚此文件"}
+                {confirmPath === path ? "确认拒绝?" : "拒绝并恢复"}
               </button>
             </div>
           </div>
@@ -957,6 +1105,10 @@ function ChangesPanel({
                   live following
                 </span>
               )}
+              <span className="review-accept-actions">
+                <button className="btn sm" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || pathStatus.get(path)?.safe_to_accept === false || isPathFullyAccepted(path) || isPathRejected(path)} onClick={() => void acceptFileChange(path)}>{isPathRejected(path) ? "已拒绝文件" : isPathFullyAccepted(path) ? "已接受文件" : pendingAccepts.has(fileAcceptKey(path)) ? "接受中…" : "接受文件"}</button>
+                <button className="btn accent sm" disabled={pendingAccepts.has("all") || gitStatus?.can_accept_all === false} onClick={() => void acceptAllChanges()}>{pendingAccepts.has("all") ? "接受中…" : "接受全部"}</button>
+              </span>
             </div>
             <div
               // 无障碍模式下整块是可聚焦的滚动区（键盘能滚），ring-inset 避免焦点环被裁
@@ -1019,6 +1171,9 @@ function ChangesPanel({
                                 )}
                               </span>
                               <span className="dla-code">{line.text}</span>
+                              {(line.kind === "add" || line.kind === "del") && line.line_id && (
+                                <button className="diff-line-accept" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || line.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, line.line_id!)}>{line.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
+                              )}
                             </li>
                           );
                         })}
@@ -1047,6 +1202,9 @@ function ChangesPanel({
                       >
                         <span className="no">{l.new_no ?? l.old_no ?? ""}</span>
                         <span className="code">{l.text}</span>
+                        {(l.kind === "add" || l.kind === "del") && l.line_id && (
+                          <button className="diff-line-accept" disabled={pendingAccepts.has("all") || pendingAccepts.has(fileAcceptKey(path)) || acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || l.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, l.line_id!)}>{l.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
+                        )}
                       </div>
                     )
                   )}
@@ -1073,6 +1231,48 @@ function typeLabel(c: FileChange): string {
     case "rename":
       return "ren";
   }
+}
+
+function withReviewCounts(status: ReviewGitStatus, paths: ReviewGitStatus["paths"]): ReviewGitStatus {
+  const acceptedCount = paths.filter((path) => path.accepted).length;
+  const rejectedCount = paths.filter((path) => path.rejected).length;
+  const remainingCount = paths.filter((path) => path.remaining).length;
+  const conflictCount = paths.filter((path) => path.conflict).length;
+  return {
+    ...status,
+    paths,
+    accepted_count: acceptedCount,
+    rejected_count: rejectedCount,
+    remaining_count: remainingCount,
+    conflict_count: conflictCount,
+    can_accept_all: remainingCount > 0 && conflictCount === 0,
+  };
+}
+
+function optimisticallyResolvePath(
+  status: ReviewGitStatus,
+  targetPath: string,
+  decision: "accepted" | "rejected",
+): ReviewGitStatus {
+  return withReviewCounts(status, status.paths.map((path) => path.path === targetPath ? {
+    ...path,
+    accepted: decision === "accepted",
+    rejected: decision === "rejected",
+    remaining: false,
+    conflict: false,
+    blocker: null,
+    accepted_items: decision === "accepted" ? path.accepted_items + path.remaining_items : 0,
+    rejected_items: decision === "rejected" ? path.accepted_items + path.rejected_items + path.remaining_items : path.rejected_items,
+    remaining_items: 0,
+  } : path));
+}
+
+function optimisticallyAcceptAll(status: ReviewGitStatus): ReviewGitStatus {
+  let next = status;
+  for (const path of status.paths) {
+    if (path.remaining && !path.conflict) next = optimisticallyResolvePath(next, path.path, "accepted");
+  }
+  return next;
 }
 
 /** 读屏用的完整中文，替掉只有视觉意义的三字母缩写 + 颜色。 */
@@ -1141,6 +1341,7 @@ interface FilesPanelSession {
   file: FileContent | null;
   draft: string;
   dirty: boolean;
+  editing: boolean;
 }
 
 function FilesPanel({
@@ -1162,14 +1363,22 @@ function FilesPanel({
   const [file, setFile] = useState<FileContent | null>(session?.file ?? null);
   const [draft, setDraft] = useState(session?.draft ?? "");
   const [dirty, setDirty] = useState(session?.dirty ?? false);
+  const [editing, setEditing] = useState(session?.editing ?? false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [contextMenuTarget, setContextMenuTarget] = useState<FileContextMenuTarget | null>(null);
   const navigation = useAppStore((state) => state.workbenchFiles[taskId] ?? null);
+  const taskTitle = useTasksStore((state) =>
+    state.details[taskId]?.task.title
+    ?? state.tasks.find((task) => task.id === taskId)?.title
+    ?? "当前任务"
+  );
   const handledNavigationRef = useRef(0);
   const selectedRowRef = useRef<HTMLButtonElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const initializedWorkspaceRef = useRef<{ path: string | null; attached: boolean } | null>(null);
   const restoredSessionRef = useRef(Boolean(session && session.workspacePath === workspacePath));
   const preserveDirtyDraftRef = useRef(Boolean(session?.dirty && session.file && session.selectedPath));
   useRememberPanelSession<FilesPanelSession>(sessionKey, {
@@ -1180,6 +1389,7 @@ function FilesPanel({
     file,
     draft,
     dirty,
+    editing,
   });
   // 未保存时的二次确认走项目自研的 armed 模式：window.confirm 在 Tauri WebView 里
   // 抢焦点、无法主题化，也拿不到统一焦点环。
@@ -1226,6 +1436,9 @@ function FilesPanel({
   );
 
   useEffect(() => {
+    const initialized = initializedWorkspaceRef.current;
+    if (initialized?.path === workspacePath && initialized.attached === workspaceAttached) return;
+    initializedWorkspaceRef.current = { path: workspacePath, attached: workspaceAttached };
     if (restoredSessionRef.current) {
       restoredSessionRef.current = false;
       if (workspacePath && workspaceAttached && Object.keys(directories).length === 0) void loadDirectory("");
@@ -1237,9 +1450,11 @@ function FilesPanel({
     setFile(null);
     setDraft("");
     setDirty(false);
+    setEditing(false);
     setFileError(null);
     setSaveError(null);
     setPendingPath(null);
+    setContextMenuTarget(null);
     if (workspacePath && workspaceAttached) void loadDirectory("");
   }, [workspacePath, workspaceAttached, loadDirectory]);
 
@@ -1252,6 +1467,7 @@ function FilesPanel({
       setFile(null);
       setDraft("");
       setDirty(false);
+      setEditing(false);
       setFileError(null);
       setSaveError(null);
       return;
@@ -1270,6 +1486,7 @@ function FilesPanel({
         setFile(next);
         setDraft(next.content);
         setDirty(false);
+        setEditing(false);
       })
       .catch((cause) => {
         if (!disposed) setFileError(String(cause));
@@ -1316,6 +1533,7 @@ function FilesPanel({
   useEffect(() => {
     if (
       !file?.is_editable
+      || !editing
       || !navigation
       || navigation.path.replace(/\\/g, "/") !== selectedPath
       || !navigation.line
@@ -1331,7 +1549,7 @@ function FilesPanel({
     textarea.setSelectionRange(offset, offset);
     const lineHeight = Number.parseFloat(getComputedStyle(textarea).lineHeight) || 20;
     textarea.scrollTop = Math.max(0, lineIndex * lineHeight - textarea.clientHeight / 3);
-  }, [file, navigation, selectedPath]);
+  }, [editing, file, navigation, selectedPath]);
 
   const toggleDirectory = (path: string) => {
     const willOpen = !expanded.has(path);
@@ -1342,6 +1560,20 @@ function FilesPanel({
       return next;
     });
     if (willOpen && !directories[path]) void loadDirectory(path);
+  };
+
+  const refreshTree = useCallback(async () => {
+    await Promise.all(["", ...Array.from(expanded)].map((path) => loadDirectory(path)));
+  }, [expanded, loadDirectory]);
+
+  const openFileContextMenu = (path: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    setContextMenuTarget({ workspacePath: workspacePath!, path, x: event.clientX, y: event.clientY });
+  };
+
+  const suppressFolderContextMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    setContextMenuTarget(null);
   };
 
   const selectFile = (path: string) => {
@@ -1420,6 +1652,10 @@ function FilesPanel({
                   if (entry.is_directory) toggleDirectory(entry.path);
                   else selectFile(entry.path);
                 }}
+                onContextMenu={(event) => {
+                  if (entry.is_directory) suppressFolderContextMenu(event);
+                  else openFileContextMenu(entry.path, event);
+                }}
               >
                 <span className="files-tree-arrow">{entry.is_directory ? (isOpen ? "⌄" : "›") : ""}</span>
                 {entry.is_directory ? <IconProjects width={13} height={13} /> : <IconFile width={13} height={13} />}
@@ -1451,6 +1687,17 @@ function FilesPanel({
         <div className="files-tree-head">
           <IconProjects width={13} height={13} />
           <span>文件</span>
+          <button
+            type="button"
+            className="files-tree-refresh"
+            aria-label="刷新文件树"
+            title="刷新文件树"
+            aria-busy={Object.values(directories).some((directory) => directory.loading)}
+            disabled={Object.values(directories).some((directory) => directory.loading)}
+            onClick={() => void refreshTree()}
+          >
+            <IconRefresh width={13} height={13} />
+          </button>
         </div>
         {renderDirectory("", 0)}
       </div>
@@ -1465,6 +1712,11 @@ function FilesPanel({
                 </span>
               )}
               {selectedIsImage && <span className="files-meta">图片预览</span>}
+              {file?.is_editable && (
+                <button className="btn ghost sm" onClick={() => setEditing((value) => !value)}>
+                  {editing ? "取消编辑" : "编辑"}
+                </button>
+              )}
               <button
                 className={"btn ghost sm" + (reloadGuard.armed ? " confirm" : "")}
                 disabled={(!file && !selectedIsImage) || saving}
@@ -1474,7 +1726,7 @@ function FilesPanel({
               </button>
               <button
                 className="btn accent sm"
-                disabled={!file?.is_editable || !dirty || saving}
+                disabled={!editing || !file?.is_editable || !dirty || saving}
                 onClick={() => void saveFile()}
               >
                 {saving ? "保存中…" : "保存"}
@@ -1519,7 +1771,7 @@ function FilesPanel({
                 <span>{file.truncated ? "文件超过 512 KiB。" : "文件包含二进制或非 UTF-8 内容。"}</span>
               </div>
             )}
-            {file?.is_editable && (
+            {file?.is_editable && editing && (
               <textarea
                 ref={textAreaRef}
                 className="files-textarea"
@@ -1537,6 +1789,15 @@ function FilesPanel({
                 }}
               />
             )}
+            {file?.is_editable && !editing && (
+              <FileCodePreview
+                path={selectedPath}
+                content={file.content}
+                activeLine={navigation?.path.replace(/\\/g, "/") === selectedPath ? navigation.line : null}
+                ariaLabel={`${selectedPath} 只读预览`}
+                className="files-code-preview"
+              />
+            )}
           </>
         ) : (
           <div className="files-empty">
@@ -1546,6 +1807,11 @@ function FilesPanel({
           </div>
         )}
       </div>
+      <FileContextMenu
+        target={contextMenuTarget}
+        tasks={[{ id: taskId, title: taskTitle }]}
+        onDismiss={() => setContextMenuTarget(null)}
+      />
     </div>
   );
 }
@@ -1988,6 +2254,11 @@ function ReviewPanel({ taskId }: { taskId: string }) {
   const [openId, setOpenId] = useState<string | null>(session?.openVerificationId ?? null);
   const [outputs, setOutputs] = useState<Record<string, string>>(session?.outputs ?? {});
   const [rowFocus, setRowFocus] = useState(-1);
+  const [delivery, setDelivery] = useState<GitDeliveryStatus | null>(null);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [gitBusy, setGitBusy] = useState<null | "stage" | "suggest" | "commit" | "push">(null);
+  const [confirmCommit, setConfirmCommit] = useState(false);
+  const [pushCountdown, setPushCountdown] = useState<number | null>(null);
   useRememberPanelSession(sessionKey, {
     command: cmd,
     requestingChange,
@@ -2024,6 +2295,102 @@ function ReviewPanel({ taskId }: { taskId: string }) {
     2000,
     true
   );
+
+  const refreshDelivery = useCallback(async () => {
+    try {
+      setDelivery(await gitDeliveryStatus(taskId));
+    } catch {
+      setDelivery(null);
+    }
+  }, [taskId]);
+
+  // Git delivery runs several subprocesses. Review decisions announce themselves immediately,
+  // so a slow fallback poll is enough and avoids repeatedly waking Git while the panel is idle.
+  usePoll(refreshDelivery, 10000, true);
+
+  useEffect(() => {
+    const onReviewStatusChanged = (event: Event) => {
+      const changedTaskId = (event as CustomEvent<{ taskId?: string }>).detail?.taskId;
+      if (!changedTaskId || changedTaskId === taskId) void refreshDelivery();
+    };
+    window.addEventListener(REVIEW_STATUS_CHANGED_EVENT, onReviewStatusChanged);
+    return () => window.removeEventListener(REVIEW_STATUS_CHANGED_EVENT, onReviewStatusChanged);
+  }, [refreshDelivery, taskId]);
+
+  useEffect(() => {
+    if (pushCountdown == null || pushCountdown <= 0) return;
+    const timer = window.setTimeout(
+      () => setPushCountdown((value) => (value == null ? null : value - 1)),
+      1000
+    );
+    return () => window.clearTimeout(timer);
+  }, [pushCountdown]);
+
+  const suggestCommit = async () => {
+    setGitBusy("suggest");
+    setError(null);
+    try {
+      setCommitMessage(await gitSuggestCommitMessage(taskId));
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setGitBusy(null);
+    }
+  };
+
+  const stageAccepted = async () => {
+    setGitBusy("stage");
+    setError(null);
+    try {
+      const status = await gitStageAccepted(taskId);
+      setDelivery(status);
+      setNotice(`已将 ${status.staged_task_paths.length} 个审核保留文件加入暂存区。`);
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setGitBusy(null);
+    }
+  };
+
+  const commitAccepted = async () => {
+    if (!confirmCommit) {
+      setConfirmCommit(true);
+      window.setTimeout(() => setConfirmCommit(false), 5000);
+      return;
+    }
+    setConfirmCommit(false);
+    setGitBusy("commit");
+    setError(null);
+    try {
+      const result = await gitCommitTask(taskId, commitMessage);
+      setNotice(`已提交 ${result.sha.slice(0, 8)}。`);
+      await refreshDelivery();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setGitBusy(null);
+    }
+  };
+
+  const pushCommitted = async () => {
+    if (pushCountdown == null) {
+      setPushCountdown(5);
+      return;
+    }
+    if (pushCountdown > 0) return;
+    setPushCountdown(null);
+    setGitBusy("push");
+    setError(null);
+    try {
+      const result = await gitPushTask(taskId);
+      setNotice(`已推送 ${result.branch} → ${result.upstream}（${result.sha.slice(0, 8)}）。`);
+      await refreshDelivery();
+    } catch (cause) {
+      setError(String(cause));
+    } finally {
+      setGitBusy(null);
+    }
+  };
 
   const run = async () => {
     const command = cmd.trim();
@@ -2153,6 +2520,28 @@ function ReviewPanel({ taskId }: { taskId: string }) {
           </div>
         )}
       </div>
+      {delivery && (
+        <section className="review-git" aria-label="Git 提交与推送">
+          <div className="review-git-head">
+            <div><span>Git 交付</span><strong>{delivery.branch ?? "detached HEAD"}</strong></div>
+            <small>{delivery.staged_task_paths.length} 个任务文件已暂存 · ahead {delivery.ahead} / behind {delivery.behind}</small>
+          </div>
+          {delivery.blockers.length > 0 && <div className="review-git-blockers">{delivery.blockers.map((blocker) => <span key={blocker}>{blocker}</span>)}</div>}
+          <div className="review-git-stage">
+            <button className="btn" disabled={gitBusy !== null || !delivery.can_stage} onClick={() => void stageAccepted()}>{gitBusy === "stage" ? "暂存中…" : "暂存已接受文件"}</button>
+            <span>审核与 Git 分离；只有这里会改动暂存区。</span>
+          </div>
+          <div className="review-git-message">
+            <input className="input" value={commitMessage} onChange={(event) => { setCommitMessage(event.target.value); setConfirmCommit(false); }} placeholder="提交信息（可编辑）" />
+            <button className="btn" disabled={gitBusy !== null || delivery.staged_task_paths.length === 0} onClick={() => void suggestCommit()}>{gitBusy === "suggest" ? "生成中…" : "自动生成"}</button>
+          </div>
+          <div className="review-git-actions">
+            <button className={"btn accent" + (confirmCommit ? " confirm" : "")} disabled={gitBusy !== null || !delivery.can_commit || !commitMessage.trim()} onClick={() => void commitAccepted()}>{gitBusy === "commit" ? "提交中…" : confirmCommit ? "再次点击确认提交" : "提交已暂存变更"}</button>
+            <button className="btn" disabled={gitBusy !== null || !delivery.can_push || (pushCountdown != null && pushCountdown > 0)} onClick={() => void pushCommitted()}>{gitBusy === "push" ? "推送中…" : pushCountdown == null ? "推送到 upstream" : pushCountdown > 0 ? `${pushCountdown}s 后可确认` : "确认推送"}</button>
+            <span>{delivery.upstream ? `upstream · ${delivery.upstream}` : "未配置 upstream，审核页不会自动创建"}</span>
+          </div>
+        </section>
+      )}
       {requestingChange && (
         <div className="review-request">
           <label htmlFor={`review-feedback-${taskId}`}>修改说明</label>

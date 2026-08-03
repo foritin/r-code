@@ -13,8 +13,10 @@ flowchart LR
     Commit --> Tag["annotated tag vX.Y.Z"]
     Tag --> Push["push main + tag"]
     Push --> Validate["Actions 校验 tag / version / changelog"]
-    Validate --> Matrix["Windows / macOS / Linux 构建到 Draft Release"]
-    Matrix --> Finalize["确认 latest.json 后发布 Draft"]
+    Validate --> Supply["生成 SBOM / 许可证清单"]
+    Validate --> Matrix["Windows x64 / macOS 双架构 / Linux x64 构建到 Draft"]
+    Supply --> Finalize["确认四平台 latest.json 后发布 Draft"]
+    Matrix --> Finalize
     Finalize --> Update["GitHub Release + Tauri updater"]
 ```
 
@@ -32,10 +34,10 @@ flowchart LR
 | 平台 | 架构 | 产物 |
 | --- | --- | --- |
 | Windows | x86_64 MSVC | 品牌安装器 `.exe`、NSIS updater `.exe`、WiX `.msi` |
-| macOS | Apple Silicon `aarch64` | `.app`、`.dmg` |
+| macOS | Apple Silicon `aarch64`、Intel `x86_64` | 各架构 `.app`、`.dmg` |
 | Linux | x86_64 GNU | `.AppImage`、`.deb` |
 
-发布工作流还会上传 Tauri updater 归档、`.sig` 签名和聚合的 `latest.json`。当前未构建 Intel macOS、Windows ARM 或 Linux ARM；添加平台时必须同步更新 updater 验收清单和 README。
+发布工作流还会上传 Tauri updater 归档、`.sig` 签名、聚合的 `latest.json`、CycloneDX SBOM 和第三方许可证清单。当前未构建 Windows ARM 或 Linux ARM；添加平台时必须同步更新 updater 验收清单和 README。Intel 构建固定使用 GitHub 的 `macos-15-intel` runner，避免 `macos-latest` 架构漂移。
 
 ## 3. 一次性仓库配置
 
@@ -58,14 +60,39 @@ flowchart LR
 
 ### 3.3 操作系统代码签名
 
-Updater 签名只保证应用更新包的完整性，不替代平台发行签名。当前仓库尚未包含以下生产凭据和完整 workflow 接线：
+Updater 签名只保证应用更新包的完整性，不替代平台发行签名。
 
-- macOS Developer ID Application 证书、Apple Team、notarization 和 stapling；
-- Windows Authenticode 证书及其安全签名服务/时间戳配置。
+macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release workflow。仓库 Settings → Secrets and variables → Actions 必须配置：
 
-公开发布前应把这两项视为上线门槛，否则 macOS Gatekeeper 和 Windows SmartScreen 会产生明显信任警告。凭据接入应单独评审，不能把证书或密码放入仓库。Linux 包签名是否启用则由分发渠道策略决定。
+- `APPLE_CERTIFICATE`：Developer ID Application `.p12` 的单行 Base64 内容；
+- `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码；
+- `APPLE_SIGNING_IDENTITY`：例如 `Developer ID Application: Example Team (TEAMID)`；
+- `APPLE_ID`：提交 notarization 的 Apple ID；
+- `APPLE_PASSWORD`：该 Apple ID 的 app-specific password，不是账户登录密码；
+- `APPLE_TEAM_ID`：Apple Developer Team ID。
 
-### 3.4 GitHub 安全入口
+workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时 macOS release job 会明确失败，而不会静默发布未签名包。证书和密码不得提交到仓库。
+
+本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
+
+Windows Authenticode 已接入 Release workflow，并且是强制门禁。仓库必须配置：
+
+- `WINDOWS_CERTIFICATE`：代码签名 `.pfx` 的 Base64 内容（支持 `certutil -encode` 输出）；
+- `WINDOWS_CERTIFICATE_PASSWORD`：PFX 导出密码；
+- `WINDOWS_TIMESTAMP_URL`：证书颁发机构提供的 RFC 3161 时间戳地址。
+
+workflow 会把证书导入 runner 的临时用户证书库，由 Tauri 在生成 updater/NSIS/MSI 前完成签名；品牌外层安装器生成后再由 `signtool` 签名。发布前会对品牌安装器、NSIS 和 MSI 逐一执行 Authenticode 验证。任一 Secret 缺失、签名或验证失败都会阻止 Draft 发布，临时 PFX 和生成的 Tauri 覆盖配置在 job 结束时删除。Linux 包签名是否启用由分发渠道策略决定。
+
+### 3.4 供应链清单
+
+`scripts/generate-supply-chain.mjs` 从锁定的 Cargo metadata 与 `package-lock.json` 生成：
+
+- `r-code-sbom.cdx.json`：CycloneDX 1.5 SBOM；
+- `THIRD_PARTY_LICENSES.md`：Cargo 与 npm 第三方依赖的声明许可证清单。
+
+Release 的 `supply-chain` job 使用 `--strict`；任何依赖缺少许可证声明都会失败。需要本地复核时运行 `node scripts/generate-supply-chain.mjs target/supply-chain --strict`。清单用于发行审计，具体许可证文本仍以各依赖包自带文件为准。
+
+### 3.5 GitHub 安全入口
 
 建议在仓库 Settings → Security 中启用 Private vulnerability reporting，使 [SECURITY.md](../SECURITY.md) 指向的私密报告入口可用。
 
@@ -132,6 +159,10 @@ cd ../..
 
 # Windows：构建最终品牌安装器
 ./scripts/build-branded-installer.ps1
+
+# macOS：本机 ad-hoc 候选包；正式候选包追加 --signed
+# Intel 本地包可追加 --target x86_64-apple-darwin
+bash ./scripts/build-macos.sh
 ```
 
 至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。
@@ -154,8 +185,9 @@ git push origin v0.1.0
 Tag push 后工作流按以下顺序运行：
 
 1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
-2. 三个平台并行构建，Windows 额外封装品牌安装器；所有产物写入同一个 Draft Release。
-3. `finalize` 确认 Draft 中存在 `latest.json`，随后发布并标为 latest。
+2. `supply-chain` 生成并严格校验 SBOM/许可证清单。
+3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；Windows 额外封装并签名品牌安装器，所有二进制产物写入同一个 Draft Release。
+4. `finalize` 确认 Draft 中存在四个平台的 updater 项，上传供应链清单，随后发布并标为 latest。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag。`workflow_dispatch` 不是创建 tag 的替代品。
 
@@ -164,8 +196,10 @@ Tag push 后工作流按以下顺序运行：
 在 GitHub Release 页面检查：
 
 - Release 不是 Draft，tag 和标题正确；
-- Windows、macOS、Linux 目标产物都存在；
+- Windows x64、macOS arm64/x64、Linux x64 目标产物都存在；
 - updater 归档均有对应 `.sig`；
+- 品牌安装器、NSIS、MSI 的 Authenticode 验证通过；
+- `r-code-sbom.cdx.json` 与 `THIRD_PARTY_LICENSES.md` 存在且内容对应当前版本；
 - `latest.json` 能通过 `https://github.com/foritin/r-code/releases/latest/download/latest.json` 获取；
 - manifest 中 version、platform key、下载 URL 和 signature 正确；
 - 从前一个已发布版本执行一次真实更新并能重新启动。
@@ -215,11 +249,11 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 - [ ] `vendor/agent-core` gitlink 指向可访问且已审核的 commit。
 - [ ] updater 私钥已备份，Secrets 与内置公钥配对验证通过。
 - [ ] GitHub Actions 具有创建 Release 的权限。
-- [ ] macOS 已签名并 notarize；Windows 已完成 Authenticode 签名，或已明确接受上线风险。
+- [ ] macOS 两种架构均已签名并 notarize；Windows Authenticode 签名与时间戳验证通过。
 - [ ] README 的支持平台、安装入口和截图与实际 Release 一致。
 - [ ] `SECURITY.md` 的私密报告入口可用。
 - [ ] `PRIVACY.md` 已由产品/法务按实际发行地区、主体和 Provider 政策确认。
-- [ ] 为二进制分发生成并复核 SBOM/第三方许可证清单；当前 `SbomGenerator` 尚未接入 Release workflow。
+- [ ] Release 自动生成的 SBOM/第三方许可证清单已复核，且没有 `UNKNOWN` 许可证。
 - [ ] 在干净机器/虚拟机完成安装、升级、卸载和用户数据保留测试。
 - [ ] 明确 0.x 阶段的数据 schema 回退策略和支持范围。
 
@@ -228,8 +262,10 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 | 文件 | 作用 |
 | --- | --- |
 | `.github/workflows/ci.yml` | 合并前质量门和版本漂移检查 |
-| `.github/workflows/release.yml` | tag 校验、跨平台构建、Draft 聚合与发布 |
+| `.github/workflows/release.yml` | tag 校验、四目标构建、Apple/Windows 签名、供应链清单、Draft 聚合与发布 |
+| `scripts/generate-supply-chain.mjs` | 生成 CycloneDX SBOM 与第三方许可证清单 |
 | `.github/release.yml` | GitHub 自动 Release Notes 分类 |
 | `scripts/release.mjs` | 版本同步、CHANGELOG 盖章和 tag 一致性校验 |
+| `scripts/build-macos.sh` | macOS app/dmg 本地构建、签名与公证验收 |
 | `src-tauri/tauri.conf.json` | Bundle、updater endpoint 和公钥 |
 | `CHANGELOG.md` | 用户可见版本历史 |

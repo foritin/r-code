@@ -208,7 +208,8 @@ function applyScopedEvent(
     return applyScopedEvent(state, event.scope, event.event, at);
   }
 
-  const prior = state.subagents.find((child) => child.id === scope.run_id);
+  const priorIndex = state.subagents.findIndex((child) => child.id === scope.run_id);
+  const prior = priorIndex >= 0 ? state.subagents[priorIndex] : undefined;
   const child: ActivitySubagent = {
     id: scope.run_id,
     label: scope.agent_label?.trim() || prior?.label || "子代理",
@@ -279,11 +280,21 @@ function applyScopedEvent(
       break;
   }
 
-  const subagents = [
-    ...state.subagents.filter((item) => item.id !== child.id),
-    child,
-  ]
-    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+  let subagents: ActivitySubagent[];
+  if (priorIndex >= 0) {
+    // 流式 token 会高频进入这里；既有子代理的排序键不变，只替换原槽位即可。
+    subagents = state.subagents.slice();
+    subagents[priorIndex] = child;
+  } else {
+    const insertionIndex = state.subagents.findIndex((item) => compareSubagents(child, item) < 0);
+    subagents = insertionIndex < 0
+      ? [...state.subagents, child]
+      : [
+          ...state.subagents.slice(0, insertionIndex),
+          child,
+          ...state.subagents.slice(insertionIndex),
+        ];
+  }
   return {
     ...state,
     running: true,
@@ -314,6 +325,10 @@ function isTerminalChildStatus(status: SubagentStatus): boolean {
 function safeChildDetail(value: string | undefined): string | null {
   if (!value) return null;
   return value.trim().replace(/\s+/g, " ").slice(0, 120) || null;
+}
+
+function compareSubagents(left: ActivitySubagent, right: ActivitySubagent): number {
+  return left.startedAt - right.startedAt || left.id.localeCompare(right.id);
 }
 
 function appendChildEvent(
@@ -491,7 +506,7 @@ function mergePersistedSubagents(
     });
   }
   return [...live.values()]
-    .sort((a, b) => a.startedAt - b.startedAt || a.id.localeCompare(b.id));
+    .sort(compareSubagents);
 }
 
 function persistedSubagentStatus(run: AgentRun): SubagentStatus {

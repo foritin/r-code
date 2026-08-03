@@ -633,6 +633,19 @@ function orderedUniqueRuns(runs: AgentRun[]): AgentRun[] {
     });
 }
 
+/**
+ * 流式光标只属于当前仍在生成的文本段。工具、计划或运行状态成为新的
+ * 时间线边界时，之前的文本已经完成，必须立即静态化。
+ */
+function finishStreamingAgents(items: TimelineItem[], exceptIndex = -1): void {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (index !== exceptIndex && item.kind === "agent" && item.streaming) {
+      items[index] = { ...item, streaming: false };
+    }
+  }
+}
+
 /** 将一条流式 AgentEvent 应用到时间线（返回新数组）。nowSec 由调用方提供。 */
 export function applyAgentEvent(
   prev: TimelineItem[],
@@ -645,13 +658,16 @@ export function applyAgentEvent(
   switch (ev.type) {
     case "message": {
       if (last?.kind === "agent" && last.streaming) {
+        finishStreamingAgents(items, items.length - 1);
         items[items.length - 1] = { ...last, text: last.text + ev.text, streaming: ev.delta };
       } else {
+        finishStreamingAgents(items);
         items.push({ kind: "agent", id: nid(), t: nowSec, text: ev.text, streaming: ev.delta });
       }
       return items;
     }
     case "tool_call": {
+      finishStreamingAgents(items);
       let inputJson: string | undefined;
       try {
         inputJson = JSON.stringify(ev.input);
@@ -674,6 +690,7 @@ export function applyAgentEvent(
       return items;
     }
     case "tool_result": {
+      finishStreamingAgents(items);
       // 后端存的是 `Value::to_string()`（commands.rs），即**永远是 JSON 编码文本**。
       // 这里若对字符串走裸串分支，流式与历史重建两条路径的编码就不一致：
       // 输出本身是合法 JSON 文本时（cat package.json、MCP 返回 JSON blob），
@@ -702,6 +719,7 @@ export function applyAgentEvent(
       return items;
     }
     case "plan": {
+      finishStreamingAgents(items);
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
         if (it.kind === "plan") {
@@ -712,14 +730,20 @@ export function applyAgentEvent(
       items.push({ kind: "plan", id: nid(), t: nowSec, steps: ev.steps });
       return items;
     }
-    case "activity":
+    case "activity": {
+      // streaming/steer_accepted 仍属于当前输出；其余活动阶段已离开文本生成前沿。
+      if (ev.phase !== "streaming" && ev.phase !== "steer_accepted") {
+        finishStreamingAgents(items);
+      }
       // 活动条消费该事件；时间线不展示内部活动或推理文本。
       return items;
+    }
     case "scoped":
     case "subagent_lifecycle":
       // 子代理详情由 Working 列表和持久化运行树呈现；主时间线默认保持折叠。
       return items;
     case "state":
+      finishStreamingAgents(items);
       return items; // state 事件由订阅方触发 refresh + 历史重建
   }
 }
