@@ -53,7 +53,7 @@ flowchart LR
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
 4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库。
-5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 18。
+5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 20。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
 7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
 8. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
@@ -111,6 +111,7 @@ flowchart TD
 - `AgentBridge`，维护任务到 runtime session、活动分支和存储 ID 的映射；
 - 外部 Agent、Codex MCP 连接和启动恢复状态；
 - 共享 `McpManager`，负责原生联网、MCP 配置、Registry、凭据引用、状态和有界关闭；
+- `PlanStore`，负责 Plan/HITL 聚合、稳定 AppData Markdown 投影和 continuation；
 - 向 WebView 发送 `agent-event` 的回调。
 
 初始化时注册的工作区模型工具包括 `read_file`、`list_files`、`search`、`glob`、`git_status`、`load_skill`、`edit`、`apply_patch`、`create_file`、`delete_file` 和 `bash`。无工作区会话仍拥有固定的 `web_search`、`web_fetch`、`mcp_discover`、`mcp_call` 与 `suggest_mcp`；安装 MCP 不会动态增加模型工具 schema。所有实际调用都必须走权限与审计边界；直接在 Agent loop 中访问文件系统或外部服务会绕过不变量。
@@ -326,7 +327,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，以及 schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes` 和 `memory_injections`。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试。
 
 新增 migration 时必须：
 
@@ -346,6 +347,14 @@ flowchart TD
 
 临时轮次、正文、候选与注入引用都只进入 AppData SQLite，不写项目目录。详细触发条件、清理策略、表结构和安全边界见 [演进记忆](./memory.md)。
 
+### 9.3 Plan、HITL 与稳定投影
+
+Plan 是 SQLite 权威聚合：`plans` 保存稳定身份和乐观修订，`plan_items`/依赖表保存功能待办，问题集与回答表保存 all-or-nothing 的结构化 human-in-the-loop 状态。模型给出的功能、问题和选项 ID 只在自己的 Plan/问题集作用域内唯一，不能成为跨任务的全局业务主键。
+
+Plan 模式仅由原生 R-Code runtime 执行。运行时只开放只读工作区工具和宿主 Plan 工具，禁止写入、Shell、变更型 MCP 与委派。`request_user_input` 先持久化问题集，再通过 Gateway 的 typed `SuspendForUser` metadata 结束当前 Run；suspension gate 会拒绝同一 Run 后续工具调用，并跳过子代理收集、质量复核和 `ReviewReady`。用户回答使用幂等键原子保存，Host 再 claim continuation；失败可重试，不把模型等待放进数据库事务。批准后由 durable implementation dispatch 把任务模式、确定性队列消息和 Plan 派发状态一起提交；启动恢复会把中断状态转成可见失败并恢复仍在队列中的任务，避免只有 Plan 已批准却没有实施入口。
+
+每个 Plan 的人类可读投影位于 `<AppData>/r-code/plans/<plan-id>/plan.md`。投影路径由 Host 生成，后续修订只原子覆盖自己的稳定文件；SQLite 提交不等待文件 I/O，投影失败会记录错误并可显式修复。项目目录和 Git 中不创建 Plan 私有元数据。完整交互和安全语义见 [Plan 模式与增强审核](./plan-mode.md)。
+
 ## 10. 文件变更、审核与验证
 
 写工具执行前由 `ChangeService` 捕获基线并放入 Blob；成功后记录新 hash、工具调用和关联 Run。审核服务据此计算 change set、diff、接受条件和回滚目标。
@@ -364,6 +373,10 @@ flowchart LR
 `VerificationService` 根据项目特征选择验证配置，记录命令、状态和输出。验证记录服务于审核，不等价于发布 CI；发布前仍必须执行仓库级完整验证。
 
 文件编辑 IPC 使用 revision hash 做乐观并发控制，避免 UI 用过期内容覆盖磁盘新版本。大文件和图片预览还有独立大小限制，外部图片只允许来自工作区或 Codex 生成目录。
+
+普通审核以 Git 工作区和 `.gitignore` 为边界，按行/文件记账；接受不等于 stage。增强审核只查询当前已批准 Plan 的 `plan_change_events`，按功能事项分组，不把无关 Git 变更混入。可信写工具记录 before/after Blob 和宿主当前 feature；`in_progress` 与可恢复的 `blocked` 功能只提供实时视图，进入不可继续写入的 `completed`/`failed`/`cancelled` 后才允许最终决策。执行中 Plan 没有 `in_progress` 项时 context 进入 `paused`，写工具会 fail-closed，直到模型显式把合法的 blocked 项恢复为 `in_progress`。无法可靠归属的 Shell、MCP 或外部代理写入保持 unassigned，只进入普通审核。
+
+拒绝功能变更使用逆向三方合并：以该功能事件的 after 为 base、当前文件为 ours、before 为 theirs，从当前内容中移除该功能能证明拥有的改动，同时保留其他功能的后来写入。路径级协调器使写入捕获与拒绝使用同一把规范化路径锁；多文件操作按路径排序取锁，并先计算全部结果。冲突时 fail-closed。正式写盘前先保存 durable journal、desired/rollback Blob，原子替换失败时回滚，启动时恢复非终态 journal。
 
 ## 11. 终端子系统
 
