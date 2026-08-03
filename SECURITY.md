@@ -30,6 +30,7 @@ We will acknowledge receipt, establish a private coordination channel, assess se
 - executing an R4 action, or bypassing the selected approval mode;
 - a read-only subagent modifying files or running commands;
 - leaking Provider credentials through config, logs, support bundles or UI;
+- leaking MCP environment/header credentials, forwarding them across origins, or changing a reviewed launch plan without renewed confirmation;
 - installing an updater artifact whose signature does not match the embedded public key;
 - cross-task/session data disclosure or unauthorised Codex/MCP control;
 - unsafe parsing of attachments, terminal output, JSONL sessions or IPC payloads.
@@ -38,6 +39,6 @@ Model mistakes or a command that the user knowingly approved are not automatical
 
 ## Handling sensitive data
 
-Provider secrets are intended to live in the operating-system credential store. Tool access remains constrained to an attached workspace, R4 actions are denied, and delegated subagents default to read-only. These controls reduce risk but do not make `full_access` equivalent to a sandbox: review workspace access and tool approvals as carefully as local shell access.
+Provider and MCP secrets are intended to live in the operating-system credential store. MCP Registry entries are unreviewed third-party metadata: adding one does not start it, and first enable requires a second exact launch-plan confirmation. Windows script and shell launchers are rejected for MCP stdio; remote MCP endpoints require HTTPS. Tool access remains constrained to an attached workspace where applicable, R4 actions are denied, and delegated subagents default to read-only. These controls reduce risk but do not make `full_access` or an enabled local MCP equivalent to a sandbox: review workspace access, MCP publishers and tool approvals as carefully as local shell access.
 
 Never attach raw application data directories, credentials or proprietary repositories to a public issue. Generate a support-bundle preview first and inspect every file before sharing it privately.
