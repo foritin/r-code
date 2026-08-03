@@ -96,6 +96,11 @@ test("release workflow refuses unsigned releases and verifies platform signature
     2,
     "both release jobs that clone agent-core must use the private-submodule token",
   );
+  assert.equal(
+    (workflow.match(/submodules: recursive/g) ?? []).length,
+    2,
+    "authenticated checkout must own release submodule initialization",
+  );
   assert.doesNotMatch(workflow, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
 });
 
@@ -105,7 +110,7 @@ test("CI authenticates every private agent-core checkout", () => {
     "utf8",
   );
 
-  const submoduleInitializers = workflow.match(/git submodule update --init --recursive --depth 1 -- vendor\/agent-core/g) ?? [];
+  const submoduleInitializers = workflow.match(/submodules: recursive/g) ?? [];
   const privateTokens = workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? [];
   assert.equal(submoduleInitializers.length, 6);
   assert.equal(privateTokens.length, submoduleInitializers.length);
