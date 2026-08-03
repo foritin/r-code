@@ -164,7 +164,7 @@ impl<'a> ReviewService<'a> {
     ///
     /// - **Auto 模式**：最新验证 `Passed` -> 可自动接受；否则不可接受
     /// - **Edit 模式**：验证 `Passed` -> 可接受；否则需用户确认
-    /// - **Ask 模式**：无文件变更，可直接接受
+    /// - **Ask / Plan 模式**：无文件变更，可直接接受
     pub async fn check_accept_readiness(
         &self,
         task_id: &str,
@@ -201,10 +201,10 @@ impl<'a> ReviewService<'a> {
                     reason: "user confirmation required (not verified)".to_string(),
                 }),
             },
-            TaskMode::Ask => Ok(AcceptReadiness {
+            TaskMode::Ask | TaskMode::Plan => Ok(AcceptReadiness {
                 can_accept: true,
                 needs_user_confirm: false,
-                reason: "ask mode; no changes to verify".to_string(),
+                reason: format!("{mode} mode; no changes to verify"),
             }),
         }
     }

@@ -22,6 +22,8 @@ pub mod mcp_settings;
 pub mod memory_runtime;
 pub mod migration;
 pub mod packaging;
+pub mod plan_review_tools;
+pub mod plan_tools;
 pub mod provider_catalog;
 pub mod provider_models;
 pub mod recovery;

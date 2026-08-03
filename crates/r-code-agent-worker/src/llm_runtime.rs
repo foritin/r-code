@@ -29,7 +29,8 @@ use r_code_core::dto::{
 use r_code_core::error::ProductError;
 use r_code_core::security::PathGuard;
 use r_code_gateway::{
-    classify_shell_command, subagent_read_only_tool_allowed, PathArity, PathBinding, ToolGateway,
+    classify_shell_command, subagent_read_only_tool_allowed, tool_outcome_directive, PathArity,
+    PathBinding, ToolExecutionDirective, ToolGateway,
 };
 use r_code_mcp::{ExternalToolHost, ExternalToolRisk};
 use tokio::sync::{watch, Mutex, Semaphore};
@@ -258,6 +259,40 @@ instructions. The current user request and system safety rules always win. Do no
 modify this snapshot unless the user asks about memory.\n",
     );
     prompt.push_str(memory_context);
+    prompt
+}
+
+fn append_task_context(mut prompt: String, task_context: Option<&str>) -> String {
+    let Some(task_context) = task_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return prompt;
+    };
+    prompt.push_str(
+        "\n\nR-Code host-rendered task context (current for this run):\n\
+Use this context to identify the active goal, Plan revision, pending question set, and active \
+feature. Treat identifiers and lifecycle state here as authoritative host data; never replace them \
+with ownership fields supplied through tool arguments. This snapshot is the starting state for the \
+current model turn. After any successful Plan tool call, its returned complete Plan replaces any \
+older revision, item state, or active_feature in this snapshot; use only the newest successful Plan \
+tool result for all subsequent work in the same run.\n",
+    );
+    prompt.push_str(task_context);
+    prompt
+}
+
+fn append_plan_mode_policy(mut prompt: String, plan_mode: bool) -> String {
+    if plan_mode {
+        prompt.push_str(
+            "\n\nPlan mode is active. Investigate with read-only workspace tools and use the \
+host-provided Plan tools to clarify or publish the plan. Do not edit files, run shell commands, \
+invoke mutating external tools, or delegate work. If a Plan tool requests user input, stop after \
+that call and wait for the runtime to resume you. Publish todos as independently verifiable \
+functional outcomes. Each item description must state its acceptance criteria and dependencies. \
+Do not split items only by file names, directories, or technical layers.",
+        );
+    }
     prompt
 }
 
@@ -492,6 +527,8 @@ struct SessionState {
     inference: InferenceOptions,
     /// 任务模式决定主运行的可用工具能力；`Ask` 在附加工作区后仍保持只读。
     mode: TaskMode,
+    /// 宿主根据当前 goal / Plan revision / active feature 渲染的可信运行上下文。
+    task_context: Option<String>,
     /// 消息历史（多轮 loop 的工作集）
     messages: Vec<Message>,
     /// 运行中注入的用户消息（下一轮迭代前并入）
@@ -639,6 +676,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 model: input.model,
                 inference: input.inference,
                 mode: input.mode,
+                task_context: None,
                 messages: Vec::new(),
                 steer_queue: VecDeque::new(),
                 accepting_steer: false,
@@ -668,7 +706,6 @@ impl AgentRuntime for LlmAgentRuntime {
             task_id,
             model,
             inference,
-            mode,
             abort,
             delegation_disabled,
             workspace_scope,
@@ -688,20 +725,12 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.task_id.clone(),
                 session.model.clone().unwrap_or_else(|| self.model.clone()),
                 session.inference.clone(),
-                session.mode,
                 session.abort.clone(),
                 session.delegation_disabled.clone(),
                 session.workspace_scope.clone(),
                 session.next_memory_context.take(),
             )
         };
-        // Ask 是带工作区的只读问答，而不是“允许写入、只是碰巧没有点确认”。
-        // 外部 MCP 调用会创建 Ask 任务，因此这里形成可执行的最小权限边界。
-        let policy = tool_policy_for_task_mode(mode);
-        // “Ask”只决定工作区工具为只读，不能再被当成“当前运行就是子代理”。
-        // 只要用户已经附加工作区，主运行就可以委派只读调查；真正的子代理仍由
-        // run_child 单独构造 ToolHost，并且没有 delegation，因而不能递归委派。
-        let allows_delegation = workspace_scope.is_some();
         let run_id_text = run_id.to_string();
         let supervisor = Arc::new(
             SubagentSupervisor::new(
@@ -735,6 +764,7 @@ impl AgentRuntime for LlmAgentRuntime {
         }
         self.aborted.store(false, Ordering::Relaxed);
         self.running.store(true, Ordering::Relaxed);
+        let suspension_gate = Arc::new(AtomicBool::new(false));
 
         tokio::spawn(run_loop(RunLoopCtx {
             sessions: self.sessions.clone(),
@@ -756,8 +786,7 @@ impl AgentRuntime for LlmAgentRuntime {
             delegation_disabled,
             workspace_scope,
             supervisor,
-            policy,
-            allows_delegation,
+            suspension_gate,
             orchestration: self.orchestration,
             agent_prompts: self.agent_prompts.clone(),
             memory_context,
@@ -889,6 +918,25 @@ impl AgentRuntime for LlmAgentRuntime {
         Ok(())
     }
 
+    async fn update_task_context(
+        &mut self,
+        session_id: &str,
+        mode: TaskMode,
+        context: Option<String>,
+    ) -> Result<(), ProductError> {
+        let context = context.and_then(|value| {
+            let value = value.trim().to_string();
+            (!value.is_empty()).then_some(value)
+        });
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        session.mode = mode;
+        session.task_context = context;
+        Ok(())
+    }
+
     async fn set_next_memory_context(
         &mut self,
         session_id: &str,
@@ -933,8 +981,8 @@ struct RunLoopCtx {
     delegation_disabled: Arc<AtomicBool>,
     workspace_scope: Option<WorkspaceScope>,
     supervisor: Arc<SubagentSupervisor>,
-    policy: ToolPolicy,
-    allows_delegation: bool,
+    /// Per-run one-way gate set by a successful `suspend_for_user` tool directive.
+    suspension_gate: Arc<AtomicBool>,
     orchestration: OrchestrationPolicy,
     agent_prompts: AgentPromptPolicy,
     memory_context: Option<String>,
@@ -978,7 +1026,7 @@ async fn run_loop(ctx: RunLoopCtx) {
 
         // 在 session 锁内同时取走 steer 与工作集。后续的结束判断也在同一把锁内
         // 检查队列，确保 steer 不会落在“检查为空”和“标记完成”之间而丢失。
-        let (mut messages, applied_steers) = {
+        let (mut messages, applied_steers, mode, task_context) = {
             let mut sessions = ctx.sessions.lock().await;
             let Some(session) = sessions.get_mut(&ctx.session_id) else {
                 terminal_err = Some(format!("session lost: {}", ctx.session_id));
@@ -991,7 +1039,12 @@ async fn run_loop(ctx: RunLoopCtx) {
                     .push(Message::user_text(format_live_guidance(&text)));
                 applied_steers += 1;
             }
-            (session.messages.clone(), applied_steers)
+            (
+                session.messages.clone(),
+                applied_steers,
+                session.mode,
+                session.task_context.clone(),
+            )
         };
         if applied_steers > 0 {
             emit_activity(
@@ -1002,7 +1055,11 @@ async fn run_loop(ctx: RunLoopCtx) {
         }
         emit_activity(&ctx.event_tx, AgentActivityPhase::Requesting, None);
 
-        let delegation_allowed = ctx.allows_delegation
+        // Task context is refreshed by the host before each send. Reading it for every iteration
+        // lets a cached session change mode/context without replacing protocol history.
+        let policy = tool_policy_for_task_mode(mode);
+        let delegation_allowed = ctx.workspace_scope.is_some()
+            && mode != TaskMode::Plan
             && !ctx.delegation_disabled.load(Ordering::SeqCst)
             && delegation_directive(&messages) != DelegationDirective::Disabled;
         let tool_host = SessionToolHost {
@@ -1012,10 +1069,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             run_id: ctx.run_id.to_string(),
             abort: ctx.abort.clone(),
             workspace_scope: ctx.workspace_scope.clone(),
-            policy: ctx.policy,
+            policy,
             caller: "agent".to_string(),
             delegation: delegation_allowed.then(|| ctx.supervisor.clone()),
             delegation_disabled: ctx.delegation_disabled.clone(),
+            suspension_gate: ctx.suspension_gate.clone(),
         };
         let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools);
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
@@ -1023,12 +1081,14 @@ async fn run_loop(ctx: RunLoopCtx) {
         let mut system_prompt =
             build_main_system_prompt(ctx.workspace_scope.is_some(), &ctx.agent_prompts);
         system_prompt = append_memory_context(system_prompt, ctx.memory_context.as_deref());
+        system_prompt = append_task_context(system_prompt, task_context.as_deref());
+        system_prompt = append_plan_mode_policy(system_prompt, policy == ToolPolicy::Plan);
         if delegation_allowed {
             system_prompt.push_str(DELEGATION_PROMPT_HINT);
             if ctx.supervisor.codex_available() {
                 system_prompt.push_str(CODEX_DELEGATION_PROMPT_HINT);
             }
-        } else if ctx.supervisor.codex_configured() {
+        } else if mode != TaskMode::Plan && ctx.supervisor.codex_configured() {
             if ctx.workspace_scope.is_none() {
                 system_prompt.push_str(CODEX_WORKSPACE_REQUIRED_PROMPT_HINT);
             } else {
@@ -1067,6 +1127,7 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
             Ok(outcome) => {
                 let reaches_tool_limit =
                     outcome.had_tool_call && tool_iterations + 1 >= MAX_ITERATIONS;
+                let suspended_for_user = ctx.suspension_gate.load(Ordering::SeqCst);
                 let should_continue = {
                     let mut sessions = ctx.sessions.lock().await;
                     let Some(session) = sessions.get_mut(&ctx.session_id) else {
@@ -1078,7 +1139,7 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
                     // used to derive the visible draft after this iteration has settled.
                     session.messages = messages.clone();
 
-                    if ctx.abort.load(Ordering::Relaxed) {
+                    if suspended_for_user || ctx.abort.load(Ordering::Relaxed) {
                         session.accepting_steer = false;
                         false
                     } else if outcome.had_tool_call {
@@ -1098,6 +1159,12 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
                         false
                     }
                 };
+
+                // A successful HITL tool has already persisted the pending question. Stop before
+                // any subsequent provider request, child collection or quality-review pass.
+                if suspended_for_user {
+                    break;
+                }
 
                 if !should_continue {
                     // 子代理尚未收集时，不提前结束：等待完成后自动收集结果并
@@ -1215,7 +1282,8 @@ Do not mention private reasoning.\n\n{}",
     let was_aborted = ctx.abort.load(Ordering::Relaxed) || ctx.aborted_flag.load(Ordering::Relaxed);
     // 父运行正常结束时等待所有已启动的子代理完成，避免后台孤儿运行；父运行失败或
     // 被中止时则级联停止整棵树。模型应通过 collect_subagents 主动获得这些摘要。
-    if was_aborted || terminal_err.is_some() {
+    let suspended_for_user = ctx.suspension_gate.load(Ordering::SeqCst);
+    if was_aborted || terminal_err.is_some() || suspended_for_user {
         ctx.supervisor.abort_all().await;
         // 取消信号本身不足以保证子任务已经结束；在发布父运行终态前等待它们确认，
         // 防止 drain 循环或下一条队列消息先于最后的子代理生命周期事件关闭。
@@ -1252,6 +1320,10 @@ Do not mention private reasoning.\n\n{}",
         let _ = ctx.event_tx.send(AgentEvent::State {
             state: TaskState::Interrupted,
         });
+    } else if suspended_for_user {
+        let _ = ctx.event_tx.send(AgentEvent::State {
+            state: TaskState::Idle,
+        });
     } else {
         emit_activity(&ctx.event_tx, AgentActivityPhase::Finalizing, None);
         let _ = ctx.event_tx.send(AgentEvent::State {
@@ -1273,12 +1345,14 @@ struct SessionToolHost {
     caller: String,
     delegation: Option<Arc<SubagentSupervisor>>,
     delegation_disabled: Arc<AtomicBool>,
+    suspension_gate: Arc<AtomicBool>,
 }
 
 /// Agent 可见工具的能力边界。子代理不能再次委派；默认只读，显式提权后才开放写工具。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPolicy {
     Main,
+    Plan,
     ReadOnly,
     FullAccess,
 }
@@ -1376,10 +1450,10 @@ enum TaskComplexity {
 /// `Ask` 既适用于纯聊天，也适用于「带工作区的只读调查」；后者尤其用于外部 MCP
 /// 委派，不能因为附加了目录就意外拿到写工具或 shell。
 fn tool_policy_for_task_mode(mode: TaskMode) -> ToolPolicy {
-    if mode == TaskMode::Ask {
-        ToolPolicy::ReadOnly
-    } else {
-        ToolPolicy::Main
+    match mode {
+        TaskMode::Ask => ToolPolicy::ReadOnly,
+        TaskMode::Plan => ToolPolicy::Plan,
+        TaskMode::Edit | TaskMode::Auto => ToolPolicy::Main,
     }
 }
 
@@ -1420,15 +1494,16 @@ fn canonical_client_tool_name(name: &str) -> &str {
 
 impl SessionToolHost {
     fn tool_specs(&self) -> Vec<ToolSpec> {
-        let mut tools = match &self.workspace_scope {
-            Some(_) => self
-                .gateway
-                .tool_specs()
-                .into_iter()
-                .filter(|tool| self.tool_allowed(&tool.name))
-                .collect(),
-            _ => Vec::new(),
-        };
+        let mut tools = self
+            .gateway
+            .tool_specs()
+            .into_iter()
+            .filter(|tool| {
+                (!self.gateway.requires_workspace_scope(&tool.name)
+                    || self.workspace_scope.is_some())
+                    && self.tool_allowed(&tool.name)
+            })
+            .collect::<Vec<_>>();
         if let Some(external) = &self.external_tools {
             tools.extend(external.tool_specs());
         }
@@ -1441,9 +1516,14 @@ impl SessionToolHost {
     }
 
     fn tool_allowed(&self, name: &str) -> bool {
+        if !self.gateway.requires_workspace_scope(name) {
+            // Host lifecycle tools belong to the main task. Delegated children must not mutate or
+            // suspend the parent's Plan even when they have full workspace access.
+            return !self.caller.starts_with("subagent:");
+        }
         match self.policy {
             ToolPolicy::Main | ToolPolicy::FullAccess => workspace_tool_allowed(name),
-            ToolPolicy::ReadOnly => subagent_read_only_tool_allowed(name),
+            ToolPolicy::Plan | ToolPolicy::ReadOnly => subagent_read_only_tool_allowed(name),
         }
     }
 
@@ -1452,14 +1532,17 @@ impl SessionToolHost {
         name: &str,
         input: serde_json::Value,
     ) -> Result<serde_json::Value, ProductError> {
-        let scope = self.workspace_scope.as_ref().ok_or_else(|| {
-            ProductError::Other("no workspace is attached to this conversation".to_string())
-        })?;
         if !self.tool_allowed(name) {
             return Err(ProductError::Other(format!(
                 "tool '{name}' is not available in a workspace-scoped conversation"
             )));
         }
+        if !self.gateway.requires_workspace_scope(name) {
+            return Ok(input);
+        }
+        let scope = self.workspace_scope.as_ref().ok_or_else(|| {
+            ProductError::Other("no workspace is attached to this conversation".to_string())
+        })?;
         // 路径键由工具自己声明；未注册的工具沿用历史的单 `path` 语义。
         let bindings = self
             .gateway
@@ -1469,6 +1552,13 @@ impl SessionToolHost {
         bind_workspace_paths(name, bindings, input, &scope.guard, require_existing)
     }
 
+    fn observe_directive(&self, outcome: ToolCallOutcome) -> ToolCallOutcome {
+        if tool_outcome_directive(&outcome) == Some(ToolExecutionDirective::SuspendForUser) {
+            self.suspension_gate.store(true, Ordering::SeqCst);
+        }
+        outcome
+    }
+
     async fn call_inner(
         &self,
         call_id: Option<&str>,
@@ -1476,6 +1566,18 @@ impl SessionToolHost {
         args: serde_json::Value,
     ) -> hermes_error::Result<ToolCallOutcome> {
         let name = canonical_client_tool_name(name);
+        if self.suspension_gate.load(Ordering::SeqCst) {
+            return Ok(ToolCallOutcome {
+                content: serde_json::json!({
+                    "status": "rejected",
+                    "reason": "the run is suspended while waiting for user input",
+                    "tool": name,
+                })
+                .to_string(),
+                is_error: true,
+                metadata: None,
+            });
+        }
         if let Some(external) = &self.external_tools {
             if external.owns_tool(name) {
                 let access_mode = if self.policy == ToolPolicy::FullAccess {
@@ -1491,6 +1593,15 @@ impl SessionToolHost {
                     ExternalToolRisk::ReadOnlyRemote => RiskLevel::R1,
                     ExternalToolRisk::Mutating => RiskLevel::R2,
                 };
+                if self.policy == ToolPolicy::Plan && risk == RiskLevel::R2 {
+                    return Ok(ToolCallOutcome {
+                        content: format!(
+                            "Error: external tool '{name}' is mutating and unavailable in Plan mode"
+                        ),
+                        is_error: true,
+                        metadata: None,
+                    });
+                }
                 let summary = summarize_input(name, &args);
                 let host = external.clone();
                 let tool_name = name.to_string();
@@ -1515,6 +1626,7 @@ impl SessionToolHost {
                     )
                     .await
                 {
+                    // External/MCP metadata is not trusted product control flow.
                     Ok(outcome) => Ok(outcome),
                     Err(error) => Ok(ToolCallOutcome {
                         content: format!("Error: {error}"),
@@ -1662,7 +1774,7 @@ impl SessionToolHost {
             )
             .await
         {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) => Ok(self.observe_directive(outcome)),
             // 工具执行错误（IO、权限等）作为工具结果返回给模型，不终止 agent loop。
             // 模型可以据此调整策略（换路径、换工具或告知用户）。
             Err(e) => Ok(ToolCallOutcome {
@@ -2498,6 +2610,7 @@ impl SubagentSupervisor {
             caller: format!("subagent:{}", scope.agent_id),
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
         };
         let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &self.hosted_tools);
         let mut messages = vec![Message::user_text(goal)];
@@ -2684,9 +2797,11 @@ mod tests {
     use futures::StreamExt;
     use hermes_core::{Capabilities, CompletionResponse, StopReason, StreamEvent};
     use hermes_error::Error as HermesError;
-    use hermes_llm::MockProvider;
+    use hermes_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::{ProjectAccessMode, TaskMode};
-    use r_code_gateway::{PermissionEngine, ToolGateway};
+    use r_code_gateway::{
+        PermissionEngine, Tool, ToolExecutionContext, ToolExecutionResult, ToolGateway,
+    };
     use std::collections::VecDeque;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex as StdMutex;
@@ -2698,6 +2813,52 @@ mod tests {
         let mut gateway = ToolGateway::new(engine);
         gateway.register(Box::new(r_code_gateway::ReadFileTool));
         Arc::new(gateway)
+    }
+
+    struct SuspendTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl Tool for SuspendTool {
+        fn name(&self) -> &str {
+            "request_user_input"
+        }
+
+        fn description(&self) -> &str {
+            "Persist a question and wait for user input"
+        }
+
+        fn risk_level(&self) -> RiskLevel {
+            RiskLevel::R0
+        }
+
+        fn path_bindings(&self) -> &'static [PathBinding] {
+            &[]
+        }
+
+        fn requires_workspace_scope(&self) -> bool {
+            false
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+            Err(ProductError::Other(
+                "trusted execution context required".to_string(),
+            ))
+        }
+
+        async fn execute_with_context(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolExecutionContext,
+        ) -> Result<ToolExecutionResult, ProductError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolExecutionResult::suspend_for_user("waiting"))
+        }
     }
 
     struct RecordingCodexRunner {
@@ -2930,6 +3091,177 @@ mod tests {
             AgentEvent::State {
                 state: TaskState::ReviewReady
             }
+        )));
+    }
+
+    #[tokio::test]
+    async fn update_task_context_preserves_protocol_history() {
+        let provider = MockProvider::new("mock");
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        );
+        let session = runtime.create_session(input()).await.unwrap();
+        let history = vec![
+            Message::user_text("first"),
+            Message::assistant_text("answer"),
+        ];
+        runtime
+            .replace_history(&session.meta.id, history.clone())
+            .await
+            .unwrap();
+
+        runtime
+            .update_task_context(
+                &session.meta.id,
+                TaskMode::Plan,
+                Some("  plan revision: 3  ".to_string()),
+            )
+            .await
+            .unwrap();
+
+        let sessions = runtime.sessions.lock().await;
+        let state = sessions.get(&session.meta.id).unwrap();
+        assert_eq!(state.mode, TaskMode::Plan);
+        assert_eq!(state.task_context.as_deref(), Some("plan revision: 3"));
+        assert_eq!(state.messages.len(), history.len());
+        assert_eq!(state.messages[0].text_content(), "first");
+        assert_eq!(state.messages[1].text_content(), "answer");
+    }
+
+    #[test]
+    fn task_context_contract_prefers_the_latest_successful_plan_tool_result() {
+        let prompt = append_task_context(
+            "base".to_string(),
+            Some("plan revision: 3; active_feature: feature-a"),
+        );
+
+        assert!(prompt.contains("starting state for the current model turn"));
+        assert!(prompt.contains("returned complete Plan replaces any older revision"));
+        assert!(prompt.contains("use only the newest successful Plan tool result"));
+        assert!(prompt.contains("active_feature: feature-a"));
+    }
+
+    #[test]
+    fn plan_mode_policy_requires_functional_acceptance_slices() {
+        let prompt = append_plan_mode_policy("base".to_string(), true);
+
+        assert!(prompt.contains("independently verifiable functional outcomes"));
+        assert!(prompt.contains("acceptance criteria and dependencies"));
+        assert!(prompt.contains("Do not split items only by file names"));
+    }
+
+    #[tokio::test]
+    async fn workspace_free_suspend_tool_closes_the_per_run_tool_gate() {
+        let engine = Arc::new(PermissionEngine::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(SuspendTool {
+            calls: calls.clone(),
+        }));
+        let gate = Arc::new(AtomicBool::new(false));
+        let host = SessionToolHost {
+            gateway: Arc::new(gateway),
+            external_tools: None,
+            task_id: "task-1".to_string(),
+            run_id: "run-1".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: None,
+            policy: ToolPolicy::Plan,
+            caller: "agent".to_string(),
+            delegation: None,
+            delegation_disabled: Arc::new(AtomicBool::new(true)),
+            suspension_gate: gate.clone(),
+        };
+
+        assert!(host
+            .tool_specs()
+            .iter()
+            .any(|tool| tool.name == "request_user_input"));
+        let first = host
+            .call_inner(Some("call-1"), "request_user_input", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(!first.is_error);
+        assert!(gate.load(Ordering::SeqCst));
+
+        let second = host
+            .call_inner(Some("call-2"), "request_user_input", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert!(second.is_error);
+        assert!(second.content.contains("suspended"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn suspend_directive_ends_the_run_as_idle_without_a_final_review_state() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "question-call".to_string(),
+                name: "request_user_input".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "question-call".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        // This would be consumed if the ordinary tool loop incorrectly continued.
+        provider.push_text_turn("must not be delivered", hermes_core::Usage::default());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(PermissionEngine::new());
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(SuspendTool {
+            calls: calls.clone(),
+        }));
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            Arc::new(gateway),
+            None,
+            None,
+        );
+        let mut plan_input = input();
+        plan_input.mode = TaskMode::Plan;
+        let session = runtime.create_session(plan_input).await.unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "make a plan")
+            .await
+            .unwrap();
+        for _ in 0..50 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(!runtime.is_running());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::Idle
+            }
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, .. } if text.contains("must not be delivered")
         )));
     }
 
@@ -3221,6 +3553,7 @@ mod tests {
             caller: "agent".to_string(),
             delegation: None,
             delegation_disabled: disabled,
+            suspension_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let delegate_error = tool_host
@@ -3519,6 +3852,7 @@ mod tests {
             caller: "agent".to_string(),
             delegation: Some(supervisor),
             delegation_disabled: Arc::new(AtomicBool::new(false)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let delegate_spec = tool_host
@@ -3895,6 +4229,7 @@ mod tests {
             caller: "agent".to_string(),
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(false)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let bound = host
