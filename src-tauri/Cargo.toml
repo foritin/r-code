@@ -28,6 +28,7 @@ r-code-store = { workspace = true }
 r-code-gateway = { workspace = true }
 r-code-terminal = { workspace = true }
 r-code-agent-worker = { workspace = true }
+r-code-mcp = { workspace = true }
 
 # SQLite（启动期恢复 / 支持包直接访问，不走连接池）
 rusqlite = { workspace = true }

@@ -39,7 +39,7 @@ pub fn tail(limit: usize, level: Option<&str>) -> Vec<LogEntry> {
     let level = level.map(|l| l.to_ascii_uppercase());
     buf.iter()
         .rev()
-        .filter(|e| level.as_ref().map_or(true, |l| e.level == *l))
+        .filter(|e| level.as_ref().is_none_or(|l| e.level == *l))
         .take(limit)
         .cloned()
         .collect::<Vec<_>>()

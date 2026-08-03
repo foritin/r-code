@@ -18,6 +18,7 @@ pub mod change_service;
 pub mod database;
 pub mod document_store;
 pub mod git_service;
+pub mod memory_store;
 pub mod migrations;
 pub mod patch_engine;
 pub mod repositories;
@@ -36,6 +37,11 @@ pub use database::Database;
 pub use document_store::{BomKind, ConflictStatus, DocumentEntry, DocumentStore};
 pub use git_service::{
     GitDiffResult, GitFileStatus, GitService, GitStatusKind, GitTreeChange, GitTreeChangeKind,
+};
+pub use memory_store::{
+    render_snapshot, sanitize_review_text, CapturedMemoryTurn, LoadedMemorySnapshot,
+    MemoryCandidateView, MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryReviewClaim,
+    MemoryReviewJobView, MemoryStore,
 };
 pub use patch_engine::{apply_patch, hash_content, PatchError};
 pub use repositories::{

@@ -705,23 +705,9 @@ impl<'a> ReviewLedgerService<'a> {
         if let (Some(repo_root), Some(workspace_root)) =
             (context.repo_root.as_ref(), context.workspace_root.as_ref())
         {
-            let mut repo_paths = Vec::new();
-            let mut display_to_repo = HashMap::new();
-            for candidate in &candidates {
-                if let Ok(repo_path) =
-                    repo_relative_path(repo_root, workspace_root, &candidate.path)
-                {
-                    display_to_repo.insert(candidate.path.clone(), repo_path.clone());
-                    repo_paths.push(repo_path);
-                }
-            }
-            if let Ok(ignored) = GitService::new(repo_root.clone()).ignored_paths(&repo_paths) {
-                candidates.retain(|candidate| {
-                    display_to_repo
-                        .get(&candidate.path)
-                        .map_or(true, |repo_path| !ignored.contains(repo_path))
-                });
-            }
+            filter_git_ignored_candidates(&mut candidates, repo_root, workspace_root, |paths| {
+                GitService::new(repo_root.clone()).ignored_paths(paths)
+            })?;
         }
 
         let blobs = BlobStore::new(self.db, self.blobs_dir.clone());
@@ -1183,6 +1169,33 @@ fn is_generated_review_path(path: &str) -> bool {
             .any(|suffix| file_name.ends_with(suffix))
 }
 
+fn filter_git_ignored_candidates(
+    candidates: &mut Vec<CandidateChange>,
+    repo_root: &Path,
+    workspace_root: &Path,
+    ignored_paths: impl FnOnce(&[String]) -> Result<BTreeSet<String>, ProductError>,
+) -> Result<(), ProductError> {
+    let display_to_repo = candidates
+        .iter()
+        .map(|candidate| {
+            repo_relative_path(repo_root, workspace_root, &candidate.path)
+                .map(|repo_path| (candidate.path.clone(), repo_path))
+        })
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    let repo_paths = display_to_repo.values().cloned().collect::<Vec<_>>();
+    let ignored = ignored_paths(&repo_paths).map_err(|error| {
+        ProductError::GitError(format!(
+            "unable to evaluate Git ignore rules; review was not materialized: {error}"
+        ))
+    })?;
+    candidates.retain(|candidate| {
+        display_to_repo
+            .get(&candidate.path)
+            .is_some_and(|repo_path| !ignored.contains(repo_path))
+    });
+    Ok(())
+}
+
 fn repo_relative_path(
     repo_root: &Path,
     workspace_root: &Path,
@@ -1262,5 +1275,25 @@ mod tests {
         assert!(is_generated_review_path("pkg/__pycache__/module.pyc"));
         assert!(!is_generated_review_path("src/log.rs"));
         assert!(!is_generated_review_path("docs/changelog.md"));
+    }
+
+    #[test]
+    fn ignore_filter_fails_closed_when_git_cannot_evaluate_rules() {
+        let root = Path::new("repo");
+        let mut candidates = vec![CandidateChange {
+            path: "var/runtime.txt".into(),
+            before_hash: None,
+            after_hash: Some("after".into()),
+        }];
+        let error = filter_git_ignored_candidates(&mut candidates, root, root, |_| {
+            Err(ProductError::GitError("git check-ignore failed".into()))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("review was not materialized"));
+        assert_eq!(
+            candidates.len(),
+            1,
+            "failure must not partially materialize a review"
+        );
     }
 }

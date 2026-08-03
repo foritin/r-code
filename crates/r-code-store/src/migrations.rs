@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 17;
+pub const LATEST_SCHEMA_VERSION: u32 = 18;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -46,6 +46,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(15, MIGRATION_015, false),
     MigrationSpec::new(16, MIGRATION_016, false),
     MigrationSpec::new(17, MIGRATION_017, false),
+    MigrationSpec::new(18, MIGRATION_018, false),
 ];
 
 impl MigrationSpec {
@@ -737,6 +738,224 @@ CREATE INDEX IF NOT EXISTS idx_review_items_file_state
     ON review_items(review_file_id, state, ordinal);
 "#;
 
+/// Migration 018: local, evolving memory.
+///
+/// Memory content is deliberately stored only in the product-owned AppData database.  Project
+/// ownership uses the stable workspace id introduced in v14; no table stores a workspace path,
+/// provider credential, tool output, attachment body, or hidden model reasoning.
+const MIGRATION_018: &str = r#"
+CREATE TABLE memory_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+    review_provider_name TEXT,
+    review_model TEXT,
+    trigger_every_turns INTEGER NOT NULL DEFAULT 10 CHECK (trigger_every_turns BETWEEN 5 AND 50),
+    explicit_remember_immediate INTEGER NOT NULL DEFAULT 1
+        CHECK (explicit_remember_immediate IN (0, 1)),
+    project_notification_mode TEXT NOT NULL DEFAULT 'on'
+        CHECK (project_notification_mode IN ('off', 'on', 'verbose')),
+    version INTEGER NOT NULL DEFAULT 0 CHECK (version >= 0),
+    review_generation INTEGER NOT NULL DEFAULT 0 CHECK (review_generation >= 0),
+    retention_time_high_watermark TEXT NOT NULL,
+    physical_cleanup_pending INTEGER NOT NULL DEFAULT 0
+        CHECK (physical_cleanup_pending IN (0, 1)),
+    physical_cleanup_epoch INTEGER NOT NULL DEFAULT 0 CHECK (physical_cleanup_epoch >= 0),
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (enabled = 0)
+        OR (
+            review_provider_name IS NOT NULL AND length(trim(review_provider_name)) > 0
+            AND review_model IS NOT NULL AND length(trim(review_model)) > 0
+        )
+    )
+);
+
+INSERT INTO memory_settings (
+    id, retention_time_high_watermark, updated_at
+) VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+
+CREATE TABLE memory_entries (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('global', 'project')),
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('preference', 'constraint', 'convention', 'decision', 'pitfall')),
+    content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 1000),
+    normalized_hash TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    origin TEXT NOT NULL CHECK (origin IN ('manual', 'approved_candidate', 'automatic_review', 'undo')),
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    source_job_id TEXT,
+    source_candidate_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (scope = 'global' AND workspace_id IS NULL
+            AND origin IN ('manual', 'approved_candidate'))
+        OR
+        (scope = 'project' AND workspace_id IS NOT NULL
+            AND origin IN ('manual', 'automatic_review', 'undo'))
+    ),
+    UNIQUE (scope, workspace_id, normalized_hash)
+);
+CREATE UNIQUE INDEX idx_memory_entries_global_hash
+    ON memory_entries(normalized_hash) WHERE scope = 'global';
+CREATE INDEX idx_memory_entries_owner
+    ON memory_entries(scope, workspace_id, pinned DESC, updated_at DESC, id);
+
+CREATE TABLE memory_entry_revisions (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    entry_id TEXT NOT NULL REFERENCES memory_entries(id) ON DELETE CASCADE,
+    prior_kind TEXT NOT NULL CHECK (prior_kind IN ('preference', 'constraint', 'convention', 'decision', 'pitfall')),
+    prior_content TEXT NOT NULL CHECK (length(prior_content) BETWEEN 1 AND 1000),
+    prior_normalized_hash TEXT NOT NULL,
+    prior_version INTEGER NOT NULL CHECK (prior_version >= 1),
+    prior_pinned INTEGER NOT NULL CHECK (prior_pinned IN (0, 1)),
+    action TEXT NOT NULL CHECK (action IN ('edit', 'automatic_replace', 'undo')),
+    source_job_id TEXT,
+    source_candidate_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_memory_revisions_entry
+    ON memory_entry_revisions(entry_id, sequence DESC);
+
+CREATE TABLE memory_review_turns (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    branch_id TEXT NOT NULL,
+    source_workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_memory_generation INTEGER,
+    global_generation INTEGER NOT NULL CHECK (global_generation >= 0),
+    user_text TEXT,
+    assistant_text TEXT,
+    captured_at TEXT NOT NULL,
+    scrubbed_at TEXT,
+    scrub_reason TEXT CHECK (scrub_reason IS NULL OR scrub_reason IN (
+        'review_succeeded', 'cancelled', 'invalidated', 'retention_expired', 'capacity_evicted'
+    )),
+    CHECK (
+        (source_workspace_id IS NULL AND workspace_memory_generation IS NULL)
+        OR (source_workspace_id IS NOT NULL AND workspace_memory_generation IS NOT NULL)
+    ),
+    CHECK (
+        (user_text IS NOT NULL AND assistant_text IS NOT NULL
+            AND scrubbed_at IS NULL AND scrub_reason IS NULL)
+        OR (user_text IS NULL AND assistant_text IS NULL
+            AND scrubbed_at IS NOT NULL AND scrub_reason IS NOT NULL)
+    )
+);
+CREATE INDEX idx_memory_turns_branch
+    ON memory_review_turns(task_id, branch_id, sequence);
+
+CREATE TABLE memory_review_jobs (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    branch_id TEXT NOT NULL,
+    source_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    source_workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    workspace_memory_generation INTEGER,
+    review_generation INTEGER NOT NULL CHECK (review_generation >= 0),
+    provider_name TEXT NOT NULL,
+    model TEXT NOT NULL,
+    inclusive_boundary INTEGER NOT NULL REFERENCES memory_review_turns(sequence),
+    trigger TEXT NOT NULL CHECK (trigger IN ('cadence', 'manual', 'explicit_remember')),
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'interrupted', 'cancelled')),
+    attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+    recovery_count INTEGER NOT NULL DEFAULT 0 CHECK (recovery_count >= 0),
+    suppressed_turn_count INTEGER NOT NULL DEFAULT 0 CHECK (suppressed_turn_count >= 0),
+    input_hash TEXT,
+    turn_count INTEGER,
+    proposal_count INTEGER,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (source_workspace_id IS NULL AND workspace_memory_generation IS NULL)
+        OR (source_workspace_id IS NOT NULL AND workspace_memory_generation IS NOT NULL)
+    )
+);
+CREATE UNIQUE INDEX idx_memory_job_active_branch
+    ON memory_review_jobs(task_id, branch_id)
+    WHERE status IN ('queued', 'running', 'failed', 'interrupted');
+CREATE INDEX idx_memory_job_queue
+    ON memory_review_jobs(status, sequence);
+
+CREATE TABLE memory_candidates (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('preference', 'constraint', 'convention', 'decision', 'pitfall')),
+    operation TEXT NOT NULL CHECK (operation IN ('add', 'replace')),
+    target_entry_id TEXT REFERENCES memory_entries(id) ON DELETE SET NULL,
+    target_version INTEGER,
+    source_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    source_workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    source_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    captured_at TEXT NOT NULL,
+    source_job_id TEXT REFERENCES memory_review_jobs(id) ON DELETE SET NULL,
+    proposal_index INTEGER NOT NULL CHECK (proposal_index BETWEEN 0 AND 7),
+    proposal_content TEXT,
+    reason TEXT,
+    proposal_hash TEXT NOT NULL,
+    reason_hash TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'approved', 'rejected', 'expired', 'superseded')),
+    resolved_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (operation = 'add' AND target_entry_id IS NULL AND target_version IS NULL)
+        OR (operation = 'replace' AND target_entry_id IS NOT NULL AND target_version IS NOT NULL)
+    ),
+    CHECK (
+        (status = 'pending' AND proposal_content IS NOT NULL AND reason IS NOT NULL
+            AND resolved_at IS NULL)
+        OR (status != 'pending' AND proposal_content IS NULL AND reason IS NULL
+            AND resolved_at IS NOT NULL)
+    ),
+    UNIQUE (source_job_id, proposal_index)
+);
+CREATE INDEX idx_memory_candidates_pending
+    ON memory_candidates(status, sequence DESC);
+
+CREATE TABLE memory_review_outcomes (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL REFERENCES memory_review_jobs(id) ON DELETE CASCADE,
+    proposal_index INTEGER NOT NULL CHECK (proposal_index BETWEEN 0 AND 7),
+    route TEXT NOT NULL CHECK (route IN ('global_candidate', 'project_entry', 'skipped')),
+    result TEXT NOT NULL,
+    entry_id TEXT REFERENCES memory_entries(id) ON DELETE SET NULL,
+    candidate_id TEXT REFERENCES memory_candidates(id) ON DELETE SET NULL,
+    error_code TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (job_id, proposal_index)
+);
+
+CREATE TABLE memory_injections (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL UNIQUE REFERENCES agent_runs(id) ON DELETE CASCADE,
+    engine TEXT NOT NULL CHECK (engine IN ('native', 'codex')),
+    status TEXT NOT NULL CHECK (status IN ('recorded', 'aborted_before_publish')),
+    snapshot_hash TEXT NOT NULL,
+    global_refs_json TEXT NOT NULL,
+    project_refs_json TEXT NOT NULL,
+    global_chars INTEGER NOT NULL CHECK (global_chars >= 0 AND global_chars <= 4000),
+    project_chars INTEGER NOT NULL CHECK (project_chars >= 0 AND project_chars <= 8000),
+    created_at TEXT NOT NULL
+);
+
+ALTER TABLE notifications ADD COLUMN target_kind TEXT
+    CHECK (target_kind IS NULL OR target_kind IN ('candidate', 'entry', 'job'));
+ALTER TABLE notifications ADD COLUMN target_id TEXT;
+ALTER TABLE notifications ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
+CREATE INDEX idx_notifications_memory_target
+    ON notifications(target_kind, target_id);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,7 +1112,10 @@ mod tests {
         type WorkspaceRow = (String, String, String, String, String, String, i64);
         let conn = schema_13_database_with_workspaces();
 
-        run_migrations(&conn).unwrap();
+        // This test owns the v13 -> v14 contract.  Keep it pinned to that boundary so
+        // later feature migrations (for example v18 evolving memory) do not weaken or
+        // accidentally redefine what v14 itself is required to do.
+        run_migrations_with_specs(&conn, &MIGRATIONS[..14], None).unwrap();
         let rows: Vec<WorkspaceRow> = conn
             .prepare(
                 "SELECT id, canonical_path, display_name, access_mode, last_opened_at, \
@@ -1160,6 +1382,14 @@ mod tests {
             "review_sessions",
             "review_files",
             "review_items",
+            "memory_settings",
+            "memory_entries",
+            "memory_entry_revisions",
+            "memory_review_turns",
+            "memory_review_jobs",
+            "memory_candidates",
+            "memory_review_outcomes",
+            "memory_injections",
             "schema_version",
         ] {
             assert!(
@@ -1172,15 +1402,14 @@ mod tests {
     #[test]
     fn migration_repairs_v14_database_missing_notifications() {
         let conn = Connection::open_in_memory().unwrap();
-        run_migrations(&conn).unwrap();
+        // Build an actual v14 database.  Rolling the version ledger backwards after
+        // applying newer migrations leaves future tables behind and does not represent
+        // any database an older R-Code release could have produced.
+        run_migrations_with_specs(&conn, &MIGRATIONS[..14], None).unwrap();
 
         // Reproduce a legacy installation whose version ledger says v14 while
         // the notification schema created by v10 is physically absent.
-        conn.execute_batch(
-            "DROP TABLE notifications;\
-             DELETE FROM schema_version WHERE version > 14;",
-        )
-        .unwrap();
+        conn.execute_batch("DROP TABLE notifications;").unwrap();
 
         run_migrations(&conn).unwrap();
 

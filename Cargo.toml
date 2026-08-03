@@ -15,6 +15,7 @@ members = [
     "crates/r-code-core",
     "crates/r-code-store",
     "crates/r-code-gateway",
+    "crates/r-code-mcp",
     "crates/r-code-terminal",
     "crates/r-code-agent-worker",
     "installer",
@@ -24,7 +25,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/foritin/r-code"
 authors = ["R-Code Team"]
@@ -41,6 +42,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 url = "2"
+http = "1"
+html2text = "=0.17.1"
 toml = "0.8"
 toml_edit = "0.22"
 
@@ -62,6 +65,7 @@ sha2 = "0.10"
 
 # HTTP
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+rmcp = { version = "=3.1.0", default-features = false, features = ["client", "server", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 
 # SQLite（产品私有存储层）
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -111,6 +115,7 @@ hermes-tauri = { path = "vendor/agent-core/crates/hermes-tauri" }
 r-code-core = { path = "crates/r-code-core" }
 r-code-store = { path = "crates/r-code-store" }
 r-code-gateway = { path = "crates/r-code-gateway" }
+r-code-mcp = { path = "crates/r-code-mcp" }
 r-code-terminal = { path = "crates/r-code-terminal" }
 r-code-agent-worker = { path = "crates/r-code-agent-worker" }
 r-code-host = { path = "src-tauri" }
