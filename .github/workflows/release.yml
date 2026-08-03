@@ -87,9 +87,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Initialize build submodule
-        run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
+          submodules: recursive
 
       - uses: actions/setup-node@v4
         with:
@@ -142,9 +140,7 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
-
-      - name: Initialize build submodule
-        run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
