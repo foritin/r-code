@@ -51,7 +51,7 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   sh: "text/x-shellscript",
   ps1: "text/x-powershell",
 };
-const PICKER_ACCEPT = [
+export const ATTACHMENT_PICKER_ACCEPT = [
   "image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/*",
   ...Array.from(TEXT_EXTENSIONS, (extension) => `.${extension}`),
 ].join(",");
@@ -270,7 +270,7 @@ export function AttachmentButton({
         ref={inputRef}
         className="sr-only composer-attachment-input"
         type="file"
-        accept={PICKER_ACCEPT}
+        accept={ATTACHMENT_PICKER_ACCEPT}
         multiple
         tabIndex={-1}
         aria-hidden="true"

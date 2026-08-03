@@ -45,13 +45,13 @@ import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
 import { CodexModelConfiguration } from "./CodexModelConfiguration";
 import { IconChevronDown, IconRefresh, IconSend, IconStop } from "../icons";
 import {
-  AttachmentButton,
   AttachmentTray,
   firstBlockedAttachmentReason,
   sendableAttachmentInputs,
   useAttachments,
   type DraftAttachment,
 } from "../Attachments";
+import { TaskAddMenu } from "../TaskAddMenu";
 import {
   attachmentCapabilityFor,
   codexImageCapability,
@@ -953,7 +953,15 @@ export function Composer({
         {/* 输入区脚下的控件：与新对话页同构的「模型」「权限」入口 */}
         <div className="comp-meta">
           <div className="comp-meta-context">
-            <AttachmentButton onFiles={attachments.addFiles} disabled={sending || commandBusy} />
+            <TaskAddMenu
+              onFiles={attachments.addFiles}
+              disabled={sending || commandBusy}
+              running={running}
+              task={task}
+              agentEngine={agentEngine}
+              onTaskChanged={() => refreshDetail(taskId)}
+              onError={setError}
+            />
             <AgentEngineSwitcher
               taskId={taskId}
               value={agentEngine}
