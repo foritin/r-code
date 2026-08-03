@@ -166,6 +166,32 @@ test("Codex login watcher is bounded and never schedules beyond its deadline", a
   await page.close();
 });
 
+test("sidebar uses green for active main agents and orange for finished tasks", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const colors = await page.evaluate(() => {
+    const dotFor = (title) => {
+      const rows = [...document.querySelectorAll(".sidebar-task-row")];
+      const row = rows.find((candidate) => candidate.textContent?.includes(title));
+      const dot = row?.querySelector(".task-state-dot");
+      if (!(dot instanceof HTMLElement)) throw new Error(`missing sidebar state dot: ${title}`);
+      return getComputedStyle(dot).backgroundColor;
+    };
+    return {
+      running: dotFor("修复任务队列并发问题"),
+      waitingWhileRunning: dotFor("优化 Rust 编译性能"),
+      reviewReady: dotFor("统一错误处理规范"),
+      finished: dotFor("更新依赖并修复告警"),
+    };
+  });
+
+  assert.equal(colors.waitingWhileRunning, colors.running);
+  assert.equal(colors.finished, colors.reviewReady);
+  assert.notEqual(colors.running, colors.finished);
+  await page.close();
+});
+
 test("Codex one-click setup resumes automatically after browser login", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

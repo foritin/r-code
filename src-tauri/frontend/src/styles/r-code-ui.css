@@ -216,10 +216,10 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .sidebar-task-row:focus-within .sidebar-task time,
 .sidebar-task-row.active .sidebar-task time { opacity: 0; }
 .task-state-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
-.task-state-dot.running { background: var(--success); }
-.task-state-dot.attention, .task-state-dot.review { background: var(--warning); }
+.task-state-dot.running, .task-state-dot.attention { background: var(--success); }
+.task-state-dot.review, .task-state-dot.done { background: var(--warning); }
 .task-state-dot.stopped { background: var(--danger); }
-.task-state-dot.done { background: var(--success); opacity: .72; }
+.task-state-dot.done { opacity: .82; }
 .sidebar-more-tasks { padding: 5px 8px 5px 16px; color: var(--fg-faint); font-size: 11px; text-align: left; }
 .sidebar-more-tasks:hover { color: var(--accent); }
 .sidebar-empty-project { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 0 9px; border-radius: 6px; color: var(--fg-faint); text-align: left; font-size: 12px; }
