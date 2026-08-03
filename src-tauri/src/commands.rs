@@ -10226,9 +10226,10 @@ fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String
     }
 }
 
-/// 构造 Codex 非交互进程。任务文本作为位置参数直接传给已验证的 CLI，绝不进入
-/// shell 命令串。权限参数只会来自 [`CodexDelegationPermissions`] 的受限枚举，绝不
-/// 接受 WebView 或 config.toml 的原始命令片段。
+/// 构造 Codex 非交互进程。任务文本通过 stdin 交给已验证的 CLI，避免 Windows npm
+/// `.cmd` shim 的命令行长度上限，也不会出现在子进程参数列表里。权限参数只会来自
+/// [`CodexDelegationPermissions`] 的受限枚举，绝不接受 WebView 或 config.toml 的原始
+/// 命令片段。
 #[allow(dead_code)]
 fn codex_exec_command_with_permissions(
     cli_path: Option<PathBuf>,
@@ -10256,7 +10257,11 @@ fn codex_exec_command_with_permissions_and_images(
     let exec_args = [
         "exec",
         "--json",
-        "--search",
+        // `--search` is a global CLI flag and is rejected in this position by current
+        // `codex exec`. A config override is supported by both exec and App Server and expresses
+        // the intended mode directly.
+        "-c",
+        "web_search=\"live\"",
         "--skip-git-repo-check",
         "--sandbox",
         permissions.sandbox().as_str(),
@@ -10270,7 +10275,10 @@ fn codex_exec_command_with_permissions_and_images(
     for image_path in image_paths {
         command.arg("--image").arg(image_path);
     }
-    command.arg(prompt);
+    // Codex documents `-` as the explicit full-prompt stdin sentinel. In particular, do not put a
+    // multi-turn session transcript behind cmd.exe as one positional argument (Windows caps it at
+    // roughly 8 KiB).
+    command.arg("-");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -10281,7 +10289,7 @@ fn codex_exec_command_with_permissions_and_images(
     }
     command
         .current_dir(workspace)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -10448,15 +10456,6 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
             };
         }
     };
-    emit_codex_observable_event(
-        observer.as_ref(),
-        event_sink,
-        AgentEvent::Activity {
-            phase: AgentActivityPhase::Requesting,
-            detail: Some("Codex CLI 进程已启动".to_string()),
-        },
-    )
-    .await;
 
     let Some(stdout) = child.stdout.take() else {
         terminate_codex_child(&mut child).await;
@@ -10472,6 +10471,38 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
             let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
         })
     });
+    let Some(mut stdin) = child.stdin.take() else {
+        terminate_codex_child(&mut child).await;
+        if let Some(stderr_task) = stderr_task {
+            let _ = timeout(Duration::from_secs(2), stderr_task).await;
+        }
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::Stream),
+            ..Default::default()
+        };
+    };
+    if stdin.write_all(prompt.as_bytes()).await.is_err() || stdin.shutdown().await.is_err() {
+        terminate_codex_child(&mut child).await;
+        if let Some(stderr_task) = stderr_task {
+            let _ = timeout(Duration::from_secs(2), stderr_task).await;
+        }
+        return CodexExecCompletion {
+            failure: Some(CodexExecFailure::Stream),
+            ..Default::default()
+        };
+    }
+    // `shutdown()` flushes the pipe but Windows does not reliably deliver EOF through the npm
+    // launcher until the parent handle is dropped.
+    drop(stdin);
+    emit_codex_observable_event(
+        observer.as_ref(),
+        event_sink,
+        AgentEvent::Activity {
+            phase: AgentActivityPhase::Requesting,
+            detail: Some("Codex CLI 进程已启动".to_string()),
+        },
+    )
+    .await;
 
     let mut lines = BufReader::new(stdout).lines();
     let mut cancelled = false;
@@ -15781,15 +15812,22 @@ command = "r-code-host"
         std::fs::write(&shim, "@echo off\r\n").unwrap();
         std::fs::write(
             &entrypoint,
-            r#"process.stdout.write('{"type":"thread.started","thread_id":"thread-test"}\n');
+            r#"let prompt = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { prompt += chunk; });
+process.stdin.on('end', () => {
+if (prompt.length !== 32000 || !/^x+$/.test(prompt)) process.exit(2);
+process.stdout.write('{"type":"thread.started","thread_id":"thread-test"}\n');
 process.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"Codex child summary"}}\n');
-process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}\n');"#,
+process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}\n');
+});"#,
         )
         .unwrap();
 
+        let prompt = "x".repeat(32_000);
         let completion = run_codex_exec_process(
             directory.path(),
-            "inspect only",
+            &prompt,
             Some(shim),
             CancellationToken::new(),
             None,
@@ -16104,12 +16142,12 @@ input.on('line', (line) => {
         std::fs::write(&node, []).unwrap();
         std::fs::write(&entrypoint, "// test entrypoint\n").unwrap();
 
-        let prompt = "inspect only";
+        let prompt = "x".repeat(32_000);
         let command = codex_exec_command_with_permissions(
             Some(shim),
             directory.path(),
             CodexDelegationPermissions::read_only(),
-            prompt,
+            &prompt,
         )
         .unwrap();
         let command = command.as_std();
@@ -16124,7 +16162,8 @@ input.on('line', (line) => {
             [
                 "exec",
                 "--json",
-                "--search",
+                "-c",
+                "web_search=\"live\"",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "read-only",
@@ -16132,7 +16171,7 @@ input.on('line', (line) => {
                 "approval_policy=\"never\"",
                 "-c",
                 "approvals_reviewer=\"user\"",
-                prompt,
+                "-",
             ]
         );
     }
@@ -16163,7 +16202,8 @@ input.on('line', (line) => {
             [
                 "exec",
                 "--json",
-                "--search",
+                "-c",
+                "web_search=\"live\"",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "workspace-write",
@@ -16171,7 +16211,7 @@ input.on('line', (line) => {
                 "approval_policy=\"on-request\"",
                 "-c",
                 "approvals_reviewer=\"auto_review\"",
-                "validated prompt",
+                "-",
             ]
         );
     }
