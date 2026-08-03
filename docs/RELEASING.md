@@ -71,17 +71,20 @@ macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release work
 - `APPLE_PASSWORD`：该 Apple ID 的 app-specific password，不是账户登录密码；
 - `APPLE_TEAM_ID`：Apple Developer Team ID。
 
-workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时 macOS release job 会明确失败，而不会静默发布未签名包。证书和密码不得提交到仓库。
+正式 release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时正式发布会明确失败。仅名称符合 `vX.Y.Z-unsigned.N` 的显式预发布标签会跳过平台签名，并始终保持 prerelease、非 Latest 状态。证书和密码不得提交到仓库。
 
 本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
 
-Windows Authenticode 已接入 Release workflow，并且是强制门禁。仓库必须配置：
+Windows Authenticode 已接入 Release workflow，并且是正式发布的强制门禁。仓库必须配置：
 
 - `WINDOWS_CERTIFICATE`：代码签名 `.pfx` 的 Base64 内容（支持 `certutil -encode` 输出）；
 - `WINDOWS_CERTIFICATE_PASSWORD`：PFX 导出密码；
 - `WINDOWS_TIMESTAMP_URL`：证书颁发机构提供的 RFC 3161 时间戳地址。
 
-workflow 会把证书导入 runner 的临时用户证书库，由 Tauri 在生成 updater/NSIS/MSI 前完成签名；品牌外层安装器生成后再由 `signtool` 签名。发布前会对品牌安装器、NSIS 和 MSI 逐一执行 Authenticode 验证。任一 Secret 缺失、签名或验证失败都会阻止 Draft 发布，临时 PFX 和生成的 Tauri 覆盖配置在 job 结束时删除。Linux 包签名是否启用由分发渠道策略决定。
+正式 workflow 会把证书导入 runner 的临时用户证书库，由 Tauri 在生成 updater/NSIS/MSI 前完成签名；品牌外层安装器生成后再由 `signtool` 签名。发布前会对品牌安装器、NSIS 和 MSI 逐一执行 Authenticode 验证。任一 Secret 缺失、签名或验证失败都会阻止正式 Draft 发布，临时 PFX 和生成的 Tauri 覆盖配置在 job 结束时删除。Linux 包签名是否启用由分发渠道策略决定。
+
+> [!WARNING]
+> `vX.Y.Z-unsigned.N` 仅用于在尚未取得平台证书时分发测试包。Windows 会显示 SmartScreen 警告，macOS 会触发 Gatekeeper；这种构建不会成为 Latest，也不会进入正式自动更新入口。它仍要求 `PAT_TOKEN` 和 `TAURI_SIGNING_PRIVATE_KEY`，确保私有子模块可读取且 updater 产物具备完整性签名。
 
 ### 3.4 供应链清单
 
@@ -179,6 +182,19 @@ git push origin v0.1.0
 ```
 
 若团队使用签名 Git tag，可把 `git tag -a` 换成 `git tag -s`。不要在 CI 失败后删除并重建同名 tag；修复发布代码后使用新的 patch 版本，保持已经公开的 tag 不可变。
+
+#### 未签名预发布
+
+当平台签名凭据尚未配置、但需要发布可下载测试包时，使用带递增序号的显式标签：
+
+```bash
+git tag -a v0.1.0-unsigned.1 -m "R-Code v0.1.0 unsigned prerelease 1"
+git push origin v0.1.0-unsigned.1
+```
+
+Release workflow 会校验其基础版本仍是 `0.1.0`，跳过 Windows Authenticode 与 Apple Developer ID/公证步骤，保留 Tauri updater 签名，并在 Release 顶部写入未签名警告。该 Release 会发布为 prerelease，但不会被标记为 Latest；`/releases/latest/download/latest.json` 不会指向它。
+
+同一基础版本需要重试时创建 `v0.1.0-unsigned.2`，不得移动或覆盖已经公开的标签。取得平台证书后，仍使用独立的正式标签 `v0.1.0` 触发完整签名、公证和 Latest 发布。
 
 ### 5.4 观察 GitHub Actions
 

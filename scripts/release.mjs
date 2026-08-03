@@ -17,6 +17,7 @@ const PATHS = {
 };
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const RELEASE_TAG = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-unsigned\.([1-9]\d*))?$/;
 
 function fail(message) {
   console.error(`release: ${message}`);
@@ -54,6 +55,16 @@ function replaceWorkspaceVersion(cargoToml, version) {
   );
   if (!replaced) fail("could not update [workspace.package].version");
   return next;
+}
+
+function parseReleaseTag(tag) {
+  const match = tag?.match(RELEASE_TAG);
+  if (!match) return null;
+  return {
+    version: match[1],
+    unsignedPrerelease: match[2] !== undefined,
+    sequence: match[2] ? Number(match[2]) : null,
+  };
 }
 
 function writeJson(path, value, newline) {
@@ -105,7 +116,10 @@ function checkVersions(tag) {
   }
 
   if (tag) {
-    if (tag !== `v${expected}`) fail(`tag ${tag} does not match workspace version v${expected}`);
+    const tagInfo = parseReleaseTag(tag);
+    if (!tagInfo || tagInfo.version !== expected) {
+      fail(`tag ${tag} must be v${expected} or v${expected}-unsigned.N`);
+    }
     const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const releaseHeading = new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m");
     if (!releaseHeading.test(read(PATHS.changelog))) {
@@ -203,7 +217,7 @@ function prepare(version) {
 
 function usage() {
   console.log("Usage:");
-  console.log("  node scripts/release.mjs check [vX.Y.Z]");
+  console.log("  node scripts/release.mjs check [vX.Y.Z|vX.Y.Z-unsigned.N]");
   console.log("  node scripts/release.mjs prepare X.Y.Z");
 }
 
@@ -228,4 +242,4 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   main(process.argv.slice(2));
 }
 
-export { replaceWorkspaceVersion, stampChangelog };
+export { parseReleaseTag, replaceWorkspaceVersion, stampChangelog };
