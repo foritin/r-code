@@ -382,7 +382,57 @@ where
                 });
                 tool_calls.push(PendingToolCall { id, name, input });
             }
-            StreamEvent::Stop { .. } => {
+            StreamEvent::HostedToolUse {
+                id,
+                name,
+                input,
+                provider_content,
+            } => {
+                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    break;
+                }
+                flush_text(&mut current_text, &mut assistant_blocks);
+                if let Some(block) = provider_content.and_then(provider_content_to_custom) {
+                    assistant_blocks.push(block);
+                }
+                tracing::debug!(tool_id = %id, tool_name = %name, "provider-hosted tool use");
+                if emit_activity {
+                    emit(AgentEvent::Activity {
+                        phase: r_code_core::dto::AgentActivityPhase::Tool,
+                        detail: Some(name.clone()),
+                    });
+                }
+                emit(AgentEvent::ToolCall {
+                    name,
+                    input,
+                    call_id: id,
+                });
+            }
+            StreamEvent::HostedToolResult {
+                id,
+                name: _,
+                output,
+                is_error,
+                provider_content,
+            } => {
+                flush_text(&mut current_text, &mut assistant_blocks);
+                if let Some(block) = provider_content.and_then(provider_content_to_custom) {
+                    assistant_blocks.push(block);
+                }
+                emit(AgentEvent::ToolResult {
+                    call_id: id,
+                    output,
+                    is_error,
+                });
+            }
+            StreamEvent::Stop { reason } => {
+                // Anthropic server tools normally finish inside one response. A rare
+                // `pause_turn` asks the client to replay the provider blocks and continue;
+                // treat that as a protocol continuation, never as a local tool execution.
+                if matches!(reason, hermes_core::StopReason::Other(ref value) if value == "pause_turn")
+                {
+                    had_tool_call = true;
+                }
                 break;
             }
             StreamEvent::Usage(u) => {
@@ -448,6 +498,15 @@ fn flush_text(current_text: &mut String, blocks: &mut Vec<ContentBlock>) {
             text: std::mem::take(current_text),
         });
     }
+}
+
+fn provider_content_to_custom(content: serde_json::Value) -> Option<ContentBlock> {
+    let mut data = content.as_object()?.clone();
+    let type_name = data.remove("type")?.as_str()?.to_string();
+    Some(ContentBlock::Custom {
+        type_name,
+        data: serde_json::Value::Object(data),
+    })
 }
 
 /// 将 `hermes_error::Error` 映射为 `ProductError`。
@@ -610,6 +669,7 @@ mod tests {
             system: None,
             messages: vec![Message::user_text("hi")],
             tools: vec![],
+            hosted_tools: vec![],
             max_tokens: 128,
             temperature: None,
             enable_caching: false,
@@ -674,6 +734,128 @@ mod tests {
         assert!(matches!(
             events.get(1),
             Some(AgentEvent::Message { text, delta: true }) if text == "hello"
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_hosted_tool_is_observed_but_never_executed_locally() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::HostedToolUse {
+                id: "srvtoolu_1".into(),
+                name: "web_search".into(),
+                input: serde_json::json!({"query": "Rust"}),
+                provider_content: Some(serde_json::json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_1",
+                    "name": "web_search",
+                    "input": {"query": "Rust"},
+                })),
+            },
+            StreamEvent::HostedToolResult {
+                id: "srvtoolu_1".into(),
+                name: "web_search".into(),
+                output: serde_json::json!({"sources": [{"url": "https://www.rust-lang.org"}]}),
+                is_error: false,
+                provider_content: Some(serde_json::json!({
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [{
+                        "type": "web_search_result",
+                        "url": "https://www.rust-lang.org",
+                        "encrypted_content": "provider-private",
+                    }],
+                })),
+            },
+            StreamEvent::TextDelta {
+                text: "Rust source summary".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("web_search");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("search")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].text_content(), "Rust source summary");
+        assert!(matches!(
+            &messages[1].content[..],
+            [
+                ContentBlock::Custom { type_name: call, .. },
+                ContentBlock::Custom { type_name: result, .. },
+                ContentBlock::Text { .. },
+            ] if call == "server_tool_use" && result == "web_search_tool_result"
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolCall { name, call_id, .. }
+                if name == "web_search" && call_id == "srvtoolu_1"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult { call_id, output, .. }
+                if call_id == "srvtoolu_1"
+                    && output["sources"][0]["url"] == "https://www.rust-lang.org"
+        )));
+    }
+
+    #[tokio::test]
+    async fn provider_pause_turn_requests_continuation_without_local_execution() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::HostedToolUse {
+                id: "srvtoolu_pause".into(),
+                name: "web_search".into(),
+                input: serde_json::json!({"query": "Rust"}),
+                provider_content: Some(serde_json::json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_pause",
+                    "name": "web_search",
+                    "input": {"query": "Rust"},
+                })),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::Other("pause_turn".into()),
+            },
+        ]));
+        let tool_host = EchoToolHost::new("web_search");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("search")];
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            false,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.had_tool_call);
+        assert!(matches!(
+            &messages[1].content[..],
+            [ContentBlock::Custom { type_name, .. }] if type_name == "server_tool_use"
         ));
     }
 

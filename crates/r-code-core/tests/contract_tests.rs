@@ -135,6 +135,7 @@ mod v_prov {
             system: None,
             messages: vec![Message::user_text("hi")],
             tools: vec![],
+            hosted_tools: vec![],
             max_tokens: 128,
             temperature: None,
             enable_caching: false,

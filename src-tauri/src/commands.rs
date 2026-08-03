@@ -34,8 +34,8 @@ use std::os::windows::process::CommandExt;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use hermes_core::{
-    CompletionRequest, ContentBlock, FileSource, InferenceOptions, Message, Role, SessionEvent,
-    SessionMeta,
+    CompletionRequest, ContentBlock, FileSource, HostedToolSpec, InferenceOptions, Message, Role,
+    SessionEvent, SessionMeta,
 };
 use hermes_store::SessionStore;
 use r_code_agent_worker::{
@@ -1581,6 +1581,7 @@ pub async fn task_compact_context(
             system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
             messages: vec![Message::user_text(prompt)],
             tools: vec![],
+            hosted_tools: vec![],
             max_tokens: 4_096,
             temperature: Some(0.1),
             enable_caching: false,
@@ -2768,6 +2769,7 @@ async fn ensure_real_runtime(
     let provider_config = build_provider_config(&provider_name, pcfg);
     let provider = hermes_llm::create_provider(provider_config).map_err(err_str)?;
     let max_tokens = effective_max_tokens(&provider_name, pcfg);
+    let hosted_tools = hosted_tools_for_provider(&provider_name, pcfg);
     let runtime = r_code_agent_worker::LlmAgentRuntime::new(
         provider,
         pcfg.model.clone(),
@@ -2775,6 +2777,7 @@ async fn ensure_real_runtime(
         max_tokens,
         pcfg.temperature,
     )
+    .with_hosted_tools(hosted_tools)
     .with_orchestration_policy(orchestration)
     .with_agent_prompts(agent_prompts.clone())
     .with_external_tools(mcp_manager.clone())
@@ -7069,6 +7072,35 @@ fn resolve_effective_protocol(
         .unwrap_or_else(|| infer_protocol_never_responses(name, &pcfg.base_url))
 }
 
+/// Enable DeepSeek's provider-hosted search only on its official Anthropic endpoint.
+/// Anthropic-compatible URLs from other vendors share the wire protocol but not this service.
+fn hosted_tools_for_provider(
+    name: &str,
+    pcfg: &hermes_config::ProviderConfig,
+) -> Vec<HostedToolSpec> {
+    if resolve_effective_protocol(name, pcfg) != ProviderProtocol::AnthropicMessages {
+        return Vec::new();
+    }
+    let configured = pcfg.base_url.trim();
+    let base_url = if configured.is_empty() {
+        provider_preset(name).map_or("", |preset| preset.base_url)
+    } else {
+        configured
+    };
+    let Ok(url) = url::Url::parse(base_url) else {
+        return Vec::new();
+    };
+    if url.host_str() != Some("api.deepseek.com") {
+        return Vec::new();
+    }
+    let path = url.path().trim_end_matches('/');
+    let path = path.strip_suffix("/v1").unwrap_or(path);
+    if !path.ends_with("/anthropic") {
+        return Vec::new();
+    }
+    vec![HostedToolSpec::web_search()]
+}
+
 /// 没存过 protocol 时的推断规则，**唯一实现**。
 ///
 /// 保存路径和运行时路径必须共用它：任何一边多写一份，两份规则迟早漂移，结果就是
@@ -10224,6 +10256,7 @@ fn codex_exec_command_with_permissions_and_images(
     let exec_args = [
         "exec",
         "--json",
+        "--search",
         "--skip-git-repo-check",
         "--sandbox",
         permissions.sandbox().as_str(),
@@ -11152,6 +11185,9 @@ async fn run_codex_app_server_process_with_images(
                     "sandbox": permissions.sandbox().as_str(),
                     "approvalPolicy": permissions.approval_policy().as_str(),
                     "approvalsReviewer": permissions.approvals_reviewer().as_str(),
+                    "config": {
+                        "web_search": "live",
+                    },
                 }
             }),
         )
@@ -14345,6 +14381,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn provider_hosted_search_is_limited_to_official_deepseek_anthropic() {
+        let deepseek = provider_cfg_with(
+            "https://api.deepseek.com/anthropic",
+            "deepseek-v4-pro",
+            ProviderProtocol::AnthropicMessages,
+        );
+        assert_eq!(hosted_tools_for_provider("deepseek", &deepseek).len(), 1);
+
+        let deepseek_chat = provider_cfg_with(
+            "https://api.deepseek.com",
+            "deepseek-v4-pro",
+            ProviderProtocol::OpenAiChat,
+        );
+        assert!(hosted_tools_for_provider("deepseek", &deepseek_chat).is_empty());
+
+        let other_anthropic = provider_cfg_with(
+            "https://api.moonshot.cn/anthropic",
+            "kimi-k2.7-code",
+            ProviderProtocol::AnthropicMessages,
+        );
+        assert!(hosted_tools_for_provider("kimi", &other_anthropic).is_empty());
+
+        let lookalike = provider_cfg_with(
+            "https://api.deepseek.com.example/anthropic",
+            "deepseek-v4-pro",
+            ProviderProtocol::AnthropicMessages,
+        );
+        assert!(hosted_tools_for_provider("deepseek", &lookalike).is_empty());
+    }
+
     /// 回归：目录里一多半预设走 Anthropic Messages 口，旧的按名字分派会把它们
     /// 全部当成 OpenAI Chat 发出去。
     #[test]
@@ -15754,7 +15821,11 @@ input.on('line', (line) => {
   if (message.method === 'initialize') {
     send({ id: message.id, result: {} });
   } else if (message.method === 'thread/start') {
-    send({ id: message.id, result: { thread: { id: 'thread-app-server' } } });
+    if (message.params?.config?.web_search !== 'live') {
+      send({ id: message.id, error: { code: -32602, message: 'expected live web search' } });
+    } else {
+      send({ id: message.id, result: { thread: { id: 'thread-app-server' } } });
+    }
   } else if (message.method === 'turn/start') {
     send({ id: message.id, result: { turn: { id: 'turn-app-server' } } });
     send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'App Server child summary' } } });
@@ -16053,6 +16124,7 @@ input.on('line', (line) => {
             [
                 "exec",
                 "--json",
+                "--search",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "read-only",
@@ -16091,6 +16163,7 @@ input.on('line', (line) => {
             [
                 "exec",
                 "--json",
+                "--search",
                 "--skip-git-repo-check",
                 "--sandbox",
                 "workspace-write",
