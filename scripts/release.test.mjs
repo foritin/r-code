@@ -90,6 +90,7 @@ test("release workflow isolates unsigned prereleases while signed releases stay 
   assert.match(workflow, /required=\(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY\)/);
   assert.match(workflow, /if \[\[ "\$RELEASE_TAG" != \*-unsigned\.\* \]\]/);
   assert.match(workflow, /prerelease: \$\{\{ contains\(env\.RELEASE_TAG, '-unsigned\.'\) \}\}/);
+  assert.match(workflow, /contains\(env\.RELEASE_TAG, '-unsigned\.'\) && '-' \|\| secrets\.APPLE_SIGNING_IDENTITY/);
   assert.match(workflow, /这是未签名预发布版本，仅用于测试/);
   assert.match(workflow, /--prerelease/);
   assert.match(workflow, /--draft=false --latest --verify-tag/);
