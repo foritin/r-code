@@ -71,7 +71,7 @@ macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release work
 - `APPLE_PASSWORD`：该 Apple ID 的 app-specific password，不是账户登录密码；
 - `APPLE_TEAM_ID`：Apple Developer Team ID。
 
-正式 release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时正式发布会明确失败。仅名称符合 `vX.Y.Z-unsigned.N` 的显式预发布标签会跳过平台签名，并始终保持 prerelease、非 Latest 状态。证书和密码不得提交到仓库。
+正式 release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时正式发布会明确失败。仅名称符合 `vX.Y.Z-unsigned.N` 的显式预发布标签会跳过 Developer ID 与公证，改用无需证书的 ad-hoc 身份，并始终保持 prerelease、非 Latest 状态。证书和密码不得提交到仓库。
 
 本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
 

@@ -258,7 +258,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          # Tauri requires macOS app bundles to be signed. Unsigned prereleases use Apple's
+          # standard ad-hoc identity (`-`), which needs no certificate and is never notarized.
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos-') && (contains(env.RELEASE_TAG, '-unsigned.') && '-' || secrets.APPLE_SIGNING_IDENTITY) || '' }}
           APPLE_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.') && secrets.APPLE_TEAM_ID || '' }}
