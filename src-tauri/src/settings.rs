@@ -10,28 +10,111 @@
 //!
 //! [doc-14 阶段1] [agent-core/08]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use hermes_config::Config;
 use r_code_agent_worker::AgentPromptPolicy;
 use r_code_core::error::ProductError;
+#[cfg(not(test))]
 use r_code_core::secret::SecretStore;
 
+#[cfg(not(test))]
 const SECRET_SERVICE: &str = "r-code";
 const AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
 const MAX_AGENT_PROMPT_CHARS: usize = 20_000;
+
+trait ProviderCredentialBackend: Send + Sync {
+    fn set(&self, provider: &str, value: &str) -> Result<(), ProductError>;
+    fn get(&self, provider: &str) -> Result<Option<String>, ProductError>;
+    fn delete(&self, provider: &str) -> Result<(), ProductError>;
+}
+
+#[cfg(not(test))]
+#[derive(Default)]
+struct OsProviderCredentialBackend;
+
+#[cfg(not(test))]
+impl ProviderCredentialBackend for OsProviderCredentialBackend {
+    fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
+        SecretStore::new(SECRET_SERVICE).store(&SettingsService::secret_key(provider), value)
+    }
+
+    fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
+        SecretStore::new(SECRET_SERVICE).get(&SettingsService::secret_key(provider))
+    }
+
+    fn delete(&self, provider: &str) -> Result<(), ProductError> {
+        SecretStore::new(SECRET_SERVICE).delete(&SettingsService::secret_key(provider))
+    }
+}
+
+// Unit tests must not depend on an interactive OS keychain. GitHub's headless macOS
+// runner can accept a Keychain write and still return NoEntry on the next lookup.
+// Namespace the process-local backend by config directory so parallel test states do
+// not see each other's provider credentials.
+#[cfg(test)]
+static TEST_PROVIDER_CREDENTIALS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<(PathBuf, String), String>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+#[cfg(test)]
+struct TestProviderCredentialBackend {
+    namespace: PathBuf,
+}
+
+#[cfg(test)]
+impl TestProviderCredentialBackend {
+    fn values(
+    ) -> std::sync::MutexGuard<'static, std::collections::HashMap<(PathBuf, String), String>> {
+        TEST_PROVIDER_CREDENTIALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn key(&self, provider: &str) -> (PathBuf, String) {
+        (self.namespace.clone(), provider.to_string())
+    }
+}
+
+#[cfg(test)]
+impl ProviderCredentialBackend for TestProviderCredentialBackend {
+    fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
+        Self::values().insert(self.key(provider), value.to_string());
+        Ok(())
+    }
+
+    fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
+        Ok(Self::values().get(&self.key(provider)).cloned())
+    }
+
+    fn delete(&self, provider: &str) -> Result<(), ProductError> {
+        Self::values().remove(&self.key(provider));
+        Ok(())
+    }
+}
 
 /// 设置服务 -- 管理全局配置 + 工作区覆盖。
 ///
 /// 优先级：默认值 < 配置文件 < 环境变量 < 显式参数。
 pub struct SettingsService {
     config_dir: PathBuf,
+    credentials: Arc<dyn ProviderCredentialBackend>,
 }
 
 impl SettingsService {
     /// 创建设置服务，`config_dir` 为全局配置目录。
     pub fn new(config_dir: PathBuf) -> Self {
-        Self { config_dir }
+        #[cfg(not(test))]
+        let credentials: Arc<dyn ProviderCredentialBackend> = Arc::new(OsProviderCredentialBackend);
+        #[cfg(test)]
+        let credentials: Arc<dyn ProviderCredentialBackend> =
+            Arc::new(TestProviderCredentialBackend {
+                namespace: config_dir.clone(),
+            });
+        Self {
+            config_dir,
+            credentials,
+        }
     }
 
     /// Product-owned MCP metadata is stored beside the other user-level settings.
@@ -195,17 +278,16 @@ impl SettingsService {
                 "provider name cannot be empty".to_string(),
             ));
         }
-        let store = SecretStore::new(SECRET_SERVICE);
         if value.trim().is_empty() {
-            store.delete(&Self::secret_key(provider))
+            self.credentials.delete(provider)
         } else {
-            store.store(&Self::secret_key(provider), value)
+            self.credentials.set(provider, value)
         }
     }
 
     /// 读取 Provider 已保存的密钥；不会将值记录到日志。
     pub fn provider_secret(&self, provider: &str) -> Result<Option<String>, ProductError> {
-        SecretStore::new(SECRET_SERVICE).get(&Self::secret_key(provider))
+        self.credentials.get(provider)
     }
 
     /// 将旧版 TOML 中的明文 api_key 迁移至 OS keychain。
@@ -244,6 +326,7 @@ impl SettingsService {
         Ok(())
     }
 
+    #[cfg(not(test))]
     fn secret_key(provider: &str) -> String {
         format!("provider:{provider}")
     }
@@ -328,6 +411,12 @@ mod tests {
     // 设置测试（它们都调用 apply_env，会读取 ANTHROPIC_API_KEY）。
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn valid_provider(api_key: &str) -> ProviderConfig {
         ProviderConfig {
             base_url: "https://api.anthropic.com".into(),
@@ -372,7 +461,7 @@ memories_dir = "{m}"
 
     #[test]
     fn config_path_joins_config_toml() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         let svc = SettingsService::new(PathBuf::from("/tmp/r-code-cfg"));
         assert_eq!(
             svc.config_path(),
@@ -403,7 +492,7 @@ memories_dir = "{m}"
 
     #[test]
     fn load_global_reads_config_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         let tmp = tempfile::tempdir().unwrap();
         write_valid_config(tmp.path(), "debug", "sk-test");
 
@@ -416,7 +505,7 @@ memories_dir = "{m}"
 
     #[test]
     fn load_global_without_file_uses_defaults() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         // 确保没有遗留的 ANTHROPIC_API_KEY 导致默认配置意外「合法」
         std::env::remove_var("ANTHROPIC_API_KEY");
 
@@ -433,7 +522,7 @@ memories_dir = "{m}"
 
     #[test]
     fn save_and_load_roundtrip() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         std::env::remove_var("ANTHROPIC_API_KEY");
 
         let tmp = tempfile::tempdir().unwrap();
@@ -466,7 +555,7 @@ memories_dir = "{m}"
 
     #[test]
     fn workspace_override_overrides_scalar() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         std::env::remove_var("ANTHROPIC_API_KEY");
 
         let tmp = tempfile::tempdir().unwrap();
@@ -491,7 +580,7 @@ memories_dir = "{m}"
 
     #[test]
     fn workspace_override_without_file_falls_back_to_global() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         std::env::remove_var("ANTHROPIC_API_KEY");
 
         let tmp = tempfile::tempdir().unwrap();
@@ -508,7 +597,7 @@ memories_dir = "{m}"
 
     #[test]
     fn env_var_overrides_config_file() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         std::env::set_var("ANTHROPIC_API_KEY", "sk-from-env");
 
         let cfg = {
@@ -529,7 +618,7 @@ memories_dir = "{m}"
 
     #[test]
     fn env_var_overrides_workspace_merge() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = lock_env();
         std::env::set_var("ANTHROPIC_API_KEY", "sk-from-env");
 
         let cfg = {
