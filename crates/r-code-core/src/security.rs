@@ -26,6 +26,10 @@ use crate::error::ProductError;
 #[derive(Debug, Clone)]
 pub struct PathGuard {
     root: PathBuf,
+    // Keep the caller-visible spelling too. On macOS, temporary paths are
+    // commonly exposed as `/var/...` while canonicalization returns
+    // `/private/var/...`; the lexical helper must recognize both spellings.
+    lexical_root: PathBuf,
 }
 
 impl PathGuard {
@@ -34,12 +38,26 @@ impl PathGuard {
     /// `root` 在创建时即被 canonical 化；若 canonical 化失败（不存在、无权限），
     /// 返回 [`ProductError::PathEscape`]（fail-closed）。
     pub fn new(root: PathBuf) -> Result<Self, ProductError> {
+        let lexical_root = if root.is_absolute() {
+            root.clone()
+        } else {
+            std::env::current_dir()
+                .map_err(|err| {
+                    ProductError::PathEscape(format!(
+                        "cannot anchor root {root:?}: {err} (fail-closed)"
+                    ))
+                })?
+                .join(&root)
+        };
         let canonical = root.canonicalize().map_err(|err| {
             ProductError::PathEscape(format!(
                 "failed to canonicalize root {root:?}: {err} (fail-closed)"
             ))
         })?;
-        Ok(Self { root: canonical })
+        Ok(Self {
+            root: canonical,
+            lexical_root,
+        })
     }
 
     /// 将 `path` 解析为相对 root 的 canonical 路径，确保不逃逸。
@@ -179,7 +197,7 @@ impl PathGuard {
     /// **非权威**：仅做快速前缀判断，不解析符号链接或 `..`。任何安全决策
     /// 必须使用 [`resolve`](Self::resolve)。
     pub fn contains(&self, path: &Path) -> bool {
-        if path.starts_with(&self.root) {
+        if path.starts_with(&self.root) || path.starts_with(&self.lexical_root) {
             return true;
         }
         // Windows：root 经 canonicalize 带 `\\?\` verbatim 前缀，而未 canonical
@@ -193,7 +211,9 @@ impl PathGuard {
                     None => p.to_path_buf(),
                 }
             }
-            strip_verbatim(path).starts_with(strip_verbatim(&self.root))
+            let path = strip_verbatim(path);
+            path.starts_with(strip_verbatim(&self.root))
+                || path.starts_with(strip_verbatim(&self.lexical_root))
         }
         #[cfg(not(windows))]
         {
