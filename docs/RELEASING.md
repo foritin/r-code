@@ -45,7 +45,7 @@ flowchart LR
 
 `.github/workflows/release.yml` 对构建和最终发布 job 声明 `contents: write`。如果组织级策略禁止 `GITHUB_TOKEN` 写 Release，需要在仓库 Settings → Actions → General 中允许工作流写入，或按组织策略改用受控的发布 App/token。
 
-不要把长期 PAT 写入 workflow 文件。当前流程不需要 `PAT_TOKEN` 拉取构建子模块；`vendor/agent-core` 使用父仓记录的 gitlink。
+不要把长期 PAT 写入 workflow 文件。`vendor/agent-core` 是私有子模块，仓库 Secret `PAT_TOKEN` 必须是一个只授予 `foritin/agent-core` **Contents: read** 的 fine-grained token；CI 和 Release 仅通过 `actions/checkout` 使用它，不把令牌写入脚本、日志或仓库。父仓 gitlink 负责锁定精确 commit，PAT 只负责让 runner 读取该 commit。
 
 ### 3.2 Tauri updater 签名
 
@@ -182,6 +182,14 @@ git push origin v0.1.0
 
 ### 5.4 观察 GitHub Actions
 
+维护机安装并登录 GitHub CLI 后，可以直接观察这次提交对应的运行：
+
+```bash
+gh auth status
+gh run list --repo foritin/r-code --branch main --workflow CI --limit 5
+gh run watch --repo foritin/r-code <run-id> --exit-status
+```
+
 Tag push 后工作流按以下顺序运行：
 
 1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
@@ -189,7 +197,13 @@ Tag push 后工作流按以下顺序运行：
 3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；Windows 额外封装并签名品牌安装器，所有二进制产物写入同一个 Draft Release。
 4. `finalize` 确认 Draft 中存在四个平台的 updater 项，上传供应链清单，随后发布并标为 latest。
 
-任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag。`workflow_dispatch` 不是创建 tag 的替代品。
+任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag：
+
+```bash
+gh workflow run Release --repo foritin/r-code -f tag=v0.1.0
+```
+
+`workflow_dispatch` 不是创建 tag 的替代品。工作流会先统一检查私有子模块令牌、updater 私钥和 Windows/macOS 签名凭据，缺少任何必需 Secret 都会在构建矩阵启动前失败并列出名称。
 
 ### 5.5 发布后验收
 
