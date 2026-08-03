@@ -102,6 +102,16 @@ test("release workflow isolates unsigned prereleases while signed releases stay 
   assert.match(workflow, /signed_config: "--config tauri\.release-windows\.conf\.json"/);
   assert.match(
     workflow,
+    /platform: windows-x64[\s\S]*?upload_workflow_artifacts: false[\s\S]*?rust-target: x86_64-pc-windows-msvc/,
+  );
+  assert.equal(
+    (workflow.match(/uploadWorkflowArtifacts: \$\{\{ matrix\.upload_workflow_artifacts \}\}/g) ?? [])
+      .length,
+    2,
+    "signed and unsigned builds must use the per-platform workflow-artifact policy",
+  );
+  assert.match(
+    workflow,
     /Build and publish signed release[\s\S]*?args: \$\{\{ matrix\.args \}\} \$\{\{ matrix\.signed_config \}\}/,
   );
   assert.match(workflow, /这是未签名预发布版本，仅用于测试/);

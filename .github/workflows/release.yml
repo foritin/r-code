@@ -125,18 +125,24 @@ jobs:
             runner: windows-latest
             args: "--bundles nsis,msi"
             signed_config: "--config tauri.release-windows.conf.json"
+            # Two localized MSI bundles currently collide on tauri-action's generated
+            # workflow-artifact name. Release assets are still uploaded to the draft.
+            upload_workflow_artifacts: false
             rust-target: x86_64-pc-windows-msvc
           - platform: macos-arm64
             runner: macos-latest
             args: "--bundles app,dmg"
+            upload_workflow_artifacts: true
             rust-target: aarch64-apple-darwin
           - platform: macos-x64
             runner: macos-15-intel
             args: "--bundles app,dmg"
+            upload_workflow_artifacts: true
             rust-target: x86_64-apple-darwin
           - platform: linux-x64
             runner: ubuntu-22.04
             args: "--bundles appimage,deb"
+            upload_workflow_artifacts: true
             rust-target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -278,7 +284,7 @@ jobs:
           prerelease: false
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
-          uploadWorkflowArtifacts: true
+          uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
 
       - name: Build and publish unsigned prerelease
         if: contains(env.RELEASE_TAG, '-unsigned.')
@@ -301,7 +307,7 @@ jobs:
           prerelease: true
           uploadUpdaterJson: true
           uploadUpdaterSignatures: true
-          uploadWorkflowArtifacts: true
+          uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
 
       - name: Verify signed and notarized macOS bundles
         if: startsWith(matrix.platform, 'macos-') && !contains(env.RELEASE_TAG, '-unsigned.')
