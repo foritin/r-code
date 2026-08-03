@@ -2,17 +2,21 @@
  * 待批权限门 —— 运行中被权限阻塞的 tool call 在这里批复。
  * 数据源:task_detail 轮询(store.tasks);批复后刷新 detail。
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { permissionApprove } from "../../lib/ipc";
 import { permissionAttribution, permissionRiskLabel } from "../../lib/format";
 import { useTasksStore } from "../../store/tasks";
 import type { AgentRun, PermissionDecision, PermissionRequest } from "../../lib/types";
 
+const EMPTY_RUNS: AgentRun[] = [];
+
 export function PendingPermissions({ taskId }: { taskId: string }) {
-  const pending = useTasksStore(
-    (s) => s.details[taskId]?.permissions.filter((p) => p.decision === "pending") ?? []
+  const permissions = useTasksStore((s) => s.details[taskId]?.permissions);
+  const runs = useTasksStore((s) => s.details[taskId]?.runs);
+  const pending = useMemo(
+    () => permissions?.filter((permission) => permission.decision === "pending") ?? [],
+    [permissions],
   );
-  const runs = useTasksStore((s) => s.details[taskId]?.runs ?? []);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -38,7 +42,7 @@ export function PendingPermissions({ taskId }: { taskId: string }) {
         <PermissionCard
           key={p.id}
           permission={p}
-          runs={runs}
+          runs={runs ?? EMPTY_RUNS}
           busy={busyId === p.id}
           onDecide={decide}
         />

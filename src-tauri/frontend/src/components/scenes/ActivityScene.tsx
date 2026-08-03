@@ -11,7 +11,6 @@ import { IconActivity, IconArrowRight, IconCheck, IconProjects, IconShield } fro
 export function ActivityScene() {
   const tasks = useTasksStore((s) => s.tasks);
   const details = useTasksStore((s) => s.details);
-  const workspaces = useTasksStore((s) => s.workspaces);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshDetails = useTasksStore((s) => s.refreshDetails);
   const refreshActivity = useTasksStore((s) => s.refreshActivity);
@@ -27,9 +26,25 @@ export function ActivityScene() {
     await Promise.all([refreshActivity(), ids.length ? refreshDetails(ids) : Promise.resolve()]);
   }, 2500);
 
-  const activeTasks = useMemo(() => sortTasksByUrgency(tasks.filter((task) => task.state !== "archived"), details), [details, tasks]);
+  const { liveTasks, completed, activeSubagentCount } = useMemo(() => {
+    const orderedTasks = sortTasksByUrgency(
+      tasks.filter((task) => task.state !== "archived"),
+      details,
+    );
+    return {
+      liveTasks: orderedTasks.filter((task) => isTaskLive(task, details[task.id])),
+      completed: tasks.filter((task) => task.state === "idle").length,
+      activeSubagentCount: tasks.reduce(
+        (total, task) => total + (
+          details[task.id]?.runs.filter(
+            (run) => run.agent_kind === "subagent" && !run.ended_at,
+          ).length ?? 0
+        ),
+        0,
+      ),
+    };
+  }, [details, tasks]);
   const recentEvents = activityPage?.items ?? [];
-  const completed = tasks.filter((task) => task.state === "idle").length;
 
   return (
     <div className="scene scene-activity">
@@ -42,14 +57,14 @@ export function ActivityScene() {
         <section className="activity-summary" aria-label="工作概览">
           <Summary value={needsYou.length} label="待处理" tone="warm" />
           <Summary value={running.length} label="运行中" tone="success" />
-          <Summary value={tasks.reduce((total, task) => total + (details[task.id]?.runs.filter((run) => run.agent_kind === "subagent" && !run.ended_at).length ?? 0), 0)} label="活跃子代理" />
+          <Summary value={activeSubagentCount} label="活跃子代理" />
           <Summary value={completed} label="已完成" />
         </section>
 
         <section className="activity-section">
-          <div className="activity-section-head"><div><p className="section-kicker">IN PROGRESS</p><h2>正在推进</h2></div><span>{activeTasks.filter((task) => isTaskLive(task, details[task.id])).length} 个任务</span></div>
+          <div className="activity-section-head"><div><p className="section-kicker">IN PROGRESS</p><h2>正在推进</h2></div><span>{liveTasks.length} 个任务</span></div>
           <div className="activity-work-list">
-            {activeTasks.filter((task) => isTaskLive(task, details[task.id])).length === 0 ? <p className="activity-empty">没有正在运行的任务。</p> : activeTasks.filter((task) => isTaskLive(task, details[task.id])).slice(0, 8).map((task) => <ActivityTaskRow key={task.id} task={task} />)}
+            {liveTasks.length === 0 ? <p className="activity-empty">没有正在运行的任务。</p> : liveTasks.slice(0, 8).map((task) => <ActivityTaskRow key={task.id} task={task} />)}
           </div>
         </section>
 

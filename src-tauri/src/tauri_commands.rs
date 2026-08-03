@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 use hermes_core::InferenceOptions;
 use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
-    SessionBranch, Task, VerificationRecord, Workspace,
+    SessionBranch, Task, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
@@ -357,7 +357,7 @@ pub async fn cmd_accept_task(
     r_code_host::commands::accept_task(&state, &task_id).await
 }
 
-/// 获取任务路径在 Git 暂存区中的审核状态。
+/// 获取应用内持久化审核状态（与 Git 暂存区无关）。
 #[tauri::command]
 pub async fn cmd_review_git_status(
     state: State<'_, CommandState>,
@@ -366,7 +366,7 @@ pub async fn cmd_review_git_status(
     r_code_host::commands::review_git_status(&state, &task_id)
 }
 
-/// 接受一条新增或删除行到 Git 暂存区。
+/// 接受一条新增或删除行；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_line(
     state: State<'_, CommandState>,
@@ -377,7 +377,7 @@ pub async fn cmd_review_accept_line(
     r_code_host::commands::review_accept_line(&state, &task_id, &path, &line_id)
 }
 
-/// 接受一个任务文件到 Git 暂存区。
+/// 接受一个任务文件；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_file(
     state: State<'_, CommandState>,
@@ -387,13 +387,23 @@ pub async fn cmd_review_accept_file(
     r_code_host::commands::review_accept_file(&state, &task_id, &path)
 }
 
-/// 接受该任务的全部安全路径到 Git 暂存区。
+/// 接受该任务的全部待审核路径；仅写审核账本。
 #[tauri::command]
 pub async fn cmd_review_accept_all(
     state: State<'_, CommandState>,
     task_id: String,
 ) -> Result<r_code_store::ReviewAcceptResult, String> {
     r_code_host::commands::review_accept_all(&state, &task_id)
+}
+
+/// 拒绝一个文件并安全恢复其任务前内容。
+#[tauri::command]
+pub async fn cmd_review_reject_file(
+    state: State<'_, CommandState>,
+    task_id: String,
+    path: String,
+) -> Result<r_code_store::ReviewAcceptResult, String> {
+    r_code_host::commands::review_reject_file(&state, &task_id, &path).await
 }
 
 /// 获取审核页 Git 提交与推送状态。
@@ -405,6 +415,15 @@ pub async fn cmd_git_delivery_status(
     r_code_host::commands::git_delivery_status(&state, &task_id)
 }
 
+/// 显式将审核中保留的文件加入 Git 暂存区。
+#[tauri::command]
+pub async fn cmd_git_stage_accepted(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<r_code_store::GitDeliveryStatus, String> {
+    r_code_host::commands::git_stage_accepted(&state, &task_id)
+}
+
 /// 生成可编辑的提交信息建议。
 #[tauri::command]
 pub async fn cmd_git_suggest_commit_message(
@@ -414,7 +433,7 @@ pub async fn cmd_git_suggest_commit_message(
     r_code_host::commands::git_suggest_commit_message(&state, &task_id)
 }
 
-/// 提交本任务已经接受到暂存区的内容。
+/// 提交用户已显式加入暂存区的任务内容。
 #[tauri::command]
 pub async fn cmd_git_commit_task(
     state: State<'_, CommandState>,
@@ -567,6 +586,23 @@ pub async fn cmd_workspace_set_access_mode(
     access_mode: ProjectAccessMode,
 ) -> Result<Workspace, String> {
     r_code_host::commands::workspace_set_access_mode(&state, &workspace_path, access_mode).await
+}
+
+/// 以 generation CAS 更新项目记忆模式，并使未完成的旧快照失效。
+#[tauri::command]
+pub async fn cmd_workspace_set_memory_mode(
+    state: State<'_, CommandState>,
+    workspace_id: String,
+    expected_generation: u64,
+    memory_mode: WorkspaceMemoryMode,
+) -> Result<Workspace, String> {
+    r_code_host::commands::workspace_set_memory_mode(
+        &state,
+        &workspace_id,
+        expected_generation,
+        memory_mode,
+    )
+    .await
 }
 
 /// 获取项目仪表盘聚合数据。
@@ -776,6 +812,101 @@ pub async fn cmd_subagent_session_messages(
 
 /// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
 #[tauri::command]
+pub async fn cmd_memory_overview(
+    state: State<'_, CommandState>,
+) -> Result<r_code_store::MemoryOverview, String> {
+    r_code_host::commands::memory_overview(&state).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_update_settings(
+    state: State<'_, CommandState>,
+    update: r_code_core::MemoryReviewSettingsUpdate,
+) -> Result<r_code_core::MemoryReviewSettingsView, String> {
+    r_code_host::commands::memory_update_settings(&state, update).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_review_now(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<String>, String> {
+    r_code_host::commands::memory_review_now(&state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_retry_job(
+    state: State<'_, CommandState>,
+    job_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::memory_retry_job(&state, &job_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_cancel_job(
+    state: State<'_, CommandState>,
+    job_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::memory_cancel_job(&state, &job_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_add_entry(
+    state: State<'_, CommandState>,
+    draft: r_code_store::MemoryEntryDraft,
+) -> Result<r_code_core::MemoryEntry, String> {
+    r_code_host::commands::memory_add_entry(&state, draft).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_edit_entry(
+    state: State<'_, CommandState>,
+    entry_id: String,
+    edit: r_code_store::MemoryEntryEdit,
+) -> Result<r_code_core::MemoryEntry, String> {
+    r_code_host::commands::memory_edit_entry(&state, &entry_id, edit).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_delete_entry(
+    state: State<'_, CommandState>,
+    entry_id: String,
+    expected_version: u64,
+) -> Result<(), String> {
+    r_code_host::commands::memory_delete_entry(&state, &entry_id, expected_version).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_approve_candidate(
+    state: State<'_, CommandState>,
+    candidate_id: String,
+    edited_content: Option<String>,
+) -> Result<r_code_core::MemoryEntry, String> {
+    r_code_host::commands::memory_approve_candidate(
+        &state,
+        &candidate_id,
+        edited_content.as_deref(),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_reject_candidate(
+    state: State<'_, CommandState>,
+    candidate_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::memory_reject_candidate(&state, &candidate_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_memory_clear_all(
+    state: State<'_, CommandState>,
+) -> Result<r_code_core::MemoryReviewSettingsView, String> {
+    r_code_host::commands::memory_clear_all(&state).await
+}
+
+/// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。
+#[tauri::command]
 pub async fn cmd_legacy_memory_status(
     state: State<'_, CommandState>,
     workspace_path: String,
@@ -797,6 +928,106 @@ pub async fn cmd_logs_tail(
 #[tauri::command]
 pub async fn cmd_settings_get(state: State<'_, CommandState>) -> Result<serde_json::Value, String> {
     r_code_host::commands::settings_get(&state).await
+}
+
+/// 读取经过脱敏的 MCP 配置与实时状态；不会因查看设置页而启动第三方进程。
+#[tauri::command]
+pub async fn cmd_mcp_snapshot(
+    state: State<'_, CommandState>,
+) -> Result<r_code_host::mcp_manager::McpManagerSnapshot, String> {
+    r_code_host::commands::mcp_snapshot(&state).await
+}
+
+/// 新建或编辑自定义 MCP。新增及启动形态变化后保持关闭，等待单独确认。
+#[tauri::command]
+pub async fn cmd_mcp_upsert(
+    state: State<'_, CommandState>,
+    request: r_code_host::mcp_manager::McpUpsertRequest,
+) -> Result<r_code_host::mcp_manager::McpServerView, String> {
+    r_code_host::commands::mcp_upsert(&state, request).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_remove(
+    state: State<'_, CommandState>,
+    server_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::mcp_remove(&state, &server_id).await
+}
+
+/// 开关 MCP；第三方首次开启分两步，第一次返回逐字段预览和一次性令牌。
+#[tauri::command]
+pub async fn cmd_mcp_toggle(
+    state: State<'_, CommandState>,
+    server_id: String,
+    enabled: bool,
+    confirmation_token: Option<String>,
+) -> Result<r_code_host::mcp_manager::McpToggleResult, String> {
+    r_code_host::commands::mcp_toggle(&state, &server_id, enabled, confirmation_token.as_deref())
+        .await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_test_connection(
+    state: State<'_, CommandState>,
+    server_id: String,
+) -> Result<Vec<r_code_mcp::McpToolDescriptor>, String> {
+    r_code_host::commands::mcp_test_connection(&state, &server_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_credential_status(
+    state: State<'_, CommandState>,
+    server_id: String,
+) -> Result<Vec<r_code_host::mcp_manager::McpCredentialStatus>, String> {
+    r_code_host::commands::mcp_credential_status(&state, &server_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_set_credential(
+    state: State<'_, CommandState>,
+    server_id: String,
+    name: String,
+    value: String,
+) -> Result<(), String> {
+    r_code_host::commands::mcp_set_credential(&state, &server_id, &name, &value).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_delete_credential(
+    state: State<'_, CommandState>,
+    server_id: String,
+    name: String,
+) -> Result<(), String> {
+    r_code_host::commands::mcp_delete_credential(&state, &server_id, &name).await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_market_search(
+    state: State<'_, CommandState>,
+    query: Option<String>,
+    cursor: Option<String>,
+    limit: usize,
+) -> Result<r_code_mcp::MarketPage, String> {
+    r_code_host::commands::mcp_market_search(&state, query.as_deref(), cursor.as_deref(), limit)
+        .await
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_market_prepare_install(
+    state: State<'_, CommandState>,
+    request: r_code_host::mcp_manager::McpMarketInstallRequest,
+) -> Result<r_code_mcp::LaunchPreview, String> {
+    r_code_host::commands::mcp_market_prepare_install(&state, &request)
+}
+
+#[tauri::command]
+pub async fn cmd_mcp_market_install(
+    state: State<'_, CommandState>,
+    request: r_code_host::mcp_manager::McpMarketInstallRequest,
+    confirmation_token: String,
+) -> Result<r_code_host::mcp_manager::McpServerView, String> {
+    r_code_host::commands::mcp_market_install(&state, &request, &confirmation_token).await
 }
 
 /// 获取内置模型服务目录，驱动设置页的"新建服务"表单。

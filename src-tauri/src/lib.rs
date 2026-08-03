@@ -16,7 +16,10 @@ pub mod ipc;
 pub mod legacy_memory;
 pub mod log_buffer;
 pub mod logging;
+pub mod mcp_manager;
 pub mod mcp_server;
+pub mod mcp_settings;
+pub mod memory_runtime;
 pub mod migration;
 pub mod packaging;
 pub mod provider_catalog;
@@ -52,7 +55,9 @@ pub use replay::{EvidenceLevel, ReplayDepth, ReplayEntry, ReplayService};
 pub use search::{ReplacePreview, SearchMatch, SearchService};
 pub use security_config::{should_block_navigation, should_block_window_open, SecurityConfig};
 pub use skills::{SkillManager, SkillStatus};
-pub use support_bundle::{BundleContents, ConfigSummary, DbStats, LogEntry, SupportBundle};
+pub use support_bundle::{
+    BundleContents, ConfigSummary, DbStats, LogEntry, McpServerSupportSummary, SupportBundle,
+};
 pub use work_card::{
     EvidenceItem, FailureState, RequiredTest, RollbackPlan, TestStatus, TestType, WorkCard,
     WorkCardBoundary, WorkCardContract,

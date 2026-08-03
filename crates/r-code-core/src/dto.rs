@@ -959,6 +959,10 @@ pub enum NotificationKind {
     ReviewReady,
     /// 用户已对审查结果提出修改要求。
     ChangeRequested,
+    /// 全局记忆候选等待用户明确批准。
+    MemoryApprovalRequired,
+    /// 项目记忆已经由复盘任务自动更新。
+    MemoryProjectUpdated,
 }
 
 impl std::fmt::Display for NotificationKind {
@@ -967,6 +971,8 @@ impl std::fmt::Display for NotificationKind {
             Self::PermissionRequested => write!(f, "permission_requested"),
             Self::ReviewReady => write!(f, "review_ready"),
             Self::ChangeRequested => write!(f, "change_requested"),
+            Self::MemoryApprovalRequired => write!(f, "memory_approval_required"),
+            Self::MemoryProjectUpdated => write!(f, "memory_project_updated"),
         }
     }
 }
@@ -978,6 +984,8 @@ impl NotificationKind {
             "permission_requested" => Some(Self::PermissionRequested),
             "review_ready" => Some(Self::ReviewReady),
             "change_requested" => Some(Self::ChangeRequested),
+            "memory_approval_required" => Some(Self::MemoryApprovalRequired),
+            "memory_project_updated" => Some(Self::MemoryProjectUpdated),
             _ => None,
         }
     }

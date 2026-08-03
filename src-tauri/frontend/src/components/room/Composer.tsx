@@ -42,7 +42,7 @@ import { ProjectAccessSelector, projectAccessModeLabel } from "../ProjectAccessS
 import { ModelSwitcher } from "./ModelSwitcher";
 import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
 import { CodexModelConfiguration } from "./CodexModelConfiguration";
-import { IconChevronDown, IconSend, IconStop } from "../icons";
+import { IconChevronDown, IconRefresh, IconSend, IconStop } from "../icons";
 import {
   AttachmentButton,
   AttachmentTray,
@@ -122,6 +122,8 @@ function fileReferenceText(path: string): string {
 
 type RunningSendMode = Extract<AgentSendMode, "queue" | "steer" | "send_now">;
 
+const RUNNING_SEND_MODE_ORDER: readonly RunningSendMode[] = ["queue", "steer", "send_now"];
+
 function runningSendModeLabel(mode: RunningSendMode): string {
   switch (mode) {
     case "steer":
@@ -142,6 +144,11 @@ function runningSendModeTitle(mode: RunningSendMode): string {
     default:
       return "当前运行结束后再发送这条消息";
   }
+}
+
+function nextRunningSendMode(mode: RunningSendMode): RunningSendMode {
+  const index = RUNNING_SEND_MODE_ORDER.indexOf(mode);
+  return RUNNING_SEND_MODE_ORDER[(index + 1) % RUNNING_SEND_MODE_ORDER.length];
 }
 
 export function Composer({
@@ -186,6 +193,8 @@ export function Composer({
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyIndexRef = useRef<number | null>(null);
   const historyDraftRef = useRef("");
+  const historyLoadedTaskRef = useRef<string | null>(null);
+  const historyRequestRef = useRef<{ taskId: string; promise: Promise<string[]> } | null>(null);
   const initializedTaskRef = useRef<string | null>(null);
   const consumedFileReferencesRef = useRef(new Set<string>());
 
@@ -250,6 +259,8 @@ export function Composer({
     setInputHistory([]);
     historyIndexRef.current = null;
     historyDraftRef.current = "";
+    historyLoadedTaskRef.current = null;
+    historyRequestRef.current = null;
     setError(null);
     setNotice(null);
     setAt(null);
@@ -282,17 +293,29 @@ export function Composer({
     acknowledgeTaskFileReference(taskId, taskFileReference.requestId);
   }, [acknowledgeTaskFileReference, taskFileReference, taskId]);
 
+  const loadInputHistory = useCallback(() => {
+    const inFlight = historyRequestRef.current;
+    if (inFlight?.taskId === taskId) return inFlight.promise;
+    const promise = sessionMessages(taskId).then((messages) => messages.flatMap((message) => {
+      const value = message.kind === "message" && message.role === "user"
+        ? message.text?.trim()
+        : null;
+      return value && !value.startsWith("[system]") ? [value] : [];
+    }));
+    historyRequestRef.current = { taskId, promise };
+    void promise.catch(() => {
+      if (historyRequestRef.current?.promise === promise) historyRequestRef.current = null;
+    });
+    return promise;
+  }, [taskId]);
+
   useEffect(() => {
     let current = true;
-    void sessionMessages(taskId)
-      .then((messages) => {
+    void loadInputHistory()
+      .then((history) => {
         if (!current) return;
-        setInputHistory(messages.flatMap((message) => {
-          const value = message.kind === "message" && message.role === "user"
-            ? message.text?.trim()
-            : null;
-          return value && !value.startsWith("[system]") ? [value] : [];
-        }));
+        historyLoadedTaskRef.current = taskId;
+        setInputHistory(history);
       })
       .catch(() => {
         // 时间线仍会显示加载错误；输入历史只是增强能力，不应阻断发送。
@@ -300,7 +323,7 @@ export function Composer({
     return () => {
       current = false;
     };
-  }, [taskId]);
+  }, [loadInputHistory, taskId]);
 
   const leaveInputHistory = useCallback(() => {
     historyIndexRef.current = null;
@@ -777,6 +800,28 @@ export function Composer({
       const canStartBrowsing = e.key === "ArrowUp"
         && selectionCollapsed
         && (!multiline || atFirstCharacter);
+      if (
+        e.key === "ArrowUp"
+        && canStartBrowsing
+        && inputHistory.length === 0
+        && historyLoadedTaskRef.current !== taskId
+      ) {
+        e.preventDefault();
+        const draft = e.currentTarget.value;
+        void loadInputHistory().then((history) => {
+          if (history.length === 0) return;
+          historyLoadedTaskRef.current = taskId;
+          setInputHistory(history);
+          const textarea = taRef.current;
+          if (!textarea || textarea.value !== draft || historyIndexRef.current != null) return;
+          historyDraftRef.current = draft;
+          historyIndexRef.current = history.length - 1;
+          showHistoryValue(history[history.length - 1]);
+        }).catch(() => {
+          // A failed enhancement read leaves the draft untouched and may be retried.
+        });
+        return;
+      }
       if (inputHistory.length > 0 && (browsing || canStartBrowsing)) {
         e.preventDefault();
         if (!browsing) {
@@ -945,9 +990,93 @@ export function Composer({
             )}
           </div>
           <span className="spacer" />
-          {!running && (
+          {running ? (
+            <div className="running-send-actions" aria-label="运行中消息操作">
+              <div className={`run-send-mode-control mode-${runningSendMode}`}>
+                <button
+                  className="run-send-mode-label run-send-primary"
+                  type="button"
+                  disabled={sending || commandBusy}
+                  onClick={() => setRunningSendMode(nextRunningSendMode(runningSendMode))}
+                  aria-label={
+                    `当前发送方式：${runningSendModeLabel(runningSendMode)}。` +
+                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
+                  }
+                  title={
+                    `${runningSendModeTitle(runningSendMode)}；` +
+                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
+                  }
+                >
+                  <span className="run-send-mode-dot" aria-hidden="true" />
+                  <span>{runningSendModeLabel(runningSendMode)}</span>
+                  <IconRefresh className="run-send-mode-cycle" width={11} height={11} aria-hidden="true" />
+                  <kbd className="sr-only">Enter</kbd>
+                </button>
+                <Menu
+                  className="run-send-mode-menu-root"
+                  label="选择发送方式"
+                  placement="up"
+                  align="right"
+                  menuClassName="comp-more-menu"
+                  trigger={
+                    <button
+                      className="run-send-mode-trigger"
+                      type="button"
+                      disabled={sending || commandBusy}
+                      aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
+                      title="直接选择发送方式"
+                    >
+                      <IconChevronDown width={11} height={11} />
+                    </button>
+                  }
+                >
+                  {({ close }) => (
+                    <>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "queue"}
+                        hint="当前运行结束后发送，不打断这一轮"
+                        onSelect={() => setRunningSendMode("queue")}
+                      >
+                        排队发送
+                      </MenuItem>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "steer"}
+                        hint="补充到当前运行，原任务与上下文保持不变"
+                        onSelect={() => setRunningSendMode("steer")}
+                      >
+                        引导当前运行
+                      </MenuItem>
+                      <MenuItem
+                        close={close}
+                        checked={runningSendMode === "send_now"}
+                        className="is-destructive"
+                        hint="中断当前运行，优先处理这条消息"
+                        onSelect={() => setRunningSendMode("send_now")}
+                      >
+                        立即发送
+                      </MenuItem>
+                    </>
+                  )}
+                </Menu>
+              </div>
+              <button
+                className={`send running-send-button mode-${runningSendMode}`}
+                type="button"
+                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
+                onClick={() => void send(runningSendMode)}
+                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
+                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
+              >
+                <IconSend width={15} height={15} />
+                <span>{sending ? "发送中" : "发送"}</span>
+              </button>
+            </div>
+          ) : (
             <button
               className="send"
+              type="button"
               disabled={
                 (!text.trim() && sendableAttachments.length === 0)
                 || Boolean(attachmentBlockedReason)
@@ -965,70 +1094,7 @@ export function Composer({
         </div>
 
         {running && (
-          <div className="run-command-bar" aria-label="运行中消息操作">
-            <div className={`run-send-split mode-${runningSendMode}`}>
-              <button
-                className="run-command-action primary run-send-primary"
-                type="button"
-                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-                onClick={() => void send(runningSendMode)}
-                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
-                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
-              >
-                <IconSend width={11} height={11} />
-                <span>{runningSendModeLabel(runningSendMode)}</span>
-                <kbd>Enter</kbd>
-              </button>
-              <Menu
-                className="run-send-mode-menu-root"
-                label="选择发送方式"
-                placement="up"
-                align="left"
-                menuClassName="comp-more-menu"
-                trigger={
-                  <button
-                    className="run-command-more run-send-mode-trigger"
-                    type="button"
-                    disabled={sending || commandBusy}
-                    aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
-                    title="选择 Enter 的发送方式"
-                  >
-                    <IconChevronDown width={12} height={12} />
-                  </button>
-                }
-              >
-                {({ close }) => (
-                  <>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "queue"}
-                      hint="当前运行结束后发送，不打断这一轮"
-                      onSelect={() => setRunningSendMode("queue")}
-                    >
-                      排队发送
-                    </MenuItem>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "steer"}
-                      hint="补充到当前运行，原任务与上下文保持不变"
-                      onSelect={() => setRunningSendMode("steer")}
-                    >
-                      引导当前运行
-                    </MenuItem>
-                    <MenuItem
-                      close={close}
-                      checked={runningSendMode === "send_now"}
-                      className="is-destructive"
-                      hint="中断当前运行，优先处理这条消息"
-                      onSelect={() => setRunningSendMode("send_now")}
-                    >
-                      立即发送
-                    </MenuItem>
-                  </>
-                )}
-              </Menu>
-            </div>
-
+          <div className="run-command-bar" aria-label="队列与运行控制">
             <Menu
               role="dialog"
               label="待发送队列"

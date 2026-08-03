@@ -317,6 +317,18 @@ fn f20_nsis_uses_r_code_icons() {
     assert!(hooks.contains("/BRANDED_PROGRESS="));
 }
 
+/// F-20a: Regenerating the Windows icon invalidates the host build so that
+/// `cargo tauri dev` cannot silently reuse an executable with stale resources.
+#[test]
+fn f20a_windows_icon_changes_rebuild_the_host_binary() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let build_script = std::fs::read_to_string(manifest_dir.join("build.rs")).unwrap();
+    assert!(
+        build_script.contains("cargo:rerun-if-changed=../icons/icon.ico"),
+        "build.rs must register the external Windows icon as a Cargo input"
+    );
+}
+
 /// F-20b: Selecting "delete app data" also releases the managed MCP host that
 /// owns r-code.db, retries both Tauri data roots, and never touches an unrelated
 /// Codex MCP registration or executable.

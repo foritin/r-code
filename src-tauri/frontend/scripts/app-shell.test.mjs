@@ -1162,7 +1162,7 @@ test("legacy memory notices stay metadata-only and preserve workspace identity",
     );
 
     const memorySection = page.locator(".knowledge-memory-panel");
-    assert.equal(await memorySection.locator("textarea").count(), 0);
+    assert.ok(await memorySection.locator("textarea").count() >= 1, "the live AppData memory ledger remains available beside the read-only legacy notice");
     assert.doesNotMatch(await memorySection.innerText(), /保存记忆|记录架构约定、开发偏好与重要上下文/);
   } finally {
     await page.evaluate(async (paths) => {
@@ -1386,6 +1386,9 @@ test("plain Enter sends from the new-conversation composer while Shift+Enter kee
 test("composer Up and Down traverse this conversation's user input history", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(() => {
+    globalThis.__rCodeBrowserMockDelayMs = { cmd_session_messages: 450 };
+  });
 
   const taskRow = page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" });
   await taskRow.locator(".sidebar-task").click();
@@ -1394,6 +1397,10 @@ test("composer Up and Down traverse this conversation's user input history", asy
   const composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
   await composer.fill("尚未发送的草稿");
   await composer.press("ArrowUp");
+  await page.waitForFunction(() => (
+    document.querySelector('textarea[aria-label="给 Agent 的消息"]')?.value
+      === "梳理任务队列执行路径并修复并发状态竞争。"
+  ));
   assert.equal(await composer.inputValue(), "梳理任务队列执行路径并修复并发状态竞争。");
   await composer.press("ArrowUp");
   assert.equal(await composer.inputValue(), "编辑历史消息后，原分支的上下文还会保留吗？");
@@ -1405,6 +1412,9 @@ test("composer Up and Down traverse this conversation's user input history", asy
   await composer.fill("第一行\n第二行");
   await composer.press("ArrowUp");
   assert.equal(await composer.inputValue(), "第一行\n第二行", "multiline caret movement must stay native");
+  await page.evaluate(() => {
+    delete globalThis.__rCodeBrowserMockDelayMs;
+  });
   await page.close();
 });
 
@@ -1633,7 +1643,7 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   assert.equal(
     await secondLineAccept.isEnabled(),
     true,
-    "accepting one line must not lock unrelated line decisions while the Git mutation is pending",
+    "accepting one line must not lock unrelated line decisions while its ledger write is pending",
   );
   await secondLineAccept.click();
   await page.waitForFunction(
@@ -1641,6 +1651,7 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
       && [...root.querySelectorAll("button.diff-line-accept")].filter((button) => button.textContent === "已接受").length >= 2,
     await workbench.elementHandle(),
   );
+  await workbench.getByRole("button", { name: "接受文件", exact: true }).click();
 
   await workbench.getByRole("tab", { name: "验证与决策", exact: true }).click();
   const delivery = workbench.getByRole("region", { name: "Git 提交与推送" });
@@ -1648,12 +1659,15 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   assert.match(await delivery.innerText(), /codex\/demo/);
   assert.match(await delivery.innerText(), /origin\/codex\/demo/);
 
+  await delivery.getByRole("button", { name: "暂存已接受文件", exact: true }).click();
+  await delivery.getByText("1 个任务文件已暂存", { exact: false }).waitFor({ state: "visible" });
+
   await delivery.getByRole("button", { name: "自动生成", exact: true }).click();
   const message = delivery.getByPlaceholder("提交信息（可编辑）");
   await page.waitForFunction((element) => element.value.length > 0, await message.elementHandle());
   assert.equal(await message.inputValue(), "feat: update reviewed task files");
 
-  const commit = delivery.getByRole("button", { name: "提交已接受变更", exact: true });
+  const commit = delivery.getByRole("button", { name: "提交已暂存变更", exact: true });
   await commit.click();
   await delivery.getByRole("button", { name: "再次点击确认提交", exact: true }).click();
   await workbench.locator(".panel-note").filter({ hasText: "已提交 01234567" }).waitFor({ state: "visible" });
@@ -1704,7 +1718,7 @@ test("Needs You groups projects and synchronizes granular review acceptance live
   await acceptFile.waitFor({ state: "visible" });
   await acceptFile.click();
   const reviewInspector = inbox.getByLabel("审核摘要", { exact: true });
-  await reviewInspector.getByText("1 个文件待接受", { exact: true }).waitFor({ state: "visible" });
+  await reviewInspector.getByText("1 个文件待处理", { exact: true }).waitFor({ state: "visible" });
   assert.equal(await inbox.getByText("src/error.rs", { exact: true }).count(), 0);
 
   // Equivalent to accepting the remaining file from the task-local review workbench.
@@ -1714,7 +1728,7 @@ test("Needs You groups projects and synchronizes granular review acceptance live
     return reviewGitStatus("mock-task-review");
   });
   assert.equal(externallyAccepted.remaining_count, 0);
-  await reviewInspector.getByText("文件已全部接受", { exact: true }).first().waitFor({ state: "visible", timeout: 5000 });
+  await reviewInspector.getByText("审核项已全部处理", { exact: true }).first().waitFor({ state: "visible", timeout: 5000 });
 
   await inbox.getByRole("button", { name: "完成审核", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('[data-task-id="mock-task-review"]'));
@@ -1723,41 +1737,146 @@ test("Needs You groups projects and synchronizes granular review acceptance live
   await page.close();
 });
 
-test("unchanged detail polling preserves store references and coalesces concurrent reads", async () => {
+test("poll stores preserve references and coalesce concurrent list and detail reads", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   const result = await page.evaluate(async () => {
     const taskId = "mock-task-complete";
-    const { useTasksStore } = await import("/src/store/tasks.ts");
-    await useTasksStore.getState().refreshDetail(taskId);
+    const {
+      selectNeedsYou,
+      selectNeedsYouTaskIds,
+      selectPendingPermissions,
+      selectReviewReady,
+      selectRunning,
+      useTasksStore,
+    } = await import("/src/store/tasks.ts");
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshWorkspaces(),
+      useTasksStore.getState().refreshDetail(taskId),
+    ]);
     const initial = useTasksStore.getState().details[taskId];
+    const initialTasks = useTasksStore.getState().tasks;
+    const initialWorkspaces = useTasksStore.getState().workspaces;
+    const selectorState = useTasksStore.getState();
+    const selectors = [
+      selectRunning,
+      selectReviewReady,
+      selectPendingPermissions,
+      selectNeedsYou,
+      selectNeedsYouTaskIds,
+    ];
+    const derivedReferencesStable = selectors.every(
+      (selector) => selector(selectorState) === selector(selectorState),
+    );
     let detailCalls = 0;
+    let taskListCalls = 0;
+    let workspaceListCalls = 0;
     let referenceChanges = 0;
     globalThis.__rCodePerformanceIpcProbe = (name) => {
       if (name === "cmd_task_detail") detailCalls += 1;
+      if (name === "cmd_task_list") taskListCalls += 1;
+      if (name === "cmd_workspace_list") workspaceListCalls += 1;
+    };
+    globalThis.__rCodeBrowserMockDelayMs = {
+      cmd_task_list: 40,
+      cmd_workspace_list: 40,
+      cmd_task_detail: 40,
     };
     const unsubscribe = useTasksStore.subscribe((state, previous) => {
       if (state.details[taskId] !== previous.details[taskId]) referenceChanges += 1;
     });
 
     await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshWorkspaces(),
+      useTasksStore.getState().refreshWorkspaces(),
+      useTasksStore.getState().refreshWorkspaces(),
       useTasksStore.getState().refreshDetail(taskId),
       useTasksStore.getState().refreshDetail(taskId),
       useTasksStore.getState().refreshDetail(taskId),
     ]);
     const concurrentReferenceStable = useTasksStore.getState().details[taskId] === initial;
-    await useTasksStore.getState().refreshDetail(taskId);
+    const concurrentTaskReferenceStable = useTasksStore.getState().tasks === initialTasks;
+    const concurrentWorkspaceReferenceStable = useTasksStore.getState().workspaces === initialWorkspaces;
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshWorkspaces(),
+      useTasksStore.getState().refreshDetail(taskId),
+    ]);
     const sequentialReferenceStable = useTasksStore.getState().details[taskId] === initial;
     unsubscribe();
     delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeBrowserMockDelayMs;
 
-    return { detailCalls, referenceChanges, concurrentReferenceStable, sequentialReferenceStable };
+    return {
+      detailCalls,
+      taskListCalls,
+      workspaceListCalls,
+      referenceChanges,
+      concurrentReferenceStable,
+      concurrentTaskReferenceStable,
+      concurrentWorkspaceReferenceStable,
+      derivedReferencesStable,
+      sequentialReferenceStable,
+    };
   });
 
   assert.equal(result.detailCalls, 2, "three concurrent reads should share one IPC, followed by one sequential poll");
+  assert.equal(result.taskListCalls, 2, "three concurrent task-list refreshes should share one IPC");
+  assert.equal(result.workspaceListCalls, 2, "three concurrent workspace-list refreshes should share one IPC");
   assert.equal(result.referenceChanges, 0, "equal JSON payloads must not replace the retained detail graph");
   assert.equal(result.concurrentReferenceStable, true);
+  assert.equal(result.concurrentTaskReferenceStable, true);
+  assert.equal(result.concurrentWorkspaceReferenceStable, true);
+  assert.equal(result.derivedReferencesStable, true, "derived selectors must preserve references for immutable inputs");
   assert.equal(result.sequentialReferenceStable, true);
+  await page.close();
+});
+
+test("poll hooks share one live refresh listener across the WebView", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.addInitScript(() => {
+    const refreshListeners = new Set();
+    const addEventListener = window.addEventListener.bind(window);
+    const removeEventListener = window.removeEventListener.bind(window);
+    window.addEventListener = (type, listener, options) => {
+      if (type === "r-code:refresh-now") refreshListeners.add(listener);
+      addEventListener(type, listener, options);
+    };
+    window.removeEventListener = (type, listener, options) => {
+      if (type === "r-code:refresh-now") refreshListeners.delete(listener);
+      removeEventListener(type, listener, options);
+    };
+    globalThis.__rCodeRefreshListenerCount = () => refreshListeners.size;
+  });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const listenerCount = await page.evaluate(() => globalThis.__rCodeRefreshListenerCount());
+  assert.equal(
+    listenerCount,
+    2,
+    "the app startup refresher and shared poll scheduler should be the only live refresh listeners",
+  );
+  await page.close();
+});
+
+test("poll failures expose stale data and clear after a successful retry", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { reportSyncFailure } = await import("/src/store/sync-health.ts");
+    reportSyncFailure("startup-tasks", "会话列表", new Error("simulated offline"));
+  });
+
+  const warning = page.getByRole("alert").filter({ hasText: "数据可能已过期" });
+  await warning.waitFor({ state: "visible" });
+  assert.match(await warning.textContent(), /会话列表|后台数据/);
+
+  await warning.getByRole("button", { name: "重试" }).click();
+  await warning.waitFor({ state: "detached" });
   await page.close();
 });
