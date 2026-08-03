@@ -78,7 +78,8 @@ button.ver-row {
 .chg-accept,
 .chg-accepted,
 .chg-rejected,
-.chg-blocked {
+.chg-blocked,
+.chg-workspace {
   flex: none;
   border: 0;
   background: transparent;
@@ -92,11 +93,53 @@ button.ver-row {
 .chg-accept:hover { color: var(--accent); }
 .chg-blocked { color: var(--warning); }
 .chg-rejected { color: var(--danger); }
+.chg-workspace { color: var(--fg-faint); }
+.chg-workspace.conflict { color: var(--warning); }
+.chg-row.workspace-only .chg-path { color: var(--fg-faint); }
+
+@keyframes review-row-exit {
+  to { opacity: 0; transform: translateX(-18px); }
+}
+
+.chg-row.is-exiting {
+  pointer-events: none;
+  animation: review-row-exit 180ms ease-in both;
+}
 
 .review-accept-actions {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: var(--sp-2);
   margin-left: auto;
+}
+
+.chg-workspace-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  white-space: nowrap;
+}
+
+.btn.review-reject-all {
+  border-color: var(--edge-danger);
+  color: var(--danger);
+}
+
+.btn.review-reject-all:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: var(--tint-danger);
+}
+
+.btn.review-reject-all.confirm {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: var(--on-solid);
 }
 
 .diff-line-accept {
