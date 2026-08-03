@@ -10,6 +10,7 @@
 use chrono::Utc;
 use r_code_core::dto::{ProjectAccessMode, Workspace, WorkspaceMemoryMode};
 use r_code_core::error::ProductError;
+use std::path::Path;
 use uuid::Uuid;
 
 use crate::repositories::WorkspaceRepository;
@@ -65,8 +66,13 @@ impl<'a> WorkspaceService<'a> {
     ///
     /// 此调用只操作产品数据库，不会读取、修改或删除 `canonical_path` 指向的任何
     /// 磁盘内容。返回 `(是否清除了项目, 清除的会话数)`。
-    pub fn forget(&self, canonical_path: &str) -> Result<(bool, usize), ProductError> {
-        self.repo.remove(canonical_path)
+    pub fn forget(
+        &self,
+        canonical_path: &str,
+        blobs_dir: &Path,
+        projection_root: &Path,
+    ) -> Result<(bool, usize), ProductError> {
+        self.repo.remove(canonical_path, blobs_dir, projection_root)
     }
 
     /// 设置项目级 Agent 权限模式。
@@ -347,12 +353,15 @@ mod tests {
     fn test_forget_removes_recent_workspace_record() {
         let db = setup();
         let svc = WorkspaceService::new(&db);
+        let app_data = TempDir::new().unwrap();
+        let blobs = app_data.path().join("blobs");
+        let plans = app_data.path().join("plans");
 
         svc.open("/proj", "P").unwrap();
-        assert_eq!(svc.forget("/proj").unwrap(), (true, 0));
+        assert_eq!(svc.forget("/proj", &blobs, &plans).unwrap(), (true, 0));
         assert!(svc.get("/proj").unwrap().is_none());
         assert!(svc.list_recent(10).unwrap().is_empty());
-        assert_eq!(svc.forget("/proj").unwrap(), (false, 0));
+        assert_eq!(svc.forget("/proj", &blobs, &plans).unwrap(), (false, 0));
     }
 
     #[test]

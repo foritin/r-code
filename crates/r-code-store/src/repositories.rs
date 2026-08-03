@@ -4,7 +4,7 @@
 //! DateTime 字段以 ISO 8601 / RFC 3339 字符串 (TEXT) 存储。
 //! [doc-06 §3-8]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{
@@ -36,14 +36,8 @@ fn parse_ts(s: &str) -> Result<DateTime<Utc>, ProductError> {
 
 /// 解析 `TaskMode` 字符串。
 fn parse_task_mode(s: &str) -> Result<TaskMode, ProductError> {
-    match s {
-        "ask" => Ok(TaskMode::Ask),
-        "edit" => Ok(TaskMode::Edit),
-        "auto" => Ok(TaskMode::Auto),
-        _ => Err(ProductError::DatabaseError(format!(
-            "invalid task mode: {s}"
-        ))),
-    }
+    TaskMode::try_from_str(s)
+        .ok_or_else(|| ProductError::DatabaseError(format!("invalid task mode: {s}")))
 }
 
 /// 解析 Agent Run 角色字符串。
@@ -418,6 +412,28 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
+    /// 显式更新任务交互模式（同时更新 `updated_at`）。
+    pub fn set_mode(&self, id: &str, mode: TaskMode) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET mode = ?1, updated_at = ?2 WHERE id = ?3",
+            params![mode.to_string(), Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Update the durable task goal consumed by Plan and subsequent model turns.
+    pub fn set_goal(&self, id: &str, goal: &str) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        conn.execute(
+            "UPDATE tasks SET goal = ?1, updated_at = ?2 WHERE id = ?3",
+            params![goal.trim(), Utc::now().to_rfc3339(), id],
+        )
+        .map_err(db_err)?;
+        Ok(())
+    }
+
     /// 更新任务的可选工作区绑定（`None` 表示纯聊天会话）。
     pub fn set_workspace_path(
         &self,
@@ -532,14 +548,22 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
-    /// 永久删除任务。所有以 task_id 关联的产品记录由数据库外键级联清理。
+    /// 永久删除任务。所有以 task_id 关联的产品记录、Blob 引用与 Plan 投影由统一
+    /// 生命周期事务清理。
     /// 返回 false 表示任务在执行前已经不存在。
-    pub fn delete(&self, id: &str) -> Result<bool, ProductError> {
-        let conn = self.db.conn()?;
-        let changed = conn
-            .execute("DELETE FROM tasks WHERE id = ?1", params![id])
-            .map_err(db_err)?;
-        Ok(changed > 0)
+    pub fn delete(
+        &self,
+        id: &str,
+        blobs_dir: &Path,
+        projection_root: &Path,
+    ) -> Result<bool, ProductError> {
+        let result =
+            crate::lifecycle_purge::LifecyclePurgeStore::new(self.db, blobs_dir, projection_root)
+                .purge_task(id)?;
+        for warning in result.cleanup_warnings {
+            tracing::warn!(task_id = id, %warning, "task AppData cleanup will retry at startup");
+        }
+        Ok(result.removed_tasks > 0)
     }
 }
 
@@ -1421,6 +1445,24 @@ impl<'a> QueuedMessageRepository<'a> {
         Ok(messages)
     }
 
+    /// Lists tasks that still have durable queued work. Startup uses this projection to resume
+    /// delivery without loading every task or competing with task-local dispatchers.
+    pub fn list_queued_task_ids(&self) -> Result<Vec<String>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT task_id FROM queued_messages WHERE state = 'queued' \
+                 ORDER BY task_id ASC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query([]).map_err(db_err)?;
+        let mut task_ids = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            task_ids.push(row.get(0).map_err(db_err)?);
+        }
+        Ok(task_ids)
+    }
+
     /// 取得全局调度器下一条消息，并把它原子地标记为 dispatching。
     pub fn take_next(&self) -> Result<Option<QueuedMessage>, ProductError> {
         self.take_next_matching(None)
@@ -1611,6 +1653,14 @@ impl<'a> BlobStore<'a> {
         }
         Ok(())
     }
+
+    /// Retry files left after a committed deletion whose best-effort disk cleanup was blocked.
+    /// Only exact lowercase BLAKE3 filenames without a matching ledger row are touched.
+    pub fn prune_unreferenced_files(
+        &self,
+    ) -> Result<crate::lifecycle_purge::AppDataPruneReport, ProductError> {
+        crate::lifecycle_purge::prune_unreferenced_blob_files(self.db, &self.blobs_dir)
+    }
 }
 
 // ============================================================================
@@ -1735,38 +1785,22 @@ impl<'a> WorkspaceRepository<'a> {
 
     /// 从 R-Code 中清除一个 Workspace 及其关联产品记录。
     ///
-    /// `tasks` 的关联审计表由外键级联清理；通知按 `workspace_path` 显式清理。
-    /// 整个操作在单一事务中完成。磁盘目录不属于数据库，也不在此方法的能力范围内。
+    /// `tasks` 的关联审计表、Blob 引用与 Plan 投影由统一生命周期服务清理；通知按
+    /// `workspace_path` 显式清理。工作区磁盘目录永远不进入删除路径。
     /// 返回 `(是否存在并清除了 Workspace, 清除的会话数)`。
-    pub fn remove(&self, canonical_path: &str) -> Result<(bool, usize), ProductError> {
-        let mut conn = self.db.conn()?;
-        let tx = conn.transaction().map_err(db_err)?;
-        let removed_sessions = tx
-            .query_row(
-                "SELECT COUNT(*) FROM tasks WHERE workspace_path = ?1",
-                params![canonical_path],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(db_err)?;
-        tx.execute(
-            "DELETE FROM notifications WHERE workspace_path = ?1 \
-             OR task_id IN (SELECT id FROM tasks WHERE workspace_path = ?1)",
-            params![canonical_path],
-        )
-        .map_err(db_err)?;
-        tx.execute(
-            "DELETE FROM tasks WHERE workspace_path = ?1",
-            params![canonical_path],
-        )
-        .map_err(db_err)?;
-        let affected = tx
-            .execute(
-                "DELETE FROM workspaces WHERE canonical_path = ?1",
-                params![canonical_path],
-            )
-            .map_err(db_err)?;
-        tx.commit().map_err(db_err)?;
-        Ok((affected > 0, removed_sessions.max(0) as usize))
+    pub fn remove(
+        &self,
+        canonical_path: &str,
+        blobs_dir: &Path,
+        projection_root: &Path,
+    ) -> Result<(bool, usize), ProductError> {
+        let result =
+            crate::lifecycle_purge::LifecyclePurgeStore::new(self.db, blobs_dir, projection_root)
+                .purge_workspace(canonical_path)?;
+        for warning in result.cleanup_warnings {
+            tracing::warn!(workspace_path = canonical_path, %warning, "workspace AppData cleanup will retry at startup");
+        }
+        Ok((result.workspace_removed, result.removed_tasks))
     }
 
     /// 更新项目级 Agent 权限模式。
