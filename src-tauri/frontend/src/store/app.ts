@@ -55,6 +55,7 @@ export interface TaskFileReferenceRequest {
   path: string;
 }
 export type SettingsPane = "providers" | "agents" | "preferences" | "diagnostics" | "codex";
+export type KnowledgeTab = "memory" | "prompts" | "skills" | "mcp";
 
 interface AppState {
   scene: Scene;
@@ -74,6 +75,10 @@ interface AppState {
   taskFileReferences: Record<string, TaskFileReferenceRequest>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
+  /** 知识控制面当前分类；MCP 建议可深链到对应配置。 */
+  knowledgeTab: KnowledgeTab;
+  /** 来自 Agent MCP 建议的可选市场检索词。 */
+  mcpMarketQuery: string | null;
   /** Ctrl K 搜索 overlay */
   searchOpen: boolean;
   /** Editor 当前浏览的文件（Ctrl K 搜索写入，Editor 场景消费） */
@@ -112,6 +117,7 @@ interface AppState {
   toggleWorkbenchFocus: () => void;
   expandReview: () => void;
   setSettingsPane: (pane: SettingsPane) => void;
+  openKnowledge: (tab?: KnowledgeTab, marketQuery?: string | null) => void;
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
   setEditorFile: (path: string | null) => void;
@@ -274,6 +280,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   workbenchFiles: {},
   taskFileReferences: {},
   settingsPane: "providers",
+  knowledgeTab: "memory",
+  mcpMarketQuery: null,
   searchOpen: false,
   editorFile: null,
   railCollapsed: readCollapsed(),
@@ -503,6 +511,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       workspacePath: useTasksStore.getState().currentProjectId,
     }),
     settingsPane,
+  })),
+  openKnowledge: (knowledgeTab = "memory", marketQuery = null) => set((state) => ({
+    ...navigateTo(state, {
+      scene: "knowledge",
+      currentTaskId: null,
+      workspacePath: useTasksStore.getState().currentProjectId,
+    }),
+    knowledgeTab,
+    mcpMarketQuery: marketQuery,
   })),
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),

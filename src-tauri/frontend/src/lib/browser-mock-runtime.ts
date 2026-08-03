@@ -12,6 +12,17 @@ import type {
   InferenceOptions,
   LegacyMemoryStatus,
   LogEntry,
+  McpCredentialStatus,
+  McpLaunchPreview,
+  McpManagerSnapshot,
+  McpMarketInstallRequest,
+  McpMarketPage,
+  McpServerView,
+  McpUpsertRequest,
+  MemoryEntryDraft,
+  MemoryEntryEdit,
+  MemoryOverview,
+  MemoryReviewSettingsUpdate,
   ProjectAccessMode,
   ProviderModelsInput,
   ProviderModelsResponse,
@@ -26,6 +37,7 @@ import type {
   TerminalInfo,
   VerificationRecord,
   Workspace,
+  WorkspaceMemoryMode,
   WorkflowSkill,
   WorkflowSkillDraft,
 } from "./types";
@@ -61,6 +73,65 @@ import {
 type MockArgs = Record<string, unknown>;
 
 let sequence = 0;
+let mockMemoryOverview: MemoryOverview = {
+  settings: {
+    enabled: false,
+    reviewer: null,
+    trigger_every_turns: 10,
+    explicit_remember_immediate: true,
+    project_notification_mode: "on",
+    version: 1,
+    review_generation: 1,
+    physical_cleanup_pending: false,
+    updated_at: new Date().toISOString(),
+  },
+  global_entries: [],
+  project_entries: [],
+  pending_candidates: [],
+  recent_jobs: [],
+};
+let mockMcpServers: McpServerView[] = [
+  {
+    id: "r-code-research",
+    display_name: "R-Code 深度调研",
+    description: "内置多来源证据收集；需要完整调研时由主 Agent 选择。",
+    enabled: true,
+    builtin: true,
+    source: { kind: "builtin" },
+    transport: { type: "builtin" },
+    state: "stopped",
+    tool_count: 3,
+    launch_approved: true,
+  },
+];
+const mockMcpCredentials = new Map<string, Set<string>>();
+
+const mockMcpMarket: McpMarketPage = {
+  servers: [{
+    name: "io.example/demo-search",
+    title: "Demo Search MCP",
+    description: "浏览器 Demo 中的 Registry 条目。",
+    version: "1.0.0",
+    status: "active",
+    is_latest: true,
+    suggested_id: "demo-search",
+    install_options: [{
+      id: "npm:demo-search@1.0.0",
+      label: "npm · demo-search@1.0.0",
+      transport: {
+        type: "stdio",
+        package_kind: "npm",
+        executable: "npx",
+        args: ["-y", "demo-search@1.0.0"],
+        environment: [{ name: "DEMO_TOKEN", description: "访问令牌", required: true, secret: true }],
+      },
+    }],
+  }],
+  stale: false,
+  fetched_at: new Date().toISOString(),
+  registry_preview: true,
+  registry_unreviewed: true,
+};
 const defaultWorkflowSkills: WorkflowSkill[] = [
   {
     id: "builtin:skill-creator",
@@ -665,6 +736,45 @@ async function browserMockImagePreview(): Promise<ArrayBuffer> {
   return blob.arrayBuffer();
 }
 
+function mockMcpPreview(server: McpServerView): McpLaunchPreview {
+  const transport = server.transport.type === "stdio"
+    ? {
+        type: "stdio" as const,
+        executable: server.transport.executable,
+        args: server.transport.args,
+        environment_names: server.transport.environment_names,
+      }
+    : server.transport.type === "streamable_http"
+      ? {
+          type: "streamable_http" as const,
+          url: server.transport.url,
+          header_names: server.transport.header_names,
+        }
+      : { type: "stdio" as const, executable: "builtin", args: [], environment_names: [] };
+  return {
+    token: `demo-approval-${server.id}`,
+    server_id: server.id,
+    fingerprint: `demo-${server.id}`,
+    transport,
+    expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+  };
+}
+
+function mockMcpViewFromRequest(request: McpUpsertRequest): McpServerView {
+  return {
+    id: request.id,
+    display_name: request.display_name,
+    description: request.description,
+    enabled: false,
+    builtin: false,
+    source: { kind: "user" },
+    transport: request.transport,
+    state: "disabled",
+    tool_count: 0,
+    launch_approved: false,
+  };
+}
+
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
   (globalThis as { __rCodePerformanceIpcProbe?: (name: string, args: MockArgs) => void })
@@ -674,6 +784,9 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
   if (delayMs > 0) {
     await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
   }
+  const forcedFailure = (globalThis as { __rCodeBrowserMockFailures?: Record<string, string> })
+    .__rCodeBrowserMockFailures?.[command];
+  if (forcedFailure) throw new Error(forcedFailure);
   switch (command) {
     case "ping": return true;
 
@@ -1035,6 +1148,15 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       workspace.last_opened_at = nowIso();
       return copy(workspace);
     }
+    case "cmd_workspace_set_memory_mode": {
+      const workspace = browserMockWorkspaces.find((item) => item.id === stringArg(args, "workspaceId"));
+      if (!workspace) throw new Error("项目不存在");
+      const expected = typeof args.expectedGeneration === "number" ? args.expectedGeneration : 0;
+      if (workspace.memory_generation !== expected) throw new Error("项目记忆设置已在其他位置更新");
+      workspace.memory_mode = args.memoryMode as WorkspaceMemoryMode;
+      workspace.memory_generation += 1;
+      return copy(workspace);
+    }
     case "cmd_workspace_dashboard": return copy(browserMockWorkspaceDashboard(stringArg(args, "workspacePath")));
     case "cmd_project_activity_list": return copy(browserMockActivityList(stringArg(args, "workspacePath")));
     case "cmd_activity_list": return copy(browserMockActivityList());
@@ -1093,11 +1215,186 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_session_messages": return copy(browserMockMessages(stringArg(args, "taskId")));
     case "cmd_subagent_session_messages": return copy(browserMockSubagentMessages(stringArg(args, "taskId"), stringArg(args, "subagentId")));
 
+    case "cmd_memory_overview": return copy(mockMemoryOverview);
+    case "cmd_memory_update_settings": {
+      const update = args.update as MemoryReviewSettingsUpdate;
+      if (update.expected_version !== mockMemoryOverview.settings.version) throw new Error("记忆设置已在其他位置更新");
+      const selectionChanged = mockMemoryOverview.settings.enabled !== update.enabled
+        || JSON.stringify(mockMemoryOverview.settings.reviewer) !== JSON.stringify(update.reviewer);
+      mockMemoryOverview.settings = {
+        ...mockMemoryOverview.settings,
+        ...update,
+        version: mockMemoryOverview.settings.version + 1,
+        review_generation: mockMemoryOverview.settings.review_generation + (selectionChanged ? 1 : 0),
+        updated_at: nowIso(),
+      };
+      return copy(mockMemoryOverview.settings);
+    }
+    case "cmd_memory_review_now": {
+      if (!mockMemoryOverview.settings.enabled || !mockMemoryOverview.settings.reviewer) return null;
+      const id = `memory-job-${++sequence}`;
+      mockMemoryOverview.recent_jobs.unshift({
+        sequence: String(sequence), id, task_id: stringArg(args, "taskId"), source_workspace_id: null,
+        trigger: "manual", status: "queued", provider_name: mockMemoryOverview.settings.reviewer.provider_name,
+        model: mockMemoryOverview.settings.reviewer.model, attempt: 0, suppressed_turn_count: 0,
+        error_code: null, created_at: nowIso(), updated_at: nowIso(),
+      });
+      return id;
+    }
+    case "cmd_memory_retry_job": {
+      const job = mockMemoryOverview.recent_jobs.find((item) => item.id === stringArg(args, "jobId"));
+      if (job) { job.status = "queued"; job.error_code = null; job.updated_at = nowIso(); }
+      return undefined;
+    }
+    case "cmd_memory_cancel_job": {
+      const job = mockMemoryOverview.recent_jobs.find((item) => item.id === stringArg(args, "jobId"));
+      if (job) { job.status = "cancelled"; job.updated_at = nowIso(); }
+      return undefined;
+    }
+    case "cmd_memory_add_entry": {
+      const draft = args.draft as MemoryEntryDraft;
+      const id = `memory-entry-${++sequence}`;
+      const entry = {
+        id,
+        owner: draft.scope === "global"
+          ? { scope: "global" as const, authorization: "manual" as const }
+          : { scope: "project" as const, workspace_id: draft.workspace_id ?? "", origin: "manual" as const },
+        kind: draft.kind,
+        content: draft.content,
+        normalized_hash: `demo-${sequence}`,
+        version: 1,
+        pinned: draft.pinned,
+        source_job_id: null,
+        source_candidate_id: null,
+        created_at: nowIso(),
+        updated_at: nowIso(),
+      };
+      (draft.scope === "global" ? mockMemoryOverview.global_entries : mockMemoryOverview.project_entries).unshift(entry);
+      return copy(entry);
+    }
+    case "cmd_memory_edit_entry": {
+      const edit = args.edit as MemoryEntryEdit;
+      const entry = [...mockMemoryOverview.global_entries, ...mockMemoryOverview.project_entries]
+        .find((item) => item.id === stringArg(args, "entryId"));
+      if (!entry) throw new Error("记忆不存在");
+      if (entry.version !== edit.expected_version) throw new Error("记忆已在其他位置更新");
+      Object.assign(entry, { kind: edit.kind, content: edit.content, pinned: edit.pinned, version: entry.version + 1, updated_at: nowIso() });
+      return copy(entry);
+    }
+    case "cmd_memory_delete_entry": {
+      const id = stringArg(args, "entryId");
+      mockMemoryOverview.global_entries = mockMemoryOverview.global_entries.filter((entry) => entry.id !== id);
+      mockMemoryOverview.project_entries = mockMemoryOverview.project_entries.filter((entry) => entry.id !== id);
+      return undefined;
+    }
+    case "cmd_memory_approve_candidate": {
+      const id = stringArg(args, "candidateId");
+      const candidate = mockMemoryOverview.pending_candidates.find((item) => item.id === id);
+      if (!candidate) throw new Error("候选不存在");
+      mockMemoryOverview.pending_candidates = mockMemoryOverview.pending_candidates.filter((item) => item.id !== id);
+      const content = optionalStringArg(args, "editedContent") ?? candidate.proposed_content;
+      const entry = {
+        id: `memory-entry-${++sequence}`, owner: { scope: "global" as const, authorization: "approved_candidate" as const },
+        kind: candidate.kind, content, normalized_hash: `demo-${sequence}`, version: 1, pinned: false,
+        source_job_id: null, source_candidate_id: candidate.id, created_at: nowIso(), updated_at: nowIso(),
+      };
+      mockMemoryOverview.global_entries.unshift(entry);
+      return copy(entry);
+    }
+    case "cmd_memory_reject_candidate": {
+      const id = stringArg(args, "candidateId");
+      mockMemoryOverview.pending_candidates = mockMemoryOverview.pending_candidates.filter((item) => item.id !== id);
+      return undefined;
+    }
+    case "cmd_memory_clear_all": {
+      mockMemoryOverview = {
+        ...mockMemoryOverview,
+        settings: { ...mockMemoryOverview.settings, enabled: false, reviewer: null, version: mockMemoryOverview.settings.version + 1, review_generation: mockMemoryOverview.settings.review_generation + 1, updated_at: nowIso() },
+        global_entries: [], project_entries: [], pending_candidates: [], recent_jobs: [],
+      };
+      return copy(mockMemoryOverview.settings);
+    }
     case "cmd_legacy_memory_status": return copy(
       legacyMemoryStatusByWorkspace.get(stringArg(args, "workspacePath"))
         ?? { exists: false, git_tracking: "unknown" },
     );
     case "cmd_settings_get": return copy(browserMockSettings);
+    case "cmd_mcp_snapshot": return copy({ servers: mockMcpServers } satisfies McpManagerSnapshot);
+    case "cmd_mcp_upsert": {
+      const request = args.request as McpUpsertRequest;
+      const server = mockMcpViewFromRequest(request);
+      mockMcpServers = [...mockMcpServers.filter((item) => item.id !== server.id), server];
+      return copy(server);
+    }
+    case "cmd_mcp_remove": {
+      const id = stringArg(args, "serverId");
+      mockMcpServers = mockMcpServers.filter((server) => server.id !== id || server.builtin);
+      return undefined;
+    }
+    case "cmd_mcp_toggle": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server) throw new Error(`未找到 MCP 服务：${id}`);
+      const enabled = args.enabled === true;
+      const confirmation = optionalStringArg(args, "confirmationToken");
+      if (enabled && !server.builtin && !server.launch_approved && !confirmation) {
+        return copy({ server, confirmation: mockMcpPreview(server) });
+      }
+      server.enabled = enabled;
+      server.state = enabled ? "stopped" : "disabled";
+      if (confirmation) server.launch_approved = true;
+      return copy({ server });
+    }
+    case "cmd_mcp_test_connection": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server?.enabled) throw new Error("请先启用该 MCP 服务");
+      server.state = "running";
+      server.tool_count = Math.max(1, server.tool_count);
+      return [{ server_id: id, name: "demo_tool", description: "Demo tool", input_schema: { type: "object" }, read_only: true }];
+    }
+    case "cmd_mcp_credential_status": {
+      const id = stringArg(args, "serverId");
+      const server = mockMcpServers.find((item) => item.id === id);
+      if (!server) throw new Error(`未找到 MCP 服务：${id}`);
+      const names = server.transport.type === "stdio"
+        ? server.transport.environment_names
+        : server.transport.type === "streamable_http" ? server.transport.header_names : [];
+      const configured = mockMcpCredentials.get(id) ?? new Set<string>();
+      return copy(names.map((name): McpCredentialStatus => ({ name, configured: configured.has(name) })));
+    }
+    case "cmd_mcp_set_credential": {
+      const id = stringArg(args, "serverId");
+      const configured = mockMcpCredentials.get(id) ?? new Set<string>();
+      if (stringArg(args, "value")) configured.add(stringArg(args, "name"));
+      mockMcpCredentials.set(id, configured);
+      return undefined;
+    }
+    case "cmd_mcp_delete_credential": {
+      mockMcpCredentials.get(stringArg(args, "serverId"))?.delete(stringArg(args, "name"));
+      return undefined;
+    }
+    case "cmd_mcp_market_search": return copy(mockMcpMarket);
+    case "cmd_mcp_market_prepare_install": {
+      const request = args.request as McpMarketInstallRequest;
+      const option = request.server.install_options.find((item) => item.id === request.option_id);
+      if (!option) throw new Error("所选启动方案不存在");
+      const transport = option.transport.type === "stdio"
+        ? { type: "stdio" as const, executable: option.transport.executable, args: option.transport.args, environment_names: option.transport.environment.map((item) => item.name) }
+        : { type: "streamable_http" as const, url: option.transport.url, header_names: option.transport.headers.map((item) => item.name) };
+      return copy({ token: `demo-install-${request.server_id}`, server_id: request.server_id, fingerprint: `demo-${request.server_id}`, transport, expires_at: new Date(Date.now() + 300_000).toISOString() });
+    }
+    case "cmd_mcp_market_install": {
+      const request = args.request as McpMarketInstallRequest;
+      const option = request.server.install_options.find((item) => item.id === request.option_id);
+      if (!option) throw new Error("所选启动方案不存在");
+      const transport = option.transport.type === "stdio"
+        ? { type: "stdio" as const, executable: option.transport.executable, args: option.transport.args, environment_names: option.transport.environment.map((item) => item.name) }
+        : { type: "streamable_http" as const, url: option.transport.url, header_names: option.transport.headers.map((item) => item.name) };
+      const server: McpServerView = { id: request.server_id, display_name: request.server.title, description: request.server.description, enabled: false, builtin: false, source: { kind: "registry", registry_url: "https://registry.modelcontextprotocol.io/v0.1/servers", name: request.server.name, version: request.server.version }, transport, state: "disabled", tool_count: 0, launch_approved: false };
+      mockMcpServers = [...mockMcpServers.filter((item) => item.id !== server.id), server];
+      return copy(server);
+    }
     case "cmd_provider_catalog": return copy(browserMockProviderCatalog);
     case "cmd_provider_models": return copy(providerModels(args.request as ProviderModelsInput));
     case "cmd_settings_set": setConfigValue(stringArg(args, "key"), args.value); return undefined;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
@@ -6,6 +6,7 @@ import { notificationList, notificationMarkAllRead, notificationMarkRead } from 
 import type { Notification, NotificationPage } from "../../lib/types";
 import { requestOnboarding } from "../../lib/onboarding";
 import { isMacPlatform, keyLabel } from "../../lib/keys";
+import { usePoll } from "../../lib/poll";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import {
   IconBell,
@@ -41,18 +42,12 @@ export function MenuBar() {
   const [notificationPage, setNotificationPage] = useState<NotificationPage | null>(null);
 
   const refreshNotifications = async () => {
-    try {
-      setNotificationPage(await notificationList());
-    } catch {
-      // 顶栏通知不应阻断主工作流；下一次轮询会再试。
-    }
+    setNotificationPage(await notificationList());
   };
 
-  useEffect(() => {
-    void refreshNotifications();
-    const timer = window.setInterval(() => void refreshNotifications(), 15_000);
-    return () => window.clearInterval(timer);
-  }, []);
+  // 跟随全局聚焦/可见性预算：应用在后台时不再维持独立定时器，恢复焦点后
+  // 立即刷新；失败进入统一同步健康提示，而不是静默保留陈旧未读数。
+  usePoll(refreshNotifications, 15_000, true, "通知中心");
 
   const openNotification = async (notification: Notification) => {
     try {

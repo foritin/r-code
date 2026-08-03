@@ -85,6 +85,12 @@
   contain-intrinsic-size:auto 320px;
 }
 .timeline-turn + .timeline-turn { margin-top:var(--sp-6); }
+.timeline-load-earlier {
+  display:block; min-height:30px; margin:0 auto var(--sp-6); padding:0 12px;
+  border:1px solid var(--border); border-radius:999px; background:var(--bg-panel);
+  color:var(--fg-muted); font:var(--text-meta) var(--font-ui);
+}
+.timeline-load-earlier:hover { border-color:var(--border-strong); color:var(--fg); }
 .timeline-run-summaries,
 .timeline-turn-trace { max-width:min(94%,var(--measure)); }
 .timeline-run-summaries { margin:0 0 var(--sp-4); }
