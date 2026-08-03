@@ -89,7 +89,26 @@ test("release workflow refuses unsigned releases and verifies platform signature
   assert.match(workflow, /signtool[\s\S]*verify/);
   assert.match(workflow, /r-code-sbom\.cdx\.json/);
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
+  assert.match(workflow, /Verify release credentials are configured/);
+  assert.match(workflow, /Missing required release secrets/);
+  assert.equal(
+    (workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? []).length,
+    2,
+    "both release jobs that clone agent-core must use the private-submodule token",
+  );
   assert.doesNotMatch(workflow, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
+});
+
+test("CI authenticates every private agent-core checkout", () => {
+  const workflow = fs.readFileSync(
+    path.join(repoRoot, ".github", "workflows", "ci.yml"),
+    "utf8",
+  );
+
+  const submoduleInitializers = workflow.match(/git submodule update --init --recursive --depth 1 -- vendor\/agent-core/g) ?? [];
+  const privateTokens = workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? [];
+  assert.equal(submoduleInitializers.length, 6);
+  assert.equal(privateTokens.length, submoduleInitializers.length);
 });
 
 test("supply-chain generator emits CycloneDX and separates workspace packages", () => {

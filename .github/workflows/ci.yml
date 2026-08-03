@@ -40,6 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # GITHUB_TOKEN is scoped to this repository and cannot clone the
+          # private agent-core submodule. PAT_TOKEN is a read-only fine-grained
+          # token with Contents access to foritin/agent-core.
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       - uses: dtolnay/rust-toolchain@stable
@@ -53,6 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       - uses: dtolnay/rust-toolchain@stable
@@ -70,6 +77,8 @@ jobs:
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       - uses: dtolnay/rust-toolchain@stable
@@ -82,6 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       - uses: dtolnay/rust-toolchain@stable
@@ -96,6 +107,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       - uses: dtolnay/rust-toolchain@stable
@@ -110,6 +123,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
       - name: Initialize build submodule
         run: git submodule update --init --recursive --depth 1 -- vendor/agent-core
       # 比对的是「父仓记录的 gitlink」与「实际 checkout 出来的 HEAD」。
