@@ -1,5 +1,10 @@
 # R-Code
 
+[![CI](https://github.com/foritin/r-code/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/foritin/r-code/actions/workflows/ci.yml)
+[![Flaky Test Report](https://github.com/foritin/r-code/actions/workflows/flaky-tests.yml/badge.svg?branch=main)](https://github.com/foritin/r-code/actions/workflows/flaky-tests.yml)
+[![Release](https://img.shields.io/github/v/release/foritin/r-code?include_prereleases&sort=semver&label=release)](https://github.com/foritin/r-code/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-orange.svg)](./LICENSE)
+
 Session-first AI coding desktop app, built with Rust, Tauri 2, React and TypeScript.
 
 R-Code 把对话、模型执行、工具审批、文件变更、验证和回放组织成可追溯的任务。项目当前处于 `0.x` 阶段；发布版本和用户可见变化见 [Releases](https://github.com/foritin/r-code/releases) 与 [CHANGELOG.md](./CHANGELOG.md)。
@@ -160,6 +165,9 @@ r-code/
 ## 文档
 
 - [文档索引](./docs/README.md)
+- [贡献指南](./CONTRIBUTING.md)
+- [支持与问题反馈](./SUPPORT.md)
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
 - [架构与实现细节](./docs/ARCHITECTURE.md)
 - [联网工具与 MCP](./docs/mcp.md)
 - [演进记忆](./docs/memory.md)
