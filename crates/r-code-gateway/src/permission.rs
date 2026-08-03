@@ -81,14 +81,15 @@ impl PermissionEngine {
         }
     }
 
-    /// 返回已有规则可直接得出的结果。严格模式只执行显式拒绝规则，避免
-    /// “总是允许”绕过“请求批准”的产品承诺。
+    /// 返回已有规则可直接得出的结果。
+    ///
+    /// `AllowAlways` 本身就是用户在“请求批准”模式下做出的显式授权；该模式只要求
+    /// 未授权调用先询问，不能反过来忽略用户刚保存的任务级规则。
     async fn standing_result(
         &self,
         task_id: &str,
         tool_name: &str,
         target: Option<&str>,
-        honor_allow_rule: bool,
     ) -> Option<PermissionCheckResult> {
         let key = StandingRuleKey {
             task_id: task_id.to_string(),
@@ -96,13 +97,18 @@ impl PermissionEngine {
             target: target.map(ToOwned::to_owned),
         };
         let rules = self.standing_rules.read().await;
-        match rules.get(&key) {
+        // Decisions made from the generic approval card are stored without a target and therefore
+        // act as a task/tool wildcard. An explicitly targeted rule still wins when both exist.
+        let decision = rules.get(&key).or_else(|| {
+            let mut wildcard = key.clone();
+            wildcard.target = None;
+            rules.get(&wildcard)
+        });
+        match decision {
             Some(PermissionDecision::Deny) => Some(PermissionCheckResult::Denied(
                 "denied by standing rule".to_string(),
             )),
-            Some(PermissionDecision::AllowAlways | PermissionDecision::Allow)
-                if honor_allow_rule =>
-            {
+            Some(PermissionDecision::AllowAlways | PermissionDecision::Allow) => {
                 Some(PermissionCheckResult::Allowed)
             }
             _ => None,
@@ -147,15 +153,7 @@ impl PermissionEngine {
                 "risk level R4: pre-rejected by policy".to_string(),
             );
         }
-        if let Some(result) = self
-            .standing_result(
-                task_id,
-                tool_name,
-                target,
-                access_mode != ProjectAccessMode::RequestApproval,
-            )
-            .await
-        {
+        if let Some(result) = self.standing_result(task_id, tool_name, target).await {
             return result;
         }
         if !Self::requires_approval(access_mode, risk_level) {
@@ -293,15 +291,7 @@ impl PermissionEngine {
                 "risk level R4: pre-rejected by policy".to_string(),
             );
         }
-        if let Some(result) = self
-            .standing_result(
-                task_id,
-                tool_name,
-                target,
-                access_mode != ProjectAccessMode::RequestApproval,
-            )
-            .await
-        {
+        if let Some(result) = self.standing_result(task_id, tool_name, target).await {
             return result;
         }
         if !Self::requires_approval(access_mode, risk_level) {
@@ -486,6 +476,46 @@ mod tests {
             )
             .await;
         assert!(matches!(r2, PermissionCheckResult::NeedsApproval(_)));
+    }
+
+    #[tokio::test]
+    async fn request_approval_honors_allow_always_for_the_same_task_and_tool() {
+        let engine = PermissionEngine::new();
+        let first = engine
+            .check_detailed_with_access_mode(
+                "t1",
+                "call-1",
+                Some("run-1"),
+                Some("main:run-1"),
+                "web_fetch",
+                RiskLevel::R1,
+                "fetch public documentation",
+                Some("https://milvus.io/docs/"),
+                ProjectAccessMode::RequestApproval,
+            )
+            .await;
+        let PermissionCheckResult::NeedsApproval(request) = first else {
+            panic!("the first request must require approval");
+        };
+
+        engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            engine
+                .check_with_access_mode(
+                    "t1",
+                    "web_fetch",
+                    RiskLevel::R1,
+                    Some("https://milvus.io/docs/full-text-search.md"),
+                    ProjectAccessMode::RequestApproval,
+                )
+                .await,
+            PermissionCheckResult::Allowed
+        );
+        assert!(engine.pending_for_task("t1").await.is_empty());
     }
 
     #[tokio::test]

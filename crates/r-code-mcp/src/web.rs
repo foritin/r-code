@@ -381,20 +381,11 @@ impl WebClient {
                     .get("location")
                     .ok_or(WebError::InvalidRedirect)?;
                 let next_url = url.join(location).map_err(|_| WebError::InvalidRedirect)?;
-                if url.origin() != next_url.origin() {
-                    // Search credentials are scoped to their configured provider. A provider or
-                    // compromised intermediary must not be able to redirect them to another
-                    // origin. Non-sensitive negotiation headers such as Accept are retained.
-                    headers.retain(|name, _| {
-                        !matches!(
-                            name.to_ascii_lowercase().as_str(),
-                            "authorization"
-                                | "proxy-authorization"
-                                | "cookie"
-                                | "x-subscription-token"
-                        )
-                    });
-                }
+                update_redirect_headers(
+                    &mut headers,
+                    &response.headers,
+                    url.origin() == next_url.origin(),
+                );
                 url = next_url;
                 continue;
             }
@@ -440,6 +431,44 @@ impl WebClient {
         }
         Ok(addresses)
     }
+}
+
+/// Carry a bounded challenge cookie only across a same-origin redirect. Some documentation sites
+/// issue a one-hop bot/challenge cookie and redirect back to the same URL; dropping that cookie
+/// turns the hop into an artificial redirect loop. Provider credentials and cookies are always
+/// removed before following a cross-origin Location.
+fn update_redirect_headers(
+    request_headers: &mut BTreeMap<String, String>,
+    response_headers: &BTreeMap<String, String>,
+    same_origin: bool,
+) {
+    if !same_origin {
+        request_headers.retain(|name, _| {
+            !matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization" | "proxy-authorization" | "cookie" | "x-subscription-token"
+            )
+        });
+        return;
+    }
+
+    let Some(cookie) = response_headers
+        .get("set-cookie")
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .filter(|value| {
+            let Some((name, _)) = value.split_once('=') else {
+                return false;
+            };
+            !name.is_empty()
+                && value.len() <= 4_096
+                && value.is_ascii()
+                && !value.bytes().any(|byte| byte.is_ascii_control())
+        })
+    else {
+        return;
+    };
+    request_headers.insert("cookie".to_string(), cookie.to_string());
 }
 
 struct SafeResponse {
@@ -670,5 +699,46 @@ fn web_error_code(error: &WebError) -> &'static str {
         WebError::Decode => "decode_failed",
         WebError::InvalidQuery => "invalid_query",
         WebError::MissingSearchCredential => "missing_credential",
+    }
+}
+
+#[cfg(test)]
+mod redirect_header_tests {
+    use super::*;
+
+    #[test]
+    fn same_origin_redirect_carries_only_the_cookie_pair() {
+        let mut request = BTreeMap::new();
+        let response = BTreeMap::from([(
+            "set-cookie".to_string(),
+            "milvus_challenge=abc123; Path=/; HttpOnly; SameSite=Lax".to_string(),
+        )]);
+
+        update_redirect_headers(&mut request, &response, true);
+
+        assert_eq!(
+            request.get("cookie").map(String::as_str),
+            Some("milvus_challenge=abc123")
+        );
+    }
+
+    #[test]
+    fn cross_origin_redirect_strips_credentials_and_cookie() {
+        let mut request = BTreeMap::from([
+            ("accept".to_string(), "application/json".to_string()),
+            ("authorization".to_string(), "Bearer secret".to_string()),
+            ("cookie".to_string(), "challenge=secret".to_string()),
+            ("x-subscription-token".to_string(), "secret".to_string()),
+        ]);
+
+        update_redirect_headers(&mut request, &BTreeMap::new(), false);
+
+        assert_eq!(
+            request.get("accept").map(String::as_str),
+            Some("application/json")
+        );
+        assert!(!request.contains_key("authorization"));
+        assert!(!request.contains_key("cookie"));
+        assert!(!request.contains_key("x-subscription-token"));
     }
 }
