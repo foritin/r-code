@@ -17,6 +17,7 @@
 //!
 //! [doc-12 §1] [doc-06 §3.7]
 
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -172,6 +173,94 @@ impl GitService {
     pub fn stage(&self, path: &str) -> Result<(), ProductError> {
         self.run_git(&["add", "--", path])?;
         Ok(())
+    }
+
+    /// Stage several explicitly selected paths in one Git process.
+    pub fn stage_paths(&self, paths: &[String]) -> Result<(), ProductError> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        // Passing every path as a process argument hits Windows' command-line length limit on
+        // larger reviews. NUL-delimited stdin is one Git process, preserves odd filenames, and
+        // keeps pathspec interpretation disabled.
+        let mut input = Vec::new();
+        for path in paths {
+            input.extend_from_slice(path.as_bytes());
+            input.push(0);
+        }
+        let args = [
+            "--literal-pathspecs",
+            "add",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ];
+        let mut command = self.git_command(&args);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|error| ProductError::GitError(format!("failed to execute git: {error}")))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| ProductError::GitError("git stdin was not available".into()))?
+            .write_all(&input)
+            .map_err(|error| {
+                ProductError::GitError(format!("failed to write git stdin: {error}"))
+            })?;
+        let output = child
+            .wait_with_output()
+            .map_err(|error| ProductError::GitError(format!("failed to wait for git: {error}")))?;
+        check_git_success(&args, &output)?;
+        Ok(())
+    }
+
+    /// Resolve repository-relative paths ignored by Git in one process.
+    ///
+    /// `--no-index` intentionally also applies ignore rules to an accidentally tracked
+    /// generated file. Review uses this only as an exclusion filter; it never changes Git state.
+    pub fn ignored_paths(&self, paths: &[String]) -> Result<BTreeSet<String>, ProductError> {
+        if paths.is_empty() {
+            return Ok(BTreeSet::new());
+        }
+        let mut input = Vec::new();
+        for path in paths {
+            input.extend_from_slice(path.as_bytes());
+            input.push(0);
+        }
+        let mut command = self.git_command(&["check-ignore", "--no-index", "-z", "--stdin"]);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command
+            .spawn()
+            .map_err(|error| ProductError::GitError(format!("failed to execute git: {error}")))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| ProductError::GitError("git stdin was not available".into()))?
+            .write_all(&input)
+            .map_err(|error| {
+                ProductError::GitError(format!("failed to write git stdin: {error}"))
+            })?;
+        let output = child
+            .wait_with_output()
+            .map_err(|error| ProductError::GitError(format!("failed to wait for git: {error}")))?;
+        match output.status.code() {
+            Some(0) | Some(1) => Ok(output
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+                .collect()),
+            _ => {
+                check_git_success(&["check-ignore", "--no-index", "-z", "--stdin"], &output)?;
+                Ok(BTreeSet::new())
+            }
+        }
     }
 
     /// Add an intent-to-add index entry so an untracked text file can be partially staged.

@@ -55,6 +55,7 @@ export interface TaskFileReferenceRequest {
   path: string;
 }
 export type SettingsPane = "providers" | "agents" | "preferences" | "diagnostics" | "codex";
+export type KnowledgeTab = "memory" | "prompts" | "skills" | "mcp";
 
 interface AppState {
   scene: Scene;
@@ -74,12 +75,18 @@ interface AppState {
   taskFileReferences: Record<string, TaskFileReferenceRequest>;
   /** 设置页当前分类，允许命令和深链直接打开目标区域。 */
   settingsPane: SettingsPane;
+  /** 知识控制面当前分类；MCP 建议可深链到对应配置。 */
+  knowledgeTab: KnowledgeTab;
+  /** 来自 Agent MCP 建议的可选市场检索词。 */
+  mcpMarketQuery: string | null;
   /** Ctrl K 搜索 overlay */
   searchOpen: boolean;
   /** Editor 当前浏览的文件（Ctrl K 搜索写入，Editor 场景消费） */
   editorFile: string | null;
   /** 侧栏是否折叠（Ctrl+B） */
   railCollapsed: boolean;
+  /** 展开时的侧栏宽度；折叠宽度仍由布局 token 控制。 */
+  railWidth: number;
   /** Deck 密度模式 */
   deckDensity: "cards" | "rows";
   /** 外观模式（亮/暗/跟随系统） */
@@ -110,10 +117,12 @@ interface AppState {
   toggleWorkbenchFocus: () => void;
   expandReview: () => void;
   setSettingsPane: (pane: SettingsPane) => void;
+  openKnowledge: (tab?: KnowledgeTab, marketQuery?: string | null) => void;
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
   setEditorFile: (path: string | null) => void;
   toggleRail: () => void;
+  setRailWidth: (width: number) => void;
   setDeckDensity: (d: "cards" | "rows") => void;
   setThemeMode: (mode: ThemeMode) => void;
   setZoom: (level: number) => void;
@@ -124,6 +133,10 @@ interface AppState {
 }
 
 const RAIL_KEY = "r-code.rail.collapsed";
+const RAIL_WIDTH_KEY = "r-code.rail.width";
+export const DEFAULT_RAIL_WIDTH = 300;
+export const MIN_RAIL_WIDTH = 232;
+export const MAX_RAIL_WIDTH = 520;
 const THEME_KEY = "r-code.theme.mode";
 let fileNavigationSequence = 0;
 let fileReferenceSequence = 0;
@@ -172,6 +185,20 @@ function readCollapsed(): boolean {
     return window.localStorage.getItem(RAIL_KEY) === "1";
   } catch {
     return false;
+  }
+}
+
+export function clampRailWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_RAIL_WIDTH;
+  return Math.round(Math.min(MAX_RAIL_WIDTH, Math.max(MIN_RAIL_WIDTH, width)));
+}
+
+function readRailWidth(): number {
+  try {
+    const saved = Number(window.localStorage.getItem(RAIL_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampRailWidth(saved) : DEFAULT_RAIL_WIDTH;
+  } catch {
+    return DEFAULT_RAIL_WIDTH;
   }
 }
 
@@ -253,9 +280,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   workbenchFiles: {},
   taskFileReferences: {},
   settingsPane: "providers",
+  knowledgeTab: "memory",
+  mcpMarketQuery: null,
   searchOpen: false,
   editorFile: null,
   railCollapsed: readCollapsed(),
+  railWidth: readRailWidth(),
   deckDensity: "cards",
   themeMode: readThemeMode(),
   zoomLevel: 100,
@@ -482,6 +512,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
     settingsPane,
   })),
+  openKnowledge: (knowledgeTab = "memory", marketQuery = null) => set((state) => ({
+    ...navigateTo(state, {
+      scene: "knowledge",
+      currentTaskId: null,
+      workspacePath: useTasksStore.getState().currentProjectId,
+    }),
+    knowledgeTab,
+    mcpMarketQuery: marketQuery,
+  })),
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setEditorFile: (editorFile) => set({ editorFile }),
@@ -495,6 +534,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return { railCollapsed };
     }),
+  setRailWidth: (width) => {
+    const railWidth = clampRailWidth(width);
+    try {
+      window.localStorage.setItem(RAIL_WIDTH_KEY, String(railWidth));
+    } catch {
+      // 受限环境下不持久化，不影响本次使用
+    }
+    set({ railWidth });
+  },
   setDeckDensity: (deckDensity) => set({ deckDensity }),
   setThemeMode: (themeMode) => {
     try {

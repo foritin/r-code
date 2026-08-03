@@ -16,6 +16,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlight } from "../../lib/highlight";
 import { COPIED_RESET_MS, copyText } from "../../lib/clipboard";
 import { toolVerb } from "../../lib/format";
+import { useAppStore } from "../../store/app";
 import { formatToolPayload, type ToolState } from "./model";
 
 /** 载荷折叠阈值（行）；与 markdown.css 的 --md-clip-lines 同源，保持观感一致。 */
@@ -105,11 +106,28 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
   outputJson,
   state,
 }: Pick<ToolCardProps, "inputJson" | "outputJson" | "state">) {
+  const openKnowledge = useAppStore((store) => store.openKnowledge);
   const input = useMemo(() => formatToolPayload(inputJson, "input"), [inputJson]);
   const output = useMemo(() => formatToolPayload(outputJson, "output"), [outputJson]);
+  const mcpSuggestion = useMemo(() => readMcpSuggestion(outputJson), [outputJson]);
 
   return (
     <>
+      {mcpSuggestion && (
+        <div className="tcard-mcp-suggestion">
+          <div>
+            <strong>可启用 MCP 扩展</strong>
+            <span>{mcpSuggestion.reason}</span>
+          </div>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => openKnowledge("mcp", mcpSuggestion.marketQuery)}
+          >
+            打开 MCP 配置
+          </button>
+        </div>
+      )}
       {input && <Payload label="输入" view={input} />}
       {output && (
         <Payload label={state === "fail" ? "错误输出" : "输出"} view={output} tone={state} />
@@ -118,6 +136,26 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
     </>
   );
 });
+
+function readMcpSuggestion(
+  raw: string | null | undefined,
+): { reason: string; marketQuery: string | null } | null {
+  if (!raw?.trim() || raw.length > 16_000) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    if (value.action !== "open_mcp_settings") return null;
+    return {
+      reason: typeof value.reason === "string" && value.reason.trim()
+        ? value.reason.trim()
+        : "当前任务可能受益于尚未启用的 MCP 工具。",
+      marketQuery: typeof value.market_query === "string" && value.market_query.trim()
+        ? value.market_query.trim()
+        : null,
+    };
+  } catch {
+    return null;
+  }
+}
 
 function Payload({
   label,

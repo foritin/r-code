@@ -87,6 +87,20 @@ pub fn should_block_window_open() -> bool {
     true // Always block in R-Code
 }
 
+/// Build a stable credential account without accepting path separators or control characters.
+pub fn mcp_credential_account(server_id: &str, kind: &str, name: &str) -> Option<String> {
+    let valid = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && !value.chars().any(char::is_control)
+            && !value.contains(['/', '\\', ':'])
+    };
+    if !valid(server_id) || !valid(kind) || !valid(name) {
+        return None;
+    }
+    Some(format!("mcp:{server_id}:{kind}:{name}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

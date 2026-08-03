@@ -105,8 +105,24 @@ fn main() {
                     tracing::warn!("emit agent-event failed: {e}");
                 }
             }));
+            // MCP settings are live. Forward only redacted lifecycle state so the settings UI can
+            // reflect connecting/ready/error without polling or revealing credentials.
+            let mut mcp_statuses = state.mcp_manager.subscribe_statuses();
+            let mcp_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while mcp_statuses.changed().await.is_ok() {
+                    let payload = mcp_statuses
+                        .borrow_and_update()
+                        .values()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if let Err(error) = mcp_app_handle.emit("mcp-status", payload) {
+                        tracing::warn!(%error, "emit mcp-status failed");
+                    }
+                }
+            });
             // 生产路径使用真实 provider runtime（配置缺失时 agent_send 直接报错）
-            state.agent.blocking_lock().enable_real_mode();
+            state.agent.enable_real_mode();
             app.manage(state);
 
             tracing::info!(data_dir = %base.display(), "CommandState initialized (persistent)");
@@ -159,7 +175,9 @@ fn main() {
             tauri_commands::cmd_review_accept_line,
             tauri_commands::cmd_review_accept_file,
             tauri_commands::cmd_review_accept_all,
+            tauri_commands::cmd_review_reject_file,
             tauri_commands::cmd_git_delivery_status,
+            tauri_commands::cmd_git_stage_accepted,
             tauri_commands::cmd_git_suggest_commit_message,
             tauri_commands::cmd_git_commit_task,
             tauri_commands::cmd_git_push_task,
@@ -176,6 +194,7 @@ fn main() {
             tauri_commands::cmd_workspace_forget,
             tauri_commands::cmd_workspace_choose,
             tauri_commands::cmd_workspace_set_access_mode,
+            tauri_commands::cmd_workspace_set_memory_mode,
             tauri_commands::cmd_workspace_dashboard,
             tauri_commands::cmd_project_activity_list,
             tauri_commands::cmd_activity_list,
@@ -205,9 +224,31 @@ fn main() {
             tauri_commands::cmd_replay,
             tauri_commands::cmd_session_messages,
             tauri_commands::cmd_subagent_session_messages,
+            tauri_commands::cmd_memory_overview,
+            tauri_commands::cmd_memory_update_settings,
+            tauri_commands::cmd_memory_review_now,
+            tauri_commands::cmd_memory_retry_job,
+            tauri_commands::cmd_memory_cancel_job,
+            tauri_commands::cmd_memory_add_entry,
+            tauri_commands::cmd_memory_edit_entry,
+            tauri_commands::cmd_memory_delete_entry,
+            tauri_commands::cmd_memory_approve_candidate,
+            tauri_commands::cmd_memory_reject_candidate,
+            tauri_commands::cmd_memory_clear_all,
             tauri_commands::cmd_legacy_memory_status,
             tauri_commands::cmd_logs_tail,
             tauri_commands::cmd_settings_get,
+            tauri_commands::cmd_mcp_snapshot,
+            tauri_commands::cmd_mcp_upsert,
+            tauri_commands::cmd_mcp_remove,
+            tauri_commands::cmd_mcp_toggle,
+            tauri_commands::cmd_mcp_test_connection,
+            tauri_commands::cmd_mcp_credential_status,
+            tauri_commands::cmd_mcp_set_credential,
+            tauri_commands::cmd_mcp_delete_credential,
+            tauri_commands::cmd_mcp_market_search,
+            tauri_commands::cmd_mcp_market_prepare_install,
+            tauri_commands::cmd_mcp_market_install,
             tauri_commands::cmd_provider_catalog,
             tauri_commands::cmd_provider_models,
             tauri_commands::cmd_settings_set,
@@ -224,8 +265,22 @@ fn main() {
             tauri_commands::cmd_codex_cli_preferences,
             tauri_commands::cmd_codex_save_cli_preferences,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                let manager = app_handle.state::<CommandState>().mcp_manager.clone();
+                let outcome = tauri::async_runtime::block_on(async move {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), manager.shutdown())
+                        .await
+                });
+                match outcome {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!(%error, "MCP shutdown reported an error"),
+                    Err(_) => tracing::warn!("MCP shutdown timed out after two seconds"),
+                }
+            }
+        });
 }
 
 /// 解析 `r-code-host mcp-server [--data-dir <path>]`。

@@ -11,6 +11,7 @@ import "./styles/shell.css";
 import "./styles/scenes.css";
 import "./styles/r-code-ui.css";
 import "./styles/product-ui.css";
+import "./styles/memory.css";
 import "./styles/workbench.css";
 import "./styles/signature.css";
 import "./styles/onboarding.css";

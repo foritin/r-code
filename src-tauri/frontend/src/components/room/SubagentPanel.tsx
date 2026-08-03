@@ -5,6 +5,7 @@
  * “面板 → 分组 → 卡片”三层边框。这里不渲染模型私有推理。
  */
 import { useEffect, useMemo, useState } from "react";
+import { useSharedNow } from "../../lib/shared-clock";
 import type { ActivitySubagent, ActivityTraceState } from "./activity";
 import { IconChevronDown, IconChevronRight, IconStop } from "../icons";
 
@@ -23,7 +24,6 @@ export function SubagentPanel({
   onAbortSubagent,
   openRequest,
 }: Props) {
-  const [now, setNow] = useState(() => Date.now());
   const [open, setOpen] = useState(true);
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +36,7 @@ export function SubagentPanel({
     () => [...state.subagents.filter((child) => !isActive(child.status))].reverse(),
     [state.subagents]
   );
+  const now = useSharedNow(active.length > 0 ? 1000 : null);
 
   useEffect(() => {
     if (active.length > 0) setOpen(true);
@@ -44,13 +45,6 @@ export function SubagentPanel({
   useEffect(() => {
     if (openRequest) setOpen(true);
   }, [openRequest]);
-
-  useEffect(() => {
-    if (active.length === 0) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [active.length]);
 
   if (state.subagents.length === 0) return null;
 

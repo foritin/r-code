@@ -497,6 +497,63 @@ impl<'a> ChangeService<'a> {
         self.rollback_file_at(task_id, &path_key, path).await
     }
 
+    /// Restore a file to a run-scoped review snapshot.
+    ///
+    /// Unlike [`rollback_file_at`](Self::rollback_file_at), this does not use the task's oldest
+    /// capture-once baseline. It restores exactly the `before_hash` of the current review session
+    /// and only when the disk still matches that session's `after_hash`. This keeps a rejected
+    /// second run from erasing changes that were accepted in the first run.
+    pub async fn restore_snapshot_at(
+        &self,
+        path_key: &str,
+        physical_path: &Path,
+        before_hash: Option<&str>,
+        after_hash: Option<&str>,
+    ) -> Result<RollbackResult, ProductError> {
+        let path = path_key.to_string();
+        let actual_hash = if physical_path.exists() {
+            Some(hash_content(&std::fs::read(physical_path)?))
+        } else {
+            None
+        };
+
+        // A repeated reject is idempotent even though the file no longer matches `after_hash`.
+        if actual_hash.as_deref() == before_hash {
+            return Ok(RollbackResult::AlreadyClean { path });
+        }
+        if actual_hash.as_deref() != after_hash {
+            return Ok(RollbackResult::ConflictDetected {
+                path,
+                reason: format!(
+                    "external modification (expected: {}, actual: {})",
+                    after_hash.unwrap_or("absent"),
+                    actual_hash.as_deref().unwrap_or("absent")
+                ),
+            });
+        }
+
+        match before_hash {
+            Some(hash) => {
+                let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+                let content = blob_store.get(hash)?.ok_or_else(|| {
+                    ProductError::RollbackError(format!("review snapshot blob not found: {hash}"))
+                })?;
+                if hash_content(&content) != hash {
+                    return Err(ProductError::RollbackError(format!(
+                        "review snapshot blob is corrupted: {hash}"
+                    )));
+                }
+                if let Some(parent) = physical_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(physical_path, content)?;
+            }
+            None if physical_path.exists() => std::fs::remove_file(physical_path)?,
+            None => {}
+        }
+        Ok(RollbackResult::Restored { path })
+    }
+
     /// 使用持久化路径键回滚一个文件。
     ///
     /// `path_key` 用于关联历史 baseline / change 记录，`physical_path` 才是实际
@@ -510,9 +567,48 @@ impl<'a> ChangeService<'a> {
     ) -> Result<RollbackResult, ProductError> {
         let path_str = path_key.to_string();
 
+        // Read the recorded tail first. A newly created file deliberately has no baseline; it
+        // is still fully reversible by deleting it when its current hash matches our last write.
+        let changes = self.list_changes(task_id).await?;
+        let path_changes: Vec<&FileChange> = changes
+            .iter()
+            .filter(|change| change.path == path_str)
+            .collect();
+
         // 1. 获取基线
         let baseline = match self.get_baseline(task_id, &path_str).await? {
             Some(b) => b,
+            None if !path_changes.is_empty() && path_changes[0].before_hash.is_none() => {
+                let expected_hash = path_changes
+                    .last()
+                    .and_then(|change| change.after_hash.as_deref());
+                let actual_hash = if physical_path.exists() {
+                    Some(hash_content(&std::fs::read(physical_path)?))
+                } else {
+                    None
+                };
+                return match (expected_hash, actual_hash.as_deref()) {
+                    (Some(expected), Some(actual)) if expected == actual => {
+                        std::fs::remove_file(physical_path)?;
+                        Ok(RollbackResult::Restored { path: path_str })
+                    }
+                    (Some(_), None) | (None, None) => {
+                        Ok(RollbackResult::AlreadyClean { path: path_str })
+                    }
+                    (Some(expected), Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "external modification (expected: {expected}, actual: {actual})"
+                        ),
+                    }),
+                    (None, Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "file exists but the task expected it to be absent (actual: {actual})"
+                        ),
+                    }),
+                };
+            }
             None => return Ok(RollbackResult::NoBaseline { path: path_str }),
         };
 
@@ -524,10 +620,6 @@ impl<'a> ChangeService<'a> {
 
         // 3. 确定预期哈希（我们以为磁盘上的内容）
         //    无变更 -> 基线 content_hash；有变更 -> 最后一次变更的 after_hash
-        let changes = self.list_changes(task_id).await?;
-        let path_changes: Vec<&FileChange> =
-            changes.iter().filter(|c| c.path == path_str).collect();
-
         let expected_hash: Option<&str> = if path_changes.is_empty() {
             Some(&baseline.content_hash)
         } else {
