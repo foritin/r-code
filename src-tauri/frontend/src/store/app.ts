@@ -101,6 +101,7 @@ interface AppState {
   goForward: () => void;
   forgetTaskNavigation: (taskId: string) => void;
   goHome: () => void;
+  openNewConversation: (workspacePath: string | null) => void;
   openDashboard: (workspacePath?: string) => void;
   openConversations: () => void;
   openDeck: () => void;
@@ -331,6 +332,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     currentTaskId: null,
     workspacePath: useTasksStore.getState().currentProjectId,
   })),
+  openNewConversation: (workspacePath) => {
+    set((state) => navigateTo(state, {
+      scene: "home",
+      currentTaskId: null,
+      workspacePath,
+    }));
+    useTasksStore.getState().setCurrentProject(workspacePath);
+  },
   openDashboard: (workspacePath) => {
     const destinationPath = workspacePath ?? useTasksStore.getState().currentProjectId;
     set((state) => navigateTo(state, {

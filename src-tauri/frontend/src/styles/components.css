@@ -498,12 +498,12 @@
 }
 .task-actions-trigger:hover,
 .task-actions-trigger[aria-expanded="true"] { color: var(--fg); border-color: var(--border); background: var(--bg-chip); }
-.task-actions-popover { width: min(286px, calc(100vw - var(--sp-10))); }
-.task-actions-popover .menu-item > svg { align-self: start; margin-top: 2px; }
+.task-actions-popover,
+.project-actions-popover { width: min(240px, calc(100vw - var(--sp-10))); }
+.task-actions-popover .menu-item > svg,
+.project-actions-popover .menu-item > svg { align-self: center; margin-top: 0; }
 .task-actions-popover .menu-item.danger:not(:disabled),
 .task-actions-popover .menu-item.danger:not(:disabled) > svg { color: var(--danger); }
-.project-actions-popover { width: min(292px, calc(100vw - var(--sp-10))); }
-.project-actions-popover .menu-item > svg { align-self: start; margin-top: 2px; }
 .project-actions-popover .menu-item.danger:not(:disabled),
 .project-actions-popover .menu-item.danger:not(:disabled) > svg { color: var(--danger); }
 
