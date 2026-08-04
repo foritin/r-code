@@ -241,7 +241,7 @@ export const browserMockSettings: SettingsResponse = {
       default_agent_engine: "r_code",
       delegation_router: "balanced",
       allow_cross_engine_delegation: true,
-      quality_loop: "auto",
+      quality_loop: "off",
       quality_reviewer: "auto",
       max_review_rounds: 1,
     },
