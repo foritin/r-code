@@ -127,6 +127,7 @@ export function MenuBar() {
               <MenuItem close={close} onSelect={() => setScene("conversations")}>对话</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("inbox")}>待处理</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("deck")}>活动</MenuItem>
+              <MenuItem close={close} onSelect={() => setScene("archive")}>归档</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("knowledge")}>知识与指令</MenuItem>
               <MenuSeparator />
               <MenuItem close={close} shortcut={keyLabel("zoomReset")} onSelect={zoomReset}>重置缩放</MenuItem>

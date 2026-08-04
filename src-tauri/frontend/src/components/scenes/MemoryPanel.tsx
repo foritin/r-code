@@ -22,6 +22,7 @@ import type {
   MemoryKind,
   MemoryOverview,
   MemoryReviewJobView,
+  ReviewerSelection,
   Workspace,
   WorkspaceMemoryMode,
 } from "../../lib/types";
@@ -61,6 +62,19 @@ function kindLabel(kind: MemoryKind) {
   return MEMORY_KINDS.find((item) => item.value === kind)?.label ?? kind;
 }
 
+function configuredReviewer(config: AppConfig | null, current: ReviewerSelection | null): ReviewerSelection | null {
+  if (current?.provider_name.trim() && current.model.trim()) return current;
+  const providerNames = Object.keys(config?.providers ?? {});
+  const candidates = [config?.default_provider, ...providerNames].filter(
+    (name, index, names): name is string => Boolean(name) && names.indexOf(name) === index,
+  );
+  for (const providerName of candidates) {
+    const model = config?.providers?.[providerName]?.model?.trim();
+    if (model) return { provider_name: providerName, model };
+  }
+  return null;
+}
+
 export function MemoryPanel({ workspace, config }: { workspace: Workspace | null; config: AppConfig | null }) {
   const tasks = useTasksStore((state) => state.tasks);
   const refreshWorkspaces = useTasksStore((state) => state.refreshWorkspaces);
@@ -76,6 +90,12 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
   const [editContent, setEditContent] = useState("");
   const [candidateEdits, setCandidateEdits] = useState<Record<string, string>>({});
   const [clearArmed, setClearArmed] = useState(false);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -97,7 +117,7 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
     try {
       await action();
       await load(true);
-      setNotice(success);
+      if (success) setNotice(success);
       return true;
     } catch (cause) {
       setError(errorText(cause));
@@ -143,22 +163,92 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
   const settings = overview.settings;
   const activeMode = workspace?.memory_mode ?? "inherit";
   const modeNote = PROJECT_MODES.find((item) => item.value === activeMode)?.note;
+  const reviewer = configuredReviewer(config, settings.reviewer);
+  const projectEnabled = !workspace || activeMode !== "off";
+  const effectivelyEnabled = settings.enabled && projectEnabled;
+  const engineTitle = !settings.enabled
+    ? "记忆已关闭"
+    : workspace && activeMode === "off"
+      ? "此项目已关闭"
+      : workspace && activeMode === "read_only"
+        ? "此项目只读"
+        : "记忆已开启";
+  const engineDescription = !settings.enabled
+    ? "默认关闭，不会读取或复盘任何对话。启用后，只有已生效的记忆会进入新对话。"
+    : workspace && activeMode === "off"
+      ? "这个项目不会读取记忆，也不会参与自动复盘。"
+      : workspace && activeMode === "read_only"
+        ? "会读取已有记忆，但不会从这个项目产生新记忆。"
+        : "新对话会读取已生效记忆；自动复盘在回答完成后异步运行。";
+  const engineActionLabel = busy === "engine"
+    ? "处理中…"
+    : !settings.enabled
+      ? reviewer ? "启用记忆" : "配置模型"
+      : workspace
+        ? activeMode === "inherit" ? "关闭此项目" : "允许自动复盘"
+        : "关闭记忆";
+
+  const updateProjectMode = (next: WorkspaceMemoryMode, success: string) => {
+    if (!workspace) return;
+    void runAction("engine", async () => {
+      await workspaceSetMemoryMode(workspace.id, workspace.memory_generation, next);
+      await refreshWorkspaces();
+    }, success);
+  };
+
+  const handleEngineAction = () => {
+    if (!settings.enabled) {
+      if (!reviewer) {
+        document.getElementById("memory-reviewer-provider")?.focus();
+        setNotice("先选择用于自动复盘的模型，再保存并启用");
+        return;
+      }
+      void runAction("engine", () => memoryUpdateSettings({
+        expected_version: settings.version,
+        enabled: true,
+        reviewer,
+        trigger_every_turns: settings.trigger_every_turns,
+        explicit_remember_immediate: settings.explicit_remember_immediate,
+        project_notification_mode: settings.project_notification_mode,
+      }), "");
+      return;
+    }
+    if (workspace) {
+      updateProjectMode(activeMode === "inherit" ? "off" : "inherit", "");
+      return;
+    }
+    void runAction("engine", () => memoryUpdateSettings({
+      expected_version: settings.version,
+      enabled: false,
+      reviewer: settings.reviewer,
+      trigger_every_turns: settings.trigger_every_turns,
+      explicit_remember_immediate: settings.explicit_remember_immediate,
+      project_notification_mode: settings.project_notification_mode,
+    }), "");
+  };
 
   return (
     <div className="knowledge-memory-panel">
       <header className="knowledge-panel-head">
         <div>
-          <span>{workspace ? "PROJECT MEMORY" : "GLOBAL MEMORY"}</span>
           <h2>{workspace ? `${workspace.display_name} 的项目记忆` : "全局记忆"}</h2>
-          <p>{workspace ? "只注入这个项目；自动复盘结果直接进入项目作用域，不会提升为全局。" : "跨项目生效；自动复盘得到的全局候选必须逐条审批。"}</p>
+          <p>{workspace ? "只对这个项目生效。" : "跨项目使用；新的全局候选需要你确认。"}</p>
         </div>
         <div className="memory-head-actions">
-          <span className={`knowledge-engine-state ${settings.enabled ? "enabled" : ""}`}>{settings.enabled ? "引擎已开启" : "引擎已关闭"}</span>
           <button className="memory-icon-button" title="刷新" aria-label="刷新记忆" disabled={busy != null} onClick={() => void load()}><IconRefresh width={14} height={14} /></button>
         </div>
       </header>
 
+      <section className={`memory-engine-strip${effectivelyEnabled ? " enabled" : ""}${activeMode === "read_only" ? " read-only" : ""}`} aria-label="记忆状态">
+        <div className="memory-engine-copy">
+          <span className="memory-engine-dot" aria-hidden="true" />
+          <div><strong>{engineTitle}</strong><p>{engineDescription}</p></div>
+        </div>
+        <button type="button" className={`rc-button${effectivelyEnabled ? " rc-button-quiet" : " rc-button-primary"}`} disabled={busy != null} onClick={handleEngineAction}>{engineActionLabel}</button>
+      </section>
+
       {(error || notice) && <div className={`memory-banner ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>
+        {!error && <IconCheck width={14} height={14} />}
         <span>{error ?? notice}</span>
         {error && <button onClick={() => { setError(null); void load(); }}>重试</button>}
       </div>}
@@ -168,7 +258,7 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
         providerNames={providerNames}
         config={config}
         busy={busy}
-        onSave={(next) => runAction("settings", () => memoryUpdateSettings(next), next.enabled ? "记忆引擎设置已应用" : "记忆引擎已关闭")}
+        onSave={(next) => runAction("settings", () => memoryUpdateSettings(next), "设置已保存")}
       />}
 
       {workspace && <section className="memory-section memory-project-mode">
@@ -191,12 +281,12 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
 
       <section className="memory-section">
         <div className="memory-section-heading">
-          <div><h3>已生效记忆 <span>{entries.length}</span></h3><p>新运行会读取这里的正文；编辑采用版本校验，避免覆盖并发修改。</p></div>
+          <div><h3>记忆 <span>{entries.length}</span></h3><p>新对话会自动读取这里的内容。</p></div>
           <button className="rc-button rc-button-quiet" disabled={!latestTask || !settings.enabled || busy != null} title={!latestTask ? "当前作用域还没有可复盘的会话" : "立即复盘最新会话"} onClick={() => latestTask && void runAction("review-now", () => memoryReviewNow(latestTask.id), "已提交一次手动复盘")}>立即复盘</button>
         </div>
 
         <div className="memory-entry-list">
-          {entries.length === 0 && <div className="memory-empty"><IconText width={18} height={18} /><div><strong>还没有{workspace ? "项目" : "全局"}记忆</strong><p>可以手动添加；启用自动复盘后，也会从成功对话中产生项目记忆或全局候选。</p></div></div>}
+          {entries.length === 0 && <div className="memory-empty"><IconText width={18} height={18} /><div><strong>暂无{workspace ? "项目" : "全局"}记忆</strong><p>手动添加一条，或让自动复盘从成功对话中提取。</p></div></div>}
           {entries.map((entry) => <MemoryEntryRow
             key={entry.id}
             entry={entry}
@@ -214,8 +304,8 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
         </div>
 
         <div className="memory-add-row">
-          <select value={draftKind} aria-label="新记忆类型" onChange={(event) => setDraftKind(event.target.value as MemoryKind)}>{MEMORY_KINDS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
-          <textarea value={draftContent} maxLength={2_000} rows={2} placeholder="写下一条稳定、可复用的事实或偏好…" onChange={(event) => setDraftContent(event.target.value)} />
+          <label><span>类型</span><select value={draftKind} aria-label="新记忆类型" onChange={(event) => setDraftKind(event.target.value as MemoryKind)}>{MEMORY_KINDS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label><span>内容</span><textarea value={draftContent} maxLength={2_000} rows={2} placeholder="稳定、可复用的事实或偏好" onChange={(event) => setDraftContent(event.target.value)} /></label>
           <button className="rc-button rc-button-primary" disabled={busy != null || draftContent.trim().length < 2} onClick={() => void runAction("add", () => memoryAddEntry({ scope: workspace ? "project" : "global", workspace_id: workspace?.id ?? null, kind: draftKind, content: draftContent, pinned: false }), "记忆已添加").then((ok) => { if (ok) setDraftContent(""); })}>添加</button>
         </div>
       </section>
@@ -246,32 +336,40 @@ function GlobalMemorySettings({ overview, providerNames, config, busy, onSave }:
 }) {
   const current = overview.settings;
   const initialProvider = current.reviewer?.provider_name ?? config?.default_provider ?? providerNames[0] ?? "";
-  const [enabled, setEnabled] = useState(current.enabled);
   const [provider, setProvider] = useState(initialProvider);
   const [model, setModel] = useState(current.reviewer?.model ?? config?.providers?.[initialProvider]?.model ?? "");
   const [cadence, setCadence] = useState(current.trigger_every_turns);
   const [explicit, setExplicit] = useState(current.explicit_remember_immediate);
 
   useEffect(() => {
-    setEnabled(current.enabled);
-    setProvider(current.reviewer?.provider_name ?? config?.default_provider ?? providerNames[0] ?? "");
-    setModel(current.reviewer?.model ?? config?.providers?.[current.reviewer?.provider_name ?? ""]?.model ?? "");
+    const nextProvider = current.reviewer?.provider_name ?? config?.default_provider ?? providerNames[0] ?? "";
+    setProvider(nextProvider);
+    setModel(current.reviewer?.model ?? config?.providers?.[nextProvider]?.model ?? "");
     setCadence(current.trigger_every_turns);
     setExplicit(current.explicit_remember_immediate);
   }, [current.version, config, providerNames.join("\0")]);
 
-  return <section className="memory-section memory-settings">
-    <div className="memory-section-heading"><div><h3>自动复盘</h3><p>Reviewer 只负责提出结构化建议；Provider 不拥有独立记忆，也不能绕过作用域与审批。</p></div>
-      <label className="memory-switch"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span aria-hidden="true" /><strong>{enabled ? "开启" : "关闭"}</strong></label>
-    </div>
+  const save = () => onSave({
+    expected_version: current.version,
+    enabled: true,
+    reviewer: provider && model.trim() ? { provider_name: provider, model: model.trim() } : null,
+    trigger_every_turns: cadence,
+    explicit_remember_immediate: explicit,
+    project_notification_mode: current.project_notification_mode,
+  });
+
+  return <form className="memory-section memory-settings" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+    <div className="memory-section-heading"><div><h3>自动复盘</h3><p>用一个轻量模型，从成功对话中提取可复用信息。</p></div></div>
     <div className="memory-settings-grid">
-      <label><span>轻量 Reviewer</span><select value={provider} onChange={(event) => { const next = event.target.value; setProvider(next); setModel(config?.providers?.[next]?.model ?? ""); }}><option value="">选择模型服务</option>{providerNames.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
-      <label><span>模型</span><input value={model} placeholder="模型名称" onChange={(event) => setModel(event.target.value)} /></label>
-      <label><span>复盘间隔</span><input type="number" min={5} max={50} value={cadence} onChange={(event) => setCadence(Math.max(5, Math.min(50, Number(event.target.value) || 5)))} /><small>个有效轮次</small></label>
-      <label className="memory-check"><input type="checkbox" checked={explicit} onChange={(event) => setExplicit(event.target.checked)} /><span>“请记住”类明确指令立即触发复盘</span></label>
+      <label><span>模型服务</span><select id="memory-reviewer-provider" aria-label="模型服务" value={provider} onChange={(event) => { const next = event.target.value; setProvider(next); setModel(config?.providers?.[next]?.model ?? ""); }}><option value="">选择模型服务</option>{providerNames.map((name) => <option key={name} value={name}>{name}</option>)}</select></label>
+      <label><span>复盘模型</span><input aria-label="复盘模型" value={model} placeholder="模型名称" onChange={(event) => setModel(event.target.value)} /></label>
+      <div className="memory-settings-behavior">
+        <label className="memory-cadence"><span>每</span><input aria-label="复盘间隔" type="number" min={5} max={50} value={cadence} onChange={(event) => setCadence(Math.max(5, Math.min(50, Number(event.target.value) || 5)))} /><span>轮自动复盘</span></label>
+        <label className="memory-check"><input type="checkbox" checked={explicit} onChange={(event) => setExplicit(event.target.checked)} /><span>明确说“请记住”时立即复盘</span></label>
+      </div>
     </div>
-    <div className="memory-settings-actions"><small>设置保存在本机 AppData。关闭后不采集、不总结、不注入。</small><button className="rc-button rc-button-primary" disabled={busy != null || (enabled && (!provider || !model.trim()))} onClick={() => void onSave({ expected_version: current.version, enabled, reviewer: provider && model.trim() ? { provider_name: provider, model: model.trim() } : null, trigger_every_turns: cadence, explicit_remember_immediate: explicit, project_notification_mode: current.project_notification_mode })}>应用</button></div>
-  </section>;
+    <div className="memory-settings-actions"><small>{current.enabled ? "更改会从下一次复盘开始生效。" : "保存后会同时开启记忆。"}</small><button type="submit" className="rc-button rc-button-primary" disabled={busy != null || !provider || !model.trim()}>{current.enabled ? "保存设置" : "保存并启用"}</button></div>
+  </form>;
 }
 
 function MemoryEntryRow({ entry, busy, editing, editKind, editContent, onEditKind, onEditContent, onBegin, onCancel, onSave, onDelete }: {

@@ -102,6 +102,13 @@ export const IconSend = (p: P) => (
   </svg>
 );
 
+export const IconSteer = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M4 6.5h7.5a7 7 0 0 1 7 7V19" />
+    <path d="m14.5 15 4 4 4-4" />
+  </svg>
+);
+
 export const IconPlus = (p: P) => (
   <svg {...base(p)}>
     <path d="M12 5v14M5 12h14" />
@@ -128,6 +135,36 @@ export const IconTrash = (p: P) => (
   </svg>
 );
 
+export const IconDragHandle = (p: P) => (
+  <svg {...base(p)} stroke="none" fill="currentColor">
+    <circle cx="8" cy="7" r="1.25" />
+    <circle cx="16" cy="7" r="1.25" />
+    <circle cx="8" cy="12" r="1.25" />
+    <circle cx="16" cy="12" r="1.25" />
+    <circle cx="8" cy="17" r="1.25" />
+    <circle cx="16" cy="17" r="1.25" />
+  </svg>
+);
+
+export const IconEdit = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m5 16.8-.8 3 3-.8L18.5 7.7l-2.2-2.2Z" />
+    <path d="m14.8 7 2.2 2.2" />
+  </svg>
+);
+
+export const IconPause = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M8.5 6v12M15.5 6v12" strokeWidth="2.2" />
+  </svg>
+);
+
+export const IconPlay = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m8 5.5 10 6.5-10 6.5Z" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 export const IconAttach = (p: P) => (
   <svg {...base(p)}>
     <path d="M20 11.5 12.5 19a5 5 0 0 1-7-7l7.5-7.5a3.4 3.4 0 0 1 4.8 4.8L10.5 16.6a1.8 1.8 0 0 1-2.6-2.6l6.8-6.8" />
@@ -144,7 +181,7 @@ export const IconImage = (p: P) => (
 
 export const IconStop = (p: P) => (
   <svg {...base(p)}>
-    <rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none" />
+    <rect x="5" y="5" width="14" height="14" rx="1.75" fill="currentColor" stroke="none" />
   </svg>
 );
 
@@ -262,6 +299,15 @@ export const IconHelp = (p: P) => (
   <svg {...base(p)}>
     <circle cx="12" cy="12" r="8.5" />
     <path d="M9.5 9.4a2.7 2.7 0 1 1 4.5 2c-.9.7-2 1.2-2 2.8M12 17.3v.1" />
+  </svg>
+);
+
+/** 持续目标：靶心和向右上方延伸的箭头。 */
+export const IconGoal = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="10.5" cy="13.5" r="7.5" />
+    <circle cx="10.5" cy="13.5" r="3.2" />
+    <path d="m10.5 13.5 8-8M14.5 5.5h4v4" />
   </svg>
 );
 

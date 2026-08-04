@@ -37,7 +37,7 @@ use hermes_core::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
     InferenceOptions, Message, Role, SessionEvent, SessionMeta,
 };
-use hermes_store::SessionStore;
+use hermes_store::{SessionStore, DURABLE_USER_MESSAGE_CANCEL_EVENT, DURABLE_USER_MESSAGE_EVENT};
 use r_code_agent_worker::{
     AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
     CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode, MockAgentRuntime,
@@ -100,7 +100,9 @@ use crate::plan_review_tools::{
     plan_review_reject_file as reject_plan_review_file,
     plan_review_status as current_plan_review_status, PlanReviewServices,
 };
-use crate::plan_tools::{PlanItemUpdateTool, PlanPublishTool, RequestUserInputTool};
+use crate::plan_tools::{
+    EnterPlanModeTool, PlanItemUpdateTool, PlanPublishTool, RequestUserInputTool,
+};
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
@@ -110,6 +112,10 @@ use crate::support_bundle::{McpServerSupportSummary, SupportBundle};
 use crate::workflow_skills::{
     SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
 };
+
+/// 诊断日志中的失败摘要上限。只保留足够定位问题的片段，避免把完整工具输出或
+/// 大段工作区内容复制到日志文件。
+const DIAGNOSTIC_ERROR_DETAIL_CHARS: usize = 1_000;
 
 // ============================================================================
 // AgentBridge -- Mock runtime + 任务会话映射
@@ -358,8 +364,8 @@ struct StartupRecoveryRun {
 
 /// 外部 CLI 子代理在当前进程内的取消注册表。
 ///
-/// SQLite 是运行记录的真源；注册表只保留不可持久化的进程取消句柄。它从不包含
-/// 命令行、提示词、认证信息或外部 Agent 的原始输出。
+/// SQLite 是运行记录的真源；注册表只保留不可持久化的进程取消句柄与 App Server
+/// 引导通道。它从不记录命令行、认证信息或外部 Agent 的原始输出。
 #[derive(Default)]
 pub struct ExternalAgentRegistry {
     runs: tokio::sync::Mutex<HashMap<String, ExternalAgentHandle>>,
@@ -369,6 +375,22 @@ struct ExternalAgentHandle {
     task_id: String,
     parent_run_id: String,
     cancellation: CancellationToken,
+    steer: Option<tokio::sync::mpsc::Sender<ExternalSteerRequest>>,
+}
+
+struct ExternalSteerRequest {
+    operation_id: String,
+    message: String,
+    response: tokio::sync::oneshot::Sender<ExternalSteerOutcome>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalSteerOutcome {
+    Accepted,
+    Rejected,
+    /// The request may have reached Codex, but its acknowledgement was not observed. Callers must
+    /// preserve the durable message and must not enqueue a second execution.
+    Unknown,
 }
 
 impl ExternalAgentRegistry {
@@ -398,9 +420,64 @@ impl ExternalAgentRegistry {
                 task_id: task_id.to_string(),
                 parent_run_id: parent_run_id.to_string(),
                 cancellation: cancellation.clone(),
+                steer: None,
             },
         );
         Ok(cancellation)
+    }
+
+    /// 为长驻的 Codex App Server 主运行安装同轮引导通道。`codex exec` 子代理不
+    /// 注册该通道，因此调用方可以明确区分“可中途引导”和“只能排到下一轮”。
+    async fn enable_steering(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<tokio::sync::mpsc::Receiver<ExternalSteerRequest>, String> {
+        let mut runs = self.runs.lock().await;
+        let handle = runs
+            .get_mut(run_id)
+            .filter(|handle| handle.task_id == task_id)
+            .ok_or_else(|| "Codex 运行已经结束".to_string())?;
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
+        handle.steer = Some(sender);
+        Ok(receiver)
+    }
+
+    /// 向已注册的 App Server 主运行发送一条同轮引导。确认丢失与明确拒绝必须
+    /// 分开：前者绝不能自动重发，否则 App Server 已接纳时会执行两次。
+    async fn steer_run_for_task(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        operation_id: &str,
+        message: &str,
+    ) -> ExternalSteerOutcome {
+        let sender = self
+            .runs
+            .lock()
+            .await
+            .get(run_id)
+            .filter(|handle| handle.task_id == task_id)
+            .and_then(|handle| handle.steer.clone());
+        let Some(sender) = sender else {
+            return ExternalSteerOutcome::Rejected;
+        };
+        let (response, received) = tokio::sync::oneshot::channel();
+        if sender
+            .send(ExternalSteerRequest {
+                operation_id: operation_id.to_string(),
+                message: message.to_string(),
+                response,
+            })
+            .await
+            .is_err()
+        {
+            return ExternalSteerOutcome::Rejected;
+        }
+        match received.await {
+            Ok(outcome) => outcome,
+            Err(_) => ExternalSteerOutcome::Unknown,
+        }
     }
 
     async fn remove(&self, run_id: &str) {
@@ -660,6 +737,75 @@ fn plan_projection_root(config_dir: &Path) -> PathBuf {
     config_dir.parent().unwrap_or(config_dir).join("plans")
 }
 
+/// Reconcile queue claims whose runtime acknowledgement may have been lost with the process.
+/// An uncancelled durable steer is already part of conversation history and must never be replayed
+/// as a fresh queued turn. This runs before the general startup recovery changes stale
+/// `dispatching` rows into failures.
+fn reconcile_durable_steer_queue_claims(
+    db: &Database,
+    sessions_dir: &Path,
+) -> Result<u64, ProductError> {
+    let entries = match std::fs::read_dir(sessions_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.into()),
+    };
+    let mut accepted_queue_ids = HashSet::new();
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let content = std::fs::read_to_string(path)?;
+        let events = content
+            .lines()
+            .filter_map(|line| serde_json::from_str::<SessionEvent>(line).ok())
+            .collect::<Vec<_>>();
+        let cancelled = events
+            .iter()
+            .filter_map(|event| {
+                let SessionEvent::System { event, data } = event else {
+                    return None;
+                };
+                (event == DURABLE_USER_MESSAGE_CANCEL_EVENT)
+                    .then(|| data.get("operation_id")?.as_str().map(str::to_owned))?
+            })
+            .collect::<HashSet<_>>();
+        for event in events {
+            let SessionEvent::System { event, data } = event else {
+                continue;
+            };
+            if event != DURABLE_USER_MESSAGE_EVENT
+                || data
+                    .get("operation_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|operation_id| cancelled.contains(operation_id))
+            {
+                continue;
+            }
+            if let Some(queue_id) = data.get("queue_id").and_then(serde_json::Value::as_str) {
+                accepted_queue_ids.insert(queue_id.to_string());
+            }
+        }
+    }
+
+    let conn = db.conn()?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut reconciled = 0_u64;
+    for queue_id in accepted_queue_ids {
+        let changed = conn
+            .execute(
+                "UPDATE queued_messages SET state = 'sent', updated_at = ?1 \
+                 WHERE id = ?2 AND state IN ('dispatching', 'failed')",
+                rusqlite::params![now, queue_id],
+            )
+            .map_err(|error| ProductError::DatabaseError(error.to_string()))?;
+        reconciled = reconciled.saturating_add(changed as u64);
+    }
+    Ok(reconciled)
+}
+
 impl CommandState {
     /// 创建命令状态。
     #[allow(clippy::too_many_arguments)]
@@ -713,6 +859,10 @@ impl CommandState {
         gateway.register(Box::new(SaveWorkflowSkillTool::new(
             WorkflowSkillCatalog::new(config_dir.join("workflow-skills")),
         )));
+        gateway.register(Box::new(EnterPlanModeTool::new(
+            db.clone(),
+            plan_store.clone(),
+        )));
         gateway.register(Box::new(PlanPublishTool::new(
             db.clone(),
             plan_store.clone(),
@@ -761,6 +911,14 @@ impl CommandState {
             mcp_manager,
             legacy_reconciliation: tokio::sync::Mutex::new(LegacyReconciliationCache::default()),
         }
+    }
+
+    /// Desktop-authoritative recovery for durable steer queue claims.
+    ///
+    /// This must not run from [`Self::new`]: MCP sibling processes construct the same state
+    /// against the desktop database and are not allowed to settle live desktop claims.
+    pub fn reconcile_durable_steer_queue_claims(&self) -> Result<u64, ProductError> {
+        reconcile_durable_steer_queue_claims(&self.db, &self.sessions_dir)
     }
 
     /// 创建用于测试的内存状态。
@@ -1431,10 +1589,20 @@ fn render_host_task_context_from_store(
 ) -> Result<String, String> {
     let plan = plan_store.current_for_task(&task.id).map_err(err_str)?;
     let execution = PlanExecutionContext::from_view(plan.as_ref());
+    let progress = plan.as_ref().map(|view| {
+        serde_json::json!({
+            "completed": view.items.iter().filter(|item| item.state == PlanItemState::Completed).count(),
+            "in_progress": view.items.iter().filter(|item| item.state == PlanItemState::InProgress).count(),
+            "pending": view.items.iter().filter(|item| matches!(item.state, PlanItemState::Proposed | PlanItemState::Pending)).count(),
+            "blocked": view.items.iter().filter(|item| item.state == PlanItemState::Blocked).count(),
+            "failed": view.items.iter().filter(|item| item.state == PlanItemState::Failed).count(),
+            "total": view.items.len(),
+        })
+    });
     let execution_policy = match execution.status {
         PlanExecutionStatus::NoExecutingPlan => None,
         PlanExecutionStatus::ActiveFeature => Some(
-            "Implement only active_feature. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes so enhanced ownership is recorded. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing.",
+            "Implement only active_feature and keep its persisted progress current. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Independent read-only investigation or verification for this active feature may use up to three subagents in parallel; collect every result before deciding acceptance. Keep overlapping or mutating work with the main Agent so enhanced ownership remains deterministic. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing. A normal final answer does not end the run while active_feature still exists.",
         ),
         PlanExecutionStatus::Paused => Some(
             "Plan execution is paused. Do not write to the workspace through direct tools, shell, MCP, or external agents. First resume blocked_feature by calling plan_item_update with state=in_progress for the same feature and current Plan revision; only then continue implementation.",
@@ -1448,6 +1616,7 @@ fn render_host_task_context_from_store(
         },
         "plan": plan.as_ref().map(|view| &view.plan),
         "items": plan.as_ref().map(|view| &view.items),
+        "progress": progress,
         "pending_question_set": plan
             .as_ref()
             .and_then(|view| view.pending_question_set.as_ref()),
@@ -3580,7 +3749,14 @@ async fn persist_runtime_event(
     let event_storage_id = scope
         .map(|value| subagent_storage_id(parent_storage_id, &value.run_id))
         .unwrap_or_else(|| parent_storage_id.to_string());
-    let _ = ensure_session_log(session_store, sessions_dir, &event_storage_id).await;
+    if let Err(error) = ensure_session_log(session_store, sessions_dir, &event_storage_id).await {
+        tracing::warn!(
+            task_id,
+            storage_id = %event_storage_id,
+            %error,
+            "failed to initialize runtime session log"
+        );
+    }
 
     match event {
         AgentEvent::Message { text, delta } => {
@@ -3675,7 +3851,24 @@ async fn persist_runtime_event(
             output,
             is_error,
         } => {
-            let _ = session_store
+            let run_id = scope
+                .map(|value| value.run_id.as_str())
+                .unwrap_or(parent_run_id);
+            if *is_error {
+                let detail = bounded_text(
+                    &redact_text(&output.to_string()),
+                    DIAGNOSTIC_ERROR_DETAIL_CHARS,
+                );
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    agent_id = scope.map(|value| value.agent_id.as_str()).unwrap_or("main"),
+                    detail,
+                    "agent tool call failed"
+                );
+            }
+            if let Err(error) = session_store
                 .append(
                     &event_storage_id,
                     SessionEvent::ToolResult {
@@ -3684,8 +3877,25 @@ async fn persist_runtime_event(
                         is_error: *is_error,
                     },
                 )
-                .await;
-            let _ = ToolCallRepository::new(db).finish(call_id, output, *is_error);
+                .await
+            {
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    %error,
+                    "failed to append agent tool result to session log"
+                );
+            }
+            if let Err(error) = ToolCallRepository::new(db).finish(call_id, output, *is_error) {
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    %error,
+                    "failed to persist agent tool result audit"
+                );
+            }
             if scope.is_none() {
                 let _ = TaskEventStore::new(db).append_for_branch(
                     task_id,
@@ -3729,6 +3939,15 @@ async fn persist_runtime_event(
             let Some(scope) = scope else {
                 return;
             };
+            if matches!(state, SubagentState::Failed) {
+                tracing::warn!(
+                    task_id,
+                    child_run_id = %scope.run_id,
+                    agent_id = %scope.agent_id,
+                    detail = detail.as_deref().unwrap_or("<no detail>"),
+                    "subagent failed"
+                );
+            }
             if matches!(
                 state,
                 SubagentState::Completed | SubagentState::Failed | SubagentState::Cancelled
@@ -4163,16 +4382,6 @@ fn queued_dispatch_mode(message: &QueuedMessage) -> AgentSendMode {
     }
 }
 
-async fn append_user_message_with_mode(
-    session_store: &SessionStore,
-    storage_id: &str,
-    message: &str,
-    mode: AgentSendMode,
-) -> Result<(), String> {
-    append_user_content_with_mode(session_store, storage_id, Message::user_text(message), mode)
-        .await
-}
-
 async fn append_user_content_with_mode(
     session_store: &SessionStore,
     storage_id: &str,
@@ -4180,19 +4389,92 @@ async fn append_user_content_with_mode(
     mode: AgentSendMode,
 ) -> Result<(), String> {
     session_store
-        .append(
+        .append_batch(
             storage_id,
-            SessionEvent::System {
-                event: USER_MESSAGE_MODE_EVENT.into(),
-                data: serde_json::json!({ "mode": send_mode_name(mode) }),
-            },
+            &[
+                SessionEvent::Message(message),
+                SessionEvent::System {
+                    event: USER_MESSAGE_MODE_EVENT.into(),
+                    data: serde_json::json!({ "mode": send_mode_name(mode) }),
+                },
+            ],
         )
         .await
-        .map_err(err_str)?;
-    session_store
-        .append(storage_id, SessionEvent::Message(message))
-        .await
         .map_err(err_str)
+}
+
+async fn stage_steer_context_with_retry(
+    session_store: &SessionStore,
+    task_id: &str,
+    storage_id: &str,
+    operation_id: &str,
+    message: &str,
+    queue_id: Option<&str>,
+) -> Result<(), String> {
+    for attempt in 1_u64..=3 {
+        match session_store
+            .append_durable_user_message(
+                storage_id,
+                operation_id,
+                &Message::user_text(message),
+                send_mode_name(AgentSendMode::Steer),
+                queue_id,
+            )
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    attempt,
+                    "steer context could not be staged yet; retrying: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(30 * attempt)).await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    task_id,
+                    attempts = attempt,
+                    "steer context could not be staged after retries: {error}"
+                );
+                return Err("暂时无法发送这条消息，请稍后重试".to_string());
+            }
+        }
+    }
+    unreachable!("bounded steer persistence retry loop always returns")
+}
+
+async fn cancel_staged_steer_with_retry(
+    session_store: &SessionStore,
+    task_id: &str,
+    storage_id: &str,
+    operation_id: &str,
+) -> Result<(), String> {
+    for attempt in 1_u64..=3 {
+        match session_store
+            .cancel_durable_user_message(storage_id, operation_id)
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    attempt,
+                    "steer fallback could not be staged yet; retrying: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(30 * attempt)).await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    task_id,
+                    attempts = attempt,
+                    "steer fallback could not be staged after retries: {error}"
+                );
+                return Err("暂时无法切换这条消息的发送方式，请稍后重试".to_string());
+            }
+        }
+    }
+    unreachable!("bounded steer cancellation retry loop always returns")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4293,9 +4575,6 @@ pub async fn agent_send_with_mode_and_attachments(
     if message.is_empty() && attachments.is_empty() {
         return Err("消息不能为空".to_string());
     }
-    if !attachments.is_empty() && matches!(mode, AgentSendMode::Steer | AgentSendMode::Queue) {
-        return Err("附件只能在当前运行结束后作为新一轮消息发送".to_string());
-    }
     let user_message = user_message_with_attachments(message, &attachments);
 
     // 同一任务的发送、分支切换与模型/主 Agent 配置共用一把 task-local 锁。
@@ -4328,6 +4607,14 @@ pub async fn agent_send_with_mode_and_attachments(
     // 运行中的 steer / 排队不重建 provider runtime：配置变更必须等当前运行收尾，
     // 否则会丢失流事件或把消息送进错误会话。真正新开 run 时才读取最新配置。
     let had_active_run = bridge.active.is_some();
+    // 空闲时三种显式发送策略都只是开启下一轮；只有运行中才分别具有
+    // 引导、排队和立即打断语义。后端也统一这一契约，避免非 UI 调用方
+    // 在空闲状态选择“引导”时得到与界面不同的错误。
+    let mode = if !had_active_run && matches!(mode, AgentSendMode::Steer | AgentSendMode::Queue) {
+        AgentSendMode::Auto
+    } else {
+        mode
+    };
     if bridge.real_mode.load(Ordering::Acquire)
         && !had_active_run
         && !matches!(mode, AgentSendMode::Queue | AgentSendMode::Steer)
@@ -4352,11 +4639,36 @@ pub async fn agent_send_with_mode_and_attachments(
             if active.task_id != task_id || active.branch_id != branch.id {
                 return Err("只能引导当前会话的正在运行任务".to_string());
             }
-            let result = bridge
-                .kind
-                .steer(&active.runtime_session_id, message)
-                .await
-                .map_err(err_str)?;
+            // JSONL is the durable outbox. Stage the user message before the runtime can accept
+            // it, so a crash or disk failure can never create an acknowledged-but-missing turn.
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            stage_steer_context_with_retry(
+                &state.session_store,
+                task_id,
+                &branch.storage_id,
+                &operation_id,
+                message,
+                None,
+            )
+            .await?;
+            let result = match bridge.kind.steer(&active.runtime_session_id, message).await {
+                Ok(result) => result,
+                Err(error) => {
+                    cancel_staged_steer_with_retry(
+                        &state.session_store,
+                        task_id,
+                        &branch.storage_id,
+                        &operation_id,
+                    )
+                    .await?;
+                    enqueue_message(&state.db, task_id, &branch.id, message, 1)?;
+                    tracing::warn!(
+                        task_id,
+                        "active run could not accept steer; queued it next: {error}"
+                    );
+                    return Ok(());
+                }
+            };
             match result {
                 SteerResult::Accepted => {
                     if let Some(current) = bridge
@@ -4369,20 +4681,25 @@ pub async fn agent_send_with_mode_and_attachments(
                             16_000,
                         );
                     }
-                    append_user_message_with_mode(
-                        &state.session_store,
-                        &branch.storage_id,
-                        message,
-                        AgentSendMode::Steer,
-                    )
-                    .await?;
-                    TaskEventStore::new(&state.db)
-                        .append_for_branch(task_id, &branch.id, TaskEventType::UserSteered)
-                        .map_err(err_str)?;
+                    if let Err(error) = TaskEventStore::new(&state.db).append_for_branch(
+                        task_id,
+                        &branch.id,
+                        TaskEventType::UserSteered,
+                    ) {
+                        tracing::warn!(task_id, "could not append steer audit event: {error}");
+                    }
                 }
                 SteerResult::RunFinished => {
                     // 运行恰好在点击引导时结束：转为持久化队列，不能写进已结束 run 的历史。
-                    enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
+                    // 该消息是用户刚刚要求介入的内容，应排在已有普通队列之前。
+                    cancel_staged_steer_with_retry(
+                        &state.session_store,
+                        task_id,
+                        &branch.storage_id,
+                        &operation_id,
+                    )
+                    .await?;
+                    enqueue_message(&state.db, task_id, &branch.id, message, 1)?;
                 }
             }
             Ok(())
@@ -4806,6 +5123,14 @@ fn mark_cancelled_plan_queue_failed(plan_store: &PlanStore, queue_id: &str, erro
     }
 }
 
+fn is_transient_queue_claim_error(error: &ProductError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("database is locked")
+        || message.contains("database table is locked")
+        || message.contains("database is busy")
+        || message.contains("busy snapshot")
+}
+
 /// Current task runtime is idle: claim and start the highest-priority durable queue message.
 async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: String) {
     let QueuedDispatchResources {
@@ -4824,6 +5149,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
         config_dir,
     } = paths;
     let agent = agent_pool.bridge_for(&task_id).await;
+    let mut claim_attempt = 0_u64;
     loop {
         let mut bridge = agent.lock().await;
         match task_has_active_main_run(&db, &task_id, &bridge) {
@@ -4837,15 +5163,31 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 return;
             }
         }
-        let Some(queued) = QueuedMessageRepository::new(&db)
-            .take_next_for_task(&task_id)
-            .map_err(err_str)
-            .unwrap_or_else(|error| {
-                tracing::warn!("cannot take queued message: {error}");
-                None
-            })
-        else {
-            return;
+        claim_attempt += 1;
+        let queued = match QueuedMessageRepository::new(&db).take_next_for_task(&task_id) {
+            Ok(Some(queued)) => {
+                claim_attempt = 0;
+                queued
+            }
+            Ok(None) => return,
+            Err(error) if is_transient_queue_claim_error(&error) && claim_attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    attempt = claim_attempt,
+                    "queue claim is temporarily busy; retrying"
+                );
+                drop(bridge);
+                tokio::time::sleep(Duration::from_millis(30 * claim_attempt)).await;
+                continue;
+            }
+            Err(error) => {
+                tracing::error!(
+                    task_id,
+                    attempts = claim_attempt,
+                    "queue dispatch could not claim the next message: {error}"
+                );
+                return;
+            }
         };
 
         let branch = match SessionBranchRepository::new(&db).ensure_active(&queued.task_id) {
@@ -5109,6 +5451,366 @@ pub async fn agent_queue_remove(
         .map_err(err_str)
 }
 
+/// Persist the complete execution order of queued messages on the active branch.
+pub async fn agent_queue_reorder(
+    state: &CommandState,
+    task_id: &str,
+    queue_ids: &[String],
+) -> Result<(), String> {
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    QueuedMessageRepository::new(&state.db)
+        .reorder_pending(task_id, &branch.id, queue_ids)
+        .map_err(err_str)?;
+    // Sorting can race the idle transition that normally triggers dispatch. Re-entering the
+    // task-local dispatcher is idempotent and closes that otherwise silent queue-stall window.
+    dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+    Ok(())
+}
+
+/// 编辑一条尚未分发的队列消息。若该项此前发送失败，编辑会把它恢复为可调度状态；
+/// 调度器仍然负责判断当前运行是否空闲，因此不会与正在进行的主 Agent 并发。
+pub async fn agent_queue_update(
+    state: &CommandState,
+    task_id: &str,
+    queue_id: &str,
+    message: &str,
+) -> Result<(), String> {
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    QueuedMessageRepository::new(&state.db)
+        .update_pending_message(queue_id, task_id, &branch.id, message)
+        .map_err(err_str)?;
+    dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+    Ok(())
+}
+
+async fn record_accepted_queue_steer(
+    state: &CommandState,
+    task_id: &str,
+    branch: &SessionBranch,
+    queued: &QueuedMessage,
+) {
+    // The durable steer record already exists before runtime acceptance. Complete the queue claim
+    // with bounded retry so the same item cannot later be dispatched as a second turn.
+    for attempt in 1_u64..=3 {
+        match QueuedMessageRepository::new(&state.db)
+            .complete_claim_for_task_branch(&queued.id, task_id, &branch.id)
+        {
+            Ok(()) => {
+                if let Err(error) = TaskEventStore::new(&state.db).append_for_branch(
+                    task_id,
+                    &branch.id,
+                    TaskEventType::UserSteered,
+                ) {
+                    tracing::warn!(
+                        task_id,
+                        queue_id = %queued.id,
+                        "could not append queue steer event: {error}"
+                    );
+                }
+                return;
+            }
+            Err(error) if attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    queue_id = %queued.id,
+                    attempt,
+                    "could not complete steered queue claim yet; retrying: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(30 * attempt)).await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    task_id,
+                    queue_id = %queued.id,
+                    "could not complete steered queue claim after retries: {error}"
+                );
+                break;
+            }
+        }
+    }
+    // A scoped completion can fail because the row was already reconciled or SQLite stayed busy.
+    // The durable message proves that replay is unsafe, so force the terminal projection and keep
+    // retrying in the background rather than leaving a permanently visible `dispatching` row.
+    for attempt in 1_u64..=3 {
+        match QueuedMessageRepository::new(&state.db)
+            .set_state(&queued.id, QueuedMessageState::Sent)
+        {
+            Ok(()) => return,
+            Err(error) if attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    queue_id = %queued.id,
+                    attempt,
+                    "accepted queue projection is temporarily busy; retrying: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(30 * attempt)).await;
+            }
+            Err(error) => tracing::error!(
+                task_id,
+                queue_id = %queued.id,
+                "accepted queue projection needs startup reconciliation: {error}"
+            ),
+        }
+    }
+
+    let db = state.db.clone();
+    let queue_id = queued.id.clone();
+    let task_id = task_id.to_string();
+    tokio::spawn(async move {
+        for attempt in 1_u64..=8 {
+            tokio::time::sleep(Duration::from_millis(250 * attempt)).await;
+            if QueuedMessageRepository::new(&db)
+                .set_state(&queue_id, QueuedMessageState::Sent)
+                .is_ok()
+            {
+                return;
+            }
+            if attempt < 8 {
+                tracing::warn!(
+                    task_id,
+                    queue_id,
+                    attempt,
+                    "accepted queue projection is still busy; retrying in background"
+                );
+            }
+        }
+        tracing::error!(
+            task_id,
+            queue_id,
+            "accepted queue projection could not be reconciled in this process"
+        );
+    });
+}
+
+async fn restore_queue_claim_after_preaccept_failure(
+    state: &CommandState,
+    task_id: &str,
+    branch_id: &str,
+    queue_id: &str,
+) {
+    for attempt in 1_u64..=3 {
+        match QueuedMessageRepository::new(&state.db)
+            .restore_claim_to_front(queue_id, task_id, branch_id)
+        {
+            Ok(()) => return,
+            Err(error) if attempt < 3 => {
+                tracing::warn!(
+                    task_id,
+                    queue_id,
+                    attempt,
+                    "queue claim could not be restored yet; retrying: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(30 * attempt)).await;
+            }
+            Err(error) => tracing::error!(
+                task_id,
+                queue_id,
+                "queue claim could not be restored after retries: {error}"
+            ),
+        }
+    }
+    if let Err(error) =
+        QueuedMessageRepository::new(&state.db).set_state(queue_id, QueuedMessageState::Failed)
+    {
+        tracing::error!(
+            task_id,
+            queue_id,
+            "queue claim could not be made retryable: {error}"
+        );
+    }
+}
+
+/// 将用户点选的队列项优先引导进当前运行。
+///
+/// 返回值供界面给出准确反馈：
+/// - `steered`：已注入 Native runtime 的当前轮；
+/// - `queued_next`：当前引擎/运行阶段无法安全注入，已原子移到队首；
+/// - `started`：点击时运行已结束，已作为下一轮开始调度。
+pub async fn agent_queue_steer(
+    state: &CommandState,
+    task_id: &str,
+    queue_id: &str,
+) -> Result<String, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let mut bridge = task_agent.lock().await;
+    let task = TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "当前会话不存在".to_string())?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能继续处理队列消息".to_string());
+    }
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    let codex_active_run = if task.agent_engine == AgentEngine::Codex {
+        AgentRunRepository::new(&state.db)
+            .get_active_run_for_branch(task_id, &branch.id)
+            .map_err(err_str)?
+    } else {
+        None
+    };
+    let queued = QueuedMessageRepository::new(&state.db)
+        .claim_pending_for_task_branch(queue_id, task_id, &branch.id)
+        .map_err(err_str)?
+        .ok_or_else(|| "这条消息已经开始处理或不在当前队列中".to_string())?;
+
+    if task.agent_engine == AgentEngine::Codex {
+        if let Some(active) = codex_active_run.as_ref() {
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            if let Err(error) = stage_steer_context_with_retry(
+                &state.session_store,
+                task_id,
+                &branch.storage_id,
+                &operation_id,
+                &queued.message,
+                Some(&queued.id),
+            )
+            .await
+            {
+                restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id)
+                    .await;
+                return Err(error);
+            }
+            match state
+                .external_agents
+                .steer_run_for_task(task_id, &active.id, &operation_id, &queued.message)
+                .await
+            {
+                ExternalSteerOutcome::Accepted => {
+                    record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+                    return Ok("steered".to_string());
+                }
+                ExternalSteerOutcome::Rejected => {
+                    if let Err(error) = cancel_staged_steer_with_retry(
+                        &state.session_store,
+                        task_id,
+                        &branch.storage_id,
+                        &operation_id,
+                    )
+                    .await
+                    {
+                        record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+                        return Err(error);
+                    }
+                }
+                ExternalSteerOutcome::Unknown => {
+                    tracing::warn!(
+                        task_id,
+                        queue_id,
+                        "Codex steer acknowledgement was lost; preserving the durable message without replay"
+                    );
+                    record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+                    return Ok("steered".to_string());
+                }
+            }
+        }
+        // App Server 尚未就绪或 turn 已越过接纳阶段：保留“引导优先”语义，只把
+        // 点选项移到队首，其他项的相对顺序不变。
+        restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+        drop(bridge);
+        if codex_active_run.is_none() {
+            dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+            return Ok("started".to_string());
+        }
+        return Ok("queued_next".to_string());
+    }
+
+    let Some(active) = bridge.active.clone() else {
+        restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+        drop(bridge);
+        dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+        return Ok("started".to_string());
+    };
+    if active.task_id != task_id || active.branch_id != branch.id {
+        restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+        return Ok("queued_next".to_string());
+    }
+
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    if let Err(error) = stage_steer_context_with_retry(
+        &state.session_store,
+        task_id,
+        &branch.storage_id,
+        &operation_id,
+        &queued.message,
+        Some(&queued.id),
+    )
+    .await
+    {
+        restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+        return Err(error);
+    }
+    let steer_result = match bridge
+        .kind
+        .steer(&active.runtime_session_id, &queued.message)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(
+                task_id,
+                queue_id,
+                "queued message could not steer the active run and was kept at the front: {error}"
+            );
+            if let Err(cancel_error) = cancel_staged_steer_with_retry(
+                &state.session_store,
+                task_id,
+                &branch.storage_id,
+                &operation_id,
+            )
+            .await
+            {
+                record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+                return Err(cancel_error);
+            }
+            restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+            return Ok("queued_next".to_string());
+        }
+    };
+
+    match steer_result {
+        SteerResult::Accepted => {
+            if let Some(current) = bridge
+                .active
+                .as_mut()
+                .filter(|current| current.run_id == active.run_id)
+            {
+                current.memory.user_text = trim_chars(
+                    &format!(
+                        "{}\n\n[运行中引导]\n{}",
+                        current.memory.user_text, queued.message
+                    ),
+                    16_000,
+                );
+            }
+            record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+            Ok("steered".to_string())
+        }
+        SteerResult::RunFinished => {
+            if let Err(error) = cancel_staged_steer_with_retry(
+                &state.session_store,
+                task_id,
+                &branch.storage_id,
+                &operation_id,
+            )
+            .await
+            {
+                record_accepted_queue_steer(state, task_id, &branch, &queued).await;
+                return Err(error);
+            }
+            restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
+            drop(bridge);
+            dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+            Ok("queued_next".to_string())
+        }
+    }
+}
+
 fn parse_message_line_id(storage_id: &str, message_id: &str) -> Result<usize, String> {
     let prefix = format!("{storage_id}:");
     let line = message_id
@@ -5121,6 +5823,18 @@ fn parse_message_line_id(storage_id: &str, message_id: &str) -> Result<usize, St
         return Err("消息标识无效".to_string());
     }
     Ok(line)
+}
+
+fn user_message_from_session_event(event: &SessionEvent) -> Option<Message> {
+    match event {
+        SessionEvent::Message(message) if message.role == hermes_core::Role::User => {
+            Some(message.clone())
+        }
+        SessionEvent::System { event, data } if event == DURABLE_USER_MESSAGE_EVENT => data
+            .get("message")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        _ => None,
+    }
 }
 
 /// 编辑一条已发送的用户消息，并从其前缀创建新的活跃会话分支后重新运行。
@@ -5162,10 +5876,7 @@ pub async fn agent_resend(
         .ok_or_else(|| "要编辑的消息已不存在".to_string())?;
     let selected_event: SessionEvent =
         serde_json::from_str(selected).map_err(|_| "要编辑的消息格式无效".to_string())?;
-    if !matches!(
-        selected_event,
-        SessionEvent::Message(ref item) if item.role == hermes_core::Role::User
-    ) {
+    if user_message_from_session_event(&selected_event).is_none() {
         return Err("只能编辑自己发送的消息".to_string());
     }
 
@@ -6968,19 +7679,30 @@ fn resolve_support_output_dir(output_dir: &str) -> Result<PathBuf, String> {
 }
 
 pub async fn support_bundle(state: &CommandState, output_dir: &str) -> Result<String, String> {
-    let bundle = SupportBundle::new(resolve_support_output_dir(output_dir)?)
-        .with_mcp_servers(mcp_support_summaries(state).await);
+    let bundle = SupportBundle::new(
+        resolve_support_output_dir(output_dir)?,
+        crate::logging::log_dir_for_config(&state.config_dir),
+    )
+    .with_mcp_servers(mcp_support_summaries(state).await);
     let db_path = support_db_path(state)?;
-    let path = bundle.generate(&db_path).await.map_err(err_str)?;
+    let path = bundle.generate(&db_path).await.map_err(|error| {
+        tracing::warn!(%error, "support bundle export failed");
+        err_str(error)
+    })?;
     Ok(path.display().to_string())
 }
 
 pub async fn support_preview(state: &CommandState) -> Result<serde_json::Value, String> {
-    // output_dir 仅用于定位 r-code.log；预览用 config_dir
-    let bundle = SupportBundle::new(state.config_dir.clone())
-        .with_mcp_servers(mcp_support_summaries(state).await);
+    let bundle = SupportBundle::new(
+        state.config_dir.clone(),
+        crate::logging::log_dir_for_config(&state.config_dir),
+    )
+    .with_mcp_servers(mcp_support_summaries(state).await);
     let db_path = support_db_path(state)?;
-    let contents = bundle.preview(&db_path).await.map_err(err_str)?;
+    let contents = bundle.preview(&db_path).await.map_err(|error| {
+        tracing::warn!(%error, "support bundle preview failed");
+        err_str(error)
+    })?;
     serde_json::to_value(&contents).map_err(|e| e.to_string())
 }
 
@@ -7050,6 +7772,77 @@ pub async fn session_messages(
     ))
 }
 
+fn push_visible_session_message(
+    out: &mut Vec<SessionMessage>,
+    msg: &Message,
+    message_id: Option<String>,
+    branch_id: &str,
+) {
+    let role = match msg.role {
+        hermes_core::Role::User => "user",
+        hermes_core::Role::Assistant => "assistant",
+    };
+    let mut text = String::new();
+    let mut image_media_types = Vec::new();
+    let mut attachments = Vec::new();
+    for block in &msg.content {
+        match block {
+            hermes_core::ContentBlock::Text { text: value } => text.push_str(value),
+            hermes_core::ContentBlock::Custom { type_name, data } => {
+                if type_name == "file_ref" {
+                    if let Some(path) = data.get("path").and_then(|value| value.as_str()) {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push('@');
+                        text.push_str(path);
+                    }
+                }
+            }
+            hermes_core::ContentBlock::Image { source } => {
+                image_media_types.push(source.media_type.clone());
+                attachments.push(SessionAttachmentMeta {
+                    name: format!("图片 {}", attachments.len() + 1),
+                    media_type: source.media_type.clone(),
+                    kind: "image".to_string(),
+                });
+            }
+            hermes_core::ContentBlock::File { source } => {
+                let kind = if source.media_type.starts_with("image/") {
+                    image_media_types.push(source.media_type.clone());
+                    "image"
+                } else if source.media_type == "application/pdf" {
+                    "pdf"
+                } else {
+                    "text"
+                };
+                attachments.push(SessionAttachmentMeta {
+                    name: source.name.clone(),
+                    media_type: source.media_type.clone(),
+                    kind: kind.to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    out.push(SessionMessage {
+        id: message_id,
+        branch_id: branch_id.to_string(),
+        kind: "message".into(),
+        role: Some(role.into()),
+        text: (!text.is_empty()).then_some(text),
+        image_count: (!image_media_types.is_empty()).then_some(image_media_types.len()),
+        image_media_types: (!image_media_types.is_empty()).then_some(image_media_types),
+        attachments: (!attachments.is_empty()).then_some(attachments),
+        tool_name: None,
+        call_id: None,
+        input_json: None,
+        output_json: None,
+        is_error: None,
+        timestamp: None,
+    });
+}
+
 fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> Vec<SessionMessage> {
     let mut out: Vec<SessionMessage> = Vec::new();
     // JSONL 的 ToolCall 不存 call_id；ToolResult 却保留 provider 生成的真实 ID。
@@ -7057,13 +7850,29 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
     // delegated_by_tool_call_id 能精确锚定到发起它的对话轮次。
     let mut pending_calls: Vec<(String, usize)> = Vec::new();
 
-    for (line_index, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(event) = serde_json::from_str::<SessionEvent>(line) else {
-            continue; // 跳过无法解析的行（崩溃恢复场景）
-        };
+    let events = content
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| !line.trim().is_empty())
+        .filter_map(|(line_index, line)| {
+            serde_json::from_str::<SessionEvent>(line)
+                .ok()
+                .map(|event| (line_index, event))
+        })
+        .collect::<Vec<_>>();
+    let cancelled_durable_messages = events
+        .iter()
+        .filter_map(|(_, event)| {
+            let SessionEvent::System { event, data } = event else {
+                return None;
+            };
+            (event == DURABLE_USER_MESSAGE_CANCEL_EVENT)
+                .then(|| data.get("operation_id")?.as_str().map(str::to_owned))?
+        })
+        .collect::<HashSet<_>>();
+    let mut visible_durable_messages = HashSet::new();
+
+    for (line_index, event) in events {
         let message_id = Some(format!("{}:{}", storage_id, line_index + 1));
         match event {
             SessionEvent::Meta(meta) => out.push(SessionMessage {
@@ -7083,70 +7892,7 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 timestamp: Some(meta.created_at.to_rfc3339()),
             }),
             SessionEvent::Message(msg) => {
-                let role = match msg.role {
-                    hermes_core::Role::User => "user",
-                    hermes_core::Role::Assistant => "assistant",
-                };
-                // 拼接文本块 + Custom 块（file_ref 等）的 @path 占位
-                let mut text = String::new();
-                let mut image_media_types = Vec::new();
-                let mut attachments = Vec::new();
-                for block in &msg.content {
-                    match block {
-                        hermes_core::ContentBlock::Text { text: t } => text.push_str(t),
-                        hermes_core::ContentBlock::Custom { type_name, data } => {
-                            if type_name == "file_ref" {
-                                if let Some(p) = data.get("path").and_then(|v| v.as_str()) {
-                                    if !text.is_empty() {
-                                        text.push('\n');
-                                    }
-                                    text.push('@');
-                                    text.push_str(p);
-                                }
-                            }
-                        }
-                        hermes_core::ContentBlock::Image { source } => {
-                            image_media_types.push(source.media_type.clone());
-                            attachments.push(SessionAttachmentMeta {
-                                name: format!("图片 {}", attachments.len() + 1),
-                                media_type: source.media_type.clone(),
-                                kind: "image".to_string(),
-                            });
-                        }
-                        hermes_core::ContentBlock::File { source } => {
-                            let kind = if source.media_type.starts_with("image/") {
-                                image_media_types.push(source.media_type.clone());
-                                "image"
-                            } else if source.media_type == "application/pdf" {
-                                "pdf"
-                            } else {
-                                "text"
-                            };
-                            attachments.push(SessionAttachmentMeta {
-                                name: source.name.clone(),
-                                media_type: source.media_type.clone(),
-                                kind: kind.to_string(),
-                            });
-                        }
-                        _ => {}
-                    }
-                }
-                out.push(SessionMessage {
-                    id: message_id,
-                    branch_id: branch_id.to_string(),
-                    kind: "message".into(),
-                    role: Some(role.into()),
-                    text: (!text.is_empty()).then_some(text),
-                    image_count: (!image_media_types.is_empty()).then_some(image_media_types.len()),
-                    image_media_types: (!image_media_types.is_empty()).then_some(image_media_types),
-                    attachments: (!attachments.is_empty()).then_some(attachments),
-                    tool_name: None,
-                    call_id: None,
-                    input_json: None,
-                    output_json: None,
-                    is_error: None,
-                    timestamp: None,
-                });
+                push_visible_session_message(&mut out, &msg, message_id, branch_id);
             }
             SessionEvent::ToolCall { name, input } => {
                 let call_id = format!("call-{}", out.len());
@@ -7212,22 +7958,69 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
             }
             // 运行时恢复专用的快照不应成为 UI 时间线里的第二份消息记录。
             SessionEvent::HistorySnapshot { .. } => {}
-            SessionEvent::System { event, data } => out.push(SessionMessage {
-                id: message_id,
-                branch_id: branch_id.to_string(),
-                kind: "system".into(),
-                role: None,
-                text: Some(event),
-                image_count: None,
-                image_media_types: None,
-                attachments: None,
-                tool_name: None,
-                call_id: None,
-                input_json: None,
-                output_json: Some(data.to_string()),
-                is_error: None,
-                timestamp: None,
-            }),
+            SessionEvent::System { event, data } => {
+                if event == DURABLE_USER_MESSAGE_EVENT {
+                    let operation_id = data.get("operation_id").and_then(serde_json::Value::as_str);
+                    let visible = operation_id.is_some_and(|operation_id| {
+                        !cancelled_durable_messages.contains(operation_id)
+                            && visible_durable_messages.insert(operation_id.to_string())
+                    });
+                    if visible {
+                        if let Some(message) = data
+                            .get("message")
+                            .and_then(|value| serde_json::from_value::<Message>(value.clone()).ok())
+                        {
+                            push_visible_session_message(
+                                &mut out,
+                                &message,
+                                message_id.clone(),
+                                branch_id,
+                            );
+                            out.push(SessionMessage {
+                                id: message_id,
+                                branch_id: branch_id.to_string(),
+                                kind: "system".into(),
+                                role: None,
+                                text: Some(USER_MESSAGE_MODE_EVENT.into()),
+                                image_count: None,
+                                image_media_types: None,
+                                attachments: None,
+                                tool_name: None,
+                                call_id: None,
+                                input_json: None,
+                                output_json: Some(
+                                    serde_json::json!({
+                                        "mode": data
+                                            .get("mode")
+                                            .and_then(serde_json::Value::as_str)
+                                            .unwrap_or("steer")
+                                    })
+                                    .to_string(),
+                                ),
+                                is_error: None,
+                                timestamp: None,
+                            });
+                        }
+                    }
+                } else if event != DURABLE_USER_MESSAGE_CANCEL_EVENT {
+                    out.push(SessionMessage {
+                        id: message_id,
+                        branch_id: branch_id.to_string(),
+                        kind: "system".into(),
+                        role: None,
+                        text: Some(event),
+                        image_count: None,
+                        image_media_types: None,
+                        attachments: None,
+                        tool_name: None,
+                        call_id: None,
+                        input_json: None,
+                        output_json: Some(data.to_string()),
+                        is_error: None,
+                        timestamp: None,
+                    });
+                }
+            }
             SessionEvent::Usage(_) => {}
         }
     }
@@ -7388,7 +8181,7 @@ pub async fn legacy_memory_status(
 }
 
 // ============================================================================
-// 日志命令（环形缓冲，应用内查看）
+// 日志命令（近 7 天持久化日志 + 当前进程尾部缓冲）
 // ============================================================================
 
 pub async fn logs_tail(
@@ -7396,7 +8189,7 @@ pub async fn logs_tail(
     limit: usize,
     level: Option<&str>,
 ) -> Result<Vec<crate::log_buffer::LogEntry>, String> {
-    Ok(crate::log_buffer::tail(limit, level))
+    Ok(crate::log_buffer::tail(limit.min(1000), level))
 }
 
 // ============================================================================
@@ -10608,9 +11401,9 @@ fn external_agent_scope(run: &AgentRun) -> AgentEventScope {
     }
 }
 
-/// Codex 主 Agent 的发送语义。Codex CLI 目前不公开可安全注入正在执行 turn 的
-/// steer 通道，因此运行中的普通发送与“引导”都会进入持久化队列；“立即发送”会
-/// 先取消当前进程树，再以高优先级分发，界面能明确看到这项差异。
+/// Codex 主 Agent 的发送语义。主运行使用长驻 App Server，因此“引导”通过官方
+/// `turn/steer` 注入当前 turn；若恰逢收尾或通道未就绪，则安全回退到队首。
+/// “立即发送”仍会先取消当前 turn，再以高优先级分发。
 async fn agent_send_codex_with_mode(
     state: &CommandState,
     task: &Task,
@@ -10622,14 +11415,63 @@ async fn agent_send_codex_with_mode(
     let active = AgentRunRepository::new(&state.db)
         .get_active_run_for_branch(&task.id, &branch.id)
         .map_err(err_str)?;
-    if active.is_some() {
+    if let Some(active) = active {
         if !attachments.is_empty() {
             return Err("当前 Codex 运行结束后才能把附件作为新一轮消息发送".to_string());
         }
-        let priority = if mode == AgentSendMode::SendNow {
-            1_000_000
-        } else {
-            0
+        if mode == AgentSendMode::Steer {
+            let operation_id = uuid::Uuid::new_v4().to_string();
+            stage_steer_context_with_retry(
+                &state.session_store,
+                &task.id,
+                &branch.storage_id,
+                &operation_id,
+                message,
+                None,
+            )
+            .await?;
+            match state
+                .external_agents
+                .steer_run_for_task(&task.id, &active.id, &operation_id, message)
+                .await
+            {
+                ExternalSteerOutcome::Accepted => {
+                    if let Err(error) = TaskEventStore::new(&state.db).append_for_branch(
+                        &task.id,
+                        &branch.id,
+                        TaskEventType::UserSteered,
+                    ) {
+                        tracing::warn!(
+                            task_id = %task.id,
+                            run_id = %active.id,
+                            "could not append Codex steer event: {error}"
+                        );
+                    }
+                    return Ok(());
+                }
+                ExternalSteerOutcome::Rejected => {
+                    cancel_staged_steer_with_retry(
+                        &state.session_store,
+                        &task.id,
+                        &branch.storage_id,
+                        &operation_id,
+                    )
+                    .await?;
+                }
+                ExternalSteerOutcome::Unknown => {
+                    tracing::warn!(
+                        task_id = %task.id,
+                        run_id = %active.id,
+                        "Codex steer acknowledgement was lost; preserving the durable message without replay"
+                    );
+                    return Ok(());
+                }
+            }
+        }
+        let priority = match mode {
+            AgentSendMode::SendNow => 1_000_000,
+            AgentSendMode::Steer => 1,
+            _ => 0,
         };
         enqueue_message(&state.db, &task.id, &branch.id, message, priority)?;
         if mode == AgentSendMode::SendNow {
@@ -10786,14 +11628,10 @@ async fn start_codex_main_with_resources(
     {
         return Err("当前 Codex 运行尚未结束".to_string());
     }
-    let workspace_path = task
-        .workspace_path
-        .as_deref()
+    let (workspace_path, workspace_access_mode) = task_workspace_binding_from_db(&db, &task)?;
+    let workspace = workspace_path
+        .map(PathBuf::from)
         .ok_or_else(|| "Codex 主 Agent 需要先附加本地工作区".to_string())?;
-    let workspace = PathGuard::new(PathBuf::from(workspace_path))
-        .map_err(err_str)?
-        .root()
-        .to_path_buf();
     let cli = probe_codex_cli().await;
     if !cli.available {
         return Err(cli
@@ -10810,7 +11648,8 @@ async fn start_codex_main_with_resources(
             return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string())
         }
     }
-    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
+    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?
+        .constrained_by_project_access(workspace_access_mode);
     let session_store = SessionStore::new(sessions_dir.clone());
     ensure_session_log(&session_store, &sessions_dir, &branch.storage_id).await?;
     let history = session_store
@@ -10855,6 +11694,13 @@ async fn start_codex_main_with_resources(
     run.routing_reason = Some("该会话已显式选择 Codex 作为主 Agent".to_string());
     let pending_snapshot = capture_workspace_snapshot(&db, &task);
     let cancellation = external_agents.reserve(&task.id, &run.id, &run.id).await?;
+    let steer_requests = match external_agents.enable_steering(&task.id, &run.id).await {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            external_agents.remove(&run.id).await;
+            return Err(error);
+        }
+    };
     if let Err(error) = AgentRunRepository::new(&db).create(&run).map_err(err_str) {
         external_agents.remove(&run.id).await;
         return Err(error);
@@ -10930,6 +11776,7 @@ async fn start_codex_main_with_resources(
         permissions,
         prepared_attachments,
         cancellation,
+        steer_requests,
         sink,
         prepared_memory.capture,
     );
@@ -11741,6 +12588,17 @@ fn codex_app_server_thread_id(result: &serde_json::Value) -> Option<String> {
         .map(|value| bounded_text(value, 160))
 }
 
+fn codex_app_server_turn_id(result: &serde_json::Value) -> Option<String> {
+    result
+        .pointer("/turn/id")
+        .or_else(|| result.get("turnId"))
+        .or_else(|| result.get("id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| bounded_text(value, 160))
+}
+
 fn codex_app_server_approval_summary(method: &str, params: &serde_json::Value) -> (String, String) {
     let detail = match method {
         "item/commandExecution/requestApproval" => params
@@ -12033,6 +12891,7 @@ async fn run_codex_app_server_process(
         observer,
         event_sink,
         approval,
+        None,
         limits,
     )
     .await
@@ -12049,6 +12908,7 @@ async fn run_codex_app_server_process_with_images(
     observer: Option<CodexExecObserver<'_>>,
     event_sink: Option<&CodexSubagentEventSink>,
     approval: CodexAppServerApprovalContext,
+    mut steer_requests: Option<tokio::sync::mpsc::Receiver<ExternalSteerRequest>>,
     limits: CodexExecLimits,
 ) -> CodexExecCompletion {
     use tokio::io::{AsyncBufReadExt, BufReader};
@@ -12145,13 +13005,14 @@ async fn run_codex_app_server_process_with_images(
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let _ = wait_for_codex_app_server_response(&mut lines, 2, limits.startup_timeout).await?;
-        Ok::<String, CodexExecFailure>(thread_id)
+        let turn = wait_for_codex_app_server_response(&mut lines, 2, limits.startup_timeout).await?;
+        let turn_id = codex_app_server_turn_id(&turn).ok_or(CodexExecFailure::ApprovalBridge)?;
+        Ok::<(String, String), CodexExecFailure>((thread_id, turn_id))
     }
     .await;
 
-    let thread_id = match setup {
-        Ok(thread_id) => thread_id,
+    let (thread_id, turn_id) = match setup {
+        Ok(ids) => ids,
         Err(failure) => {
             terminate_codex_child(&mut child).await;
             if let Some(stderr_task) = stderr_task {
@@ -12172,7 +13033,7 @@ async fn run_codex_app_server_process_with_images(
         event_sink,
         AgentEvent::Activity {
             phase: AgentActivityPhase::Requesting,
-            detail: Some("已连接 Codex 审批桥，正在准备工作区".to_string()),
+            detail: Some("已连接 Codex 运行服务，正在准备工作区".to_string()),
         },
     )
     .await;
@@ -12181,6 +13042,9 @@ async fn run_codex_app_server_process_with_images(
     let mut failure = None;
     let mut summary = None;
     let mut completed = false;
+    let mut next_steer_request_id = 1_000_u64;
+    let mut pending_steers: HashMap<u64, tokio::sync::oneshot::Sender<ExternalSteerOutcome>> =
+        HashMap::new();
     let idle_timer = tokio::time::sleep(limits.idle_timeout);
     let deadline_timer = tokio::time::sleep(limits.hard_timeout);
     tokio::pin!(idle_timer);
@@ -12215,6 +13079,38 @@ async fn run_codex_app_server_process_with_images(
                 ).await;
                 break;
             }
+            request = async {
+                match steer_requests.as_mut() {
+                    Some(receiver) => receiver.recv().await,
+                    None => std::future::pending::<Option<ExternalSteerRequest>>().await,
+                }
+            } => {
+                let Some(request) = request else {
+                    steer_requests = None;
+                    continue;
+                };
+                let request_id = next_steer_request_id;
+                next_steer_request_id = next_steer_request_id.saturating_add(1);
+                let payload = serde_json::json!({
+                    "id": request_id,
+                    "method": "turn/steer",
+                    "params": {
+                        "threadId": thread_id,
+                        "clientUserMessageId": format!("r-code-steer-{}", request.operation_id),
+                        "input": codex_app_server_input(&request.message, &[]),
+                        "expectedTurnId": turn_id,
+                    }
+                });
+                if write_codex_app_server_value(&mut stdin, &payload).await.is_err() {
+                    // `write_all`/flush failure is ambiguous: the peer may have received the full
+                    // frame before the transport failed. Never convert it into an automatic retry.
+                    let _ = request.response.send(ExternalSteerOutcome::Unknown);
+                    failure = Some(CodexExecFailure::Stream);
+                    break;
+                }
+                pending_steers.insert(request_id, request.response);
+                idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+            }
             next = lines.next_line() => match next {
                 Ok(Some(line)) => {
                     if line.len() > CODEX_APP_SERVER_MAX_LINE_BYTES {
@@ -12229,6 +13125,28 @@ async fn run_codex_app_server_process_with_images(
                             break;
                         }
                     };
+                    if let Some(request_id) = value.get("id").and_then(serde_json::Value::as_u64) {
+                        if let Some(response) = pending_steers.remove(&request_id) {
+                            let accepted = if value.get("error").is_some() {
+                                tracing::warn!(
+                                    task_id = %approval.task_id,
+                                    run_id = %approval.run_id,
+                                    "Codex App Server rejected turn/steer"
+                                );
+                                ExternalSteerOutcome::Rejected
+                            } else if value
+                                .pointer("/result/turnId")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|accepted_turn| accepted_turn == turn_id)
+                            {
+                                ExternalSteerOutcome::Accepted
+                            } else {
+                                ExternalSteerOutcome::Unknown
+                            };
+                            let _ = response.send(accepted);
+                            continue;
+                        }
+                    }
                     match handle_codex_app_server_request(
                         &value,
                         &mut stdin,
@@ -12270,6 +13188,14 @@ async fn run_codex_app_server_process_with_images(
                     break;
                 }
             }
+        }
+    }
+    for (_, response) in pending_steers.drain() {
+        let _ = response.send(ExternalSteerOutcome::Unknown);
+    }
+    if let Some(receiver) = steer_requests.as_mut() {
+        while let Ok(request) = receiver.try_recv() {
+            let _ = request.response.send(ExternalSteerOutcome::Rejected);
         }
     }
     terminate_codex_child(&mut child).await;
@@ -12391,6 +13317,7 @@ async fn run_codex_delegation_process_with_images(
             observer,
             event_sink,
             approval,
+            None,
             CodexExecLimits::default(),
         )
         .await
@@ -12428,6 +13355,7 @@ fn spawn_codex_main(
     permissions: CodexDelegationPermissions,
     prepared_images: Option<PreparedCodexAttachments>,
     cancellation: CancellationToken,
+    steer_requests: tokio::sync::mpsc::Receiver<ExternalSteerRequest>,
     sink: Option<AgentEventSink>,
     memory: ActiveMemoryCapture,
 ) {
@@ -12437,11 +13365,14 @@ fn spawn_codex_main(
             .as_ref()
             .map(|prepared| prepared.paths.as_slice())
             .unwrap_or_default();
-        let completion = run_codex_delegation_process_with_images(
+        // 主 Agent 统一使用长驻 App Server：它支持所有权限预设，同时提供官方
+        // `turn/steer` 同轮介入语义。一次性子代理仍可按预设选择轻量 `codex exec`。
+        let completion = run_codex_app_server_process_with_images(
             &workspace,
             &prompt,
             image_paths,
             cli_path,
+            permissions,
             cancellation,
             Some(CodexExecObserver {
                 db: &db,
@@ -12452,13 +13383,14 @@ fn spawn_codex_main(
                 sink: &sink,
             }),
             None,
-            permissions,
             CodexAppServerApprovalContext {
                 permission_engine: tool_gateway.permission_engine().clone(),
                 task_id: run.task_id.clone(),
                 run_id: run.id.clone(),
                 caller: format!("main:codex:{}", run.id),
             },
+            Some(steer_requests),
+            CodexExecLimits::default(),
         )
         .await;
 
@@ -12506,6 +13438,12 @@ fn spawn_codex_main(
         } else {
             let detail = codex_exec_failure_message(completion.failure)
                 .replace("Codex CLI 子代理", "Codex 主 Agent");
+            tracing::warn!(
+                task_id = %run.task_id,
+                run_id = %run.id,
+                detail,
+                "Codex main agent failed"
+            );
             persist_and_emit_external_event(
                 &db,
                 &session_store,
@@ -13452,6 +14390,10 @@ mod tests {
         assert!(task.workspace_path.is_none());
         assert_eq!(task.title, "Test");
         assert_eq!(task.mode, TaskMode::Ask);
+        assert!(
+            !task.goal_active,
+            "ordinary first prompts are not explicit Goals"
+        );
 
         let tasks = task_list(&state, None, false).await.unwrap();
         assert_eq!(tasks.len(), 1);
@@ -13483,6 +14425,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(task.goal, "Revised goal");
+        assert!(task.goal_active);
         let task = task_set_mode(&state, &task.id, TaskMode::Plan)
             .await
             .unwrap();
@@ -13502,6 +14445,7 @@ mod tests {
                         id: "feature-one".to_string(),
                         title: "Feature one".to_string(),
                         description: "Implement one independently verifiable feature".to_string(),
+                        section_path: vec![],
                         depends_on: vec![],
                     }],
                 },
@@ -13555,6 +14499,9 @@ mod tests {
         assert!(context.contains("Implement only active_feature"));
         assert!(context.contains("edit/apply_patch/create_file/delete_file"));
         assert!(context.contains("ordinary Git review"));
+        assert!(context.contains("subagents in parallel"));
+        assert!(context.contains("normal final answer does not end"));
+        assert!(context.contains("\"progress\""));
         assert!(context.contains("feature-one"));
 
         let completed = plan_update_item(
@@ -13816,12 +14763,19 @@ mod tests {
             .await
             .unwrap();
         assert!(archived_activity.items.is_empty());
+        let archived_global_activity = activity_list(&state, None, 20).await.unwrap();
+        assert!(archived_global_activity.items.is_empty());
 
         let restored = task_restore(&state, &task.id).await.unwrap();
         assert_eq!(restored.state, TaskState::Idle);
         let restored_dashboard = workspace_dashboard(&state, &workspace).await.unwrap();
         assert_eq!(restored_dashboard.tasks.len(), 1);
         assert!(restored_dashboard.archived.is_empty());
+        let restored_global_activity = activity_list(&state, None, 20).await.unwrap();
+        assert!(restored_global_activity
+            .items
+            .iter()
+            .any(|item| item.task_id == task.id));
     }
 
     #[tokio::test]
@@ -14640,6 +15594,56 @@ mod tests {
             .contains("fn secret"));
     }
 
+    #[test]
+    fn session_message_parser_materializes_only_uncancelled_durable_steers() {
+        let events = [
+            SessionEvent::System {
+                event: DURABLE_USER_MESSAGE_EVENT.into(),
+                data: serde_json::json!({
+                    "operation_id": "cancelled",
+                    "message": Message::user_text("do not show"),
+                    "mode": "steer",
+                }),
+            },
+            SessionEvent::System {
+                event: DURABLE_USER_MESSAGE_EVENT.into(),
+                data: serde_json::json!({
+                    "operation_id": "accepted",
+                    "message": Message::user_text("show this steer"),
+                    "mode": "steer",
+                }),
+            },
+            SessionEvent::System {
+                event: DURABLE_USER_MESSAGE_CANCEL_EVENT.into(),
+                data: serde_json::json!({ "operation_id": "cancelled" }),
+            },
+        ];
+        let content = events
+            .iter()
+            .map(|event| serde_json::to_string(event).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let messages = parse_session_messages(&content, "branch", "storage");
+        let visible_user_messages = messages
+            .iter()
+            .filter(|message| message.role.as_deref() == Some("user"))
+            .collect::<Vec<_>>();
+        assert_eq!(visible_user_messages.len(), 1);
+        assert_eq!(
+            visible_user_messages[0].text.as_deref(),
+            Some("show this steer")
+        );
+        assert!(messages.iter().any(|message| {
+            message.kind == "system"
+                && message.text.as_deref() == Some(USER_MESSAGE_MODE_EVENT)
+                && message
+                    .output_json
+                    .as_deref()
+                    .is_some_and(|value| value.contains("\"mode\":\"steer\""))
+        }));
+    }
+
     #[tokio::test]
     async fn agent_abort_updates_state() {
         let (_dir, state) = setup_state();
@@ -14805,6 +15809,249 @@ mod tests {
             message.role.as_deref() == Some("user")
                 && message.text.as_deref() == Some("queued first")
         }));
+    }
+
+    #[tokio::test]
+    async fn explicit_steer_starts_a_normal_turn_when_runtime_is_idle() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+
+        agent_send_with_mode(&state, &task.id, "idle steer", AgentSendMode::Steer)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        let detail = task_detail(&state, &task.id).await.unwrap();
+        assert_eq!(detail.runs.len(), 1);
+        assert!(detail.queued_messages.is_empty());
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        assert!(messages.iter().any(|message| {
+            message.role.as_deref() == Some("user") && message.text.as_deref() == Some("idle steer")
+        }));
+    }
+
+    #[tokio::test]
+    async fn selected_queue_item_starts_when_runtime_is_idle() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let queued = QueuedMessage::new(&task.id, &branch.id, "start selected", 0);
+        QueuedMessageRepository::new(&state.db)
+            .enqueue(&queued)
+            .unwrap();
+
+        assert_eq!(
+            agent_queue_steer(&state, &task.id, &queued.id)
+                .await
+                .unwrap(),
+            "started"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+        assert!(agent_queue_list(&state, &task.id).await.unwrap().is_empty());
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        assert!(messages.iter().any(|message| {
+            message.role.as_deref() == Some("user")
+                && message.text.as_deref() == Some("start selected")
+        }));
+    }
+
+    #[tokio::test]
+    async fn selected_queued_message_steers_now_without_reordering_the_rest() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        agent_send(&state, &task.id, "active turn").await.unwrap();
+
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let first = QueuedMessage::new(&task.id, &branch.id, "first queued", 0);
+        let second = QueuedMessage::new(&task.id, &branch.id, "second queued", 0);
+        let selected = QueuedMessage::new(&task.id, &branch.id, "selected steer", 0);
+        let queue = QueuedMessageRepository::new(&state.db);
+        queue.enqueue(&first).unwrap();
+        queue.enqueue(&second).unwrap();
+        queue.enqueue(&selected).unwrap();
+
+        let outcome = agent_queue_steer(&state, &task.id, &selected.id)
+            .await
+            .unwrap();
+        assert_eq!(outcome, "steered");
+        assert_eq!(
+            agent_queue_list(&state, &task.id)
+                .await
+                .unwrap()
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first queued", "second queued"]
+        );
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        assert!(messages.iter().any(|message| {
+            message.role.as_deref() == Some("user")
+                && message.text.as_deref() == Some("selected steer")
+        }));
+
+        agent_queue_remove(&state, &task.id, &first.id)
+            .await
+            .unwrap();
+        agent_queue_remove(&state, &task.id, &second.id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn preaccept_failure_restores_a_claim_and_only_desktop_reconciles_acceptance() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Queue recovery", "g", "ask")
+            .await
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let recoverable = QueuedMessage::new(&task.id, &branch.id, "restore me", 0);
+        let accepted = QueuedMessage::new(&task.id, &branch.id, "already accepted", 0);
+        let queue = QueuedMessageRepository::new(&state.db);
+        queue.enqueue(&recoverable).unwrap();
+        queue.enqueue(&accepted).unwrap();
+
+        queue
+            .claim_pending_for_task_branch(&recoverable.id, &task.id, &branch.id)
+            .unwrap()
+            .unwrap();
+        restore_queue_claim_after_preaccept_failure(&state, &task.id, &branch.id, &recoverable.id)
+            .await;
+        assert_eq!(
+            queue
+                .list_pending(&task.id, &branch.id)
+                .unwrap()
+                .first()
+                .map(|message| message.id.as_str()),
+            Some(recoverable.id.as_str())
+        );
+
+        queue
+            .claim_pending_for_task_branch(&accepted.id, &task.id, &branch.id)
+            .unwrap()
+            .unwrap();
+        ensure_session_log(
+            &state.session_store,
+            &state.sessions_dir,
+            &branch.storage_id,
+        )
+        .await
+        .unwrap();
+        state
+            .session_store
+            .append_durable_user_message(
+                &branch.storage_id,
+                "accepted-operation",
+                &Message::user_text("already accepted"),
+                "steer",
+                Some(&accepted.id),
+            )
+            .await
+            .unwrap();
+
+        // MCP siblings also construct CommandState. Construction alone must not settle a live
+        // desktop claim; only the authoritative desktop startup invokes reconciliation.
+        let state_value: String = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM queued_messages WHERE id = ?1",
+                [&accepted.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state_value, "dispatching");
+
+        assert_eq!(state.reconcile_durable_steer_queue_claims().unwrap(), 1);
+        let state_value: String = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT state FROM queued_messages WHERE id = ?1",
+                [&accepted.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state_value, "sent");
+    }
+
+    #[tokio::test]
+    async fn selected_queue_item_uses_the_codex_main_steer_channel_when_available() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Codex", "g", "ask")
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .set_agent_engine(&task.id, AgentEngine::Codex)
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let mut run = AgentRun::new_for_branch(&task.id, &branch.id, "codex-test");
+        run.runtime_kind = AgentRunRuntimeKind::CodexExec;
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        state
+            .external_agents
+            .reserve(&task.id, &run.id, &run.id)
+            .await
+            .unwrap();
+        let mut steer_requests = state
+            .external_agents
+            .enable_steering(&task.id, &run.id)
+            .await
+            .unwrap();
+        let responder = tokio::spawn(async move {
+            for expected in ["selected Codex steer", "direct Codex steer"] {
+                let request = steer_requests.recv().await.unwrap();
+                assert_eq!(request.message, expected);
+                assert!(!request.operation_id.is_empty());
+                let _ = request.response.send(ExternalSteerOutcome::Accepted);
+            }
+        });
+
+        let queue = QueuedMessageRepository::new(&state.db);
+        let first = QueuedMessage::new(&task.id, &branch.id, "first queued", 0);
+        let selected = QueuedMessage::new(&task.id, &branch.id, "selected Codex steer", 0);
+        queue.enqueue(&first).unwrap();
+        queue.enqueue(&selected).unwrap();
+
+        assert_eq!(
+            agent_queue_steer(&state, &task.id, &selected.id)
+                .await
+                .unwrap(),
+            "steered"
+        );
+        agent_send_with_mode(&state, &task.id, "direct Codex steer", AgentSendMode::Steer)
+            .await
+            .unwrap();
+        assert_eq!(
+            agent_queue_list(&state, &task.id)
+                .await
+                .unwrap()
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first queued"]
+        );
+        let messages = session_messages(&state, &task.id).await.unwrap();
+        assert!(messages.iter().any(|message| {
+            message.role.as_deref() == Some("user")
+                && message.text.as_deref() == Some("selected Codex steer")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.role.as_deref() == Some("user")
+                && message.text.as_deref() == Some("direct Codex steer")
+        }));
+        responder.await.unwrap();
+        state.external_agents.remove(&run.id).await;
     }
 
     #[tokio::test]
@@ -17200,6 +18447,176 @@ input.on('line', (line) => {
             completion.summary.as_deref(),
             Some("App Server child summary")
         );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_accepts_turn_steer_for_the_active_main_run() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-steer",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-steer' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-steer' } } });
+  } else if (message.method === 'turn/steer') {
+    const text = message.params?.input?.[0]?.text;
+    if (message.params?.threadId !== 'thread-steer' ||
+        message.params?.expectedTurnId !== 'turn-steer' ||
+        message.params?.clientUserMessageId !== 'r-code-steer-durable-operation-42' ||
+        text !== 'focus the failing test') {
+      send({ id: message.id, error: { code: -32602, message: 'invalid steer' } });
+      return;
+    }
+    send({ id: message.id, result: { turnId: 'turn-steer' } });
+    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'Steered main result' } } });
+    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (steer_sender, steer_receiver) = tokio::sync::mpsc::channel(2);
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images(
+                &workspace,
+                "start the task",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-steer".to_string(),
+                    run_id: "run-steer".to_string(),
+                    caller: "main:codex:run-steer".to_string(),
+                },
+                Some(steer_receiver),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                },
+            )
+            .await
+        });
+        let (response, received) = tokio::sync::oneshot::channel();
+        steer_sender
+            .send(ExternalSteerRequest {
+                operation_id: "durable-operation-42".to_string(),
+                message: "focus the failing test".to_string(),
+                response,
+            })
+            .await
+            .unwrap();
+        let steer_outcome = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, received)
+            .await
+            .expect("turn/steer response timed out")
+            .expect("turn/steer response channel closed");
+        assert_eq!(steer_outcome, ExternalSteerOutcome::Accepted);
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("Codex App Server steer run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("Steered main result"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_reports_unknown_when_steer_ack_is_lost() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-steer-ack-lost",
+            r#"const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    send({ id: message.id, result: {} });
+  } else if (message.method === 'thread/start') {
+    send({ id: message.id, result: { thread: { id: 'thread-ack-lost' } } });
+  } else if (message.method === 'turn/start') {
+    send({ id: message.id, result: { turn: { id: 'turn-ack-lost' } } });
+  } else if (message.method === 'turn/steer') {
+    if (message.params?.clientUserMessageId !== 'r-code-steer-operation-ack-lost') {
+      send({ id: message.id, error: { code: -32602, message: 'wrong operation id' } });
+      return;
+    }
+    // The steer is accepted and the turn completes, but its JSON-RPC response is deliberately
+    // omitted to model a transport-level acknowledgement loss.
+    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'Accepted without ack' } } });
+    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full-access must be a built-in preset");
+        let (steer_sender, steer_receiver) = tokio::sync::mpsc::channel(2);
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process_with_images(
+                &workspace,
+                "start the task",
+                &[],
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-ack-lost".to_string(),
+                    run_id: "run-ack-lost".to_string(),
+                    caller: "main:codex:run-ack-lost".to_string(),
+                },
+                Some(steer_receiver),
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                },
+            )
+            .await
+        });
+        let (response, received) = tokio::sync::oneshot::channel();
+        steer_sender
+            .send(ExternalSteerRequest {
+                operation_id: "operation-ack-lost".to_string(),
+                message: "keep this exactly once".to_string(),
+                response,
+            })
+            .await
+            .unwrap();
+        let outcome = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, received)
+            .await
+            .expect("turn/steer outcome timed out")
+            .expect("turn/steer outcome channel closed");
+        assert_eq!(outcome, ExternalSteerOutcome::Unknown);
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("Codex App Server ack-loss run timed out")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
     }
 
     #[cfg(windows)]

@@ -239,6 +239,17 @@ export const agentQueueList = (taskId: string) =>
 export const agentQueueRemove = (taskId: string, queueId: string) =>
   ipc<void>("cmd_agent_queue_remove", { taskId, queueId });
 
+export const agentQueueReorder = (taskId: string, queueIds: string[]) =>
+  ipc<void>("cmd_agent_queue_reorder", { taskId, queueIds });
+
+export const agentQueueUpdate = (taskId: string, queueId: string, message: string) =>
+  ipc<void>("cmd_agent_queue_update", { taskId, queueId, message });
+
+export type AgentQueueSteerResult = "steered" | "queued_next" | "started";
+
+export const agentQueueSteer = (taskId: string, queueId: string) =>
+  ipc<AgentQueueSteerResult>("cmd_agent_queue_steer", { taskId, queueId });
+
 export const agentResend = (taskId: string, messageId: string, message: string) =>
   ipc<void>("cmd_agent_resend", { taskId, messageId, message });
 
@@ -591,6 +602,12 @@ export const terminalRawSnapshot = (id: string) =>
 export const terminalRawSince = (id: string, cursor: number) =>
   ipc<TerminalRawBatch>("cmd_terminal_raw_since", { id, cursor });
 
+/** PTY reader 的轻量输出就绪信号；字节内容仍由 terminalRawSince 增量读取。 */
+export const onTerminalOutput = (handler: (terminalId: string) => void): Promise<UnlistenFn> => {
+  if (shouldUseBrowserMock()) return Promise.resolve(() => {});
+  return listen<string>("terminal-output", (event) => handler(event.payload));
+};
+
 export const terminalKill = (id: string) => ipc<void>("cmd_terminal_kill", { id });
 
 export const terminalResize = (id: string, cols: number, rows: number) =>
@@ -614,6 +631,15 @@ export const supportBundle = async (outputDir: string) => {
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     return `${outputDir.replace(/[\\/]+$/, "")}/r-code-support-preview.json`;
+  }
+};
+
+export const supportBundleChoose = async () => {
+  try {
+    return await ipc<string | null>("cmd_support_bundle_choose");
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return "C:/Users/preview/Downloads/r-code-support-preview.json";
   }
 };
 

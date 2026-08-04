@@ -6,8 +6,11 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex as StdMutex,
+};
+use tokio::sync::{broadcast, Mutex};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize, PtySystem};
 use r_code_core::error::ProductError;
@@ -18,6 +21,26 @@ use crate::shell_integration::{shell_integration_spawn, ShellIntegrationConfig};
 
 /// Scrollback 缓冲区最大大小（约 200KB）。
 const MAX_SCROLLBACK: usize = 200_000;
+
+/// Reader 线程与异步管理器之间的有界交接缓冲。
+///
+/// PTY 可能在终端面板未挂载时持续高速输出，因此不能用无界 channel 暂存字节。
+/// Reader 直接把最新尾部写入这里；`received_cursor` 保留绝对位置，让渲染器在
+/// 旧内容被裁剪后能通过 `reset` 安全恢复。
+#[derive(Debug, Default)]
+struct PendingOutput {
+    bytes: Vec<u8>,
+    received_cursor: u64,
+    disconnected: bool,
+}
+
+impl PendingOutput {
+    fn append(&mut self, bytes: &[u8]) {
+        self.received_cursor = self.received_cursor.saturating_add(bytes.len() as u64);
+        self.bytes.extend_from_slice(bytes);
+        trim_scrollback(&mut self.bytes);
+    }
+}
 
 /// 终端 ID 类型。
 pub type TerminalId = String;
@@ -73,8 +96,10 @@ pub struct TerminalHandle {
     writer: Box<dyn std::io::Write + Send>,
     /// PTY master（用于 resize 和 reader 克隆）
     master: Box<dyn MasterPty + Send>,
-    /// 后台读取线程的输出通道
-    output_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    /// 后台读取线程的有界输出交接缓冲。
+    pending_output: Arc<StdMutex<PendingOutput>>,
+    /// 合并尚未被任一消费者排空的输出通知，避免高吞吐命令淹没 WebView 事件队列。
+    output_signal_pending: Arc<AtomicBool>,
     /// 是否已被显式 kill（防止 Drop 重复 kill 导致 PID 复用风险）
     killed: bool,
     /// OSC 133 块解析器（用于追踪命令退出码）[doc-03 §4]
@@ -83,8 +108,6 @@ pub struct TerminalHandle {
     last_exit_code: Option<i32>,
     /// 退出码版本号（每次新观测到退出码时递增）
     exit_code_version: u64,
-    /// 已处理的 block_parser 块数（用于增量检测新完成的块）
-    blocks_seen: usize,
     /// shell integration 为本终端建立的临时 profile shim。
     integration_dir: Option<PathBuf>,
 }
@@ -119,14 +142,25 @@ impl Drop for TerminalHandle {
 pub struct TerminalManager {
     pty_system: std::sync::Mutex<Box<dyn PtySystem + Send>>,
     terminals: Arc<Mutex<HashMap<TerminalId, TerminalHandle>>>,
+    output_events: broadcast::Sender<TerminalId>,
 }
 
 impl TerminalManager {
     pub fn new() -> Self {
+        let (output_events, _) = broadcast::channel(256);
         Self {
             pty_system: std::sync::Mutex::new(native_pty_system()),
             terminals: Arc::new(Mutex::new(HashMap::new())),
+            output_events,
         }
+    }
+
+    /// 订阅“某终端已有新 PTY 输出”的轻量通知。
+    ///
+    /// 通知只负责唤醒渲染器；原始字节仍通过 [`Self::raw_since`] 的有界 scrollback
+    /// 读取，因此慢消费者不会丢失内容，也不会让 PTY reader 阻塞在 WebView 上。
+    pub fn subscribe_output(&self) -> broadcast::Receiver<TerminalId> {
+        self.output_events.subscribe()
     }
 
     /// 创建一个新终端。
@@ -221,8 +255,14 @@ impl TerminalManager {
         drop(pair.slave);
         let master = pair.master;
 
-        // 后台线程持续读取 PTY 输出，通过 unbounded channel 传递
-        let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        // 后台线程持续读取 PTY 输出，直接写入固定上限的共享尾部缓冲。
+        // 这保证即使终端页未挂载、没有消费者排空，内存也不会随输出无限增长。
+        let pending_output = Arc::new(StdMutex::new(PendingOutput::default()));
+        let reader_output = pending_output.clone();
+        let output_events = self.output_events.clone();
+        let output_terminal_id = id.clone();
+        let output_signal_pending = Arc::new(AtomicBool::new(false));
+        let reader_signal_pending = output_signal_pending.clone();
         std::thread::spawn(move || {
             let mut reader = reader;
             let mut buf = [0u8; 4096];
@@ -230,12 +270,30 @@ impl TerminalManager {
                 match reader.read(&mut buf) {
                     Ok(0) => break, // EOF
                     Ok(n) => {
-                        if tx.send(buf[..n].to_vec()).is_err() {
-                            break; // receiver dropped
+                        {
+                            let mut output = reader_output
+                                .lock()
+                                .expect("terminal pending output mutex poisoned");
+                            output.append(&buf[..n]);
+                        }
+                        if !reader_signal_pending.swap(true, Ordering::AcqRel)
+                            && output_events.send(output_terminal_id.clone()).is_err()
+                        {
+                            // 没有订阅者时不要永久保持 pending；稍后建立的订阅者会
+                            // 先读取快照，后续输出仍应能够再次发出通知。
+                            reader_signal_pending.store(false, Ordering::Release);
                         }
                     }
                     Err(_) => break,
                 }
+            }
+            if let Ok(mut output) = reader_output.lock() {
+                output.disconnected = true;
+            }
+            if !reader_signal_pending.swap(true, Ordering::AcqRel)
+                && output_events.send(output_terminal_id).is_err()
+            {
+                reader_signal_pending.store(false, Ordering::Release);
             }
         });
 
@@ -250,12 +308,12 @@ impl TerminalManager {
             child,
             writer,
             master,
-            output_rx: rx,
+            pending_output,
+            output_signal_pending,
             killed: false,
             block_parser: BlockParser::new(),
             last_exit_code: None,
             exit_code_version: 0,
-            blocks_seen: 0,
             integration_dir: integration.cleanup_dir,
         };
 
@@ -356,41 +414,42 @@ impl TerminalManager {
     }
 
     fn drain_output(handle: &mut TerminalHandle) -> Result<Vec<u8>, ProductError> {
-        // 排空通道中所有可用数据
-        let mut raw_data = Vec::new();
-        loop {
-            match handle.output_rx.try_recv() {
-                Ok(chunk) => raw_data.extend_from_slice(&chunk),
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    handle.state = TerminalState::Exited;
-                    break;
-                }
-            }
-        }
+        // 先允许 reader 发下一次通知，再排空当前队列。若 reader 恰好在排空期间写入，
+        // 最多产生一次无内容的冗余唤醒，不会出现“新字节到了但没有事件”的丢失窗口。
+        handle.output_signal_pending.store(false, Ordering::Release);
+        // 原子取走当前尾部。Reader 已在写入时裁剪，因此这里的峰值始终有界。
+        let (raw_data, received_cursor, disconnected) = {
+            let mut output = handle
+                .pending_output
+                .lock()
+                .expect("terminal pending output mutex poisoned");
+            (
+                std::mem::take(&mut output.bytes),
+                output.received_cursor,
+                output.disconnected,
+            )
+        };
 
         // Feed raw data to block parser for OSC 133 exit code tracking [doc-03 §4]
         if !raw_data.is_empty() {
-            handle.block_parser.feed(&raw_data);
-            let new_block_count = handle.block_parser.blocks().len();
-            while handle.blocks_seen < new_block_count {
-                let block = &handle.block_parser.blocks()[handle.blocks_seen];
-                if let Some(code) = block.exit_code {
-                    handle.last_exit_code = Some(code);
-                    handle.exit_code_version = handle.exit_code_version.wrapping_add(1);
-                }
-                handle.blocks_seen += 1;
+            for code in handle.block_parser.feed(&raw_data) {
+                handle.last_exit_code = Some(code);
+                handle.exit_code_version = handle.exit_code_version.wrapping_add(1);
             }
 
             // 保持两份 scrollback：ANSI-free 文本供 agent 读取；原始字节流只给
             // 受控桌面模拟器渲染，避免 UI 因丢失 cursor/colour 序列退化为日志框。
-            handle.raw_output_cursor = handle
-                .raw_output_cursor
-                .saturating_add(raw_data.len() as u64);
+            // received_cursor 包含交接缓冲被裁掉的字节，因此游标不能只累加
+            // raw_data.len()；否则慢消费者无法识别需要 reset。
+            handle.raw_output_cursor = received_cursor;
             handle.raw_scrollback.extend_from_slice(&raw_data);
             trim_scrollback(&mut handle.raw_scrollback);
 
             Self::refresh_state_from_shell_markers(handle);
+        }
+
+        if disconnected {
+            handle.state = TerminalState::Exited;
         }
 
         // 去除 ANSI 转义序列
@@ -802,6 +861,20 @@ mod tests {
         let _manager = TerminalManager::default();
     }
 
+    #[test]
+    fn pending_output_stays_bounded_without_a_consumer() {
+        let mut output = PendingOutput::default();
+        let chunk = vec![b'x'; 4096];
+
+        for _ in 0..256 {
+            output.append(&chunk);
+        }
+
+        assert_eq!(output.received_cursor, (chunk.len() * 256) as u64);
+        assert_eq!(output.bytes.len(), MAX_SCROLLBACK);
+        assert!(output.received_cursor > output.bytes.len() as u64);
+    }
+
     // === PTY 集成测试 ===
     // Unix: 使用 /bin/cat（回显 stdin）和 /bin/echo（立即退出）
     // Windows: 使用 cmd.exe（保持运行）和 cmd.exe + exit（退出）
@@ -954,6 +1027,73 @@ mod tests {
             String::from_utf8_lossy(&snapshot).contains("hello_world"),
             "snapshot should retain prior output: {:?}",
             String::from_utf8_lossy(&snapshot)
+        );
+
+        let _ = manager.kill(&id).await;
+    }
+
+    #[tokio::test]
+    async fn output_notification_wakes_renderer_without_polling() {
+        let shell = match cat_path() {
+            Some(path) => path,
+            None => return,
+        };
+
+        let manager = TerminalManager::new();
+        let mut output_notifications = manager.subscribe_output();
+        let id = manager
+            .create(shell, &std::env::temp_dir(), vec![])
+            .await
+            .expect("create should succeed");
+
+        // Discard shell startup output and its notification. The assertion below is about
+        // input echo, which must wake the renderer instead of waiting for its recovery poll.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let initial = manager
+            .raw_snapshot(&id)
+            .await
+            .expect("initial raw snapshot");
+        while output_notifications.try_recv().is_ok() {}
+
+        #[cfg(windows)]
+        let input = "echo r_code_event_driven_echo\r";
+        #[cfg(not(windows))]
+        let input = "r_code_event_driven_echo\n";
+
+        manager.send(&id, input).await.expect("send should succeed");
+        let notified_id = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let candidate = output_notifications
+                    .recv()
+                    .await
+                    .expect("output notification channel should stay open");
+                if candidate == id {
+                    break candidate;
+                }
+            }
+        })
+        .await
+        .expect("PTY output should notify the renderer without polling");
+
+        assert_eq!(notified_id, id);
+        let batch = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let batch = manager
+                    .raw_since(&id, initial.cursor)
+                    .await
+                    .expect("notified output should be readable");
+                if batch.output.contains("r_code_event_driven_echo") {
+                    break batch;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("notified PTY output should become readable");
+        assert!(
+            batch.output.contains("r_code_event_driven_echo"),
+            "notification must correspond to readable PTY output: {:?}",
+            batch.output
         );
 
         let _ = manager.kill(&id).await;

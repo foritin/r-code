@@ -6,7 +6,7 @@
 //! R-Code Host 二进制入口 -- Tauri 应用壳。
 //!
 //! 启动流程：
-//! 1. 初始化结构化日志（stdout + 内存环形缓冲）
+//! 1. 初始化结构化日志（stdout + 内存尾部 + 7 天滚动文件）
 //! 2. 启动 Tauri 应用壳（加载前端 WebView）
 //! 3. 在 setup hook 中创建持久化 CommandState（AppData/r-code）+ 后台启动 IPC server
 //! 4. 注册 Tauri 命令（前端通过 invoke 调用）
@@ -69,9 +69,24 @@ fn main() {
             let blobs_dir = base.join("blobs");
             let sessions_dir = base.join("sessions");
             let config_dir = base.join("config");
-            for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir] {
+            let logs_dir = base.join("logs");
+            for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir, &logs_dir] {
                 std::fs::create_dir_all(dir)?;
             }
+            let retention_dir = logs_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) =
+                        r_code_host::log_buffer::prune_expired_logs(&retention_dir)
+                    {
+                        tracing::warn!(%error, "failed to prune expired diagnostic logs");
+                    }
+                }
+            });
             // 旧版 config.toml 可能仍含明文 api_key：尽早迁入系统凭据库。
             // Keychain 暂不可用不阻断启动，设置页会给出可见错误而不会泄露密钥。
             match r_code_host::settings::SettingsService::new(config_dir.clone())
@@ -100,6 +115,16 @@ fn main() {
             // Only the authoritative desktop startup performs crash recovery. MCP sibling
             // processes also construct CommandState against the same database and must not mark
             // a live desktop continuation as interrupted.
+            match state.reconcile_durable_steer_queue_claims() {
+                Ok(reconciled) if reconciled > 0 => tracing::info!(
+                    reconciled,
+                    "reconciled durable steer queue claims without replay"
+                ),
+                Err(error) => {
+                    tracing::warn!("failed to reconcile durable steer queue claims: {error}")
+                }
+                _ => {}
+            }
             match state.plan_store.recover_interrupted_continuations() {
                 Ok(recovered) if recovered > 0 => tracing::warn!(
                     recovered,
@@ -177,6 +202,27 @@ fn main() {
                     tracing::warn!("emit agent-event failed: {e}");
                 }
             }));
+            // PTY reader 只发轻量“有输出”信号；WebView 收到后按绝对游标拉取有界
+            // 增量。相比固定轮询，这既消除键入回显延迟，也不会把大段输出复制进事件。
+            let mut terminal_output = state.terminal_manager.subscribe_output();
+            let terminal_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match terminal_output.recv().await {
+                        Ok(terminal_id) => {
+                            if let Err(error) =
+                                terminal_app_handle.emit("terminal-output", terminal_id)
+                            {
+                                tracing::warn!(%error, "emit terminal-output failed");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "terminal output notifications lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
             // MCP settings are live. Forward only redacted lifecycle state so the settings UI can
             // reflect connecting/ready/error without polling or revealing credentials.
             let mut mcp_statuses = state.mcp_manager.subscribe_statuses();
@@ -257,6 +303,9 @@ fn main() {
             tauri_commands::cmd_agent_delegate_codex_mcp,
             tauri_commands::cmd_agent_queue_list,
             tauri_commands::cmd_agent_queue_remove,
+            tauri_commands::cmd_agent_queue_reorder,
+            tauri_commands::cmd_agent_queue_update,
+            tauri_commands::cmd_agent_queue_steer,
             tauri_commands::cmd_agent_resend,
             tauri_commands::cmd_permission_approve,
             tauri_commands::cmd_permission_pending,
@@ -310,6 +359,7 @@ fn main() {
             tauri_commands::cmd_recovery_data,
             tauri_commands::cmd_recovery_cleanup,
             tauri_commands::cmd_support_bundle,
+            tauri_commands::cmd_support_bundle_choose,
             tauri_commands::cmd_support_preview,
             tauri_commands::cmd_file_list,
             tauri_commands::cmd_file_read,
