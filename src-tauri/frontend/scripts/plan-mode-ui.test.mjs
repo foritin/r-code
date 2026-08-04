@@ -118,6 +118,9 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
 
   const panel = page.getByRole("region", { name: "当前计划" });
   await panel.waitFor({ state: "visible" });
+  assert.equal(await page.getByTestId("workbench-panel").getAttribute("data-workbench-section"), "plan");
+  assert.equal(await page.getByRole("tab").filter({ hasText: "计划" }).getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(".convo > .plan-panel").count(), 0, "the full Plan must not occupy the conversation column");
   assert.match(await panel.locator(".plan-goal").innerText(), /逐功能验收/);
   assert.match(await panel.locator(".plan-metadata").innerText(), /demo-plan-.*\/plan\.md/);
   await page.getByText("在整理计划前还需要你确认两项边界", { exact: false }).waitFor();
@@ -130,6 +133,9 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await panel.getByRole("button", { name: "确认实施", exact: true }).waitFor();
   const features = panel.locator(".plan-feature-list > li");
   assert.equal(await features.count(), 2);
+  assert.equal(await features.first().locator(".plan-feature-index").innerText(), "1");
+  assert.equal(await features.nth(1).locator(".plan-feature-index").innerText(), "2");
+  assert.equal(await features.first().locator(".plan-feature-details").getAttribute("open"), null);
   assert.match(await features.nth(1).innerText(), /依赖：明确实现边界/);
   await panel.getByRole("button", { name: "确认实施", exact: true }).click();
   await panel.getByText("实施中", { exact: false }).first().waitFor();
@@ -230,7 +236,7 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   // reviving the cancelled revision.
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
-    useAppStore.getState().hideWorkbench();
+    useAppStore.getState().setCanvasTab("plan");
   });
   const cancelledPlanId = await page.evaluate(async () => {
     const [{ planGet }, { useAppStore }] = await Promise.all([
@@ -256,9 +262,18 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   assert.equal(cancelledState, "cancelled", await panel.innerText());
   await panel.getByText("已取消", { exact: false }).first().waitFor({ timeout: 3_000 });
 
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().hideWorkbench();
+  });
+
   await page.getByRole("button", { name: "添加到任务", exact: true }).click();
   const roomAddDialog = page.getByRole("dialog", { name: "添加到任务" });
   await roomAddDialog.getByRole("button", { name: /^计划模式/ }).click();
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setCanvasTab("plan");
+  });
   await panel.getByText("草拟中", { exact: false }).first().waitFor();
   const replacementPlanId = await page.evaluate(async () => {
     const [{ planGet }, { useAppStore }] = await Promise.all([
@@ -271,7 +286,7 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   });
   assert.ok(cancelledPlanId && replacementPlanId && cancelledPlanId !== replacementPlanId);
 
-  // Plan is an inline collaboration surface; it must not replace conversation history.
+  // Plan is a docked collaboration surface; it must not replace conversation history.
   assert.equal(await page.locator(".timeline").isVisible(), true);
   assert.deepEqual(runtimeErrors, []);
   await page.close();

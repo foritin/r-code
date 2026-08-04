@@ -32,7 +32,7 @@ export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "studio-light" | "obsidian";
 
 /** Room 画布页签（titlebar 按钮可远程切换）。 */
-export type CanvasTab = "summary" | "changes" | "files" | "terminal" | "review";
+export type CanvasTab = "summary" | "changes" | "files" | "terminal" | "review" | "plan";
 /** 工作台顶部可独立关闭的工具页签；changes 是 review 内部的子视图。 */
 export type WorkbenchToolTab = Exclude<CanvasTab, "changes">;
 export type WorkbenchMode = "docked" | "hidden" | "focus" | "collapsed";
