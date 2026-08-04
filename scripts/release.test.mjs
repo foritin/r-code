@@ -4,7 +4,12 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { parseReleaseTag, replaceWorkspaceVersion, stampChangelog } from "./release.mjs";
+import {
+  parseReleaseTag,
+  refreshCargoLock,
+  replaceWorkspaceVersion,
+  stampChangelog,
+} from "./release.mjs";
 import { collectComponents, createArtifacts } from "./generate-supply-chain.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,6 +19,19 @@ test("replaceWorkspaceVersion only changes the workspace package version", () =>
   const actual = replaceWorkspaceVersion(input, "0.2.0");
   assert.match(actual, /\[workspace\.package\]\nversion = "0\.2\.0"/);
   assert.match(actual, /example = "0\.1\.0"/);
+});
+
+test("refreshCargoLock resolves dependencies so workspace versions are rewritten", () => {
+  let invocation;
+  refreshCargoLock((command, args, options) => {
+    invocation = { command, args, options };
+    return { status: 0 };
+  }, "D:/example/r-code");
+
+  assert.equal(invocation.command, "cargo");
+  assert.deepEqual(invocation.args, ["metadata", "--format-version", "1"]);
+  assert.equal(invocation.options.cwd, "D:/example/r-code");
+  assert.deepEqual(invocation.options.stdio, ["ignore", "ignore", "inherit"]);
 });
 
 test("stampChangelog moves Unreleased notes into a dated release", () => {
