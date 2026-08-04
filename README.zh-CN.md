@@ -143,7 +143,7 @@ node scripts/publish-release.mjs v0.1.0 --dry-run
 node scripts/publish-release.mjs v0.1.0
 ```
 
-发布闸门会创建不可变 tag、触发四平台 GitHub Actions 构建、等待完成并核对上传资产。首次发布的 Secrets、平台签名、未签名预发布、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
+发布闸门会创建不可变 tag、触发四平台 GitHub Actions 构建、等待完成并核对上传资产。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
 
 ## 项目结构
 

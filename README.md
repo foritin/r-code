@@ -143,7 +143,7 @@ node scripts/publish-release.mjs v0.1.0 --dry-run
 node scripts/publish-release.mjs v0.1.0
 ```
 
-The publish gate creates the immutable tag, triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Follow [the release guide](./docs/RELEASING.md) for required secrets, signatures, unsigned prereleases, recovery, and post-release acceptance.
+The publish gate creates the immutable tag, triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/RELEASING.md) for credentials, recovery, and post-release acceptance.
 
 ## Repository layout
 

@@ -12,6 +12,10 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 - 新增一键发布闸门：在创建版本标签前检查 `main`、CI、GitHub Actions Secrets 和版本一致性，并在构建完成后核对四个平台的 Release 资产与更新清单。
 
+### Changed
+
+- 正式发布在缺少 Windows/macOS 平台证书时按平台降级为未签名构建，不再阻断 Release；Latest 页面会明确标出未签名平台和安装风险，updater 完整性签名仍为必需。
+
 ### Security
 
 - Windows 卸载清理只会终止 R-Code AppData 下符合受管命名规则的 MCP Host，并拒绝可能逃逸数据目录的 Bundle ID。

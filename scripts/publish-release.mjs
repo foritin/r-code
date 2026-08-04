@@ -11,10 +11,12 @@ import { parseReleaseTag } from "./release.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE_RELEASE_SECRETS = ["PAT_TOKEN", "TAURI_SIGNING_PRIVATE_KEY"];
-const SIGNED_RELEASE_SECRETS = [
+const WINDOWS_SIGNING_SECRETS = [
   "WINDOWS_CERTIFICATE",
   "WINDOWS_CERTIFICATE_PASSWORD",
   "WINDOWS_TIMESTAMP_URL",
+];
+const APPLE_SIGNING_SECRETS = [
   "APPLE_CERTIFICATE",
   "APPLE_CERTIFICATE_PASSWORD",
   "APPLE_SIGNING_IDENTITY",
@@ -22,6 +24,7 @@ const SIGNED_RELEASE_SECRETS = [
   "APPLE_PASSWORD",
   "APPLE_TEAM_ID",
 ];
+const UNSIGNED_STABLE_WARNING_MARKER = "RCODE_UNSIGNED_STABLE_WARNING";
 
 class ReleaseError extends Error {}
 
@@ -37,7 +40,10 @@ Options:
   --help     Show this help.
 
 Prepare a new base version before publishing:
-  node scripts/release.mjs prepare X.Y.Z`);
+  node scripts/release.mjs prepare X.Y.Z
+
+Stable tags become Latest. Missing Windows/macOS certificate groups fall back per platform
+with a public warning; PAT_TOKEN and TAURI_SIGNING_PRIVATE_KEY remain required.`);
 }
 
 function parseArguments(argv) {
@@ -103,10 +109,40 @@ function parseJson(output, context) {
   }
 }
 
-function requiredSecretsForTag(tagInfo) {
-  return tagInfo.unsignedPrerelease
-    ? [...BASE_RELEASE_SECRETS]
-    : [...BASE_RELEASE_SECRETS, ...SIGNED_RELEASE_SECRETS];
+function requiredSecretsForTag() {
+  return [...BASE_RELEASE_SECRETS];
+}
+
+function platformSigningPlan(tagInfo, availableSecrets) {
+  const available = availableSecrets instanceof Set
+    ? availableSecrets
+    : new Set(availableSecrets);
+  if (tagInfo.unsignedPrerelease) {
+    return {
+      windowsSigned: false,
+      appleSigned: false,
+      missingWindows: [],
+      missingApple: [],
+      forcedUnsigned: true,
+    };
+  }
+
+  const missingWindows = WINDOWS_SIGNING_SECRETS.filter((name) => !available.has(name));
+  const missingApple = APPLE_SIGNING_SECRETS.filter((name) => !available.has(name));
+  return {
+    windowsSigned: missingWindows.length === 0,
+    appleSigned: missingApple.length === 0,
+    missingWindows,
+    missingApple,
+    forcedUnsigned: false,
+  };
+}
+
+function unsignedPlatformNames(signingPlan) {
+  const platforms = [];
+  if (!signingPlan.windowsSigned) platforms.push("Windows");
+  if (!signingPlan.appleSigned) platforms.push("macOS");
+  return platforms;
 }
 
 function requiredReleaseAssets(version) {
@@ -134,12 +170,20 @@ function requiredReleaseAssets(version) {
   ];
 }
 
-function validateReleaseRecord(record, tag, tagInfo) {
+function validateReleaseRecord(record, tag, tagInfo, signingPlan = null) {
   const problems = [];
   if (record.tagName !== tag) problems.push(`release tag is ${record.tagName ?? "<missing>"}`);
   if (record.isDraft) problems.push("release is still a draft");
   if (Boolean(record.isPrerelease) !== tagInfo.unsignedPrerelease) {
     problems.push(tagInfo.unsignedPrerelease ? "release is not marked as a prerelease" : "stable release is marked as a prerelease");
+  }
+  if (
+    !tagInfo.unsignedPrerelease
+    && signingPlan
+    && unsignedPlatformNames(signingPlan).length > 0
+    && !String(record.body ?? "").includes(UNSIGNED_STABLE_WARNING_MARKER)
+  ) {
+    problems.push("unsigned stable release is missing its public signing warning");
   }
 
   const assets = new Map((record.assets ?? []).map((asset) => [asset.name, asset]));
@@ -230,7 +274,7 @@ async function waitForReleaseRecord(gh, repository, tag) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const result = github(gh, [
       "release", "view", tag, "--repo", repository,
-      "--json", "tagName,isDraft,isPrerelease,url,assets",
+      "--json", "tagName,name,body,isDraft,isPrerelease,url,assets",
     ], { allowFailure: true });
     if (result.status === 0) return parseJson(result.stdout, "release view");
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_500));
@@ -238,8 +282,8 @@ async function waitForReleaseRecord(gh, repository, tag) {
   throw new ReleaseError(`Release workflow succeeded, but GitHub Release ${tag} is unavailable`);
 }
 
-function verifyPublishedRelease(gh, repository, tag, tagInfo, record) {
-  const problems = validateReleaseRecord(record, tag, tagInfo);
+function verifyPublishedRelease(gh, repository, tag, tagInfo, record, signingPlan) {
+  const problems = validateReleaseRecord(record, tag, tagInfo, signingPlan);
   if (!tagInfo.unsignedPrerelease) {
     const latest = parseJson(
       github(gh, ["release", "view", "--repo", repository, "--json", "tagName"]).stdout,
@@ -262,13 +306,18 @@ function verifyPublishedRelease(gh, repository, tag, tagInfo, record) {
   }
 }
 
-async function confirmPublish(tag, tagInfo, assumeYes) {
+async function confirmPublish(tag, tagInfo, signingPlan, assumeYes) {
   if (assumeYes) return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new ReleaseError("interactive confirmation is unavailable; pass --yes only after reviewing the preflight output");
   }
 
-  const kind = tagInfo.unsignedPrerelease ? "unsigned prerelease" : "signed stable release";
+  const unsignedPlatforms = unsignedPlatformNames(signingPlan);
+  const kind = tagInfo.unsignedPrerelease
+    ? "unsigned prerelease"
+    : unsignedPlatforms.length > 0
+      ? `stable release with unsigned ${unsignedPlatforms.join(" and ")} artifacts`
+      : "fully signed stable release";
   console.log(`\npublish-release: ready to create and push ${tag} (${kind}).`);
   console.log("publish-release: public tags are immutable; type the complete tag to continue.");
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
@@ -329,16 +378,33 @@ async function publish(options) {
     throw new ReleaseError(`missing GitHub Actions secrets for ${options.tag}: ${missingSecrets.join(", ")}`);
   }
 
+  const signingPlan = platformSigningPlan(tagInfo, availableSecrets);
+  if (!tagInfo.unsignedPrerelease) {
+    if (signingPlan.missingWindows.length > 0) {
+      console.warn(
+        `publish-release: WARNING — Windows artifacts will be unsigned; missing: ${signingPlan.missingWindows.join(", ")}`,
+      );
+    }
+    if (signingPlan.missingApple.length > 0) {
+      console.warn(
+        `publish-release: WARNING — macOS artifacts will use ad-hoc signing without notarization; missing: ${signingPlan.missingApple.join(", ")}`,
+      );
+    }
+  }
+
+  const unsignedPlatforms = unsignedPlatformNames(signingPlan);
   const releaseKind = tagInfo.unsignedPrerelease
     ? "unsigned prerelease (not Latest; platform signing disabled)"
-    : "signed stable release (becomes Latest after all platforms pass)";
+    : unsignedPlatforms.length > 0
+      ? `stable release with unsigned ${unsignedPlatforms.join(" and ")} artifacts (becomes Latest with a public warning)`
+      : "fully signed stable release (becomes Latest after all platforms pass)";
   console.log(`publish-release: preflight passed — ${releaseKind}`);
   if (options.dryRun) {
     console.log(`publish-release: dry run complete; would create and push ${options.tag}`);
     return;
   }
 
-  await confirmPublish(options.tag, tagInfo, options.yes);
+  await confirmPublish(options.tag, tagInfo, signingPlan, options.yes);
   const message = tagInfo.unsignedPrerelease
     ? `R-Code ${options.tag} unsigned prerelease`
     : `R-Code ${options.tag}`;
@@ -355,7 +421,7 @@ async function publish(options) {
 
   github(gh, ["run", "watch", String(releaseRun.databaseId), "--repo", repository, "--exit-status"], { stdio: "inherit" });
   const record = await waitForReleaseRecord(gh, repository, options.tag);
-  verifyPublishedRelease(gh, repository, options.tag, tagInfo, record);
+  verifyPublishedRelease(gh, repository, options.tag, tagInfo, record, signingPlan);
   console.log(`publish-release: published and verified ${record.url}`);
 }
 
@@ -379,8 +445,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
 
 export {
   parseArguments,
+  platformSigningPlan,
   requiredReleaseAssets,
   requiredSecretsForTag,
+  unsignedPlatformNames,
   validateReleaseRecord,
   validateUpdaterManifest,
 };
