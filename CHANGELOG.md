@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-04
+
 ### Added
 
 - Plan 模式：任务目标、结构化 human-in-the-loop 问题、稳定 AppData Markdown 投影、按功能拆分的依赖待办和确认实施流程。
@@ -49,5 +51,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 自动更新源与 Cargo 仓库元数据改为当前 GitHub 仓库，避免客户端从错误仓库查询 `latest.json`。
 - Windows 安装器、卸载器与应用程序使用 R-Code 图标，release 启动不再打开命令行窗口。
 
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
+
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0
