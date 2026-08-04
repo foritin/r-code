@@ -102,20 +102,22 @@ export function errText(e: unknown): string {
 }
 
 /** 模式 → 人性化文案（humane language 红线）。 */
-export function modeLabel(mode: "ask" | "edit" | "auto"): string {
+export function modeLabel(mode: "ask" | "edit" | "auto" | "plan"): string {
   switch (mode) {
     case "ask": return "Ask — 先聊清楚";
     case "edit": return "Edit — 改动要批准";
     case "auto": return "Auto — 放手让它做";
+    case "plan": return "Plan — 先规划再实施";
   }
 }
 
 /** 模式 → 芯片用短标签；解释性文案放 title，避免与项目权限芯片撞车。 */
-export function modeShortLabel(mode: "ask" | "edit" | "auto"): string {
+export function modeShortLabel(mode: "ask" | "edit" | "auto" | "plan"): string {
   switch (mode) {
     case "ask": return "Ask";
     case "edit": return "Edit";
     case "auto": return "Auto";
+    case "plan": return "Plan";
   }
 }
 

@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 18;
+pub const LATEST_SCHEMA_VERSION: u32 = 21;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -47,6 +47,9 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(16, MIGRATION_016, false),
     MigrationSpec::new(17, MIGRATION_017, false),
     MigrationSpec::new(18, MIGRATION_018, false),
+    MigrationSpec::new(19, MIGRATION_019, false),
+    MigrationSpec::new(20, MIGRATION_020, false),
+    MigrationSpec::new(21, MIGRATION_021, false),
 ];
 
 impl MigrationSpec {
@@ -954,6 +957,386 @@ ALTER TABLE notifications ADD COLUMN target_id TEXT;
 ALTER TABLE notifications ADD COLUMN workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE;
 CREATE INDEX idx_notifications_memory_target
     ON notifications(target_kind, target_id);
+"#;
+
+/// Migration 019: durable Plan/HITL state and feature-scoped review journals.
+///
+/// A Plan owns its revisioned items and questions, while its user-authored goal remains in
+/// `tasks.goal`. Blob hashes point at the existing content-addressed BlobStore. Rejection journal
+/// rows are deliberately durable before any filesystem mutation so startup can recover them.
+const MIGRATION_019: &str = r#"
+CREATE TABLE plans (
+    id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+    state TEXT NOT NULL DEFAULT 'draft' CHECK (state IN (
+        'draft', 'awaiting_input', 'ready', 'approved', 'executing', 'completed', 'cancelled'
+    )),
+    approved_revision INTEGER CHECK (
+        approved_revision IS NULL OR (approved_revision >= 1 AND approved_revision <= revision)
+    ),
+    projection_path TEXT,
+    projection_revision INTEGER CHECK (
+        projection_revision IS NULL OR (projection_revision >= 1 AND projection_revision <= revision)
+    ),
+    projection_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    approved_at TEXT,
+    CHECK (projection_path IS NULL OR length(trim(projection_path)) > 0),
+    CHECK (
+        (approved_revision IS NULL AND approved_at IS NULL)
+        OR (approved_revision IS NOT NULL AND approved_at IS NOT NULL)
+    )
+);
+CREATE UNIQUE INDEX idx_plans_current_task
+    ON plans(task_id) WHERE state NOT IN ('completed', 'cancelled');
+CREATE INDEX idx_plans_task_updated
+    ON plans(task_id, updated_at DESC);
+
+CREATE TABLE plan_items (
+    id TEXT NOT NULL CHECK (length(trim(id)) > 0),
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    description TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'proposed' CHECK (state IN (
+        'proposed', 'pending', 'in_progress', 'blocked', 'completed', 'failed', 'cancelled'
+    )),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (id, plan_id, revision),
+    UNIQUE (plan_id, revision, ordinal),
+    CHECK (completed_at IS NULL OR state IN ('completed', 'failed', 'cancelled'))
+);
+CREATE INDEX idx_plan_items_revision_state
+    ON plan_items(plan_id, revision, state, ordinal);
+
+CREATE TABLE plan_item_dependencies (
+    plan_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    item_id TEXT NOT NULL,
+    depends_on_item_id TEXT NOT NULL,
+    PRIMARY KEY (plan_id, revision, item_id, depends_on_item_id),
+    FOREIGN KEY (item_id, plan_id, revision)
+        REFERENCES plan_items(id, plan_id, revision) ON DELETE CASCADE,
+    FOREIGN KEY (depends_on_item_id, plan_id, revision)
+        REFERENCES plan_items(id, plan_id, revision) ON DELETE CASCADE,
+    CHECK (item_id <> depends_on_item_id)
+);
+CREATE INDEX idx_plan_item_dependencies_ready
+    ON plan_item_dependencies(plan_id, revision, item_id);
+
+CREATE TABLE plan_question_sets (
+    id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK (revision >= 1),
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'answered', 'skipped')),
+    answer_idempotency_key TEXT,
+    continuation_state TEXT NOT NULL DEFAULT 'not_requested' CHECK (continuation_state IN (
+        'not_requested', 'pending', 'dispatching', 'dispatched', 'failed'
+    )),
+    continuation_error TEXT,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT,
+    dispatched_at TEXT,
+    CHECK (
+        (state = 'pending' AND resolved_at IS NULL AND answer_idempotency_key IS NULL)
+        OR (
+            state <> 'pending' AND resolved_at IS NOT NULL
+            AND answer_idempotency_key IS NOT NULL
+            AND length(trim(answer_idempotency_key)) > 0
+        )
+    ),
+    CHECK (
+        (continuation_state = 'dispatched' AND dispatched_at IS NOT NULL)
+        OR (continuation_state <> 'dispatched' AND dispatched_at IS NULL)
+    )
+);
+CREATE UNIQUE INDEX idx_plan_question_sets_pending
+    ON plan_question_sets(plan_id) WHERE state = 'pending';
+CREATE INDEX idx_plan_question_sets_revision
+    ON plan_question_sets(plan_id, revision, created_at DESC);
+
+CREATE TABLE plan_questions (
+    id TEXT NOT NULL CHECK (length(trim(id)) > 0),
+    question_set_id TEXT NOT NULL REFERENCES plan_question_sets(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 2),
+    header TEXT NOT NULL CHECK (length(trim(header)) BETWEEN 1 AND 64),
+    question TEXT NOT NULL CHECK (length(trim(question)) > 0),
+    answer_kind TEXT CHECK (answer_kind IS NULL OR answer_kind IN ('option', 'free_form')),
+    answer_value TEXT,
+    answered_at TEXT,
+    PRIMARY KEY (id, question_set_id),
+    UNIQUE (question_set_id, ordinal),
+    CHECK (
+        (answer_kind IS NULL AND answer_value IS NULL AND answered_at IS NULL)
+        OR (answer_kind IN ('option', 'free_form') AND length(answer_value) > 0 AND answered_at IS NOT NULL)
+    )
+);
+
+CREATE TABLE plan_question_options (
+    id TEXT NOT NULL CHECK (length(trim(id)) > 0),
+    question_id TEXT NOT NULL,
+    question_set_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+    description TEXT NOT NULL,
+    PRIMARY KEY (id, question_id, question_set_id),
+    UNIQUE (question_id, question_set_id, ordinal),
+    FOREIGN KEY (question_id, question_set_id)
+        REFERENCES plan_questions(id, question_set_id) ON DELETE CASCADE
+);
+
+CREATE TABLE plan_change_events (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE CHECK (length(trim(id)) > 0),
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    plan_revision INTEGER NOT NULL CHECK (plan_revision >= 1),
+    item_id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    -- Tool audit events drain asynchronously after gateway observation, so this trusted ID is
+    -- intentionally not an FK. The uniqueness constraint below also indexes it for later joins.
+    tool_call_id TEXT NOT NULL,
+    path TEXT NOT NULL CHECK (length(trim(path)) > 0),
+    before_blob_hash TEXT REFERENCES blobs(hash),
+    before_exists INTEGER NOT NULL CHECK (before_exists IN (0, 1)),
+    after_blob_hash TEXT REFERENCES blobs(hash),
+    after_exists INTEGER CHECK (after_exists IS NULL OR after_exists IN (0, 1)),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'captured', 'failed')),
+    error TEXT,
+    created_at TEXT NOT NULL,
+    finalized_at TEXT,
+    FOREIGN KEY (item_id, plan_id, plan_revision)
+        REFERENCES plan_items(id, plan_id, revision) ON DELETE CASCADE,
+    CHECK (
+        (before_exists = 0 AND before_blob_hash IS NULL)
+        OR (before_exists = 1 AND before_blob_hash IS NOT NULL)
+    ),
+    CHECK (
+        (after_exists IS NULL AND after_blob_hash IS NULL)
+        OR (after_exists = 0 AND after_blob_hash IS NULL)
+        OR (after_exists = 1 AND after_blob_hash IS NOT NULL)
+    ),
+    CHECK (
+        (state = 'pending' AND after_exists IS NULL AND finalized_at IS NULL)
+        OR (state = 'captured' AND after_exists IS NOT NULL AND finalized_at IS NOT NULL)
+        OR (state = 'failed' AND finalized_at IS NOT NULL)
+    ),
+    UNIQUE (tool_call_id, path)
+);
+CREATE INDEX idx_plan_change_events_feature
+    ON plan_change_events(plan_id, plan_revision, item_id, sequence);
+CREATE INDEX idx_plan_change_events_path
+    ON plan_change_events(path, sequence);
+CREATE INDEX idx_plan_change_events_pending
+    ON plan_change_events(state, sequence) WHERE state = 'pending';
+
+CREATE TABLE plan_review_decisions (
+    id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    plan_revision INTEGER NOT NULL CHECK (plan_revision >= 1),
+    item_id TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (scope IN ('feature', 'file')),
+    path TEXT,
+    decision TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected')),
+    decided_at TEXT NOT NULL,
+    FOREIGN KEY (item_id, plan_id, plan_revision)
+        REFERENCES plan_items(id, plan_id, revision) ON DELETE CASCADE,
+    CHECK (
+        (scope = 'feature' AND path IS NULL)
+        OR (scope = 'file' AND length(trim(path)) > 0)
+    )
+);
+CREATE UNIQUE INDEX idx_plan_review_decisions_feature
+    ON plan_review_decisions(plan_id, plan_revision, item_id) WHERE scope = 'feature';
+CREATE UNIQUE INDEX idx_plan_review_decisions_file
+    ON plan_review_decisions(plan_id, plan_revision, item_id, path) WHERE scope = 'file';
+CREATE INDEX idx_plan_review_decisions_read
+    ON plan_review_decisions(plan_id, plan_revision, item_id, scope);
+
+CREATE TABLE plan_reject_operations (
+    id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    plan_revision INTEGER NOT NULL CHECK (plan_revision >= 1),
+    item_id TEXT NOT NULL,
+    scope TEXT NOT NULL CHECK (scope IN ('feature', 'file')),
+    path TEXT,
+    state TEXT NOT NULL DEFAULT 'prepared' CHECK (state IN (
+        'prepared', 'applying', 'committed', 'rolling_back', 'rolled_back', 'conflict', 'failed'
+    )),
+    recovery_count INTEGER NOT NULL DEFAULT 0 CHECK (recovery_count >= 0),
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    FOREIGN KEY (item_id, plan_id, plan_revision)
+        REFERENCES plan_items(id, plan_id, revision) ON DELETE CASCADE,
+    CHECK (
+        (scope = 'feature' AND path IS NULL)
+        OR (scope = 'file' AND length(trim(path)) > 0)
+    ),
+    CHECK (
+        (state IN ('committed', 'rolled_back', 'conflict', 'failed') AND completed_at IS NOT NULL)
+        OR (state IN ('prepared', 'applying', 'rolling_back') AND completed_at IS NULL)
+    )
+);
+CREATE INDEX idx_plan_reject_operations_recovery
+    ON plan_reject_operations(state, created_at)
+    WHERE state IN ('prepared', 'applying', 'rolling_back');
+CREATE INDEX idx_plan_reject_operations_feature
+    ON plan_reject_operations(plan_id, plan_revision, item_id, created_at DESC);
+
+CREATE TABLE plan_reject_operation_files (
+    operation_id TEXT NOT NULL REFERENCES plan_reject_operations(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    path TEXT NOT NULL CHECK (length(trim(path)) > 0),
+    expected_current_hash TEXT REFERENCES blobs(hash),
+    expected_exists INTEGER NOT NULL CHECK (expected_exists IN (0, 1)),
+    rollback_hash TEXT REFERENCES blobs(hash),
+    rollback_exists INTEGER NOT NULL CHECK (rollback_exists IN (0, 1)),
+    desired_hash TEXT REFERENCES blobs(hash),
+    desired_exists INTEGER NOT NULL CHECK (desired_exists IN (0, 1)),
+    state TEXT NOT NULL DEFAULT 'pending'
+        CHECK (state IN ('pending', 'applied', 'rolled_back', 'conflict')),
+    error TEXT,
+    applied_at TEXT,
+    rolled_back_at TEXT,
+    PRIMARY KEY (operation_id, path),
+    UNIQUE (operation_id, ordinal),
+    CHECK (
+        (expected_exists = 0 AND expected_current_hash IS NULL)
+        OR (expected_exists = 1 AND expected_current_hash IS NOT NULL)
+    ),
+    CHECK (
+        (rollback_exists = 0 AND rollback_hash IS NULL)
+        OR (rollback_exists = 1 AND rollback_hash IS NOT NULL)
+    ),
+    CHECK (
+        (desired_exists = 0 AND desired_hash IS NULL)
+        OR (desired_exists = 1 AND desired_hash IS NOT NULL)
+    ),
+    CHECK (
+        (state = 'pending' AND applied_at IS NULL AND rolled_back_at IS NULL)
+        OR (state = 'applied' AND applied_at IS NOT NULL AND rolled_back_at IS NULL)
+        OR (state = 'rolled_back' AND applied_at IS NOT NULL AND rolled_back_at IS NOT NULL)
+        OR (state = 'conflict')
+    )
+);
+CREATE INDEX idx_plan_reject_operation_files_order
+    ON plan_reject_operation_files(operation_id, ordinal);
+"#;
+
+/// Migration 020: durable approved-Plan implementation handoff.
+const MIGRATION_020: &str = r#"
+ALTER TABLE plans ADD COLUMN implementation_dispatch_state TEXT NOT NULL DEFAULT 'not_requested'
+    CHECK (implementation_dispatch_state IN (
+        'not_requested', 'pending', 'dispatching', 'dispatched', 'failed'
+    ));
+ALTER TABLE plans ADD COLUMN implementation_dispatch_error TEXT;
+ALTER TABLE plans ADD COLUMN implementation_queue_message_id TEXT;
+ALTER TABLE plans ADD COLUMN implementation_dispatched_at TEXT;
+CREATE INDEX idx_plans_implementation_dispatch
+    ON plans(implementation_dispatch_state, updated_at);
+"#;
+
+/// Migration 021: make enhanced-review file and feature decisions mutually exclusive across
+/// pooled connections. Active rejection journals are claims: no incompatible decision or
+/// rejection may start until the claim reaches a terminal state.
+const MIGRATION_021: &str = r#"
+CREATE TRIGGER trg_plan_review_decisions_scope_guard
+BEFORE INSERT ON plan_review_decisions
+BEGIN
+    SELECT CASE
+        WHEN NEW.scope = 'file' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND scope = 'feature'
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+        WHEN NEW.scope = 'feature' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND scope = 'file'
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+    END;
+END;
+
+CREATE TRIGGER trg_plan_reject_operations_scope_guard
+BEFORE INSERT ON plan_reject_operations
+WHEN NEW.state IN ('prepared', 'applying', 'rolling_back')
+BEGIN
+    SELECT CASE
+        WHEN NEW.scope = 'file' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+        WHEN NEW.scope = 'feature' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+    END;
+END;
 "#;
 
 #[cfg(test)]

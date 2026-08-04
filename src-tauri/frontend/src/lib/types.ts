@@ -6,7 +6,7 @@
  */
 
 // ---------- 任务 ----------
-export type TaskMode = "ask" | "edit" | "auto";
+export type TaskMode = "ask" | "edit" | "auto" | "plan";
 export type TaskAgentEngine = "r_code" | "codex";
 export interface InferenceOptions {
   /** 未设置表示沿用当前模型服务默认。 */
@@ -56,6 +56,209 @@ export interface Task {
   worktree_path: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ---------- Plan / Human in the loop ----------
+export type PlanState =
+  | "draft"
+  | "awaiting_input"
+  | "ready"
+  | "approved"
+  | "executing"
+  | "completed"
+  | "cancelled";
+
+export type PlanItemState =
+  | "proposed"
+  | "pending"
+  | "in_progress"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type PlanQuestionSetState = "pending" | "answered" | "skipped";
+export type PlanContinuationState =
+  | "not_requested"
+  | "pending"
+  | "dispatching"
+  | "dispatched"
+  | "failed";
+export type PlanImplementationDispatchState = PlanContinuationState;
+
+export interface Plan {
+  id: string;
+  task_id: string;
+  revision: number;
+  state: PlanState;
+  approved_revision: number | null;
+  projection_path: string | null;
+  projection_revision: number | null;
+  projection_error: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  implementation_dispatch_state: PlanImplementationDispatchState;
+  implementation_dispatch_error: string | null;
+  implementation_queue_message_id: string | null;
+  implementation_dispatched_at: string | null;
+}
+
+export interface PlanItem {
+  id: string;
+  plan_id: string;
+  revision: number;
+  ordinal: number;
+  title: string;
+  description: string;
+  state: PlanItemState;
+  depends_on: string[];
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PlanQuestionOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** Persisted answer shape returned by the aggregate. */
+export type PlanQuestionAnswer =
+  | { kind: "option"; option_id: string }
+  | { kind: "free_form"; text: string };
+
+export interface PlanQuestion {
+  id: string;
+  question_set_id: string;
+  ordinal: number;
+  header: string;
+  question: string;
+  options: PlanQuestionOption[];
+  answer: PlanQuestionAnswer | null;
+  answered_at: string | null;
+}
+
+export interface PlanQuestionSet {
+  id: string;
+  plan_id: string;
+  revision: number;
+  state: PlanQuestionSetState;
+  answer_idempotency_key: string | null;
+  continuation_state: PlanContinuationState;
+  continuation_error: string | null;
+  questions: PlanQuestion[];
+  created_at: string;
+  resolved_at: string | null;
+  dispatched_at: string | null;
+}
+
+/** `tasks.goal` remains the only persisted goal; this is its Plan aggregate view. */
+export interface PlanGoal {
+  task_id: string;
+  goal: string;
+  updated_at: string;
+}
+
+export interface PlanView {
+  plan: Plan;
+  goal: PlanGoal;
+  items: PlanItem[];
+  pending_question_set: PlanQuestionSet | null;
+  /** Latest resolved set while its continuation still needs attention or dispatch. */
+  continuation_question_set: PlanQuestionSet | null;
+}
+
+// ---------- Plan enhanced review ----------
+
+export type PlanReviewDecisionKind = "accepted" | "rejected";
+export type PlanReviewScope = "feature" | "file";
+
+export interface EnhancedReviewEventView {
+  sequence: number;
+  event_id: string;
+  tool_call_id: string;
+  before_exists: boolean;
+  after_exists: boolean;
+  before_blob_hash: string | null;
+  after_blob_hash: string | null;
+  /** Unified UTF-8 patch. Binary changes intentionally omit this field. */
+  patch: string | null;
+  binary: boolean;
+}
+
+export interface EnhancedReviewFileView {
+  path: string;
+  decision: PlanReviewDecisionKind | null;
+  first_sequence: number;
+  last_sequence: number;
+  events: EnhancedReviewEventView[];
+}
+
+export interface EnhancedReviewGroupView {
+  item_id: string;
+  ordinal: number;
+  title: string;
+  description: string;
+  /** Authoritative Plan item state returned with the review snapshot. */
+  state: PlanItemState;
+  decision: PlanReviewDecisionKind | null;
+  files: EnhancedReviewFileView[];
+}
+
+export interface EnhancedReviewView {
+  task_id: string;
+  plan_id: string;
+  plan_revision: number;
+  groups: EnhancedReviewGroupView[];
+}
+
+export interface EnhancedReviewTarget {
+  task_id: string;
+  plan_id: string;
+  plan_revision: number;
+  item_id: string;
+  path: string | null;
+}
+
+export interface PlanReviewDecision {
+  id: string;
+  plan_id: string;
+  plan_revision: number;
+  item_id: string;
+  scope: PlanReviewScope;
+  path: string | null;
+  decision: PlanReviewDecisionKind;
+  decided_at: string;
+}
+
+export interface PlanRejectResult {
+  operation_id: string;
+  decision: PlanReviewDecision;
+  changed_paths: string[];
+  idempotent: boolean;
+}
+
+/** Exact tagged input contract accepted by `cmd_plan_answer`. */
+export type PlanQuestionAnswerInput =
+  | { kind: "option"; question_id: string; option_id: string }
+  | { kind: "text"; question_id: string; text: string };
+
+export interface AnswerPlanQuestionsInput {
+  question_set_id: string;
+  expected_revision: number;
+  idempotency_key: string;
+  skip_all: boolean;
+  answers: PlanQuestionAnswerInput[];
+}
+
+export interface UpdatePlanItemInput {
+  plan_id: string;
+  item_id: string;
+  expected_revision: number;
+  state: PlanItemState;
 }
 
 export interface ContextCompactionResult {

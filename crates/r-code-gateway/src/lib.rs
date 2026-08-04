@@ -21,7 +21,11 @@ pub use classifier::{
     classify_command, classify_shell_command, has_control_chars, is_agent_process,
     CommandClassification,
 };
-pub use gateway::{subagent_read_only_tool_allowed, PathArity, PathBinding, Tool, ToolGateway};
+pub use gateway::{
+    subagent_read_only_tool_allowed, tool_outcome_directive, PathArity, PathBinding, Tool,
+    ToolExecutionContext, ToolExecutionDirective, ToolExecutionResult, ToolGateway,
+    ToolOutcomeMetadata, ToolPolicyGuard,
+};
 pub use permission::{PermissionCheckResult, PermissionEngine, StandingRuleKey};
 pub use tools::{
     ApplyPatchTool, CreateFileTool, DeleteFileTool, EditTool, GitStatusTool, ListFilesTool,

@@ -1,6 +1,6 @@
 # R-Code Privacy Notice
 
-Last updated: 2026-08-03
+Last updated: 2026-08-04
 
 This notice describes the data flows implemented by the open-source R-Code desktop application. It is a technical baseline for a public release, not a substitute for legal review or for the privacy terms of a distributor, organisation, model provider or hosted service.
 
@@ -14,10 +14,13 @@ R-Code stores application data under the operating system's application-data loc
 - non-secret Provider configuration, application logs and recovery metadata;
 - non-secret MCP server configuration and cached MCP Registry search results;
 - when evolving memory is enabled: its settings, approved global/project entries, sanitized short-lived review turns, review jobs/candidates and injection references in SQLite.
+- Plan-mode goals, revisions, structured questions/answers, feature todos, feature-change ownership and enhanced-review decisions in SQLite, plus human-readable Plan projections and recovery blobs under application data.
 
 R-Code reads and modifies workspace files only when a workspace is attached and the selected access/approval policy allows the operation. Forgetting a workspace removes the application's workspace reference; it does not delete the source directory itself.
 
 Evolving memory is off by default. R-Code stores its content only in the application-data SQLite database and does not create `.r-code/memory.md`, edit `.gitignore`, or add memory data to Git. Global suggestions require explicit user approval; validated project suggestions can apply automatically only to their source workspace. Project memory can also be set to read-only or off.
+
+Plan documents follow the same local-data boundary: the durable state is stored in SQLite and the Markdown projection is written to `<AppData>/r-code/plans/<plan-id>/plan.md`, never into the attached project. Enhanced review may store before/after and rollback snapshots in the application Blob store so a feature-scoped rejection can preserve unrelated edits and recover safely after interruption. These files are not added to the project's Git index by R-Code. Permanently deleting a task or forgetting a workspace releases its Plan-owned Blob references and removes only canonical UUID Plan projection directories under application data; R-Code never follows a stored projection path into the workspace or another location.
 
 Local data remains on the device until it is removed through the application, by the user, or by operating-system cleanup. Uninstall behaviour varies by platform and installer, so do not assume uninstalling also erases the application-data directory.
 
@@ -30,6 +33,7 @@ When you use an LLM Provider, R-Code sends data needed to answer the request to 
 - attachment content and metadata;
 - tool definitions, tool results and error context;
 - model, reasoning and inference settings.
+- in Plan mode, the current task goal, Plan revision/state, pending structured questions and active feature context required to continue the workflow.
 
 The Provider processes and retains that data under its own terms and privacy policy. Before attaching confidential code or personal data, review the endpoint, account and data-retention settings shown in R-Code and the Provider's current policy. A custom Provider URL sends data to the operator of that URL.
 

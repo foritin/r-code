@@ -98,6 +98,7 @@ import { projectAccessModeLabel } from "../ProjectAccessSelector";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { FileCodePreview } from "../files/FileCodePreview";
 import { FileContextMenu, type FileContextMenuTarget } from "../files/FileContextMenu";
+import { EnhancedReviewPanel } from "./EnhancedReviewPanel";
 
 interface Props {
   taskId: string;
@@ -700,7 +701,44 @@ function runningCls(state: string): string {
 
 // ---------- Changes ----------
 
-function ChangesPanel({
+function ChangesPanel(props: {
+  taskId: string;
+  running: boolean;
+  detail: TaskDetail | undefined;
+  onVisibleCountChange: (count: number) => void;
+}) {
+  const sessionKey = `${props.taskId}:review-mode`;
+  const session = readPanelSession<{ mode: "normal" | "enhanced" }>(sessionKey);
+  const [mode, setMode] = useState<"normal" | "enhanced">(session?.mode ?? "normal");
+  useRememberPanelSession(sessionKey, { mode });
+  return (
+    <div className="review-mode-shell">
+      <div
+        className="review-mode-toolbar"
+        role="tablist"
+        aria-label="变更审核模式"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const next = mode === "normal" ? "enhanced" : "normal";
+          setMode(next);
+          requestAnimationFrame(() => document.getElementById(`review-mode-${next}`)?.focus());
+        }}
+      >
+        <button id="review-mode-normal" type="button" role="tab" aria-selected={mode === "normal"} aria-controls="review-mode-panel" tabIndex={mode === "normal" ? 0 : -1} onClick={() => setMode("normal")}>普通</button>
+        <button id="review-mode-enhanced" type="button" role="tab" aria-selected={mode === "enhanced"} aria-controls="review-mode-panel" tabIndex={mode === "enhanced" ? 0 : -1} onClick={() => setMode("enhanced")}>增强</button>
+        <span>{mode === "normal" ? "Git 工作区" : "当前 Plan 功能点"}</span>
+      </div>
+      <div id="review-mode-panel" className="review-mode-content" role="tabpanel" aria-labelledby={`review-mode-${mode}`}>
+        {mode === "normal"
+          ? <NormalChangesPanel {...props} />
+          : <EnhancedReviewPanel taskId={props.taskId} running={props.running} onVisibleCountChange={props.onVisibleCountChange} />}
+      </div>
+    </div>
+  );
+}
+
+function NormalChangesPanel({
   taskId,
   running,
   detail,
@@ -767,7 +805,9 @@ function ChangesPanel({
   }, []);
 
   const visibleChanges = useMemo(() => {
-    if (!gitStatus || running) return changes;
+    // Fail closed until the authoritative Git-filtered scope is available. Raw task events may
+    // contain ignored logs/temp files and must never become actionable review rows.
+    if (!gitStatus) return [];
     const recordedByPath = new Map(changes.map((change) => [change.path, change]));
     const visible = gitStatus.paths
       .filter((status) => status.scope === "workspace" || !status.rejected || exitingPaths.has(status.path))
@@ -790,7 +830,7 @@ function ChangesPanel({
       if (recorded) visible.push(recorded);
     }
     return visible;
-  }, [changes, exitingPaths, gitStatus, running, taskId]);
+  }, [changes, exitingPaths, gitStatus, taskId]);
   useEffect(() => onVisibleCountChange(visibleChanges.length), [onVisibleCountChange, visibleChanges.length]);
   const path = sel && visibleChanges.some((change) => change.path === sel)
     ? sel
@@ -1160,7 +1200,11 @@ function ChangesPanel({
       <div className="changes-list">
         {visibleChanges.length === 0 && (
           <div className="empty">
-            {gitStatus && gitStatus.accepted_count + gitStatus.rejected_count > 0
+            {!gitStatus
+              ? reviewStatusError
+                ? "审核范围暂不可用，请稍后重试。"
+                : "正在确认可审核范围…"
+              : gitStatus.accepted_count + gitStatus.rejected_count > 0
               ? "本轮变更已处理完，工作区没有其他未提交变更。"
               : "工作区没有未提交变更。"}
           </div>

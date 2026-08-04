@@ -25,6 +25,7 @@ import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
+import { PlanPanel } from "../plan/PlanPanel";
 
 const ROOM_SPLIT_STORAGE_KEY = "r-code.room.split-pct";
 const DEFAULT_ROOM_SPLIT_PCT = 55;
@@ -467,6 +468,11 @@ export function RoomScene() {
             工作区操作失败：{scopeError}
           </StatusBar>
         )}
+        <PlanPanel
+          task={task}
+          running={running}
+          onTaskChanged={() => refreshDetail(currentTaskId)}
+        />
         <Timeline
           ref={tlRef}
           taskId={currentTaskId}

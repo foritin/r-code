@@ -23,6 +23,14 @@ import type {
   MemoryEntryEdit,
   MemoryOverview,
   MemoryReviewSettingsUpdate,
+  AnswerPlanQuestionsInput,
+  EnhancedReviewFileView,
+  EnhancedReviewTarget,
+  EnhancedReviewView,
+  PlanRejectResult,
+  PlanReviewDecision,
+  PlanQuestionSet,
+  PlanView,
   ProjectAccessMode,
   ProviderModelsInput,
   ProviderModelsResponse,
@@ -36,6 +44,7 @@ import type {
   TaskMode,
   TerminalInfo,
   VerificationRecord,
+  UpdatePlanItemInput,
   Workspace,
   WorkspaceMemoryMode,
   WorkflowSkill,
@@ -178,6 +187,12 @@ const partiallyAcceptedReviewPaths = new Map<string, Set<string>>();
 const rejectedReviewPaths = new Map<string, Set<string>>();
 /** Git staging is an explicit delivery step and never changes review decisions. */
 const stagedReviewPaths = new Map<string, Set<string>>();
+/** Durable Plan state used by browser-only product demos and deterministic UI tests. */
+const mockPlans = new Map<string, PlanView>();
+const mockPlanQuestionSets = new Map<string, PlanQuestionSet>();
+const mockPlanAnswerPayloads = new Map<string, string>();
+const mockPlanReviewDecisions = new Map<string, PlanReviewDecision>();
+let mockPlanSequence = 0;
 const terminals: TerminalInfo[] = [
   { id: "demo-terminal-main", state: "idle", shell: "PowerShell", is_busy: false },
 ];
@@ -366,6 +381,9 @@ function sendMessage(args: MockArgs): void {
     return;
   }
 
+  if (task.mode === "plan") requestMockPlanQuestions(taskId);
+  const planNeedsInput = currentMockPlan(taskId)?.plan.state === "awaiting_input";
+
   for (const run of detail.runs) {
     if (run.ended_at == null) {
       run.ended_at = timestamp;
@@ -380,7 +398,9 @@ function sendMessage(args: MockArgs): void {
     parent_run_id: null,
     agent_kind: "main",
     agent_label: "主代理",
-    summary: task.workspace_path ? "已完成代码检查并准备变更" : "已完成本轮回答",
+    summary: task.mode === "plan"
+      ? planNeedsInput ? "计划需要补充信息" : "计划草案已准备好，等待用户确认"
+      : task.workspace_path ? "已完成代码检查并准备变更" : "已完成本轮回答",
     delegated_by_tool_call_id: null,
     model: task.model ?? "gpt-5.6",
     runtime_kind: task.agent_engine === "codex" ? "codex_exec" : "native",
@@ -389,7 +409,7 @@ function sendMessage(args: MockArgs): void {
       ? "该会话已选择 Codex 主 Agent"
       : "该会话已选择 R-Code 主 Agent",
     external_session_id: null,
-    review_state: task.workspace_path ? "pending" : "answered",
+    review_state: task.mode === "plan" ? "answered" : task.workspace_path ? "pending" : "answered",
     started_at: timestamp,
     ended_at: timestamp,
     usage_json: JSON.stringify({ input_tokens: 860, output_tokens: 420 }),
@@ -422,13 +442,17 @@ function sendMessage(args: MockArgs): void {
       branch_id: detail.active_branch.id,
       kind: "message",
       role: "assistant",
-      text: task.workspace_path
+      text: task.mode === "plan"
+        ? planNeedsInput
+          ? "在整理计划前还需要你确认两项边界；回答下方问题后我会继续生成计划。"
+          : "计划草案已整理为可独立验收的功能项。确认后即可按依赖顺序实施。"
+        : task.workspace_path
         ? "已完成这轮演示任务：我检查了相关文件、整理了修改，并把结果放到右侧 Changes 与 Review 中供你继续操作。"
         : "这是浏览器 Demo 的完整会话回复。你可以继续追问、使用斜杠命令，或从左侧切换到其他产品场景。",
       timestamp,
     },
   );
-  if (task.workspace_path && detail.changes.length === 0) {
+  if (task.mode !== "plan" && task.workspace_path && detail.changes.length === 0) {
     detail.changes.push({
       id: nextId("change"),
       task_id: taskId,
@@ -441,7 +465,7 @@ function sendMessage(args: MockArgs): void {
       created_at: timestamp,
     });
   }
-  task.state = task.workspace_path ? "review_ready" : "idle";
+  task.state = task.mode === "plan" ? "idle" : task.workspace_path ? "review_ready" : "idle";
   touchTask(task);
   addEvent(detail, "run_started");
   addEvent(detail, "run_ended");
@@ -456,6 +480,497 @@ function setTaskField(args: MockArgs, field: "workspace_path" | "provider_name" 
   if (field === "title") task.title = stringArg(args, "title").trim() || task.title;
   touchTask(task);
   return task;
+}
+
+function integerArg(args: MockArgs, key: string): number {
+  const value = args[key];
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Demo 参数 ${key} 无效`);
+  }
+  return value;
+}
+
+function updateTaskGoal(args: MockArgs): Task {
+  const task = taskById(stringArg(args, "taskId"));
+  task.goal = stringArg(args, "goal").trim();
+  touchTask(task);
+  const view = mockPlans.get(task.id);
+  if (view) {
+    view.goal.goal = task.goal;
+    view.goal.updated_at = task.updated_at;
+  }
+  return task;
+}
+
+function setTaskMode(args: MockArgs): Task {
+  const task = taskById(stringArg(args, "taskId"));
+  const mode = stringArg(args, "mode") as TaskMode;
+  if (!(["ask", "edit", "auto", "plan"] satisfies TaskMode[]).includes(mode)) {
+    throw new Error(`Demo 任务模式无效: ${mode}`);
+  }
+  if (mode === "plan" && task.agent_engine !== "r_code") {
+    throw new Error("计划模式需要使用 R-Code 主 Agent");
+  }
+  task.mode = mode;
+  touchTask(task);
+  return task;
+}
+
+function syncMockPlanGoal(view: PlanView): PlanView {
+  const task = taskById(view.plan.task_id);
+  view.goal = {
+    task_id: task.id,
+    goal: task.goal,
+    updated_at: task.updated_at,
+  };
+  return view;
+}
+
+function currentMockPlan(taskId: string): PlanView | null {
+  const view = mockPlans.get(taskId);
+  return view ? syncMockPlanGoal(view) : null;
+}
+
+function createMockPlan(taskId: string): PlanView {
+  const existing = mockPlans.get(taskId);
+  if (existing && !["completed", "cancelled"].includes(existing.plan.state)) {
+    throw new Error("该会话已经有一个进行中的计划");
+  }
+  const task = taskById(taskId);
+  const timestamp = nowIso();
+  mockPlanSequence += 1;
+  const planId = `demo-plan-${taskId}-${mockPlanSequence}`;
+  const view: PlanView = {
+    plan: {
+      id: planId,
+      task_id: taskId,
+      revision: 1,
+      state: "draft",
+      approved_revision: null,
+      projection_path: `R-Code/Plans/${planId}/plan.md`,
+      projection_revision: 1,
+      projection_error: null,
+      created_at: timestamp,
+      updated_at: timestamp,
+      approved_at: null,
+      implementation_dispatch_state: "not_requested",
+      implementation_dispatch_error: null,
+      implementation_queue_message_id: null,
+      implementation_dispatched_at: null,
+    },
+    goal: { task_id: taskId, goal: task.goal, updated_at: task.updated_at },
+    items: [],
+    pending_question_set: null,
+    continuation_question_set: null,
+  };
+  mockPlans.set(taskId, view);
+  return view;
+}
+
+function requestMockPlanQuestions(taskId: string): void {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.state !== "draft" || view.items.length > 0 || view.pending_question_set) return;
+  const timestamp = nowIso();
+  const revision = view.plan.revision + 1;
+  const setId = `${view.plan.id}-questions-${revision}`;
+  const set: PlanQuestionSet = {
+    id: setId,
+    plan_id: view.plan.id,
+    revision,
+    state: "pending",
+    answer_idempotency_key: null,
+    continuation_state: "not_requested",
+    continuation_error: null,
+    questions: [
+      {
+        id: `${setId}-scope`,
+        question_set_id: setId,
+        ordinal: 1,
+        header: "实现范围",
+        question: "这轮计划应优先覆盖哪个范围？",
+        options: [
+          { id: "focused", label: "聚焦核心流程", description: "先交付主路径与必要验证。" },
+          { id: "complete", label: "完整交付", description: "同时覆盖边界、迁移与文档。" },
+        ],
+        answer: null,
+        answered_at: null,
+      },
+      {
+        id: `${setId}-validation`,
+        question_set_id: setId,
+        ordinal: 2,
+        header: "验收方式",
+        question: "你希望以什么作为主要验收依据？",
+        options: [
+          { id: "automated", label: "自动化测试", description: "优先使用可重复运行的测试。" },
+          { id: "manual", label: "交互验收", description: "优先验证实际界面与操作流程。" },
+          { id: "both", label: "两者结合", description: "自动化回归与人工体验同时覆盖。" },
+        ],
+        answer: null,
+        answered_at: null,
+      },
+    ],
+    created_at: timestamp,
+    resolved_at: null,
+    dispatched_at: null,
+  };
+  view.plan.revision = revision;
+  view.plan.state = "awaiting_input";
+  view.plan.updated_at = timestamp;
+  view.plan.projection_revision = revision;
+  view.pending_question_set = set;
+  mockPlanQuestionSets.set(setId, set);
+}
+
+/** Browser chat simulates the trusted runtime publishing a small feature Plan. */
+function publishMockPlan(taskId: string, request: string): void {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.state !== "draft" || view.items.length > 0) return;
+  const timestamp = nowIso();
+  const revision = view.plan.revision + 1;
+  const firstId = `${view.plan.id}-feature-1`;
+  const secondId = `${view.plan.id}-feature-2`;
+  view.plan.revision = revision;
+  view.plan.state = "ready";
+  view.plan.projection_revision = revision;
+  view.plan.updated_at = timestamp;
+  view.items = [
+    {
+      id: firstId,
+      plan_id: view.plan.id,
+      revision,
+      ordinal: 1,
+      title: "明确实现边界",
+      description: request.trim() || "确认目标、约束与验收标准。",
+      state: "proposed",
+      depends_on: [],
+      created_at: timestamp,
+      updated_at: timestamp,
+      started_at: null,
+      completed_at: null,
+    },
+    {
+      id: secondId,
+      plan_id: view.plan.id,
+      revision,
+      ordinal: 2,
+      title: "实现并验证功能",
+      description: "完成实现、测试与交付检查。",
+      state: "proposed",
+      depends_on: [firstId],
+      created_at: timestamp,
+      updated_at: timestamp,
+      started_at: null,
+      completed_at: null,
+    },
+  ];
+}
+
+function dispatchMockPlanContinuation(taskId: string, questionSet: PlanQuestionSet): void {
+  const view = currentMockPlan(taskId);
+  if (!view || view.continuation_question_set?.id !== questionSet.id) return;
+  questionSet.continuation_state = "dispatching";
+  questionSet.continuation_error = null;
+  window.setTimeout(() => {
+    const current = currentMockPlan(taskId);
+    if (!current || current.continuation_question_set?.id !== questionSet.id) return;
+    questionSet.continuation_state = "dispatched";
+    questionSet.dispatched_at = nowIso();
+    current.continuation_question_set = null;
+    publishMockPlan(taskId, taskById(taskId).goal || "根据已确认的边界生成实现计划");
+  }, 240);
+}
+
+function answerMockPlan(taskId: string, input: AnswerPlanQuestionsInput): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view) throw new Error("该会话没有进行中的计划");
+  const set = mockPlanQuestionSets.get(input.question_set_id);
+  if (!set || set.plan_id !== view.plan.id) throw new Error("问题集不存在或不属于该会话");
+  const serialized = JSON.stringify(input);
+  if (set.state !== "pending") {
+    if (mockPlanAnswerPayloads.get(set.id) === serialized) return view;
+    throw new Error("问题集已经由另一份回答处理");
+  }
+  if (view.plan.revision !== input.expected_revision || set.revision !== input.expected_revision) {
+    throw new Error("计划已经更新，请刷新后重试");
+  }
+  if (input.skip_all) {
+    if (input.answers.length !== 0) throw new Error("跳过整个问题集时不能同时提交回答");
+    set.state = "skipped";
+  } else {
+    const answers = new Map(input.answers.map((answer) => [answer.question_id, answer]));
+    if (answers.size !== set.questions.length) throw new Error("必须完整回答当前问题集");
+    for (const question of set.questions) {
+      const answer = answers.get(question.id);
+      if (!answer) throw new Error("必须完整回答当前问题集");
+      if (answer.kind === "option") {
+        if (!question.options.some((option) => option.id === answer.option_id)) {
+          throw new Error(`选项不属于问题 ${question.id}`);
+        }
+        question.answer = { kind: "option", option_id: answer.option_id };
+      } else {
+        if (!answer.text.trim()) throw new Error("自定义回答不能为空");
+        question.answer = { kind: "free_form", text: answer.text.trim() };
+      }
+      question.answered_at = nowIso();
+    }
+    set.state = "answered";
+  }
+  const timestamp = nowIso();
+  set.answer_idempotency_key = input.idempotency_key;
+  set.continuation_state = "pending";
+  set.resolved_at = timestamp;
+  mockPlanAnswerPayloads.set(set.id, serialized);
+  view.pending_question_set = null;
+  view.continuation_question_set = set;
+  view.plan.revision += 1;
+  view.plan.state = "draft";
+  view.plan.projection_revision = view.plan.revision;
+  view.plan.updated_at = timestamp;
+  dispatchMockPlanContinuation(taskId, set);
+  return view;
+}
+
+function retryMockPlanContinuation(taskId: string, questionSetId: string): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view) throw new Error("该会话没有进行中的计划");
+  const set = mockPlanQuestionSets.get(questionSetId);
+  if (!set || set.plan_id !== view.plan.id || set.state === "pending") {
+    throw new Error("没有可重试的计划续接");
+  }
+  if (set.continuation_state === "failed" || set.continuation_state === "pending") {
+    view.continuation_question_set = set;
+    set.continuation_state = "dispatching";
+    set.continuation_error = null;
+    dispatchMockPlanContinuation(taskId, set);
+  }
+  return view;
+}
+
+function approveMockPlan(taskId: string, planId: string, expectedRevision: number): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.id !== planId) throw new Error("计划不存在或不属于该会话");
+  if (
+    view.plan.approved_revision === expectedRevision
+    && ["approved", "executing", "completed"].includes(view.plan.state)
+  ) return view;
+  if (view.plan.revision !== expectedRevision) throw new Error("计划已经更新，请刷新后重试");
+  if (view.plan.state !== "ready" || view.items.length === 0) throw new Error("计划尚未准备好");
+  const timestamp = nowIso();
+  view.plan.approved_revision = expectedRevision;
+  view.plan.revision += 1;
+  view.plan.state = "executing";
+  view.plan.approved_at = timestamp;
+  view.plan.updated_at = timestamp;
+  view.plan.projection_revision = view.plan.revision;
+  view.plan.implementation_dispatch_state = "dispatched";
+  view.plan.implementation_dispatch_error = null;
+  view.plan.implementation_queue_message_id = `plan-implementation:${planId}:${expectedRevision}`;
+  view.plan.implementation_dispatched_at = timestamp;
+  taskById(taskId).mode = "auto";
+  for (const item of view.items) {
+    item.state = item.depends_on.length === 0 ? "in_progress" : "pending";
+    item.updated_at = timestamp;
+    item.started_at = item.state === "in_progress" ? timestamp : null;
+  }
+  return view;
+}
+
+function retryMockPlanImplementation(taskId: string, planId: string): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.id !== planId || view.plan.state !== "executing") {
+    throw new Error("没有可重试的计划实施请求");
+  }
+  if (view.plan.implementation_dispatch_state === "failed") {
+    view.plan.implementation_dispatch_state = "dispatched";
+    view.plan.implementation_dispatch_error = null;
+    view.plan.implementation_dispatched_at = nowIso();
+  }
+  return view;
+}
+
+function cancelMockPlan(taskId: string, planId: string, expectedRevision: number): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.id !== planId) throw new Error("计划不存在或不属于该会话");
+  if (view.plan.state === "cancelled") return view;
+  if (view.plan.revision !== expectedRevision) throw new Error("计划已经更新，请刷新后重试");
+  if (view.plan.state === "completed") throw new Error("已完成的计划不能取消");
+  const timestamp = nowIso();
+  view.plan.revision += 1;
+  view.plan.state = "cancelled";
+  view.plan.updated_at = timestamp;
+  view.plan.implementation_dispatch_state = "not_requested";
+  view.plan.implementation_dispatch_error = null;
+  view.plan.implementation_dispatched_at = null;
+  for (const item of view.items) {
+    if (!["completed", "failed", "cancelled"].includes(item.state)) {
+      item.state = "cancelled";
+      item.completed_at = timestamp;
+      item.updated_at = timestamp;
+    }
+  }
+  const task = taskById(taskId);
+  task.mode = task.workspace_path ? "edit" : "ask";
+  touchTask(task);
+  return view;
+}
+
+function updateMockPlanItem(taskId: string, input: UpdatePlanItemInput): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.id !== input.plan_id) throw new Error("计划不存在或不属于该会话");
+  if (view.plan.revision !== input.expected_revision) throw new Error("计划已经更新，请刷新后重试");
+  if (view.plan.state !== "executing") throw new Error("计划当前没有在执行");
+  const item = view.items.find((candidate) => candidate.id === input.item_id);
+  if (!item) throw new Error("计划功能项不存在");
+  const timestamp = nowIso();
+  item.state = input.state;
+  item.updated_at = timestamp;
+  if (input.state === "in_progress" && !item.started_at) item.started_at = timestamp;
+  if (input.state === "completed") item.completed_at = timestamp;
+  if (input.state === "completed") {
+    const completed = new Set(view.items.filter((candidate) => candidate.state === "completed").map((candidate) => candidate.id));
+    const next = view.items.find((candidate) =>
+      candidate.state === "pending" && candidate.depends_on.every((dependency) => completed.has(dependency))
+    );
+    if (next) {
+      next.state = "in_progress";
+      next.started_at = timestamp;
+      next.updated_at = timestamp;
+    }
+  }
+  view.plan.revision += 1;
+  view.plan.state = view.items.every((candidate) => candidate.state === "completed") ? "completed" : "executing";
+  view.plan.updated_at = timestamp;
+  view.plan.projection_revision = view.plan.revision;
+  return view;
+}
+
+function repairMockPlanProjection(taskId: string, planId: string): PlanView {
+  const view = currentMockPlan(taskId);
+  if (!view || view.plan.id !== planId) throw new Error("计划不存在或不属于该会话");
+  view.plan.projection_error = null;
+  view.plan.projection_revision = view.plan.revision;
+  view.plan.updated_at = nowIso();
+  return view;
+}
+
+function mockPlanReviewDecisionKey(planId: string, itemId: string, path: string | null): string {
+  return `${planId}:${itemId}:${path ?? "@feature"}`;
+}
+
+function mockEnhancedReviewFiles(
+  view: PlanView,
+  itemId: string,
+  ordinal: number,
+): EnhancedReviewFileView[] {
+  const firstPath = ordinal === 1 ? "src/plan-mode.ts" : "src/shared-plan.ts";
+  const sharedPath = "src/shared-plan.ts";
+  const textPatch = ordinal === 1
+    ? "diff --git a/src/plan-mode.ts b/src/plan-mode.ts\n@@ -0,0 +1,3 @@\n+export const planMode = true;\n+export const askHuman = true;\n+export const planRevision = 1;"
+    : "diff --git a/src/shared-plan.ts b/src/shared-plan.ts\n@@ -2,3 +2,4 @@\n export const owner = 'plan';\n+export const enhancedReview = true;\n export const stable = true;";
+  const sharedPatch = ordinal === 1
+    ? "diff --git a/src/shared-plan.ts b/src/shared-plan.ts\n@@ -0,0 +1,2 @@\n+export const owner = 'plan';\n+export const stable = true;"
+    : textPatch;
+  const createFile = (path: string, sequence: number, patch: string | null, binary = false): EnhancedReviewFileView => ({
+    path,
+    decision: mockPlanReviewDecisions.get(mockPlanReviewDecisionKey(view.plan.id, itemId, path))?.decision ?? null,
+    first_sequence: sequence,
+    last_sequence: sequence,
+    events: [{
+      sequence,
+      event_id: `${itemId}-event-${sequence}`,
+      tool_call_id: `${itemId}-tool-${sequence}`,
+      before_exists: ordinal !== 1 || path === sharedPath,
+      after_exists: true,
+      before_blob_hash: binary ? "demo-binary-before" : "demo-text-before",
+      after_blob_hash: binary ? "demo-binary-after" : "demo-text-after",
+      patch,
+      binary,
+    }],
+  });
+  const files = [createFile(firstPath, ordinal * 10, textPatch)];
+  if (firstPath !== sharedPath) files.push(createFile(sharedPath, ordinal * 10 + 1, sharedPatch));
+  if (ordinal === 2) files.push(createFile("assets/plan-preview.bin", ordinal * 10 + 2, null, true));
+  return files;
+}
+
+function currentMockEnhancedReview(taskId: string): EnhancedReviewView | null {
+  const view = currentMockPlan(taskId);
+  if (!view || view.items.length === 0) return null;
+  return {
+    task_id: taskId,
+    plan_id: view.plan.id,
+    plan_revision: view.plan.revision,
+    groups: view.items.map((item) => ({
+      item_id: item.id,
+      ordinal: item.ordinal,
+      title: item.title,
+      description: item.description,
+      state: item.state,
+      decision: mockPlanReviewDecisions.get(mockPlanReviewDecisionKey(view.plan.id, item.id, null))?.decision ?? null,
+      files: mockEnhancedReviewFiles(view, item.id, item.ordinal),
+    })),
+  };
+}
+
+function mockPlanReviewTarget(args: MockArgs): EnhancedReviewTarget {
+  const target = args.target as EnhancedReviewTarget | undefined;
+  if (!target?.task_id || !target.plan_id || !target.item_id) throw new Error("增强审核目标不完整");
+  return target;
+}
+
+function decideMockPlanReview(
+  target: EnhancedReviewTarget,
+  decision: "accepted" | "rejected",
+  scope: "feature" | "file",
+): PlanReviewDecision {
+  const view = currentMockEnhancedReview(target.task_id);
+  if (!view || view.plan_id !== target.plan_id) throw new Error("计划审核版本已经失效");
+  const group = view.groups.find((candidate) => candidate.item_id === target.item_id);
+  if (!group) throw new Error("计划功能项不存在");
+  if (!(["blocked", "completed", "failed", "cancelled"] as const).includes(group.state as never)) {
+    throw new Error("功能仍在实施，暂时不能接受或拒绝");
+  }
+  if (scope === "file" && (!target.path || !group.files.some((file) => file.path === target.path))) {
+    throw new Error("计划审核文件不存在");
+  }
+  const key = mockPlanReviewDecisionKey(target.plan_id, target.item_id, scope === "file" ? target.path : null);
+  const existing = mockPlanReviewDecisions.get(key);
+  if (existing?.decision === decision) return existing;
+  const result: PlanReviewDecision = {
+    id: nextId("plan-review"),
+    plan_id: target.plan_id,
+    plan_revision: view.plan_revision,
+    item_id: target.item_id,
+    scope,
+    path: scope === "file" ? target.path : null,
+    decision,
+    decided_at: nowIso(),
+  };
+  mockPlanReviewDecisions.set(key, result);
+  if (scope === "feature") {
+    for (const file of group.files) {
+      mockPlanReviewDecisions.set(mockPlanReviewDecisionKey(target.plan_id, target.item_id, file.path), {
+        ...result,
+        id: nextId("plan-review-file"),
+        scope: "file",
+        path: file.path,
+      });
+    }
+  }
+  return result;
+}
+
+function rejectMockPlanReview(target: EnhancedReviewTarget, scope: "feature" | "file"): PlanRejectResult {
+  const decision = decideMockPlanReview(target, "rejected", scope);
+  const view = currentMockEnhancedReview(target.task_id);
+  const group = view?.groups.find((candidate) => candidate.item_id === target.item_id);
+  return {
+    operation_id: nextId("plan-reject"),
+    decision,
+    changed_paths: scope === "file" ? [target.path!].filter(Boolean) : group?.files.map((file) => file.path) ?? [],
+    idempotent: false,
+  };
 }
 
 function forkTask(taskId: string, messageId: string | null = null): SessionBranch {
@@ -839,6 +1354,53 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return copy(task);
     }
     case "cmd_task_rename": return copy(setTaskField(args, "title"));
+    case "cmd_task_update_goal": return copy(updateTaskGoal(args));
+    case "cmd_task_set_mode": return copy(setTaskMode(args));
+    case "cmd_plan_get": return copy(currentMockPlan(stringArg(args, "taskId")));
+    case "cmd_plan_create": return copy(createMockPlan(stringArg(args, "taskId")));
+    case "cmd_plan_answer": return copy(answerMockPlan(
+      stringArg(args, "taskId"),
+      args.input as AnswerPlanQuestionsInput,
+    ));
+    case "cmd_plan_retry_continuation": return copy(retryMockPlanContinuation(
+      stringArg(args, "taskId"),
+      stringArg(args, "questionSetId"),
+    ));
+    case "cmd_plan_approve": return copy(approveMockPlan(
+      stringArg(args, "taskId"),
+      stringArg(args, "planId"),
+      integerArg(args, "expectedRevision"),
+    ));
+    case "cmd_plan_retry_implementation": return copy(retryMockPlanImplementation(
+      stringArg(args, "taskId"),
+      stringArg(args, "planId"),
+    ));
+    case "cmd_plan_cancel": return copy(cancelMockPlan(
+      stringArg(args, "taskId"),
+      stringArg(args, "planId"),
+      integerArg(args, "expectedRevision"),
+    ));
+    case "cmd_plan_repair_projection": return copy(repairMockPlanProjection(
+      stringArg(args, "taskId"),
+      stringArg(args, "planId"),
+    ));
+    case "cmd_plan_update_item": return copy(updateMockPlanItem(
+      stringArg(args, "taskId"),
+      args.input as UpdatePlanItemInput,
+    ));
+    case "cmd_plan_review_status": return copy(currentMockEnhancedReview(stringArg(args, "taskId")));
+    case "cmd_plan_review_accept_file": return copy(decideMockPlanReview(
+      mockPlanReviewTarget(args),
+      "accepted",
+      "file",
+    ));
+    case "cmd_plan_review_accept_feature": return copy(decideMockPlanReview(
+      mockPlanReviewTarget(args),
+      "accepted",
+      "feature",
+    ));
+    case "cmd_plan_review_reject_file": return copy(rejectMockPlanReview(mockPlanReviewTarget(args), "file"));
+    case "cmd_plan_review_reject_feature": return copy(rejectMockPlanReview(mockPlanReviewTarget(args), "feature"));
     case "cmd_task_fork_context": return copy(forkTask(stringArg(args, "taskId")));
     case "cmd_task_compact_context": {
       const count = browserMockMessages(stringArg(args, "taskId")).filter((item) => item.kind === "message").length;

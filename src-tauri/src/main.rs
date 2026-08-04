@@ -97,6 +97,78 @@ fn main() {
                 project_root,
                 Some(db_path),
             );
+            // Only the authoritative desktop startup performs crash recovery. MCP sibling
+            // processes also construct CommandState against the same database and must not mark
+            // a live desktop continuation as interrupted.
+            match state.plan_store.recover_interrupted_continuations() {
+                Ok(recovered) if recovered > 0 => tracing::warn!(
+                    recovered,
+                    "recovered interrupted Plan continuations as visible retryable failures"
+                ),
+                Err(error) => tracing::warn!("failed to recover Plan continuations: {error}"),
+                _ => {}
+            }
+            match state
+                .plan_store
+                .recover_interrupted_implementation_dispatches()
+            {
+                Ok(recovered) if recovered > 0 => tracing::warn!(
+                    recovered,
+                    "recovered interrupted Plan implementation handoffs as visible retryable failures"
+                ),
+                Err(error) => {
+                    tracing::warn!("failed to recover Plan implementation handoffs: {error}")
+                }
+                _ => {}
+            }
+            // Rejection recovery is desktop-authoritative for the same reason: an MCP sibling can
+            // share this database, but must never roll back paths while the desktop is active.
+            match tauri::async_runtime::block_on(
+                r_code_host::plan_review_tools::recover_plan_review_rejections(&state.plan_review),
+            ) {
+                Ok(report)
+                    if !report.recovered_operation_ids.is_empty()
+                        || !report.conflicted_operation_ids.is_empty()
+                        || !report.retryable_operation_ids.is_empty() =>
+                {
+                    tracing::warn!(
+                        recovered = report.recovered_operation_ids.len(),
+                        conflicted = report.conflicted_operation_ids.len(),
+                        retryable = report.retryable_operation_ids.len(),
+                        "recovered pending Plan enhanced-review rejections"
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!("failed to recover Plan enhanced-review rejections: {error}")
+                }
+                _ => {}
+            }
+            // A committed task/project deletion is authoritative even when Windows temporarily
+            // keeps an AppData file open. Retry only cryptographically named Blob files and
+            // canonical UUID Plan directories; database-provided paths are never deletion roots.
+            let blob_store = r_code_store::BlobStore::new(&state.db, state.blobs_dir.clone());
+            match blob_store.prune_unreferenced_files() {
+                Ok(report) => {
+                    if report.removed > 0 {
+                        tracing::info!(removed = report.removed, "pruned orphan Blob files");
+                    }
+                    for warning in report.warnings {
+                        tracing::warn!(%warning, "orphan Blob cleanup will retry at next startup");
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to prune orphan Blob files"),
+            }
+            match state.plan_store.prune_orphan_projection_directories() {
+                Ok(report) => {
+                    if report.removed > 0 {
+                        tracing::info!(removed = report.removed, "pruned orphan Plan projections");
+                    }
+                    for warning in report.warnings {
+                        tracing::warn!(%warning, "orphan Plan cleanup will retry at next startup");
+                    }
+                }
+                Err(error) => tracing::warn!(%error, "failed to prune orphan Plan projections"),
+            }
             // agent 事件出口：drain 循环 → WebView（"agent-event" 信封 {task_id, event}）
             let app_handle = app.handle().clone();
             state.set_agent_event_sink(Arc::new(move |task_id, event| {
@@ -123,6 +195,15 @@ fn main() {
             });
             // 生产路径使用真实 provider runtime（配置缺失时 agent_send 直接报错）
             state.agent.enable_real_mode();
+            match tauri::async_runtime::block_on(
+                r_code_host::commands::resume_queued_dispatches(&state),
+            ) {
+                Ok(resumed) if resumed > 0 => {
+                    tracing::info!(resumed, "resumed durable queued tasks after startup")
+                }
+                Err(error) => tracing::warn!("failed to resume durable queued tasks: {error}"),
+                _ => {}
+            }
             app.manage(state);
 
             tracing::info!(data_dir = %base.display(), "CommandState initialized (persistent)");
@@ -149,6 +230,22 @@ fn main() {
             tauri_commands::cmd_task_set_model,
             tauri_commands::cmd_task_set_inference,
             tauri_commands::cmd_task_rename,
+            tauri_commands::cmd_task_update_goal,
+            tauri_commands::cmd_task_set_mode,
+            tauri_commands::cmd_plan_get,
+            tauri_commands::cmd_plan_create,
+            tauri_commands::cmd_plan_answer,
+            tauri_commands::cmd_plan_retry_continuation,
+            tauri_commands::cmd_plan_approve,
+            tauri_commands::cmd_plan_retry_implementation,
+            tauri_commands::cmd_plan_cancel,
+            tauri_commands::cmd_plan_repair_projection,
+            tauri_commands::cmd_plan_update_item,
+            tauri_commands::cmd_plan_review_status,
+            tauri_commands::cmd_plan_review_accept_file,
+            tauri_commands::cmd_plan_review_accept_feature,
+            tauri_commands::cmd_plan_review_reject_file,
+            tauri_commands::cmd_plan_review_reject_feature,
             tauri_commands::cmd_task_fork_context,
             tauri_commands::cmd_task_compact_context,
             tauri_commands::cmd_task_detail,

@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use r_code_core::dto::{PermissionDecision, ProjectAccessMode, RiskLevel, ToolCall};
 use r_code_core::error::ProductError;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::permission::{PermissionCheckResult, PermissionEngine};
@@ -70,6 +71,115 @@ impl PathBinding {
 /// 默认绑定：单个必填 `path`（与历史行为一致）。
 const DEFAULT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("path")];
 
+/// Host-owned identity and access data for one tool invocation.
+///
+/// This value is constructed only after the gateway has bound the model call to a task/run and
+/// chosen the effective access mode. Tools must use this context instead of accepting ownership
+/// fields from model-controlled JSON input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolExecutionContext {
+    pub task_id: String,
+    pub run_id: String,
+    pub tool_call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+    pub access_mode: ProjectAccessMode,
+}
+
+/// Optional host policy evaluated before permission prompts and before any built-in or dynamic
+/// external tool executes. The gateway owns the audit record; the host owns product state.
+pub trait ToolPolicyGuard: Send + Sync {
+    fn check(
+        &self,
+        context: &ToolExecutionContext,
+        tool_name: &str,
+        risk_level: RiskLevel,
+    ) -> Result<(), ProductError>;
+}
+
+/// A typed control directive emitted by a successful tool invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolExecutionDirective {
+    /// Stop the current agent run and wait for explicit user input.
+    SuspendForUser,
+}
+
+/// Stable metadata envelope used at the gateway/runtime boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolOutcomeMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directive: Option<ToolExecutionDirective>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+/// Result returned by a context-aware tool.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolExecutionResult {
+    pub content: String,
+    pub directive: Option<ToolExecutionDirective>,
+    pub metadata: Option<serde_json::Value>,
+}
+
+impl ToolExecutionResult {
+    pub fn success(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            directive: None,
+            metadata: None,
+        }
+    }
+
+    pub fn suspend_for_user(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            directive: Some(ToolExecutionDirective::SuspendForUser),
+            metadata: None,
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    fn into_outcome(self) -> ToolCallOutcome {
+        let metadata = if self.directive.is_some() || self.metadata.is_some() {
+            serde_json::to_value(ToolOutcomeMetadata {
+                directive: self.directive,
+                data: self.metadata,
+            })
+            .ok()
+        } else {
+            None
+        };
+        ToolCallOutcome {
+            content: self.content,
+            is_error: false,
+            metadata,
+        }
+    }
+}
+
+impl From<String> for ToolExecutionResult {
+    fn from(content: String) -> Self {
+        Self::success(content)
+    }
+}
+
+/// Decode a gateway-owned control directive from a tool outcome.
+///
+/// Unknown or malformed metadata is deliberately ignored so third-party/legacy outcome metadata
+/// remains backward compatible.
+pub fn tool_outcome_directive(outcome: &ToolCallOutcome) -> Option<ToolExecutionDirective> {
+    outcome
+        .metadata
+        .clone()
+        .and_then(|value| serde_json::from_value::<ToolOutcomeMetadata>(value).ok())
+        .and_then(|metadata| metadata.directive)
+}
+
 /// 工具 trait -- 每个内置工具实现此接口。
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -98,10 +208,28 @@ pub trait Tool: Send + Sync {
     fn requires_existing_path(&self) -> bool {
         true
     }
+    /// Whether this tool needs an attached workspace and PathGuard scope.
+    ///
+    /// Existing file and command tools stay fail-closed by default. Host-owned tools that operate
+    /// only on AppData/SQLite may opt out and remain available in workspace-free conversations.
+    fn requires_workspace_scope(&self) -> bool {
+        true
+    }
     /// JSON Schema 输入定义。
     fn input_schema(&self) -> serde_json::Value;
     /// 执行工具，返回输出文本。
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError>;
+    /// Execute with trusted host context.
+    ///
+    /// The default adapter preserves every existing Tool implementation. Context-aware host tools
+    /// override this method and derive task/run ownership exclusively from `context`.
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        self.execute(input).await.map(ToolExecutionResult::from)
+    }
 }
 
 /// 子代理只能经由 Gateway 使用这组可证明无副作用的工作区工具。
@@ -128,6 +256,7 @@ pub struct ToolGateway {
     permission_engine: Arc<PermissionEngine>,
     /// 审计账本 -- 所有工具调用记录（含被拒绝 / 待审批）。
     ledger: Arc<RwLock<Vec<ToolCall>>>,
+    policy_guard: Option<Arc<dyn ToolPolicyGuard>>,
 }
 
 impl ToolGateway {
@@ -137,7 +266,12 @@ impl ToolGateway {
             tools: HashMap::new(),
             permission_engine,
             ledger: Arc::new(RwLock::new(Vec::new())),
+            policy_guard: None,
         }
+    }
+
+    pub fn set_policy_guard(&mut self, guard: Arc<dyn ToolPolicyGuard>) {
+        self.policy_guard = Some(guard);
     }
 
     /// 注册一个工具。
@@ -157,6 +291,15 @@ impl ToolGateway {
         self.tools
             .get(tool_name)
             .map(|tool| tool.requires_existing_path())
+            .unwrap_or(true)
+    }
+
+    /// Query whether a registered tool requires an attached workspace scope.
+    /// Unknown tools default to `true` so callers cannot accidentally expose them globally.
+    pub fn requires_workspace_scope(&self, tool_name: &str) -> bool {
+        self.tools
+            .get(tool_name)
+            .map(|tool| tool.requires_workspace_scope())
             .unwrap_or(true)
     }
 
@@ -222,8 +365,9 @@ impl ToolGateway {
         // 2. 获取风险等级（按本次输入动态定级；非命令类工具回落到静态等级）
         let risk_level = tool.risk_for(&input);
         if is_subagent_caller(caller)
-            && access_mode != ProjectAccessMode::FullAccess
-            && !subagent_read_only_tool_allowed(tool_name)
+            && (!tool.requires_workspace_scope()
+                || (access_mode != ProjectAccessMode::FullAccess
+                    && !subagent_read_only_tool_allowed(tool_name)))
         {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
             let mut audit =
@@ -240,6 +384,20 @@ impl ToolGateway {
         // 4. 先创建审计记录，使待审批请求可关联稳定的 tool_call_id。
         let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
         audit.caller = caller.map(|s| s.to_string());
+        let context = ToolExecutionContext {
+            task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
+            tool_call_id: audit.id.clone(),
+            caller: caller.map(ToOwned::to_owned),
+            access_mode,
+        };
+        if let Some(guard) = &self.policy_guard {
+            if let Err(error) = guard.check(&context, tool_name, risk_level) {
+                audit.deny(error.to_string());
+                self.ledger.write().await.push(audit);
+                return Err(error);
+            }
+        }
 
         // 5. 权限检查
         let check_result = self
@@ -260,16 +418,12 @@ impl ToolGateway {
         // 6. 根据检查结果处理
         match check_result {
             PermissionCheckResult::Allowed => {
-                let outcome = tool.execute(input).await;
+                let outcome = tool.execute_with_context(input, &context).await;
                 match outcome {
-                    Ok(content) => {
-                        audit.succeed(&content);
+                    Ok(result) => {
+                        audit.succeed(&result.content);
                         self.ledger.write().await.push(audit);
-                        Ok(ToolCallOutcome {
-                            content,
-                            is_error: false,
-                            metadata: None,
-                        })
+                        Ok(result.into_outcome())
                     }
                     Err(err) => {
                         audit.fail(err.to_string());
@@ -355,13 +509,29 @@ impl ToolGateway {
         }
         audit.caller = caller.map(|s| s.to_string());
         if is_subagent_caller(caller)
-            && access_mode != ProjectAccessMode::FullAccess
-            && !subagent_read_only_tool_allowed(tool_name)
+            && (!tool.requires_workspace_scope()
+                || (access_mode != ProjectAccessMode::FullAccess
+                    && !subagent_read_only_tool_allowed(tool_name)))
         {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
             audit.deny(&reason);
             self.ledger.write().await.push(audit);
             return Err(ProductError::PermissionError(reason));
+        }
+
+        let context = ToolExecutionContext {
+            task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
+            tool_call_id: audit.id.clone(),
+            caller: caller.map(ToOwned::to_owned),
+            access_mode,
+        };
+        if let Some(guard) = &self.policy_guard {
+            if let Err(error) = guard.check(&context, tool_name, risk_level) {
+                audit.deny(error.to_string());
+                self.ledger.write().await.push(audit);
+                return Err(error);
+            }
         }
 
         let check_result = self
@@ -427,16 +597,12 @@ impl ToolGateway {
         };
         debug_assert!(approved);
 
-        // 已获许可：执行并记账
-        match tool.execute(input).await {
-            Ok(content) => {
-                audit.succeed(&content);
+        // 已获许可：执行并记账。所有权信息来自 gateway，而不是模型输入。
+        match tool.execute_with_context(input, &context).await {
+            Ok(result) => {
+                audit.succeed(&result.content);
                 self.ledger.write().await.push(audit);
-                Ok(ToolCallOutcome {
-                    content,
-                    is_error: false,
-                    metadata: None,
-                })
+                Ok(result.into_outcome())
             }
             Err(err) => {
                 audit.fail(err.to_string());
@@ -484,6 +650,21 @@ impl ToolGateway {
             audit.deny(&reason);
             self.ledger.write().await.push(audit);
             return Err(ProductError::PermissionError(reason));
+        }
+
+        let context = ToolExecutionContext {
+            task_id: task_id.to_string(),
+            run_id: run_id.to_string(),
+            tool_call_id: audit.id.clone(),
+            caller: caller.map(ToOwned::to_owned),
+            access_mode,
+        };
+        if let Some(guard) = &self.policy_guard {
+            if let Err(error) = guard.check(&context, tool_name, risk_level) {
+                audit.deny(error.to_string());
+                self.ledger.write().await.push(audit);
+                return Err(error);
+            }
         }
 
         let check_result = self
@@ -686,6 +867,69 @@ impl Tool for FailTool {
 }
 
 #[cfg(test)]
+struct ContextTool {
+    seen: Arc<std::sync::Mutex<Option<ToolExecutionContext>>>,
+}
+
+#[cfg(test)]
+struct RejectMutationsGuard;
+
+#[cfg(test)]
+impl ToolPolicyGuard for RejectMutationsGuard {
+    fn check(
+        &self,
+        _context: &ToolExecutionContext,
+        _tool_name: &str,
+        risk_level: RiskLevel,
+    ) -> Result<(), ProductError> {
+        if matches!(risk_level, RiskLevel::R0 | RiskLevel::R1) {
+            Ok(())
+        } else {
+            Err(ProductError::PermissionError(
+                "state-changing tools are paused".to_string(),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for ContextTool {
+    fn name(&self) -> &str {
+        "context_tool"
+    }
+    fn description(&self) -> &str {
+        "Capture trusted execution context"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(ProductError::Other(
+            "context_tool requires trusted execution".to_string(),
+        ))
+    }
+    async fn execute_with_context(
+        &self,
+        _input: serde_json::Value,
+        context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        *self.seen.lock().unwrap() = Some(context.clone());
+        Ok(ToolExecutionResult::suspend_for_user("waiting")
+            .with_metadata(serde_json::json!({"question_set_id": "set-1"})))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use r_code_core::dto::{PermissionDecision, ToolCallStatus};
@@ -758,6 +1002,150 @@ mod tests {
         assert_eq!(entry.run_id, "r1");
         assert_eq!(entry.caller.as_deref(), Some("caller-1"));
         assert!(entry.ended_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn context_tool_receives_trusted_identity_and_serializes_directive() {
+        let (_, mut gw) = make_gateway();
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        gw.register(Box::new(ContextTool { seen: seen.clone() }));
+
+        let outcome = gw
+            .execute_call_with_access_mode(
+                "trusted-task",
+                "trusted-run",
+                "context_tool",
+                serde_json::json!({
+                    "task_id": "spoofed-task",
+                    "run_id": "spoofed-run"
+                }),
+                Some("agent"),
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .unwrap();
+
+        let context = seen.lock().unwrap().clone().unwrap();
+        assert_eq!(context.task_id, "trusted-task");
+        assert_eq!(context.run_id, "trusted-run");
+        assert!(!context.tool_call_id.is_empty());
+        assert_eq!(context.caller.as_deref(), Some("agent"));
+        assert_eq!(context.access_mode, ProjectAccessMode::FullAccess);
+        assert!(!gw.requires_workspace_scope("context_tool"));
+        assert_eq!(
+            tool_outcome_directive(&outcome),
+            Some(ToolExecutionDirective::SuspendForUser)
+        );
+        assert_eq!(
+            outcome.metadata.unwrap()["data"]["question_set_id"],
+            "set-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_cannot_invoke_host_only_tool_even_with_full_workspace_access() {
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(ContextTool {
+            seen: Arc::new(std::sync::Mutex::new(None)),
+        }));
+
+        let result = gw
+            .execute_call_with_access_mode(
+                "task-1",
+                "child-1",
+                "context_tool",
+                serde_json::json!({}),
+                Some("subagent:child-1"),
+                ProjectAccessMode::FullAccess,
+            )
+            .await;
+
+        assert!(matches!(result, Err(ProductError::PermissionError(_))));
+    }
+
+    #[tokio::test]
+    async fn policy_guard_blocks_waiting_builtin_and_external_mutations_before_execution() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (_, mut gw) = make_gateway();
+        gw.register(Box::new(WriteTool));
+        gw.set_policy_guard(Arc::new(RejectMutationsGuard));
+
+        let builtin = gw
+            .execute_with_wait_with_access_mode(
+                "task",
+                "run",
+                None,
+                "write_file",
+                serde_json::json!({ "path": "blocked.txt", "content": "blocked" }),
+                Some("agent"),
+                "write blocked.txt",
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await;
+        assert!(matches!(builtin, Err(ProductError::PermissionError(_))));
+
+        let external_called = Arc::new(AtomicBool::new(false));
+        let marker = external_called.clone();
+        let external = gw
+            .execute_external_with_wait(
+                "task",
+                "run",
+                None,
+                "mcp_write",
+                serde_json::json!({ "value": "blocked" }),
+                Some("agent"),
+                "external mutation",
+                None,
+                ProjectAccessMode::FullAccess,
+                RiskLevel::R2,
+                move || async move {
+                    marker.store(true, Ordering::SeqCst);
+                    Ok(ToolCallOutcome {
+                        content: "mutated".to_string(),
+                        is_error: false,
+                        metadata: None,
+                    })
+                },
+            )
+            .await;
+        assert!(matches!(external, Err(ProductError::PermissionError(_))));
+        assert!(!external_called.load(Ordering::SeqCst));
+
+        let read_called = Arc::new(AtomicBool::new(false));
+        let marker = read_called.clone();
+        let read = gw
+            .execute_external_with_wait(
+                "task",
+                "run",
+                None,
+                "mcp_read",
+                serde_json::json!({}),
+                Some("agent"),
+                "external read",
+                None,
+                ProjectAccessMode::FullAccess,
+                RiskLevel::R1,
+                move || async move {
+                    marker.store(true, Ordering::SeqCst);
+                    Ok(ToolCallOutcome {
+                        content: "read".to_string(),
+                        is_error: false,
+                        metadata: None,
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(read.content, "read");
+        assert!(read_called.load(Ordering::SeqCst));
+
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 3);
+        assert_eq!(ledger[0].status, ToolCallStatus::Denied);
+        assert_eq!(ledger[1].status, ToolCallStatus::Denied);
+        assert_eq!(ledger[2].status, ToolCallStatus::Ok);
     }
 
     #[tokio::test]

@@ -184,6 +184,7 @@ test("sidebar project and conversation actions share one compact side-menu patte
   await projectTrigger.click();
   const projectMenu = page.getByRole("menu", { name: "r-code 项目操作", exact: true });
   await projectMenu.waitFor({ state: "visible" });
+  await page.waitForTimeout(120); // compare settled geometry, not the entry-scale transition
   const projectRect = await rect(projectMenu);
   assert.ok(
     projectRect.left >= sidebarRect.right + 3,
@@ -205,6 +206,7 @@ test("sidebar project and conversation actions share one compact side-menu patte
   await taskTrigger.click();
   const taskMenu = page.getByRole("menu", { name: "管理对话：更新依赖并修复告警", exact: true });
   await taskMenu.waitFor({ state: "visible" });
+  await page.waitForTimeout(120);
   const taskRect = await rect(taskMenu);
   assert.ok(
     taskRect.left >= sidebarRect.right + 3,

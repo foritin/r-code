@@ -15,6 +15,7 @@ pub mod dto;
 pub mod error;
 pub mod ids;
 mod memory;
+pub mod plan;
 pub mod process;
 pub mod secret;
 pub mod security;

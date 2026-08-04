@@ -6,6 +6,22 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-04
+
+### Added
+
+- Plan 模式：任务目标、结构化 human-in-the-loop 问题、稳定 AppData Markdown 投影、按功能拆分的依赖待办和确认实施流程。
+- Plan 确认后的可靠实施队列、重启恢复与失败重试，以及不会回滚工作区的二次确认取消流程。
+- 增强审核：仅展示当前 Plan 的功能变更，支持功能/文件级接受与拒绝，并通过逆向三方合并保留同一文件中其他功能的改动。
+- 中英文双 README 入口，补充 Plan/HITL、增强审核、并发恢复与隐私边界文档。
+
+### Security
+
+- Plan 模式禁止写工具、Shell、变更型 MCP 和委派；等待用户回答后会关闭同一 Run 的后续工具执行。
+- 执行中的 Plan 没有活动功能时进入暂停态，直接写入、变更型 Shell 和 MCP 均 fail-closed，直到显式恢复被阻塞事项。
+- 功能级拒绝使用路径有序锁、durable journal、rollback Blob 和原子替换；冲突时保持文件不变并要求人工处理。
+- 删除会话/项目时按事务引用计数清理审核 Blob 和 UUID Plan 投影；启动清理不信任数据库提供的文件路径。
+
 ## [0.1.0] - 2026-08-03
 
 ### Added
@@ -35,5 +51,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 自动更新源与 Cargo 仓库元数据改为当前 GitHub 仓库，避免客户端从错误仓库查询 `latest.json`。
 - Windows 安装器、卸载器与应用程序使用 R-Code 图标，release 启动不再打开命令行窗口。
 
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
+
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0

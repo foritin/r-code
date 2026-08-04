@@ -18,9 +18,12 @@ pub mod change_service;
 pub mod database;
 pub mod document_store;
 pub mod git_service;
+pub mod lifecycle_purge;
 pub mod memory_store;
 pub mod migrations;
 pub mod patch_engine;
+pub mod plan_review;
+pub mod plan_store;
 pub mod repositories;
 pub mod review;
 pub mod review_git;
@@ -38,12 +41,25 @@ pub use document_store::{BomKind, ConflictStatus, DocumentEntry, DocumentStore};
 pub use git_service::{
     GitDiffResult, GitFileStatus, GitService, GitStatusKind, GitTreeChange, GitTreeChangeKind,
 };
+pub use lifecycle_purge::{
+    AppDataPruneReport, LifecyclePurgeResult, LifecyclePurgeStore, PURGE_REJECT_IN_PROGRESS,
+};
 pub use memory_store::{
     render_snapshot, sanitize_review_text, CapturedMemoryTurn, LoadedMemorySnapshot,
     MemoryCandidateView, MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryReviewClaim,
     MemoryReviewJobView, MemoryStore,
 };
 pub use patch_engine::{apply_patch, hash_content, PatchError};
+pub use plan_review::{
+    CoordinatedWriteGuard, EnhancedReviewEventView, EnhancedReviewFileView,
+    EnhancedReviewGroupView, EnhancedReviewTarget, EnhancedReviewView, FinishPlanWriteInput,
+    OsPlanReviewFileSystem, PathCoordinator, PathLease, PlanFeatureRef, PlanRejectRecoveryReport,
+    PlanRejectResult, PlanReviewFileSystem, PlanReviewStore, PlanRevisionRef, PlanWriteGuard,
+    RecordPlanWriteOutcome, PLAN_REVIEW_FEATURE_NOT_TERMINAL, PLAN_REVIEW_SCOPE_CONFLICT,
+};
+pub use plan_store::{
+    PlanStore, PLAN_CONTINUATION_INTERRUPTED, PLAN_IMPLEMENTATION_DISPATCH_INTERRUPTED,
+};
 pub use repositories::{
     AgentRunRepository, BlobStore, NotificationRepository, QueuedMessageRepository,
     SessionBranchRepository, TaskEventStore, TaskRepository, ToolCallRepository,
