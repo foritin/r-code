@@ -111,6 +111,7 @@ export interface PlanItem {
   ordinal: number;
   title: string;
   description: string;
+  section_path: string[];
   state: PlanItemState;
   depends_on: string[];
   created_at: string;

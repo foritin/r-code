@@ -1431,10 +1431,20 @@ fn render_host_task_context_from_store(
 ) -> Result<String, String> {
     let plan = plan_store.current_for_task(&task.id).map_err(err_str)?;
     let execution = PlanExecutionContext::from_view(plan.as_ref());
+    let progress = plan.as_ref().map(|view| {
+        serde_json::json!({
+            "completed": view.items.iter().filter(|item| item.state == PlanItemState::Completed).count(),
+            "in_progress": view.items.iter().filter(|item| item.state == PlanItemState::InProgress).count(),
+            "pending": view.items.iter().filter(|item| matches!(item.state, PlanItemState::Proposed | PlanItemState::Pending)).count(),
+            "blocked": view.items.iter().filter(|item| item.state == PlanItemState::Blocked).count(),
+            "failed": view.items.iter().filter(|item| item.state == PlanItemState::Failed).count(),
+            "total": view.items.len(),
+        })
+    });
     let execution_policy = match execution.status {
         PlanExecutionStatus::NoExecutingPlan => None,
         PlanExecutionStatus::ActiveFeature => Some(
-            "Implement only active_feature. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes so enhanced ownership is recorded. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing.",
+            "Implement only active_feature and keep its persisted progress current. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Independent read-only investigation or verification for this active feature may use up to three subagents in parallel; collect every result before deciding acceptance. Keep overlapping or mutating work with the main Agent so enhanced ownership remains deterministic. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing. A normal final answer does not end the run while active_feature still exists.",
         ),
         PlanExecutionStatus::Paused => Some(
             "Plan execution is paused. Do not write to the workspace through direct tools, shell, MCP, or external agents. First resume blocked_feature by calling plan_item_update with state=in_progress for the same feature and current Plan revision; only then continue implementation.",
@@ -1448,6 +1458,7 @@ fn render_host_task_context_from_store(
         },
         "plan": plan.as_ref().map(|view| &view.plan),
         "items": plan.as_ref().map(|view| &view.items),
+        "progress": progress,
         "pending_question_set": plan
             .as_ref()
             .and_then(|view| view.pending_question_set.as_ref()),
@@ -13502,6 +13513,7 @@ mod tests {
                         id: "feature-one".to_string(),
                         title: "Feature one".to_string(),
                         description: "Implement one independently verifiable feature".to_string(),
+                        section_path: vec![],
                         depends_on: vec![],
                     }],
                 },
@@ -13555,6 +13567,9 @@ mod tests {
         assert!(context.contains("Implement only active_feature"));
         assert!(context.contains("edit/apply_patch/create_file/delete_file"));
         assert!(context.contains("ordinary Git review"));
+        assert!(context.contains("subagents in parallel"));
+        assert!(context.contains("normal final answer does not end"));
+        assert!(context.contains("\"progress\""));
         assert!(context.contains("feature-one"));
 
         let completed = plan_update_item(

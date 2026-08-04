@@ -103,6 +103,10 @@ pub trait ToolPolicyGuard: Send + Sync {
 pub enum ToolExecutionDirective {
     /// Stop the current agent run and wait for explicit user input.
     SuspendForUser,
+    /// Keep the current agent run alive until a later tool result releases the gate.
+    RequireAgentContinuation,
+    /// Release a previously required continuation so the agent may finish normally.
+    AllowAgentCompletion,
 }
 
 /// Stable metadata envelope used at the gateway/runtime boundary.
@@ -135,6 +139,22 @@ impl ToolExecutionResult {
         Self {
             content: content.into(),
             directive: Some(ToolExecutionDirective::SuspendForUser),
+            metadata: None,
+        }
+    }
+
+    pub fn require_agent_continuation(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            directive: Some(ToolExecutionDirective::RequireAgentContinuation),
+            metadata: None,
+        }
+    }
+
+    pub fn allow_agent_completion(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            directive: Some(ToolExecutionDirective::AllowAgentCompletion),
             metadata: None,
         }
     }

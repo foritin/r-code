@@ -76,7 +76,7 @@ impl Tool for PlanPublishTool {
     }
 
     fn description(&self) -> &str {
-        "Publish the current Plan draft as 1-100 independently verifiable feature items. Use only in Plan mode after investigation and any required user clarification. Each item must represent one coherent implementation outcome with explicit dependencies."
+        "Publish the current Plan draft as 1-100 independently verifiable executable leaf items. Use section_path for optional hierarchy (for example phase -> area) instead of creating non-executable parent items. Each leaf must represent one coherent implementation outcome with explicit acceptance criteria and only real dependencies."
     }
 
     fn risk_level(&self) -> RiskLevel {
@@ -113,6 +113,12 @@ impl Tool for PlanPublishTool {
                             "id": { "type": "string", "minLength": 1, "maxLength": 256 },
                             "title": { "type": "string", "minLength": 1, "maxLength": 200 },
                             "description": { "type": "string", "maxLength": 20000 },
+                            "section_path": {
+                                "type": "array",
+                                "maxItems": 4,
+                                "description": "Optional presentation hierarchy. Parent labels are not executable tasks; this item remains the tracked leaf.",
+                                "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+                            },
                             "depends_on": {
                                 "type": "array",
                                 "items": { "type": "string", "minLength": 1, "maxLength": 256 },
@@ -392,7 +398,11 @@ impl Tool for PlanItemUpdateTool {
             "instruction": "This complete Plan is now authoritative. Continue only with active_feature; if it is null, stop implementation.",
         }))
         .map_err(|error| invalid(format!("serialize plan_item_update result: {error}")))?;
-        Ok(ToolExecutionResult::success(content))
+        if active_feature.is_some() {
+            Ok(ToolExecutionResult::require_agent_continuation(content))
+        } else {
+            Ok(ToolExecutionResult::allow_agent_completion(content))
+        }
     }
 }
 
@@ -503,12 +513,14 @@ mod tests {
                             id: "first".to_string(),
                             title: "First".to_string(),
                             description: "Complete the first acceptance criterion".to_string(),
+                            section_path: vec![],
                             depends_on: vec![],
                         },
                         PlanItemDraft {
                             id: "second".to_string(),
                             title: "Second".to_string(),
                             description: "Verify the dependent outcome".to_string(),
+                            section_path: vec![],
                             depends_on: vec!["first".to_string()],
                         },
                     ],
@@ -539,6 +551,10 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(
+            blocked.directive,
+            Some(r_code_gateway::ToolExecutionDirective::AllowAgentCompletion)
+        );
         let blocked: serde_json::Value = serde_json::from_str(&blocked.content).unwrap();
         assert!(blocked["active_feature"].is_null());
 
@@ -554,6 +570,10 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(
+            resumed.directive,
+            Some(r_code_gateway::ToolExecutionDirective::RequireAgentContinuation)
+        );
         let resumed: serde_json::Value = serde_json::from_str(&resumed.content).unwrap();
         assert_eq!(resumed["active_feature"]["id"], "first");
 
@@ -569,6 +589,10 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(
+            advanced.directive,
+            Some(r_code_gateway::ToolExecutionDirective::RequireAgentContinuation)
+        );
         let advanced: serde_json::Value = serde_json::from_str(&advanced.content).unwrap();
         assert_eq!(advanced["active_feature"]["id"], "second");
         assert!(tool.description().contains("state=in_progress"));

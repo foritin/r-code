@@ -57,6 +57,7 @@ fn item(id: &str, title: &str, depends_on: &[&str]) -> PlanItemDraft {
         id: id.to_string(),
         title: title.to_string(),
         description: format!("Implement {title}"),
+        section_path: vec![],
         depends_on: depends_on
             .iter()
             .map(|value| (*value).to_string())
@@ -182,6 +183,46 @@ fn restart_preserves_current_plan_goal_items_and_stable_projection_path() {
     assert_eq!(current.items[0].id, "feature-1");
     assert_eq!(projection_path(&current), expected_path);
     assert!(expected_path.is_file());
+    let markdown = fs::read_to_string(&expected_path).unwrap();
+    assert!(markdown.contains("**1 Persistent feature**"));
+}
+
+#[test]
+fn hierarchy_path_survives_restart_and_projects_numbered_leaf_progress() {
+    let directory = tempfile::tempdir().unwrap();
+    let database_path = directory.path().join("r-code.db");
+    let projection_root = directory.path().join("plans");
+    let db = Arc::new(Database::open(&database_path).unwrap());
+    let task = seed_task(db.as_ref(), "Track hierarchical progress");
+    let store = PlanStore::new(Arc::clone(&db), &projection_root);
+    let created = store
+        .create_plan(&CreatePlanInput {
+            task_id: task.id.clone(),
+        })
+        .unwrap();
+    let mut protocol = item("protocol", "Add protocol methods", &[]);
+    protocol.section_path = vec!["Backend".to_string(), "Vector adapter".to_string()];
+    let published = publish(
+        &store,
+        &task.id,
+        &created.plan.id,
+        created.plan.revision,
+        vec![protocol],
+    );
+    drop(store);
+    drop(db);
+
+    let reopened_db = Arc::new(Database::open(&database_path).unwrap());
+    let reopened = PlanStore::new(Arc::clone(&reopened_db), &projection_root);
+    let current = reopened.current_for_task(&task.id).unwrap().unwrap();
+    assert_eq!(
+        current.items[0].section_path,
+        vec!["Backend".to_string(), "Vector adapter".to_string()]
+    );
+    let markdown = fs::read_to_string(projection_path(&published)).unwrap();
+    assert!(markdown.contains("### 1 Backend"));
+    assert!(markdown.contains("#### 1.1 Vector adapter"));
+    assert!(markdown.contains("**1.1.1 Add protocol methods**"));
 }
 
 #[test]

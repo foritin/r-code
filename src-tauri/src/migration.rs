@@ -390,6 +390,14 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 21,
+            to_version: 22,
+            description: "Hierarchical Plan progress paths for executable feature items"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
