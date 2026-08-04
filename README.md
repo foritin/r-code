@@ -167,7 +167,7 @@ r-code/
 - [Support](./SUPPORT.md)
 - [Code of Conduct](./CODE_OF_CONDUCT.md)
 - [Architecture](./docs/ARCHITECTURE.md)
-- [Plan mode and enhanced review](./docs/plan-mode.md)
+- [Plan mode and enhanced review](./docs/plan-mode.en.md)
 - [Web tools and MCP](./docs/mcp.md)
 - [Evolving memory](./docs/memory.md)
 - [Release guide](./docs/RELEASING.md)
