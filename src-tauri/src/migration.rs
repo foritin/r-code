@@ -383,6 +383,13 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 20,
+            to_version: 21,
+            description: "Atomic enhanced-review scope and rejection claims".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
