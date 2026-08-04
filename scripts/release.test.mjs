@@ -10,6 +10,13 @@ import {
   replaceWorkspaceVersion,
   stampChangelog,
 } from "./release.mjs";
+import {
+  parseArguments,
+  requiredReleaseAssets,
+  requiredSecretsForTag,
+  validateReleaseRecord,
+  validateUpdaterManifest,
+} from "./publish-release.mjs";
 import { collectComponents, createArtifacts } from "./generate-supply-chain.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -167,6 +174,71 @@ test("release tags distinguish signed releases from numbered unsigned prerelease
   assert.equal(parseReleaseTag("v0.1.0-unsigned.0"), null);
   assert.equal(parseReleaseTag("v0.1.0-beta.1"), null);
   assert.equal(parseReleaseTag("0.1.0-unsigned.1"), null);
+});
+
+test("publish-release parses safe release modes and flags", () => {
+  assert.deepEqual(parseArguments(["v0.2.1-unsigned.2", "--dry-run", "--no-wait"]), {
+    dryRun: true,
+    yes: false,
+    noWait: true,
+    help: false,
+    tag: "v0.2.1-unsigned.2",
+  });
+  assert.throws(() => parseArguments(["v0.2.1-beta.1"]), /tag must be/);
+  assert.throws(() => parseArguments(["v0.2.1", "--force"]), /unknown option/);
+});
+
+test("publish-release only skips platform-signing secrets for explicit unsigned tags", () => {
+  const signed = requiredSecretsForTag(parseReleaseTag("v0.2.1"));
+  const unsigned = requiredSecretsForTag(parseReleaseTag("v0.2.1-unsigned.1"));
+
+  assert.deepEqual(unsigned, ["PAT_TOKEN", "TAURI_SIGNING_PRIVATE_KEY"]);
+  assert.ok(signed.includes("WINDOWS_CERTIFICATE"));
+  assert.ok(signed.includes("APPLE_SIGNING_IDENTITY"));
+  assert.ok(signed.includes("APPLE_TEAM_ID"));
+});
+
+test("publish-release verifies all four platform asset families", () => {
+  const required = requiredReleaseAssets("0.2.1");
+  assert.equal(required.length, 20);
+  assert.ok(required.includes("R-Code_0.2.1_x64-installer.exe"));
+  assert.ok(required.includes("R-Code_0.2.1_aarch64.dmg"));
+  assert.ok(required.includes("R-Code_0.2.1_x64.dmg"));
+  assert.ok(required.includes("R-Code_0.2.1_amd64.AppImage"));
+
+  const record = {
+    tagName: "v0.2.1-unsigned.1",
+    isDraft: false,
+    isPrerelease: true,
+    assets: required.map((name) => ({ name, size: 1 })),
+  };
+  assert.deepEqual(
+    validateReleaseRecord(record, record.tagName, parseReleaseTag(record.tagName)),
+    [],
+  );
+  record.assets = record.assets.filter((asset) => asset.name !== "THIRD_PARTY_LICENSES.md");
+  assert.match(
+    validateReleaseRecord(record, record.tagName, parseReleaseTag(record.tagName)).join("\n"),
+    /missing asset THIRD_PARTY_LICENSES\.md/,
+  );
+});
+
+test("publish-release verifies the updater manifest contract", () => {
+  const tag = "v0.2.1-unsigned.1";
+  const tagInfo = parseReleaseTag(tag);
+  const manifest = {
+    version: "0.2.1",
+    platforms: Object.fromEntries(
+      ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"]
+        .map((platform) => [platform, {}]),
+    ),
+  };
+  assert.deepEqual(validateUpdaterManifest(manifest, tag, tagInfo), []);
+  delete manifest.platforms["darwin-x86_64"];
+  assert.match(
+    validateUpdaterManifest(manifest, tag, tagInfo).join("\n"),
+    /latest\.json is missing darwin-x86_64/,
+  );
 });
 
 test("CI authenticates every private agent-core checkout", () => {

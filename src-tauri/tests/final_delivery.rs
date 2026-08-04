@@ -336,17 +336,14 @@ fn f20a_windows_icon_changes_rebuild_the_host_binary() {
 fn f20b_uninstall_delete_data_releases_managed_mcp_host() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let hooks = std::fs::read_to_string(manifest_dir.join("installer-hooks.nsh")).unwrap();
+    let cleanup = std::fs::read_to_string(manifest_dir.join("uninstall-cleanup.ps1")).unwrap();
 
     for contract in [
         "NSIS_HOOK_POSTUNINSTALL",
         "$DeleteAppDataCheckboxState = 1",
         "$UpdateMode <> 1",
-        "codex.Source mcp get r-code --json",
-        "codex.Source mcp remove r-code",
-        "Get-CimInstance Win32_Process",
-        "r-code-mcp-host-",
-        "registeredCommand.StartsWith($$hostRoot",
-        "registeredArgs.Count -eq 3",
+        "File /oname=$PLUGINSDIR\\r-code-uninstall-cleanup.ps1",
+        "-File \"$PLUGINSDIR\\r-code-uninstall-cleanup.ps1\"",
         "RMDir /r /REBOOTOK \"$APPDATA\\${BUNDLEID}\"",
         "RMDir /r /REBOOTOK \"$LOCALAPPDATA\\${BUNDLEID}\"",
         "删除将在 Windows 重启后完成",
@@ -356,6 +353,186 @@ fn f20b_uninstall_delete_data_releases_managed_mcp_host() {
             "missing uninstall cleanup contract: {contract}"
         );
     }
+
+    for contract in [
+        "Get-Command codex",
+        "$codex.Source mcp get r-code --json",
+        "$codex.Source mcp remove r-code",
+        "Get-CimInstance Win32_Process",
+        "^r-code-mcp-host-[a-f0-9]{64}\\.exe$",
+        "Test-ManagedHostPath",
+        "registeredArgs.Count -eq 3",
+        "Stop-Process -Id $managedHost.ProcessId -Force",
+        "Remove-Item -LiteralPath $root -Recurse -Force",
+        "RetrySeconds = 8",
+    ] {
+        assert!(
+            cleanup.contains(contract),
+            "missing uninstall cleanup script contract: {contract}"
+        );
+    }
+}
+
+/// F-20c: NSIS stores command operands in a fixed-size runtime string. The
+/// stock Tauri NSIS toolchain reports `NSIS_MAX_STRLEN=1024`, so a longer
+/// inline PowerShell command is silently truncated before it can release the
+/// SQLite handles that block immediate profile deletion.
+#[test]
+fn f20c_uninstall_commands_fit_the_nsis_runtime_string() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let hooks = std::fs::read_to_string(manifest_dir.join("installer-hooks.nsh")).unwrap();
+
+    let command_lines = hooks
+        .lines()
+        .filter(|line| line.contains("nsExec::Exec") || line.trim_start().starts_with("ExecWait "));
+
+    for line in command_lines {
+        assert!(
+            line.encode_utf16().count() < 1024,
+            "NSIS command exceeds NSIS_MAX_STRLEN=1024 and will be truncated ({} UTF-16 code units)",
+            line.encode_utf16().count()
+        );
+    }
+}
+
+/// F-20d: The extracted cleanup script stops an owned host and removes both
+/// application-data roots in the same uninstall run. Test roots are isolated
+/// and registration cleanup is disabled so this never touches a developer's
+/// real Codex configuration.
+#[cfg(target_os = "windows")]
+#[test]
+fn f20d_uninstall_cleanup_script_removes_test_profile_immediately() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = manifest_dir.join("uninstall-cleanup.ps1");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_root = std::env::temp_dir().join(format!(
+        "r-code-uninstall-cleanup-{}-{nonce}",
+        std::process::id()
+    ));
+    let roaming_base = test_root.join("roaming");
+    let local_base = test_root.join("local");
+    let bundle_id = "com.r-code.uninstall-test";
+    let roaming_bundle = roaming_base.join(bundle_id);
+    let local_bundle = local_base.join(bundle_id);
+    let managed_host_dir = roaming_bundle.join("r-code/mcp-host");
+    let managed_host = managed_host_dir.join(format!("r-code-mcp-host-{}.exe", "0".repeat(64)));
+
+    std::fs::create_dir_all(&managed_host_dir).unwrap();
+    std::fs::create_dir_all(roaming_bundle.join("r-code/db")).unwrap();
+    std::fs::create_dir_all(local_bundle.join("WebView2/Cache")).unwrap();
+    std::fs::write(roaming_bundle.join("r-code/db/r-code.db"), b"test").unwrap();
+    std::fs::write(local_bundle.join("WebView2/Cache/cache.bin"), b"test").unwrap();
+
+    let command_shell = std::env::var_os("COMSPEC").expect("COMSPEC must exist on Windows");
+    std::fs::copy(command_shell, &managed_host).unwrap();
+    let mut managed_process = std::process::Command::new(&managed_host)
+        .args(["/d", "/q", "/k"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    assert!(
+        managed_process.try_wait().unwrap().is_none(),
+        "managed host fixture exited before cleanup"
+    );
+
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&script)
+        .args(["-BundleId", bundle_id, "-RoamingBase"])
+        .arg(&roaming_base)
+        .arg("-LocalBase")
+        .arg(&local_base)
+        .args(["-RetrySeconds", "2", "-SkipCodexRegistration"])
+        .output()
+        .unwrap();
+
+    let stopped_by_cleanup = match managed_process.try_wait().unwrap() {
+        Some(_) => true,
+        None => {
+            managed_process.kill().unwrap();
+            managed_process.wait().unwrap();
+            false
+        }
+    };
+    let roaming_removed = !roaming_bundle.exists();
+    let local_removed = !local_bundle.exists();
+    if test_root.exists() {
+        std::fs::remove_dir_all(&test_root).unwrap();
+    }
+
+    assert!(
+        output.status.success(),
+        "cleanup script failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stopped_by_cleanup, "managed host process was not stopped");
+    assert!(roaming_removed, "roaming profile was not removed");
+    assert!(local_removed, "local profile was not removed");
+}
+
+/// F-20e: A manually invoked cleanup script must reject path-like bundle IDs
+/// before deriving deletion roots. This keeps the standalone helper safe even
+/// outside the installer, where its arguments are no longer compile-time data.
+#[cfg(target_os = "windows")]
+#[test]
+fn f20e_uninstall_cleanup_rejects_parent_directory_bundle_id() {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let script = manifest_dir.join("uninstall-cleanup.ps1");
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let test_root = std::env::temp_dir().join(format!(
+        "r-code-uninstall-boundary-{}-{nonce}",
+        std::process::id()
+    ));
+    let roaming_base = test_root.join("roaming");
+    let local_base = test_root.join("local");
+    let sentinel = test_root.join("keep.txt");
+
+    std::fs::create_dir_all(&roaming_base).unwrap();
+    std::fs::create_dir_all(&local_base).unwrap();
+    std::fs::write(&sentinel, b"keep").unwrap();
+
+    let output = std::process::Command::new("powershell.exe")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&script)
+        .args(["-BundleId", "..", "-RoamingBase"])
+        .arg(&roaming_base)
+        .arg("-LocalBase")
+        .arg(&local_base)
+        .arg("-SkipCodexRegistration")
+        .output()
+        .unwrap();
+
+    let sentinel_untouched = std::fs::read(&sentinel).unwrap() == b"keep";
+    if test_root.exists() {
+        std::fs::remove_dir_all(&test_root).unwrap();
+    }
+
+    assert!(!output.status.success(), "path-like bundle ID was accepted");
+    assert!(sentinel_untouched, "cleanup escaped its managed roots");
 }
 
 /// F-21: The distributable Windows installer is a real branded bootstrapper,

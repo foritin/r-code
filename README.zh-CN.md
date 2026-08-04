@@ -138,11 +138,12 @@ cargo tauri build --bundles appimage,deb
 
 ```bash
 node scripts/release.mjs prepare 0.1.0
-git tag -a v0.1.0 -m "R-Code v0.1.0"
-git push origin v0.1.0
+# 审阅、验证、提交并推送 main，等待 CI 通过后：
+node scripts/publish-release.mjs v0.1.0 --dry-run
+node scripts/publish-release.mjs v0.1.0
 ```
 
-不要把这几条命令当作完整上线清单。首次发布的 Secrets、平台签名、完整验证、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
+发布闸门会创建不可变 tag、触发四平台 GitHub Actions 构建、等待完成并核对上传资产。首次发布的 Secrets、平台签名、未签名预发布、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
 
 ## 项目结构
 
