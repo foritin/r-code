@@ -6,6 +6,20 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-04
+
+### Added
+
+- 新增一键发布闸门：在创建版本标签前检查 `main`、CI、GitHub Actions Secrets 和版本一致性，并在构建完成后核对四个平台的 Release 资产与更新清单。
+
+### Security
+
+- Windows 卸载清理只会终止 R-Code AppData 下符合受管命名规则的 MCP Host，并拒绝可能逃逸数据目录的 Bundle ID。
+
+### Fixed
+
+- 勾选删除数据后，卸载器会先释放 R-Code 受管进程并重试清理本地数据；只有仍被 Windows 或安全软件占用时才回退到重启后删除。
+
 ## [0.2.0] - 2026-08-04
 
 ### Added
@@ -52,6 +66,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - Windows 安装器、卸载器与应用程序使用 R-Code 图标，release 启动不再打开命令行窗口。
 
 [0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
-
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/foritin/r-code/releases/tag/v0.2.1
