@@ -6,7 +6,7 @@
 //! R-Code Host 二进制入口 -- Tauri 应用壳。
 //!
 //! 启动流程：
-//! 1. 初始化结构化日志（stdout + 内存环形缓冲）
+//! 1. 初始化结构化日志（stdout + 内存尾部 + 7 天滚动文件）
 //! 2. 启动 Tauri 应用壳（加载前端 WebView）
 //! 3. 在 setup hook 中创建持久化 CommandState（AppData/r-code）+ 后台启动 IPC server
 //! 4. 注册 Tauri 命令（前端通过 invoke 调用）
@@ -69,9 +69,24 @@ fn main() {
             let blobs_dir = base.join("blobs");
             let sessions_dir = base.join("sessions");
             let config_dir = base.join("config");
-            for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir] {
+            let logs_dir = base.join("logs");
+            for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir, &logs_dir] {
                 std::fs::create_dir_all(dir)?;
             }
+            let retention_dir = logs_dir.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    if let Err(error) =
+                        r_code_host::log_buffer::prune_expired_logs(&retention_dir)
+                    {
+                        tracing::warn!(%error, "failed to prune expired diagnostic logs");
+                    }
+                }
+            });
             // 旧版 config.toml 可能仍含明文 api_key：尽早迁入系统凭据库。
             // Keychain 暂不可用不阻断启动，设置页会给出可见错误而不会泄露密钥。
             match r_code_host::settings::SettingsService::new(config_dir.clone())
@@ -310,6 +325,7 @@ fn main() {
             tauri_commands::cmd_recovery_data,
             tauri_commands::cmd_recovery_cleanup,
             tauri_commands::cmd_support_bundle,
+            tauri_commands::cmd_support_bundle_choose,
             tauri_commands::cmd_support_preview,
             tauri_commands::cmd_file_list,
             tauri_commands::cmd_file_read,

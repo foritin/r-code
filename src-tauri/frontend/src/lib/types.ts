@@ -1226,7 +1226,7 @@ export interface SupportBundlePreview {
   version: string;
   platform: string;
   generated_at: string;
-  logs: { level: string; message: string; timestamp: string }[];
+  logs: { level: string; message: string; timestamp: string; target: string }[];
   config_summary: Record<string, unknown>;
   db_stats: { task_count: number; run_count: number; tool_call_count: number };
 }

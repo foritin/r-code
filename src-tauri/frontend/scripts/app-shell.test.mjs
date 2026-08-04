@@ -1444,6 +1444,27 @@ test("composer Up and Down traverse this conversation's user input history", asy
   await page.close();
 });
 
+test("diagnostics uses fixed retention and a native-folder export flow", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "诊断", exact: true }).click();
+  await page.getByRole("heading", { name: "诊断日志", exact: true }).waitFor();
+  await page.getByText("日志按日滚动，固定保留最近 7 天。", { exact: false }).waitFor();
+  assert.equal(
+    await page.getByRole("textbox", { name: "输出目录" }).count(),
+    0,
+    "export destination must not be a manually editable path",
+  );
+
+  await page.getByRole("button", { name: "生成预览", exact: true }).click();
+  await page.getByText("警告/错误条数", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "选择目录并导出", exact: true }).click();
+  await page.getByText("已生成：", { exact: false }).waitFor();
+  await page.close();
+});
+
 test("agent coordination prompts can be edited, saved, and restored", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

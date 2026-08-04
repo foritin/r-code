@@ -617,6 +617,15 @@ export const supportBundle = async (outputDir: string) => {
   }
 };
 
+export const supportBundleChoose = async () => {
+  try {
+    return await ipc<string | null>("cmd_support_bundle_choose");
+  } catch (error) {
+    if (!shouldUseBrowserMock()) throw error;
+    return "C:/Users/preview/Downloads/r-code-support-preview.json";
+  }
+};
+
 export const supportPreview = async () => {
   try {
     return await ipc<SupportBundlePreview>("cmd_support_preview");

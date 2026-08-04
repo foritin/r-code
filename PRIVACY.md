@@ -11,7 +11,7 @@ R-Code stores application data under the operating system's application-data loc
 - tasks, workspace references, run state, approvals, tool-call metadata and notifications in SQLite;
 - conversation and Agent events in JSONL session files;
 - file baselines, verification output and other large content in content-addressed Blob storage;
-- non-secret Provider configuration, application logs and recovery metadata;
+- non-secret Provider configuration, redacted diagnostic logs and recovery metadata;
 - non-secret MCP server configuration and cached MCP Registry search results;
 - when evolving memory is enabled: its settings, approved global/project entries, sanitized short-lived review turns, review jobs/candidates and injection references in SQLite.
 - Plan-mode goals, revisions, structured questions/answers, feature todos, feature-change ownership and enhanced-review decisions in SQLite, plus human-readable Plan projections and recovery blobs under application data.
@@ -23,6 +23,8 @@ Evolving memory is off by default. R-Code stores its content only in the applica
 Plan documents follow the same local-data boundary: the durable state is stored in SQLite and the Markdown projection is written to `<AppData>/r-code/plans/<plan-id>/plan.md`, never into the attached project. Enhanced review may store before/after and rollback snapshots in the application Blob store so a feature-scoped rejection can preserve unrelated edits and recover safely after interruption. These files are not added to the project's Git index by R-Code. Permanently deleting a task or forgetting a workspace releases its Plan-owned Blob references and removes only canonical UUID Plan projection directories under application data; R-Code never follows a stored projection path into the workspace or another location.
 
 Local data remains on the device until it is removed through the application, by the user, or by operating-system cleanup. Uninstall behaviour varies by platform and installer, so do not assume uninstalling also erases the application-data directory.
+
+Diagnostic logs are written as daily JSONL files under the application-data directory and are automatically limited to the most recent seven calendar days. This retention is fixed rather than user-configurable. Logs cover operational events such as Provider/model failures, tool failures, subagent failures, MCP connection/call failures and storage/recovery warnings; they are not intended to contain prompt bodies, source-file bodies or complete tool output. Tool failures may include a bounded error summary for diagnosis. Known credential patterns are redacted before the event reaches disk.
 
 ## Data sent to model providers
 
@@ -65,7 +67,7 @@ Do not place credentials in prompts, source files, logs or public issues. R-Code
 
 ## Support bundles and issue reports
 
-Support bundles are generated locally. Preview and inspect them before sharing, and send them only through a channel appropriate for the data they contain. The MCP section is a strict summary containing only server IDs, transport kinds, enabled/state values and error classes; it omits launch commands, arguments, URLs, header/environment names, credential references and values. Other bundle sections may still reveal paths, runtime metadata or diagnostic output even after known credential patterns are redacted.
+Support bundles are generated locally in a directory explicitly selected with the operating system's folder picker. Their log section contains only the most recent warning/error entries from the seven-day diagnostic window, with original timestamps and module names, and applies redaction again before export. Preview and inspect a bundle before sharing it, and send it only through a channel appropriate for the data it contains. The MCP section is a strict summary containing only server IDs, transport kinds, enabled/state values and error classes; it omits launch commands, arguments, URLs, header/environment names, credential references and values. Other bundle sections may still reveal paths, runtime metadata or diagnostic output even after known credential patterns are redacted.
 
 Never attach proprietary source, raw application-data directories or credentials to a public GitHub issue. Security-sensitive reports should follow [SECURITY.md](./SECURITY.md).
 
