@@ -1176,7 +1176,7 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   default_agent_engine: "r_code",
   delegation_router: "balanced",
   allow_cross_engine_delegation: true,
-  quality_loop: "auto",
+  quality_loop: "off",
   quality_reviewer: "auto",
   max_review_rounds: 1,
 };
@@ -1277,7 +1277,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
 
       <section className="settings-block">
         <h3>质量复核</h3>
-        <p className="desc">复核循环是宿主编排能力，不是隐藏提示词 Skill；运行阶段、复核者和轮次都会显示。</p>
+        <p className="desc">默认关闭以避免额外延迟和模型消耗；开启后，运行阶段、复核者和轮次都会明确显示。</p>
         <div className="field">
           <label htmlFor="set-quality-loop">触发方式</label>
           <select
