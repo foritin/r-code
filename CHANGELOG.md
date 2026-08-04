@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-04
+
 ### Added
 
 - Plan 实施支持 `1 / 1.1 / 1.2` 层级进度、依赖解锁、连续派发与可并行事项提示。
@@ -103,5 +105,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 [0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
 [0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/foritin/r-code/releases/tag/v0.2.1
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/foritin/r-code/releases/tag/v0.2.2
