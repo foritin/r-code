@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 
 use chrono::Utc;
 use r_code_core::dto::{AgentRun, Task, TaskMode};
@@ -10,13 +10,14 @@ use r_code_core::error::ProductError;
 use r_code_store::{
     AgentRunRepository, Database, EnhancedReviewTarget, FinishPlanWriteInput,
     OsPlanReviewFileSystem, PathCoordinator, PlanReviewFileSystem, PlanReviewStore, TaskRepository,
-    PLAN_REVIEW_FEATURE_NOT_TERMINAL,
+    PLAN_REVIEW_FEATURE_NOT_TERMINAL, PLAN_REVIEW_SCOPE_CONFLICT,
 };
 use rusqlite::params;
 use tempfile::TempDir;
 
 struct Fixture {
     db: Database,
+    db_path: Option<PathBuf>,
     _temp: TempDir,
     workspace: PathBuf,
     blobs: PathBuf,
@@ -43,6 +44,35 @@ impl Fixture {
         AgentRunRepository::new(&db).create(&run).unwrap();
         Self {
             db,
+            db_path: None,
+            _temp: temp,
+            workspace,
+            blobs,
+            task,
+            run,
+        }
+    }
+
+    fn new_file_backed() -> Self {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let blobs = temp.path().join("blobs");
+        let db_path = temp.path().join("r-code.db");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&blobs).unwrap();
+        let db = Database::open(&db_path).unwrap();
+        let task = Task::new(
+            Some(workspace.to_string_lossy().into_owned()),
+            "Plan review",
+            "test enhanced review",
+            TaskMode::Edit,
+        );
+        TaskRepository::new(&db).create(&task).unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&db).create(&run).unwrap();
+        Self {
+            db,
+            db_path: Some(db_path),
             _temp: temp,
             workspace,
             blobs,
@@ -298,6 +328,167 @@ impl PlanReviewFileSystem for FailingFileSystem {
         }
         OsPlanReviewFileSystem.write_snapshot(path, content)
     }
+}
+
+struct BlockingReadFileSystem {
+    reads: AtomicUsize,
+    block_on_read: usize,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl BlockingReadFileSystem {
+    fn new(block_on_read: usize, entered: mpsc::Sender<()>, release: mpsc::Receiver<()>) -> Self {
+        Self {
+            reads: AtomicUsize::new(0),
+            block_on_read,
+            entered: Mutex::new(Some(entered)),
+            release: Mutex::new(release),
+        }
+    }
+}
+
+impl PlanReviewFileSystem for BlockingReadFileSystem {
+    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
+        let call = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
+        if call == self.block_on_read {
+            if let Some(entered) = self.entered.lock().unwrap().take() {
+                entered
+                    .send(())
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+            }
+            self.release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|error| io::Error::other(error.to_string()))?;
+        }
+        OsPlanReviewFileSystem.read_snapshot(path)
+    }
+
+    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()> {
+        OsPlanReviewFileSystem.write_snapshot(path, content)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn active_feature_rejection_blocks_racing_file_accept_across_connections() {
+    let fixture = Fixture::new_file_backed();
+    fixture.insert_plan("plan", "executing", &[("feature-a", "in_progress")]);
+    let file = fixture.workspace.join("shared.txt");
+    std::fs::write(&file, "baseline\n").unwrap();
+    let capture_store = fixture.store();
+    fixture
+        .tracked_write(&capture_store, "shared.txt", "feature\n", "write-a")
+        .await;
+    fixture.set_item_state("plan", "feature-a", "completed");
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    // The second read happens after the rejection journal has acquired its durable active claim.
+    let reject_store = fixture.store_with_fs(Arc::new(BlockingReadFileSystem::new(
+        2, entered_tx, release_rx,
+    )));
+    let second_db = Database::open(fixture.db_path.as_ref().unwrap()).unwrap();
+    let accept_target = fixture.target("plan", "feature-a", Some("shared.txt"));
+    let blobs = fixture.blobs.clone();
+    let accept = std::thread::spawn(move || {
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let result = PlanReviewStore::new(&second_db, blobs).accept_file(&accept_target);
+        release_tx.send(()).unwrap();
+        result
+    });
+
+    let rejected = reject_store
+        .reject_feature(
+            &fixture.workspace,
+            &fixture.target("plan", "feature-a", None),
+        )
+        .await
+        .unwrap();
+    let accept_error = accept.join().unwrap().unwrap_err();
+    assert!(accept_error
+        .to_string()
+        .contains(PLAN_REVIEW_SCOPE_CONFLICT));
+    assert_eq!(rejected.decision.decision.as_str(), "rejected");
+    assert_eq!(std::fs::read_to_string(file).unwrap(), "baseline\n");
+
+    let conn = fixture.db.conn().unwrap();
+    let decisions: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT scope, decision FROM plan_review_decisions
+             WHERE plan_id = 'plan' AND item_id = 'feature-a' ORDER BY scope",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(decisions, vec![("feature".into(), "rejected".into())]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn racing_file_accept_blocks_feature_rejection_before_it_writes() {
+    let fixture = Fixture::new_file_backed();
+    fixture.insert_plan("plan", "executing", &[("feature-a", "in_progress")]);
+    let file = fixture.workspace.join("shared.txt");
+    std::fs::write(&file, "baseline\n").unwrap();
+    let capture_store = fixture.store();
+    fixture
+        .tracked_write(&capture_store, "shared.txt", "feature\n", "write-a")
+        .await;
+    fixture.set_item_state("plan", "feature-a", "completed");
+
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    // The first read pauses before the rejection journal can claim the feature.
+    let reject_store = fixture.store_with_fs(Arc::new(BlockingReadFileSystem::new(
+        1, entered_tx, release_rx,
+    )));
+    let second_db = Database::open(fixture.db_path.as_ref().unwrap()).unwrap();
+    let accept_target = fixture.target("plan", "feature-a", Some("shared.txt"));
+    let blobs = fixture.blobs.clone();
+    let accept = std::thread::spawn(move || {
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let result = PlanReviewStore::new(&second_db, blobs).accept_file(&accept_target);
+        release_tx.send(()).unwrap();
+        result
+    });
+
+    let reject_error = reject_store
+        .reject_feature(
+            &fixture.workspace,
+            &fixture.target("plan", "feature-a", None),
+        )
+        .await
+        .unwrap_err();
+    let accepted = accept.join().unwrap().unwrap();
+    assert_eq!(accepted.decision.as_str(), "accepted");
+    assert!(reject_error
+        .to_string()
+        .contains(PLAN_REVIEW_SCOPE_CONFLICT));
+    assert_eq!(
+        std::fs::read_to_string(file).unwrap(),
+        "feature\n",
+        "the losing rejection must fail before mutating the file"
+    );
+
+    let conn = fixture.db.conn().unwrap();
+    let decisions: Vec<(String, String)> = conn
+        .prepare(
+            "SELECT scope, decision FROM plan_review_decisions
+             WHERE plan_id = 'plan' AND item_id = 'feature-a' ORDER BY scope",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(decisions, vec![("file".into(), "accepted".into())]);
 }
 
 #[tokio::test]

@@ -47,6 +47,11 @@ const PLAN_INDEXES: &[&str] = &[
     "idx_plans_implementation_dispatch",
 ];
 
+const PLAN_TRIGGERS: &[&str] = &[
+    "trg_plan_review_decisions_scope_guard",
+    "trg_plan_reject_operations_scope_guard",
+];
+
 fn schema_version(conn: &Connection) -> i64 {
     conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| {
         row.get(0)
@@ -119,7 +124,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
+fn clean_database_and_schema_18_upgrade_reach_complete_schema_21() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -128,6 +133,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
     );
     let tables = schema_objects(&clean_conn, "table");
     let indexes = schema_objects(&clean_conn, "index");
+    let triggers = schema_objects(&clean_conn, "trigger");
     for table in PLAN_TABLES {
         assert!(
             tables.contains(*table),
@@ -138,6 +144,12 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
         assert!(
             indexes.contains(*index),
             "clean schema is missing index {index}"
+        );
+    }
+    for trigger in PLAN_TRIGGERS {
+        assert!(
+            triggers.contains(*trigger),
+            "clean schema is missing trigger {trigger}"
         );
     }
     drop(clean_conn);
@@ -161,7 +173,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
              DROP TABLE plan_item_dependencies;
              DROP TABLE plan_items;
              DROP TABLE plans;
-             DELETE FROM schema_version WHERE version IN (19, 20);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21);",
         )
         .unwrap();
         assert_eq!(schema_version(&conn), 18);
@@ -170,7 +182,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
 
     let upgraded = Database::open(&path).unwrap();
     let conn = upgraded.conn().unwrap();
-    assert_eq!(schema_version(&conn), 20);
+    assert_eq!(schema_version(&conn), i64::from(LATEST_SCHEMA_VERSION));
     assert_eq!(
         TaskRepository::new(&upgraded)
             .get(&task.id)
@@ -181,16 +193,23 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_20() {
     );
     let tables = schema_objects(&conn, "table");
     let indexes = schema_objects(&conn, "index");
+    let triggers = schema_objects(&conn, "trigger");
     for table in PLAN_TABLES {
         assert!(tables.contains(*table), "upgrade is missing table {table}");
     }
     for index in PLAN_INDEXES {
         assert!(indexes.contains(*index), "upgrade is missing index {index}");
     }
+    for trigger in PLAN_TRIGGERS {
+        assert!(
+            triggers.contains(*trigger),
+            "upgrade is missing trigger {trigger}"
+        );
+    }
 }
 
 #[test]
-fn schema_20_declares_every_check_and_foreign_key_contract() {
+fn schema_21_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 
@@ -565,5 +584,5 @@ fn direct_schema_18_migration_entrypoint_is_idempotent() {
     let conn = Connection::open_in_memory().unwrap();
     run_migrations(&conn).unwrap();
     run_migrations(&conn).unwrap();
-    assert_eq!(schema_version(&conn), 20);
+    assert_eq!(schema_version(&conn), i64::from(LATEST_SCHEMA_VERSION));
 }

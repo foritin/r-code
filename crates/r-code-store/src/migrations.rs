@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 20;
+pub const LATEST_SCHEMA_VERSION: u32 = 21;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -49,6 +49,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(18, MIGRATION_018, false),
     MigrationSpec::new(19, MIGRATION_019, false),
     MigrationSpec::new(20, MIGRATION_020, false),
+    MigrationSpec::new(21, MIGRATION_021, false),
 ];
 
 impl MigrationSpec {
@@ -1242,6 +1243,100 @@ ALTER TABLE plans ADD COLUMN implementation_queue_message_id TEXT;
 ALTER TABLE plans ADD COLUMN implementation_dispatched_at TEXT;
 CREATE INDEX idx_plans_implementation_dispatch
     ON plans(implementation_dispatch_state, updated_at);
+"#;
+
+/// Migration 021: make enhanced-review file and feature decisions mutually exclusive across
+/// pooled connections. Active rejection journals are claims: no incompatible decision or
+/// rejection may start until the claim reaches a terminal state.
+const MIGRATION_021: &str = r#"
+CREATE TRIGGER trg_plan_review_decisions_scope_guard
+BEFORE INSERT ON plan_review_decisions
+BEGIN
+    SELECT CASE
+        WHEN NEW.scope = 'file' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND scope = 'feature'
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+        WHEN NEW.scope = 'feature' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND scope = 'file'
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+    END;
+END;
+
+CREATE TRIGGER trg_plan_reject_operations_scope_guard
+BEFORE INSERT ON plan_reject_operations
+WHEN NEW.state IN ('prepared', 'applying', 'rolling_back')
+BEGIN
+    SELECT CASE
+        WHEN NEW.scope = 'file' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+                  AND (
+                      scope = 'feature'
+                      OR (scope = 'file' AND path = NEW.path)
+                  )
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+        WHEN NEW.scope = 'feature' AND (
+            EXISTS (
+                SELECT 1 FROM plan_review_decisions
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+            )
+            OR EXISTS (
+                SELECT 1 FROM plan_reject_operations
+                WHERE plan_id = NEW.plan_id
+                  AND plan_revision = NEW.plan_revision
+                  AND item_id = NEW.item_id
+                  AND state IN ('prepared', 'applying', 'rolling_back')
+            )
+        ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
+    END;
+END;
 "#;
 
 #[cfg(test)]

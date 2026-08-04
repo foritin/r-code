@@ -327,7 +327,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作，防止跨连接竞态产生互相矛盾的账本或文件状态。
 
 新增 migration 时必须：
 
