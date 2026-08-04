@@ -62,7 +62,7 @@ flowchart LR
 
 Updater 签名只保证应用更新包的完整性，不替代平台发行签名。
 
-macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release workflow。仓库 Settings → Secrets and variables → Actions 必须配置：
+macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release workflow。要生成平台信任的 macOS 安装包，仓库 Settings → Secrets and variables → Actions 需要配置：
 
 - `APPLE_CERTIFICATE`：Developer ID Application `.p12` 的单行 Base64 内容；
 - `APPLE_CERTIFICATE_PASSWORD`：导出 `.p12` 时设置的密码；
@@ -71,20 +71,22 @@ macOS 的 Developer ID 签名、notarization 和 stapling 已接入 Release work
 - `APPLE_PASSWORD`：该 Apple ID 的 app-specific password，不是账户登录密码；
 - `APPLE_TEAM_ID`：Apple Developer Team ID。
 
-正式 release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证；缺少任一 Secret 时正式发布会明确失败。仅名称符合 `vX.Y.Z-unsigned.N` 的显式预发布标签会跳过 Developer ID 与公证，改用无需证书的 ad-hoc 身份，并始终保持 prerelease、非 Latest 状态。证书和密码不得提交到仓库。
+完整配置时，release workflow 会把证书导入 runner 的临时 keychain，构建 `.app`/`.dmg`，并强制执行 `codesign`、Gatekeeper assessment 和 stapler 验证。缺少任一 Apple Secret 时，只将 macOS 构建降级为 ad-hoc 签名，不会阻断其他平台或稳定版发布；Release 标题和正文会公开警告该平台未完成 Developer ID 签名与公证。证书和密码不得提交到仓库。
 
 本机测试可以运行 `bash ./scripts/build-macos.sh` 生成 ad-hoc 签名包；这种包只用于开发验证，不能替代 Developer ID。正式本地候选包需先把 Developer ID 导入 Keychain，并设置 `APPLE_SIGNING_IDENTITY` 及 Apple ID 三个 notarization 变量，再运行 `bash ./scripts/build-macos.sh --signed`。脚本也支持 App Store Connect API key 方式，具体变量见 `--help`。
 
-Windows Authenticode 已接入 Release workflow，并且是正式发布的强制门禁。仓库必须配置：
+Windows Authenticode 已接入 Release workflow。要生成平台信任的 Windows 安装包，仓库需要配置：
 
 - `WINDOWS_CERTIFICATE`：代码签名 `.pfx` 的 Base64 内容（支持 `certutil -encode` 输出）；
 - `WINDOWS_CERTIFICATE_PASSWORD`：PFX 导出密码；
 - `WINDOWS_TIMESTAMP_URL`：证书颁发机构提供的 RFC 3161 时间戳地址。
 
-正式 workflow 会把证书导入 runner 的临时用户证书库，由 Tauri 在生成 updater/NSIS/MSI 前完成签名；品牌外层安装器生成后再由 `signtool` 签名。发布前会对品牌安装器、NSIS 和 MSI 逐一执行 Authenticode 验证。任一 Secret 缺失、签名或验证失败都会阻止正式 Draft 发布，临时 PFX 和生成的 Tauri 覆盖配置在 job 结束时删除。Linux 包签名是否启用由分发渠道策略决定。
+完整配置时，workflow 会把证书导入 runner 的临时用户证书库，由 Tauri 在生成 updater/NSIS/MSI 前完成签名；品牌外层安装器生成后再由 `signtool` 签名。发布前会对品牌安装器、NSIS 和 MSI 逐一执行 Authenticode 验证。缺少任一 Windows Secret 时，只将 Windows 构建降级为未签名，不会阻断稳定版发布；Release 会公开 SmartScreen 风险警告。已经选择签名后若证书导入、签名或验签失败，构建仍会失败，不能静默降级。临时 PFX 和生成的 Tauri 覆盖配置在 job 结束时删除。Linux 包签名是否启用由分发渠道策略决定。
 
 > [!WARNING]
-> `vX.Y.Z-unsigned.N` 仅用于在尚未取得平台证书时分发测试包。Windows 会显示 SmartScreen 警告，macOS 会触发 Gatekeeper；这种构建不会成为 Latest，也不会进入正式自动更新入口。它仍要求 `PAT_TOKEN` 和 `TAURI_SIGNING_PRIVATE_KEY`，确保私有子模块可读取且 updater 产物具备完整性签名。
+> 稳定标签 `vX.Y.Z` 在缺少平台证书时仍可发布并成为 Latest，但 Release 会标记为 `unsigned build` 或 `partially unsigned`，正文顶部也会列出未签名平台。Windows 可能显示 SmartScreen 警告，macOS 可能触发 Gatekeeper。`PAT_TOKEN` 和 `TAURI_SIGNING_PRIVATE_KEY` 仍是硬门禁，确保私有子模块可读取且 updater 产物具备完整性签名。
+>
+> `vX.Y.Z-unsigned.N` 仍保留为显式测试预发布：它强制关闭 Windows/macOS 平台签名，始终是 prerelease、非 Latest，也不会进入正式自动更新入口。
 
 ### 3.4 供应链清单
 
@@ -130,14 +132,14 @@ node scripts/release.mjs prepare 0.2.0
 # 只做预检，不创建 tag
 node scripts/publish-release.mjs v0.1.0 --dry-run
 
-# 正式签名版本：交互式输入完整 tag 后才会发布
+# 稳定版本：证书齐全时签名；缺失时降级并在 Latest 页面警告
 node scripts/publish-release.mjs v0.1.0
 
 # 尚未配置平台证书时的测试预发布
 node scripts/publish-release.mjs v0.1.0-unsigned.1
 ```
 
-脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的 Actions Secrets；工作流成功后还会核对 Release 状态、20 个发行资产和四平台 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag；只想让远端继续运行可加 `--no-wait`。
+脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的基础 Actions Secrets。平台证书缺失会在本地预检和 Actions 日志中警告，并按平台降级；工作流成功后还会核对 Release 状态、公开警告、20 个发行资产和四平台 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag；只想让远端继续运行可加 `--no-wait`。
 
 ### 5.1 冻结并准备版本
 
@@ -212,7 +214,7 @@ git push origin v0.1.0-unsigned.1
 
 Release workflow 会校验其基础版本仍是 `0.1.0`，跳过 Windows Authenticode 与 Apple Developer ID/公证步骤，保留 Tauri updater 签名，并在 Release 顶部写入未签名警告。该 Release 会发布为 prerelease，但不会被标记为 Latest；`/releases/latest/download/latest.json` 不会指向它。
 
-同一基础版本需要重试时创建 `v0.1.0-unsigned.2`，不得移动或覆盖已经公开的标签。取得平台证书后，仍使用独立的正式标签 `v0.1.0` 触发完整签名、公证和 Latest 发布。
+同一基础版本需要重试时创建 `v0.1.0-unsigned.2`，不得移动或覆盖已经公开的标签。稳定标签 `v0.1.0` 会按当时可用的证书逐平台签名，并在所有平台完成后成为 Latest。
 
 ### 5.4 观察 GitHub Actions
 
@@ -228,8 +230,8 @@ Tag push 后工作流按以下顺序运行：
 
 1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
 2. `supply-chain` 生成并严格校验 SBOM/许可证清单。
-3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；Windows 额外封装并签名品牌安装器，所有二进制产物写入同一个 Draft Release。
-4. `finalize` 确认 Draft 中存在四个平台的 updater 项，上传供应链清单，随后发布并标为 latest。
+3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
+4. `finalize` 确认 Draft 中存在四个平台的 updater 项，上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag：
 
@@ -237,7 +239,7 @@ Tag push 后工作流按以下顺序运行：
 gh workflow run Release --repo foritin/r-code -f tag=v0.1.0
 ```
 
-`workflow_dispatch` 不是创建 tag 的替代品。工作流会先统一检查私有子模块令牌、updater 私钥和 Windows/macOS 签名凭据，缺少任何必需 Secret 都会在构建矩阵启动前失败并列出名称。
+`workflow_dispatch` 不是创建 tag 的替代品。工作流会先统一检查私有子模块令牌和 updater 私钥；缺少它们会失败。Windows/macOS 签名凭据按平台探测：整组齐全时签名，缺少任一项时该平台降级并给出警告。
 
 ### 5.5 发布后验收
 
@@ -297,7 +299,7 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 - [ ] `vendor/agent-core` gitlink 指向可访问且已审核的 commit。
 - [ ] updater 私钥已备份，Secrets 与内置公钥配对验证通过。
 - [ ] GitHub Actions 具有创建 Release 的权限。
-- [ ] macOS 两种架构均已签名并 notarize；Windows Authenticode 签名与时间戳验证通过。
+- [ ] 若平台证书尚未配置，已确认 Release 标题/正文列出未签名平台，并接受 Windows SmartScreen 与 macOS Gatekeeper 的分发影响；若已配置，则 macOS 两种架构签名/公证和 Windows Authenticode 时间戳验签均通过。
 - [ ] README 的支持平台、安装入口和截图与实际 Release 一致。
 - [ ] `SECURITY.md` 的私密报告入口可用。
 - [ ] `PRIVACY.md` 已由产品/法务按实际发行地区、主体和 Provider 政策确认。

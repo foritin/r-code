@@ -12,8 +12,10 @@ import {
 } from "./release.mjs";
 import {
   parseArguments,
+  platformSigningPlan,
   requiredReleaseAssets,
   requiredSecretsForTag,
+  unsignedPlatformNames,
   validateReleaseRecord,
   validateUpdaterManifest,
 } from "./publish-release.mjs";
@@ -96,7 +98,7 @@ test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
   assert.doesNotMatch(script, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
 });
 
-test("release workflow isolates unsigned prereleases while signed releases stay fail-closed", () => {
+test("release workflow falls back per platform while preserving explicit unsigned prereleases", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
@@ -122,17 +124,21 @@ test("release workflow isolates unsigned prereleases while signed releases stay 
   assert.match(workflow, /Import-PfxCertificate/);
   assert.match(workflow, /signtool[\s\S]*verify/);
   assert.match(workflow, /required=\(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY\)/);
-  assert.match(workflow, /if \[\[ "\$RELEASE_TAG" != \*-unsigned\.\* \]\]/);
-  const unsignedStep = workflow.match(
-    /- name: Build and publish unsigned prerelease([\s\S]*?)(?=\n      - name:)/,
+  assert.match(workflow, /windows_signed: \$\{\{ steps\.release-mode\.outputs\.windows_signed \}\}/);
+  assert.match(workflow, /apple_signed: \$\{\{ steps\.release-mode\.outputs\.apple_signed \}\}/);
+  assert.match(workflow, /Unsigned Windows artifacts/);
+  assert.match(workflow, /Ad-hoc macOS artifacts/);
+  const fallbackStep = workflow.match(
+    /- name: Build and publish unsigned or Linux artifacts([\s\S]*?)(?=\n      - name:)/,
   )?.[1];
-  assert.ok(unsignedStep, "unsigned prerelease build step must exist");
-  assert.match(unsignedStep, /if: contains\(env\.RELEASE_TAG, '-unsigned\.'\)/);
-  assert.match(unsignedStep, /APPLE_SIGNING_IDENTITY: .*&& '-' \|\| ''/);
-  assert.match(unsignedStep, /args: \$\{\{ matrix\.args \}\} --target \$\{\{ matrix\.rust-target \}\}/);
-  assert.match(unsignedStep, /prerelease: true/);
-  assert.doesNotMatch(unsignedStep, /APPLE_ID|APPLE_PASSWORD|APPLE_TEAM_ID/);
-  assert.doesNotMatch(unsignedStep, /tauri\.release-windows\.conf\.json|matrix\.signed_config/);
+  assert.ok(fallbackStep, "unsigned fallback build step must exist");
+  assert.match(fallbackStep, /needs\.validate\.outputs\.windows_signed != 'true'/);
+  assert.match(fallbackStep, /needs\.validate\.outputs\.apple_signed != 'true'/);
+  assert.match(fallbackStep, /APPLE_SIGNING_IDENTITY: .*&& '-' \|\| ''/);
+  assert.match(fallbackStep, /args: \$\{\{ matrix\.args \}\} --target \$\{\{ matrix\.rust-target \}\}/);
+  assert.match(fallbackStep, /prerelease: \$\{\{ contains\(env\.RELEASE_TAG, '-unsigned\.'\) \}\}/);
+  assert.doesNotMatch(fallbackStep, /APPLE_ID|APPLE_PASSWORD|APPLE_TEAM_ID/);
+  assert.doesNotMatch(fallbackStep, /tauri\.release-windows\.conf\.json|matrix\.signed_config/);
   assert.match(workflow, /signed_config: "--config tauri\.release-windows\.conf\.json"/);
   assert.match(
     workflow,
@@ -142,19 +148,21 @@ test("release workflow isolates unsigned prereleases while signed releases stay 
     (workflow.match(/uploadWorkflowArtifacts: \$\{\{ matrix\.upload_workflow_artifacts \}\}/g) ?? [])
       .length,
     2,
-    "signed and unsigned builds must use the per-platform workflow-artifact policy",
+    "signed and fallback builds must use the per-platform workflow-artifact policy",
   );
   assert.match(
     workflow,
-    /Build and publish signed release[\s\S]*?args: \$\{\{ matrix\.args \}\} \$\{\{ matrix\.signed_config \}\}/,
+    /Build and publish platform-signed artifacts[\s\S]*?args: \$\{\{ matrix\.args \}\} \$\{\{ matrix\.signed_config \}\}/,
   );
   assert.match(workflow, /这是未签名预发布版本，仅用于测试/);
+  assert.match(workflow, /RCODE_UNSIGNED_STABLE_WARNING/);
+  assert.match(workflow, /此 Latest 版本包含未完成平台代码签名的安装包/);
   assert.match(workflow, /--prerelease/);
-  assert.match(workflow, /--draft=false --latest --verify-tag/);
+  assert.match(workflow, /--latest/);
   assert.match(workflow, /GH_REPO: \$\{\{ github\.repository \}\}/);
   assert.match(workflow, /r-code-sbom\.cdx\.json/);
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
-  assert.match(workflow, /Verify release credentials are configured/);
+  assert.match(workflow, /Verify release credentials and select signing mode/);
   assert.match(workflow, /Missing required release secrets/);
   assert.equal(
     (workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? []).length,
@@ -197,14 +205,50 @@ test("publish-release parses safe release modes and flags", () => {
   assert.throws(() => parseArguments(["v0.2.1", "--force"]), /unknown option/);
 });
 
-test("publish-release only skips platform-signing secrets for explicit unsigned tags", () => {
-  const signed = requiredSecretsForTag(parseReleaseTag("v0.2.1"));
+test("publish-release requires updater integrity secrets but treats platform certificates as optional", () => {
+  const stable = requiredSecretsForTag(parseReleaseTag("v0.2.1"));
   const unsigned = requiredSecretsForTag(parseReleaseTag("v0.2.1-unsigned.1"));
 
   assert.deepEqual(unsigned, ["PAT_TOKEN", "TAURI_SIGNING_PRIVATE_KEY"]);
-  assert.ok(signed.includes("WINDOWS_CERTIFICATE"));
-  assert.ok(signed.includes("APPLE_SIGNING_IDENTITY"));
-  assert.ok(signed.includes("APPLE_TEAM_ID"));
+  assert.deepEqual(stable, unsigned);
+});
+
+test("publish-release selects signing independently for Windows and macOS", () => {
+  const stable = parseReleaseTag("v0.2.1");
+  const windowsSecrets = [
+    "WINDOWS_CERTIFICATE",
+    "WINDOWS_CERTIFICATE_PASSWORD",
+    "WINDOWS_TIMESTAMP_URL",
+  ];
+  const appleSecrets = [
+    "APPLE_CERTIFICATE",
+    "APPLE_CERTIFICATE_PASSWORD",
+    "APPLE_SIGNING_IDENTITY",
+    "APPLE_ID",
+    "APPLE_PASSWORD",
+    "APPLE_TEAM_ID",
+  ];
+  const windowsOnly = platformSigningPlan(stable, windowsSecrets);
+  assert.equal(windowsOnly.windowsSigned, true);
+  assert.equal(windowsOnly.appleSigned, false);
+  assert.deepEqual(unsignedPlatformNames(windowsOnly), ["macOS"]);
+  assert.ok(windowsOnly.missingApple.includes("APPLE_SIGNING_IDENTITY"));
+
+  const none = platformSigningPlan(stable, []);
+  assert.deepEqual(unsignedPlatformNames(none), ["Windows", "macOS"]);
+  assert.ok(none.missingWindows.includes("WINDOWS_CERTIFICATE"));
+
+  const fullySigned = platformSigningPlan(stable, [...windowsSecrets, ...appleSecrets]);
+  assert.deepEqual(unsignedPlatformNames(fullySigned), []);
+  assert.equal(fullySigned.windowsSigned, true);
+  assert.equal(fullySigned.appleSigned, true);
+
+  const explicitUnsigned = platformSigningPlan(
+    parseReleaseTag("v0.2.1-unsigned.1"),
+    [...windowsSecrets, "APPLE_SIGNING_IDENTITY"],
+  );
+  assert.equal(explicitUnsigned.forcedUnsigned, true);
+  assert.deepEqual(unsignedPlatformNames(explicitUnsigned), ["Windows", "macOS"]);
 });
 
 test("publish-release verifies all four platform asset families", () => {
@@ -230,6 +274,26 @@ test("publish-release verifies all four platform asset families", () => {
     validateReleaseRecord(record, record.tagName, parseReleaseTag(record.tagName)).join("\n"),
     /missing asset THIRD_PARTY_LICENSES\.md/,
   );
+});
+
+test("publish-release requires a public warning for unsigned stable releases", () => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const signingPlan = platformSigningPlan(tagInfo, []);
+  const record = {
+    tagName: tag,
+    isDraft: false,
+    isPrerelease: false,
+    body: "Generated notes",
+    assets: requiredReleaseAssets(tagInfo.version).map((name) => ({ name, size: 1 })),
+  };
+
+  assert.match(
+    validateReleaseRecord(record, tag, tagInfo, signingPlan).join("\n"),
+    /missing its public signing warning/,
+  );
+  record.body = "<!-- RCODE_UNSIGNED_STABLE_WARNING -->\n> [!WARNING]";
+  assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, signingPlan), []);
 });
 
 test("publish-release verifies the updater manifest contract", () => {
