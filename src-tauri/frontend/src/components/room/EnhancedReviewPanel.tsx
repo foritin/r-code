@@ -8,6 +8,7 @@ import {
   REVIEW_STATUS_CHANGED_EVENT,
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
+import { IconChevronDown, IconChevronRight } from "../icons";
 import type {
   EnhancedReviewGroupView,
   EnhancedReviewTarget,
@@ -23,6 +24,12 @@ interface Props {
 }
 
 const TERMINAL_STATES = new Set<PlanItemState>(["completed", "failed", "cancelled"]);
+
+interface ActionFailure {
+  key: string;
+  message: string;
+  detail: string;
+}
 
 const STATE_LABEL: Record<PlanItemState, string> = {
   proposed: "待批准",
@@ -56,6 +63,34 @@ function targetOf(view: EnhancedReviewView, itemId: string, path: string | null)
 
 function decisionLabel(decision: PlanReviewDecisionKind): string {
   return decision === "accepted" ? "已接受" : "已拒绝";
+}
+
+function isGroupResolved(group: EnhancedReviewGroupView): boolean {
+  return group.decision != null
+    || (group.files.length > 0 && group.files.every((file) => file.decision != null));
+}
+
+function actionFailure(
+  key: string,
+  cause: unknown,
+  path: string | null,
+  decision: PlanReviewDecisionKind,
+): ActionFailure {
+  const detail = String(cause).replace(/^Error:\s*/i, "");
+  const rollbackConflict = decision === "rejected"
+    && /rejection conflicts|changed (?:while|externally).*rejection|external change prevents rollback/i.test(detail);
+  if (rollbackConflict) {
+    return {
+      key,
+      detail,
+      message: `${path ? `文件 ${path} 未拒绝` : "未拒绝整组"}：检测到捕获后的重叠修改。为避免覆盖后续内容，R-Code 已安全停止回滚；请先审阅或保存后续修改，再重试。`,
+    };
+  }
+  return {
+    key,
+    detail,
+    message: `${path ? `文件 ${path}` : "整组"}${decision === "accepted" ? "接受" : "拒绝"}失败：${detail}`,
+  };
 }
 
 function patchLineKind(line: string): string {
@@ -95,13 +130,16 @@ function optimisticDecision(
 export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: Props) {
   const [view, setView] = useState<EnhancedReviewView | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ActionFailure | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [confirmRejects, setConfirmRejects] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const pendingRef = useRef<Set<string>>(new Set());
   const confirmTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const refreshSequenceRef = useRef(0);
+  const expansionPlanRef = useRef<string | null>(null);
 
   const refresh = useCallback(async () => {
     const sequence = ++refreshSequenceRef.current;
@@ -109,9 +147,9 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
       const next = await planReviewStatus(taskId);
       if (sequence !== refreshSequenceRef.current) return;
       setView(next);
-      setError(null);
+      setRefreshError(null);
     } catch (cause) {
-      if (sequence === refreshSequenceRef.current) setError(`无法刷新增强审核：${String(cause)}`);
+      if (sequence === refreshSequenceRef.current) setRefreshError(`无法刷新增强审核：${String(cause)}`);
     } finally {
       if (sequence === refreshSequenceRef.current) setLoading(false);
     }
@@ -133,10 +171,26 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
     confirmTimersRef.current.clear();
   }, []);
 
-  const unresolvedCount = useMemo(() => view?.groups.reduce((total, group) => {
-    if (group.decision) return total;
+  const visibleGroups = useMemo(
+    () => view?.groups.filter((group) => !isGroupResolved(group)) ?? [],
+    [view],
+  );
+
+  const unresolvedCount = useMemo(() => visibleGroups.reduce((total, group) => {
     return total + group.files.filter((file) => !file.decision).length;
-  }, 0) ?? 0, [view]);
+  }, 0), [visibleGroups]);
+
+  useEffect(() => {
+    if (!view) {
+      expansionPlanRef.current = null;
+      setExpandedGroups(new Set());
+      return;
+    }
+    const identity = `${view.plan_id}:${view.plan_revision}`;
+    if (expansionPlanRef.current === identity) return;
+    expansionPlanRef.current = identity;
+    setExpandedGroups(visibleGroups[0] ? new Set([visibleGroups[0].item_id]) : new Set());
+  }, [view, visibleGroups]);
 
   useEffect(() => onVisibleCountChange(unresolvedCount), [onVisibleCountChange, unresolvedCount]);
 
@@ -185,9 +239,13 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
     if (decision === "rejected" && !armReject(key)) return;
     if (!beginOperation(key)) return;
     const snapshot = view;
-    setError(null);
+    setActionError(null);
     setNotice(null);
-    setView((current) => optimisticDecision(current, group.item_id, path, decision));
+    // Accept is a ledger-only decision and can update immediately. Rejection may need a
+    // three-way filesystem rollback, so it stays visible until that operation really commits.
+    if (decision === "accepted") {
+      setView((current) => optimisticDecision(current, group.item_id, path, decision));
+    }
     try {
       const target = targetOf(snapshot, group.item_id, path);
       if (decision === "accepted") {
@@ -198,11 +256,14 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
       } else {
         await planReviewRejectFile(target);
       }
+      if (decision === "rejected") {
+        setView((current) => optimisticDecision(current, group.item_id, path, decision));
+      }
       setNotice(`${path ?? group.title} ${decision === "accepted" ? "已接受" : "已拒绝并恢复"}。`);
       void refresh();
     } catch (cause) {
-      setView(snapshot);
-      setError(String(cause));
+      if (decision === "accepted") setView(snapshot);
+      setActionError(actionFailure(key, cause, path, decision));
       void refresh();
     } finally {
       finishOperation(key);
@@ -211,6 +272,15 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
 
   const groupBusy = (itemId: string) => [...pending].some((key) => key === operationKey(itemId, null) || key.startsWith(`file:${itemId}:`));
   const fileBusy = (itemId: string, path: string) => pending.has(operationKey(itemId, null)) || pending.has(operationKey(itemId, path));
+
+  const toggleGroup = (itemId: string) => {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
 
   if (loading && !view) return <div className="enhanced-review-empty">加载当前 Plan 的功能变更…</div>;
 
@@ -223,20 +293,30 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
         </span>
         {view && <em>Plan r{view.plan_revision} · {unresolvedCount} 个文件待处理</em>}
       </header>
-      {error && <div className="panel-error" role="alert">{error}</div>}
+      {refreshError && <div className="panel-error" role="alert">{refreshError}</div>}
       {notice && <div className="panel-note" role="status">{notice}</div>}
-      {!view || view.groups.length === 0 ? (
+      {!view || visibleGroups.length === 0 ? (
         <div className="enhanced-review-empty">
-          <strong>当前没有可增强审核的 Plan 变更</strong>
-          <span>先在计划模式批准并实施功能点；普通模式仍可查看 Git 工作区变更。</span>
+          <strong>{!view
+            ? "没有对应的功能计划"
+            : view.groups.length > 0
+              ? "当前 Plan 的变更已全部处理"
+              : "当前功能计划还没有可增强审核的变更"}</strong>
+          <span>{!view
+            ? "增强模式只显示由 Plan 功能点产生的变更，因此这里保持为空；其他变更请切换到“普通”模式查看。"
+            : view.groups.length > 0
+              ? "已接受或拒绝的决定仍保存在审核账本中。"
+              : "只有成功归属到该 Plan 功能点的变更才会显示；其他变更请切换到“普通”模式查看。"}</span>
         </div>
       ) : (
         <div className="enhanced-review-groups">
-          {view.groups.map((group) => {
+          {visibleGroups.map((group) => {
             const terminal = TERMINAL_STATES.has(group.state);
             const featureKey = operationKey(group.item_id, null);
             const featureBusy = pending.has(featureKey);
             const busy = groupBusy(group.item_id);
+            const expanded = expandedGroups.has(group.item_id);
+            const bodyId = `enhanced-feature-${group.item_id.replace(/[^a-zA-Z0-9_-]/g, "-")}-body`;
             const hasFileDecision = group.files.some((file) => file.decision != null);
             const featureActionTitle = !terminal
               ? group.state === "blocked"
@@ -246,13 +326,27 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                 ? "已有文件级决定，不能再整组处理"
                 : undefined;
             return (
-              <section className={`enhanced-feature tone-${stableTone(group.item_id)}`} key={group.item_id} data-item-id={group.item_id}>
+              <section className={`enhanced-feature tone-${stableTone(group.item_id)}${expanded ? " expanded" : " collapsed"}`} key={group.item_id} data-item-id={group.item_id}>
                 <header className="enhanced-feature-head">
-                  <i className="feature-diamond" aria-hidden="true" />
-                  <span className="enhanced-feature-copy">
-                    <span><b>功能 {group.ordinal}</b><strong>{group.title}</strong></span>
-                    <small>{group.description}</small>
-                  </span>
+                  <button
+                    type="button"
+                    className="enhanced-feature-toggle"
+                    aria-expanded={expanded}
+                    aria-controls={bodyId}
+                    aria-label={`${expanded ? "收起" : "展开"}功能 ${group.ordinal}：${group.title}`}
+                    onClick={() => toggleGroup(group.item_id)}
+                  >
+                    <i className="feature-diamond" aria-hidden="true" />
+                    <span className="enhanced-feature-copy">
+                      <span><b>功能 {group.ordinal}</b><strong>{group.title}</strong></span>
+                      <small>{expanded
+                        ? group.description
+                        : `${group.state === "in_progress" ? "功能仍在实施 · " : group.state === "blocked" ? "功能暂时受阻 · " : ""}${group.files.length} 个文件${group.files.some((file) => file.events.some((event) => event.binary)) ? " · 含二进制" : ""}`}</small>
+                    </span>
+                    <span className="enhanced-feature-chevron" aria-hidden="true">
+                      {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+                    </span>
+                  </button>
                   <span className={`enhanced-feature-state state-${group.state}`}>
                     {group.state === "in_progress" && <i aria-hidden="true" />}
                     {STATE_LABEL[group.state]}
@@ -278,14 +372,18 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                     </span>
                   )}
                 </header>
-                {!terminal && (
-                  <div className="enhanced-running-note">
-                    {group.state === "blocked"
-                      ? "功能暂时受阻 · 仍可恢复实施，完成或终止前不能接受或拒绝"
-                      : "功能仍在实施 · diff 会持续刷新，结束前不能接受或拒绝"}
-                  </div>
+                {actionError?.key === featureKey && (
+                  <div className="enhanced-action-error" role="alert" title={actionError.detail}>{actionError.message}</div>
                 )}
-                <div className="enhanced-files">
+                {expanded && <div className="enhanced-feature-body" id={bodyId}>
+                  {!terminal && (
+                    <div className="enhanced-running-note">
+                      {group.state === "blocked"
+                        ? "功能暂时受阻 · 仍可恢复实施，完成或终止前不能接受或拒绝"
+                        : "功能仍在实施 · diff 会持续刷新，结束前不能接受或拒绝"}
+                    </div>
+                  )}
+                  <div className="enhanced-files">
                   {group.files.map((file) => {
                     const key = operationKey(group.item_id, file.path);
                     const isBusy = fileBusy(group.item_id, file.path);
@@ -321,6 +419,9 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                             </span>
                           )}
                         </header>
+                        {actionError?.key === key && (
+                          <div className="enhanced-action-error file" role="alert" title={actionError.detail}>{actionError.message}</div>
+                        )}
                         <div className="enhanced-events">
                           {file.events.map((event) => event.binary ? (
                             <div className="enhanced-binary-preview" key={event.event_id}>
@@ -341,7 +442,8 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                     );
                   })}
                   {group.files.length === 0 && <div className="enhanced-no-files">该功能点还没有捕获到文件事件。</div>}
-                </div>
+                  </div>
+                </div>}
               </section>
             );
           })}

@@ -14,7 +14,7 @@ use r_code_core::dto::{
     ToolCallStatus, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, TransactionBehavior};
 
 use crate::Database;
 
@@ -131,7 +131,7 @@ fn parse_workspace_memory_mode(value: &str) -> Result<WorkspaceMemoryMode, Produ
 /// 将数据库行映射为 `Task`。
 ///
 /// 列顺序：id, workspace_path, provider_name, title, goal, mode, state, worktree_path,
-/// created_at, updated_at, model, agent_engine, inference_json。
+/// created_at, updated_at, model, agent_engine, inference_json, goal_active。
 fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
     let mode_str: String = row.get(5).map_err(db_err)?;
     let mode = parse_task_mode(&mode_str)?;
@@ -157,6 +157,7 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
         provider_name: row.get(2).map_err(db_err)?,
         title: row.get(3).map_err(db_err)?,
         goal: row.get(4).map_err(db_err)?,
+        goal_active: row.get::<_, i64>(13).map_err(db_err)? != 0,
         mode,
         state,
         worktree_path: row.get(7).map_err(db_err)?,
@@ -323,8 +324,8 @@ impl<'a> TaskRepository<'a> {
     pub fn create(&self, task: &Task) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
         conn.execute(
-            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json, goal_active) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 task.id,
                 task.workspace_path,
@@ -341,6 +342,7 @@ impl<'a> TaskRepository<'a> {
                 serde_json::to_string(&task.inference).map_err(|error| {
                     ProductError::DatabaseError(format!("serialize task inference: {error}"))
                 })?,
+                task.goal_active,
             ],
         )
         .map_err(db_err)?;
@@ -352,7 +354,7 @@ impl<'a> TaskRepository<'a> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json \
+                "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json, goal_active \
                  FROM tasks WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -372,7 +374,7 @@ impl<'a> TaskRepository<'a> {
     ) -> Result<Vec<Task>, ProductError> {
         let conn = self.db.conn()?;
         let mut sql = String::from(
-            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json \
+            "SELECT id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json, goal_active \
              FROM tasks WHERE 1=1",
         );
         let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -423,12 +425,13 @@ impl<'a> TaskRepository<'a> {
         Ok(())
     }
 
-    /// Update the durable task goal consumed by Plan and subsequent model turns.
+    /// Update or clear the explicitly activated Goal consumed by Plan and subsequent model turns.
     pub fn set_goal(&self, id: &str, goal: &str) -> Result<(), ProductError> {
         let conn = self.db.conn()?;
+        let goal = goal.trim();
         conn.execute(
-            "UPDATE tasks SET goal = ?1, updated_at = ?2 WHERE id = ?3",
-            params![goal.trim(), Utc::now().to_rfc3339(), id],
+            "UPDATE tasks SET goal = ?1, goal_active = ?2, updated_at = ?3 WHERE id = ?4",
+            params![goal, !goal.is_empty(), Utc::now().to_rfc3339(), id],
         )
         .map_err(db_err)?;
         Ok(())
@@ -527,6 +530,8 @@ impl<'a> TaskRepository<'a> {
         if let Some(g) = goal {
             sets.push("goal = ?");
             param_values.push(Box::new(g.to_string()));
+            sets.push("goal_active = ?");
+            param_values.push(Box::new(!g.trim().is_empty()));
         }
         if let Some(w) = worktree_path {
             sets.push("worktree_path = ?");
@@ -1056,7 +1061,7 @@ impl<'a> TaskEventStore<'a> {
         Ok(events)
     }
 
-    /// 按事件 ID 倒序列出全局近期事件。
+    /// 按事件 ID 倒序列出未归档会话的全局近期事件。
     ///
     /// `before_event_id` 是不透明分页游标的内部值；前端只需把响应中的
     /// `next_cursor` 原样带回。自增 ID 比时间字符串更稳定，也能避免同一毫秒的
@@ -1071,8 +1076,11 @@ impl<'a> TaskEventStore<'a> {
         let limit = i64::from(limit.clamp(1, 100));
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, branch_id, event_type, created_at FROM task_events \
-                 WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+                "SELECT event.id, event.task_id, event.branch_id, event.event_type, event.created_at \
+                 FROM task_events AS event \
+                 INNER JOIN tasks AS task ON task.id = event.task_id \
+                 WHERE task.state != 'archived' AND event.id < ?1 \
+                 ORDER BY event.id DESC LIMIT ?2",
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![before, limit]).map_err(db_err)?;
@@ -1401,11 +1409,33 @@ impl<'a> QueuedMessageRepository<'a> {
     }
 
     pub fn enqueue(&self, message: &QueuedMessage) -> Result<(), ProductError> {
-        let conn = self.db.conn()?;
-        conn.execute(
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let sort_order: i64 = if message.priority > 0 {
+            tx.query_row(
+                "SELECT COALESCE(MIN(sort_order), 0) - 1 FROM queued_messages \
+                 WHERE task_id = ?1 AND branch_id = ?2 \
+                   AND state IN ('queued', 'dispatching', 'failed')",
+                params![message.task_id, message.branch_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?
+        } else {
+            tx.query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM queued_messages \
+                 WHERE task_id = ?1 AND branch_id = ?2 \
+                   AND state IN ('queued', 'dispatching', 'failed')",
+                params![message.task_id, message.branch_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?
+        };
+        tx.execute(
             "INSERT INTO queued_messages \
-             (id, task_id, branch_id, message, state, priority, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, task_id, branch_id, message, state, priority, sort_order, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 message.id,
                 message.task_id,
@@ -1413,12 +1443,13 @@ impl<'a> QueuedMessageRepository<'a> {
                 message.message,
                 message.state.to_string(),
                 message.priority,
+                sort_order,
                 message.created_at.to_rfc3339(),
                 message.updated_at.to_rfc3339(),
             ],
         )
         .map_err(db_err)?;
-        Ok(())
+        tx.commit().map_err(db_err)
     }
 
     /// 只列出当前用户仍可操作或需要看到的排队项目。
@@ -1434,7 +1465,7 @@ impl<'a> QueuedMessageRepository<'a> {
                  FROM queued_messages \
                  WHERE task_id = ?1 AND branch_id = ?2 \
                    AND state IN ('queued', 'dispatching', 'failed') \
-                 ORDER BY priority DESC, created_at ASC",
+                 ORDER BY sort_order ASC, priority DESC, created_at ASC, id ASC",
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![task_id, branch_id]).map_err(db_err)?;
@@ -1481,13 +1512,18 @@ impl<'a> QueuedMessageRepository<'a> {
         task_id: Option<&str>,
     ) -> Result<Option<QueuedMessage>, ProductError> {
         let mut conn = self.db.conn()?;
-        let tx = conn.transaction().map_err(db_err)?;
+        // Acquire the writer reservation before selecting a candidate. A deferred transaction
+        // can read a snapshot, race a queue reorder commit, and then fail its write upgrade with
+        // SQLITE_BUSY_SNAPSHOT, leaving an idle task with work that is never dispatched.
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
         let candidate = if let Some(task_id) = task_id {
             let mut stmt = tx
                 .prepare(
                     "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' AND task_id = ?1 \
-                     ORDER BY priority DESC, created_at ASC LIMIT 1",
+                     ORDER BY sort_order ASC, priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
                 .map_err(db_err)?;
             let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
@@ -1500,7 +1536,7 @@ impl<'a> QueuedMessageRepository<'a> {
                 .prepare(
                     "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
                      FROM queued_messages WHERE state = 'queued' \
-                     ORDER BY priority DESC, created_at ASC LIMIT 1",
+                     ORDER BY priority DESC, created_at ASC, id ASC LIMIT 1",
                 )
                 .map_err(db_err)?;
             let mut rows = stmt.query([]).map_err(db_err)?;
@@ -1528,6 +1564,208 @@ impl<'a> QueuedMessageRepository<'a> {
         message.state = QueuedMessageState::Dispatching;
         message.updated_at = Utc::now();
         Ok(Some(message))
+    }
+
+    /// Replace the exact pending order for one visible task branch.
+    ///
+    /// The complete queued ID set is required so a drag made against a stale UI cannot
+    /// silently overwrite a message that arrived or started dispatching in the meantime.
+    pub fn reorder_pending(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+        ordered_ids: &[String],
+    ) -> Result<(), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let current_ids = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT id FROM queued_messages \
+                     WHERE task_id = ?1 AND branch_id = ?2 AND state = 'queued' \
+                     ORDER BY sort_order ASC, priority DESC, created_at ASC, id ASC",
+                )
+                .map_err(db_err)?;
+            let ids = statement
+                .query_map(params![task_id, branch_id], |row| row.get::<_, String>(0))
+                .map_err(db_err)?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(db_err)?;
+            ids
+        };
+        let mut expected = current_ids;
+        let mut requested = ordered_ids.to_vec();
+        expected.sort();
+        requested.sort();
+        if expected != requested || requested.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(ProductError::Other(
+                "待发送队列已经变化，请刷新后重试排序".to_string(),
+            ));
+        }
+
+        let now = Utc::now().to_rfc3339();
+        for (index, id) in ordered_ids.iter().enumerate() {
+            let sort_order = i64::try_from(index)
+                .map_err(|_| ProductError::Other("待发送队列过长，无法排序".to_string()))?;
+            let changed = tx
+                .execute(
+                    "UPDATE queued_messages SET sort_order = ?1, updated_at = ?2 \
+                     WHERE id = ?3 AND task_id = ?4 AND branch_id = ?5 AND state = 'queued'",
+                    params![sort_order, now, id, task_id, branch_id],
+                )
+                .map_err(db_err)?;
+            if changed != 1 {
+                return Err(ProductError::Other(
+                    "待发送队列已经变化，请刷新后重试排序".to_string(),
+                ));
+            }
+        }
+        tx.commit().map_err(db_err)
+    }
+
+    /// 编辑一条仍可操作的队列消息。失败项在用户修正后重新进入等待状态；已经开始
+    /// 分发的消息不会被改写，避免界面编辑与调度器竞争时出现“显示新文本、执行旧文本”。
+    pub fn update_pending_message(
+        &self,
+        id: &str,
+        task_id: &str,
+        branch_id: &str,
+        message: &str,
+    ) -> Result<(), ProductError> {
+        let message = message.trim();
+        if message.is_empty() {
+            return Err(ProductError::Other("队列消息不能为空".to_string()));
+        }
+        let conn = self.db.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE queued_messages \
+                 SET message = ?1, state = 'queued', updated_at = ?2 \
+                 WHERE id = ?3 AND task_id = ?4 AND branch_id = ?5 \
+                   AND state IN ('queued', 'failed')",
+                params![message, Utc::now().to_rfc3339(), id, task_id, branch_id,],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            return Err(ProductError::Other(
+                "这条消息已经开始处理或不在当前队列中".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// 原子认领用户点选的队列项，用于将指定消息引导进当前运行。
+    ///
+    /// 与 `take_next_for_task` 不同，这里只认领给定 ID，并同时校验任务、分支和状态；
+    /// 因此不会误取队首，也不会把旧分支的文本注入当前会话。
+    pub fn claim_pending_for_task_branch(
+        &self,
+        id: &str,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<Option<QueuedMessage>, ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let candidate = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT id, task_id, branch_id, message, state, priority, created_at, updated_at \
+                     FROM queued_messages \
+                     WHERE id = ?1 AND task_id = ?2 AND branch_id = ?3 AND state = 'queued'",
+                )
+                .map_err(db_err)?;
+            let mut rows = statement
+                .query(params![id, task_id, branch_id])
+                .map_err(db_err)?;
+            match rows.next().map_err(db_err)? {
+                Some(row) => Some(row_to_queued_message(row)?),
+                None => None,
+            }
+        };
+        let Some(mut message) = candidate else {
+            tx.commit().map_err(db_err)?;
+            return Ok(None);
+        };
+        let now = Utc::now();
+        let changed = tx
+            .execute(
+                "UPDATE queued_messages SET state = 'dispatching', updated_at = ?1 \
+                 WHERE id = ?2 AND task_id = ?3 AND branch_id = ?4 AND state = 'queued'",
+                params![now.to_rfc3339(), id, task_id, branch_id],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            tx.commit().map_err(db_err)?;
+            return Ok(None);
+        }
+        tx.commit().map_err(db_err)?;
+        message.state = QueuedMessageState::Dispatching;
+        message.updated_at = now;
+        Ok(Some(message))
+    }
+
+    /// 当前运行无法接纳引导时，把已经认领的消息还原到队首。只移动该消息，其他
+    /// 队列项的 `sort_order` 完全不变，从而保留用户此前的拖拽顺序。
+    pub fn restore_claim_to_front(
+        &self,
+        id: &str,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<(), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let sort_order: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MIN(sort_order), 0) - 1 FROM queued_messages \
+                 WHERE task_id = ?1 AND branch_id = ?2 AND id <> ?3 \
+                   AND state IN ('queued', 'dispatching', 'failed')",
+                params![task_id, branch_id, id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        let changed = tx
+            .execute(
+                "UPDATE queued_messages \
+                 SET state = 'queued', sort_order = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND task_id = ?4 AND branch_id = ?5 AND state = 'dispatching'",
+                params![sort_order, Utc::now().to_rfc3339(), id, task_id, branch_id,],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            return Err(ProductError::Other(
+                "这条消息的队列状态已经变化".to_string(),
+            ));
+        }
+        tx.commit().map_err(db_err)
+    }
+
+    /// 将成功引导进当前运行的认领项移出可见队列。
+    pub fn complete_claim_for_task_branch(
+        &self,
+        id: &str,
+        task_id: &str,
+        branch_id: &str,
+    ) -> Result<(), ProductError> {
+        let conn = self.db.conn()?;
+        let changed = conn
+            .execute(
+                "UPDATE queued_messages SET state = 'sent', updated_at = ?1 \
+                 WHERE id = ?2 AND task_id = ?3 AND branch_id = ?4 AND state = 'dispatching'",
+                params![Utc::now().to_rfc3339(), id, task_id, branch_id],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            return Err(ProductError::Other(
+                "这条消息的队列状态已经变化".to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn set_state(&self, id: &str, state: QueuedMessageState) -> Result<(), ProductError> {
@@ -1912,6 +2150,7 @@ mod tests {
         assert_eq!(fetched.workspace_path.as_deref(), Some("/proj"));
         assert_eq!(fetched.title, "My Task");
         assert_eq!(fetched.goal, "Do stuff");
+        assert!(!fetched.goal_active);
         assert_eq!(fetched.mode, TaskMode::Auto);
         assert_eq!(fetched.state, TaskState::Idle);
         assert!(fetched.worktree_path.is_none());
@@ -2029,7 +2268,27 @@ mod tests {
         let fetched = repo.get(&task.id).unwrap().unwrap();
         assert_eq!(fetched.title, "Updated Title");
         assert_eq!(fetched.goal, "Updated Goal");
+        assert!(fetched.goal_active);
         assert_eq!(fetched.worktree_path.as_deref(), Some("/worktree/path"));
+    }
+
+    #[test]
+    fn test_task_goal_activation_and_clear_are_atomic() {
+        let db = setup_db();
+        let repo = TaskRepository::new(&db);
+        let task = create_test_task(&db, "/proj", "Goal lifecycle");
+
+        assert!(!repo.get(&task.id).unwrap().unwrap().goal_active);
+
+        repo.set_goal(&task.id, "  Explicit goal  ").unwrap();
+        let active = repo.get(&task.id).unwrap().unwrap();
+        assert_eq!(active.goal, "Explicit goal");
+        assert!(active.goal_active);
+
+        repo.set_goal(&task.id, "   ").unwrap();
+        let cleared = repo.get(&task.id).unwrap().unwrap();
+        assert_eq!(cleared.goal, "");
+        assert!(!cleared.goal_active);
     }
 
     #[test]
@@ -2366,6 +2625,25 @@ mod tests {
     }
 
     #[test]
+    fn test_recent_events_hide_archived_tasks_until_restored() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "Archived activity");
+        let store = TaskEventStore::new(&db);
+        store.append(&task.id, TaskEventType::RunEnded).unwrap();
+
+        assert_eq!(store.list_recent(None, 20).unwrap().len(), 1);
+        TaskRepository::new(&db)
+            .update_state(&task.id, TaskState::Archived)
+            .unwrap();
+        assert!(store.list_recent(None, 20).unwrap().is_empty());
+
+        TaskRepository::new(&db)
+            .update_state(&task.id, TaskState::Idle)
+            .unwrap();
+        assert_eq!(store.list_recent(None, 20).unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_event_all_types_roundtrip() {
         let db = setup_db();
         let task = create_test_task(&db, "/proj", "All Event Types");
@@ -2579,6 +2857,167 @@ mod tests {
         let pending = repo.list_pending(&task.id, &branch.id).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, normal.id);
+    }
+
+    #[test]
+    fn queued_message_reorder_is_exact_and_controls_task_dispatch_order() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "reorder queue");
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let repo = QueuedMessageRepository::new(&db);
+        let first = QueuedMessage::new(&task.id, &branch.id, "first", 0);
+        let second = QueuedMessage::new(&task.id, &branch.id, "second", 0);
+        let third = QueuedMessage::new(&task.id, &branch.id, "third", 0);
+        repo.enqueue(&first).unwrap();
+        repo.enqueue(&second).unwrap();
+        repo.enqueue(&third).unwrap();
+
+        assert!(repo
+            .reorder_pending(
+                &task.id,
+                &branch.id,
+                &[third.id.clone(), third.id.clone(), first.id.clone()],
+            )
+            .is_err());
+        assert_eq!(
+            repo.list_pending(&task.id, &branch.id)
+                .unwrap()
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![first.id.as_str(), second.id.as_str(), third.id.as_str()]
+        );
+
+        repo.reorder_pending(
+            &task.id,
+            &branch.id,
+            &[third.id.clone(), first.id.clone(), second.id.clone()],
+        )
+        .unwrap();
+        assert_eq!(
+            repo.list_pending(&task.id, &branch.id)
+                .unwrap()
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![third.id.as_str(), first.id.as_str(), second.id.as_str()]
+        );
+
+        let claimed = repo.take_next_for_task(&task.id).unwrap().unwrap();
+        assert_eq!(claimed.id, third.id);
+        repo.set_state(&claimed.id, QueuedMessageState::Sent)
+            .unwrap();
+        assert_eq!(
+            repo.take_next_for_task(&task.id).unwrap().unwrap().id,
+            first.id
+        );
+    }
+
+    #[test]
+    fn queue_claim_waits_for_a_concurrent_reorder_writer_then_dispatches() {
+        let dir = TempDir::new().unwrap();
+        let db = std::sync::Arc::new(Database::open(dir.path().join("queue.db")).unwrap());
+        let task = create_test_task(&db, "/proj", "concurrent reorder");
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let queued = QueuedMessage::new(&task.id, &branch.id, "dispatch me", 0);
+        QueuedMessageRepository::new(&db).enqueue(&queued).unwrap();
+
+        let mut reorder_conn = db.conn().unwrap();
+        let reorder = reorder_conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        reorder
+            .execute(
+                "UPDATE queued_messages SET sort_order = sort_order + 1 WHERE id = ?1",
+                params![queued.id],
+            )
+            .unwrap();
+
+        let dispatch_db = db.clone();
+        let task_id = task.id.clone();
+        let dispatch = std::thread::spawn(move || {
+            QueuedMessageRepository::new(&dispatch_db).take_next_for_task(&task_id)
+        });
+        std::thread::sleep(std::time::Duration::from_millis(75));
+        reorder.commit().unwrap();
+
+        let claimed = dispatch.join().unwrap().unwrap().unwrap();
+        assert_eq!(claimed.id, queued.id);
+        assert_eq!(claimed.state, QueuedMessageState::Dispatching);
+    }
+
+    #[test]
+    fn queued_message_edit_and_selected_claim_leave_the_other_order_unchanged() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "queue actions");
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let repo = QueuedMessageRepository::new(&db);
+        let first = QueuedMessage::new(&task.id, &branch.id, "first", 0);
+        let second = QueuedMessage::new(&task.id, &branch.id, "second", 0);
+        let third = QueuedMessage::new(&task.id, &branch.id, "third", 0);
+        repo.enqueue(&first).unwrap();
+        repo.enqueue(&second).unwrap();
+        repo.enqueue(&third).unwrap();
+
+        repo.update_pending_message(&second.id, &task.id, &branch.id, "edited second")
+            .unwrap();
+        let claimed = repo
+            .claim_pending_for_task_branch(&third.id, &task.id, &branch.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(claimed.message, "third");
+        assert_eq!(claimed.state, QueuedMessageState::Dispatching);
+        repo.complete_claim_for_task_branch(&third.id, &task.id, &branch.id)
+            .unwrap();
+
+        let remaining = repo.list_pending(&task.id, &branch.id).unwrap();
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "edited second"]
+        );
+        assert!(repo
+            .update_pending_message(&third.id, &task.id, &branch.id, "too late")
+            .is_err());
+    }
+
+    #[test]
+    fn restoring_a_selected_claim_promotes_only_that_message() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "queue claim fallback");
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let repo = QueuedMessageRepository::new(&db);
+        let first = QueuedMessage::new(&task.id, &branch.id, "first", 0);
+        let second = QueuedMessage::new(&task.id, &branch.id, "second", 0);
+        let third = QueuedMessage::new(&task.id, &branch.id, "third", 0);
+        repo.enqueue(&first).unwrap();
+        repo.enqueue(&second).unwrap();
+        repo.enqueue(&third).unwrap();
+
+        repo.claim_pending_for_task_branch(&third.id, &task.id, &branch.id)
+            .unwrap()
+            .unwrap();
+        repo.restore_claim_to_front(&third.id, &task.id, &branch.id)
+            .unwrap();
+
+        assert_eq!(
+            repo.list_pending(&task.id, &branch.id)
+                .unwrap()
+                .iter()
+                .map(|message| message.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["third", "first", "second"]
+        );
     }
 
     #[test]

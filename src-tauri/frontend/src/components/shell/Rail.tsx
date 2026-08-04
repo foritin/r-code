@@ -10,6 +10,7 @@ import { ProjectActionsMenu } from "../ProjectActionsMenu";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 import {
   IconActivity,
+  IconArchive,
   IconFolderOpen,
   IconHistory,
   IconInbox,
@@ -108,6 +109,7 @@ export function Rail() {
         <NavItem icon={<IconHistory />} label="对话" active={scene === "home" || scene === "conversations" || scene === "room"} onClick={() => setScene("conversations")} />
         <NavItem icon={<IconInbox />} label="待处理" active={scene === "inbox"} count={needsCount} onClick={() => setScene("inbox")} />
         <NavItem icon={<IconActivity />} label="活动" active={scene === "deck"} onClick={() => setScene("deck")} />
+        <NavItem icon={<IconArchive />} label="归档" active={scene === "archive"} onClick={() => setScene("archive")} />
         <NavItem icon={<IconText />} label="知识与指令" active={scene === "knowledge"} onClick={() => setScene("knowledge")} />
       </nav>
 

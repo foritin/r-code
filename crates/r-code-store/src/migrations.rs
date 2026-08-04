@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 21;
+pub const LATEST_SCHEMA_VERSION: u32 = 24;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -50,6 +50,9 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(19, MIGRATION_019, false),
     MigrationSpec::new(20, MIGRATION_020, false),
     MigrationSpec::new(21, MIGRATION_021, false),
+    MigrationSpec::new(22, MIGRATION_022, false),
+    MigrationSpec::new(23, MIGRATION_023, false),
+    MigrationSpec::new(24, MIGRATION_024, false),
 ];
 
 impl MigrationSpec {
@@ -1339,6 +1342,59 @@ BEGIN
 END;
 "#;
 
+/// Migration 022: presentation-only hierarchy for executable Plan leaf items.
+const MIGRATION_022: &str = r#"
+ALTER TABLE plan_items ADD COLUMN section_path_json TEXT NOT NULL DEFAULT '[]';
+"#;
+
+/// Migration 023: distinguish an explicitly activated Goal from the ordinary
+/// first task prompt already stored in `tasks.goal`. Existing conversations
+/// default to inactive so upgrading cannot invent Goals the user never set.
+const MIGRATION_023: &str = r#"
+ALTER TABLE tasks ADD COLUMN goal_active INTEGER NOT NULL DEFAULT 0
+    CHECK (goal_active IN (0, 1));
+"#;
+
+/// Migration 024: persist the user-visible order of pending messages independently
+/// from timestamps. Existing rows keep their former priority/creation ordering.
+const MIGRATION_024: &str = r#"
+CREATE TABLE IF NOT EXISTS queued_messages (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    branch_id TEXT NOT NULL,
+    message TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'queued',
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_queued_messages_pending
+    ON queued_messages(state, priority DESC, created_at ASC);
+
+ALTER TABLE queued_messages ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+
+WITH ranked AS (
+    SELECT id,
+           ROW_NUMBER() OVER (
+               PARTITION BY task_id, branch_id
+               ORDER BY priority DESC, created_at ASC, id ASC
+           ) - 1 AS next_sort_order
+    FROM queued_messages
+    WHERE state IN ('queued', 'dispatching', 'failed')
+)
+UPDATE queued_messages
+SET sort_order = (
+    SELECT next_sort_order FROM ranked WHERE ranked.id = queued_messages.id
+)
+WHERE id IN (SELECT id FROM ranked);
+
+DROP INDEX IF EXISTS idx_queued_messages_task_branch;
+CREATE INDEX idx_queued_messages_task_branch
+    ON queued_messages(task_id, branch_id, state, sort_order ASC, priority DESC, created_at ASC);
+CREATE INDEX idx_queued_messages_task_dispatch
+    ON queued_messages(task_id, state, sort_order ASC, priority DESC, created_at ASC);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1809,6 +1865,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(notification_objects, 3);
+    }
+
+    #[test]
+    fn migration_v24_backfills_the_previous_visible_queue_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations_with_specs(&conn, &MIGRATIONS[..23], None).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tasks (id, title, goal, mode, state, created_at, updated_at) \
+             VALUES ('queue-task', 'Queue', 'Queue', 'ask', 'idle', \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+             INSERT INTO queued_messages \
+                 (id, task_id, branch_id, message, state, priority, created_at, updated_at) \
+             VALUES \
+                 ('normal-new', 'queue-task', 'main', 'normal-new', 'queued', 0, \
+                  '2026-01-01T00:02:00Z', '2026-01-01T00:02:00Z'), \
+                 ('urgent', 'queue-task', 'main', 'urgent', 'queued', 100, \
+                  '2026-01-01T00:03:00Z', '2026-01-01T00:03:00Z'), \
+                 ('normal-old', 'queue-task', 'main', 'normal-old', 'queued', 0, \
+                  '2026-01-01T00:01:00Z', '2026-01-01T00:01:00Z');",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let mut statement = conn
+            .prepare("SELECT id FROM queued_messages ORDER BY sort_order ASC")
+            .unwrap();
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["urgent", "normal-old", "normal-new"]);
     }
 
     #[test]

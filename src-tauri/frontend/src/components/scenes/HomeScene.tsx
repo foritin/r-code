@@ -11,6 +11,7 @@ import {
   taskCreate,
   taskSetInference,
   taskSetModel,
+  taskUpdateGoal,
   workspaceChoose,
   workspaceSetAccessMode,
   workflowSkillsList,
@@ -66,7 +67,12 @@ import {
   useAttachments,
   type DraftAttachment,
 } from "../Attachments";
-import { TaskAddMenu } from "../TaskAddMenu";
+import { GoalModeChip, TaskAddMenu } from "../TaskAddMenu";
+import {
+  AgentSendModeControl,
+  effectiveAgentSendMode,
+  useAgentSendModePreference,
+} from "../AgentSendModeControl";
 import {
   attachmentCapabilityFor,
   codexImageCapability,
@@ -95,7 +101,7 @@ export function HomeScene() {
   const needsYou = useTasksStore(selectNeedsYou);
 
   const [goal, setGoal] = useState("");
-  const [taskGoal, setTaskGoal] = useState("");
+  const [goalMode, setGoalMode] = useState(false);
   const [draftMode, setDraftMode] = useState<TaskMode | null>(null);
   const [provider, setProvider] = useState<ProviderChoice | null>(null);
   const [draftModel, setDraftModel] = useState<string | null>(null);
@@ -115,8 +121,10 @@ export function HomeScene() {
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
   const [workflowSkills, setWorkflowSkills] = useState<WorkflowSkill[]>([]);
+  const [sendMode, setSendMode] = useAgentSendModePreference();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messageDraftBeforeGoalRef = useRef("");
   const composerRef = useRef<HTMLDivElement>(null);
   const attachments = useAttachments();
   const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
@@ -155,12 +163,17 @@ export function HomeScene() {
     workspaceAttached: Boolean(currentWorkspace),
     running: false,
   };
-  const slashItems = slashDismissed ? [] : matchingSlashCommands(goal, slashContext, workflowSkills);
+  const slashItems = goalMode || slashDismissed ? [] : matchingSlashCommands(goal, slashContext, workflowSkills);
   const slashOpen = slashItems.length > 0;
-  const canSend = (goal.trim().length > 0 || sendableAttachments.length > 0)
-    && !launching
-    && !attachmentBlockedReason
-    && (engineReady || goal.trim().startsWith("/"));
+  const canSend = goalMode
+    ? goal.trim().length > 0
+      && !launching
+      && !attachmentBlockedReason
+      && engineReady
+    : (goal.trim().length > 0 || sendableAttachments.length > 0)
+      && !launching
+      && !attachmentBlockedReason
+      && (engineReady || goal.trim().startsWith("/"));
 
   usePoll(async () => {
     await refreshTasks();
@@ -273,6 +286,7 @@ export function HomeScene() {
     message: string,
     title: string,
     files: AttachmentInput[] = [],
+    persistentGoal = "",
   ) => {
     if (agentEngine === "r_code" && !providerReady) {
       setError("先连接并保存一个模型服务，随后即可直接开始聊天。");
@@ -301,7 +315,7 @@ export function HomeScene() {
       const task = await taskCreate(
         currentWorkspacePath,
         title.slice(0, 48),
-        taskGoal.trim() || message || "分析附加文件",
+        persistentGoal.trim() || message || "分析附加文件",
         taskMode,
         activeProvider?.name ?? null,
         agentEngine,
@@ -310,12 +324,19 @@ export function HomeScene() {
         if (activeModel && activeModel !== activeProvider.model) await taskSetModel(task.id, activeModel);
         if (Object.keys(draftInference).length > 0) await taskSetInference(task.id, draftInference);
       }
-      if (taskMode === "plan") await planCreate(task.id);
+      if (persistentGoal.trim()) {
+        stage = "设置目标";
+        await taskUpdateGoal(task.id, persistentGoal);
+      }
+      if (taskMode === "plan") {
+        stage = "创建计划";
+        await planCreate(task.id);
+      }
       stage = "发送消息";
-      await agentSend(task.id, message, "auto", files);
+      await agentSend(task.id, message, effectiveAgentSendMode(sendMode, false), files);
       await refreshTasks().catch(() => {});
       attachments.clear();
-      setTaskGoal("");
+      setGoalMode(false);
       setDraftMode(null);
       openRoom(task.id);
     } catch (cause) {
@@ -326,7 +347,27 @@ export function HomeScene() {
     }
   };
 
+  const setGoalComposerMode = (active: boolean) => {
+    if (active === goalMode) return;
+    if (active) {
+      messageDraftBeforeGoalRef.current = goal;
+      setGoal("");
+      setCommandNotice(null);
+    } else {
+      setGoal(messageDraftBeforeGoalRef.current);
+    }
+    setGoalMode(active);
+    setSlashDismissed(active);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
   const send = async () => {
+    if (goalMode) {
+      if (launching || !goal.trim() || !engineReady) return;
+      const normalized = goal.trim();
+      await launchConversation(normalized, normalized, sendableAttachments, normalized);
+      return;
+    }
     const text = goal.trim();
     if (attachmentBlockedReason) {
       setError(attachmentBlockedReason);
@@ -483,7 +524,7 @@ export function HomeScene() {
         <div className="home-intro">
           <div className="home-eyebrow">
             <span className={`status-dot${engineReady ? " ready" : ""}`} />
-            {engineReady ? `NEW TASK · ${agentEngine === "codex" ? "CODEX" : "R-CODE"}` : "CONNECT AGENT"}
+            {engineReady ? `新任务 · ${agentEngine === "codex" ? "CODEX" : "R-CODE"}` : "连接 AGENT"}
             {needsYou.length > 0 && (
               <button className="quiet-link" onClick={() => setScene("inbox")}>
                 {needsYou.length} 项待处理
@@ -494,7 +535,7 @@ export function HomeScene() {
           <h1>从结果开始，而不是从工具开始。</h1>
           <p className="home-subtitle">
             {engineReady
-              ? `描述你要完成的事情。${agentEngine === "codex" ? "Codex CLI" : "R-Code"} 会在可见权限边界内执行，并把路由、子智能体与复核过程留给你查看。`
+              ? `描述你要完成的事情。${agentEngine === "codex" ? "Codex CLI" : "R-Code"} 会在当前权限边界内执行。`
               : agentEngine === "codex"
                 ? "Codex 主 Agent 需要本机 CLI、登录状态和一个已附加的工作区。"
                 : "连接任意兼容模型服务后，直接描述目标；工作区仍可在需要读取或修改代码时再附加。"}
@@ -554,18 +595,27 @@ export function HomeScene() {
             ref={textareaRef}
             rows={1}
             value={goal}
-            aria-label="描述新任务"
+            aria-label={goalMode ? "任务目标" : "描述新任务"}
             aria-controls={slashOpen ? "slash-command-menu" : undefined}
             aria-activedescendant={slashOpen ? `slash-command-option-${slashActive}` : undefined}
-            placeholder={engineReady ? "描述你想完成的事…" : agentEngine === "codex" ? "先连接 Codex 并附加工作区…" : "先在设置中连接模型服务…"}
+            placeholder={goalMode
+              ? "描述目标；发送后 Agent 会立即开始执行…"
+              : engineReady
+                ? "描述你想完成的事…"
+                : agentEngine === "codex" ? "先连接 Codex 并附加工作区…" : "先在设置中连接模型服务…"}
             onChange={(event) => {
               setGoal(event.target.value);
               setSlashActive(0);
-              setSlashDismissed(false);
+              setSlashDismissed(goalMode);
             }}
             onPaste={attachments.onPaste}
             onKeyDown={(event) => {
               if (event.nativeEvent.isComposing) return;
+              if (goalMode && event.key === "Escape") {
+                event.preventDefault();
+                setGoalComposerMode(false);
+                return;
+              }
               if (slashOpen) {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
@@ -616,12 +666,18 @@ export function HomeScene() {
                 onFiles={attachments.addFiles}
                 disabled={launching}
                 agentEngine={agentEngine}
-                draftGoal={taskGoal}
                 draftMode={draftMode ?? (currentWorkspacePath ? "edit" : "ask")}
-                onDraftGoalChange={setTaskGoal}
+                goalMode={goalMode}
+                onGoalModeChange={setGoalComposerMode}
                 onDraftModeChange={setDraftMode}
                 onError={setError}
               />
+              {goalMode && (
+                <GoalModeChip
+                  disabled={launching}
+                  onExit={() => setGoalComposerMode(false)}
+                />
+              )}
               <Menu
                 className="scope-control"
                 label="会话可访问的文件夹"
@@ -740,14 +796,16 @@ export function HomeScene() {
                 />
               )}
 
-              {currentWorkspace && (
-                <ProjectAccessSelector
-                  value={currentWorkspace.access_mode}
-                  workspaceName={currentWorkspace.display_name}
-                  onChange={setWorkspaceAccessMode}
-                  openRequest={permissionMenuRequest}
-                />
-              )}
+              <ProjectAccessSelector
+                value={currentWorkspace?.access_mode ?? "request_approval"}
+                workspaceName={currentWorkspace?.display_name ?? "未附加工作区"}
+                unavailableReason={currentWorkspace
+                  ? undefined
+                  : "先附加文件夹，才能设置 Agent 的本地工具权限。"}
+                disabled={launching}
+                onChange={setWorkspaceAccessMode}
+                openRequest={permissionMenuRequest}
+              />
             </div>
 
             <div className="composer-actions">
@@ -756,16 +814,28 @@ export function HomeScene() {
                   {agentEngine === "codex" ? "连接 Codex CLI" : "连接模型服务"}
                 </button>
               )}
-              <span className="send-hint">Enter 发送 · Shift+Enter 换行</span>
+              {goalMode ? (
+                <span className="send-hint">Enter 执行目标 · Shift+Enter 换行</span>
+              ) : (
+                <AgentSendModeControl
+                  mode={sendMode}
+                  running={false}
+                  disabled={launching}
+                  onChange={setSendMode}
+                />
+              )}
               <button
-                className="send-button"
+                className={`send-button composer-primary-button${launching ? " is-loading" : ""}`}
                 disabled={!canSend}
-                title={attachmentBlockedReason ?? "发送（Enter）"}
+                title={launching ? "正在发送新对话" : goalMode ? "执行目标（Enter）" : attachmentBlockedReason ?? "发送（Enter）"}
                 onClick={() => void send()}
-                aria-label="发送"
+                aria-label={launching ? "正在发送新对话" : goalMode ? "执行目标" : "发送"}
+                aria-busy={launching || undefined}
               >
-                <IconSend width={15} height={15} />
-                <span>{launching ? "发送中" : "发送"}</span>
+                {launching
+                  ? <span className="send-loading-spinner" aria-hidden="true" />
+                  : <IconSend width={15} height={15} />}
+                <span className="sr-only">{launching ? "发送中" : goalMode ? "执行目标" : "发送"}</span>
               </button>
             </div>
           </div>

@@ -16,6 +16,7 @@ use rusqlite::Connection;
 /// All sensitive data (API keys, tokens, passwords) is redacted.
 pub struct SupportBundle {
     output_dir: PathBuf,
+    log_dir: PathBuf,
     mcp_servers: Vec<McpServerSupportSummary>,
 }
 
@@ -28,7 +29,7 @@ pub struct BundleContents {
     pub platform: String,
     /// 生成时间（RFC 3339）
     pub generated_at: String,
-    /// 脱敏后的最近日志
+    /// 脱敏后的最近 warning/error 日志
     pub logs: Vec<LogEntry>,
     /// 配置摘要（无密钥）
     pub config_summary: ConfigSummary,
@@ -45,6 +46,8 @@ pub struct LogEntry {
     pub message: String,
     /// 时间戳
     pub timestamp: String,
+    /// 产生日志的模块
+    pub target: String,
 }
 
 /// 配置摘要 -- 仅包含非敏感信息 [doc-07 §6]。
@@ -86,10 +89,12 @@ pub struct DbStats {
 const MAX_LOG_LINES: usize = 200;
 
 impl SupportBundle {
-    /// 创建支持包生成器。`output_dir` 为生成的 JSON 包输出目录。
-    pub fn new(output_dir: PathBuf) -> Self {
+    /// 创建支持包生成器。输出目录与诊断日志目录必须显式分离，避免把用户选择的
+    /// 导出位置误当作应用日志来源。
+    pub fn new(output_dir: PathBuf, log_dir: PathBuf) -> Self {
         Self {
             output_dir,
+            log_dir,
             mcp_servers: Vec::new(),
         }
     }
@@ -130,7 +135,7 @@ impl SupportBundle {
     /// 收集全部内容。
     async fn collect(&self, db_path: &Path) -> Result<BundleContents, ProductError> {
         let generated_at = chrono::Utc::now().to_rfc3339();
-        let logs = self.collect_logs(&generated_at);
+        let logs = self.collect_logs()?;
         let config_summary = self.collect_config(db_path);
         let db_stats = self.collect_db_stats(db_path);
 
@@ -144,29 +149,22 @@ impl SupportBundle {
         })
     }
 
-    /// 读取最近日志并脱敏。
-    ///
-    /// 日志文件位于 `{output_dir}/r-code.log`（若存在）。每行经 [`redact_text`]
-    /// 脱敏后作为一条 LogEntry。文件不存在时返回空列表。
-    fn collect_logs(&self, generated_at: &str) -> Vec<LogEntry> {
-        let log_path = self.output_dir.join("r-code.log");
-        let Ok(content) = std::fs::read_to_string(&log_path) else {
-            return Vec::new();
-        };
-        let lines: Vec<&str> = content.lines().collect();
-        let start = lines.len().saturating_sub(MAX_LOG_LINES);
-        lines[start..]
-            .iter()
-            .filter(|l| !l.trim().is_empty())
-            .map(|line| {
-                let redacted = redact_text(line);
-                LogEntry {
-                    level: detect_level(&redacted),
-                    message: redacted,
-                    timestamp: generated_at.to_string(),
-                }
+    /// 读取近 7 天最近的 warning/error，并保留事件原始时间戳与模块。
+    fn collect_logs(&self) -> Result<Vec<LogEntry>, ProductError> {
+        let logs = crate::log_buffer::tail_levels_with_persistence(
+            &self.log_dir,
+            MAX_LOG_LINES,
+            &["WARN", "ERROR"],
+        )?;
+        Ok(logs
+            .into_iter()
+            .map(|entry| LogEntry {
+                level: entry.level.to_ascii_lowercase(),
+                message: redact_text(&entry.message),
+                timestamp: entry.timestamp,
+                target: entry.target,
             })
-            .collect()
+            .collect())
     }
 
     /// 收集配置摘要（无密钥）。
@@ -203,20 +201,6 @@ impl SupportBundle {
             run_count: count_rows(&conn, "agent_runs"),
             tool_call_count: count_rows(&conn, "tool_calls"),
         }
-    }
-}
-
-/// 检测日志行级别。
-fn detect_level(line: &str) -> String {
-    let lower = line.to_ascii_lowercase();
-    if lower.contains("error") {
-        "error".to_string()
-    } else if lower.contains("warn") {
-        "warn".to_string()
-    } else if lower.contains("debug") {
-        "debug".to_string()
-    } else {
-        "info".to_string()
     }
 }
 
@@ -262,7 +246,7 @@ mod tests {
     #[tokio::test]
     async fn generate_creates_json_file() {
         let (dir, db_path, _db) = setup_db_with_data();
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
         let path = bundle.generate(&db_path).await.unwrap();
         assert!(path.exists());
         assert_eq!(path.extension().and_then(|s| s.to_str()), Some("json"));
@@ -278,7 +262,10 @@ mod tests {
     async fn preview_returns_contents_without_writing() {
         let (dir, db_path, _db) = setup_db_with_data();
         // 输出目录使用嵌套路径，验证不写文件时不创建目录
-        let bundle = SupportBundle::new(dir.path().join("nested").join("out"));
+        let bundle = SupportBundle::new(
+            dir.path().join("nested").join("out"),
+            dir.path().join("logs"),
+        );
         let contents = bundle.preview(&db_path).await.unwrap();
         assert_eq!(contents.version, env!("CARGO_PKG_VERSION"));
         assert!(!contents.platform.is_empty());
@@ -309,7 +296,7 @@ mod tests {
         )
         .unwrap();
 
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
         let contents = bundle.preview(&db_path).await.unwrap();
         assert_eq!(contents.db_stats.task_count, 2);
         assert_eq!(contents.db_stats.run_count, 1);
@@ -321,14 +308,44 @@ mod tests {
     #[tokio::test]
     async fn logs_redacted_in_bundle() {
         let dir = TempDir::new().unwrap();
-        // 在 output_dir 放置含敏感信息的日志文件
-        let log_content = "Authorization: Bearer sk-secret123456\ntoken=abc456\nnormal line\n";
-        std::fs::write(dir.path().join("r-code.log"), log_content).unwrap();
+        let log_dir = dir.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let log_path = log_dir.join(format!(
+            "{}.{}",
+            crate::log_buffer::LOG_FILE_PREFIX,
+            chrono::Utc::now().format("%Y-%m-%d")
+        ));
+        let entries = [
+            crate::log_buffer::LogEntry {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                level: "WARN".into(),
+                target: "r_code_agent_worker".into(),
+                message: "Authorization: Bearer sk-secret123456".into(),
+            },
+            crate::log_buffer::LogEntry {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                level: "ERROR".into(),
+                target: "r_code_gateway".into(),
+                message: "token=abc456 model request failed".into(),
+            },
+            crate::log_buffer::LogEntry {
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                level: "INFO".into(),
+                target: "r_code_host".into(),
+                message: "normal line".into(),
+            },
+        ];
+        let log_content = entries
+            .iter()
+            .map(|entry| serde_json::to_string(entry).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(log_path, format!("{log_content}\n")).unwrap();
 
         let db_path = dir.path().join("test.db");
         let _db = Database::open(&db_path).unwrap();
 
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), log_dir);
         let contents = bundle.preview(&db_path).await.unwrap();
 
         // 所有日志条目不得包含原始敏感片段
@@ -347,18 +364,24 @@ mod tests {
             "expected redaction marker, got: {combined}"
         );
         assert!(combined.contains("token=***"));
-        // 普通行保留
-        assert!(combined.contains("normal line"));
-        // 3 条非空日志行
-        assert_eq!(contents.logs.len(), 3);
+        // 支持包只导出 warning/error，普通 info 不应混入。
+        assert!(!combined.contains("normal line"));
+        assert!(contents.logs.iter().all(|entry| {
+            matches!(entry.level.as_str(), "warn" | "error")
+                && !entry.timestamp.is_empty()
+                && !entry.target.is_empty()
+        }));
     }
 
     #[tokio::test]
-    async fn preview_no_log_file_returns_empty_logs() {
+    async fn preview_without_log_file_only_uses_safe_current_process_tail() {
         let (dir, db_path, _db) = setup_db_with_data();
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
         let contents = bundle.preview(&db_path).await.unwrap();
-        assert!(contents.logs.is_empty());
+        assert!(contents
+            .logs
+            .iter()
+            .all(|entry| matches!(entry.level.as_str(), "warn" | "error")));
     }
 
     // ── 配置摘要（无密钥）────────────────────────────────────────
@@ -366,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn config_summary_has_no_secrets() {
         let (dir, db_path, _db) = setup_db_with_data();
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
         let contents = bundle.preview(&db_path).await.unwrap();
         let cs = &contents.config_summary;
         assert!(!cs.default_provider.is_empty());
@@ -379,15 +402,14 @@ mod tests {
     #[tokio::test]
     async fn mcp_support_summary_is_status_only() {
         let (dir, db_path, _db) = setup_db_with_data();
-        let bundle = SupportBundle::new(dir.path().to_path_buf()).with_mcp_servers(vec![
-            McpServerSupportSummary {
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"))
+            .with_mcp_servers(vec![McpServerSupportSummary {
                 id: "sample".to_string(),
                 transport_kind: "stdio".to_string(),
                 enabled: true,
                 state: "error".to_string(),
                 error_class: Some("connect_failed".to_string()),
-            },
-        ]);
+            }]);
         let contents = bundle.preview(&db_path).await.unwrap();
         let json = serde_json::to_string(&contents).unwrap();
 
@@ -404,7 +426,7 @@ mod tests {
     async fn generate_missing_db_returns_zero_stats() {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("nonexistent.db");
-        let bundle = SupportBundle::new(dir.path().to_path_buf());
+        let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
         // 不存在的 DB 不应 panic，统计归零
         let contents = bundle.preview(&db_path).await.unwrap();
         assert_eq!(contents.db_stats.task_count, 0);
@@ -416,22 +438,13 @@ mod tests {
     async fn generate_creates_output_dir_if_missing() {
         let (dir, db_path, _db) = setup_db_with_data();
         let out_dir = dir.path().join("deep").join("nested").join("bundle");
-        let bundle = SupportBundle::new(out_dir.clone());
+        let bundle = SupportBundle::new(out_dir.clone(), dir.path().join("logs"));
         let path = bundle.generate(&db_path).await.unwrap();
         assert!(path.exists());
         assert!(out_dir.exists());
     }
 
     // ── 单元测试：纯函数 ──────────────────────────────────────────
-
-    #[test]
-    fn detect_level_picks_correct_level() {
-        assert_eq!(detect_level("something error happened"), "error");
-        assert_eq!(detect_level("this is a warn"), "warn");
-        assert_eq!(detect_level("debug info"), "debug");
-        assert_eq!(detect_level("just info"), "info");
-        assert_eq!(detect_level("{\"level\":\"error\",\"msg\":\"x\"}"), "error");
-    }
 
     #[test]
     fn redact_text_helper_is_used() {
@@ -450,6 +463,7 @@ mod tests {
                 level: "info".into(),
                 message: "hello".into(),
                 timestamp: "2026-07-25T00:00:00Z".into(),
+                target: "r_code_host".into(),
             }],
             config_summary: ConfigSummary {
                 default_provider: "anthropic".into(),

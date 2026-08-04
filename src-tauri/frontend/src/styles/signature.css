@@ -521,6 +521,21 @@
   transition: background-color 140ms ease, box-shadow 140ms ease;
 }
 
+#app.r-code-signature .send-button.composer-primary-button,
+#app.r-code-signature .send.composer-primary-button {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+#app.r-code-signature .send-button.is-loading:disabled,
+#app.r-code-signature .send.is-loading:disabled {
+  opacity: 1;
+}
+
 /* Composer controls are one compact tool row. Long model names scroll with the row instead of
    turning every control into a two-line card. */
 #app.r-code-signature .scene-home .chat-composer-foot {
@@ -865,14 +880,6 @@
   background: transparent;
 }
 
-#app.r-code-signature .activity-strip {
-  min-height: 28px;
-  padding: 7px 24px 0;
-  border-top: 1px solid var(--border);
-  border-bottom: 0;
-  background: var(--bg-panel);
-}
-
 #app.r-code-signature .subagent-panel {
   margin-inline: 16px;
   border-top: 1px solid var(--border);
@@ -954,10 +961,6 @@
   box-shadow: none;
 }
 
-#app.r-code-signature .scene-room .activity-strip + .composer {
-  border-top: 0;
-}
-
 #app.r-code-signature .scene-room .comp-box textarea {
   display: block;
   min-height: 76px;
@@ -994,9 +997,39 @@
   color: var(--fg);
 }
 
-#app.r-code-signature .scene-room .comp-box .run-command-bar {
-  margin: 8px 0 0;
-  padding: 8px 0 0;
+#app.r-code-signature .scene-room .composer-queue-stack {
+  margin-bottom: 8px;
+  border-color: var(--signature-panel-edge);
+  border-radius: 12px;
+  background: var(--signature-control);
+}
+
+@media (max-height: 700px) {
+  #app.r-code-signature .scene-home .home-stage {
+    padding-top: 24px;
+  }
+
+  #app.r-code-signature .scene-home h1 {
+    margin-block: 8px 6px;
+    font-size: clamp(25px, 3.8vw, 31px);
+  }
+
+  #app.r-code-signature .scene-home .home-subtitle {
+    line-height: 1.55;
+  }
+
+  #app.r-code-signature .home-suggestions {
+    margin-top: 14px;
+  }
+
+  #app.r-code-signature .home-suggestion {
+    min-height: 44px;
+  }
+
+  #app.r-code-signature .home-composer textarea {
+    min-height: 72px;
+    padding-block: 12px;
+  }
 }
 
 #app.r-code-signature .provider-pill,
@@ -1025,7 +1058,7 @@
   letter-spacing: 0.035em;
 }
 
-#app.r-code-signature .workbench-tab strong {
+#app.r-code-signature .workbench-tab-select strong {
   font-weight: 620;
 }
 

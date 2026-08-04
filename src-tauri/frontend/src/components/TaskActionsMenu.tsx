@@ -1,11 +1,11 @@
 import { useCallback, useState } from "react";
-import { taskArchive, taskDelete } from "../lib/ipc";
+import { taskArchive, taskDelete, taskRestore } from "../lib/ipc";
 import { isTaskLive, taskTitle } from "../lib/presentation";
 import { useAppStore } from "../store/app";
 import { useTasksStore } from "../store/tasks";
 import { pushToast } from "../store/toast";
 import type { Task, TaskDetail } from "../lib/types";
-import { IconArchive, IconMore, IconTrash } from "./icons";
+import { IconArchive, IconMore, IconRestore, IconTrash } from "./icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import type { SurfacePlacement } from "./ui/AnchoredSurface";
 import { Menu, MenuItem, MenuSeparator } from "./ui/Menu";
@@ -24,7 +24,8 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
   const currentTaskId = useAppStore((state) => state.currentTaskId);
   const openConversations = useAppStore((state) => state.openConversations);
   const forgetTaskNavigation = useAppStore((state) => state.forgetTaskNavigation);
-  const [busy, setBusy] = useState<"archive" | "delete" | null>(null);
+  const refreshDetail = useTasksStore((state) => state.refreshDetail);
+  const [busy, setBusy] = useState<"archive" | "restore" | "delete" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const live = isTaskLive(task, detail);
   const title = taskTitle(task);
@@ -67,6 +68,21 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
     }
   }, [busy, forgetTaskNavigation, leaveRemovedRoom, live, onChanged, refreshTasks, task.id, title]);
 
+  const restore = useCallback(async () => {
+    if (busy || task.state !== "archived") return;
+    setBusy("restore");
+    try {
+      await taskRestore(task.id);
+      await Promise.all([refreshTasks(), refreshDetail(task.id)]);
+      onChanged?.();
+      pushToast({ kind: "success", title: "对话已还原", body: title });
+    } catch (cause) {
+      pushToast({ kind: "error", title: "无法还原对话", body: String(cause) });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, onChanged, refreshDetail, refreshTasks, task.id, task.state, title]);
+
   return (
     <>
       <Menu
@@ -91,14 +107,17 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
       >
         {({ close }) => (
           <>
-            <MenuItem
-              disabled={live || task.state === "archived"}
-              close={close}
-              onSelect={() => void archive()}
-            >
-              <IconArchive width={15} height={15} />
-              归档对话
-            </MenuItem>
+            {task.state === "archived" ? (
+              <MenuItem close={close} onSelect={() => void restore()}>
+                <IconRestore width={15} height={15} />
+                还原对话
+              </MenuItem>
+            ) : (
+              <MenuItem disabled={live} close={close} onSelect={() => void archive()}>
+                <IconArchive width={15} height={15} />
+                归档对话
+              </MenuItem>
+            )}
             <MenuSeparator />
             <MenuItem
               className="danger"

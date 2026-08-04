@@ -354,7 +354,7 @@ function activityTone(item: ProjectActivityItem): "running" | "attention" | "rev
 
 function ProjectActivityRail({ items }: { items: ProjectActivityItem[] }) {
   const openRoom = useAppStore((s) => s.openRoom);
-  // 仪表盘为每段未归档对话只保留最新关键节点；完整事件仍在任务详情和全局活动页。
+  // 仪表盘为每段未归档对话只保留最新关键节点；完整协议事件只留在任务审计记录。
   const significant = items.filter((item) => !["state_changed", "queue_dispatched", "tool_call", "tool_result", "system"].includes(item.kind));
   const visibleItems: ProjectActivityItem[] = [];
   const seenTasks = new Set<string>();

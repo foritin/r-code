@@ -83,6 +83,38 @@ test.after(async () => {
   server?.kill();
 });
 
+test("Plan outline keeps visual leaf order identical to execution order", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const outline = await page.evaluate(async () => {
+    const { planOutline } = await import("/src/components/plan/PlanPanel.tsx");
+    const make = (id, title, section_path) => ({
+      id,
+      title,
+      description: "",
+      section_path,
+      state: "pending",
+      depends_on: [],
+    });
+    return planOutline([
+      make("first", "First", ["Backend"]),
+      make("root", "Root", []),
+      make("last", "Last", ["Backend"]),
+    ]).map((entry) => entry.kind === "item"
+      ? { kind: "item", id: entry.item.id, number: entry.number }
+      : { kind: "section", title: entry.title, number: entry.number });
+  });
+
+  assert.deepEqual(outline, [
+    { kind: "section", title: "Backend", number: "1" },
+    { kind: "item", id: "first", number: "1.1" },
+    { kind: "item", id: "root", number: "2" },
+    { kind: "section", title: "Backend", number: "3" },
+    { kind: "item", id: "last", number: "3.1" },
+  ]);
+  await page.close();
+});
+
 test("Plan mode carries Goal into the task, asks per-question HITL, and approves feature todos", async () => {
   const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
   const runtimeErrors = [];
@@ -92,6 +124,26 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   });
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  // The ordinary first prompt is task context, not an explicitly configured Goal. Existing
+  // conversations must therefore upgrade without inventing a Goal lifecycle the user never set.
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openRoom("mock-task-queue");
+  });
+  await page.locator(".scene.scene-room").waitFor({ state: "visible" });
+  assert.equal(await page.getByRole("region", { name: "当前目标" }).count(), 0);
+  assert.equal(await page.locator(".sum-goal").count(), 0, "ordinary task context must not render as an explicit Goal");
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  const ordinaryTaskGoalItem = page.getByRole("dialog", { name: "添加到任务" }).getByRole("button", { name: /^目标/ });
+  assert.doesNotMatch(await ordinaryTaskGoalItem.innerText(), /已设置|进行中/);
+  await page.keyboard.press("Escape");
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().goHome();
+  });
+  await page.locator(".scene.scene-home").waitFor({ state: "visible" });
+
   await page.getByRole("button", { name: "添加到任务", exact: true }).click();
   const addDialog = page.getByRole("dialog", { name: "添加到任务" });
   await page.setViewportSize({ width: 520, height: 620 });
@@ -105,19 +157,39 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   assert.ok(addBox && addBox.x >= 0 && addBox.x + addBox.width <= 520, "Add must not be clipped in a narrow window");
   assert.ok(addBox && addBox.y >= 0 && addBox.y + addBox.height <= 620, "Add must remain vertically reachable");
   await page.setViewportSize({ width: 1180, height: 820 });
+  assert.equal(await addDialog.locator("textarea").count(), 0, "Goal must not open a second composer");
   await addDialog.getByRole("button", { name: /目标/ }).click();
-  await addDialog.getByLabel("目标", { exact: true }).fill("交付一个可逐功能验收的计划模式");
-  await addDialog.getByRole("button", { name: "保存目标", exact: true }).click();
-  await addDialog.getByRole("status").filter({ hasText: "已保存" }).waitFor();
-  await addDialog.getByRole("button", { name: /返回添加/ }).click();
-  await addDialog.getByRole("button", { name: /^计划模式/ }).click();
+  await addDialog.waitFor({ state: "hidden" });
+  const goalModeChip = page.getByRole("button", { name: "退出目标模式", exact: true });
+  await goalModeChip.waitFor({ state: "visible" });
+  await goalModeChip.hover();
+  assert.equal(await goalModeChip.locator(".goal-mode-close").isVisible(), true, "Goal hover must expose the × affordance");
+  await goalModeChip.click();
+  await page.getByLabel("描述新任务").waitFor();
 
-  await page.getByLabel("描述新任务").fill("先澄清边界，再生成实施计划");
-  await page.getByRole("button", { name: "发送", exact: true }).click();
+  // Plan is an interaction mode. Goal remains the main composer input and its send action starts
+  // the task immediately; there is no intermediate "save goal, then write another prompt" step.
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  await addDialog.getByRole("button", { name: /^计划模式/ }).click();
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  await addDialog.getByRole("button", { name: /目标/ }).click();
+  await page.getByLabel("任务目标", { exact: true }).fill("交付一个可逐功能验收的计划模式；先澄清边界，再生成实施计划");
+  await page.getByRole("button", { name: "执行目标", exact: true }).click();
   await page.locator(".scene.scene-room").waitFor({ state: "visible" });
+  assert.equal(await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    return taskId ? useTasksStore.getState().details[taskId]?.task.goal_active : null;
+  }), true);
 
   const panel = page.getByRole("region", { name: "当前计划" });
   await panel.waitFor({ state: "visible" });
+  assert.equal(await page.getByTestId("workbench-panel").getAttribute("data-workbench-section"), "plan");
+  assert.equal(await page.getByRole("tab").filter({ hasText: "计划" }).getAttribute("aria-selected"), "true");
+  assert.equal(await page.locator(".convo > .plan-panel").count(), 0, "the full Plan must not occupy the conversation column");
   assert.match(await panel.locator(".plan-goal").innerText(), /逐功能验收/);
   assert.match(await panel.locator(".plan-metadata").innerText(), /demo-plan-.*\/plan\.md/);
   await page.getByText("在整理计划前还需要你确认两项边界", { exact: false }).waitFor();
@@ -127,13 +199,42 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await questions.getByLabel(/两者结合/).check();
   await questions.getByRole("button", { name: "提交回答", exact: true }).click();
 
-  await panel.getByRole("button", { name: "确认实施", exact: true }).waitFor();
-  const features = panel.locator(".plan-feature-list > li");
+  await panel.getByRole("button", { name: "确认", exact: true }).waitFor();
+  assert.equal(await panel.getByText(/回答已接纳/).count(), 0, "ready Plan state should replace redundant success notices");
+  const sections = panel.locator(".plan-feature-list > .plan-outline-section");
+  const features = panel.locator(".plan-feature-list > li:not(.plan-outline-section)");
+  assert.equal(await sections.count(), 2);
   assert.equal(await features.count(), 2);
+  assert.equal(await sections.first().locator(".plan-feature-index").innerText(), "1");
+  assert.equal(await features.first().locator(".plan-feature-index").innerText(), "1.1");
+  assert.equal(await sections.nth(1).locator(".plan-feature-index").innerText(), "2");
+  assert.equal(await features.nth(1).locator(".plan-feature-index").innerText(), "2.1");
+  assert.equal(await features.first().locator(".plan-feature-details").isVisible(), false);
+  await features.nth(1).getByRole("button", { name: /展开功能 2\.1/ }).click();
   assert.match(await features.nth(1).innerText(), /依赖：明确实现边界/);
-  await panel.getByRole("button", { name: "确认实施", exact: true }).click();
+  await features.nth(1).getByRole("button", { name: /收起功能 2\.1/ }).click();
+
+  await sections.first().getByRole("button", { name: /收起阶段 1/ }).click();
+  assert.equal(await features.count(), 1, "collapsing a section must hide its descendant features");
+  await sections.first().getByRole("button", { name: /展开阶段 1/ }).click();
+  assert.equal(await features.count(), 2);
+
+  const planToggle = panel.getByRole("button", { name: "收起计划", exact: true });
+  await planToggle.click();
+  assert.equal(await panel.locator(".plan-panel-body").isVisible(), false);
+  await panel.getByRole("button", { name: "展开计划", exact: true }).click();
+  assert.equal(await panel.locator(".plan-panel-body").isVisible(), true);
+  assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 0.*待处理 2/s);
+  const decisionButtons = panel.locator(".plan-decision-actions > button");
+  const [cancelBox, confirmBox] = await Promise.all([
+    decisionButtons.filter({ hasText: /^取消$/ }).boundingBox(),
+    decisionButtons.filter({ hasText: /^确认$/ }).boundingBox(),
+  ]);
+  assert.ok(cancelBox && confirmBox && Math.abs(cancelBox.y - confirmBox.y) <= 1, "Confirm and Cancel must stay on one row");
+  await panel.getByRole("button", { name: "确认", exact: true }).click();
   await panel.getByText("实施中", { exact: false }).first().waitFor();
   assert.match(await features.first().innerText(), /进行中/);
+  assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 1.*待处理 1/s);
 
   // Approval switches the task back to auto mode. Leaving and reopening the
   // room must still discover the durable Plan instead of hiding the panel.
@@ -157,6 +258,26 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await page.locator(".scene.scene-room").waitFor({ state: "visible" });
   await panel.waitFor({ state: "visible" });
   await panel.getByText("实施中", { exact: false }).first().waitFor();
+
+  // An existing task edits its durable Goal through the conversation composer too.
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().hideWorkbench();
+  });
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  const roomGoalDialog = page.getByRole("dialog", { name: "添加到任务" });
+  assert.equal(await roomGoalDialog.locator("textarea").count(), 0);
+  await roomGoalDialog.getByRole("button", { name: /^目标/ }).click();
+  assert.equal(await page.getByLabel("任务目标", { exact: true }).inputValue(), "交付一个可逐功能验收的计划模式；先澄清边界，再生成实施计划");
+  await page.getByLabel("任务目标", { exact: true }).fill("交付计划并逐功能完成增强审核");
+  await page.getByRole("button", { name: "更新并执行目标", exact: true }).click();
+  await page.getByLabel("给 Agent 的消息", { exact: true }).waitFor();
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setCanvasTab("plan");
+  });
+  await panel.waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.querySelector(".plan-goal")?.textContent?.includes("逐功能完成增强审核"));
 
   // Complete feature 1 through the same typed IPC used by the runtime. Feature 2 then becomes
   // active, which lets this test cover terminal decisions and live-but-disabled review together.
@@ -230,7 +351,7 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   // reviving the cancelled revision.
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
-    useAppStore.getState().hideWorkbench();
+    useAppStore.getState().setCanvasTab("plan");
   });
   const cancelledPlanId = await page.evaluate(async () => {
     const [{ planGet }, { useAppStore }] = await Promise.all([
@@ -241,9 +362,13 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
     if (!taskId) throw new Error("Room task is missing");
     return (await planGet(taskId))?.plan.id ?? null;
   });
-  await panel.getByRole("button", { name: "取消计划", exact: true }).click();
-  await panel.getByText("工作区中的文件不会被回滚", { exact: false }).waitFor();
-  await panel.getByRole("button", { name: "确认取消", exact: true }).click();
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await panel.getByText("取消当前计划？", { exact: true }).waitFor();
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await panel.getByText("取消当前计划？", { exact: true }).waitFor({ state: "detached" });
+  await panel.getByRole("button", { name: "取消", exact: true }).click();
+  await panel.getByText("取消当前计划？", { exact: true }).waitFor();
+  await panel.getByRole("button", { name: "确认", exact: true }).click();
   await page.waitForTimeout(250);
   const cancelledState = await page.evaluate(async () => {
     const [{ planGet }, { useAppStore }] = await Promise.all([
@@ -256,9 +381,18 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   assert.equal(cancelledState, "cancelled", await panel.innerText());
   await panel.getByText("已取消", { exact: false }).first().waitFor({ timeout: 3_000 });
 
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().hideWorkbench();
+  });
+
   await page.getByRole("button", { name: "添加到任务", exact: true }).click();
   const roomAddDialog = page.getByRole("dialog", { name: "添加到任务" });
   await roomAddDialog.getByRole("button", { name: /^计划模式/ }).click();
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setCanvasTab("plan");
+  });
   await panel.getByText("草拟中", { exact: false }).first().waitFor();
   const replacementPlanId = await page.evaluate(async () => {
     const [{ planGet }, { useAppStore }] = await Promise.all([
@@ -271,8 +405,49 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   });
   assert.ok(cancelledPlanId && replacementPlanId && cancelledPlanId !== replacementPlanId);
 
-  // Plan is an inline collaboration surface; it must not replace conversation history.
+  // Plan is a docked collaboration surface; it must not replace conversation history.
   assert.equal(await page.locator(".timeline").isVisible(), true);
+
+  // Goal is an executable lifecycle, not a detached metadata field. It stays editable while a
+  // run is active, Stop ends that run without clearing the goal, and Delete clears it explicitly.
+  await page.evaluate(async () => {
+    const [{ browserMockChangeRequest }, { useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/lib/mock-data.ts"),
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    browserMockChangeRequest(taskId);
+    await useTasksStore.getState().refreshDetail(taskId);
+    useAppStore.getState().hideWorkbench();
+  });
+  const activeGoal = page.getByRole("region", { name: "当前目标" });
+  await activeGoal.getByText("进行中的目标", { exact: true }).waitFor();
+  const goalActionBoxes = await activeGoal.locator(".active-goal-actions button").evaluateAll((buttons) => buttons.map((button) => {
+    const rect = button.getBoundingClientRect();
+    return { width: rect.width, height: rect.height };
+  }));
+  assert.ok(goalActionBoxes.every(({ width, height }) => width >= 36 && height >= 36), "Goal actions need comfortable desktop hit targets");
+  await activeGoal.getByRole("button", { name: "编辑目标", exact: true }).click();
+  assert.equal(await page.getByLabel("任务目标", { exact: true }).inputValue(), "交付计划并逐功能完成增强审核");
+  await page.getByLabel("任务目标", { exact: true }).press("Escape");
+  await activeGoal.getByRole("button", { name: "停止目标", exact: true }).click();
+  await activeGoal.getByText("已停止的目标", { exact: true }).waitFor();
+  await activeGoal.getByRole("button", { name: "删除目标", exact: true }).click();
+  await activeGoal.waitFor({ state: "detached" });
+  assert.equal(await page.getByText(/目标已(?:停止并)?删除。/, { exact: true }).count(), 0);
+  const clearedGoal = await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    const task = taskId ? useTasksStore.getState().details[taskId]?.task : null;
+    return task ? { goal: task.goal, active: task.goal_active } : null;
+  });
+  assert.deepEqual(clearedGoal, { goal: "", active: false });
+
   assert.deepEqual(runtimeErrors, []);
   await page.close();
 });

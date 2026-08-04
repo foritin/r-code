@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { subagentSessionMessages } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { useSharedNow } from "../../lib/shared-clock";
@@ -19,6 +19,7 @@ import { Markdown } from "./Markdown";
 import { SubagentAvatar } from "./SubagentIdentity";
 import { ToolPayloadDetails } from "./ToolCard";
 import type { ToolState } from "./model";
+import { handleWorkbenchTabListKeyDown } from "./workbench-tabs";
 import type {
   ActivitySubagent,
   ActivitySubagentEvent,
@@ -33,10 +34,9 @@ interface Props {
   runs: readonly AgentRun[];
   selectedSubagentId: string | null;
   openSubagentIds: readonly string[];
+  toolTabs: ReactNode;
   onSelect: (subagentId: string) => void;
-  onBack: () => void;
   onCloseTab: (subagentId: string) => void;
-  onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
   onToggleFocus: () => void;
@@ -89,10 +89,9 @@ export function SubagentWorkbench({
   runs,
   selectedSubagentId,
   openSubagentIds,
+  toolTabs,
   onSelect,
-  onBack,
   onCloseTab,
-  onClose,
   onOpenLauncher,
   onHide,
   onToggleFocus,
@@ -126,12 +125,11 @@ export function SubagentWorkbench({
       data-subagent-view={selected ? "detail" : "list"}
     >
       <SubagentTabsHeader
+        toolTabs={toolTabs}
         openedChildren={openedChildren}
         selectedSubagentId={selected?.id ?? null}
         onSelect={onSelect}
-        onSelectOverview={onBack}
         onCloseTab={onCloseTab}
-        onClose={onClose}
         onOpenLauncher={onOpenLauncher}
         onHide={onHide}
         onToggleFocus={onToggleFocus}
@@ -145,23 +143,21 @@ export function SubagentWorkbench({
 }
 
 function SubagentTabsHeader({
+  toolTabs,
   openedChildren,
   selectedSubagentId,
   onSelect,
-  onSelectOverview,
   onCloseTab,
-  onClose,
   onOpenLauncher,
   onHide,
   onToggleFocus,
   focused,
 }: {
+  toolTabs: ReactNode;
   openedChildren: readonly { child: ActivitySubagent; index: number }[];
   selectedSubagentId: string | null;
   onSelect: (subagentId: string) => void;
-  onSelectOverview: () => void;
   onCloseTab: (subagentId: string) => void;
-  onClose: () => void;
   onOpenLauncher: () => void;
   onHide: () => void;
   onToggleFocus: () => void;
@@ -169,56 +165,28 @@ function SubagentTabsHeader({
 }) {
   return (
     <header className="subagent-page-header workbench-head subagent-tabs-header">
-      <div className="workbench-tabs" role="tablist" aria-label="子智能体工作台">
-        <div
-          className={`workbench-tab${selectedSubagentId == null ? " workbench-active-tab" : ""}`}
-          role="tab"
-          tabIndex={selectedSubagentId == null ? 0 : -1}
-          aria-selected={selectedSubagentId == null}
-          aria-label="子智能体"
-          onClick={onSelectOverview}
-          onKeyDown={(event) => {
-            if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-            event.preventDefault();
-            onSelectOverview();
-          }}
-        >
-          <SubagentAvatar index={0} size="xs" />
-          <strong>子智能体</strong>
-          <button
-            type="button"
-            className="workbench-tab-close"
-            data-testid="subagent-tab-close"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose();
-            }}
-            aria-label="关闭子智能体标签页"
-            title="关闭子智能体"
-          >
-            <IconClose width={13} height={13} />
-          </button>
-        </div>
+      <div className="workbench-tabs" role="tablist" aria-label="任务工作台标签" onKeyDown={handleWorkbenchTabListKeyDown}>
+        {toolTabs}
         {openedChildren.map(({ child, index }) => {
           const selected = selectedSubagentId === child.id;
           return (
             <div
               key={child.id}
               className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
-              role="tab"
-              tabIndex={selected ? 0 : -1}
-              aria-selected={selected}
-              aria-label={child.label}
-              data-subagent-id={child.id}
-              onClick={() => onSelect(child.id)}
-              onKeyDown={(event) => {
-                if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                event.preventDefault();
-                onSelect(child.id);
-              }}
             >
-              <SubagentAvatar index={index} identity={child.id} size="xs" />
-              <strong title={child.label}>{child.label}</strong>
+              <button
+                type="button"
+                className="workbench-tab-select"
+                role="tab"
+                tabIndex={selected ? 0 : -1}
+                aria-selected={selected}
+                aria-label={child.label}
+                data-subagent-id={child.id}
+                onClick={() => onSelect(child.id)}
+              >
+                <SubagentAvatar index={index} identity={child.id} size="xs" />
+                <strong title={child.label}>{child.label}</strong>
+              </button>
               <button
                 type="button"
                 className="workbench-tab-close"

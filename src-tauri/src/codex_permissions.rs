@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use r_code_core::dto::ProjectAccessMode;
+
 /// 设置页展示的 Codex 子代理权限预设。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +192,61 @@ impl CodexDelegationPermissions {
         }
     }
 
+    /// Translate the workspace permission selector into an enforceable Codex profile.
+    /// `RequestApproval` uses a read-only sandbox so file writes and commands must cross
+    /// the App Server approval bridge instead of being silently allowed inside the workspace.
+    const fn from_project_access(mode: ProjectAccessMode) -> Self {
+        match mode {
+            ProjectAccessMode::RequestApproval => Self {
+                mode: CodexPermissionMode::RequestApproval,
+                sandbox: CodexSandboxMode::ReadOnly,
+                approval_policy: CodexApprovalPolicy::OnRequest,
+                approvals_reviewer: CodexApprovalsReviewer::User,
+            },
+            ProjectAccessMode::RiskBased => Self {
+                mode: CodexPermissionMode::AutoReview,
+                sandbox: CodexSandboxMode::WorkspaceWrite,
+                approval_policy: CodexApprovalPolicy::OnRequest,
+                approvals_reviewer: CodexApprovalsReviewer::AutoReview,
+            },
+            ProjectAccessMode::FullAccess => Self {
+                mode: CodexPermissionMode::FullAccess,
+                sandbox: CodexSandboxMode::DangerFullAccess,
+                approval_policy: CodexApprovalPolicy::Never,
+                approvals_reviewer: CodexApprovalsReviewer::User,
+            },
+        }
+    }
+
+    /// Apply the project-level selector without allowing it to elevate a more restrictive
+    /// global Codex profile. This keeps the UI truthful for the current workspace while honoring
+    /// a user's global safety ceiling.
+    pub(crate) const fn constrained_by_project_access(self, mode: ProjectAccessMode) -> Self {
+        match mode {
+            ProjectAccessMode::RequestApproval => {
+                if matches!(self.sandbox, CodexSandboxMode::ReadOnly)
+                    && matches!(self.approval_policy, CodexApprovalPolicy::Never)
+                {
+                    self
+                } else {
+                    Self::from_project_access(mode)
+                }
+            }
+            ProjectAccessMode::RiskBased => {
+                if matches!(self.sandbox, CodexSandboxMode::ReadOnly)
+                    || (matches!(self.approvals_reviewer, CodexApprovalsReviewer::User)
+                        && !matches!(self.approval_policy, CodexApprovalPolicy::Never))
+                {
+                    self
+                } else {
+                    Self::from_project_access(mode)
+                }
+            }
+            // Full access is an upper bound, not an instruction to weaken a safer global profile.
+            ProjectAccessMode::FullAccess => self,
+        }
+    }
+
     pub(crate) fn from_config(
         sandbox: Option<&str>,
         approval_policy: Option<&str>,
@@ -324,5 +381,27 @@ mod tests {
         );
         assert_eq!(profile.mode(), CodexPermissionMode::Custom);
         assert!(profile.requests_r_code_approval());
+    }
+
+    #[test]
+    fn project_access_never_elevates_global_permissions() {
+        let full = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+            .expect("full access is a built-in profile");
+        let request = full.constrained_by_project_access(ProjectAccessMode::RequestApproval);
+        assert_eq!(request.mode(), CodexPermissionMode::RequestApproval);
+        assert_eq!(request.sandbox().as_str(), "read-only");
+        assert_eq!(request.approval_policy().as_str(), "on-request");
+        assert_eq!(request.approvals_reviewer().as_str(), "user");
+        assert!(request.requests_r_code_approval());
+
+        let read_only = CodexDelegationPermissions::read_only();
+        assert_eq!(
+            read_only.constrained_by_project_access(ProjectAccessMode::FullAccess),
+            read_only
+        );
+        assert_eq!(
+            read_only.constrained_by_project_access(ProjectAccessMode::RiskBased),
+            read_only
+        );
     }
 }

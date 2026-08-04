@@ -1,39 +1,49 @@
 import type { ProjectAccessMode } from "../lib/types";
 import { useAsyncAction } from "../lib/hooks";
-import { Menu, MenuItem } from "./ui/Menu";
+import { Menu } from "./ui/Menu";
 import { StatusBar } from "./ui/StatusBar";
-import { IconChevronDown } from "./icons";
+import {
+  IconCheck,
+  IconChevronDown,
+  IconShield,
+  IconTerminal,
+  IconUser,
+} from "./icons";
 
 const OPTIONS: ReadonlyArray<{
   value: ProjectAccessMode;
   label: string;
   description: string;
+  icon: typeof IconShield;
 }> = [
   {
     value: "request_approval",
-    label: "请求批准",
-    description: "访问外部服务、执行命令或修改文件时总是询问。",
+    label: "请求审批",
+    description: "编辑文件、使用互联网或执行命令前始终询问。",
+    icon: IconUser,
   },
   {
     value: "risk_based",
     label: "替我审批",
-    description: "仅在检测到中高风险操作时请求批准。",
+    description: "自动批准低风险操作，仅在检测到中高风险时询问。",
+    icon: IconTerminal,
   },
   {
     value: "full_access",
     label: "完全访问权限",
     description: "自动批准工作区内的低、中、高风险操作。",
+    icon: IconShield,
   },
 ];
 
 export function projectAccessModeLabel(mode: ProjectAccessMode): string {
-  return OPTIONS.find((option) => option.value === mode)?.label ?? "请求批准";
+  return OPTIONS.find((option) => option.value === mode)?.label ?? "请求审批";
 }
 
 export function projectAccessModeShortLabel(mode: ProjectAccessMode): string {
   return (
     {
-      request_approval: "批准",
+      request_approval: "审批",
       risk_based: "风险",
       full_access: "完全",
     } as Record<ProjectAccessMode, string>
@@ -44,6 +54,10 @@ interface Props {
   value: ProjectAccessMode;
   workspaceName: string;
   disabled?: boolean;
+  /** 没有可授权的工作区时仍保留入口，打开后解释边界而不是直接消失。 */
+  unavailableReason?: string;
+  /** 运行中修改只影响下一轮；由调用方把这个事实显示在菜单里。 */
+  changeNotice?: string;
   /** up：输入区（菜单向上展开）；down：会话顶栏 */
   placement?: "up" | "down";
   openRequest?: number;
@@ -61,6 +75,8 @@ export function ProjectAccessSelector({
   value,
   workspaceName,
   disabled = false,
+  unavailableReason,
+  changeNotice,
   placement = "up",
   openRequest,
   onChange,
@@ -71,15 +87,22 @@ export function ProjectAccessSelector({
   }, { label: "更新权限" });
 
   return (
-    <div className="project-access-control">
+    <div className={`project-access-control mode-${value}${unavailableReason ? " unavailable" : ""}`}>
       <Menu
         trigger={
           <button
             type="button"
-            className="project-access-trigger"
-            title={`${workspaceName}：${projectAccessModeLabel(value)}（仅限此工作区）`}
+            className={`project-access-trigger mode-${value}${unavailableReason ? " unavailable" : ""}`}
+            title={unavailableReason ?? `${workspaceName}：${projectAccessModeLabel(value)}（仅限此工作区）`}
           >
-            <span>权限：{save.busy ? "保存中…" : projectAccessModeLabel(value)}</span>
+            <IconShield width={15} height={15} aria-hidden="true" />
+            <span>
+              权限：{save.busy
+                ? "保存中…"
+                : unavailableReason
+                  ? "需附加文件夹"
+                  : projectAccessModeLabel(value)}
+            </span>
             <IconChevronDown width={12} height={12} />
           </button>
         }
@@ -92,22 +115,44 @@ export function ProjectAccessSelector({
       >
         {({ close }) => (
           <>
-            <div className="popover-head">
-              <strong>应如何批准操作？</strong>
-              <span>仅限「{workspaceName}」工作区</span>
+            <div className="project-access-head">
+              <strong>应如何批准 Agent 操作？</strong>
+              <span className="project-access-scope">
+                {unavailableReason ?? `仅作用于「${workspaceName}」工作区`}
+              </span>
+              {changeNotice && !unavailableReason && (
+                <span className="project-access-notice">{changeNotice}</span>
+              )}
             </div>
-            {OPTIONS.map((option) => (
-              <MenuItem
-                key={option.value}
-                close={close}
-                checked={option.value === value}
-                hint={option.description}
-                disabled={save.busy}
-                onSelect={() => void save.run(option.value)}
-              >
-                {option.label}
-              </MenuItem>
-            ))}
+            <div className="project-access-options">
+              {OPTIONS.map((option) => {
+                const OptionIcon = option.icon;
+                const selected = option.value === value && !unavailableReason;
+                return (
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={`project-access-option mode-${option.value}${selected ? " selected" : ""}`}
+                    key={option.value}
+                    disabled={save.busy || Boolean(unavailableReason)}
+                    onClick={() => {
+                      close();
+                      void save.run(option.value);
+                    }}
+                  >
+                    <span className="project-access-option-icon" aria-hidden="true">
+                      <OptionIcon width={18} height={18} />
+                    </span>
+                    <span className="project-access-option-copy">
+                      <strong>{option.label}</strong>
+                      <small>{option.description}</small>
+                    </span>
+                    {selected && <IconCheck className="project-access-check" width={16} height={16} aria-hidden="true" />}
+                  </button>
+                );
+              })}
+            </div>
           </>
         )}
       </Menu>

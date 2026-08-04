@@ -262,6 +262,9 @@ pub struct PlanItem {
     pub ordinal: u32,
     pub title: String,
     pub description: String,
+    /// Optional presentation hierarchy. Only leaf items participate in execution and review.
+    #[serde(default)]
+    pub section_path: Vec<String>,
     pub state: PlanItemState,
     #[serde(default)]
     pub depends_on: Vec<String>,
@@ -393,6 +396,9 @@ pub struct PlanItemDraft {
     pub id: String,
     pub title: String,
     pub description: String,
+    /// Optional hierarchy labels such as `["Backend", "Validation"]`.
+    #[serde(default)]
+    pub section_path: Vec<String>,
     #[serde(default)]
     pub depends_on: Vec<String>,
 }

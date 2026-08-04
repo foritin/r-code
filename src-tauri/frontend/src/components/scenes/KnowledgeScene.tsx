@@ -56,11 +56,10 @@ export function KnowledgeScene() {
       <section className="knowledge-center" aria-label="知识与指令">
         <header className="knowledge-header">
           <div>
-            <p className="page-kicker">KNOWLEDGE &amp; INSTRUCTIONS</p>
             <h1>知识与指令</h1>
-            <p>统一管理会被 Agent 使用的记忆、协作 Prompt 与 Skills。数据保存在 R-Code AppData，不进入项目目录或 Git。</p>
+            <p>管理 Agent 的记忆、协作方式和扩展能力。</p>
           </div>
-          <span className="knowledge-local-badge"><IconShield width={14} height={14} />仅本机</span>
+          <span className="knowledge-local-badge"><IconShield width={14} height={14} />数据仅存本机</span>
         </header>
 
         <div className="knowledge-layout">
@@ -68,10 +67,10 @@ export function KnowledgeScene() {
             {tab === "mcp" ? (
               <div className="knowledge-scope-group">
                 <span>设备</span>
-                <button className="active" aria-pressed="true" aria-label="本机工具">
+                <div className="knowledge-scope-static active" aria-label="本机工具">
                   <IconShield width={15} height={15} />
                   <strong>本机工具</strong>
-                </button>
+                </div>
                 <p className="knowledge-scope-note">连接配置对本机用户生效，不随项目进入 Git。</p>
               </div>
             ) : <>
@@ -104,9 +103,8 @@ export function KnowledgeScene() {
           <div className="knowledge-content">
             <nav className="knowledge-tabs" role="tablist" aria-label="知识类型">
               {TABS.map((item) => (
-                <button key={item.id} type="button" role="tab" aria-label={item.label} aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} onClick={() => openKnowledge(item.id)}>
+                <button key={item.id} type="button" role="tab" aria-label={item.label} aria-selected={tab === item.id} className={tab === item.id ? "active" : ""} title={item.description} onClick={() => openKnowledge(item.id)}>
                   <strong>{item.label}</strong>
-                  <span>{item.description}</span>
                 </button>
               ))}
             </nav>

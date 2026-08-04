@@ -299,7 +299,7 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 
 ### 8.3 密钥与日志
 
-Provider API key 通过 `keyring` 写入操作系统凭据库，配置文件只保存非敏感 Provider 元数据。日志层会遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
+Provider API key 通过 `keyring` 写入操作系统凭据库，配置文件只保存非敏感 Provider 元数据。结构化诊断日志在写入磁盘前遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数，按日滚动并固定保留最近 7 天；模型、工具、子代理、MCP 与恢复链路的 operational warning/error 会进入该日志，Prompt、源码正文与完整工具输出不进入普通日志。支持包通过系统目录选择器显式导出，只包含近 7 天脱敏后的 warning/error 明细（保留原始时间戳与模块）和白名单统计。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
 
 更完整的漏洞报告方式见根目录 [SECURITY.md](../SECURITY.md)。
 
@@ -327,7 +327,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作，防止跨连接竞态产生互相矛盾的账本或文件状态。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作；schema 22 为可执行 Plan 叶子事项增加展示层级路径，支持稳定的 1、1.1、1.2 编号而不让父标题进入执行状态机；schema 23 以 `tasks.goal_active` 区分普通首条任务描述和用户显式启用的 Goal 生命周期，旧会话升级后默认不启用 Goal；schema 24 为 `queued_messages` 增加持久排序位置，确保界面从上到下的顺序就是后端实际出队顺序。
 
 新增 migration 时必须：
 
@@ -349,9 +349,9 @@ flowchart TD
 
 ### 9.3 Plan、HITL 与稳定投影
 
-Plan 是 SQLite 权威聚合：`plans` 保存稳定身份和乐观修订，`plan_items`/依赖表保存功能待办，问题集与回答表保存 all-or-nothing 的结构化 human-in-the-loop 状态。模型给出的功能、问题和选项 ID 只在自己的 Plan/问题集作用域内唯一，不能成为跨任务的全局业务主键。
+Plan 是 SQLite 权威聚合：`plans` 保存稳定身份和乐观修订，`plan_items`/依赖表保存可执行叶子待办及其层级展示路径，问题集与回答表保存 all-or-nothing 的结构化 human-in-the-loop 状态。层级父标题只用于投影与 UI 编号，不参与依赖推进、变更归属或审核决定。模型给出的功能、问题和选项 ID 只在自己的 Plan/问题集作用域内唯一，不能成为跨任务的全局业务主键。
 
-Plan 模式仅由原生 R-Code runtime 执行。运行时只开放只读工作区工具和宿主 Plan 工具，禁止写入、Shell、变更型 MCP 与委派。`request_user_input` 先持久化问题集，再通过 Gateway 的 typed `SuspendForUser` metadata 结束当前 Run；suspension gate 会拒绝同一 Run 后续工具调用，并跳过子代理收集、质量复核和 `ReviewReady`。用户回答使用幂等键原子保存，Host 再 claim continuation；失败可重试，不把模型等待放进数据库事务。批准后由 durable implementation dispatch 把任务模式、确定性队列消息和 Plan 派发状态一起提交；启动恢复会把中断状态转成可见失败并恢复仍在队列中的任务，避免只有 Plan 已批准却没有实施入口。
+Plan 模式仅由原生 R-Code runtime 执行。运行时只开放只读工作区工具和宿主 Plan 工具，禁止写入、Shell、变更型 MCP 与委派。`request_user_input` 先持久化问题集，再通过 Gateway 的 typed `SuspendForUser` metadata 结束当前 Run；suspension gate 会拒绝同一 Run 后续工具调用，并跳过子代理收集、质量复核和 `ReviewReady`。用户回答使用幂等键原子保存，Host 再 claim continuation；失败可重试，不把模型等待放进数据库事务。批准后由 durable implementation dispatch 把任务模式、确定性队列消息和 Plan 派发状态一起提交。实施 Run 使用 typed continuation gate：只要仍有 `active_feature`，普通文本收尾不会结束 Run；`plan_item_update` 只有在全部完成或进入阻塞状态时才释放终止门。独立的只读调查或验证可以在当前叶子事项内并行委派并统一收集，写入仍由主 Agent 负责以保持增强审核归属确定。启动恢复会把中断状态转成可见失败并恢复仍在队列中的任务。
 
 每个 Plan 的人类可读投影位于 `<AppData>/r-code/plans/<plan-id>/plan.md`。投影路径由 Host 生成，后续修订只原子覆盖自己的稳定文件；SQLite 提交不等待文件 I/O，投影失败会记录错误并可显式修复。项目目录和 Git 中不创建 Plan 私有元数据。完整交互和安全语义见 [Plan 模式与增强审核](./plan-mode.md)。
 

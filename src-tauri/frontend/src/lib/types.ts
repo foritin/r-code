@@ -51,6 +51,8 @@ export interface Task {
   agent_engine: TaskAgentEngine;
   title: string;
   goal: string;
+  /** true only after the user explicitly starts a persistent Goal lifecycle. */
+  goal_active: boolean;
   mode: TaskMode;
   state: TaskState;
   worktree_path: string | null;
@@ -111,6 +113,7 @@ export interface PlanItem {
   ordinal: number;
   title: string;
   description: string;
+  section_path: string[];
   state: PlanItemState;
   depends_on: string[];
   created_at: string;
@@ -1225,7 +1228,7 @@ export interface SupportBundlePreview {
   version: string;
   platform: string;
   generated_at: string;
-  logs: { level: string; message: string; timestamp: string }[];
+  logs: { level: string; message: string; timestamp: string; target: string }[];
   config_summary: Record<string, unknown>;
   db_stats: { task_count: number; run_count: number; tool_call_count: number };
 }

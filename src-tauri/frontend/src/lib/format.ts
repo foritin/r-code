@@ -103,22 +103,14 @@ export function errText(e: unknown): string {
 
 /** 模式 → 人性化文案（humane language 红线）。 */
 export function modeLabel(mode: "ask" | "edit" | "auto" | "plan"): string {
-  switch (mode) {
-    case "ask": return "Ask — 先聊清楚";
-    case "edit": return "Edit — 改动要批准";
-    case "auto": return "Auto — 放手让它做";
-    case "plan": return "Plan — 先规划再实施";
-  }
+  return mode === "plan"
+    ? "Plan — 先规划，确认后实施"
+    : "Agent — 直接处理；可用能力由项目权限决定";
 }
 
 /** 模式 → 芯片用短标签；解释性文案放 title，避免与项目权限芯片撞车。 */
 export function modeShortLabel(mode: "ask" | "edit" | "auto" | "plan"): string {
-  switch (mode) {
-    case "ask": return "Ask";
-    case "edit": return "Edit";
-    case "auto": return "Auto";
-    case "plan": return "Plan";
-  }
+  return mode === "plan" ? "Plan" : "Agent";
 }
 
 export interface PermissionAttribution {
