@@ -55,7 +55,7 @@ pub use plan_review::{
     EnhancedReviewGroupView, EnhancedReviewTarget, EnhancedReviewView, FinishPlanWriteInput,
     OsPlanReviewFileSystem, PathCoordinator, PathLease, PlanFeatureRef, PlanRejectRecoveryReport,
     PlanRejectResult, PlanReviewFileSystem, PlanReviewStore, PlanRevisionRef, PlanWriteGuard,
-    RecordPlanWriteOutcome, PLAN_REVIEW_FEATURE_NOT_TERMINAL,
+    RecordPlanWriteOutcome, PLAN_REVIEW_FEATURE_NOT_TERMINAL, PLAN_REVIEW_SCOPE_CONFLICT,
 };
 pub use plan_store::{
     PlanStore, PLAN_CONTINUATION_INTERRUPTED, PLAN_IMPLEMENTATION_DISPATCH_INTERRUPTED,

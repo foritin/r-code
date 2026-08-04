@@ -40,6 +40,7 @@ pub struct PlanRevisionRef {
 }
 
 pub const PLAN_REVIEW_FEATURE_NOT_TERMINAL: &str = "plan_review_feature_not_terminal";
+pub const PLAN_REVIEW_SCOPE_CONFLICT: &str = "plan_review_scope_conflict";
 
 /// Metadata supplied after a trusted write completes while [`PlanWriteGuard`] is still held.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1085,14 +1086,24 @@ impl<'a> PlanReviewStore<'a> {
         let now = decision.decided_at.to_rfc3339();
         let mut conn = self.db.conn()?;
         let tx = conn.transaction().map_err(db_error)?;
-        insert_decision(&tx, &decision)?;
-        tx.execute(
-            "UPDATE plan_reject_operations
+        // Release this operation's active database claim inside the same write transaction before
+        // inserting its decision. The schema guard can then reject every *other* incompatible
+        // claim without mistaking this operation for a competitor. No other writer can observe the
+        // intermediate state because SQLite holds the transaction's write lock until commit.
+        let updated = tx
+            .execute(
+                "UPDATE plan_reject_operations
              SET state = 'committed', error = NULL, updated_at = ?1, completed_at = ?1
              WHERE id = ?2 AND state = 'applying'",
-            params![now, operation_id],
-        )
-        .map_err(db_error)?;
+                params![now, operation_id],
+            )
+            .map_err(db_error)?;
+        if updated != 1 {
+            return Err(invalid(format!(
+                "rejection operation {operation_id} is no longer applying"
+            )));
+        }
+        insert_decision(&tx, &decision)?;
         tx.commit().map_err(db_error)?;
         Ok(decision)
     }
@@ -2227,7 +2238,13 @@ fn invalid(message: impl Into<String>) -> ProductError {
 }
 
 fn db_error(error: rusqlite::Error) -> ProductError {
-    ProductError::DatabaseError(error.to_string())
+    let message = error.to_string();
+    if message.contains(PLAN_REVIEW_SCOPE_CONFLICT) {
+        return invalid(format!(
+            "{PLAN_REVIEW_SCOPE_CONFLICT}: another incompatible review action is already final or in progress"
+        ));
+    }
+    ProductError::DatabaseError(message)
 }
 
 fn io_error(error: io::Error) -> ProductError {
