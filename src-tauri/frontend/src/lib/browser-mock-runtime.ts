@@ -767,6 +767,7 @@ function approveMockPlan(taskId: string, planId: string, expectedRevision: numbe
   view.plan.implementation_dispatch_error = null;
   view.plan.implementation_queue_message_id = `plan-implementation:${planId}:${expectedRevision}`;
   view.plan.implementation_dispatched_at = timestamp;
+  taskById(taskId).mode = "auto";
   for (const item of view.items) {
     item.state = item.depends_on.length === 0 ? "in_progress" : "pending";
     item.updated_at = timestamp;

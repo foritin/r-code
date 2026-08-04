@@ -86,14 +86,19 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
   const [retryQuestionSetId, setRetryQuestionSetId] = useState<string | null>(null);
   const currentQuestionSetId = view?.pending_question_set?.id ?? null;
   const answerKeys = useRef(new Map<string, string>());
+  const activeTaskId = useRef(task.id);
+  activeTaskId.current = task.id;
 
   const refresh = useCallback(async () => {
+    const requestedTaskId = task.id;
     try {
-      const next = await planGet(task.id);
+      const next = await planGet(requestedTaskId);
+      if (activeTaskId.current !== requestedTaskId) return next;
       setView(next);
       setLoaded(true);
       return next;
     } catch (cause) {
+      if (activeTaskId.current !== requestedTaskId) throw cause;
       setLoaded(true);
       setError(`读取计划失败：${errorText(cause)}`);
       throw cause;
@@ -110,7 +115,11 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
     setCancelArmedRevision(null);
     setNotice(null);
     setError(null);
-  }, [task.id]);
+    // Approval returns the task to auto mode. Always probe once when a room is
+    // opened so an executing or completed Plan survives navigation and restart;
+    // the regular poll is enabled after this initial lookup finds the Plan.
+    void refresh().catch(() => undefined);
+  }, [task.id, refresh]);
 
   useEffect(() => {
     if (!currentQuestionSetId) return;

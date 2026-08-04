@@ -114,7 +114,7 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
 
   await page.getByLabel("描述新任务").fill("先澄清边界，再生成实施计划");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await page.locator(".scene-room").waitFor({ state: "visible" });
+  await page.locator(".scene.scene-room").waitFor({ state: "visible" });
 
   const panel = page.getByRole("region", { name: "当前计划" });
   await panel.waitFor({ state: "visible" });
@@ -134,6 +134,29 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await panel.getByRole("button", { name: "确认实施", exact: true }).click();
   await panel.getByText("实施中", { exact: false }).first().waitFor();
   assert.match(await features.first().innerText(), /进行中/);
+
+  // Approval switches the task back to auto mode. Leaving and reopening the
+  // room must still discover the durable Plan instead of hiding the panel.
+  const approvedTaskId = await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    const task = useTasksStore.getState().details[taskId]?.task;
+    if (task?.mode !== "auto") throw new Error(`Approved task stayed in ${task?.mode ?? "unknown"} mode`);
+    useAppStore.getState().goHome();
+    return taskId;
+  });
+  await page.locator(".scene.scene-home").waitFor({ state: "visible" });
+  await page.evaluate(async (taskId) => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openRoom(taskId);
+  }, approvedTaskId);
+  await page.locator(".scene.scene-room").waitFor({ state: "visible" });
+  await panel.waitFor({ state: "visible" });
+  await panel.getByText("实施中", { exact: false }).first().waitFor();
 
   // Complete feature 1 through the same typed IPC used by the runtime. Feature 2 then becomes
   // active, which lets this test cover terminal decisions and live-but-disabled review together.
