@@ -74,8 +74,8 @@ pub enum QualityLoopMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QualityReviewer {
-    #[default]
     Auto,
+    #[default]
     RCode,
     Codex,
 }
@@ -134,7 +134,7 @@ impl Default for OrchestrationPolicy {
             delegation_router: DelegationRouterMode::Balanced,
             allow_cross_engine_delegation: true,
             quality_loop: QualityLoopMode::Off,
-            quality_reviewer: QualityReviewer::Auto,
+            quality_reviewer: QualityReviewer::RCode,
             max_review_rounds: 1,
         }
     }
@@ -300,6 +300,14 @@ Codex CLI is installed and authenticated. If the user asks to invoke Codex in Pl
 this runtime boundary and continue planning directly; for that request, do not call `mcp_discover` or `suggest_mcp`, \
 and do not claim Codex is missing or unconfigured. An approved Plan may use the configured Codex \
 collaborator during its later implementation run.",
+        );
+    } else {
+        prompt.push_str(
+            "\n\nAgent mode is active. Work directly unless the request needs a structured Plan before any writes. \
+When the user explicitly asks for planning, or the scope is too ambiguous or risky to implement \
+safely in one pass, call `enter_plan_mode` before making changes. The host will end this Agent run \
+and resume the same request in Plan mode. Do not call `plan_publish` or `request_user_input` from \
+Agent mode. Returning from Plan to Agent requires explicit user approval of the published Plan.",
         );
     }
     prompt
@@ -1369,13 +1377,13 @@ Do not mention private reasoning.\n\n{}",
     }
 
     // 收尾：错误以非增量消息呈现；正常完成才发出 ReviewReady。
-    if let Some(err) = terminal_err {
+    if let Some(err) = terminal_err.as_deref() {
         let _ = ctx.event_tx.send(AgentEvent::Message {
             text: format!("[error] {err}"),
             delta: false,
         });
     }
-    if was_aborted {
+    if was_aborted || terminal_err.is_some() {
         let _ = ctx.event_tx.send(AgentEvent::State {
             state: TaskState::Interrupted,
         });
@@ -1579,7 +1587,8 @@ impl SessionToolHost {
         if !self.gateway.requires_workspace_scope(name) {
             // Host lifecycle tools belong to the main task. Delegated children must not mutate or
             // suspend the parent's Plan even when they have full workspace access.
-            return !self.caller.starts_with("subagent:");
+            return !self.caller.starts_with("subagent:")
+                && host_lifecycle_tool_allowed(self.policy, name);
         }
         match self.policy {
             ToolPolicy::Main | ToolPolicy::FullAccess => workspace_tool_allowed(name),
@@ -1594,7 +1603,7 @@ impl SessionToolHost {
     ) -> Result<serde_json::Value, ProductError> {
         if !self.tool_allowed(name) {
             return Err(ProductError::Other(format!(
-                "tool '{name}' is not available in a workspace-scoped conversation"
+                "tool '{name}' is not available in the current task mode"
             )));
         }
         if !self.gateway.requires_workspace_scope(name) {
@@ -1847,11 +1856,33 @@ impl SessionToolHost {
             // 工具执行错误（IO、权限等）作为工具结果返回给模型，不终止 agent loop。
             // 模型可以据此调整策略（换路径、换工具或告知用户）。
             Err(e) => Ok(ToolCallOutcome {
-                content: format!("Error: {e}"),
+                content: user_visible_tool_error(&e),
                 is_error: true,
                 metadata: None,
             }),
         }
+    }
+}
+
+fn user_visible_tool_error(error: &ProductError) -> String {
+    match error {
+        ProductError::DatabaseError(_)
+        | ProductError::MigrationError(_)
+        | ProductError::BlobError(_)
+        | ProductError::IpcError(_)
+        | ProductError::SecretError(_) => "操作暂时无法完成，请稍后再试。".to_string(),
+        _ => format!("Error: {error}"),
+    }
+}
+
+/// Keep Plan lifecycle operations out of Agent requests (and vice versa), instead of relying on
+/// a later state-machine error after a model has already selected the wrong tool.
+fn host_lifecycle_tool_allowed(policy: ToolPolicy, name: &str) -> bool {
+    match name {
+        "enter_plan_mode" => matches!(policy, ToolPolicy::Main | ToolPolicy::ReadOnly),
+        "plan_publish" | "request_user_input" => policy == ToolPolicy::Plan,
+        "plan_item_update" => matches!(policy, ToolPolicy::Main | ToolPolicy::FullAccess),
+        _ => true,
     }
 }
 
@@ -3295,11 +3326,30 @@ mod tests {
     }
 
     #[test]
+    fn agent_mode_policy_can_reduce_to_plan_but_cannot_bypass_approval() {
+        let prompt = append_plan_mode_policy("base".to_string(), false);
+
+        assert!(prompt.contains("call `enter_plan_mode` before making changes"));
+        assert!(prompt.contains("Do not call `plan_publish`"));
+        assert!(prompt.contains("requires explicit user approval"));
+    }
+
+    #[test]
     fn automatic_quality_review_is_opt_in_by_default() {
-        assert_eq!(
-            OrchestrationPolicy::default().quality_loop,
-            QualityLoopMode::Off
-        );
+        let policy = OrchestrationPolicy::default();
+        assert_eq!(policy.quality_loop, QualityLoopMode::Off);
+        assert_eq!(policy.quality_reviewer, QualityReviewer::RCode);
+    }
+
+    #[test]
+    fn internal_storage_failure_is_sanitized_for_the_tool_timeline() {
+        let message = user_visible_tool_error(&ProductError::DatabaseError(
+            "database is locked".to_string(),
+        ));
+
+        assert_eq!(message, "操作暂时无法完成，请稍后再试。");
+        assert!(!message.contains("database"));
+        assert!(!message.contains("locked"));
     }
 
     #[tokio::test]
@@ -3496,6 +3546,66 @@ mod tests {
             AgentEvent::Message { text, .. } if text.contains("settled final")
         )));
         assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn active_plan_stops_as_interrupted_after_repeated_premature_finals() {
+        let provider = MockProvider::new("mock");
+        for attempt in 1..=MAX_REQUIRED_CONTINUATION_REPROMPTS + 1 {
+            provider.push_text_turn(
+                format!("premature final {attempt}"),
+                hermes_core::Usage::default(),
+            );
+        }
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        );
+        let mut auto_input = input();
+        auto_input.mode = TaskMode::Auto;
+        let session = runtime.create_session(auto_input).await.unwrap();
+        runtime
+            .update_task_context(
+                &session.meta.id,
+                TaskMode::Auto,
+                Some(r#"{"execution_status":"active_feature"}"#.to_string()),
+            )
+            .await
+            .unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "do not abandon the active feature")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(!runtime.is_running());
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, delta: false }
+                if text.contains("模型连续尝试提前结束")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::Interrupted
+            }
+        )));
+        assert!(!events.iter().any(|event| matches!(
             event,
             AgentEvent::State {
                 state: TaskState::ReviewReady
@@ -4387,6 +4497,35 @@ mod tests {
         );
         assert_eq!(tool_policy_for_task_mode(TaskMode::Edit), ToolPolicy::Main);
         assert_eq!(tool_policy_for_task_mode(TaskMode::Auto), ToolPolicy::Main);
+    }
+
+    #[test]
+    fn plan_lifecycle_tools_are_exposed_only_in_their_valid_mode() {
+        for policy in [ToolPolicy::Main, ToolPolicy::ReadOnly] {
+            assert!(host_lifecycle_tool_allowed(policy, "enter_plan_mode"));
+            assert!(!host_lifecycle_tool_allowed(policy, "plan_publish"));
+            assert!(!host_lifecycle_tool_allowed(policy, "request_user_input"));
+        }
+        assert!(!host_lifecycle_tool_allowed(
+            ToolPolicy::Plan,
+            "enter_plan_mode"
+        ));
+        assert!(host_lifecycle_tool_allowed(
+            ToolPolicy::Plan,
+            "plan_publish"
+        ));
+        assert!(host_lifecycle_tool_allowed(
+            ToolPolicy::Plan,
+            "request_user_input"
+        ));
+        assert!(!host_lifecycle_tool_allowed(
+            ToolPolicy::Plan,
+            "plan_item_update"
+        ));
+        assert!(host_lifecycle_tool_allowed(
+            ToolPolicy::Main,
+            "plan_item_update"
+        ));
     }
 
     #[test]

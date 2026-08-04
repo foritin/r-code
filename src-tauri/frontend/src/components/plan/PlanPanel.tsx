@@ -17,6 +17,8 @@ import type {
 } from "../../lib/types";
 import {
   IconCheck,
+  IconChevronDown,
+  IconChevronRight,
   IconHelp,
   IconRefresh,
 } from "../icons";
@@ -88,11 +90,12 @@ type OutlineNode =
   | { kind: "item"; key: string; item: PlanItem };
 
 type OutlineEntry =
-  | { kind: "section"; key: string; title: string; number: string; depth: number; progress: PlanProgress }
-  | { kind: "item"; key: string; item: PlanItem; number: string; depth: number };
+  | { kind: "section"; key: string; title: string; number: string; depth: number; ancestors: string[]; progress: PlanProgress }
+  | { kind: "item"; key: string; item: PlanItem; number: string; depth: number; ancestors: string[] };
 
-function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
+export function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
   const root: OutlineNode[] = [];
+  let sectionSequence = 0;
   for (const item of items) {
     let children = root;
     const path: string[] = Array.isArray(item.section_path)
@@ -101,11 +104,11 @@ function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
     const keyPath: string[] = [];
     for (const segment of path) {
       keyPath.push(segment);
-      let section = children.find(
-        (node): node is Extract<OutlineNode, { kind: "section" }> => node.kind === "section" && node.title === segment,
-      );
+      const last = children[children.length - 1];
+      let section = last?.kind === "section" && last.title === segment ? last : undefined;
       if (!section) {
-        section = { kind: "section", key: `section:${JSON.stringify(keyPath)}`, title: segment, children: [] };
+        sectionSequence += 1;
+        section = { kind: "section", key: `section:${sectionSequence}:${JSON.stringify(keyPath)}`, title: segment, children: [] };
         children.push(section);
       }
       children = section.children;
@@ -117,7 +120,7 @@ function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
     node.kind === "item" ? [node.item] : descendantItems(node.children)
   ));
   const flattened: OutlineEntry[] = [];
-  const visit = (nodes: readonly OutlineNode[], prefix: number[], depth: number) => {
+  const visit = (nodes: readonly OutlineNode[], prefix: number[], depth: number, ancestors: string[]) => {
     nodes.forEach((node, index) => {
       const numberPath = [...prefix, index + 1];
       const number = numberPath.join(".");
@@ -128,15 +131,16 @@ function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
           title: node.title,
           number,
           depth,
+          ancestors,
           progress: featureProgress(descendantItems(node.children)),
         });
-        visit(node.children, numberPath, depth + 1);
+        visit(node.children, numberPath, depth + 1, [...ancestors, node.key]);
       } else {
-        flattened.push({ kind: "item", key: node.key, item: node.item, number, depth });
+        flattened.push({ kind: "item", key: node.key, item: node.item, number, depth, ancestors });
       }
     });
   };
-  visit(root, [], 0);
+  visit(root, [], 0, []);
   return flattened;
 }
 
@@ -157,6 +161,9 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
   const [cancelArmedRevision, setCancelArmedRevision] = useState<number | null>(null);
   const [answers, setAnswers] = useState<Record<string, AnswerDraft>>({});
   const [retryQuestionSetId, setRetryQuestionSetId] = useState<string | null>(null);
+  const [planCollapsed, setPlanCollapsed] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => new Set());
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set());
   const currentQuestionSetId = view?.pending_question_set?.id ?? null;
   const answerKeys = useRef(new Map<string, string>());
   useEffect(() => {
@@ -164,6 +171,9 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
     setAnswers({});
     setRetryQuestionSetId(null);
     setCancelArmedRevision(null);
+    setPlanCollapsed(false);
+    setCollapsedSections(new Set());
+    setExpandedItems(new Set());
     setNotice(null);
     setError(null);
   }, [task.id]);
@@ -176,11 +186,34 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
 
   const progress = useMemo(() => featureProgress(view?.items ?? []), [view?.items]);
   const outline = useMemo(() => planOutline(view?.items ?? []), [view?.items]);
+  const visibleOutline = useMemo(
+    () => outline.filter((entry) => entry.ancestors.every((key) => !collapsedSections.has(key))),
+    [collapsedSections, outline],
+  );
   const itemTitles = useMemo(
     () => new Map((view?.items ?? []).map((item) => [item.id, item.title])),
     [view?.items],
   );
   const cancelArmed = view != null && cancelArmedRevision === view.plan.revision;
+  const panelBodyId = `plan-panel-${task.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-body`;
+
+  const toggleSection = (key: string) => {
+    setCollapsedSections((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const toggleItem = (itemId: string) => {
+    setExpandedItems((current) => {
+      const next = new Set(current);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  };
 
   const initialize = async () => {
     if (busy) return;
@@ -219,7 +252,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
     const operation = skipAll ? "skip" : "answer";
     setBusy(operation);
     setError(null);
-    setNotice(skipAll ? "正在跳过这组问题…" : "正在提交回答…");
+    setNotice(null);
     const key = answerKeys.current.get(questionSet.id) ?? newIdempotencyKey();
     answerKeys.current.set(questionSet.id, key);
     try {
@@ -232,9 +265,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
       });
       setView(next);
       setRetryQuestionSetId(null);
-      setNotice(next.continuation_question_set
-        ? "回答已接纳，Agent 正在续接同一份计划。"
-        : "回答已接纳，计划已继续更新。");
+      setNotice(null);
       await onTaskChanged?.();
     } catch (cause) {
       const message = errorText(cause);
@@ -268,7 +299,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
     try {
       const next = await planApprove(task.id, view.plan.id, view.plan.revision);
       setView(next);
-      setNotice("计划已确认，功能事项将按依赖顺序进入实施。");
+      setNotice(null);
       await onTaskChanged?.();
     } catch (cause) {
       setError(`确认实施失败：${errorText(cause)}`);
@@ -309,38 +340,39 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
     }
   };
 
-  const cancel = async () => {
-    if (!view || busy || running) return;
-    if (!cancelArmed) {
-      setBusy("cancel");
-      setError(null);
-      try {
-        // Refresh before arming the destructive action. Plan item/review activity may have
-        // advanced the revision since the last poll; confirming against that stale snapshot
-        // would otherwise force the user through an avoidable conflict round-trip.
-        const latest = await refresh();
-        if (!latest) throw new Error("当前计划已不存在");
-        setCancelArmedRevision(latest.plan.revision);
-        setNotice("再次点击“确认取消”才会取消计划；工作区中的文件不会被回滚。");
-      } catch {
-        setNotice(null);
-      } finally {
-        setBusy(null);
-      }
-      return;
+  const prepareCancel = async () => {
+    if (!view || busy || running || cancelArmed) return;
+    setBusy("cancel");
+    setError(null);
+    setNotice(null);
+    try {
+      // Refresh before arming the destructive action. Plan item/review activity may have
+      // advanced the revision since the last poll; confirming against that stale snapshot
+      // would otherwise force the user through an avoidable conflict round-trip.
+      const latest = await refresh();
+      if (!latest) throw new Error("当前计划已不存在");
+      setCancelArmedRevision(latest.plan.revision);
+    } catch {
+      setError("暂时无法取消计划，请稍后再试。");
+    } finally {
+      setBusy(null);
     }
+  };
+
+  const cancel = async () => {
+    if (!view || busy || running || !cancelArmed) return;
     setBusy("cancel");
     setError(null);
     try {
       const next = await planCancel(task.id, view.plan.id, view.plan.revision);
       setView(next);
       setCancelArmedRevision(null);
-      setNotice("计划已取消。现有工作区文件保持不变，你可以从“添加”重新建立计划。");
+      setNotice(null);
       await onTaskChanged?.();
     } catch (cause) {
       setError(`取消计划失败：${errorText(cause)}`);
       await refresh().catch(() => undefined);
-      setNotice("计划在确认期间发生了变化，请检查最新状态后重新取消。");
+      setCancelArmedRevision(null);
     } finally {
       setBusy(null);
     }
@@ -377,22 +409,34 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
 
   return (
     <section className={`plan-panel state-${view.plan.state}`} aria-label="当前计划" data-task-id={task.id}>
-      <header className="plan-panel-summary">
-        <span className="plan-state-diamond" aria-hidden="true" />
-        <span className="plan-summary-copy">
-          <strong>计划</strong>
-          <small>{PLAN_STATE_LABEL[view.plan.state]} · 修订 {view.plan.revision}</small>
-        </span>
-        {progress.total > 0 && (
-          <span className="plan-summary-progress">{progress.completed}/{progress.total} · {progressPercent}%</span>
-        )}
+      <header className={`plan-panel-summary${planCollapsed ? " is-collapsed" : ""}`}>
+        <button
+          type="button"
+          className="plan-summary-toggle"
+          aria-expanded={!planCollapsed}
+          aria-controls={panelBodyId}
+          aria-label={`${planCollapsed ? "展开" : "收起"}计划`}
+          onClick={() => setPlanCollapsed((collapsed) => !collapsed)}
+        >
+          <span className="plan-summary-chevron" aria-hidden="true">
+            {planCollapsed ? <IconChevronRight width={14} height={14} /> : <IconChevronDown width={14} height={14} />}
+          </span>
+          <span className="plan-state-diamond" aria-hidden="true" />
+          <span className="plan-summary-copy">
+            <strong>计划</strong>
+            <small>{PLAN_STATE_LABEL[view.plan.state]} · 修订 {view.plan.revision}</small>
+          </span>
+          {progress.total > 0 && (
+            <span className="plan-summary-progress">{progress.completed}/{progress.total} · {progressPercent}%</span>
+          )}
+        </button>
         {running && <span className="plan-runtime-state">Agent 运行中</span>}
         <button type="button" className="iconbtn" aria-label="刷新计划" title="刷新计划" onClick={() => void refresh()}>
           <IconRefresh width={13} height={13} />
         </button>
       </header>
 
-      <div className="plan-panel-body">
+      <div className="plan-panel-body" id={panelBodyId} hidden={planCollapsed}>
           <div className="plan-metadata">
             <span title={view.plan.projection_path ?? "计划文档尚未生成"}>
               文档 · {view.plan.projection_path ?? "准备中"}
@@ -567,75 +611,118 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
                 {progress.failed > 0 && <span className="is-failed">失败 {progress.failed}</span>}
               </div>
               <ol className="plan-feature-list">
-                {outline.map((entry) => entry.kind === "section" ? (
-                  <li
-                    className="plan-outline-section"
-                    key={entry.key}
-                    style={{ paddingInlineStart: `${2 + entry.depth * 14}px` }}
-                  >
-                    <span className="plan-feature-index" aria-label={`阶段 ${entry.number}`}>{entry.number}</span>
-                    <span className="plan-feature-copy">
-                      <span><strong>{entry.title}</strong><em>{entry.progress.completed}/{entry.progress.total}</em></span>
-                    </span>
-                  </li>
-                ) : (
-                  <li
-                    className={`state-${entry.item.state}`}
-                    key={entry.key}
-                    style={{ paddingInlineStart: `${2 + entry.depth * 14}px` }}
-                  >
-                    <span className="plan-feature-index" aria-label={`第 ${entry.number} 步`}>{entry.number}</span>
-                    <span className="plan-feature-copy">
-                      <span><strong>{entry.item.title}</strong><em>{ITEM_STATE_LABEL[entry.item.state]}</em></span>
-                      {entry.item.depends_on.length > 0 && (
-                        <small className="plan-feature-dependencies">
-                          依赖：{entry.item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
-                        </small>
-                      )}
-                      {entry.item.description && (
-                        <details className="plan-feature-details">
-                          <summary>查看细节</summary>
-                          <p>{entry.item.description}</p>
-                        </details>
-                      )}
-                    </span>
-                    {entry.item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
-                  </li>
-                ))}
+                {visibleOutline.map((entry) => {
+                  if (entry.kind === "section") {
+                    const collapsed = collapsedSections.has(entry.key);
+                    return (
+                      <li
+                        className={`plan-outline-section${collapsed ? " is-collapsed" : ""}`}
+                        key={entry.key}
+                        style={{ paddingInlineStart: `${entry.depth * 14}px` }}
+                      >
+                        <button
+                          type="button"
+                          className="plan-outline-toggle"
+                          aria-expanded={!collapsed}
+                          aria-label={`${collapsed ? "展开" : "收起"}阶段 ${entry.number}：${entry.title}`}
+                          onClick={() => toggleSection(entry.key)}
+                        >
+                          <span className="plan-row-chevron" aria-hidden="true">
+                            {collapsed ? <IconChevronRight width={13} height={13} /> : <IconChevronDown width={13} height={13} />}
+                          </span>
+                          <span className="plan-feature-index" aria-label={`阶段 ${entry.number}`}>{entry.number}</span>
+                          <span className="plan-feature-copy">
+                            <span><strong>{entry.title}</strong><em>{entry.progress.completed}/{entry.progress.total}</em></span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  }
+
+                  const expanded = expandedItems.has(entry.item.id);
+                  const detailsId = `plan-item-${entry.item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-details`;
+                  return (
+                    <li
+                      className={`plan-feature-item state-${entry.item.state}${expanded ? " is-expanded" : ""}`}
+                      key={entry.key}
+                      style={{ paddingInlineStart: `${entry.depth * 14}px` }}
+                    >
+                      <button
+                        type="button"
+                        className="plan-feature-toggle"
+                        aria-expanded={expanded}
+                        aria-controls={detailsId}
+                        aria-label={`${expanded ? "收起" : "展开"}功能 ${entry.number}：${entry.item.title}`}
+                        onClick={() => toggleItem(entry.item.id)}
+                      >
+                        <span className="plan-row-chevron" aria-hidden="true">
+                          {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+                        </span>
+                        <span className="plan-feature-index" aria-label={`第 ${entry.number} 步`}>{entry.number}</span>
+                        <span className="plan-feature-copy">
+                          <span><strong>{entry.item.title}</strong><em>{ITEM_STATE_LABEL[entry.item.state]}</em></span>
+                        </span>
+                        {entry.item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
+                      </button>
+                      <div className="plan-feature-details" id={detailsId} hidden={!expanded}>
+                        {entry.item.depends_on.length > 0 && (
+                          <small className="plan-feature-dependencies">
+                            依赖：{entry.item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
+                          </small>
+                        )}
+                        {entry.item.description && <p>{entry.item.description}</p>}
+                      </div>
+                    </li>
+                  );
+                })}
               </ol>
             </div>
           )}
 
-          {implementationReady && (
-            <div className="plan-approval">
-              <span>{running
-                ? "计划已准备好，等待本轮规划运行安全结束后即可确认。"
-                : "计划已准备好。确认后，事项才会进入实施与增强审核。"}</span>
-              <button
-                className="btn accent"
-                type="button"
-                disabled={busy != null || running}
-                title={running ? "请等待当前 Plan 运行结束" : "确认并开始实施"}
-                onClick={() => void approve()}
-              >
-                {busy === "approve" ? "确认中…" : "确认实施"}
-              </button>
-            </div>
-          )}
-
-
-          {cancellable && (
-            <div className="plan-cancel-row">
-              <span>取消只终止计划、待办和后续派发，不撤销已经写入工作区的文件。</span>
-              <button
-                className={`quiet-link danger-link${cancelArmed ? " is-armed" : ""}`}
-                type="button"
-                disabled={busy != null || running}
-                title={running ? "请先停止或等待当前运行结束" : "取消当前计划"}
-                onClick={() => void cancel()}
-              >
-                {busy === "cancel" ? "取消中…" : cancelArmed ? "确认取消" : "取消计划"}
-              </button>
+          {(implementationReady || cancellable) && (
+            <div className={`plan-decision-bar${cancelArmed ? " is-canceling" : ""}`}>
+              {cancelArmed && <span className="plan-decision-prompt" role="status">取消当前计划？</span>}
+              <span className="plan-decision-actions">
+                {cancellable && (
+                  <button
+                    className="btn plan-cancel-action"
+                    type="button"
+                    disabled={busy != null || running}
+                    aria-busy={busy === "cancel" && !cancelArmed}
+                    title={running
+                      ? "请先停止或等待当前运行结束"
+                      : cancelArmed
+                        ? "返回计划"
+                        : "取消当前计划"}
+                    onClick={() => {
+                      if (cancelArmed) setCancelArmedRevision(null);
+                      else void prepareCancel();
+                    }}
+                  >
+                    {busy === "cancel" && !cancelArmed && <span className="plan-action-spinner" aria-hidden="true" />}
+                    取消
+                  </button>
+                )}
+                {(implementationReady || cancelArmed) && (
+                  <button
+                    className={`btn ${cancelArmed ? "danger" : "accent"}`}
+                    type="button"
+                    disabled={busy != null || running}
+                    aria-busy={busy === "approve" || (busy === "cancel" && cancelArmed)}
+                    title={running
+                      ? "请等待当前 Plan 运行结束"
+                      : cancelArmed
+                        ? "确认取消当前计划"
+                        : "确认并开始实施"}
+                    onClick={() => void (cancelArmed ? cancel() : approve())}
+                  >
+                    {(busy === "approve" || (busy === "cancel" && cancelArmed)) && (
+                      <span className="plan-action-spinner" aria-hidden="true" />
+                    )}
+                    确认
+                  </button>
+                )}
+              </span>
             </div>
           )}
       </div>

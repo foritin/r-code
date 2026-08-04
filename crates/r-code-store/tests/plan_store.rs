@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use r_code_core::dto::{QueuedMessageState, SessionBranch, Task, TaskMode};
+use r_code_core::dto::{AgentEngine, QueuedMessageState, SessionBranch, Task, TaskMode, TaskState};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
     PlanContinuationState, PlanImplementationDispatchState, PlanItemDraft, PlanItemState,
@@ -223,6 +223,48 @@ fn hierarchy_path_survives_restart_and_projects_numbered_leaf_progress() {
     assert!(markdown.contains("### 1 Backend"));
     assert!(markdown.contains("#### 1.1 Vector adapter"));
     assert!(markdown.contains("**1.1.1 Add protocol methods**"));
+}
+
+#[test]
+fn noncontiguous_sections_preserve_the_execution_ordinal_in_projection() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(directory.path().join("r-code.db")).unwrap());
+    let task = seed_task(db.as_ref(), "Preserve section order");
+    let store = PlanStore::new(Arc::clone(&db), directory.path().join("plans"));
+    let created = store
+        .create_plan(&CreatePlanInput {
+            task_id: task.id.clone(),
+        })
+        .unwrap();
+    let mut first = item("first", "First backend item", &[]);
+    first.section_path = vec!["Backend".to_string()];
+    let root = item("root", "Root item", &[]);
+    let mut last = item("last", "Last backend item", &["root"]);
+    last.section_path = vec!["Backend".to_string()];
+    let published = publish(
+        &store,
+        &task.id,
+        &created.plan.id,
+        created.plan.revision,
+        vec![first, root, last],
+    );
+
+    assert_eq!(
+        published
+            .items
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["first", "root", "last"]
+    );
+    let markdown = fs::read_to_string(projection_path(&published)).unwrap();
+    let first_position = markdown.find("First backend item").unwrap();
+    let root_position = markdown.find("Root item").unwrap();
+    let last_position = markdown.find("Last backend item").unwrap();
+    assert!(first_position < root_position && root_position < last_position);
+    assert!(markdown.contains("### 1 Backend"));
+    assert!(markdown.contains("**2 Root item**"));
+    assert!(markdown.contains("### 3 Backend"));
 }
 
 #[test]
@@ -938,6 +980,230 @@ fn approved_implementation_is_staged_once_with_task_mode_in_the_same_transaction
         .query_row("SELECT COUNT(*) FROM queued_messages", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[test]
+fn agent_plan_entry_creates_the_draft_mode_and_continuation_in_one_transaction() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = Task::new(None, "Agent", "Plan before writing", TaskMode::Edit);
+    TaskRepository::new(&db).create(&task).unwrap();
+    let branch = SessionBranchRepository::new(&db)
+        .ensure_active(&task.id)
+        .unwrap();
+    let store = PlanStore::new(db.clone(), directory.path().join("plans"));
+
+    let entered = store
+        .enter_plan_mode_and_stage_continuation(
+            &task.id,
+            &branch.id,
+            "Continue the same request in Plan mode",
+        )
+        .unwrap();
+
+    assert_eq!(entered.plan.state, PlanState::Draft);
+    assert_eq!(
+        TaskRepository::new(&db)
+            .get(&task.id)
+            .unwrap()
+            .unwrap()
+            .mode,
+        TaskMode::Plan
+    );
+    let pending = QueuedMessageRepository::new(&db)
+        .list_pending(&task.id, &branch.id)
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].state, QueuedMessageState::Queued);
+    assert!(pending[0].id.starts_with("plan-entry:"));
+}
+
+#[test]
+fn agent_plan_entry_rolls_back_plan_and_queue_when_mode_switch_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let task = Task::new(None, "Agent", "Atomic Plan entry", TaskMode::Edit);
+    TaskRepository::new(&db).create(&task).unwrap();
+    let branch = SessionBranchRepository::new(&db)
+        .ensure_active(&task.id)
+        .unwrap();
+    let store = PlanStore::new(db.clone(), directory.path().join("plans"));
+    db.conn()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_agent_plan_entry
+             BEFORE UPDATE OF mode ON tasks
+             WHEN NEW.mode = 'plan'
+             BEGIN SELECT RAISE(ABORT, 'fault after Plan outbox writes'); END;",
+        )
+        .unwrap();
+
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(
+            &task.id,
+            &branch.id,
+            "Continue the same request in Plan mode",
+        ),
+        "fault after Plan outbox writes",
+    );
+    let conn = db.conn().unwrap();
+    let plan_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM plans", [], |row| row.get(0))
+        .unwrap();
+    let queue_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM queued_messages", [], |row| row.get(0))
+        .unwrap();
+    let mode: String = conn
+        .query_row("SELECT mode FROM tasks WHERE id = ?1", [&task.id], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(plan_count, 0);
+    assert_eq!(queue_count, 0);
+    assert_eq!(mode, "edit");
+}
+
+#[test]
+fn agent_plan_entry_rejects_invalid_task_and_branch_states() {
+    let directory = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open_in_memory().unwrap());
+    let tasks = TaskRepository::new(&db);
+    let branches = SessionBranchRepository::new(&db);
+    let store = PlanStore::new(db.clone(), directory.path().join("plans"));
+
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation("", "branch", "continue"),
+        "cannot be blank",
+    );
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation("missing", "branch", "continue"),
+        "task does not exist",
+    );
+
+    let archived = Task::new(None, "Archived", "Plan safely", TaskMode::Edit);
+    tasks.create(&archived).unwrap();
+    let archived_branch = branches.ensure_active(&archived.id).unwrap();
+    tasks
+        .update_state(&archived.id, TaskState::Archived)
+        .unwrap();
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(&archived.id, &archived_branch.id, "continue"),
+        "archived task",
+    );
+
+    let codex = Task::new(None, "Codex", "Plan safely", TaskMode::Edit);
+    tasks.create(&codex).unwrap();
+    tasks
+        .set_agent_engine(&codex.id, AgentEngine::Codex)
+        .unwrap();
+    let codex_branch = branches.ensure_active(&codex.id).unwrap();
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(&codex.id, &codex_branch.id, "continue"),
+        "requires the R-Code",
+    );
+
+    let already_plan = Task::new(None, "Plan", "Already planning", TaskMode::Plan);
+    tasks.create(&already_plan).unwrap();
+    let plan_branch = branches.ensure_active(&already_plan.id).unwrap();
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(&already_plan.id, &plan_branch.id, "continue"),
+        "unavailable while task mode is plan",
+    );
+
+    let inactive_branch = Task::new(None, "Branch", "Use active branch", TaskMode::Edit);
+    tasks.create(&inactive_branch).unwrap();
+    branches.ensure_active(&inactive_branch.id).unwrap();
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(
+            &inactive_branch.id,
+            "not-the-active-branch",
+            "continue",
+        ),
+        "active session branch",
+    );
+
+    let existing = Task::new(None, "Existing", "Do not duplicate", TaskMode::Edit);
+    tasks.create(&existing).unwrap();
+    let existing_branch = branches.ensure_active(&existing.id).unwrap();
+    store
+        .create_plan(&CreatePlanInput {
+            task_id: existing.id.clone(),
+        })
+        .unwrap();
+    assert_error_contains(
+        store.enter_plan_mode_and_stage_continuation(&existing.id, &existing_branch.id, "continue"),
+        "already has an active Plan",
+    );
+}
+
+#[test]
+fn hierarchy_validation_rejects_unsafe_paths_without_changing_the_plan() {
+    let fixture = Fixture::in_memory("Validate hierarchy");
+    let created = fixture.create_plan();
+    let projection = projection_path(&created);
+    let original_projection = fs::read_to_string(&projection).unwrap();
+    let invalid_paths = [
+        vec!["1", "2", "3", "4", "5"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        vec!["   ".to_string()],
+        vec!["x".repeat(121)],
+        vec!["unsafe\0label".to_string()],
+    ];
+
+    for section_path in invalid_paths {
+        let mut draft = item("feature", "Feature", &[]);
+        draft.section_path = section_path;
+        assert!(fixture
+            .store
+            .publish_plan(
+                &fixture.task.id,
+                &PublishPlanInput {
+                    plan_id: created.plan.id.clone(),
+                    expected_revision: created.plan.revision,
+                    items: vec![draft],
+                },
+            )
+            .is_err());
+        let unchanged = fixture
+            .store
+            .current_for_task(&fixture.task.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.plan.revision, created.plan.revision);
+        assert_eq!(
+            fs::read_to_string(&projection).unwrap(),
+            original_projection
+        );
+    }
+}
+
+#[test]
+fn corrupt_hierarchy_json_is_reported_instead_of_silently_flattened() {
+    let fixture = Fixture::in_memory("Detect corrupt hierarchy");
+    let created = fixture.create_plan();
+    publish(
+        &fixture.store,
+        &fixture.task.id,
+        &created.plan.id,
+        created.plan.revision,
+        vec![item("feature", "Feature", &[])],
+    );
+    fixture
+        .db
+        .conn()
+        .unwrap()
+        .execute(
+            "UPDATE plan_items SET section_path_json = 'not-json' WHERE plan_id = ?1",
+            [&created.plan.id],
+        )
+        .unwrap();
+
+    assert_error_contains(
+        fixture.store.current_for_task(&fixture.task.id),
+        "invalid Plan section_path_json",
+    );
 }
 
 #[test]

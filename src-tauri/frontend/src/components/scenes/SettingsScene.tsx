@@ -1177,7 +1177,7 @@ const DEFAULT_ORCHESTRATION: OrchestrationConfig = {
   delegation_router: "balanced",
   allow_cross_engine_delegation: true,
   quality_loop: "off",
-  quality_reviewer: "auto",
+  quality_reviewer: "r_code",
   max_review_rounds: 1,
 };
 

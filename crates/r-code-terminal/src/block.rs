@@ -8,6 +8,14 @@
 
 use chrono::{DateTime, Utc};
 
+/// The block model is metadata, not terminal scrollback. Keeping a small recent window is enough
+/// for diagnostics while ensuring a long-lived terminal cannot retain every command and byte it
+/// has ever produced.
+const MAX_RETAINED_BLOCKS: usize = 64;
+const MAX_COMMAND_BYTES: usize = 16 * 1024;
+const MAX_BLOCK_OUTPUT_BYTES: usize = 32 * 1024;
+const MAX_PENDING_ESCAPE_BYTES: usize = 8 * 1024;
+
 /// 块类型 — 命令或 turn。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockType {
@@ -61,7 +69,8 @@ impl BlockParser {
     }
 
     /// 输入终端输出并解析块。
-    pub fn feed(&mut self, data: &[u8]) {
+    pub fn feed(&mut self, data: &[u8]) -> Vec<i32> {
+        let mut completed_exit_codes = Vec::new();
         // 合并暂存区与新数据
         let mut buf = std::mem::take(&mut self.pending);
         buf.extend_from_slice(data);
@@ -72,20 +81,20 @@ impl BlockParser {
                 // ESC — 转义序列
                 if i + 1 >= buf.len() {
                     // ESC 在缓冲区末尾 — 不完整
-                    self.pending = buf[i..].to_vec();
-                    return;
+                    self.retain_pending_escape(&buf[i..]);
+                    return completed_exit_codes;
                 }
                 match buf[i + 1] {
                     b']' => {
                         // OSC: ESC ] ... BEL(0x07) 或 ST(ESC \)
                         let osc_start = i + 2;
                         if let Some((param_end, term_len)) = find_osc_terminator(&buf, osc_start) {
-                            self.handle_osc(&buf[osc_start..param_end]);
+                            self.handle_osc(&buf[osc_start..param_end], &mut completed_exit_codes);
                             i = param_end + term_len;
                         } else {
                             // 不完整 OSC — 暂存
-                            self.pending = buf[i..].to_vec();
-                            return;
+                            self.retain_pending_escape(&buf[i..]);
+                            return completed_exit_codes;
                         }
                     }
                     b'[' => {
@@ -98,8 +107,8 @@ impl BlockParser {
                             i = j + 1; // 跳过 final byte
                         } else {
                             // 不完整 CSI — 暂存
-                            self.pending = buf[i..].to_vec();
-                            return;
+                            self.retain_pending_escape(&buf[i..]);
+                            return completed_exit_codes;
                         }
                     }
                     b'P' | b'X' | b'^' | b'_' => {
@@ -107,8 +116,8 @@ impl BlockParser {
                         if let Some(end) = find_string_terminator(&buf, i + 2) {
                             i = end;
                         } else {
-                            self.pending = buf[i..].to_vec();
-                            return;
+                            self.retain_pending_escape(&buf[i..]);
+                            return completed_exit_codes;
                         }
                     }
                     b'(' | b')' | b'*' | b'+' | b'-' | b'.' | b'/' => {
@@ -116,8 +125,8 @@ impl BlockParser {
                         if i + 2 < buf.len() {
                             i += 3;
                         } else {
-                            self.pending = buf[i..].to_vec();
-                            return;
+                            self.retain_pending_escape(&buf[i..]);
+                            return completed_exit_codes;
                         }
                     }
                     _ => {
@@ -136,6 +145,7 @@ impl BlockParser {
         }
         // 全部消费完毕
         self.pending.clear();
+        completed_exit_codes
     }
 
     /// 获取已完成的块。
@@ -171,7 +181,7 @@ impl BlockParser {
     }
 
     /// 处理 OSC 序列参数。
-    fn handle_osc(&mut self, params: &[u8]) {
+    fn handle_osc(&mut self, params: &[u8], completed_exit_codes: &mut Vec<i32>) {
         let param_str = String::from_utf8_lossy(params);
         let mut parts = param_str.splitn(3, ';');
         let kind = parts.next().unwrap_or("");
@@ -185,7 +195,7 @@ impl BlockParser {
             "C" => self.handle_command_executed(),
             "D" => {
                 let exit_code = parts.next().and_then(|s| s.trim().parse::<i32>().ok());
-                self.handle_command_exit(exit_code);
+                self.handle_command_exit(exit_code, completed_exit_codes);
             }
             _ => {}
         }
@@ -196,7 +206,7 @@ impl BlockParser {
         // 如果有未关闭的块，先完成它（无 exit code）
         if let Some(mut block) = self.current_block.take() {
             block.ended_at = Some(Utc::now());
-            self.blocks.push(block);
+            self.push_completed_block(block);
         }
         self.current_block = Some(Block {
             block_type: BlockType::Command,
@@ -230,14 +240,17 @@ impl BlockParser {
         self.state = ParseState::InOutput;
     }
 
-    fn handle_command_exit(&mut self, exit_code: Option<i32>) {
+    fn handle_command_exit(&mut self, exit_code: Option<i32>, completed_exit_codes: &mut Vec<i32>) {
         // D 标记：命令退出
         if let Some(block) = &mut self.current_block {
             block.exit_code = exit_code;
             block.ended_at = Some(Utc::now());
         }
         if let Some(block) = self.current_block.take() {
-            self.blocks.push(block);
+            self.push_completed_block(block);
+        }
+        if let Some(exit_code) = exit_code {
+            completed_exit_codes.push(exit_code);
         }
         self.state = ParseState::Outside;
     }
@@ -252,16 +265,46 @@ impl BlockParser {
             match self.state {
                 ParseState::InCommand => {
                     let cmd = block.command.get_or_insert_with(String::new);
-                    cmd.push_str(&s);
+                    push_prefix_bounded(cmd, &s, MAX_COMMAND_BYTES);
                 }
                 ParseState::InOutput => {
-                    block.output.push_str(&s);
+                    push_prefix_bounded(&mut block.output, &s, MAX_BLOCK_OUTPUT_BYTES);
                 }
                 // InPrompt / Outside — 丢弃
                 _ => {}
             }
         }
     }
+
+    fn push_completed_block(&mut self, block: Block) {
+        if self.blocks.len() == MAX_RETAINED_BLOCKS {
+            self.blocks.remove(0);
+        }
+        self.blocks.push(block);
+    }
+
+    fn retain_pending_escape(&mut self, data: &[u8]) {
+        // An unterminated OSC/DCS string is malformed after this limit. Discard it rather than
+        // retaining an attacker-controlled stream forever; the next complete escape sequence can
+        // establish parser state again.
+        if data.len() <= MAX_PENDING_ESCAPE_BYTES {
+            self.pending.extend_from_slice(data);
+        } else {
+            self.pending.clear();
+        }
+    }
+}
+
+fn push_prefix_bounded(target: &mut String, text: &str, max_bytes: usize) {
+    let remaining = max_bytes.saturating_sub(target.len());
+    if remaining == 0 {
+        return;
+    }
+    let mut end = remaining.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    target.push_str(&text[..end]);
 }
 
 impl Default for BlockParser {
@@ -592,5 +635,40 @@ mod tests {
         parser.feed(&osc133_d(0));
         assert!(parser.blocks().is_empty());
         assert!(parser.current().is_none());
+    }
+
+    #[test]
+    fn continuously_consumed_output_keeps_parser_memory_bounded() {
+        let mut parser = BlockParser::new();
+
+        for index in 0..(MAX_RETAINED_BLOCKS * 3) {
+            let mut start = Vec::new();
+            start.extend(osc133("A"));
+            start.extend(osc133("B"));
+            start.extend(format!("command-{index}").as_bytes());
+            start.extend(osc133("C"));
+            parser.feed(&start);
+
+            // Model the manager draining every PTY chunk promptly: parser retention must still be
+            // bounded independently of the handoff and scrollback buffers.
+            for _ in 0..64 {
+                parser.feed(&vec![b'x'; 4096]);
+            }
+            assert_eq!(parser.feed(&osc133_d(index as i32)), vec![index as i32]);
+        }
+
+        assert_eq!(parser.blocks().len(), MAX_RETAINED_BLOCKS);
+        assert!(parser
+            .blocks()
+            .iter()
+            .all(|block| block.output.len() <= MAX_BLOCK_OUTPUT_BYTES));
+        assert!(parser.blocks().iter().all(|block| block
+            .command
+            .as_ref()
+            .is_none_or(|value| value.len() <= MAX_COMMAND_BYTES)));
+
+        parser.feed(b"\x1b]unterminated");
+        parser.feed(&vec![b'y'; MAX_PENDING_ESCAPE_BYTES * 2]);
+        assert!(parser.pending.len() <= MAX_PENDING_ESCAPE_BYTES);
     }
 }

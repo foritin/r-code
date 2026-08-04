@@ -71,10 +71,21 @@
 /* 项目级 Agent 权限选择器：视觉与会话输入区一致，策略本身不放宽工作区边界。 */
 .project-access-control { position: relative; flex: none; }
 .project-access-trigger {
-  display: inline-flex; align-items: center; gap:var(--sp-3); max-width: 180px;
+  display: inline-flex; align-items: center; gap: 7px; max-width: 196px;
   padding:var(--sp-2) var(--sp-4); border: 1px solid var(--border); border-radius: var(--radius-chip);
   background: var(--bg-chip); color: var(--fg-muted); cursor: pointer;
-  font: var(--text-meta) var(--font-mono); white-space: nowrap;
+  font: 500 var(--text-meta) var(--font-ui); white-space: nowrap;
+}
+.project-access-trigger > svg:first-child { color: var(--fg-faint); }
+.project-access-trigger.mode-full_access:not(.unavailable) { color: var(--accent); }
+.project-access-trigger.mode-full_access:not(.unavailable) > svg:first-child { color: currentColor; }
+.project-access-trigger.unavailable { color: var(--fg-faint); }
+.comp-meta .project-access-trigger { max-width: 196px; }
+#app.r-code-signature .scene-room .comp-meta .project-access-trigger.mode-full_access:not(.unavailable) {
+  color: var(--accent);
+}
+#app.r-code-signature .scene-room .comp-meta .project-access-trigger.mode-full_access:not(.unavailable) > svg:first-child {
+  color: currentColor;
 }
 .project-access-trigger:hover,.project-access-trigger.open {
   color: var(--fg); border-color: var(--edge-accent);
@@ -83,33 +94,50 @@
   outline: 2px solid var(--edge-accent-hi); outline-offset: 2px;
 }
 .project-access-trigger:disabled { opacity: .5; cursor: default; }
-.project-access-menu { width: min(350px, calc(100vw - 32px)); }
-.project-access-head { display: grid; gap:var(--sp-2); margin:0 var(--sp-1) var(--sp-3); padding:var(--sp-4) var(--sp-4) var(--sp-4); border-bottom: 1px solid var(--border); }
-.project-access-head strong { color: var(--fg); font: var(--text-sm) var(--font-ui); }
-.project-access-head span { color: var(--fg-faint); font-size: var(--text-meta); }
+.project-access-menu { width: min(380px, calc(100vw - 32px)); padding: 7px; }
+.project-access-head {
+  display: grid; gap: 5px; margin: 0; padding: 9px 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.project-access-head strong { color: var(--fg); font: 600 var(--text-sm) var(--font-ui); }
+.project-access-scope { color: var(--fg-faint); font-size: var(--text-meta); line-height: 1.45; }
+.project-access-notice {
+  margin-top: 3px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 7px; background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--fg-muted); font-size: var(--text-meta); line-height: 1.45;
+}
+.project-access-options { display: grid; gap: 2px; padding-top: 6px; }
 .project-access-option {
-  display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap:var(--sp-5); width: 100%;
-  min-height: 52px; padding:var(--sp-4) var(--sp-5); border: 1px solid transparent; border-radius: var(--radius-sm);
+  display: grid; grid-template-columns: 34px minmax(0,1fr) 18px; align-items: center; gap: 11px; width: 100%;
+  min-height: 64px; padding: 8px 10px; border: 1px solid transparent; border-radius: 9px;
   background: transparent; color: var(--fg-muted); text-align: left; cursor: pointer;
 }
 .project-access-option:hover {
-  background: var(--bg-chip); border-color: var(--border-strong);
+  background: var(--bg-chip); border-color: color-mix(in srgb, var(--fg) 8%, transparent);
 }
 .project-access-option.selected {
-  background: color-mix(in srgb, var(--accent) 16%, var(--bg-card));
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); color: var(--fg);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--fg) 6%, transparent);
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+  border-color: color-mix(in srgb, var(--fg) 9%, transparent); color: var(--fg);
+}
+.project-access-option.mode-full_access.selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 25%, var(--border)); color: var(--accent);
 }
 .project-access-option:focus-visible {
   outline: 2px solid var(--edge-accent-hi); outline-offset: -2px;
 }
-.project-access-option:disabled { cursor: default; opacity: .6; }
-.project-access-option-copy { display: grid; gap:var(--sp-1); min-width: 0; }
-.project-access-option-copy strong { font-size: var(--text-sm); font-weight: 600; }
+.project-access-option:disabled { cursor: default; opacity: .48; }
+.project-access-option-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent); color: var(--fg-muted);
+}
+.project-access-option.selected .project-access-option-icon { color: currentColor; }
+.project-access-option-copy { display: grid; gap: 3px; min-width: 0; }
+.project-access-option-copy strong { color: currentColor; font-size: var(--text-sm); font-weight: 600; }
 .project-access-option-copy small { color: var(--fg-faint); font-size: var(--text-meta); line-height: 1.45; }
-.project-access-option > svg { color: var(--accent); }
+.project-access-check { color: currentColor; }
 
-/* ---------- Room composer 的分支编辑 / 队列明细 ---------- */
+/* ---------- Room composer 的分支编辑 ---------- */
 .comp-editing {
   display: flex; align-items: center; gap:var(--sp-4); flex-wrap: wrap;
   margin-bottom:var(--sp-4); padding:var(--sp-3) var(--sp-5);
@@ -117,22 +145,6 @@
   background: var(--bg-panel); color: var(--fg-muted); font-size: var(--text-meta); line-height: 1.45;
 }
 .comp-editing { border-color: var(--edge-accent); color: var(--accent); }
-.queue-item {
-  display:grid; grid-template-columns:minmax(0, 1fr) auto auto; align-items:center; gap:var(--sp-3); min-width:0;
-  padding:var(--sp-3) var(--sp-3); border-radius: var(--radius-xs); background:var(--bg-panel); color:var(--fg-muted); font-size:var(--text-meta);
-}
-.queue-item > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.queue-state {
-  color:var(--fg-faint); font:var(--text-meta) var(--font-mono); white-space:nowrap;
-}
-.queue-state.queued { color: var(--fg-muted); }
-.queue-state.dispatching { color:var(--accent); animation:pulse 1.5s infinite; }
-.queue-state.failed { color:var(--danger); }
-.queue-item button {
-  padding:var(--sp-1) var(--sp-2); border:0; border-radius: var(--radius-xs); background:none; color:var(--fg-faint); font:inherit; cursor:pointer;
-}
-.queue-item button:hover { color:var(--danger); background:var(--tint-danger); }
-
 /* ============================================================================
    Inbox — needs-you 卡（语义照 fusion ncard：琥珀渐变 + tag + acts）
    ============================================================================ */

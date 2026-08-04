@@ -398,6 +398,21 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 22,
+            to_version: 23,
+            description: "Explicit Goal lifecycle state without reclassifying existing tasks"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 23,
+            to_version: 24,
+            description: "Durable user-defined execution order for queued messages".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

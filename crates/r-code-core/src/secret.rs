@@ -107,28 +107,59 @@ struct RedactionPattern {
 /// 编译一次、复用的脱敏规则集合。**顺序敏感**：更具体的模式先执行，避免
 /// 敏感片段残留。
 ///
-/// 1. `Bearer <token>`（先于 Authorization，整体吞掉 token）
-/// 2. `Authorization:` 头（吞到行尾，覆盖 `Basic <b64>` 等多 token 值）
-/// 3. `Cookie:` 头（吞到行尾）
-/// 4. `token=` 参数
-/// 5. API key（`sk-...` / `sk-ant-...`，`\b` 防止 `risk-area` 误伤）
+/// 1. PEM 私钥与 URL userinfo
+/// 2. Authorization / Cookie / Bearer 头
+/// 3. 常见敏感字段赋值（API key、密码、client secret、各种 token、AWS key）
+/// 4. 常见提供商 token 格式
+/// 5. OpenAI / Anthropic 风格 API key（`\b` 防止 `risk-area` 误伤）
 static REDACTION_PATTERNS: LazyLock<Vec<RedactionPattern>> = LazyLock::new(|| {
     vec![
         RedactionPattern {
-            re: Regex::new(r"Bearer\s+[a-zA-Z0-9_.-]+").unwrap(),
+            re: Regex::new(
+                r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+            )
+            .unwrap(),
+            replacement: "[PRIVATE KEY REDACTED]",
+        },
+        RedactionPattern {
+            re: Regex::new(r"(?i)\b([a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+@").unwrap(),
+            replacement: "$1***@",
+        },
+        RedactionPattern {
+            re: Regex::new(r"(?i)Bearer\s+[a-zA-Z0-9_.-]+").unwrap(),
             replacement: "Bearer ***",
         },
         RedactionPattern {
-            re: Regex::new(r"[Aa]uthorization:\s*[^\r\n]*").unwrap(),
+            re: Regex::new(r"(?i)\b(?:proxy-)?authorization\s*:\s*[^\r\n]*").unwrap(),
             replacement: "Authorization: ***",
         },
         RedactionPattern {
-            re: Regex::new(r"[Cc]ookie:\s*[^\r\n]*").unwrap(),
+            re: Regex::new(r"(?i)\b(?:set-)?cookie\s*:\s*[^\r\n]*").unwrap(),
             replacement: "Cookie: ***",
         },
         RedactionPattern {
-            re: Regex::new(r"token=[a-zA-Z0-9_-]+").unwrap(),
-            replacement: "token=***",
+            re: Regex::new(
+                r#"(?i)\b(api[_-]?key|x[_-]?api[_-]?key|password|passwd|pwd|client[_-]?secret|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|token|aws[_-]?access[_-]?key[_-]?id|aws[_-]?secret[_-]?access[_-]?key|aws[_-]?session[_-]?token|private[_-]?key|credential(?:s)?)\b(\s*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,}\]&]+)"#,
+            )
+            .unwrap(),
+            replacement: "$1$2***",
+        },
+        RedactionPattern {
+            re: Regex::new(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")
+                .unwrap(),
+            replacement: "github_***",
+        },
+        RedactionPattern {
+            re: Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap(),
+            replacement: "AWS_ACCESS_KEY_***",
+        },
+        RedactionPattern {
+            re: Regex::new(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b").unwrap(),
+            replacement: "slack_***",
+        },
+        RedactionPattern {
+            re: Regex::new(r"\bAIza[A-Za-z0-9_-]{20,}\b").unwrap(),
+            replacement: "google_***",
         },
         RedactionPattern {
             re: Regex::new(r"\bsk-[a-zA-Z0-9_-]+").unwrap(),
@@ -139,8 +170,8 @@ static REDACTION_PATTERNS: LazyLock<Vec<RedactionPattern>> = LazyLock::new(|| {
 
 /// 在文本进入日志 / telemetry 前脱敏 [doc-07 §6]。
 ///
-/// 覆盖：API key（`sk-...` / `sk-ant-...`）、Bearer token、Authorization 头、
-/// `token=` 参数、Cookie 头。设计原则：**过脱敏优于欠脱敏**。
+/// 覆盖：API key、密码与 client secret、常见 provider token、Bearer token、
+/// Authorization/Cookie 头、URL userinfo 和 PEM 私钥。设计原则：**过脱敏优于欠脱敏**。
 ///
 /// # 示例
 /// ```
@@ -235,6 +266,46 @@ mod tests {
         assert!(!output.contains("session=abc"));
         // 各脱敏标记应存在
         assert_eq!(output, "Authorization: ***\ntoken=***\nCookie: ***");
+    }
+
+    #[test]
+    fn redact_common_credential_assignments_and_provider_tokens() {
+        let input = concat!(
+            "api_key=plain-secret password: hunter2 client_secret='client-value' ",
+            "x-api-key=header-value access_token=access-value ",
+            "ghp_abcdefghijklmnopqrstuvwxyz123456 ",
+            "AKIAABCDEFGHIJKLMNOP ",
+            "xoxb-1234567890-secret"
+        );
+        let output = redact_text(input);
+
+        for secret in [
+            "plain-secret",
+            "hunter2",
+            "client-value",
+            "header-value",
+            "access-value",
+            "ghp_abcdefghijklmnopqrstuvwxyz123456",
+            "AKIAABCDEFGHIJKLMNOP",
+            "xoxb-1234567890-secret",
+        ] {
+            assert!(!output.contains(secret), "credential leaked: {secret}");
+        }
+        assert!(output.contains("api_key=***"));
+        assert!(output.contains("password: ***"));
+        assert!(output.contains("client_secret=***"));
+    }
+
+    #[test]
+    fn redact_json_credentials_url_userinfo_and_private_keys() {
+        let input = "{\"api_key\":\"json-secret\"} postgres://user:db-password@example.test/db\n-----BEGIN PRIVATE KEY-----\nsecret-body\n-----END PRIVATE KEY-----";
+        let output = redact_text(input);
+
+        assert!(!output.contains("json-secret"));
+        assert!(!output.contains("db-password"));
+        assert!(!output.contains("secret-body"));
+        assert!(output.contains("postgres://user:***@example.test/db"));
+        assert!(output.contains("[PRIVATE KEY REDACTED]"));
     }
 
     #[test]

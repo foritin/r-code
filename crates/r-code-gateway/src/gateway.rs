@@ -235,6 +235,14 @@ pub trait Tool: Send + Sync {
     fn requires_workspace_scope(&self) -> bool {
         true
     }
+    /// Whether the host may replay this tool after a clearly transient storage-contention error.
+    ///
+    /// This is deliberately opt-in. Command and filesystem tools can have effects before they
+    /// return an error, so retrying them generically could execute an operation twice. Host-owned
+    /// transactional tools may enable this when replay is safe.
+    fn allows_transient_retry(&self) -> bool {
+        false
+    }
     /// JSON Schema 输入定义。
     fn input_schema(&self) -> serde_json::Value;
     /// 执行工具，返回输出文本。
@@ -250,6 +258,89 @@ pub trait Tool: Send + Sync {
     ) -> Result<ToolExecutionResult, ProductError> {
         self.execute(input).await.map(ToolExecutionResult::from)
     }
+}
+
+const MAX_TRANSIENT_TOOL_ATTEMPTS: usize = 3;
+
+fn is_transient_storage_contention(error: &ProductError) -> bool {
+    let ProductError::DatabaseError(message) = error else {
+        return false;
+    };
+    let message = message.to_ascii_lowercase();
+    message.contains("database is locked")
+        || message.contains("database table is locked")
+        || message.contains("database schema is locked")
+        || message.contains("database is busy")
+        || message.contains("database table is busy")
+        || message.contains("database schema is busy")
+}
+
+fn transient_retry_delay(attempt: usize) -> std::time::Duration {
+    #[cfg(test)]
+    {
+        let _ = attempt;
+        std::time::Duration::ZERO
+    }
+    #[cfg(not(test))]
+    {
+        // The database connection already has a busy timeout. This short bounded backoff gives a
+        // competing writer time to finish without adding another long fixed wait.
+        std::time::Duration::from_millis(if attempt == 1 { 150 } else { 450 })
+    }
+}
+
+async fn execute_registered_tool(
+    tool: &dyn Tool,
+    input: serde_json::Value,
+    context: &ToolExecutionContext,
+    abort_flag: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<ToolExecutionResult, ProductError> {
+    let max_attempts = if tool.allows_transient_retry() {
+        MAX_TRANSIENT_TOOL_ATTEMPTS
+    } else {
+        1
+    };
+
+    for attempt in 1..=max_attempts {
+        if abort_flag.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(ProductError::Other(format!(
+                "tool {} cancelled before execution completed",
+                tool.name()
+            )));
+        }
+
+        match tool.execute_with_context(input.clone(), context).await {
+            Ok(result) => return Ok(result),
+            Err(error) if is_transient_storage_contention(&error) && attempt < max_attempts => {
+                tracing::warn!(
+                    task_id = %context.task_id,
+                    run_id = %context.run_id,
+                    tool_call_id = %context.tool_call_id,
+                    tool = tool.name(),
+                    attempt,
+                    max_attempts,
+                    error = %error,
+                    "transient tool execution failure; retrying"
+                );
+                tokio::time::sleep(transient_retry_delay(attempt)).await;
+            }
+            Err(error) if is_transient_storage_contention(&error) && max_attempts > 1 => {
+                tracing::error!(
+                    task_id = %context.task_id,
+                    run_id = %context.run_id,
+                    tool_call_id = %context.tool_call_id,
+                    tool = tool.name(),
+                    attempts = attempt,
+                    error = %error,
+                    "transient tool execution failure exhausted automatic retries"
+                );
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("tool retry loop always returns on its final attempt")
 }
 
 /// 子代理只能经由 Gateway 使用这组可证明无副作用的工作区工具。
@@ -438,7 +529,7 @@ impl ToolGateway {
         // 6. 根据检查结果处理
         match check_result {
             PermissionCheckResult::Allowed => {
-                let outcome = tool.execute_with_context(input, &context).await;
+                let outcome = execute_registered_tool(tool.as_ref(), input, &context, None).await;
                 match outcome {
                     Ok(result) => {
                         audit.succeed(&result.content);
@@ -618,7 +709,7 @@ impl ToolGateway {
         debug_assert!(approved);
 
         // 已获许可：执行并记账。所有权信息来自 gateway，而不是模型输入。
-        match tool.execute_with_context(input, &context).await {
+        match execute_registered_tool(tool.as_ref(), input, &context, abort_flag.as_deref()).await {
             Ok(result) => {
                 audit.succeed(&result.content);
                 self.ledger.write().await.push(audit);
@@ -887,6 +978,80 @@ impl Tool for FailTool {
 }
 
 #[cfg(test)]
+struct FlakyTool {
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
+    failures_before_success: usize,
+    retry_safe: bool,
+}
+
+#[cfg(test)]
+struct AbortAfterTransientFailureTool {
+    attempts: Arc<std::sync::atomic::AtomicUsize>,
+    abort: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for AbortAfterTransientFailureTool {
+    fn name(&self) -> &str {
+        "abort_after_transient_failure"
+    }
+    fn description(&self) -> &str {
+        "Sets the run abort flag after one transient failure"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn allows_transient_retry(&self) -> bool {
+        true
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        self.attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.abort.store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(ProductError::DatabaseError(
+            "database is locked".to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for FlakyTool {
+    fn name(&self) -> &str {
+        "flaky"
+    }
+    fn description(&self) -> &str {
+        "Fails with transient storage contention before succeeding"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+    fn allows_transient_retry(&self) -> bool {
+        self.retry_safe
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        let attempt = self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if attempt <= self.failures_before_success {
+            Err(ProductError::DatabaseError(
+                "database is locked".to_string(),
+            ))
+        } else {
+            Ok("recovered".to_string())
+        }
+    }
+}
+
+#[cfg(test)]
 struct ContextTool {
     seen: Arc<std::sync::Mutex<Option<ToolExecutionContext>>>,
 }
@@ -953,6 +1118,34 @@ impl Tool for ContextTool {
 mod tests {
     use super::*;
     use r_code_core::dto::{PermissionDecision, ToolCallStatus};
+    use tracing::instrument::WithSubscriber;
+
+    #[derive(Clone)]
+    struct LevelSubscriber {
+        levels: Arc<std::sync::Mutex<Vec<tracing::Level>>>,
+    }
+
+    impl tracing::Subscriber for LevelSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            self.levels.lock().unwrap().push(*event.metadata().level());
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
 
     fn make_gateway() -> (Arc<PermissionEngine>, ToolGateway) {
         let engine = Arc::new(PermissionEngine::new());
@@ -1341,6 +1534,141 @@ mod tests {
         // 失败仍应记录审计
         let ledger = gw.ledger().await;
         assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].status, ToolCallStatus::Error);
+    }
+
+    #[tokio::test]
+    async fn retry_safe_tool_absorbs_transient_failures_before_auditing_success() {
+        let (_, mut gw) = make_gateway();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        gw.register(Box::new(FlakyTool {
+            attempts: attempts.clone(),
+            failures_before_success: 2,
+            retry_safe: true,
+        }));
+        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let outcome = async {
+            gw.execute_with_wait_with_access_mode(
+                "t1",
+                "r1",
+                Some("call-1"),
+                "flaky",
+                serde_json::json!({}),
+                Some("agent"),
+                "flaky operation",
+                None,
+                ProjectAccessMode::RiskBased,
+            )
+            .await
+        }
+        .with_subscriber(LevelSubscriber {
+            levels: levels.clone(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.content, "recovered");
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_TRANSIENT_TOOL_ATTEMPTS
+        );
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].id, "call-1");
+        assert_eq!(ledger[0].status, ToolCallStatus::Ok);
+        assert_eq!(
+            *levels.lock().unwrap(),
+            vec![tracing::Level::WARN, tracing::Level::WARN]
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_transient_retries_record_only_the_final_failure() {
+        let (_, mut gw) = make_gateway();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        gw.register(Box::new(FlakyTool {
+            attempts: attempts.clone(),
+            failures_before_success: usize::MAX,
+            retry_safe: true,
+        }));
+        let levels = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let result = async {
+            gw.execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
+                .await
+        }
+        .with_subscriber(LevelSubscriber {
+            levels: levels.clone(),
+        })
+        .await;
+
+        assert!(matches!(result, Err(ProductError::DatabaseError(_))));
+        assert_eq!(
+            attempts.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_TRANSIENT_TOOL_ATTEMPTS
+        );
+        let ledger = gw.ledger().await;
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].status, ToolCallStatus::Error);
+        assert_eq!(
+            *levels.lock().unwrap(),
+            vec![
+                tracing::Level::WARN,
+                tracing::Level::WARN,
+                tracing::Level::ERROR,
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_without_replay_opt_in_are_never_retried() {
+        let (_, mut gw) = make_gateway();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        gw.register(Box::new(FlakyTool {
+            attempts: attempts.clone(),
+            failures_before_success: 1,
+            retry_safe: false,
+        }));
+
+        let result = gw
+            .execute_call("t1", "r1", "flaky", serde_json::json!({}), None)
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn abort_between_transient_attempts_prevents_replay() {
+        let (_, mut gateway) = make_gateway();
+        let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        gateway.register(Box::new(AbortAfterTransientFailureTool {
+            attempts: attempts.clone(),
+            abort: abort.clone(),
+        }));
+
+        let result = gateway
+            .execute_with_wait(
+                "t1",
+                "r1",
+                Some("abort-retry-call"),
+                "abort_after_transient_failure",
+                serde_json::json!({}),
+                Some("agent"),
+                "retry-safe operation",
+                Some(abort),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(ProductError::Other(message)) if message.contains("cancelled"))
+        );
+        assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let ledger = gateway.ledger().await;
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].id, "abort-retry-call");
         assert_eq!(ledger[0].status, ToolCallStatus::Error);
     }
 

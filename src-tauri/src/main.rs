@@ -115,6 +115,16 @@ fn main() {
             // Only the authoritative desktop startup performs crash recovery. MCP sibling
             // processes also construct CommandState against the same database and must not mark
             // a live desktop continuation as interrupted.
+            match state.reconcile_durable_steer_queue_claims() {
+                Ok(reconciled) if reconciled > 0 => tracing::info!(
+                    reconciled,
+                    "reconciled durable steer queue claims without replay"
+                ),
+                Err(error) => {
+                    tracing::warn!("failed to reconcile durable steer queue claims: {error}")
+                }
+                _ => {}
+            }
             match state.plan_store.recover_interrupted_continuations() {
                 Ok(recovered) if recovered > 0 => tracing::warn!(
                     recovered,
@@ -192,6 +202,27 @@ fn main() {
                     tracing::warn!("emit agent-event failed: {e}");
                 }
             }));
+            // PTY reader 只发轻量“有输出”信号；WebView 收到后按绝对游标拉取有界
+            // 增量。相比固定轮询，这既消除键入回显延迟，也不会把大段输出复制进事件。
+            let mut terminal_output = state.terminal_manager.subscribe_output();
+            let terminal_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match terminal_output.recv().await {
+                        Ok(terminal_id) => {
+                            if let Err(error) =
+                                terminal_app_handle.emit("terminal-output", terminal_id)
+                            {
+                                tracing::warn!(%error, "emit terminal-output failed");
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::warn!(skipped, "terminal output notifications lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
             // MCP settings are live. Forward only redacted lifecycle state so the settings UI can
             // reflect connecting/ready/error without polling or revealing credentials.
             let mut mcp_statuses = state.mcp_manager.subscribe_statuses();
@@ -272,6 +303,9 @@ fn main() {
             tauri_commands::cmd_agent_delegate_codex_mcp,
             tauri_commands::cmd_agent_queue_list,
             tauri_commands::cmd_agent_queue_remove,
+            tauri_commands::cmd_agent_queue_reorder,
+            tauri_commands::cmd_agent_queue_update,
+            tauri_commands::cmd_agent_queue_steer,
             tauri_commands::cmd_agent_resend,
             tauri_commands::cmd_permission_approve,
             tauri_commands::cmd_permission_pending,

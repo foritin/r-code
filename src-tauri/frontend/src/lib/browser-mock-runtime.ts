@@ -319,6 +319,7 @@ function createTask(args: MockArgs): Task {
     inference: {},
     title: stringArg(args, "title") || "新对话",
     goal: stringArg(args, "goal"),
+    goal_active: false,
     mode: (args.mode as TaskMode | undefined) ?? (workspacePath ? "edit" : "ask"),
     state: "exploring",
     worktree_path: null,
@@ -493,6 +494,7 @@ function integerArg(args: MockArgs, key: string): number {
 function updateTaskGoal(args: MockArgs): Task {
   const task = taskById(stringArg(args, "taskId"));
   task.goal = stringArg(args, "goal").trim();
+  task.goal_active = task.goal.length > 0;
   touchTask(task);
   const view = mockPlans.get(task.id);
   if (view) {
@@ -1423,6 +1425,57 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const detail = detailById(stringArg(args, "taskId"));
       detail.queued_messages = detail.queued_messages.filter((item) => item.id !== stringArg(args, "queueId"));
       return undefined;
+    }
+    case "cmd_agent_queue_reorder": {
+      const detail = detailById(stringArg(args, "taskId"));
+      const queueIds = Array.isArray(args.queueIds)
+        ? args.queueIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const pending = detail.queued_messages.filter((item) => item.state === "queued");
+      const expected = pending.map((item) => item.id).sort();
+      const requested = [...queueIds].sort();
+      if (
+        expected.length !== requested.length
+        || expected.some((id, index) => id !== requested[index])
+        || new Set(queueIds).size !== queueIds.length
+      ) {
+        throw new Error("待发送队列已经变化，请刷新后重试排序");
+      }
+      const byId = new Map(pending.map((item) => [item.id, item]));
+      const reordered = queueIds.map((id) => byId.get(id)!);
+      let queuedIndex = 0;
+      detail.queued_messages = detail.queued_messages.map((item) =>
+        item.state === "queued" ? reordered[queuedIndex++] : item
+      );
+      return undefined;
+    }
+    case "cmd_agent_queue_update": {
+      const detail = detailById(stringArg(args, "taskId"));
+      const queueId = stringArg(args, "queueId");
+      const message = stringArg(args, "message").trim();
+      if (!message) throw new Error("队列消息不能为空");
+      const queued = detail.queued_messages.find((item) => item.id === queueId);
+      if (!queued || (queued.state !== "queued" && queued.state !== "failed")) {
+        throw new Error("这条消息已经开始处理或不在当前队列中");
+      }
+      queued.message = message;
+      queued.state = "queued";
+      queued.updated_at = nowIso();
+      return undefined;
+    }
+    case "cmd_agent_queue_steer": {
+      const taskId = stringArg(args, "taskId");
+      const queueId = stringArg(args, "queueId");
+      const task = taskById(taskId);
+      const detail = detailById(taskId);
+      const index = detail.queued_messages.findIndex(
+        (item) => item.id === queueId && item.state === "queued",
+      );
+      if (index < 0) throw new Error("这条消息已经开始处理或不在当前队列中");
+      detail.queued_messages.splice(index, 1);
+      addEvent(detail, "user_steered");
+      touchTask(task);
+      return "steered";
     }
     case "cmd_agent_resend": {
       const taskId = stringArg(args, "taskId");

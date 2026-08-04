@@ -5,10 +5,13 @@
  * 输入区脚下现在镜像了「模型」与「权限」两个控件（与新对话页同构）。原先这里
  * 只有一个只读的模型状态芯片，想换模型或改权限必须回到会话顶栏找。
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   agentQueueRemove,
+  agentQueueReorder,
+  agentQueueSteer,
+  agentQueueUpdate,
   agentSend,
   quickOpen,
   runVerification,
@@ -18,6 +21,7 @@ import {
   taskForkContext,
   taskRename,
   taskSetModel,
+  taskUpdateGoal,
   workflowSkillsList,
 } from "../../lib/ipc";
 import type {
@@ -36,14 +40,22 @@ import { useAsyncAction } from "../../lib/hooks";
 import { usePoll } from "../../lib/poll";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
-import { Menu, MenuItem } from "../ui/Menu";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
 import { StatusBar } from "../ui/StatusBar";
 import { ProjectAccessSelector, projectAccessModeLabel } from "../ProjectAccessSelector";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { AgentEngineSwitcher } from "./AgentEngineSwitcher";
 import { CodexModelConfiguration } from "./CodexModelConfiguration";
-import { IconChevronDown, IconRefresh, IconSend, IconStop } from "../icons";
+import {
+  IconDragHandle,
+  IconEdit,
+  IconMore,
+  IconSend,
+  IconSteer,
+  IconStop,
+  IconTrash,
+} from "../icons";
+import { Menu, MenuItem } from "../ui/Menu";
 import {
   AttachmentTray,
   firstBlockedAttachmentReason,
@@ -51,7 +63,14 @@ import {
   useAttachments,
   type DraftAttachment,
 } from "../Attachments";
-import { TaskAddMenu } from "../TaskAddMenu";
+import { ActiveGoalBar, GoalModeChip, TaskAddMenu } from "../TaskAddMenu";
+import {
+  AgentSendModeControl,
+  agentSendModeLabel,
+  agentSendModeTitle,
+  effectiveAgentSendMode,
+  useAgentSendModePreference,
+} from "../AgentSendModeControl";
 import {
   attachmentCapabilityFor,
   codexImageCapability,
@@ -121,35 +140,26 @@ function fileReferenceText(path: string): string {
   return `@"${path.replace(/"/g, '\\"')}"`;
 }
 
-type RunningSendMode = Extract<AgentSendMode, "queue" | "steer" | "send_now">;
+type QueueDropEdge = "before" | "after";
 
-const RUNNING_SEND_MODE_ORDER: readonly RunningSendMode[] = ["queue", "steer", "send_now"];
-
-function runningSendModeLabel(mode: RunningSendMode): string {
-  switch (mode) {
-    case "steer":
-      return "引导";
-    case "send_now":
-      return "立即发送";
-    default:
-      return "排队";
-  }
+function moveQueueItem(
+  messages: QueuedMessage[],
+  sourceId: string,
+  targetId: string,
+  edge: QueueDropEdge,
+): QueuedMessage[] {
+  if (sourceId === targetId) return messages;
+  const source = messages.find((item) => item.id === sourceId);
+  if (!source) return messages;
+  const next = messages.filter((item) => item.id !== sourceId);
+  const targetIndex = next.findIndex((item) => item.id === targetId);
+  if (targetIndex < 0) return messages;
+  next.splice(targetIndex + (edge === "after" ? 1 : 0), 0, source);
+  return next;
 }
 
-function runningSendModeTitle(mode: RunningSendMode): string {
-  switch (mode) {
-    case "steer":
-      return "把消息补充到当前运行，不替换原任务";
-    case "send_now":
-      return "中断当前运行并立即处理这条消息";
-    default:
-      return "当前运行结束后再发送这条消息";
-  }
-}
-
-function nextRunningSendMode(mode: RunningSendMode): RunningSendMode {
-  const index = RUNNING_SEND_MODE_ORDER.indexOf(mode);
-  return RUNNING_SEND_MODE_ORDER[(index + 1) % RUNNING_SEND_MODE_ORDER.length];
+function sameQueueOrder(left: QueuedMessage[], right: QueuedMessage[]): boolean {
+  return left.length === right.length && left.every((item, index) => item.id === right[index]?.id);
 }
 
 export function Composer({
@@ -177,6 +187,10 @@ export function Composer({
 }: Props) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [goalSaveError, setGoalSaveError] = useState<string | null>(null);
+  const [goalMode, setGoalMode] = useState(false);
+  const [goalSaving, setGoalSaving] = useState(false);
+  const [goalDeleting, setGoalDeleting] = useState(false);
   const [sending, setSending] = useState(false);
   const [at, setAt] = useState<AtState | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -186,9 +200,17 @@ export function Composer({
   const [modelMenuRequest, setModelMenuRequest] = useState(0);
   const [permissionMenuRequest, setPermissionMenuRequest] = useState(0);
   const [codexPreferences, setCodexPreferences] = useState<CodexCliPreferences | null>(null);
-  const [runningSendMode, setRunningSendMode] = useState<RunningSendMode>("queue");
+  const [sendMode, setSendMode] = useAgentSendModePreference();
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [workflowSkills, setWorkflowSkills] = useState<WorkflowSkill[]>([]);
+  const [queueView, setQueueView] = useState<QueuedMessage[]>(queuedMessages);
+  const [draggedQueueId, setDraggedQueueId] = useState<string | null>(null);
+  const [queueDropTarget, setQueueDropTarget] = useState<{ id: string; edge: QueueDropEdge } | null>(null);
+  const [queueAnnouncement, setQueueAnnouncement] = useState("");
+  const [queueActionError, setQueueActionError] = useState<string | null>(null);
+  const [queueActionBusyId, setQueueActionBusyId] = useState<string | null>(null);
+  const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
+  const [queueEditText, setQueueEditText] = useState("");
   const taRef = useRef<HTMLTextAreaElement>(null);
   const compBoxRef = useRef<HTMLDivElement>(null);
   const debRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -198,6 +220,7 @@ export function Composer({
   const historyRequestRef = useRef<{ taskId: string; promise: Promise<string[]> } | null>(null);
   const initializedTaskRef = useRef<string | null>(null);
   const consumedFileReferencesRef = useRef(new Set<string>());
+  const messageDraftBeforeGoalRef = useRef("");
 
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
@@ -234,7 +257,7 @@ export function Composer({
     attachments.attachments,
     capabilityForAttachment,
   );
-  const runBlockedReason = running && attachments.attachments.length > 0
+  const runBlockedReason = running && !goalMode && attachments.attachments.length > 0
     ? "当前运行结束后才能把附件作为新一轮消息发送。"
     : null;
   const attachmentBlockedReason = runBlockedReason ?? capabilityBlockedReason;
@@ -244,7 +267,7 @@ export function Composer({
     workspaceAttached,
     running,
   };
-  const slashItems = slashDismissed ? [] : matchingSlashCommands(text, slashContext, workflowSkills);
+  const slashItems = goalMode || slashDismissed ? [] : matchingSlashCommands(text, slashContext, workflowSkills);
   const slashOpen = slashItems.length > 0;
 
   useEffect(() => () => {
@@ -263,18 +286,20 @@ export function Composer({
     historyLoadedTaskRef.current = null;
     historyRequestRef.current = null;
     setError(null);
+    setGoalSaveError(null);
+    setGoalMode(false);
+    setGoalSaving(false);
+    setGoalDeleting(false);
     setNotice(null);
+    setQueueActionError(null);
+    setQueueActionBusyId(null);
+    setEditingQueueId(null);
+    setQueueEditText("");
     setAt(null);
     setSlashActive(0);
     setSlashDismissed(false);
-    setRunningSendMode("queue");
     attachments.clear();
   }, [taskId, attachments.clear]);
-
-  useEffect(() => {
-    // 每轮运行重新从最安全的“排队”开始；用户仍可在当前运行内显式切换。
-    if (!running) setRunningSendMode("queue");
-  }, [running]);
 
   useEffect(() => {
     if (!taskFileReference) return;
@@ -676,7 +701,119 @@ export function Composer({
     workspacePath,
   ]);
 
+  const enterGoalMode = useCallback(() => {
+    if (goalMode) return;
+    messageDraftBeforeGoalRef.current = text;
+    setText(task?.goal_active ? task.goal : "");
+    setGoalMode(true);
+    setGoalSaveError(null);
+    setAt(null);
+    setSlashDismissed(true);
+    leaveInputHistory();
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, [goalMode, leaveInputHistory, task?.goal, task?.goal_active, text]);
+
+  const exitGoalMode = useCallback(() => {
+    setText(messageDraftBeforeGoalRef.current);
+    setGoalMode(false);
+    setGoalSaveError(null);
+    setAt(null);
+    setSlashDismissed(false);
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
+
+  const saveTaskGoal = useCallback(async () => {
+    const draft = text;
+    const normalized = text.trim();
+    const updatingExistingGoal = task?.goal_active === true;
+    if (goalSaving || sending || commandBusy || !normalized) return;
+    if (capabilityBlockedReason) {
+      setGoalSaveError(capabilityBlockedReason);
+      return;
+    }
+
+    setGoalSaving(true);
+    setGoalSaveError(null);
+    setNotice(null);
+    setText("");
+    setAt(null);
+    setGoalMode(false);
+    leaveInputHistory();
+    try {
+      await taskUpdateGoal(taskId, normalized);
+      // Editing an active Goal replaces its objective. A normal steer is explicitly additive in
+      // the runtime, so use send_now to stop the old run and start the updated Goal immediately.
+      const sent = await transmit(
+        normalized,
+        running ? "send_now" : "auto",
+        sendableAttachments,
+      );
+      if (!sent) {
+        setGoalSaveError("目标已经更新，但还没有成功交给 Agent；请重试执行。");
+        setText(normalized);
+        setGoalMode(true);
+        return;
+      }
+      if (attachments.attachments.length > 0) attachments.clear();
+      setText(messageDraftBeforeGoalRef.current);
+      await refreshDetail(taskId);
+      setNotice(updatingExistingGoal ? "目标已更新，Agent 正按新目标执行。" : "目标已设置，Agent 已开始执行。");
+    } catch (cause) {
+      setGoalSaveError(String(cause).replace(/^Error:\s*/i, ""));
+      setText((current) => current.length > 0 ? current : draft);
+      setGoalMode(true);
+    } finally {
+      setGoalSaving(false);
+      requestAnimationFrame(() => taRef.current?.focus());
+    }
+  }, [
+    attachments.attachments.length,
+    attachments.clear,
+    capabilityBlockedReason,
+    commandBusy,
+    goalSaving,
+    leaveInputHistory,
+    refreshDetail,
+    running,
+    sendableAttachments,
+    sending,
+    task?.goal,
+    task?.goal_active,
+    taskId,
+    text,
+    transmit,
+  ]);
+
+  const deleteTaskGoal = useCallback(async () => {
+    if (goalDeleting || goalSaving || sending || !task?.goal_active || !task.goal.trim()) return;
+    setGoalDeleting(true);
+    setGoalSaveError(null);
+    setNotice(null);
+    try {
+      if (running) await onAbort();
+      await taskUpdateGoal(taskId, "");
+      await refreshDetail(taskId);
+      if (goalMode) setText(messageDraftBeforeGoalRef.current);
+      setGoalMode(false);
+    } catch (cause) {
+      setGoalSaveError(String(cause).replace(/^Error:\s*/i, ""));
+    } finally {
+      setGoalDeleting(false);
+    }
+  }, [goalDeleting, goalMode, goalSaving, onAbort, refreshDetail, running, sending, task?.goal, task?.goal_active, taskId]);
+
+  const resumeTaskGoal = useCallback(async () => {
+    const currentGoal = task?.goal_active ? task.goal.trim() : "";
+    if (!currentGoal || sending || commandBusy) return;
+    const sent = await transmit(currentGoal, "auto");
+    if (sent) setNotice("已继续执行目标。");
+  }, [commandBusy, sending, task?.goal, task?.goal_active, transmit]);
+
   const send = useCallback(async (mode: AgentSendMode = "auto") => {
+    if (goalMode) {
+      await saveTaskGoal();
+      return;
+    }
     const draft = text;
     const msg = text.trim();
     if (attachmentBlockedReason) {
@@ -715,7 +852,9 @@ export function Composer({
     attachments.clear,
     commandBusy,
     executeSlash,
+    goalMode,
     leaveInputHistory,
+    saveTaskGoal,
     sendableAttachments,
     sending,
     text,
@@ -725,10 +864,176 @@ export function Composer({
 
   const removeQueued = useAsyncAction(async (queueId: string) => {
     await agentQueueRemove(taskId, queueId);
-    await refreshDetail(taskId);
-  }, { label: "移除队列消息" });
+    setQueueView((current) => current.filter((item) => item.id !== queueId));
+    try {
+      await refreshDetail(taskId);
+    } catch {
+      // The durable mutation succeeded; polling will reconcile a transient refresh failure.
+    }
+    setQueueAnnouncement("已删除一条排队消息");
+  }, {
+    label: "移除队列消息",
+    onError: () => setQueueActionError("暂时无法删除这条消息，请稍后重试。"),
+  });
 
-  const abort = useAsyncAction(onAbort, { label: "中断" });
+  const reorderQueued = useAsyncAction(async (queueIds: string[]) => {
+    await agentQueueReorder(taskId, queueIds);
+    try {
+      await refreshDetail(taskId);
+    } catch {
+      // Keep the already persisted optimistic order until the next detail poll.
+    }
+  }, {
+    label: "调整队列顺序",
+    onError: () => {
+      setQueueView(queuedMessages);
+      setQueueActionError("队列刚刚发生了变化，已恢复最新顺序，请再试一次。");
+    },
+  });
+
+  useEffect(() => {
+    if (draggedQueueId || reorderQueued.busy) return;
+    setQueueView(queuedMessages);
+  }, [draggedQueueId, queuedMessages, reorderQueued.busy, taskId]);
+
+  useEffect(() => {
+    if (!editingQueueId) return;
+    if (!queuedMessages.some((item) => item.id === editingQueueId)) {
+      setEditingQueueId(null);
+      setQueueEditText("");
+    }
+  }, [editingQueueId, queuedMessages]);
+
+  const startQueueEdit = (item: QueuedMessage) => {
+    if (item.state !== "queued" && item.state !== "failed") return;
+    setQueueActionError(null);
+    setEditingQueueId(item.id);
+    setQueueEditText(item.message);
+  };
+
+  const cancelQueueEdit = () => {
+    setEditingQueueId(null);
+    setQueueEditText("");
+  };
+
+  const saveQueueEdit = async (item: QueuedMessage) => {
+    const message = queueEditText.trim();
+    if (!message || queueActionBusyId) return;
+    setQueueActionError(null);
+    setQueueActionBusyId(item.id);
+    try {
+      await agentQueueUpdate(taskId, item.id, message);
+      setQueueView((current) => current.map((queued) => queued.id === item.id
+        ? { ...queued, message, state: "queued" }
+        : queued));
+      try {
+        await refreshDetail(taskId);
+      } catch {
+        // The edit is durable; the next poll can refresh timestamps and state.
+      }
+      setEditingQueueId(null);
+      setQueueEditText("");
+      setQueueAnnouncement("队列消息已更新");
+    } catch {
+      setQueueActionError("暂时无法保存这条消息，请稍后重试。");
+    } finally {
+      setQueueActionBusyId(null);
+    }
+  };
+
+  const steerQueued = async (item: QueuedMessage) => {
+    if (!running || item.state !== "queued" || queueActionBusyId) return;
+    setQueueActionError(null);
+    setQueueActionBusyId(item.id);
+    try {
+      const outcome = await agentQueueSteer(taskId, item.id);
+      setQueueView((current) => {
+        if (outcome === "steered" || outcome === "started") {
+          return current.filter((queued) => queued.id !== item.id);
+        }
+        return [
+          { ...item, state: "queued" },
+          ...current.filter((queued) => queued.id !== item.id),
+        ];
+      });
+      try {
+        await refreshDetail(taskId);
+      } catch {
+        // The selected action already succeeded; polling will reconcile the projection.
+      }
+      if (outcome === "steered") {
+        setQueueAnnouncement("消息已引导进当前运行");
+      } else if (outcome === "started") {
+        setQueueAnnouncement("当前运行已经结束，消息已开始执行");
+      } else {
+        setQueueAnnouncement("当前运行暂不可介入，消息已移到队首");
+      }
+    } catch {
+      setQueueActionError("暂时无法引导这条消息；它仍保留在队列中。");
+      try {
+        await refreshDetail(taskId);
+      } catch {
+        // Preserve the last visible queue when even the refresh path is unavailable.
+      }
+    } finally {
+      setQueueActionBusyId(null);
+    }
+  };
+
+  const toggleQueueing = () => {
+    if (sendMode === "queue") {
+      setSendMode("steer");
+      setQueueAnnouncement("已关闭后续排队；现有队列保持不变");
+    } else {
+      setSendMode("queue");
+      setQueueAnnouncement("后续消息将加入队列");
+    }
+  };
+
+  const persistQueueOrder = (next: QueuedMessage[]) => {
+    if (sameQueueOrder(queueView, next)) return;
+    setQueueView(next);
+    const pending = next.filter((item) => item.state === "queued");
+    setQueueAnnouncement("队列顺序已调整；越靠上越先执行");
+    void reorderQueued.run(pending.map((item) => item.id));
+  };
+
+  const dropQueueItem = (
+    event: React.DragEvent<HTMLLIElement>,
+    targetId: string,
+  ) => {
+    event.preventDefault();
+    const sourceId = draggedQueueId || event.dataTransfer.getData("text/plain");
+    const target = queueView.find((item) => item.id === targetId);
+    if (!sourceId || target?.state !== "queued" || reorderQueued.busy) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const edge: QueueDropEdge = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+    const next = moveQueueItem(queueView, sourceId, targetId, edge);
+    setDraggedQueueId(null);
+    setQueueDropTarget(null);
+    persistQueueOrder(next);
+  };
+
+  const moveQueueItemFromKeyboard = (queueId: string, key: string) => {
+    const pending = queueView.filter((item) => item.state === "queued");
+    const index = pending.findIndex((item) => item.id === queueId);
+    if (index < 0) return;
+    let targetIndex = index;
+    let edge: QueueDropEdge = "before";
+    if (key === "ArrowUp") targetIndex = Math.max(0, index - 1);
+    else if (key === "ArrowDown") {
+      targetIndex = Math.min(pending.length - 1, index + 1);
+      edge = "after";
+    } else if (key === "Home") targetIndex = 0;
+    else if (key === "End") {
+      targetIndex = pending.length - 1;
+      edge = "after";
+    } else return;
+    if (targetIndex === index) return;
+    persistQueueOrder(moveQueueItem(queueView, queueId, pending[targetIndex].id, edge));
+  };
+
+  const abort = useAsyncAction(onAbort, { label: "停止" });
 
   const pickSlash = useCallback((command: SlashCommandDefinition) => {
     const next = slashCommandInsertion(command);
@@ -746,6 +1051,18 @@ export function Composer({
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
+    if (goalMode) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        exitGoalMode();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void saveTaskGoal();
+      }
+      return;
+    }
     if (slashOpen) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
@@ -847,9 +1164,22 @@ export function Composer({
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void send(running ? runningSendMode : "auto");
+      void send(effectiveAgentSendMode(sendMode, running));
     }
   };
+
+  const queuedPositionById = useMemo(() => {
+    const positions = new Map<string, number>();
+    let position = 0;
+    for (const item of queueView) {
+      if (item.state !== "queued") continue;
+      position += 1;
+      positions.set(item.id, position);
+    }
+    return positions;
+  }, [queueView]);
+  const reorderableQueueCount = queuedPositionById.size;
+  const queueBusy = removeQueued.busy || reorderQueued.busy || queueActionBusyId != null;
 
   return (
     <div className="composer">
@@ -858,9 +1188,19 @@ export function Composer({
           发送失败：{error}
         </StatusBar>
       )}
+      {goalSaveError && (
+        <StatusBar kind="error" compact onDismiss={() => setGoalSaveError(null)}>
+          目标操作失败：{goalSaveError}
+        </StatusBar>
+      )}
       {abort.error && (
         <StatusBar kind="error" compact onDismiss={abort.clearError}>
           {abort.error}
+        </StatusBar>
+      )}
+      {queueActionError && (
+        <StatusBar kind="error" compact onDismiss={() => setQueueActionError(null)}>
+          {queueActionError}
         </StatusBar>
       )}
       {notice && (
@@ -918,24 +1258,238 @@ export function Composer({
           )}
         </AnchoredSurface>
       )}
+      {queueView.length > 0 && (
+        <section className="composer-queue-stack" aria-label="待发送队列，越靠上越先执行">
+          <p id={`queue-order-help-${taskId}`} className="sr-only">
+            拖动排序手柄调整执行顺序；也可以聚焦手柄后使用上下方向键，越靠上越先执行。
+          </p>
+          <ol className="composer-queue-list">
+            {queueView.map((item) => {
+              const pendingPosition = queuedPositionById.get(item.id) ?? 0;
+              const editing = editingQueueId === item.id;
+              const itemBusy = queueActionBusyId === item.id;
+              const canEdit = item.state === "queued" || item.state === "failed";
+              const canSteer = running && item.state === "queued";
+              const canReorder = item.state === "queued"
+                && reorderableQueueCount > 1
+                && !editing;
+              const dropClass = queueDropTarget?.id === item.id
+                ? ` is-drop-${queueDropTarget.edge}`
+                : "";
+              const steerTitle = running
+                ? "在模型的下一个可介入点引导当前运行"
+                : "当前没有可引导的运行";
+              return (
+                <li
+                  className={`composer-queue-row${editing ? " is-editing" : ""}${draggedQueueId === item.id ? " is-dragging" : ""}${dropClass}`}
+                  data-queue-id={item.id}
+                  key={item.id}
+                  onDragOver={(event) => {
+                    if (!canReorder || !draggedQueueId || draggedQueueId === item.id || queueBusy) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    const bounds = event.currentTarget.getBoundingClientRect();
+                    const edge: QueueDropEdge = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+                    setQueueDropTarget((current) => current?.id === item.id && current.edge === edge
+                      ? current
+                      : { id: item.id, edge });
+                  }}
+                  onDrop={(event) => dropQueueItem(event, item.id)}
+                >
+                  <span className="queue-row-leading">
+                    <span className="queue-kind-icon" aria-hidden="true">
+                      <IconSteer width={15} height={15} />
+                    </span>
+                    {canReorder && (
+                      <button
+                        type="button"
+                        className="queue-reorder-handle"
+                        draggable={!queueBusy}
+                        disabled={queueBusy}
+                        aria-label={`调整队列顺序：${item.message}，当前第 ${pendingPosition} 条，共 ${reorderableQueueCount} 条`}
+                        aria-describedby={`queue-order-help-${taskId}`}
+                        title="拖动排序；也可使用 ↑ ↓ Home End"
+                        onDragStart={(event) => {
+                          if (queueBusy) {
+                            event.preventDefault();
+                            return;
+                          }
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData("text/plain", item.id);
+                          setDraggedQueueId(item.id);
+                          setQueueDropTarget(null);
+                        }}
+                        onDragEnd={() => {
+                          setDraggedQueueId(null);
+                          setQueueDropTarget(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+                          event.preventDefault();
+                          if (!queueBusy) {
+                            moveQueueItemFromKeyboard(item.id, event.key);
+                          }
+                        }}
+                      >
+                        <IconDragHandle width={16} height={16} />
+                      </button>
+                    )}
+                  </span>
+                  {editing ? (
+                    <textarea
+                      className="queue-edit-input"
+                      value={queueEditText}
+                      rows={1}
+                      autoFocus
+                      disabled={itemBusy}
+                      aria-label="编辑队列消息"
+                      onChange={(event) => setQueueEditText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelQueueEdit();
+                        } else if (event.key === "Enter" && !event.shiftKey) {
+                          event.preventDefault();
+                          void saveQueueEdit(item);
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className="queue-message" title={item.message}>{item.message}</span>
+                  )}
+                  {!editing && (
+                    <span className={`queue-state ${item.state}`}>
+                      {item.state === "queued" ? "" : queueStateLabel(item.state)}
+                    </span>
+                  )}
+                  <div className="queue-row-actions">
+                    {editing ? (
+                      <>
+                        <button
+                          type="button"
+                          className="queue-edit-action"
+                          disabled={itemBusy}
+                          onClick={cancelQueueEdit}
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          className="queue-edit-action primary"
+                          disabled={itemBusy || !queueEditText.trim()}
+                          onClick={() => void saveQueueEdit(item)}
+                        >
+                          {itemBusy ? "保存中…" : "保存"}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          className={`queue-steer-button${itemBusy ? " is-loading" : ""}`}
+                          disabled={!canSteer || queueBusy}
+                          onClick={() => void steerQueued(item)}
+                          aria-label={`引导当前运行：${item.message}`}
+                          title={steerTitle}
+                        >
+                          <IconSteer width={15} height={15} />
+                          <span>引导</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="queue-remove-button"
+                          disabled={queueBusy || item.state === "dispatching"}
+                          onClick={() => void removeQueued.run(item.id)}
+                          aria-label={`删除队列消息：${item.message}`}
+                          title="删除这条队列消息"
+                        >
+                          <IconTrash width={15} height={15} />
+                        </button>
+                        <Menu
+                          className="queue-actions-menu-root"
+                          label="队列消息操作"
+                          placement="up"
+                          align="right"
+                          gap={6}
+                          disabled={queueBusy}
+                          menuClassName="queue-actions-popover"
+                          trigger={
+                            <button
+                              type="button"
+                              className="queue-more-button"
+                              aria-label={`更多队列操作：${item.message}`}
+                              title="更多操作"
+                            >
+                              <IconMore width={16} height={16} />
+                            </button>
+                          }
+                        >
+                          {({ close }) => (
+                            <>
+                              <MenuItem
+                                close={close}
+                                disabled={!canEdit}
+                                onSelect={() => startQueueEdit(item)}
+                              >
+                                <IconEdit width={15} height={15} />
+                                编辑消息
+                              </MenuItem>
+                              <MenuItem close={close} onSelect={toggleQueueing}>
+                                <IconSteer width={15} height={15} />
+                                {sendMode === "queue" ? "关闭排队" : "启用排队"}
+                              </MenuItem>
+                            </>
+                          )}
+                        </Menu>
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ol>
+          <span className="sr-only" aria-live="polite">{queueAnnouncement}</span>
+        </section>
+      )}
       <div className="comp-box" ref={compBoxRef}>
+        {task?.goal_active && task.goal.trim() && (
+          <ActiveGoalBar
+            goal={task.goal.trim()}
+            running={running}
+            stopped={task.state === "interrupted"}
+            busy={goalSaving || goalDeleting || sending || abort.busy}
+            onEdit={enterGoalMode}
+            onStop={() => void abort.run()}
+            onResume={() => void resumeTaskGoal()}
+            onDelete={() => void deleteTaskGoal()}
+          />
+        )}
         <textarea
           ref={taRef}
           rows={2}
           value={text}
-          aria-label="给 Agent 的消息"
+          aria-label={goalMode ? "任务目标" : "给 Agent 的消息"}
           aria-controls={slashOpen ? "slash-command-menu" : undefined}
           aria-activedescendant={slashOpen ? `slash-command-option-${slashActive}` : undefined}
           placeholder={
-            running
-              ? "正在处理，可继续补充要求…"
-              : "回复、提问或补充上下文…（输入 @ 引用文件）"
+            goalMode
+              ? task?.goal_active
+                ? "修改目标；发送后 Agent 会立即按新目标执行…"
+                : "描述目标；发送后 Agent 会立即开始执行…"
+              : running
+                ? "正在处理，可继续补充要求…"
+                : "回复、提问或补充上下文…（输入 @ 引用文件）"
           }
           onChange={(e) => {
             leaveInputHistory();
             setText(e.target.value);
             setSlashActive(0);
-            setSlashDismissed(false);
+            setGoalSaveError(null);
+            setSlashDismissed(goalMode);
+            if (goalMode) {
+              setAt(null);
+              return;
+            }
             if (e.target.value.startsWith("/")) setAt(null);
             else detectAt(e.target.value, e.target.selectionStart ?? e.target.value.length);
           }}
@@ -955,13 +1509,24 @@ export function Composer({
           <div className="comp-meta-context">
             <TaskAddMenu
               onFiles={attachments.addFiles}
-              disabled={sending || commandBusy}
+              disabled={sending || commandBusy || goalSaving}
               running={running}
               task={task}
               agentEngine={agentEngine}
+              goalMode={goalMode}
+              onGoalModeChange={(active) => {
+                if (active) enterGoalMode();
+                else exitGoalMode();
+              }}
               onTaskChanged={() => refreshDetail(taskId)}
               onError={setError}
             />
+            {goalMode && (
+              <GoalModeChip
+                disabled={goalSaving}
+                onExit={exitGoalMode}
+              />
+            )}
             <AgentEngineSwitcher
               taskId={taskId}
               value={agentEngine}
@@ -990,177 +1555,93 @@ export function Composer({
                 onPreferencesChange={setCodexPreferences}
               />
             )}
-            {workspaceAttached && (
-              <ProjectAccessSelector
-                value={workspaceAccessMode}
-                workspaceName={workspaceName ?? "当前工作区"}
-                placement="up"
-                disabled={scopeBusy || running}
-                onChange={onAccessModeChange}
-                openRequest={permissionMenuRequest}
-              />
-            )}
+            <ProjectAccessSelector
+              value={workspaceAccessMode}
+              workspaceName={workspaceName ?? "未附加工作区"}
+              placement="up"
+              disabled={scopeBusy}
+              unavailableReason={workspaceAttached
+                ? undefined
+                : "先通过“+”附加文件夹，才能设置 Agent 的本地工具权限。"}
+              changeNotice={running
+                ? "当前运行继续使用启动时的权限；新设置从下一轮开始生效。"
+                : undefined}
+              onChange={onAccessModeChange}
+              openRequest={permissionMenuRequest}
+            />
           </div>
           <span className="spacer" />
-          {running ? (
-            <div className="running-send-actions" aria-label="运行中消息操作">
-              <div className={`run-send-mode-control mode-${runningSendMode}`}>
-                <button
-                  className="run-send-mode-label run-send-primary"
-                  type="button"
-                  disabled={sending || commandBusy}
-                  onClick={() => setRunningSendMode(nextRunningSendMode(runningSendMode))}
-                  aria-label={
-                    `当前发送方式：${runningSendModeLabel(runningSendMode)}。` +
-                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
-                  }
-                  title={
-                    `${runningSendModeTitle(runningSendMode)}；` +
-                    `点击切换为${runningSendModeLabel(nextRunningSendMode(runningSendMode))}`
-                  }
-                >
-                  <span className="run-send-mode-dot" aria-hidden="true" />
-                  <span>{runningSendModeLabel(runningSendMode)}</span>
-                  <IconRefresh className="run-send-mode-cycle" width={11} height={11} aria-hidden="true" />
-                  <kbd className="sr-only">Enter</kbd>
-                </button>
-                <Menu
-                  className="run-send-mode-menu-root"
-                  label="选择发送方式"
-                  placement="up"
-                  align="right"
-                  menuClassName="comp-more-menu"
-                  trigger={
-                    <button
-                      className="run-send-mode-trigger"
-                      type="button"
-                      disabled={sending || commandBusy}
-                      aria-label={`选择发送方式，当前为${runningSendModeLabel(runningSendMode)}`}
-                      title="直接选择发送方式"
-                    >
-                      <IconChevronDown width={11} height={11} />
-                    </button>
-                  }
-                >
-                  {({ close }) => (
-                    <>
-                      <MenuItem
-                        close={close}
-                        checked={runningSendMode === "queue"}
-                        hint="当前运行结束后发送，不打断这一轮"
-                        onSelect={() => setRunningSendMode("queue")}
-                      >
-                        排队发送
-                      </MenuItem>
-                      <MenuItem
-                        close={close}
-                        checked={runningSendMode === "steer"}
-                        hint="补充到当前运行，原任务与上下文保持不变"
-                        onSelect={() => setRunningSendMode("steer")}
-                      >
-                        引导当前运行
-                      </MenuItem>
-                      <MenuItem
-                        close={close}
-                        checked={runningSendMode === "send_now"}
-                        className="is-destructive"
-                        hint="中断当前运行，优先处理这条消息"
-                        onSelect={() => setRunningSendMode("send_now")}
-                      >
-                        立即发送
-                      </MenuItem>
-                    </>
-                  )}
-                </Menu>
-              </div>
-              <button
-                className={`send running-send-button mode-${runningSendMode}`}
-                type="button"
-                disabled={!text.trim() || sending || commandBusy || Boolean(attachmentBlockedReason)}
-                onClick={() => void send(runningSendMode)}
-                aria-label={`${runningSendModeLabel(runningSendMode)}消息`}
-                title={`${runningSendModeTitle(runningSendMode)}（Enter）`}
-              >
-                <IconSend width={15} height={15} />
-                <span>{sending ? "发送中" : "发送"}</span>
-              </button>
-            </div>
-          ) : (
+          {goalMode ? (
             <button
-              className="send"
+              className={`send composer-primary-button${goalSaving || sending ? " is-loading" : ""}`}
               type="button"
-              disabled={
-                (!text.trim() && sendableAttachments.length === 0)
-                || Boolean(attachmentBlockedReason)
-                || sending
-                || commandBusy
-              }
-              onClick={() => void send("auto")}
-              aria-label="发送消息"
-              title={attachmentBlockedReason ?? "发送（Enter）"}
+              disabled={goalSaving || sending || commandBusy || !text.trim()}
+              onClick={() => void saveTaskGoal()}
+              aria-label={task?.goal_active ? "更新并执行目标" : "执行目标"}
+              aria-busy={goalSaving || sending || undefined}
+              title={task?.goal_active ? "更新并执行目标（Enter）" : "执行目标（Enter）"}
             >
-              <IconSend width={15} height={15} />
-              <span>{sending ? "发送中" : "发送"}</span>
+              {goalSaving || sending
+                ? <span className="send-loading-spinner" aria-hidden="true" />
+                : <IconSend width={15} height={15} />}
+              <span className="sr-only">{goalSaving || sending ? "执行中" : task?.goal_active ? "更新并执行目标" : "执行目标"}</span>
             </button>
+          ) : (
+            <div className="running-send-actions" aria-label={running ? "运行中消息操作" : "消息发送操作"}>
+              <AgentSendModeControl
+                mode={sendMode}
+                running={running}
+                disabled={sending || commandBusy}
+                onChange={setSendMode}
+              />
+              {sending ? (
+                <button
+                  className="send composer-primary-button running-send-button is-loading"
+                  type="button"
+                  disabled
+                  aria-label="正在发送消息"
+                  aria-busy="true"
+                  title="正在发送消息"
+                >
+                  <span className="send-loading-spinner" aria-hidden="true" />
+                  <span className="sr-only">发送中</span>
+                </button>
+              ) : running && !text.trim() && sendableAttachments.length === 0 ? (
+                <button
+                  className={`send composer-primary-button composer-stop-button${abort.busy ? " is-loading" : ""}`}
+                  type="button"
+                  disabled={abort.busy || commandBusy}
+                  onClick={() => void abort.run()}
+                  aria-label={abort.busy ? "正在停止当前运行" : "停止当前运行"}
+                  aria-busy={abort.busy || undefined}
+                  title={abort.busy ? "正在停止当前运行" : "停止当前运行"}
+                >
+                  {abort.busy
+                    ? <span className="send-loading-spinner" aria-hidden="true" />
+                    : <IconStop width={22} height={22} />}
+                  <span className="sr-only">{abort.busy ? "停止中" : "停止"}</span>
+                </button>
+              ) : (
+                <button
+                  className={`send composer-primary-button running-send-button mode-${sendMode}`}
+                  type="button"
+                  disabled={
+                    (!text.trim() && sendableAttachments.length === 0)
+                    || Boolean(attachmentBlockedReason)
+                    || commandBusy
+                  }
+                  onClick={() => void send(effectiveAgentSendMode(sendMode, running))}
+                  aria-label={running ? `${agentSendModeLabel(sendMode)}消息` : "发送消息"}
+                  title={attachmentBlockedReason ?? `${agentSendModeTitle(sendMode, running)}（Enter）`}
+                >
+                  <IconSend width={15} height={15} />
+                  <span className="sr-only">发送</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
 
-        {running && (
-          <div className="run-command-bar" aria-label="队列与运行控制">
-            <Menu
-              role="dialog"
-              label="待发送队列"
-              placement="up"
-              align="left"
-              menuClassName="queue-popover"
-              trigger={
-                <button className="run-queue-summary" type="button">
-                  队列 <strong>{queuedMessages.length}</strong>
-                </button>
-              }
-            >
-              <div className="queue-popover-head">
-                <span>待发送队列</span>
-                <span>{queuedMessages.length} 条</span>
-              </div>
-              {queuedMessages.length === 0 ? (
-                <p className="queue-empty">没有待发送的消息</p>
-              ) : (
-                <div className="queue-list">
-                  {queuedMessages.map((item) => (
-                    <div className="queue-item" key={item.id}>
-                      <span title={item.message}>{item.message}</span>
-                      <span className={"queue-state " + item.state}>{queueStateLabel(item.state)}</span>
-                      <button
-                        type="button"
-                        className="iconbtn"
-                        disabled={removeQueued.busy}
-                        onClick={() => void removeQueued.run(item.id)}
-                        aria-label={`移除队列消息：${item.message}`}
-                      >
-                        移除
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Menu>
-
-            <span className="run-command-spacer" />
-
-            <button
-              className="run-command-stop is-destructive"
-              type="button"
-              disabled={abort.busy}
-              onClick={() => void abort.run()}
-              aria-label={abort.busy ? "正在中断当前运行" : "中断当前运行"}
-              title="中断当前运行"
-            >
-              <IconStop width={11} height={11} />
-              <span>{abort.busy ? "中断中" : "中断"}</span>
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

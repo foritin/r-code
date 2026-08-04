@@ -28,6 +28,7 @@ import {
   REVIEW_STATUS_CHANGED_EVENT,
   runVerification,
   sessionMessages,
+  onTerminalOutput,
   terminalCreate,
   terminalCreateCodex,
   terminalKill,
@@ -76,6 +77,7 @@ import { buildAuditFeed } from "./audit";
 import type { ActivityTraceState } from "./activity";
 import { SubagentAvatar } from "./SubagentIdentity";
 import { SubagentWorkbench } from "./SubagentWorkbench";
+import { handleWorkbenchTabListKeyDown } from "./workbench-tabs";
 import { isLocalRasterReference, LocalImageArtifact } from "./LocalResource";
 import {
   IconActivity,
@@ -315,7 +317,6 @@ export function Canvas({
     closeTab(tool);
   };
   const openLauncher = () => {
-    onCloseSubagents();
     showLauncher();
     setLauncherIndex(0);
     requestAnimationFrame(() => launcherButtonsRef.current[0]?.focus());
@@ -341,6 +342,52 @@ export function Canvas({
     setLauncherIndex(next);
     launcherButtonsRef.current[next]?.focus();
   };
+  const toolTabs = openTabs.map((toolId) => {
+    const tool = TABS.find((item) => item.id === toolId);
+    if (!tool) return null;
+    const selected = !launcherOpen
+      && activeToolId === tool.id
+      && (!subagentPageOpen || selectedSubagentId == null);
+    const selectTool = () => {
+      if (tool.id === "summary" && subagentPageOpen) {
+        onBackToSubagents();
+        return;
+      }
+      activateTool(tool.openTab);
+    };
+    return (
+      <div
+        key={tool.id}
+        className={`workbench-tab${selected ? " workbench-active-tab" : ""}`}
+      >
+        <button
+          type="button"
+          className="workbench-tab-select"
+          role="tab"
+          tabIndex={selected ? 0 : -1}
+          aria-selected={selected}
+          aria-controls="workbench-panel"
+          onClick={selectTool}
+        >
+          <ToolIcon tab={tool.id} width={15} height={15} />
+          <strong>{tool.label}</strong>
+        </button>
+        <button
+          type="button"
+          className="workbench-tab-close"
+          data-testid={selected ? "workbench-close" : undefined}
+          onClick={(event) => {
+            event.stopPropagation();
+            closeTool(tool.id);
+          }}
+          aria-label={`关闭${tool.label}标签页`}
+          title={`关闭${tool.label}`}
+        >
+          <IconClose width={13} height={13} />
+        </button>
+      </div>
+    );
+  });
 
   return (
     <aside
@@ -359,10 +406,9 @@ export function Canvas({
           runs={detail?.runs ?? []}
           selectedSubagentId={selectedSubagentId}
           openSubagentIds={openSubagentIds}
+          toolTabs={toolTabs}
           onSelect={onInspectSubagent}
-          onBack={onBackToSubagents}
           onCloseTab={onCloseSubagentTab}
-          onClose={onCloseSubagents}
           onOpenLauncher={openLauncher}
           onHide={hideWorkbenchPanel}
           onToggleFocus={toggleFocus}
@@ -372,44 +418,8 @@ export function Canvas({
       ) : (
         <>
         <header className="workbench-head">
-        <div className="workbench-tabs" role="tablist" aria-label="已打开的工作台工具">
-          {openTabs.map((toolId) => {
-            const tool = TABS.find((item) => item.id === toolId);
-            if (!tool) return null;
-            const selected = !launcherOpen && activeToolId === tool.id;
-            return (
-              <div
-                key={tool.id}
-                className={`workbench-tab${selected ? " workbench-active-tab" : ""}`}
-                role="tab"
-                tabIndex={selected ? 0 : -1}
-                aria-selected={selected}
-                aria-controls="workbench-panel"
-                onClick={() => activateTool(tool.openTab)}
-                onKeyDown={(event) => {
-                  if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
-                  event.preventDefault();
-                  activateTool(tool.openTab);
-                }}
-              >
-                <ToolIcon tab={tool.id} width={15} height={15} />
-                <strong>{tool.label}</strong>
-                <button
-                  type="button"
-                  className="workbench-tab-close"
-                  data-testid={selected ? "workbench-close" : undefined}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    closeTool(tool.id);
-                  }}
-                  aria-label={`关闭${tool.label}标签页`}
-                  title={`关闭${tool.label}`}
-                >
-                  <IconClose width={13} height={13} />
-                </button>
-              </div>
-            );
-          })}
+        <div className="workbench-tabs" role="tablist" aria-label="已打开的工作台工具" onKeyDown={handleWorkbenchTabListKeyDown}>
+          {toolTabs}
         </div>
         <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开工具启动器" title="新增扩展" aria-pressed={launcherOpen}>
           <IconPlus width={16} height={16} />
@@ -608,12 +618,12 @@ function SummaryPanel({
     : subagentRuns.filter((run) => run.ended_at != null && run.review_state !== "failed" && run.review_state !== "aborted").length;
   const subagentCount = Math.max(activity.subagents.length, subagentRuns.length);
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
-  const hasDistinctGoal = Boolean(task.goal.trim() && task.goal.trim() !== title);
+  const hasDistinctGoal = Boolean(task.goal_active && task.goal.trim() && task.goal.trim() !== title);
   const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "纯聊天");
   const modelLabel = activeMainRun?.model || task.provider_name || "默认模型服务";
 
-  // 会话模式（Ask/Edit/Auto）和项目权限（请求批准/风险/完全）是两件事，但连读起来
-  // 高度重合。合成一枚「策略」芯片：短标签并排，完整解释放 title，不再单独占一格指标。
+  // 产品只展示 Agent / Plan 两种交互模式。持久层中的 Ask/Edit/Auto 是兼容策略，
+  // 项目权限仍独立决定 Agent 在工作区中可以使用的能力。
   const accessLabel =
     workspaceAttached && workspaceAccessMode ? projectAccessModeLabel(workspaceAccessMode) : null;
   const policyLabel = `${modeShortLabel(task.mode)} · ${accessLabel ?? "仅聊天"}`;
@@ -2126,6 +2136,87 @@ function terminalTheme() {
   };
 }
 
+const TERMINAL_INPUT_BATCH_MS = 4;
+
+/**
+ * 严格保序、单请求在途的终端输入缓冲。
+ *
+ * 人工键入最多只增加 4ms；粘贴、按键连发以及 IPC 在途期间到达的数据会合并成
+ * 下一次写入，避免“一字符一个 Promise”形成不断增长的队列。控制键立即冲刷，
+ * 且不做伪本地回显——PowerShell 行编辑、密码提示和 TUI 必须以真实 PTY 为准。
+ */
+export function createTerminalInputBuffer(
+  send: (chunk: string) => Promise<void>,
+  onError: (cause: unknown) => void,
+  delayMs = TERMINAL_INPUT_BATCH_MS,
+) {
+  let pending = "";
+  let timer: number | null = null;
+  let inFlight: Promise<void> | null = null;
+  let disposed = false;
+
+  const clearTimer = () => {
+    if (timer == null) return;
+    window.clearTimeout(timer);
+    timer = null;
+  };
+
+  const pump = (): Promise<void> | null => {
+    if (inFlight || !pending) return inFlight;
+    clearTimer();
+    const chunk = pending;
+    pending = "";
+    const current = send(chunk)
+      .catch(onError)
+      .then(() => undefined)
+      .finally(() => {
+        if (inFlight !== current) return;
+        inFlight = null;
+        // 数据已经等待过一次 IPC 往返，不再额外施加批处理延迟。
+        if (pending) void pump();
+      });
+    inFlight = current;
+    return current;
+  };
+
+  const schedule = () => {
+    if (timer != null || inFlight || !pending) return;
+    timer = window.setTimeout(() => {
+      timer = null;
+      void pump();
+    }, delayMs);
+  };
+
+  const flush = async () => {
+    clearTimer();
+    while (pending || inFlight) {
+      if (!inFlight) pump();
+      const current = inFlight;
+      if (current) await current;
+    }
+  };
+
+  return {
+    push(data: string) {
+      if (disposed || !data) return;
+      pending += data;
+      if (/[\r\n\x03]/.test(data) || data.startsWith("\x1b")) {
+        clearTimer();
+        void pump();
+      } else {
+        schedule();
+      }
+    },
+    flush,
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      clearTimer();
+      void flush();
+    },
+  };
+}
+
 /**
  * 真正的 PTY viewport。
  *
@@ -2145,6 +2236,7 @@ function TerminalViewport({
   const activeIdRef = useRef<string | null>(null);
   const cursorRef = useRef(0);
   const writeChainRef = useRef(Promise.resolve());
+  const pullStateRef = useRef({ terminalId, running: false, requested: false });
   const [readyForId, setReadyForId] = useState<string | null>(null);
   const ready = readyForId === terminalId;
 
@@ -2181,14 +2273,15 @@ function TerminalViewport({
 
     let disposed = false;
     let resizeFrame: number | null = null;
-    let sendChain = Promise.resolve();
     let terminal: XtermTerminal | null = null;
     let fit: FitAddon | null = null;
     let inputDisposable: { dispose: () => void } | null = null;
+    let inputBuffer: ReturnType<typeof createTerminalInputBuffer> | null = null;
     setReadyForId(null);
     activeIdRef.current = terminalId;
     cursorRef.current = 0;
     writeChainRef.current = Promise.resolve();
+    pullStateRef.current = { terminalId, running: false, requested: false };
 
     const report = (cause: unknown) => {
       if (!disposed) onError(String(cause));
@@ -2234,11 +2327,12 @@ function TerminalViewport({
         terminal.loadAddon(fit);
         terminal.open(host);
         terminalRef.current = terminal;
+        inputBuffer = createTerminalInputBuffer(
+          (data) => terminalSend(terminalId, data, false),
+          report,
+        );
         inputDisposable = terminal.onData((data) => {
-          // IPC 是异步的；串行化可以保证 Ctrl+C、方向键和连续粘贴到达 PTY 的顺序。
-          sendChain = sendChain
-            .then(() => terminalSend(terminalId, data, false))
-            .catch((cause) => report(cause));
+          inputBuffer?.push(data);
         });
 
         const snapshot = await terminalRawSnapshot(terminalId);
@@ -2258,6 +2352,7 @@ function TerminalViewport({
       observer.disconnect();
       themeObserver.disconnect();
       inputDisposable?.dispose();
+      inputBuffer?.dispose();
       if (terminal && terminalRef.current === terminal) terminalRef.current = null;
       if (activeIdRef.current === terminalId) activeIdRef.current = null;
       terminal?.dispose();
@@ -2265,15 +2360,56 @@ function TerminalViewport({
   }, [enqueueWrite, onError, terminalId]);
 
   const pullOutput = useCallback(async () => {
+    const state = pullStateRef.current;
+    if (!ready || state.terminalId !== terminalId || activeIdRef.current !== terminalId) return;
+    if (state.running) {
+      state.requested = true;
+      return;
+    }
+
+    state.running = true;
+    try {
+      do {
+        state.requested = false;
+        const batch = await terminalRawSince(terminalId, cursorRef.current);
+        if (pullStateRef.current !== state || activeIdRef.current !== terminalId) return;
+        cursorRef.current = batch.cursor;
+        if (batch.reset || batch.output) {
+          await enqueueWrite(terminalId, batch.output, batch.reset);
+        }
+      } while (state.requested);
+    } catch (cause) {
+      if (pullStateRef.current === state) onError(String(cause));
+    } finally {
+      if (pullStateRef.current === state) state.running = false;
+    }
+  }, [enqueueWrite, onError, ready, terminalId]);
+
+  useEffect(() => {
     if (!ready) return;
-    const batch = await terminalRawSince(terminalId, cursorRef.current);
-    cursorRef.current = batch.cursor;
-    if (batch.reset || batch.output) await enqueueWrite(terminalId, batch.output, batch.reset);
-  }, [enqueueWrite, ready, terminalId]);
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void onTerminalOutput((outputTerminalId) => {
+      if (outputTerminalId === terminalId) void pullOutput();
+    })
+      .then((nextUnlisten) => {
+        if (disposed) nextUnlisten();
+        else {
+          unlisten = nextUnlisten;
+          // Snapshot 与事件订阅之间可能恰好到达一段输出；监听真正建立后补读一次。
+          void pullOutput();
+        }
+      })
+      .catch((cause) => onError(String(cause)));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [onError, pullOutput, ready, terminalId]);
 
   usePoll(
-    () => pullOutput().catch((cause) => onError(String(cause))),
-    250,
+    pullOutput,
+    1_000,
     ready
   );
 

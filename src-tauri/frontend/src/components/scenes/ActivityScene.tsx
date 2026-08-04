@@ -1,96 +1,157 @@
 import { useMemo } from "react";
 import { elapsedMinutes } from "../../lib/format";
-import { isTaskLive, pendingPermissionCount, sortTasksByUrgency, taskActivity, taskStateLabel, taskTitle, visualTaskState, workspaceName } from "../../lib/presentation";
+import {
+  isTaskLive,
+  sortTasksByUrgency,
+  taskActivity,
+  taskStateLabel,
+  taskTitle,
+  visualTaskState,
+  workspaceName,
+} from "../../lib/presentation";
 import { usePoll } from "../../lib/poll";
-import { selectNeedsYou, selectRunning, useTasksStore } from "../../store/tasks";
+import type { Task } from "../../lib/types";
 import { useAppStore } from "../../store/app";
-import type { ProjectActivityItem, Task } from "../../lib/types";
-import { IconActivity, IconArrowRight, IconCheck, IconProjects, IconShield } from "../icons";
+import { selectNeedsYou, useTasksStore, type NeedsYouItem } from "../../store/tasks";
+import { IconArrowRight } from "../icons";
 
-/** 全局活动页：跨项目的概览，不含项目专属的活动侧栏。 */
+/** 跨项目工作摘要：只展示可行动状态与每段对话的最新结果，不复述底层事件流水。 */
 export function ActivityScene() {
-  const tasks = useTasksStore((s) => s.tasks);
-  const details = useTasksStore((s) => s.details);
-  const refreshTasks = useTasksStore((s) => s.refreshTasks);
-  const refreshDetails = useTasksStore((s) => s.refreshDetails);
-  const refreshActivity = useTasksStore((s) => s.refreshActivity);
-  const activityPage = useTasksStore((s) => s.activityPage);
-  const running = useTasksStore(selectRunning);
+  const tasks = useTasksStore((state) => state.tasks);
+  const details = useTasksStore((state) => state.details);
+  const refreshTasks = useTasksStore((state) => state.refreshTasks);
+  const refreshDetails = useTasksStore((state) => state.refreshDetails);
   const needsYou = useTasksStore(selectNeedsYou);
-  const openRoom = useAppStore((s) => s.openRoom);
-  const setScene = useAppStore((s) => s.setScene);
+  const setScene = useAppStore((state) => state.setScene);
 
   usePoll(async () => {
     await refreshTasks();
-    const ids = useTasksStore.getState().tasks.filter((task) => task.state !== "idle" && task.state !== "archived").map((task) => task.id);
-    await Promise.all([refreshActivity(), ids.length ? refreshDetails(ids) : Promise.resolve()]);
-  }, 2500);
+    const ids = useTasksStore.getState().tasks
+      .filter((task) => task.state !== "idle" && task.state !== "archived")
+      .map((task) => task.id);
+    if (ids.length) await refreshDetails(ids);
+  }, 2_500, true, "工作进展");
 
-  const { liveTasks, completed, activeSubagentCount } = useMemo(() => {
-    const orderedTasks = sortTasksByUrgency(
-      tasks.filter((task) => task.state !== "archived"),
-      details,
-    );
+  const { liveTasks, recentTasks } = useMemo(() => {
+    const attentionIds = new Set(needsYou.map((item) => item.task.id));
+    const ordered = sortTasksByUrgency(tasks, details);
     return {
-      liveTasks: orderedTasks.filter((task) => isTaskLive(task, details[task.id])),
-      completed: tasks.filter((task) => task.state === "idle").length,
-      activeSubagentCount: tasks.reduce(
-        (total, task) => total + (
-          details[task.id]?.runs.filter(
-            (run) => run.agent_kind === "subagent" && !run.ended_at,
-          ).length ?? 0
-        ),
-        0,
-      ),
+      // 等待用户决策的运行会话只出现在第一段，避免同一件事重复两次。
+      liveTasks: ordered.filter((task) => isTaskLive(task, details[task.id]) && !attentionIds.has(task.id)),
+      recentTasks: [...tasks]
+        .filter((task) => task.state === "idle" || task.state === "interrupted")
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+        .slice(0, 8),
     };
-  }, [details, tasks]);
-  const recentEvents = activityPage?.items ?? [];
+  }, [details, needsYou, tasks]);
 
   return (
     <div className="scene scene-activity">
       <div className="activity-page">
         <header className="activity-header">
-          <div><p className="page-kicker">ACTIVITY</p><h1>活动</h1><p>跨项目掌握正在推进、需要决定和刚刚完成的工作。</p></div>
+          <div><h1>活动</h1><p>需要你处理、正在运行和最近结束的对话。</p></div>
           <button className="rc-button rc-button-quiet" onClick={() => setScene("conversations")}>全部对话 <IconArrowRight width={14} height={14} /></button>
         </header>
 
-        <section className="activity-summary" aria-label="工作概览">
-          <Summary value={needsYou.length} label="待处理" tone="warm" />
-          <Summary value={running.length} label="运行中" tone="success" />
-          <Summary value={activeSubagentCount} label="活跃子代理" />
-          <Summary value={completed} label="已完成" />
-        </section>
-
-        <section className="activity-section">
-          <div className="activity-section-head"><div><p className="section-kicker">IN PROGRESS</p><h2>正在推进</h2></div><span>{liveTasks.length} 个任务</span></div>
-          <div className="activity-work-list">
-            {liveTasks.length === 0 ? <p className="activity-empty">没有正在运行的任务。</p> : liveTasks.slice(0, 8).map((task) => <ActivityTaskRow key={task.id} task={task} />)}
+        <ActivitySection title="需要处理" count={needsYou.length} action={needsYou.length ? <button className="text-link" onClick={() => setScene("inbox")}>查看全部 <IconArrowRight width={14} height={14} /></button> : null}>
+          <div className="activity-needs-list">
+            {needsYou.length === 0
+              ? <p className="activity-empty">当前没有需要你处理的事项。</p>
+              : needsYou.slice(0, 5).map((item) => <ActivityNeedRow key={item.kind === "permission" ? item.permission!.id : item.task.id} item={item} />)}
           </div>
-        </section>
+        </ActivitySection>
 
-        {needsYou.length > 0 && <section className="activity-section activity-needs-section"><div className="activity-section-head"><div><p className="section-kicker">NEEDS YOU</p><h2>等待决定</h2></div><button className="text-link" onClick={() => setScene("inbox")}>打开待处理 <IconArrowRight width={14} height={14} /></button></div><div className="activity-needs-list">{needsYou.slice(0, 4).map((item) => <button className="activity-need-row" key={item.kind === "permission" ? item.permission!.id : item.task.id} onClick={() => setScene("inbox")}><span>{item.kind === "permission" ? <IconShield width={16} height={16} /> : <IconCheck width={16} height={16} />}</span><strong>{taskTitle(item.task)}</strong><small>{item.kind === "permission" ? `权限请求 · ${item.permission!.tool_name}` : "等待审核"}</small><time>{elapsedMinutes(item.since)}</time></button>)}</div></section>}
+        <ActivitySection title="正在进行" count={liveTasks.length}>
+          <div className="activity-work-list">
+            {liveTasks.length === 0
+              ? <p className="activity-empty">当前没有后台任务在运行。</p>
+              : liveTasks.slice(0, 8).map((task) => <ActivityTaskRow key={task.id} task={task} />)}
+          </div>
+        </ActivitySection>
 
-        <section className="activity-section activity-recent-section">
-          <div className="activity-section-head"><div><p className="section-kicker">RECENTLY</p><h2>最近动态</h2></div></div>
-          <div className="activity-recent-list">{recentEvents.length === 0 ? <p className="activity-empty">任务的运行记录会在这里显示。</p> : recentEvents.slice(0, 9).map((item) => <ActivityEventRow key={item.id} item={item} />)}</div>
-        </section>
+        <ActivitySection title="最近结束" count={recentTasks.length}>
+          <div className="activity-recent-list">
+            {recentTasks.length === 0
+              ? <p className="activity-empty">完成或停止的对话会显示在这里。</p>
+              : recentTasks.map((task) => <RecentTaskRow key={task.id} task={task} />)}
+          </div>
+        </ActivitySection>
       </div>
     </div>
   );
 }
 
-function Summary({ value, label, tone }: { value: number; label: string; tone?: "warm" | "success" }) { return <div className={`activity-summary-metric${tone ? ` ${tone}` : ""}`}><strong>{value}</strong><span>{label}</span></div>; }
-
-function ActivityTaskRow({ task }: { task: Task }) {
-  const detail = useTasksStore((s) => s.details[task.id]);
-  const workspaces = useTasksStore((s) => s.workspaces);
-  const openRoom = useAppStore((s) => s.openRoom);
-  const waiting = pendingPermissionCount(detail);
-  return <button className="activity-work-row" onClick={() => openRoom(task.id)}><i className={`task-state-dot ${visualTaskState(task, detail)}`} /><span><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></span><em>{workspaceName(task.workspace_path, workspaces)}</em><b>{waiting ? `等待 ${waiting} 项授权` : taskStateLabel(task.state, detail)}</b><IconArrowRight width={15} height={15} /></button>;
+function ActivitySection({ title, count, action, children }: { title: string; count: number; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section className="activity-section">
+      <div className="activity-section-head">
+        <div><h2>{title}</h2><span>{count}</span></div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
 }
 
-function ActivityEventRow({ item }: { item: ProjectActivityItem }) {
-  const openRoom = useAppStore((s) => s.openRoom);
-  const tone = item.kind === "permission_requested" ? "attention" : item.kind === "change_requested" ? "review" : item.kind === "run_ended" || item.kind === "verification_run" ? "done" : "running";
-  return <button className="activity-recent-row" onClick={() => openRoom(item.task_id)}><i className={`task-state-dot ${tone}`} /><span><strong>{item.summary}</strong><small>{item.task_title} · <IconProjects width={12} height={12} /> {item.actor ?? "主代理"}</small></span><time>{elapsedMinutes(item.at)}</time></button>;
+function ActivityNeedRow({ item }: { item: NeedsYouItem }) {
+  const details = useTasksStore((state) => state.details);
+  const workspaces = useTasksStore((state) => state.workspaces);
+  const openRoom = useAppStore((state) => state.openRoom);
+  const detail = details[item.task.id];
+  const description = item.kind === "permission"
+    ? `等待授权 · ${item.permission!.tool_name}`
+    : `${detail?.changes.length ?? 0} 个文件等待审核`;
+
+  return (
+    <button className="activity-need-row" onClick={() => openRoom(item.task.id, item.kind === "review_ready" ? "review" : undefined)}>
+      <i className={`task-state-dot ${item.kind === "permission" ? "attention" : "review"}`} />
+      <span><strong>{taskTitle(item.task)}</strong><small>{description}</small></span>
+      <em>{workspaceName(item.task.workspace_path, workspaces)}</em>
+      <time>{elapsedMinutes(item.since)}</time>
+      <IconArrowRight width={15} height={15} />
+    </button>
+  );
+}
+
+function ActivityTaskRow({ task }: { task: Task }) {
+  const detail = useTasksStore((state) => state.details[task.id]);
+  const workspaces = useTasksStore((state) => state.workspaces);
+  const openRoom = useAppStore((state) => state.openRoom);
+  const subagentCount = detail?.runs.filter((run) => run.agent_kind === "subagent" && !run.ended_at).length ?? 0;
+  const status = subagentCount > 0 ? `${taskStateLabel(task.state, detail)} · ${subagentCount} 个子代理` : taskStateLabel(task.state, detail);
+
+  return (
+    <button className="activity-work-row" onClick={() => openRoom(task.id)}>
+      <i className={`task-state-dot ${visualTaskState(task, detail)}`} />
+      <span><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></span>
+      <em>{workspaceName(task.workspace_path, workspaces)}</em>
+      <b>{status}</b>
+      <IconArrowRight width={15} height={15} />
+    </button>
+  );
+}
+
+function RecentTaskRow({ task }: { task: Task }) {
+  const detail = useTasksStore((state) => state.details[task.id]);
+  const workspaces = useTasksStore((state) => state.workspaces);
+  const openRoom = useAppStore((state) => state.openRoom);
+  const latestVerification = detail?.verifications[detail.verifications.length - 1];
+  const signal = task.state === "interrupted"
+    ? "已停止，可继续"
+    : latestVerification?.status === "passed"
+      ? `验证通过${detail?.changes.length ? ` · ${detail.changes.length} 个文件` : ""}`
+      : detail?.changes.length
+        ? `${detail.changes.length} 个文件变更`
+        : "已完成，可继续追问";
+
+  return (
+    <button className="activity-recent-row" onClick={() => openRoom(task.id)}>
+      <i className={`task-state-dot ${visualTaskState(task, detail)}`} />
+      <span><strong>{taskTitle(task)}</strong><small>{taskActivity(task, detail)}</small></span>
+      <b>{signal}</b>
+      <em>{workspaceName(task.workspace_path, workspaces)}</em>
+      <time>{elapsedMinutes(task.updated_at)}</time>
+      <IconArrowRight width={15} height={15} />
+    </button>
+  );
 }

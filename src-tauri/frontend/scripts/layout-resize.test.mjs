@@ -186,7 +186,7 @@ test("project conversation keeps every control while using a flat workspace hier
     const activity = document.querySelector(".activity-strip");
     const userMessage = document.querySelector(".you");
     const titleMarker = document.querySelector(".room-conversation-title");
-    if (!(composer instanceof HTMLElement) || !(box instanceof HTMLElement) || !(activity instanceof HTMLElement)
+    if (!(composer instanceof HTMLElement) || !(box instanceof HTMLElement)
       || !(userMessage instanceof HTMLElement) || !(titleMarker instanceof HTMLElement)) {
       throw new Error("room visual contract elements are missing");
     }
@@ -196,7 +196,7 @@ test("project conversation keeps every control while using a flat workspace hier
       boxRadius: boxStyle.borderRadius,
       boxShadow: boxStyle.boxShadow,
       composerBackground: getComputedStyle(composer).backgroundColor,
-      activityBackground: getComputedStyle(activity).backgroundColor,
+      activityPresent: activity instanceof HTMLElement,
       userShadow: getComputedStyle(userMessage).boxShadow,
       titleMarkerDisplay: getComputedStyle(titleMarker, "::before").display,
     };
@@ -205,7 +205,7 @@ test("project conversation keeps every control while using a flat workspace hier
   assert.deepEqual(visualContract.boxBorder, ["0px", "0px", "0px", "0px"]);
   assert.equal(visualContract.boxRadius, "0px");
   assert.equal(visualContract.boxShadow, "none");
-  assert.equal(visualContract.composerBackground, visualContract.activityBackground);
+  assert.equal(visualContract.activityPresent, false, "the composer should not repeat tool activity above the input");
   assert.equal(visualContract.userShadow, "none");
   assert.equal(visualContract.titleMarkerDisplay, "none");
   await page.locator(".agent-engine-pill").waitFor({ state: "visible" });
