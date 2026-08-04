@@ -43,6 +43,7 @@ use crate::runtime::{AgentRuntime, SteerResult};
 
 /// 单个 run 的最大迭代轮数（防失控兜底）。
 const MAX_ITERATIONS: usize = 32;
+const MAX_REQUIRED_CONTINUATION_REPROMPTS: usize = 3;
 /// 同一主运行并行执行的子代理上限。
 const MAX_PARALLEL_SUBAGENTS: usize = 3;
 /// 单次主运行可委派的子代理总量上限，防止模型无限排队占用资源。
@@ -290,6 +291,9 @@ host-provided Plan tools to clarify or publish the plan. Do not edit files, run 
 invoke mutating external tools, or delegate work. If a Plan tool requests user input, stop after \
 that call and wait for the runtime to resume you. Publish todos as independently verifiable \
 functional outcomes. Each item description must state its acceptance criteria and dependencies. \
+Use `section_path` only to organize executable leaf items into numbered phases such as 1, 1.1, \
+and 1.2; do not create parent-only todo items. Omit dependencies between independent leaves so \
+their read-only investigation or verification can be delegated in parallel during implementation. \
 Do not split items only by file names, directories, or technical layers. Codex CLI configuration is \
 independent from MCP services. Plan mode intentionally disables subagent delegation even when \
 Codex CLI is installed and authenticated. If the user asks to invoke Codex in Plan mode, explain \
@@ -715,6 +719,7 @@ impl AgentRuntime for LlmAgentRuntime {
             delegation_disabled,
             workspace_scope,
             memory_context,
+            continuation_required,
         ) = {
             let mut sessions = self.sessions.lock().await;
             let session = sessions
@@ -734,6 +739,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 session.delegation_disabled.clone(),
                 session.workspace_scope.clone(),
                 session.next_memory_context.take(),
+                task_context_requires_continuation(session.task_context.as_deref()),
             )
         };
         let run_id_text = run_id.to_string();
@@ -770,6 +776,7 @@ impl AgentRuntime for LlmAgentRuntime {
         self.aborted.store(false, Ordering::Relaxed);
         self.running.store(true, Ordering::Relaxed);
         let suspension_gate = Arc::new(AtomicBool::new(false));
+        let continuation_gate = Arc::new(AtomicBool::new(continuation_required));
 
         tokio::spawn(run_loop(RunLoopCtx {
             sessions: self.sessions.clone(),
@@ -792,6 +799,7 @@ impl AgentRuntime for LlmAgentRuntime {
             workspace_scope,
             supervisor,
             suspension_gate,
+            continuation_gate,
             orchestration: self.orchestration,
             agent_prompts: self.agent_prompts.clone(),
             memory_context,
@@ -988,9 +996,24 @@ struct RunLoopCtx {
     supervisor: Arc<SubagentSupervisor>,
     /// Per-run one-way gate set by a successful `suspend_for_user` tool directive.
     suspension_gate: Arc<AtomicBool>,
+    /// Host-owned Plan gate. A visible answer cannot finish while an active feature remains.
+    continuation_gate: Arc<AtomicBool>,
     orchestration: OrchestrationPolicy,
     agent_prompts: AgentPromptPolicy,
     memory_context: Option<String>,
+}
+
+fn task_context_requires_continuation(context: Option<&str>) -> bool {
+    context
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| {
+            value
+                .get("execution_status")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("active_feature")
 }
 
 /// 将常见的服务端参数错误转换为可操作的界面提示；原始错误仍会写入 tracing 日志，
@@ -1023,6 +1046,7 @@ async fn run_loop(ctx: RunLoopCtx) {
     let mut terminal_err: Option<String> = None;
     let mut tool_iterations = 0usize;
     let mut quality_rounds = 0u8;
+    let mut continuation_reprompts = 0usize;
 
     loop {
         if ctx.abort.load(Ordering::Relaxed) {
@@ -1079,6 +1103,7 @@ async fn run_loop(ctx: RunLoopCtx) {
             delegation: delegation_allowed.then(|| ctx.supervisor.clone()),
             delegation_disabled: ctx.delegation_disabled.clone(),
             suspension_gate: ctx.suspension_gate.clone(),
+            continuation_gate: ctx.continuation_gate.clone(),
         };
         let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools);
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
@@ -1133,6 +1158,8 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
                 let reaches_tool_limit =
                     outcome.had_tool_call && tool_iterations + 1 >= MAX_ITERATIONS;
                 let suspended_for_user = ctx.suspension_gate.load(Ordering::SeqCst);
+                let continuation_required = ctx.continuation_gate.load(Ordering::SeqCst);
+                let mut forced_continuation = false;
                 let should_continue = {
                     let mut sessions = ctx.sessions.lock().await;
                     let Some(session) = sessions.get_mut(&ctx.session_id) else {
@@ -1159,6 +1186,14 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
                     } else if !session.steer_queue.is_empty() {
                         // steer 在本轮无工具回复的收尾期间抵达：继续一轮以消费它。
                         true
+                    } else if continuation_required
+                        && continuation_reprompts < MAX_REQUIRED_CONTINUATION_REPROMPTS
+                    {
+                        session.messages.push(Message::user_text(
+                            "[system] The current Plan still has an active feature. This run may not finish yet. Continue implementing only the active feature, verify its acceptance criteria, and call plan_item_update with completed or blocked before giving a final answer.",
+                        ));
+                        forced_continuation = true;
+                        true
                     } else {
                         session.accepting_steer = false;
                         false
@@ -1172,6 +1207,14 @@ CLIs. Work directly and do not delegate or invoke Codex/Claude through shell com
                 }
 
                 if !should_continue {
+                    if continuation_required
+                        && continuation_reprompts >= MAX_REQUIRED_CONTINUATION_REPROMPTS
+                    {
+                        terminal_err = Some(
+                            "Plan 仍有进行中的功能，但模型连续尝试提前结束。运行已安全停止；可继续会话以重试当前功能。"
+                                .to_string(),
+                        );
+                    }
                     // 子代理尚未收集时，不提前结束：等待完成后自动收集结果并
                     // 注入历史，让模型有机会在下一轮汇总。
                     if terminal_err.is_none()
@@ -1272,8 +1315,19 @@ Do not mention private reasoning.\n\n{}",
                     }
                     break;
                 }
+                if forced_continuation {
+                    continuation_reprompts += 1;
+                    emit_activity(
+                        &ctx.event_tx,
+                        AgentActivityPhase::Requesting,
+                        Some(format!(
+                            "Plan 尚未完成，继续当前功能（{continuation_reprompts}/{MAX_REQUIRED_CONTINUATION_REPROMPTS}）"
+                        )),
+                    );
+                }
                 if outcome.had_tool_call {
                     tool_iterations += 1;
+                    continuation_reprompts = 0;
                 }
             }
             Err(e) => {
@@ -1351,6 +1405,7 @@ struct SessionToolHost {
     delegation: Option<Arc<SubagentSupervisor>>,
     delegation_disabled: Arc<AtomicBool>,
     suspension_gate: Arc<AtomicBool>,
+    continuation_gate: Arc<AtomicBool>,
 }
 
 /// Agent 可见工具的能力边界。子代理不能再次委派；默认只读，显式提权后才开放写工具。
@@ -1558,8 +1613,17 @@ impl SessionToolHost {
     }
 
     fn observe_directive(&self, outcome: ToolCallOutcome) -> ToolCallOutcome {
-        if tool_outcome_directive(&outcome) == Some(ToolExecutionDirective::SuspendForUser) {
-            self.suspension_gate.store(true, Ordering::SeqCst);
+        match tool_outcome_directive(&outcome) {
+            Some(ToolExecutionDirective::SuspendForUser) => {
+                self.suspension_gate.store(true, Ordering::SeqCst);
+            }
+            Some(ToolExecutionDirective::RequireAgentContinuation) => {
+                self.continuation_gate.store(true, Ordering::SeqCst);
+            }
+            Some(ToolExecutionDirective::AllowAgentCompletion) => {
+                self.continuation_gate.store(false, Ordering::SeqCst);
+            }
+            None => {}
         }
         outcome
     }
@@ -2616,6 +2680,7 @@ impl SubagentSupervisor {
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
         };
         let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &self.hosted_tools);
         let mut messages = vec![Message::user_text(goal)];
@@ -2824,6 +2889,10 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct SequencedPlanUpdateTool {
+        calls: Arc<AtomicUsize>,
+    }
+
     #[async_trait]
     impl Tool for SuspendTool {
         fn name(&self) -> &str {
@@ -2863,6 +2932,56 @@ mod tests {
         ) -> Result<ToolExecutionResult, ProductError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(ToolExecutionResult::suspend_for_user("waiting"))
+        }
+    }
+
+    #[async_trait]
+    impl Tool for SequencedPlanUpdateTool {
+        fn name(&self) -> &str {
+            "plan_item_update"
+        }
+
+        fn description(&self) -> &str {
+            "Complete the active Plan feature"
+        }
+
+        fn risk_level(&self) -> RiskLevel {
+            RiskLevel::R0
+        }
+
+        fn path_bindings(&self) -> &'static [PathBinding] {
+            &[]
+        }
+
+        fn requires_workspace_scope(&self) -> bool {
+            false
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+            Err(ProductError::Other(
+                "trusted execution context required".to_string(),
+            ))
+        }
+
+        async fn execute_with_context(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolExecutionContext,
+        ) -> Result<ToolExecutionResult, ProductError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                Ok(ToolExecutionResult::require_agent_continuation(
+                    r#"{"active_feature":{"id":"feature-two"}}"#,
+                ))
+            } else {
+                Ok(ToolExecutionResult::allow_agent_completion(
+                    r#"{"active_feature":null}"#,
+                ))
+            }
         }
     }
 
@@ -3151,12 +3270,25 @@ mod tests {
     }
 
     #[test]
+    fn active_plan_context_sets_the_runtime_continuation_gate() {
+        assert!(task_context_requires_continuation(Some(
+            r#"{"execution_status":"active_feature"}"#
+        )));
+        assert!(!task_context_requires_continuation(Some(
+            r#"{"execution_status":"paused"}"#
+        )));
+        assert!(!task_context_requires_continuation(Some("not-json")));
+    }
+
+    #[test]
     fn plan_mode_policy_requires_functional_acceptance_slices() {
         let prompt = append_plan_mode_policy("base".to_string(), true);
 
         assert!(prompt.contains("independently verifiable functional outcomes"));
         assert!(prompt.contains("acceptance criteria and dependencies"));
         assert!(prompt.contains("Do not split items only by file names"));
+        assert!(prompt.contains("Use `section_path`"));
+        assert!(prompt.contains("delegated in parallel during implementation"));
         assert!(prompt.contains("Codex CLI configuration is independent from MCP services"));
         assert!(prompt.contains("do not call `mcp_discover` or `suggest_mcp`"));
         assert!(prompt.contains("Plan mode intentionally disables subagent delegation"));
@@ -3191,6 +3323,7 @@ mod tests {
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(true)),
             suspension_gate: gate.clone(),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
         };
 
         assert!(host
@@ -3278,6 +3411,95 @@ mod tests {
         assert!(!events.iter().any(|event| matches!(
             event,
             AgentEvent::Message { text, .. } if text.contains("must not be delivered")
+        )));
+    }
+
+    #[tokio::test]
+    async fn active_plan_cannot_finish_until_all_features_release_continuation() {
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("premature final", hermes_core::Usage::default());
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "complete-feature-one".to_string(),
+                name: "plan_item_update".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "complete-feature-one".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        provider.push_text_turn("second premature final", hermes_core::Usage::default());
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "complete-feature-two".to_string(),
+                name: "plan_item_update".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "complete-feature-two".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        provider.push_text_turn("settled final", hermes_core::Usage::default());
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(PermissionEngine::new());
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(SequencedPlanUpdateTool {
+            calls: calls.clone(),
+        }));
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            Arc::new(gateway),
+            None,
+            None,
+        );
+        let mut auto_input = input();
+        auto_input.mode = TaskMode::Auto;
+        let session = runtime.create_session(auto_input).await.unwrap();
+        runtime
+            .update_task_context(
+                &session.meta.id,
+                TaskMode::Auto,
+                Some(r#"{"execution_status":"active_feature"}"#.to_string()),
+            )
+            .await
+            .unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "implement the active feature")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(!runtime.is_running());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity { detail: Some(detail), .. }
+                if detail.contains("Plan 尚未完成")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, .. } if text.contains("settled final")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
         )));
     }
 
@@ -3570,6 +3792,7 @@ mod tests {
             delegation: None,
             delegation_disabled: disabled,
             suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let delegate_error = tool_host
@@ -3869,6 +4092,7 @@ mod tests {
             delegation: Some(supervisor),
             delegation_disabled: Arc::new(AtomicBool::new(false)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let delegate_spec = tool_host
@@ -4246,6 +4470,7 @@ mod tests {
             delegation: None,
             delegation_disabled: Arc::new(AtomicBool::new(false)),
             suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
         };
 
         let bound = host

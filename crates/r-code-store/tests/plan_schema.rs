@@ -124,7 +124,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_21() {
+fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -173,7 +173,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_21() {
              DROP TABLE plan_item_dependencies;
              DROP TABLE plan_items;
              DROP TABLE plans;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22);",
         )
         .unwrap();
         assert_eq!(schema_version(&conn), 18);
@@ -209,7 +209,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_21() {
 }
 
 #[test]
-fn schema_21_declares_every_check_and_foreign_key_contract() {
+fn schema_22_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 

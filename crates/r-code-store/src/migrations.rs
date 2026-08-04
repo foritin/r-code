@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 21;
+pub const LATEST_SCHEMA_VERSION: u32 = 22;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -50,6 +50,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(19, MIGRATION_019, false),
     MigrationSpec::new(20, MIGRATION_020, false),
     MigrationSpec::new(21, MIGRATION_021, false),
+    MigrationSpec::new(22, MIGRATION_022, false),
 ];
 
 impl MigrationSpec {
@@ -1337,6 +1338,11 @@ BEGIN
         ) THEN RAISE(ABORT, 'plan_review_scope_conflict')
     END;
 END;
+"#;
+
+/// Migration 022: presentation-only hierarchy for executable Plan leaf items.
+const MIGRATION_022: &str = r#"
+ALTER TABLE plan_items ADD COLUMN section_path_json TEXT NOT NULL DEFAULT '[]';
 "#;
 
 #[cfg(test)]

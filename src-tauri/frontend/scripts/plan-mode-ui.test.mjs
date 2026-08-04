@@ -131,15 +131,21 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await questions.getByRole("button", { name: "提交回答", exact: true }).click();
 
   await panel.getByRole("button", { name: "确认实施", exact: true }).waitFor();
-  const features = panel.locator(".plan-feature-list > li");
+  const sections = panel.locator(".plan-feature-list > .plan-outline-section");
+  const features = panel.locator(".plan-feature-list > li:not(.plan-outline-section)");
+  assert.equal(await sections.count(), 2);
   assert.equal(await features.count(), 2);
-  assert.equal(await features.first().locator(".plan-feature-index").innerText(), "1");
-  assert.equal(await features.nth(1).locator(".plan-feature-index").innerText(), "2");
+  assert.equal(await sections.first().locator(".plan-feature-index").innerText(), "1");
+  assert.equal(await features.first().locator(".plan-feature-index").innerText(), "1.1");
+  assert.equal(await sections.nth(1).locator(".plan-feature-index").innerText(), "2");
+  assert.equal(await features.nth(1).locator(".plan-feature-index").innerText(), "2.1");
   assert.equal(await features.first().locator(".plan-feature-details").getAttribute("open"), null);
   assert.match(await features.nth(1).innerText(), /依赖：明确实现边界/);
+  assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 0.*待处理 2/s);
   await panel.getByRole("button", { name: "确认实施", exact: true }).click();
   await panel.getByText("实施中", { exact: false }).first().waitFor();
   assert.match(await features.first().innerText(), /进行中/);
+  assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 1.*待处理 1/s);
 
   // Approval switches the task back to auto mode. Leaving and reopening the
   // room must still discover the durable Plan instead of hiding the panel.

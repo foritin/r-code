@@ -63,11 +63,81 @@ function newIdempotencyKey(): string {
     ?? `plan-answer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function featureProgress(items: readonly PlanItem[]): { completed: number; total: number } {
+interface PlanProgress {
+  completed: number;
+  total: number;
+  inProgress: number;
+  pending: number;
+  blocked: number;
+  failed: number;
+}
+
+function featureProgress(items: readonly PlanItem[]): PlanProgress {
   return {
     completed: items.filter((item) => item.state === "completed").length,
     total: items.length,
+    inProgress: items.filter((item) => item.state === "in_progress").length,
+    pending: items.filter((item) => ["proposed", "pending"].includes(item.state)).length,
+    blocked: items.filter((item) => item.state === "blocked").length,
+    failed: items.filter((item) => item.state === "failed").length,
   };
+}
+
+type OutlineNode =
+  | { kind: "section"; key: string; title: string; children: OutlineNode[] }
+  | { kind: "item"; key: string; item: PlanItem };
+
+type OutlineEntry =
+  | { kind: "section"; key: string; title: string; number: string; depth: number; progress: PlanProgress }
+  | { kind: "item"; key: string; item: PlanItem; number: string; depth: number };
+
+function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
+  const root: OutlineNode[] = [];
+  for (const item of items) {
+    let children = root;
+    const path: string[] = Array.isArray(item.section_path)
+      ? item.section_path.map((segment) => segment.trim()).filter(Boolean)
+      : [];
+    const keyPath: string[] = [];
+    for (const segment of path) {
+      keyPath.push(segment);
+      let section = children.find(
+        (node): node is Extract<OutlineNode, { kind: "section" }> => node.kind === "section" && node.title === segment,
+      );
+      if (!section) {
+        section = { kind: "section", key: `section:${JSON.stringify(keyPath)}`, title: segment, children: [] };
+        children.push(section);
+      }
+      children = section.children;
+    }
+    children.push({ kind: "item", key: `item:${item.id}`, item });
+  }
+
+  const descendantItems = (nodes: readonly OutlineNode[]): PlanItem[] => nodes.flatMap((node) => (
+    node.kind === "item" ? [node.item] : descendantItems(node.children)
+  ));
+  const flattened: OutlineEntry[] = [];
+  const visit = (nodes: readonly OutlineNode[], prefix: number[], depth: number) => {
+    nodes.forEach((node, index) => {
+      const numberPath = [...prefix, index + 1];
+      const number = numberPath.join(".");
+      if (node.kind === "section") {
+        flattened.push({
+          kind: "section",
+          key: node.key,
+          title: node.title,
+          number,
+          depth,
+          progress: featureProgress(descendantItems(node.children)),
+        });
+        visit(node.children, numberPath, depth + 1);
+      } else {
+        flattened.push({ kind: "item", key: node.key, item: node.item, number, depth });
+      }
+    });
+  };
+  visit(root, [], 0);
+  return flattened;
 }
 
 export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
@@ -105,6 +175,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
   }, [currentQuestionSetId]);
 
   const progress = useMemo(() => featureProgress(view?.items ?? []), [view?.items]);
+  const outline = useMemo(() => planOutline(view?.items ?? []), [view?.items]);
   const itemTitles = useMemo(
     () => new Map((view?.items ?? []).map((item) => [item.id, item.title])),
     [view?.items],
@@ -313,7 +384,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
           <small>{PLAN_STATE_LABEL[view.plan.state]} · 修订 {view.plan.revision}</small>
         </span>
         {progress.total > 0 && (
-          <span className="plan-summary-progress">{progress.completed}/{progress.total} 功能</span>
+          <span className="plan-summary-progress">{progress.completed}/{progress.total} · {progressPercent}%</span>
         )}
         {running && <span className="plan-runtime-state">Agent 运行中</span>}
         <button type="button" className="iconbtn" aria-label="刷新计划" title="刷新计划" onClick={() => void refresh()}>
@@ -488,25 +559,47 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
               <div className="plan-progress" role="progressbar" aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.completed}>
                 <span style={{ width: `${progressPercent}%` }} />
               </div>
+              <div className="plan-progress-breakdown" aria-label="计划进度明细">
+                <span className="is-completed">完成 {progress.completed}</span>
+                <span className="is-active">进行中 {progress.inProgress}</span>
+                <span>待处理 {progress.pending}</span>
+                {progress.blocked > 0 && <span className="is-blocked">阻塞 {progress.blocked}</span>}
+                {progress.failed > 0 && <span className="is-failed">失败 {progress.failed}</span>}
+              </div>
               <ol className="plan-feature-list">
-                {view.items.map((item, index) => (
-                  <li className={`state-${item.state}`} key={item.id}>
-                    <span className="plan-feature-index" aria-label={`第 ${index + 1} 步`}>{index + 1}</span>
+                {outline.map((entry) => entry.kind === "section" ? (
+                  <li
+                    className="plan-outline-section"
+                    key={entry.key}
+                    style={{ paddingInlineStart: `${2 + entry.depth * 14}px` }}
+                  >
+                    <span className="plan-feature-index" aria-label={`阶段 ${entry.number}`}>{entry.number}</span>
                     <span className="plan-feature-copy">
-                      <span><strong>{item.title}</strong><em>{ITEM_STATE_LABEL[item.state]}</em></span>
-                      {item.depends_on.length > 0 && (
+                      <span><strong>{entry.title}</strong><em>{entry.progress.completed}/{entry.progress.total}</em></span>
+                    </span>
+                  </li>
+                ) : (
+                  <li
+                    className={`state-${entry.item.state}`}
+                    key={entry.key}
+                    style={{ paddingInlineStart: `${2 + entry.depth * 14}px` }}
+                  >
+                    <span className="plan-feature-index" aria-label={`第 ${entry.number} 步`}>{entry.number}</span>
+                    <span className="plan-feature-copy">
+                      <span><strong>{entry.item.title}</strong><em>{ITEM_STATE_LABEL[entry.item.state]}</em></span>
+                      {entry.item.depends_on.length > 0 && (
                         <small className="plan-feature-dependencies">
-                          依赖：{item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
+                          依赖：{entry.item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
                         </small>
                       )}
-                      {item.description && (
+                      {entry.item.description && (
                         <details className="plan-feature-details">
                           <summary>查看细节</summary>
-                          <p>{item.description}</p>
+                          <p>{entry.item.description}</p>
                         </details>
                       )}
                     </span>
-                    {item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
+                    {entry.item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
                   </li>
                 ))}
               </ol>

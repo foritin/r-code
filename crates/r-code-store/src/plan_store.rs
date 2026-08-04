@@ -268,10 +268,18 @@ impl PlanStore {
             )
             .map_err(db_err)?;
             for (ordinal, item) in input.items.iter().enumerate() {
+                let section_path = serde_json::to_string(
+                    &item
+                        .section_path
+                        .iter()
+                        .map(|segment| segment.trim())
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| invalid(format!("serialize Plan section path: {error}")))?;
                 tx.execute(
                     "INSERT INTO plan_items \
-                     (id, plan_id, revision, ordinal, title, description, state, created_at, updated_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'proposed', ?7, ?7)",
+                     (id, plan_id, revision, ordinal, title, description, section_path_json, state, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'proposed', ?8, ?8)",
                     params![
                         item.id,
                         input.plan_id,
@@ -279,6 +287,7 @@ impl PlanStore {
                         ordinal as i64,
                         item.title.trim(),
                         item.description.trim(),
+                        section_path,
                         now,
                     ],
                 )
@@ -1543,6 +1552,17 @@ fn validate_item_drafts(items: &[PlanItemDraft]) -> Result<(), ProductError> {
         if item.description.chars().count() > 20_000 {
             return Err(invalid("feature description exceeds 20000 characters"));
         }
+        if item.section_path.len() > 4 {
+            return Err(invalid("feature section_path supports at most 4 levels"));
+        }
+        for segment in &item.section_path {
+            let length = segment.trim().chars().count();
+            if !(1..=120).contains(&length) || segment.contains('\0') {
+                return Err(invalid(
+                    "feature section_path labels must be 1-120 safe characters",
+                ));
+            }
+        }
         let mut dependencies = HashSet::new();
         for dependency in &item.depends_on {
             validate_identifier(dependency, "dependency id")?;
@@ -1836,7 +1856,7 @@ fn load_items(
 ) -> Result<Vec<PlanItem>, ProductError> {
     let mut statement = conn
         .prepare(
-            "SELECT id, ordinal, title, description, state, created_at, updated_at, started_at, completed_at \
+            "SELECT id, ordinal, title, description, state, created_at, updated_at, started_at, completed_at, section_path_json \
              FROM plan_items WHERE plan_id = ?1 AND revision = ?2 ORDER BY ordinal ASC",
         )
         .map_err(db_err)?;
@@ -1852,6 +1872,11 @@ fn load_items(
         let updated_at: String = row.get(6).map_err(db_err)?;
         let started_at: Option<String> = row.get(7).map_err(db_err)?;
         let completed_at: Option<String> = row.get(8).map_err(db_err)?;
+        let section_path_json: String = row.get(9).map_err(db_err)?;
+        let section_path =
+            serde_json::from_str::<Vec<String>>(&section_path_json).map_err(|error| {
+                ProductError::DatabaseError(format!("invalid Plan section_path_json: {error}"))
+            })?;
         items.push(PlanItem {
             id: id.clone(),
             plan_id: plan_id.to_string(),
@@ -1859,6 +1884,7 @@ fn load_items(
             ordinal: ordinal as u32,
             title: row.get(2).map_err(db_err)?,
             description: row.get(3).map_err(db_err)?,
+            section_path,
             state: PlanItemState::try_from_str(&state).ok_or_else(|| {
                 ProductError::DatabaseError(format!("invalid Plan item state: {state}"))
             })?,
@@ -2153,27 +2179,85 @@ fn render_plan_markdown(view: &PlanView) -> String {
     if view.items.is_empty() {
         output.push_str("_No feature items published._\n");
     } else {
+        let mut outline = Vec::new();
         for item in &view.items {
-            let marker = match item.state {
-                PlanItemState::Completed => "x",
-                _ => " ",
-            };
-            output.push_str(&format!(
-                "{}. [{marker}] **{}** (`{}`) — `{}`\n",
-                item.ordinal + 1,
-                item.title,
-                item.id,
-                item.state
-            ));
-            if !item.description.trim().is_empty() {
-                output.push_str(&format!("   {}\n", item.description.trim()));
+            insert_outline_item(&mut outline, &item.section_path, item);
+        }
+        render_outline_nodes(&mut output, &outline, &[]);
+    }
+    output
+}
+
+enum PlanOutlineNode<'a> {
+    Section {
+        title: String,
+        children: Vec<PlanOutlineNode<'a>>,
+    },
+    Item(&'a PlanItem),
+}
+
+fn insert_outline_item<'a>(
+    nodes: &mut Vec<PlanOutlineNode<'a>>,
+    section_path: &[String],
+    item: &'a PlanItem,
+) {
+    let Some((section, remainder)) = section_path.split_first() else {
+        nodes.push(PlanOutlineNode::Item(item));
+        return;
+    };
+    let index = nodes
+        .iter()
+        .position(|node| matches!(node, PlanOutlineNode::Section { title, .. } if title == section))
+        .unwrap_or_else(|| {
+            nodes.push(PlanOutlineNode::Section {
+                title: section.clone(),
+                children: Vec::new(),
+            });
+            nodes.len() - 1
+        });
+    if let PlanOutlineNode::Section { children, .. } = &mut nodes[index] {
+        insert_outline_item(children, remainder, item);
+    }
+}
+
+fn render_outline_nodes(output: &mut String, nodes: &[PlanOutlineNode<'_>], prefix: &[usize]) {
+    for (index, node) in nodes.iter().enumerate() {
+        let mut number_path = prefix.to_vec();
+        number_path.push(index + 1);
+        let number = number_path
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
+        match node {
+            PlanOutlineNode::Section { title, children } => {
+                let heading_level = (3 + prefix.len()).min(6);
+                output.push_str(&format!(
+                    "\n{} {number} {}\n\n",
+                    "#".repeat(heading_level),
+                    title.trim()
+                ));
+                render_outline_nodes(output, children, &number_path);
             }
-            if !item.depends_on.is_empty() {
-                output.push_str(&format!("   Depends on: {}\n", item.depends_on.join(", ")));
+            PlanOutlineNode::Item(item) => {
+                let marker = if item.state == PlanItemState::Completed {
+                    "x"
+                } else {
+                    " "
+                };
+                output.push_str(&format!(
+                    "- [{marker}] **{number} {}** (`{}`) — `{}`\n",
+                    item.title, item.id, item.state
+                ));
+                if !item.description.trim().is_empty() {
+                    output.push_str(&format!("  {}\n", item.description.trim()));
+                }
+                if !item.depends_on.is_empty() {
+                    output.push_str(&format!("  Depends on: {}\n", item.depends_on.join(", ")));
+                }
             }
         }
     }
-    output
 }
 
 /// Builds and syncs the temporary file, drops every database connection, rechecks the committed
