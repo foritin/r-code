@@ -25,7 +25,8 @@ import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
 import { projectAccessModeLabel } from "../ProjectAccessSelector";
-import { PlanPanel } from "../plan/PlanPanel";
+import { PlanShortcut } from "../plan/PlanPanel";
+import { useTaskPlan } from "../plan/useTaskPlan";
 
 const ROOM_SPLIT_STORAGE_KEY = "r-code.room.split-pct";
 const DEFAULT_ROOM_SPLIT_PCT = 55;
@@ -92,6 +93,8 @@ export function RoomScene() {
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
   const workspaces = useTasksStore((s) => s.workspaces);
   const listedTask = useTasksStore((s) => currentTaskId ? s.tasks.find((task) => task.id === currentTaskId) : undefined);
+  const taskSnapshot = detail?.task ?? listedTask ?? null;
+  const planController = useTaskPlan(taskSnapshot?.id ?? null, taskSnapshot?.mode ?? null);
 
   const [scopeBusy, setScopeBusy] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
@@ -111,6 +114,7 @@ export function RoomScene() {
   const [roomWidth, setRoomWidth] = useState(0);
   const [roomSplitPct, setRoomSplitPct] = useState(() => roomSplitRef.current);
   const [isSplitDragging, setIsSplitDragging] = useState(false);
+  const autoOpenedPlanSignals = useRef(new Set<string>());
   const {
     running,
     queuedMessages,
@@ -194,6 +198,21 @@ export function RoomScene() {
     const saved = currentTaskId ? taskSubagentViews.get(currentTaskId) : undefined;
     setSubagentView(saved ?? { open: false, selectedId: null, openIds: [] });
   }, [currentTaskId]);
+
+  useEffect(() => {
+    const view = planController.view;
+    if (!currentTaskId || !view || view.plan.task_id !== currentTaskId) return;
+
+    const signal = view.pending_question_set
+      ? `${currentTaskId}:question:${view.pending_question_set.id}`
+      : view.plan.state === "ready" && view.items.length > 0
+        ? `${currentTaskId}:ready:${view.plan.revision}`
+        : null;
+    if (!signal || autoOpenedPlanSignals.current.has(signal)) return;
+
+    autoOpenedPlanSignals.current.add(signal);
+    setCanvasTab("plan");
+  }, [currentTaskId, planController.view, setCanvasTab]);
 
   useEffect(() => {
     const workbenchVisible = workbenchMode === "docked" || workbenchMode === "focus";
@@ -331,7 +350,7 @@ export function RoomScene() {
   }
 
   // 先用列表快照立即画出任务壳，detail IPC 返回后再补齐运行信息，避免点击后整页空等。
-  const task = detail?.task ?? listedTask;
+  const task = taskSnapshot;
   if (!task) {
     return (
       <section className="scene scene-room workbench-hidden" data-testid="workbench-root" data-workbench-mode="hidden">
@@ -462,17 +481,17 @@ export function RoomScene() {
               )}
             </>
           )}
+          <PlanShortcut
+            taskMode={task.mode}
+            controller={planController}
+            onOpen={() => setCanvasTab("plan")}
+          />
         </div>
         {scopeError && (
           <StatusBar kind="error" compact onDismiss={() => setScopeError(null)}>
             工作区操作失败：{scopeError}
           </StatusBar>
         )}
-        <PlanPanel
-          task={task}
-          running={running}
-          onTaskChanged={() => refreshDetail(currentTaskId)}
-        />
         <Timeline
           ref={tlRef}
           taskId={currentTaskId}
@@ -542,6 +561,8 @@ export function RoomScene() {
       )}
       <Canvas
         taskId={currentTaskId}
+        task={task}
+        planController={planController}
         running={running}
         activity={activity}
         workspacePath={workspacePath}
@@ -554,6 +575,7 @@ export function RoomScene() {
         onCloseSubagentTab={closeSubagentTab}
         onCloseSubagents={closeSubagentView}
         onAbortSubagent={abortSubagent}
+        onTaskChanged={() => refreshDetail(currentTaskId)}
       />
     </section>
   );

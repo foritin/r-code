@@ -1,30 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   planAnswer,
   planApprove,
   planCancel,
   planCreate,
-  planGet,
   planRepairProjection,
   planRetryContinuation,
   planRetryImplementation,
 } from "../../lib/ipc";
-import { usePoll } from "../../lib/poll";
 import type {
   PlanItem,
   PlanQuestionAnswerInput,
   PlanQuestionSet,
   PlanState,
-  PlanView,
   Task,
 } from "../../lib/types";
 import {
   IconCheck,
-  IconChevronDown,
   IconHelp,
   IconRefresh,
 } from "../icons";
 import { StatusBar } from "../ui/StatusBar";
+import type { TaskPlanController } from "./useTaskPlan";
 
 type AnswerDraft =
   | { kind: "option"; optionId: string }
@@ -33,6 +30,7 @@ type AnswerDraft =
 interface Props {
   task: Task;
   running: boolean;
+  controller: TaskPlanController;
   onTaskChanged?: () => Promise<void> | void;
 }
 
@@ -72,10 +70,15 @@ function featureProgress(items: readonly PlanItem[]): { completed: number; total
   };
 }
 
-export function PlanPanel({ task, running, onTaskChanged }: Props) {
-  const [view, setView] = useState<PlanView | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [expanded, setExpanded] = useState(true);
+export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
+  const {
+    view,
+    loaded,
+    loadError,
+    setView,
+    refresh,
+    clearLoadError,
+  } = controller;
   const [busy, setBusy] = useState<
     "create" | "answer" | "skip" | "retry" | "approve" | "repair" | "retryImplementation" | "cancel" | null
   >(null);
@@ -86,44 +89,17 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
   const [retryQuestionSetId, setRetryQuestionSetId] = useState<string | null>(null);
   const currentQuestionSetId = view?.pending_question_set?.id ?? null;
   const answerKeys = useRef(new Map<string, string>());
-  const activeTaskId = useRef(task.id);
-  activeTaskId.current = task.id;
-
-  const refresh = useCallback(async () => {
-    const requestedTaskId = task.id;
-    try {
-      const next = await planGet(requestedTaskId);
-      if (activeTaskId.current !== requestedTaskId) return next;
-      setView(next);
-      setLoaded(true);
-      return next;
-    } catch (cause) {
-      if (activeTaskId.current !== requestedTaskId) throw cause;
-      setLoaded(true);
-      setError(`读取计划失败：${errorText(cause)}`);
-      throw cause;
-    }
-  }, [task.id]);
-
-  usePoll(async () => { await refresh(); }, 1800, task.mode === "plan" || view != null, "计划状态");
-
   useEffect(() => {
-    setView(null);
-    setLoaded(false);
+    answerKeys.current.clear();
     setAnswers({});
     setRetryQuestionSetId(null);
     setCancelArmedRevision(null);
     setNotice(null);
     setError(null);
-    // Approval returns the task to auto mode. Always probe once when a room is
-    // opened so an executing or completed Plan survives navigation and restart;
-    // the regular poll is enabled after this initial lookup finds the Plan.
-    void refresh().catch(() => undefined);
-  }, [task.id, refresh]);
+  }, [task.id]);
 
   useEffect(() => {
     if (!currentQuestionSetId) return;
-    setExpanded(true);
     setAnswers({});
     setNotice(null);
   }, [currentQuestionSetId]);
@@ -133,9 +109,7 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
     () => new Map((view?.items ?? []).map((item) => [item.id, item.title])),
     [view?.items],
   );
-  const visible = task.mode === "plan" || view != null;
   const cancelArmed = view != null && cancelArmedRevision === view.plan.revision;
-  if (!visible) return null;
 
   const initialize = async () => {
     if (busy) return;
@@ -144,7 +118,6 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
     try {
       const next = await planCreate(task.id);
       setView(next);
-      setExpanded(true);
     } catch (cause) {
       setError(`初始化计划失败：${errorText(cause)}`);
     } finally {
@@ -303,18 +276,24 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
   };
 
   if (!loaded && !view) {
-    return <div className="plan-panel plan-panel-loading" role="status">正在读取计划…</div>;
+    return <div className="plan-panel plan-panel-loading" role="status">正在读取当前对话的计划…</div>;
   }
 
   if (!view) {
     return (
-      <section className="plan-panel plan-panel-empty" aria-label="计划模式">
-        <IconHelp width={16} height={16} />
-        <span>计划模式已开启，但尚未建立计划文档。</span>
-        <button className="quiet-link" type="button" disabled={busy === "create"} onClick={() => void initialize()}>
-          {busy === "create" ? "初始化中…" : "初始化计划"}
-        </button>
-        {error && <StatusBar kind="error" compact>{error}</StatusBar>}
+      <section className="plan-panel plan-panel-empty" aria-label="当前计划" data-task-id={task.id}>
+        <span className="plan-empty-icon"><IconHelp width={18} height={18} /></span>
+        <div>
+          <strong>当前对话没有计划</strong>
+          <p>进入计划模式后，步骤和需要你确认的问题会显示在这里。</p>
+        </div>
+        {task.mode === "plan" && (
+          <button className="btn" type="button" disabled={busy === "create"} onClick={() => void initialize()}>
+            {busy === "create" ? "初始化中…" : "初始化计划"}
+          </button>
+        )}
+        {loadError && <StatusBar kind="error" compact onDismiss={clearLoadError}>{loadError}</StatusBar>}
+        {error && <StatusBar kind="error" compact onDismiss={() => setError(null)}>{error}</StatusBar>}
       </section>
     );
   }
@@ -326,13 +305,8 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
   const progressPercent = progress.total > 0 ? Math.round(progress.completed / progress.total * 100) : 0;
 
   return (
-    <section className={`plan-panel state-${view.plan.state}`} aria-label="当前计划">
-      <button
-        className="plan-panel-summary"
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-      >
+    <section className={`plan-panel state-${view.plan.state}`} aria-label="当前计划" data-task-id={task.id}>
+      <header className="plan-panel-summary">
         <span className="plan-state-diamond" aria-hidden="true" />
         <span className="plan-summary-copy">
           <strong>计划</strong>
@@ -342,19 +316,17 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
           <span className="plan-summary-progress">{progress.completed}/{progress.total} 功能</span>
         )}
         {running && <span className="plan-runtime-state">Agent 运行中</span>}
-        <IconChevronDown className={expanded ? "is-open" : ""} width={14} height={14} />
-      </button>
+        <button type="button" className="iconbtn" aria-label="刷新计划" title="刷新计划" onClick={() => void refresh()}>
+          <IconRefresh width={13} height={13} />
+        </button>
+      </header>
 
-      {expanded && (
-        <div className="plan-panel-body">
+      <div className="plan-panel-body">
           <div className="plan-metadata">
             <span title={view.plan.projection_path ?? "计划文档尚未生成"}>
               文档 · {view.plan.projection_path ?? "准备中"}
             </span>
             <span>同步修订 · {view.plan.projection_revision ?? "—"}</span>
-            <button type="button" className="iconbtn" aria-label="刷新计划" title="刷新计划" onClick={() => void refresh()}>
-              <IconRefresh width={13} height={13} />
-            </button>
           </div>
 
           {view.goal.goal && (
@@ -370,6 +342,7 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
               计划正文同步失败：{view.plan.projection_error}
             </StatusBar>
           )}
+          {loadError && <StatusBar kind="error" compact onDismiss={clearLoadError}>{loadError}</StatusBar>}
           {error && <StatusBar kind="error" compact onDismiss={() => setError(null)}>{error}</StatusBar>}
           {notice && <StatusBar kind="info" compact onDismiss={() => setNotice(null)}>{notice}</StatusBar>}
 
@@ -518,14 +491,19 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
               <ol className="plan-feature-list">
                 {view.items.map((item, index) => (
                   <li className={`state-${item.state}`} key={item.id}>
-                    <span className="plan-feature-marker" aria-hidden="true" />
+                    <span className="plan-feature-index" aria-label={`第 ${index + 1} 步`}>{index + 1}</span>
                     <span className="plan-feature-copy">
-                      <span><b>{index + 1}</b><strong>{item.title}</strong><em>{ITEM_STATE_LABEL[item.state]}</em></span>
-                      <small>{item.description}</small>
+                      <span><strong>{item.title}</strong><em>{ITEM_STATE_LABEL[item.state]}</em></span>
                       {item.depends_on.length > 0 && (
                         <small className="plan-feature-dependencies">
                           依赖：{item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
                         </small>
+                      )}
+                      {item.description && (
+                        <details className="plan-feature-details">
+                          <summary>查看细节</summary>
+                          <p>{item.description}</p>
+                        </details>
                       )}
                     </span>
                     {item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
@@ -567,8 +545,34 @@ export function PlanPanel({ task, running, onTaskChanged }: Props) {
               </button>
             </div>
           )}
-        </div>
-      )}
+      </div>
     </section>
+  );
+}
+
+interface PlanShortcutProps {
+  taskMode: Task["mode"];
+  controller: TaskPlanController;
+  onOpen: () => void;
+}
+
+/** 对话区只保留轻量入口，完整内容统一进入任务级右侧工作台。 */
+export function PlanShortcut({ taskMode, controller, onOpen }: PlanShortcutProps) {
+  const { view, loaded } = controller;
+  if (taskMode !== "plan" && !view) return null;
+  const progress = featureProgress(view?.items ?? []);
+  const label = view ? PLAN_STATE_LABEL[view.plan.state] : loaded ? "尚未建立" : "读取中";
+
+  return (
+    <button
+      type="button"
+      className={`room-plan-shortcut state-${view?.plan.state ?? "draft"}`}
+      onClick={onOpen}
+      aria-label={`打开计划，${label}`}
+    >
+      <span className="plan-state-diamond" aria-hidden="true" />
+      <strong>计划</strong>
+      <small>{label}{progress.total > 0 ? ` · ${progress.completed}/${progress.total}` : ""}</small>
+    </button>
   );
 }

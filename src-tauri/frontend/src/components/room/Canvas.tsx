@@ -1,5 +1,5 @@
 /**
- * Room 右列画布 —— Summary / Changes·n / Terminal / Review 四页签。
+ * Room 右列任务工作台 —— 运行 / 文件 / 终端 / 审核 / Plan 等项目任务工具。
  * 激活页签来自 store.app.canvasTab（页签点击或 视图 菜单切换）。
  * Changes 以本轮记录为可操作范围，并合并当前项目的 Git 未提交变更作为只读上下文。
  */
@@ -49,6 +49,7 @@ import type {
   ProjectAccessMode,
   ReviewGitStatus,
   SessionMessage,
+  Task,
   TaskDetail,
   TerminalInfo,
   VerificationRecord,
@@ -99,9 +100,13 @@ import { useCodexCliGate } from "../codex/CodexCliGate";
 import { FileCodePreview } from "../files/FileCodePreview";
 import { FileContextMenu, type FileContextMenuTarget } from "../files/FileContextMenu";
 import { EnhancedReviewPanel } from "./EnhancedReviewPanel";
+import { PlanPanel } from "../plan/PlanPanel";
+import type { TaskPlanController } from "../plan/useTaskPlan";
 
 interface Props {
   taskId: string;
+  task: Task;
+  planController: TaskPlanController;
   running: boolean;
   activity: ActivityTraceState;
   workspacePath: string | null;
@@ -114,6 +119,7 @@ interface Props {
   onCloseSubagentTab: (subagentId: string) => void;
   onCloseSubagents: () => void;
   onAbortSubagent: (subagentId: string) => Promise<void>;
+  onTaskChanged?: () => Promise<void> | void;
 }
 
 const shortcutLabel = (action: Parameters<typeof keyLabel>[0]) => keyLabel(action).split(" ").join("+");
@@ -123,6 +129,7 @@ const TABS: { id: WorkbenchToolTab; openTab: CanvasTab; label: string; descripti
   { id: "terminal", openTab: "terminal", label: "终端", description: "打开任务级持久终端会话", shortcut: shortcutLabel("workbenchTerminal") },
   { id: "files", openTab: "files", label: "文件", description: "浏览并编辑当前工作区文件", shortcut: shortcutLabel("workbenchFiles") },
   { id: "review", openTab: "changes", label: "审核", description: "检查差异、运行验证并决定是否接受", shortcut: shortcutLabel("workbenchReview") },
+  { id: "plan", openTab: "plan", label: "计划", description: "查看当前对话的步骤、进度与待确认问题", shortcut: "" },
 ];
 
 const EMPTY_WORKBENCH_TABS: readonly WorkbenchToolTab[] = [];
@@ -151,6 +158,7 @@ function ToolIcon({ tab, ...props }: { tab: CanvasTab; width?: number; height?: 
   if (tab === "summary") return <IconActivity {...props} />;
   if (tab === "files") return <IconFile {...props} />;
   if (tab === "terminal") return <IconTerminal {...props} />;
+  if (tab === "plan") return <IconEditor {...props} />;
   return <IconShield {...props} />;
 }
 
@@ -205,6 +213,8 @@ function rovingIndexOf(focusIndex: number, selectedIndex: number, count: number)
 
 export function Canvas({
   taskId,
+  task,
+  planController,
   running,
   activity,
   workspacePath,
@@ -217,6 +227,7 @@ export function Canvas({
   onCloseSubagentTab,
   onCloseSubagents,
   onAbortSubagent,
+  onTaskChanged,
 }: Props) {
   const tab = useAppStore((s) => s.canvasTab);
   const setTab = useAppStore((s) => s.setCanvasTab);
@@ -437,7 +448,8 @@ export function Canvas({
                     <span className="workbench-launcher-glyph"><ToolIcon tab={tool.id} width={17} height={17} /></span>
                     <span><strong>{tool.label}</strong><small>{tool.description}</small></span>
                     {tool.id === "review" && <em>{displayedReviewChangeCount}</em>}
-                    <kbd>{tool.shortcut}</kbd>
+                    {tool.id === "plan" && planController.view && <em>{planController.view.items.length}</em>}
+                    {tool.shortcut && <kbd>{tool.shortcut}</kbd>}
                   </button>
                 </li>
               ))}
@@ -462,6 +474,14 @@ export function Canvas({
           <FilesPanel key={`${taskId}:${workspacePath ?? "none"}:files`} taskId={taskId} workspacePath={workspacePath} workspaceAttached={workspaceAttached} running={running} />
         ) : tab === "terminal" ? (
           <TerminalPanel key={`${taskId}:terminal`} taskId={taskId} workspacePath={workspacePath} workspaceAttached={workspaceAttached} />
+        ) : tab === "plan" ? (
+          <PlanPanel
+            key={`${taskId}:plan`}
+            task={task}
+            running={running}
+            controller={planController}
+            onTaskChanged={onTaskChanged}
+          />
         ) : (
           <div className="workbench-review-tool">
             <div
