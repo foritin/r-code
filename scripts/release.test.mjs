@@ -58,6 +58,15 @@ test("stampChangelog keeps older release links and advances the comparison base"
   assert.match(actual, /^\[Unreleased\]: .*\/compare\/v0\.1\.1\.\.\.HEAD$/m);
   assert.match(actual, /^\[0\.1\.1\]: .*\/releases\/tag\/v0\.1\.1$/m);
   assert.equal((actual.match(/^\[Unreleased\]:/gm) ?? []).length, 1);
+  assert.doesNotMatch(actual, /\n{3,}/, "release links must not retain surrounding blank lines");
+});
+
+test("stampChangelog preserves CRLF without creating mixed line endings", () => {
+  const input = "# Changelog\r\n\r\n## [Unreleased]\r\n\r\n### Fixed\r\n\r\n- A regression.\r\n\r\n## [0.1.0] - 2026-07-01\r\n\r\n- Initial release.\r\n\r\n[Unreleased]: https://github.com/foritin/r-code/compare/v0.1.0...HEAD\r\n[0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0\r\n";
+  const actual = stampChangelog(input, "0.1.1", "https://github.com/foritin/r-code");
+
+  assert.equal(actual.replaceAll("\r\n", "").includes("\n"), false);
+  assert.doesNotMatch(actual, /\r\r\n/);
 });
 
 test("macOS packaging keeps native window chrome and app/dmg targets", () => {

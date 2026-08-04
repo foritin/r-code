@@ -151,7 +151,7 @@ function stampChangelog(changelog, version, repository) {
   let next = `${before}${newline}${newline}## [${version}] - ${date}${newline}${newline}${unreleasedBody}`;
   if (after) next += `${newline}${newline}${after}`;
 
-  const definitionPattern = /^\[(Unreleased|[^\]]+)\]:\s+\S+\s*$/gm;
+  const definitionPattern = /^\[(Unreleased|[^\]]+)\]:\s+\S+[^\S\r\n]*$/gm;
   const definitions = [...next.matchAll(definitionPattern)];
   const keep = definitions
     .filter((match) => match[1] !== "Unreleased" && match[1] !== version)
