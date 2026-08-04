@@ -207,6 +207,7 @@ impl McpSupervisor {
                 Ok(tools)
             }
             Err(error) => {
+                tracing::warn!(server_id, %error, "MCP tool discovery failed");
                 self.publish_status(
                     server_id,
                     McpServerState::Error,
@@ -244,6 +245,7 @@ impl McpSupervisor {
         match session.call_tool(tool_name, args).await {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
+                tracing::warn!(server_id, tool_name, %error, "MCP tool call failed");
                 self.publish_status(
                     server_id,
                     McpServerState::Error,
@@ -280,6 +282,7 @@ impl McpSupervisor {
             let _gate = slot.connect_gate.lock().await;
             let id = slot.config.read().await.id.clone();
             if let Err(error) = self.close_slot_session(&slot).await {
+                tracing::warn!(server_id = %id, %error, "MCP session shutdown failed");
                 self.publish_status(
                     &id,
                     McpServerState::Error,
@@ -343,6 +346,7 @@ impl McpSupervisor {
                 Ok(session)
             }
             Err(error) => {
+                tracing::warn!(server_id, %error, "MCP connection failed");
                 self.publish_status(
                     server_id,
                     McpServerState::Error,

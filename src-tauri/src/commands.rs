@@ -111,6 +111,10 @@ use crate::workflow_skills::{
     SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
 };
 
+/// 诊断日志中的失败摘要上限。只保留足够定位问题的片段，避免把完整工具输出或
+/// 大段工作区内容复制到日志文件。
+const DIAGNOSTIC_ERROR_DETAIL_CHARS: usize = 1_000;
+
 // ============================================================================
 // AgentBridge -- Mock runtime + 任务会话映射
 // ============================================================================
@@ -3591,7 +3595,14 @@ async fn persist_runtime_event(
     let event_storage_id = scope
         .map(|value| subagent_storage_id(parent_storage_id, &value.run_id))
         .unwrap_or_else(|| parent_storage_id.to_string());
-    let _ = ensure_session_log(session_store, sessions_dir, &event_storage_id).await;
+    if let Err(error) = ensure_session_log(session_store, sessions_dir, &event_storage_id).await {
+        tracing::warn!(
+            task_id,
+            storage_id = %event_storage_id,
+            %error,
+            "failed to initialize runtime session log"
+        );
+    }
 
     match event {
         AgentEvent::Message { text, delta } => {
@@ -3686,7 +3697,24 @@ async fn persist_runtime_event(
             output,
             is_error,
         } => {
-            let _ = session_store
+            let run_id = scope
+                .map(|value| value.run_id.as_str())
+                .unwrap_or(parent_run_id);
+            if *is_error {
+                let detail = bounded_text(
+                    &redact_text(&output.to_string()),
+                    DIAGNOSTIC_ERROR_DETAIL_CHARS,
+                );
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    agent_id = scope.map(|value| value.agent_id.as_str()).unwrap_or("main"),
+                    detail,
+                    "agent tool call failed"
+                );
+            }
+            if let Err(error) = session_store
                 .append(
                     &event_storage_id,
                     SessionEvent::ToolResult {
@@ -3695,8 +3723,25 @@ async fn persist_runtime_event(
                         is_error: *is_error,
                     },
                 )
-                .await;
-            let _ = ToolCallRepository::new(db).finish(call_id, output, *is_error);
+                .await
+            {
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    %error,
+                    "failed to append agent tool result to session log"
+                );
+            }
+            if let Err(error) = ToolCallRepository::new(db).finish(call_id, output, *is_error) {
+                tracing::warn!(
+                    task_id,
+                    run_id,
+                    call_id,
+                    %error,
+                    "failed to persist agent tool result audit"
+                );
+            }
             if scope.is_none() {
                 let _ = TaskEventStore::new(db).append_for_branch(
                     task_id,
@@ -3740,6 +3785,15 @@ async fn persist_runtime_event(
             let Some(scope) = scope else {
                 return;
             };
+            if matches!(state, SubagentState::Failed) {
+                tracing::warn!(
+                    task_id,
+                    child_run_id = %scope.run_id,
+                    agent_id = %scope.agent_id,
+                    detail = detail.as_deref().unwrap_or("<no detail>"),
+                    "subagent failed"
+                );
+            }
             if matches!(
                 state,
                 SubagentState::Completed | SubagentState::Failed | SubagentState::Cancelled
@@ -6979,19 +7033,30 @@ fn resolve_support_output_dir(output_dir: &str) -> Result<PathBuf, String> {
 }
 
 pub async fn support_bundle(state: &CommandState, output_dir: &str) -> Result<String, String> {
-    let bundle = SupportBundle::new(resolve_support_output_dir(output_dir)?)
-        .with_mcp_servers(mcp_support_summaries(state).await);
+    let bundle = SupportBundle::new(
+        resolve_support_output_dir(output_dir)?,
+        crate::logging::log_dir_for_config(&state.config_dir),
+    )
+    .with_mcp_servers(mcp_support_summaries(state).await);
     let db_path = support_db_path(state)?;
-    let path = bundle.generate(&db_path).await.map_err(err_str)?;
+    let path = bundle.generate(&db_path).await.map_err(|error| {
+        tracing::warn!(%error, "support bundle export failed");
+        err_str(error)
+    })?;
     Ok(path.display().to_string())
 }
 
 pub async fn support_preview(state: &CommandState) -> Result<serde_json::Value, String> {
-    // output_dir 仅用于定位 r-code.log；预览用 config_dir
-    let bundle = SupportBundle::new(state.config_dir.clone())
-        .with_mcp_servers(mcp_support_summaries(state).await);
+    let bundle = SupportBundle::new(
+        state.config_dir.clone(),
+        crate::logging::log_dir_for_config(&state.config_dir),
+    )
+    .with_mcp_servers(mcp_support_summaries(state).await);
     let db_path = support_db_path(state)?;
-    let contents = bundle.preview(&db_path).await.map_err(err_str)?;
+    let contents = bundle.preview(&db_path).await.map_err(|error| {
+        tracing::warn!(%error, "support bundle preview failed");
+        err_str(error)
+    })?;
     serde_json::to_value(&contents).map_err(|e| e.to_string())
 }
 
@@ -7399,7 +7464,7 @@ pub async fn legacy_memory_status(
 }
 
 // ============================================================================
-// 日志命令（环形缓冲，应用内查看）
+// 日志命令（近 7 天持久化日志 + 当前进程尾部缓冲）
 // ============================================================================
 
 pub async fn logs_tail(
@@ -7407,7 +7472,7 @@ pub async fn logs_tail(
     limit: usize,
     level: Option<&str>,
 ) -> Result<Vec<crate::log_buffer::LogEntry>, String> {
-    Ok(crate::log_buffer::tail(limit, level))
+    Ok(crate::log_buffer::tail(limit.min(1000), level))
 }
 
 // ============================================================================
@@ -12517,6 +12582,12 @@ fn spawn_codex_main(
         } else {
             let detail = codex_exec_failure_message(completion.failure)
                 .replace("Codex CLI 子代理", "Codex 主 Agent");
+            tracing::warn!(
+                task_id = %run.task_id,
+                run_id = %run.id,
+                detail,
+                "Codex main agent failed"
+            );
             persist_and_emit_external_event(
                 &db,
                 &session_store,

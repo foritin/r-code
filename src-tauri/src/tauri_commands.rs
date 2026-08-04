@@ -920,6 +920,34 @@ pub async fn cmd_support_bundle(
     r_code_host::commands::support_bundle(&state, &output_dir).await
 }
 
+/// 通过系统原生目录选择器导出支持包；取消选择属于正常操作，返回 `None`。
+#[tauri::command]
+pub async fn cmd_support_bundle_choose(
+    app: AppHandle,
+    state: State<'_, CommandState>,
+) -> Result<Option<String>, String> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("选择诊断支持包导出目录")
+            .blocking_pick_folder()
+            .map(|path| {
+                path.into_path()
+                    .map_err(|error| format!("invalid folder selection: {error}"))
+            })
+            .transpose()
+    })
+    .await
+    .map_err(|error| format!("folder dialog worker failed: {error}"))??;
+
+    match selected {
+        Some(path) => r_code_host::commands::support_bundle(&state, &path.to_string_lossy())
+            .await
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
 /// 预览支持包内容（不写文件，供用户确认后再导出）。
 #[tauri::command]
 pub async fn cmd_support_preview(
@@ -1061,7 +1089,7 @@ pub async fn cmd_legacy_memory_status(
     r_code_host::commands::legacy_memory_status(&state, &workspace_path).await
 }
 
-/// 读取最近的日志条目（环形缓冲；level 过滤如 "error"/"warn"）。
+/// 读取最近的诊断日志条目（启动时已水合近七天尾部；level 如 "error"/"warn"）。
 #[tauri::command]
 pub async fn cmd_logs_tail(
     state: State<'_, CommandState>,

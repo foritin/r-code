@@ -299,7 +299,7 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 
 ### 8.3 密钥与日志
 
-Provider API key 通过 `keyring` 写入操作系统凭据库，配置文件只保存非敏感 Provider 元数据。日志层会遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
+Provider API key 通过 `keyring` 写入操作系统凭据库，配置文件只保存非敏感 Provider 元数据。结构化诊断日志在写入磁盘前遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数，按日滚动并固定保留最近 7 天；模型、工具、子代理、MCP 与恢复链路的 operational warning/error 会进入该日志，Prompt、源码正文与完整工具输出不进入普通日志。支持包通过系统目录选择器显式导出，只包含近 7 天脱敏后的 warning/error 明细（保留原始时间戳与模块）和白名单统计。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
 
 更完整的漏洞报告方式见根目录 [SECURITY.md](../SECURITY.md)。
 

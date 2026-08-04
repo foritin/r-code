@@ -16,7 +16,7 @@ import {
   settingsSaveProvider,
   settingsSelectProvider,
   settingsSet,
-  supportBundle,
+  supportBundleChoose,
   supportPreview,
   workflowSkillDelete,
   workflowSkillReset,
@@ -1713,7 +1713,8 @@ function LogSection() {
 
   return (
     <section className="settings-block">
-      <h3>实时日志</h3>
+      <h3>诊断日志</h3>
+      <p className="desc">当前进程与近期历史会实时汇合；日志按日滚动，固定保留最近 7 天。</p>
       <div className="field">
         <div className="chips" role="radiogroup" aria-label="日志级别过滤">
           {LOG_FILTERS.map((l) => (
@@ -1752,7 +1753,6 @@ function LogSection() {
 
 function SupportSection() {
   const [preview, setPreview] = useState<SupportBundlePreview | null>(null);
-  const [outDir, setOutDir] = useState("");
   const [bundlePath, setBundlePath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1770,12 +1770,12 @@ function SupportSection() {
   };
 
   const doExport = async () => {
-    const dir = outDir.trim();
     setBusy(true);
     setErr(null);
     setBundlePath(null);
     try {
-      setBundlePath(await supportBundle(dir));
+      const path = await supportBundleChoose();
+      if (path) setBundlePath(path);
     } catch (e) {
       setErr(`导出失败：${errText(e)}`);
     } finally {
@@ -1786,7 +1786,7 @@ function SupportSection() {
   return (
     <section className="settings-block">
       <h3>支持包</h3>
-      <p className="desc">导出版本、平台、近期日志和本地统计，便于提交问题；预览不会写入文件。</p>
+      <p className="desc">导出近 7 天脱敏后的 warning/error 明细、版本、平台和本地统计；预览不会写入文件。</p>
       {err && <div className="errbar" role="alert">{err}</div>}
       <div className="footbar">
         <button className="btn" disabled={busy} onClick={() => void doPreview()}>
@@ -1801,7 +1801,7 @@ function SupportSection() {
           <dd>{preview.platform}</dd>
           <dt>生成时间</dt>
           <dd>{preview.generated_at}</dd>
-          <dt>日志条数</dt>
+          <dt>警告/错误条数</dt>
           <dd>{preview.logs.length}</dd>
           <dt>本地统计</dt>
           <dd>
@@ -1810,11 +1810,9 @@ function SupportSection() {
           </dd>
         </dl>
       )}
-      <div className="field export-row">
-        <label htmlFor="set-output-dir">输出目录</label>
-        <input id="set-output-dir" className="input" value={outDir} onChange={(e) => setOutDir(e.target.value)} placeholder="留空则导出到系统下载目录" />
+      <div className="footbar">
         <button className="btn accent" disabled={busy} onClick={() => void doExport()}>
-          导出
+          选择目录并导出
         </button>
       </div>
       {bundlePath && (
