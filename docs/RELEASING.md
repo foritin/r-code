@@ -124,6 +124,21 @@ node scripts/release.mjs prepare 0.2.0
 
 以下示例发布 `0.1.0`。执行前先把版本号替换为实际目标。
 
+完成版本准备、验证、提交并推送 `main` 后，推荐由发布闸门脚本创建 tag、触发四平台构建、等待工作流并验收 Release：
+
+```bash
+# 只做预检，不创建 tag
+node scripts/publish-release.mjs v0.1.0 --dry-run
+
+# 正式签名版本：交互式输入完整 tag 后才会发布
+node scripts/publish-release.mjs v0.1.0
+
+# 尚未配置平台证书时的测试预发布
+node scripts/publish-release.mjs v0.1.0-unsigned.1
+```
+
+脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的 Actions Secrets；工作流成功后还会核对 Release 状态、20 个发行资产和四平台 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag；只想让远端继续运行可加 `--no-wait`。
+
 ### 5.1 冻结并准备版本
 
 确保发布分支已经包含计划内容，工作区干净，构建子模块指针已经提交：
@@ -172,8 +187,11 @@ bash ./scripts/build-macos.sh
 
 ### 5.3 提交、打 tag、推送
 
+推荐在发布提交已推送且 CI 通过后运行上述 `publish-release.mjs`。下列手工命令保留为故障恢复和理解底层流程的参考：
+
 ```bash
 git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json \
+  installer/tauri.conf.json \
   src-tauri/frontend/package.json src-tauri/frontend/package-lock.json CHANGELOG.md
 git commit -m "chore(release): v0.1.0"
 git tag -a v0.1.0 -m "R-Code v0.1.0"
@@ -296,6 +314,7 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 | `scripts/generate-supply-chain.mjs` | 生成 CycloneDX SBOM 与第三方许可证清单 |
 | `.github/release.yml` | GitHub 自动 Release Notes 分类 |
 | `scripts/release.mjs` | 版本同步、CHANGELOG 盖章和 tag 一致性校验 |
+| `scripts/publish-release.mjs` | 发布前置闸门、tag 推送、Actions 等待与 Release 资产验收 |
 | `scripts/build-macos.sh` | macOS app/dmg 本地构建、签名与公证验收 |
 | `src-tauri/tauri.conf.json` | Bundle、updater endpoint 和公钥 |
 | `CHANGELOG.md` | 用户可见版本历史 |

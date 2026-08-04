@@ -138,11 +138,12 @@ The version, changelog, tag, and GitHub Release flow is validated as one chain:
 
 ```bash
 node scripts/release.mjs prepare 0.1.0
-git tag -a v0.1.0 -m "R-Code v0.1.0"
-git push origin v0.1.0
+# Review, verify, commit, push main, and wait for CI; then:
+node scripts/publish-release.mjs v0.1.0 --dry-run
+node scripts/publish-release.mjs v0.1.0
 ```
 
-Do not use those commands as a complete production checklist. Follow [the release guide](./docs/RELEASING.md) for required secrets, signatures, full verification, recovery, and post-release acceptance.
+The publish gate creates the immutable tag, triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Follow [the release guide](./docs/RELEASING.md) for required secrets, signatures, unsigned prereleases, recovery, and post-release acceptance.
 
 ## Repository layout
 
