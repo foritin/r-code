@@ -7,6 +7,7 @@ import {
   recoveryCleanup,
   recoveryData,
   settingsGet,
+  planCreate,
   taskCreate,
   taskSetInference,
   taskSetModel,
@@ -25,6 +26,7 @@ import type {
   ProjectAccessMode,
   RecoveryPageData,
   TaskAgentEngine,
+  TaskMode,
   WorkflowSkill,
 } from "../../lib/types";
 import {
@@ -58,13 +60,13 @@ import {
 import { ModelSwitcher } from "../room/ModelSwitcher";
 import { CodexModelConfiguration } from "../room/CodexModelConfiguration";
 import {
-  AttachmentButton,
   AttachmentTray,
   firstBlockedAttachmentReason,
   sendableAttachmentInputs,
   useAttachments,
   type DraftAttachment,
 } from "../Attachments";
+import { TaskAddMenu } from "../TaskAddMenu";
 import {
   attachmentCapabilityFor,
   codexImageCapability,
@@ -93,6 +95,8 @@ export function HomeScene() {
   const needsYou = useTasksStore(selectNeedsYou);
 
   const [goal, setGoal] = useState("");
+  const [taskGoal, setTaskGoal] = useState("");
+  const [draftMode, setDraftMode] = useState<TaskMode | null>(null);
   const [provider, setProvider] = useState<ProviderChoice | null>(null);
   const [draftModel, setDraftModel] = useState<string | null>(null);
   const [draftInference, setDraftInference] = useState<InferenceOptions>({});
@@ -174,6 +178,12 @@ export function HomeScene() {
       return providerChoices.find((choice) => choice.name === fallback) ?? null;
     });
   }, [providerChoices, fallback]);
+
+  useEffect(() => {
+    // Plan v1 is a native R-Code policy. Do not carry a stale Plan selection into
+    // a newly selected Codex main-agent session.
+    if (agentEngine === "codex" && draftMode === "plan") setDraftMode(null);
+  }, [agentEngine, draftMode]);
 
   // A model-created Skill is written to AppData through `save_skill`. Keep the home
   // composer catalog fresh so it becomes callable immediately, without restarting R-Code.
@@ -285,11 +295,14 @@ export function HomeScene() {
     setSlashDismissed(false);
     let stage = "创建会话";
     try {
+      const taskMode: TaskMode = draftMode === "plan"
+        ? "plan"
+        : currentWorkspacePath ? "edit" : "ask";
       const task = await taskCreate(
         currentWorkspacePath,
         title.slice(0, 48),
-        message || "分析附加文件",
-        currentWorkspacePath ? "edit" : "ask",
+        taskGoal.trim() || message || "分析附加文件",
+        taskMode,
         activeProvider?.name ?? null,
         agentEngine,
       );
@@ -297,10 +310,13 @@ export function HomeScene() {
         if (activeModel && activeModel !== activeProvider.model) await taskSetModel(task.id, activeModel);
         if (Object.keys(draftInference).length > 0) await taskSetInference(task.id, draftInference);
       }
+      if (taskMode === "plan") await planCreate(task.id);
       stage = "发送消息";
       await agentSend(task.id, message, "auto", files);
       await refreshTasks().catch(() => {});
       attachments.clear();
+      setTaskGoal("");
+      setDraftMode(null);
       openRoom(task.id);
     } catch (cause) {
       setError(`${stage}失败：${errText(cause)}`);
@@ -596,7 +612,16 @@ export function HomeScene() {
           />
           <div className="chat-composer-foot">
             <div className="composer-context">
-              <AttachmentButton onFiles={attachments.addFiles} disabled={launching} />
+              <TaskAddMenu
+                onFiles={attachments.addFiles}
+                disabled={launching}
+                agentEngine={agentEngine}
+                draftGoal={taskGoal}
+                draftMode={draftMode ?? (currentWorkspacePath ? "edit" : "ask")}
+                onDraftGoalChange={setTaskGoal}
+                onDraftModeChange={setDraftMode}
+                onError={setError}
+              />
               <Menu
                 className="scope-control"
                 label="会话可访问的文件夹"

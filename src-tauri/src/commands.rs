@@ -53,6 +53,11 @@ use r_code_core::dto::{
     ToolCall, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
+use r_code_core::plan::{
+    AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
+    PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanQuestionAnswer, PlanQuestionSet,
+    PlanQuestionSetState, PlanReviewDecision, PlanState, PlanView, UpdatePlanItemInput,
+};
 use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
 use r_code_core::security::PathGuard;
@@ -64,12 +69,13 @@ use r_code_gateway::permission::{PermissionCheckResult, PermissionEngine};
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
-    AgentRunRepository, BlobStore, CapturedMemoryTurn, ChangeService, Database, GitCommitResult,
-    GitDeliveryStatus, GitPushResult, GitService, GitStatusKind, GitTreeChangeKind,
-    MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryStore, NewRunWorkspaceSnapshot,
-    NotificationRepository, QueuedMessageRepository, ReviewAcceptResult, ReviewDecision,
-    ReviewDiffLineKind, ReviewGitService, ReviewGitStatus, ReviewPathStatus, ReviewService,
-    RollbackResult, SessionBranchRepository, TaskEventStore, TaskRepository, ToolCallRepository,
+    AgentRunRepository, BlobStore, CapturedMemoryTurn, ChangeService, Database,
+    EnhancedReviewTarget, EnhancedReviewView, GitCommitResult, GitDeliveryStatus, GitPushResult,
+    GitService, GitStatusKind, GitTreeChangeKind, MemoryEntryDraft, MemoryEntryEdit,
+    MemoryOverview, MemoryStore, NewRunWorkspaceSnapshot, NotificationRepository, PlanRejectResult,
+    PlanStore, QueuedMessageRepository, ReviewAcceptResult, ReviewDecision, ReviewDiffLineKind,
+    ReviewGitService, ReviewGitStatus, ReviewPathStatus, ReviewService, RollbackResult,
+    SessionBranchRepository, TaskEventStore, TaskRepository, ToolCallRepository,
     VerificationConfig, VerificationService, WorkspaceService,
 };
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
@@ -87,6 +93,14 @@ use crate::mcp_manager::{
     McpCredentialStatus, McpManager, McpManagerSnapshot, McpMarketInstallRequest, McpServerView,
     McpToggleResult, McpTransportView, McpUpsertRequest,
 };
+use crate::plan_review_tools::{
+    plan_review_accept_feature as accept_plan_review_feature,
+    plan_review_accept_file as accept_plan_review_file,
+    plan_review_reject_feature as reject_plan_review_feature,
+    plan_review_reject_file as reject_plan_review_file,
+    plan_review_status as current_plan_review_status, PlanReviewServices,
+};
+use crate::plan_tools::{PlanItemUpdateTool, PlanPublishTool, RequestUserInputTool};
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
@@ -227,10 +241,29 @@ struct QueuedDispatchResources {
     agent_pool: Arc<AgentRuntimePool>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
+    plan_store: Arc<PlanStore>,
     paths: AgentRuntimePaths,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
     sink: Option<AgentEventSink>,
+}
+
+fn queued_dispatch_resources(state: &CommandState) -> QueuedDispatchResources {
+    let sink = state.agent_event_sink.lock().unwrap().clone();
+    QueuedDispatchResources {
+        agent_pool: state.agent.clone(),
+        external_agents: state.external_agents.clone(),
+        db: state.db.clone(),
+        plan_store: state.plan_store.clone(),
+        paths: AgentRuntimePaths {
+            blobs_dir: state.blobs_dir.clone(),
+            sessions_dir: state.sessions_dir.clone(),
+            config_dir: state.config_dir.clone(),
+        },
+        tool_gateway: state.tool_gateway.clone(),
+        mcp_manager: state.mcp_manager.clone(),
+        sink,
+    }
 }
 
 fn capture_workspace_snapshot(db: &Database, task: &Task) -> Option<PendingWorkspaceSnapshot> {
@@ -515,6 +548,13 @@ impl AgentRuntimePool {
             .clone()
     }
 
+    async fn existing_bridge_for(
+        &self,
+        task_id: &str,
+    ) -> Option<Arc<tokio::sync::Mutex<AgentBridge>>> {
+        self.bridges.lock().await.get(task_id).cloned()
+    }
+
     async fn remove(&self, task_id: &str) {
         self.bridges.lock().await.remove(task_id);
     }
@@ -575,6 +615,10 @@ struct LegacyReconciliationCache {
 pub struct CommandState {
     /// SQLite 数据库（产品状态源）
     pub db: Arc<Database>,
+    /// SQLite-authoritative Plan/HITL aggregate with AppData Markdown projections.
+    pub plan_store: Arc<PlanStore>,
+    /// Plan feature ownership, path coordination, and enhanced-review service aggregate.
+    pub plan_review: Arc<PlanReviewServices>,
     /// Blob 存储目录（文件基线 / 验证输出）
     pub blobs_dir: PathBuf,
     /// JSONL 会话存储目录
@@ -612,6 +656,10 @@ pub struct CommandState {
 /// Agent 事件出口闭包（task_id, event）——由 bin 侧用 AppHandle 实现 emit。
 pub type AgentEventSink = Arc<dyn Fn(&str, &AgentEvent) + Send + Sync>;
 
+fn plan_projection_root(config_dir: &Path) -> PathBuf {
+    config_dir.parent().unwrap_or(config_dir).join("plans")
+}
+
 impl CommandState {
     /// 创建命令状态。
     #[allow(clippy::too_many_arguments)]
@@ -625,6 +673,13 @@ impl CommandState {
     ) -> Self {
         let permission_engine = Arc::new(PermissionEngine::new());
         let mcp_manager = Arc::new(McpManager::new(config_dir.clone()));
+        // `config_dir` is AppData/r-code/config in production and <tmp>/config in tests.
+        // Plan projections are deliberately siblings, never project/workspace files.
+        let plan_store = Arc::new(PlanStore::new(
+            db.clone(),
+            plan_projection_root(&config_dir),
+        ));
+        let plan_review = Arc::new(PlanReviewServices::new(db.clone(), blobs_dir.clone()));
         match reconcile_tool_calls_for_finished_runs(&db) {
             Ok(repaired) if repaired > 0 => tracing::info!(
                 repaired,
@@ -645,6 +700,9 @@ impl CommandState {
         // 阻断桌面启动，恢复页会安全地显示为空并保留数据库原状。
         let startup_recovery = capture_startup_recovery(&db).unwrap_or_default();
         let mut gateway = r_code_gateway::ToolGateway::new(permission_engine.clone());
+        gateway.set_policy_guard(Arc::new(
+            crate::plan_review_tools::PlanExecutionToolGuard::new(db.clone()),
+        ));
         // 只读（R0/R1）
         gateway.register(Box::new(r_code_gateway::ReadFileTool));
         gateway.register(Box::new(r_code_gateway::ListFilesTool));
@@ -655,15 +713,37 @@ impl CommandState {
         gateway.register(Box::new(SaveWorkflowSkillTool::new(
             WorkflowSkillCatalog::new(config_dir.join("workflow-skills")),
         )));
+        gateway.register(Box::new(PlanPublishTool::new(
+            db.clone(),
+            plan_store.clone(),
+        )));
+        gateway.register(Box::new(RequestUserInputTool::new(
+            db.clone(),
+            plan_store.clone(),
+        )));
+        gateway.register(Box::new(PlanItemUpdateTool::new(
+            db.clone(),
+            plan_store.clone(),
+        )));
         // 写入（R2）
-        gateway.register(Box::new(r_code_gateway::EditTool));
-        gateway.register(Box::new(r_code_gateway::ApplyPatchTool));
-        gateway.register(Box::new(r_code_gateway::CreateFileTool));
-        gateway.register(Box::new(r_code_gateway::DeleteFileTool));
+        gateway.register(Box::new(
+            plan_review.tracked(Box::new(r_code_gateway::EditTool)),
+        ));
+        gateway.register(Box::new(
+            plan_review.tracked(Box::new(r_code_gateway::ApplyPatchTool)),
+        ));
+        gateway.register(Box::new(
+            plan_review.tracked(Box::new(r_code_gateway::CreateFileTool)),
+        ));
+        gateway.register(Box::new(
+            plan_review.tracked(Box::new(r_code_gateway::DeleteFileTool)),
+        ));
         // 命令执行（静态 R3；实际等级由 classify_shell_command 按命令内容判定）
         gateway.register(Box::new(r_code_gateway::BashTool));
         Self {
             db,
+            plan_store,
+            plan_review,
             blobs_dir,
             session_store: SessionStore::new(sessions_dir.clone()),
             sessions_dir,
@@ -1096,7 +1176,10 @@ fn parse_mode(mode: &str) -> Result<TaskMode, String> {
         "ask" => Ok(TaskMode::Ask),
         "edit" => Ok(TaskMode::Edit),
         "auto" => Ok(TaskMode::Auto),
-        _ => Err(format!("invalid mode: {mode} (expected ask/edit/auto)")),
+        "plan" => Ok(TaskMode::Plan),
+        _ => Err(format!(
+            "invalid mode: {mode} (expected ask/edit/auto/plan)"
+        )),
     }
 }
 
@@ -1290,6 +1373,9 @@ pub async fn task_create_with_agent(
             hermes_config::MainAgentEngine::Codex => AgentEngine::Codex,
         },
     };
+    if mode == TaskMode::Plan && agent_engine != AgentEngine::RCode {
+        return Err("Codex CLI 主 Agent 暂不支持 Plan 模式；请选择 R-Code 内置 Agent".to_string());
+    }
     let provider_name = if agent_engine == AgentEngine::RCode {
         validate_selected_provider(state, provider_name)?
     } else {
@@ -1337,6 +1423,526 @@ pub async fn task_rename(state: &CommandState, task_id: &str, title: &str) -> Re
     repo.get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found after rename: {task_id}"))
+}
+
+fn render_host_task_context_from_store(
+    plan_store: &PlanStore,
+    task: &Task,
+) -> Result<String, String> {
+    let plan = plan_store.current_for_task(&task.id).map_err(err_str)?;
+    let execution = PlanExecutionContext::from_view(plan.as_ref());
+    let execution_policy = match execution.status {
+        PlanExecutionStatus::NoExecutingPlan => None,
+        PlanExecutionStatus::ActiveFeature => Some(
+            "Implement only active_feature. Attribute every workspace write to that feature. Do not work ahead or skip dependencies. Prefer direct edit/apply_patch/create_file/delete_file tools for Plan feature writes so enhanced ownership is recorded. Writes made through shell, MCP, or external agents cannot be reliably attributed and appear only in ordinary Git review. Call plan_item_update when the feature is completed or blocked before continuing.",
+        ),
+        PlanExecutionStatus::Paused => Some(
+            "Plan execution is paused. Do not write to the workspace through direct tools, shell, MCP, or external agents. First resume blocked_feature by calling plan_item_update with state=in_progress for the same feature and current Plan revision; only then continue implementation.",
+        ),
+    };
+    serde_json::to_string_pretty(&serde_json::json!({
+        "task": {
+            "id": task.id,
+            "goal": task.goal,
+            "mode": task.mode,
+        },
+        "plan": plan.as_ref().map(|view| &view.plan),
+        "items": plan.as_ref().map(|view| &view.items),
+        "pending_question_set": plan
+            .as_ref()
+            .and_then(|view| view.pending_question_set.as_ref()),
+        "execution_status": execution.status,
+        "active_feature": execution.active_feature,
+        "blocked_feature": execution.blocked_feature,
+        "execution_policy": execution_policy,
+    }))
+    .map_err(|error| format!("无法渲染 Plan 运行上下文：{error}"))
+}
+
+fn render_host_task_context(state: &CommandState, task: &Task) -> Result<String, String> {
+    render_host_task_context_from_store(&state.plan_store, task)
+}
+
+async fn refresh_runtime_task_context_if_present(
+    state: &CommandState,
+    task: &Task,
+) -> Result<(), String> {
+    let Some(task_agent) = state.agent.existing_bridge_for(&task.id).await else {
+        return Ok(());
+    };
+    let context = render_host_task_context(state, task)?;
+    let mut bridge = task_agent.lock().await;
+    let Some(runtime_session_id) = bridge
+        .sessions
+        .get(&task.id)
+        .map(|session| session.runtime_session_id.clone())
+    else {
+        return Ok(());
+    };
+    bridge
+        .kind
+        .update_task_context(&runtime_session_id, task.mode, Some(context))
+        .await
+        .map_err(err_str)
+}
+
+fn require_task(state: &CommandState, task_id: &str) -> Result<Task, String> {
+    TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))
+}
+
+fn require_native_plan_task(state: &CommandState, task_id: &str) -> Result<Task, String> {
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能继续 Plan 工作流".to_string());
+    }
+    if task.agent_engine != AgentEngine::RCode {
+        return Err("Plan 模式仅支持 R-Code 内置 Agent；请先将主 Agent 切换为 R-Code".to_string());
+    }
+    if task.mode != TaskMode::Plan {
+        return Err("当前会话未启用 Plan 模式".to_string());
+    }
+    Ok(task)
+}
+
+/// Update or clear the durable goal and immediately refresh any cached native session.
+pub async fn task_update_goal(
+    state: &CommandState,
+    task_id: &str,
+    goal: &str,
+) -> Result<Task, String> {
+    if goal.chars().count() > 20_000 {
+        return Err("目标不能超过 20,000 个字符".to_string());
+    }
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能修改目标".to_string());
+    }
+    let repo = TaskRepository::new(&state.db);
+    repo.set_goal(task_id, goal).map_err(err_str)?;
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    Ok(task)
+}
+
+/// Switch task policy without replacing the protocol history of a cached native session.
+pub async fn task_set_mode(
+    state: &CommandState,
+    task_id: &str,
+    mode: TaskMode,
+) -> Result<Task, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能切换模式".to_string());
+    }
+    if mode == TaskMode::Plan && task.agent_engine != AgentEngine::RCode {
+        return Err(
+            "Codex CLI 主 Agent 暂不支持 Plan 模式；请先切换到 R-Code 内置 Agent".to_string(),
+        );
+    }
+    if mode != task.mode && task_has_active_main_run(&state.db, task_id, &bridge)? {
+        return Err("当前运行尚未结束，请先停止或等待完成后再切换模式".to_string());
+    }
+    TaskRepository::new(&state.db)
+        .set_mode(task_id, mode)
+        .map_err(err_str)?;
+    drop(bridge);
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    Ok(task)
+}
+
+pub async fn plan_get(state: &CommandState, task_id: &str) -> Result<Option<PlanView>, String> {
+    require_task(state, task_id)?;
+    state.plan_store.current_for_task(task_id).map_err(err_str)
+}
+
+pub async fn plan_create(state: &CommandState, task_id: &str) -> Result<PlanView, String> {
+    let task = require_native_plan_task(state, task_id)?;
+    if let Some(current) = state
+        .plan_store
+        .current_for_task(task_id)
+        .map_err(err_str)?
+        .filter(|view| !matches!(view.plan.state, PlanState::Completed | PlanState::Cancelled))
+    {
+        return Ok(current);
+    }
+    let view = state
+        .plan_store
+        .create_plan(&CreatePlanInput {
+            task_id: task_id.to_string(),
+        })
+        .map_err(err_str)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    Ok(view)
+}
+
+fn render_plan_continuation(question_set: &PlanQuestionSet) -> Result<String, String> {
+    match question_set.state {
+        PlanQuestionSetState::Answered => {}
+        PlanQuestionSetState::Skipped => {
+            return Ok("已跳过本轮计划问题，请结合现有上下文继续完善同一计划。".to_string());
+        }
+        PlanQuestionSetState::Pending => return Err("问题集尚未回答，不能恢复 Plan".to_string()),
+    }
+
+    let mut rendered = "计划问题已回答，请根据以下选择继续完善同一计划：".to_string();
+    for question in &question_set.questions {
+        let answer = match question.answer.as_ref() {
+            Some(PlanQuestionAnswer::Option { option_id }) => question
+                .options
+                .iter()
+                .find(|option| option.id == *option_id)
+                .map(|option| option.label.as_str())
+                .unwrap_or("已选择一个选项"),
+            Some(PlanQuestionAnswer::FreeForm { text }) => text.as_str(),
+            None => "未回答",
+        };
+        rendered.push_str(&format!("\n- {}：{}", question.question, answer));
+    }
+    rendered.push_str("\n\n请不要重复询问这些已解决的问题。");
+    Ok(rendered)
+}
+
+/// CAS-claim and resume a resolved question set. Concurrent calls cannot dispatch twice. A
+/// process crash after the claim is recovered as a visible failed continuation on next startup.
+async fn dispatch_plan_continuation(
+    state: &CommandState,
+    task_id: &str,
+    question_set_id: &str,
+) -> Result<(), String> {
+    let Some(claimed) = state
+        .plan_store
+        .claim_continuation(task_id, question_set_id)
+        .map_err(err_str)?
+    else {
+        return Ok(());
+    };
+    let message = match render_plan_continuation(&claimed) {
+        Ok(message) => message,
+        Err(error) => {
+            let _ = state.plan_store.mark_continuation_failed(
+                task_id,
+                question_set_id,
+                &format!("PLAN_CONTINUATION_RENDER_FAILED: {error}"),
+            );
+            return Err(format!("回答已保存，但无法生成 Plan 恢复消息：{error}"));
+        }
+    };
+    if let Err(error) = agent_send_with_mode(state, task_id, &message, AgentSendMode::Auto).await {
+        if let Err(mark_error) = state.plan_store.mark_continuation_failed(
+            task_id,
+            question_set_id,
+            &format!("PLAN_CONTINUATION_DISPATCH_FAILED: {error}"),
+        ) {
+            tracing::error!(
+                task_id,
+                question_set_id,
+                "could not mark failed Plan continuation: {mark_error}"
+            );
+        }
+        return Err(format!(
+            "回答已保存，但恢复 Plan 运行失败，可点击重试：{error}"
+        ));
+    }
+    if let Err(error) = state
+        .plan_store
+        .mark_continuation_dispatched(task_id, question_set_id)
+    {
+        let _ = state.plan_store.mark_continuation_failed(
+            task_id,
+            question_set_id,
+            &format!("PLAN_CONTINUATION_ACK_FAILED: {error}"),
+        );
+        return Err(format!(
+            "Plan 恢复消息已提交，但确认状态保存失败；为避免永久卡住，已标记为可重试：{error}"
+        ));
+    }
+    Ok(())
+}
+
+pub async fn plan_answer(
+    state: &CommandState,
+    task_id: &str,
+    input: AnswerPlanQuestionsInput,
+) -> Result<PlanView, String> {
+    require_native_plan_task(state, task_id)?;
+    let question_set_id = input.question_set_id.clone();
+    state
+        .plan_store
+        .answer_questions(task_id, &input)
+        .map_err(err_str)?;
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    dispatch_plan_continuation(state, task_id, &question_set_id).await?;
+    state
+        .plan_store
+        .current_for_task(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "Plan 在回答后不可用".to_string())
+}
+
+pub async fn plan_retry_continuation(
+    state: &CommandState,
+    task_id: &str,
+    question_set_id: &str,
+) -> Result<PlanView, String> {
+    require_native_plan_task(state, task_id)?;
+    state
+        .plan_store
+        .retry_continuation(task_id, question_set_id)
+        .map_err(err_str)?;
+    dispatch_plan_continuation(state, task_id, question_set_id).await?;
+    state
+        .plan_store
+        .current_for_task(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "Plan 在重试后不可用".to_string())
+}
+
+fn render_plan_implementation_message(view: &PlanView) -> Result<String, String> {
+    let active = view
+        .items
+        .iter()
+        .find(|item| item.state == PlanItemState::InProgress)
+        .ok_or_else(|| {
+            "Plan 已批准，但没有可执行的 in_progress 功能项；请检查依赖关系后继续".to_string()
+        })?;
+    Ok(format!(
+        "计划已确认，请实施当前功能事项“{}”。\n\n验收边界：{}\n\n只处理这一项，不要跳过依赖或提前实现后续事项；优先使用直接文件编辑工具，以便变更能够归属到该功能事项。完成或受阻时请更新事项状态。",
+        active.title, active.description
+    ))
+}
+
+/// Claim and durably stage the approved Plan while the caller holds the task-local runtime lock.
+/// The SQLite transaction changes task mode, creates/reuses one deterministic queue row, and
+/// acknowledges the Plan handoff together, so no crash window can leave a hidden implementation.
+fn stage_plan_implementation(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+    current: PlanView,
+) -> Result<PlanView, String> {
+    let branch = SessionBranchRepository::new(&state.db)
+        .ensure_active(task_id)
+        .map_err(err_str)?;
+    let message = render_plan_implementation_message(&current)?;
+    let Some(_claimed) = state
+        .plan_store
+        .claim_implementation_dispatch(task_id, plan_id)
+        .map_err(err_str)?
+    else {
+        return Ok(current);
+    };
+    match state
+        .plan_store
+        .stage_implementation_dispatch(task_id, plan_id, &branch.id, &message)
+    {
+        Ok(view) => Ok(view),
+        Err(error) => {
+            let error = format!("PLAN_IMPLEMENTATION_STAGE_FAILED: {error}");
+            if let Err(mark_error) = state
+                .plan_store
+                .mark_implementation_dispatch_failed(task_id, plan_id, &error)
+            {
+                tracing::error!(
+                    task_id,
+                    plan_id,
+                    "could not persist failed Plan handoff: {mark_error}"
+                );
+            }
+            Err(format!(
+                "Plan 已批准，但实施请求暂未入队；可点击重试：{}",
+                error.trim_start_matches("PLAN_IMPLEMENTATION_STAGE_FAILED: ")
+            ))
+        }
+    }
+}
+
+async fn drain_plan_implementation_queue(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+) -> Result<PlanView, String> {
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
+    state
+        .plan_store
+        .get_plan(task_id, plan_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "Plan 不存在或不属于当前会话".to_string())
+}
+
+pub async fn plan_approve(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+    expected_revision: u64,
+) -> Result<PlanView, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能批准 Plan".to_string());
+    }
+    if task.agent_engine != AgentEngine::RCode {
+        return Err("Plan 模式仅支持 R-Code 内置 Agent；请先将主 Agent 切换为 R-Code".to_string());
+    }
+    if !matches!(task.mode, TaskMode::Plan | TaskMode::Auto | TaskMode::Edit) {
+        return Err("当前会话未启用 Plan 工作流".to_string());
+    }
+    if task_has_active_main_run(&state.db, task_id, &bridge)? {
+        return Err("当前运行尚未结束，请先停止或等待完成后再批准 Plan".to_string());
+    }
+    let (view, _newly_approved) = state
+        .plan_store
+        .approve_plan_with_outcome(
+            task_id,
+            &ApprovePlanInput {
+                plan_id: plan_id.to_string(),
+                expected_revision,
+            },
+        )
+        .map_err(err_str)?;
+    let view = stage_plan_implementation(state, task_id, plan_id, view)?;
+    drop(bridge);
+    let _ = view;
+    drain_plan_implementation_queue(state, task_id, plan_id).await
+}
+
+pub async fn plan_retry_implementation(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+) -> Result<PlanView, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能重试 Plan 实施".to_string());
+    }
+    if task.agent_engine != AgentEngine::RCode {
+        return Err("Plan 模式仅支持 R-Code 内置 Agent；请先将主 Agent 切换为 R-Code".to_string());
+    }
+    if task_has_active_main_run(&state.db, task_id, &bridge)? {
+        return Err("当前运行尚未结束，无需重复启动 Plan 实施".to_string());
+    }
+    let view = state
+        .plan_store
+        .get_plan(task_id, plan_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "Plan 不存在或不属于当前会话".to_string())?;
+    let view = stage_plan_implementation(state, task_id, plan_id, view)?;
+    drop(bridge);
+    let _ = view;
+    drain_plan_implementation_queue(state, task_id, plan_id).await
+}
+
+pub async fn plan_cancel(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+    expected_revision: u64,
+) -> Result<PlanView, String> {
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let task = require_task(state, task_id)?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能取消 Plan".to_string());
+    }
+    if task_has_active_main_run(&state.db, task_id, &bridge)? {
+        return Err("当前运行尚未结束，请先停止或等待完成后再取消 Plan".to_string());
+    }
+    let view = state
+        .plan_store
+        .cancel_plan(
+            task_id,
+            &CancelPlanInput {
+                plan_id: plan_id.to_string(),
+                expected_revision,
+            },
+        )
+        .map_err(err_str)?;
+    drop(bridge);
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    Ok(view)
+}
+
+pub async fn plan_repair_projection(
+    state: &CommandState,
+    task_id: &str,
+    plan_id: &str,
+) -> Result<PlanView, String> {
+    require_task(state, task_id)?;
+    state
+        .plan_store
+        .repair_projection(task_id, plan_id)
+        .map_err(err_str)
+}
+
+pub async fn plan_update_item(
+    state: &CommandState,
+    task_id: &str,
+    input: UpdatePlanItemInput,
+) -> Result<PlanView, String> {
+    let task = require_task(state, task_id)?;
+    if !matches!(task.mode, TaskMode::Auto | TaskMode::Edit) {
+        return Err("只有已批准并进入执行模式的 Plan 才能更新功能项".to_string());
+    }
+    let view = state
+        .plan_store
+        .update_plan_item(task_id, &input)
+        .map_err(err_str)?;
+    let task = require_task(state, task_id)?;
+    refresh_runtime_task_context_if_present(state, &task).await?;
+    Ok(view)
+}
+
+/// Current Plan-only enhanced review; ordinary Git changes are intentionally excluded.
+pub fn plan_review_status(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Option<EnhancedReviewView>, String> {
+    current_plan_review_status(&state.plan_review, task_id).map_err(err_str)
+}
+
+/// Accepting is ledger-only and never stages or commits Git changes.
+pub fn plan_review_accept_file(
+    state: &CommandState,
+    target: &EnhancedReviewTarget,
+) -> Result<PlanReviewDecision, String> {
+    accept_plan_review_file(&state.plan_review, target).map_err(err_str)
+}
+
+pub fn plan_review_accept_feature(
+    state: &CommandState,
+    target: &EnhancedReviewTarget,
+) -> Result<PlanReviewDecision, String> {
+    accept_plan_review_feature(&state.plan_review, target).map_err(err_str)
+}
+
+pub async fn plan_review_reject_file(
+    state: &CommandState,
+    target: &EnhancedReviewTarget,
+) -> Result<PlanRejectResult, String> {
+    reject_plan_review_file(&state.plan_review, target)
+        .await
+        .map_err(err_str)
+}
+
+pub async fn plan_review_reject_feature(
+    state: &CommandState,
+    target: &EnhancedReviewTarget,
+) -> Result<PlanRejectResult, String> {
+    reject_plan_review_feature(&state.plan_review, target)
+        .await
+        .map_err(err_str)
 }
 
 fn task_has_active_main_run(
@@ -1754,7 +2360,14 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
     if task_has_active_main_run(&state.db, task_id, &bridge)? {
         return Err("会话仍在运行，请先停止后删除".to_string());
     }
-    if !repo.delete(task_id).map_err(err_str)? {
+    if !repo
+        .delete(
+            task_id,
+            &state.blobs_dir,
+            state.plan_store.projection_root(),
+        )
+        .map_err(err_str)?
+    {
         return Err(format!("task not found: {task_id}"));
     }
     bridge.sessions.remove(task_id);
@@ -1877,6 +2490,11 @@ pub async fn task_set_agent_engine(
     }
     if agent_engine == AgentEngine::Codex && task.workspace_path.is_none() {
         return Err("Codex 主 Agent 需要先附加本地工作区".to_string());
+    }
+    if agent_engine == AgentEngine::Codex && task.mode == TaskMode::Plan {
+        return Err(
+            "Plan 模式仅支持 R-Code 内置 Agent；请先退出 Plan 模式再切换 Codex CLI".to_string(),
+        );
     }
     if task_has_active_main_run(&state.db, task_id, &bridge)? {
         return Err("当前运行尚未结束，不能在执行期间切换主 Agent".to_string());
@@ -2634,6 +3252,17 @@ impl AgentRuntime for AgentRuntimeKind {
                 r.update_workspace_scope(session_id, workspace_path, access_mode)
                     .await
             }
+        }
+    }
+    async fn update_task_context(
+        &mut self,
+        session_id: &str,
+        mode: TaskMode,
+        context: Option<String>,
+    ) -> Result<(), ProductError> {
+        match self {
+            Self::Real(r) => r.update_task_context(session_id, mode, context).await,
+            Self::Mock(r) => r.update_task_context(session_id, mode, context).await,
         }
     }
     async fn poll_events(&mut self) -> Result<Vec<AgentEvent>, ProductError> {
@@ -3570,6 +4199,7 @@ async fn append_user_content_with_mode(
 async fn start_run_locked(
     bridge: &mut AgentBridge,
     db: &Database,
+    plan_store: &PlanStore,
     session_store: &SessionStore,
     sessions_dir: &Path,
     task: &Task,
@@ -3580,6 +4210,7 @@ async fn start_run_locked(
     start_run_locked_with_message(
         bridge,
         db,
+        plan_store,
         session_store,
         sessions_dir,
         task,
@@ -3683,6 +4314,11 @@ pub async fn agent_send_with_mode_and_attachments(
         .map_err(err_str)?;
 
     if task.agent_engine == AgentEngine::Codex {
+        if task.mode == TaskMode::Plan {
+            return Err(
+                "Codex CLI 主 Agent 暂不支持 Plan 模式；请切换到 R-Code 内置 Agent".to_string(),
+            );
+        }
         let result =
             agent_send_codex_with_mode(state, &task, &branch, message, mode, &attachments).await;
         drop(bridge);
@@ -3765,6 +4401,7 @@ pub async fn agent_send_with_mode_and_attachments(
                         agent_pool: state.agent.clone(),
                         external_agents: state.external_agents.clone(),
                         db: state.db.clone(),
+                        plan_store: state.plan_store.clone(),
                         paths: AgentRuntimePaths {
                             blobs_dir: state.blobs_dir.clone(),
                             sessions_dir: state.sessions_dir.clone(),
@@ -3803,6 +4440,7 @@ pub async fn agent_send_with_mode_and_attachments(
                 let active = start_run_locked_with_message(
                     &mut bridge,
                     &state.db,
+                    &state.plan_store,
                     &state.session_store,
                     &state.sessions_dir,
                     &task,
@@ -3833,6 +4471,7 @@ pub async fn agent_send_with_mode_and_attachments(
                 let active = start_run_locked_with_message(
                     &mut bridge,
                     &state.db,
+                    &state.plan_store,
                     &state.session_store,
                     &state.sessions_dir,
                     &task,
@@ -3862,6 +4501,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
         state.agent.clone(),
         state.external_agents.clone(),
         state.db.clone(),
+        state.plan_store.clone(),
         state.blobs_dir.clone(),
         state.sessions_dir.clone(),
         state.config_dir.clone(),
@@ -3880,6 +4520,7 @@ fn spawn_drain_loop_with_resources(
     agent_pool: Arc<AgentRuntimePool>,
     external_agents: Arc<ExternalAgentRegistry>,
     db: Arc<Database>,
+    plan_store: Arc<PlanStore>,
     blobs_dir: PathBuf,
     sessions_dir: PathBuf,
     config_dir: PathBuf,
@@ -4120,6 +4761,7 @@ fn spawn_drain_loop_with_resources(
                 agent_pool,
                 external_agents,
                 db,
+                plan_store,
                 paths: AgentRuntimePaths {
                     blobs_dir,
                     sessions_dir,
@@ -4135,12 +4777,42 @@ fn spawn_drain_loop_with_resources(
     });
 }
 
-/// 当前任务的 runtime 空闲后，从该任务的持久化队列中取出最高优先级消息并启动。
+fn mark_queued_dispatch_failed(db: &Database, plan_store: &PlanStore, queue_id: &str, error: &str) {
+    if let Err(mark_error) =
+        QueuedMessageRepository::new(db).set_state(queue_id, QueuedMessageState::Failed)
+    {
+        tracing::error!(queue_id, "could not persist queue failure: {mark_error}");
+    }
+    if let Err(mark_error) = plan_store.mark_implementation_dispatch_failed_for_queue(
+        queue_id,
+        &format!("PLAN_IMPLEMENTATION_QUEUE_FAILED: {error}"),
+    ) {
+        tracing::error!(
+            queue_id,
+            "could not synchronize Plan queue failure: {mark_error}"
+        );
+    }
+}
+
+fn mark_cancelled_plan_queue_failed(plan_store: &PlanStore, queue_id: &str, error: &str) {
+    if let Err(mark_error) = plan_store.mark_implementation_dispatch_failed_for_queue(
+        queue_id,
+        &format!("PLAN_IMPLEMENTATION_QUEUE_FAILED: {error}"),
+    ) {
+        tracing::error!(
+            queue_id,
+            "could not synchronize cancelled Plan queue: {mark_error}"
+        );
+    }
+}
+
+/// Current task runtime is idle: claim and start the highest-priority durable queue message.
 async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: String) {
     let QueuedDispatchResources {
         agent_pool,
         external_agents,
         db,
+        plan_store,
         paths,
         tool_gateway,
         mcp_manager,
@@ -4180,8 +4852,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             Ok(branch) => branch,
             Err(error) => {
                 tracing::warn!(queue_id = %queued.id, "cannot load active branch: {error}");
-                let _ = QueuedMessageRepository::new(&db)
-                    .set_state(&queued.id, QueuedMessageState::Failed);
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error.to_string());
                 return;
             }
         };
@@ -4189,13 +4860,17 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             // 旧分支上的待发送消息不能混入新分支；保留状态为 cancelled 供审计。
             let _ = QueuedMessageRepository::new(&db)
                 .set_state(&queued.id, QueuedMessageState::Cancelled);
+            mark_cancelled_plan_queue_failed(
+                &plan_store,
+                &queued.id,
+                "active session branch changed before delivery",
+            );
             continue;
         }
         let task = match TaskRepository::new(&db).get(&queued.task_id) {
             Ok(Some(task)) => task,
             Ok(None) | Err(_) => {
-                let _ = QueuedMessageRepository::new(&db)
-                    .set_state(&queued.id, QueuedMessageState::Failed);
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, "task is unavailable");
                 return;
             }
         };
@@ -4232,8 +4907,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 }
                 Err(error) => {
                     tracing::warn!(queue_id = %queued.id, "queued Codex message could not start: {error}");
-                    let _ = QueuedMessageRepository::new(&db)
-                        .set_state(&queued.id, QueuedMessageState::Failed);
+                    mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
                 }
             }
             return;
@@ -4249,14 +4923,14 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             .await
             {
                 tracing::warn!(queue_id = %queued.id, "queued message provider is unavailable: {error}");
-                let _ = QueuedMessageRepository::new(&db)
-                    .set_state(&queued.id, QueuedMessageState::Failed);
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
                 return;
             }
         }
         let started = start_run_locked(
             &mut bridge,
             &db,
+            &plan_store,
             &SessionStore::new(sessions_dir.clone()),
             &sessions_dir,
             &task,
@@ -4287,6 +4961,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                     agent_pool,
                     external_agents,
                     db,
+                    plan_store,
                     blobs_dir,
                     sessions_dir,
                     config_dir,
@@ -4299,12 +4974,24 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             }
             Err(error) => {
                 tracing::warn!(queue_id = %queued.id, "queued message could not start: {error}");
-                let _ = QueuedMessageRepository::new(&db)
-                    .set_state(&queued.id, QueuedMessageState::Failed);
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
                 return;
             }
         }
     }
+}
+
+/// Resume every task that still has a durable queued message after desktop startup. Task-local
+/// locks and the queue claim CAS make repeated calls safe; at most one message per task starts.
+pub async fn resume_queued_dispatches(state: &CommandState) -> Result<usize, String> {
+    let task_ids = QueuedMessageRepository::new(&state.db)
+        .list_queued_task_ids()
+        .map_err(err_str)?;
+    let count = task_ids.len();
+    for task_id in task_ids {
+        dispatch_next_queued(queued_dispatch_resources(state), task_id).await;
+    }
+    Ok(count)
 }
 
 pub async fn agent_abort(state: &CommandState, task_id: &str) -> Result<(), String> {
@@ -5725,7 +6412,13 @@ pub async fn workspace_forget(
         return Err("项目仍有会话正在运行，请先停止后再清除项目".to_string());
     }
 
-    let (removed, removed_sessions) = service.forget(workspace_path).map_err(err_str)?;
+    let (removed, removed_sessions) = service
+        .forget(
+            workspace_path,
+            &state.blobs_dir,
+            state.plan_store.projection_root(),
+        )
+        .map_err(err_str)?;
     state.agent.remove_all(&task_ids).await;
 
     for (task_id, storage_ids) in session_logs {
@@ -6749,6 +7442,7 @@ pub struct FileTreeListing {
 async fn start_run_locked_with_message(
     bridge: &mut AgentBridge,
     db: &Database,
+    plan_store: &PlanStore,
     session_store: &SessionStore,
     sessions_dir: &Path,
     task: &Task,
@@ -6761,6 +7455,12 @@ async fn start_run_locked_with_message(
     }
     let runtime_session_id =
         ensure_runtime_session(bridge, db, session_store, sessions_dir, task, branch).await?;
+    let task_context = render_host_task_context_from_store(plan_store, task)?;
+    bridge
+        .kind
+        .update_task_context(&runtime_session_id, task.mode, Some(task_context))
+        .await
+        .map_err(err_str)?;
     let message_text = message.text_content();
     let prepared_memory = prepare_run_memory(db, task, &message_text);
     bridge
@@ -11870,6 +12570,10 @@ fn spawn_codex_main(
             QueuedDispatchResources {
                 agent_pool,
                 external_agents,
+                plan_store: Arc::new(PlanStore::new(
+                    db.clone(),
+                    plan_projection_root(&config_dir),
+                )),
                 db,
                 paths: AgentRuntimePaths {
                     blobs_dir,
@@ -12765,6 +13469,192 @@ mod tests {
         assert_eq!(renamed.id, task.id);
         assert_eq!(renamed.title, "After");
         assert!(task_rename(&state, &task.id, "   ").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn plan_commands_preserve_identity_and_approve_into_execution_mode() {
+        let (dir, state) = setup_state();
+        assert_eq!(state.plan_store.projection_root(), dir.path().join("plans"));
+        let task = task_create(&state, None, "Plan", "Initial goal", "ask")
+            .await
+            .unwrap();
+
+        let task = task_update_goal(&state, &task.id, "  Revised goal  ")
+            .await
+            .unwrap();
+        assert_eq!(task.goal, "Revised goal");
+        let task = task_set_mode(&state, &task.id, TaskMode::Plan)
+            .await
+            .unwrap();
+        assert_eq!(task.mode, TaskMode::Plan);
+
+        let created = plan_create(&state, &task.id).await.unwrap();
+        let same = plan_create(&state, &task.id).await.unwrap();
+        assert_eq!(created.plan.id, same.plan.id);
+        let published = state
+            .plan_store
+            .publish_plan(
+                &task.id,
+                &r_code_core::plan::PublishPlanInput {
+                    plan_id: created.plan.id.clone(),
+                    expected_revision: created.plan.revision,
+                    items: vec![r_code_core::plan::PlanItemDraft {
+                        id: "feature-one".to_string(),
+                        title: "Feature one".to_string(),
+                        description: "Implement one independently verifiable feature".to_string(),
+                        depends_on: vec![],
+                    }],
+                },
+            )
+            .unwrap();
+        let approved = plan_approve(
+            &state,
+            &task.id,
+            &published.plan.id,
+            published.plan.revision,
+        )
+        .await
+        .unwrap();
+        assert_eq!(approved.plan.state, PlanState::Executing);
+        assert_eq!(require_task(&state, &task.id).unwrap().mode, TaskMode::Auto);
+        for _ in 0..100 {
+            let task_agent = state.agent.bridge_for(&task.id).await;
+            let bridge = task_agent.lock().await;
+            if !task_has_active_main_run(&state.db, &task.id, &bridge).unwrap() {
+                break;
+            }
+            drop(bridge);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let retry = plan_approve(
+            &state,
+            &task.id,
+            &published.plan.id,
+            published.plan.revision,
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry.plan.revision, approved.plan.revision);
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let history = state.session_store.load(&branch.storage_id).await.unwrap();
+        assert_eq!(
+            history
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.role == Role::User && message.text_content().contains("计划已确认")
+                })
+                .count(),
+            1,
+            "approval retries must not dispatch implementation twice"
+        );
+        let context =
+            render_host_task_context(&state, &require_task(&state, &task.id).unwrap()).unwrap();
+        assert!(context.contains("Implement only active_feature"));
+        assert!(context.contains("edit/apply_patch/create_file/delete_file"));
+        assert!(context.contains("ordinary Git review"));
+        assert!(context.contains("feature-one"));
+
+        let completed = plan_update_item(
+            &state,
+            &task.id,
+            UpdatePlanItemInput {
+                plan_id: approved.plan.id.clone(),
+                item_id: "feature-one".to_string(),
+                expected_revision: approved.plan.revision,
+                state: PlanItemState::Completed,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(completed.plan.state, PlanState::Completed);
+    }
+
+    #[tokio::test]
+    async fn codex_main_agent_cannot_enter_plan_mode() {
+        let (_dir, state) = setup_state();
+        let mut task = Task::new(None, "Codex", "Plan this", TaskMode::Ask);
+        task.agent_engine = AgentEngine::Codex;
+        TaskRepository::new(&state.db).create(&task).unwrap();
+        let error = task_set_mode(&state, &task.id, TaskMode::Plan)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Codex CLI"));
+        assert_eq!(require_task(&state, &task.id).unwrap().mode, TaskMode::Ask);
+    }
+
+    #[tokio::test]
+    async fn answered_plan_question_resumes_once_in_the_same_session() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Plan", "Clarify", "plan")
+            .await
+            .unwrap();
+        let created = plan_create(&state, &task.id).await.unwrap();
+        let awaiting = state
+            .plan_store
+            .request_questions(
+                &task.id,
+                &r_code_core::plan::RequestPlanQuestionsInput {
+                    plan_id: created.plan.id.clone(),
+                    expected_revision: created.plan.revision,
+                    questions: vec![r_code_core::plan::PlanQuestionDraft {
+                        id: "scope".to_string(),
+                        header: "Scope".to_string(),
+                        question: "Which scope?".to_string(),
+                        options: vec![
+                            r_code_core::plan::PlanQuestionOptionDraft {
+                                id: "small".to_string(),
+                                label: "Small (Recommended)".to_string(),
+                                description: "Keep scope focused".to_string(),
+                            },
+                            r_code_core::plan::PlanQuestionOptionDraft {
+                                id: "wide".to_string(),
+                                label: "Wide".to_string(),
+                                description: "Include adjacent work".to_string(),
+                            },
+                        ],
+                    }],
+                },
+            )
+            .unwrap();
+        let question_set_id = awaiting.pending_question_set.unwrap().id;
+        let answer = AnswerPlanQuestionsInput {
+            question_set_id: question_set_id.clone(),
+            expected_revision: awaiting.plan.revision,
+            idempotency_key: "answer-once".to_string(),
+            skip_all: false,
+            answers: vec![r_code_core::plan::PlanQuestionAnswerInput::Option {
+                question_id: "scope".to_string(),
+                option_id: "small".to_string(),
+            }],
+        };
+        plan_answer(&state, &task.id, answer.clone()).await.unwrap();
+        plan_answer(&state, &task.id, answer).await.unwrap();
+        let set = state
+            .plan_store
+            .get_question_set(&task.id, &question_set_id)
+            .unwrap();
+        assert_eq!(
+            set.continuation_state,
+            r_code_core::plan::PlanContinuationState::Dispatched
+        );
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let history = state.session_store.load(&branch.storage_id).await.unwrap();
+        assert_eq!(
+            history
+                .messages
+                .iter()
+                .filter(|message| {
+                    message.role == Role::User && message.text_content().contains("计划问题已回答")
+                })
+                .count(),
+            1,
+            "an idempotent answer retry must not resume the model twice"
+        );
     }
 
     #[tokio::test]

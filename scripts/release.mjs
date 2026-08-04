@@ -165,10 +165,12 @@ function stampChangelog(changelog, version, repository) {
   return `${next}${newline}${newline}${links.join(newline)}${newline}`;
 }
 
-function refreshCargoLock() {
-  const result = spawnSync("cargo", ["metadata", "--format-version", "1", "--no-deps"], {
-    cwd: ROOT,
-    stdio: "inherit",
+function refreshCargoLock(spawn = spawnSync, cwd = ROOT) {
+  // Resolving the full graph is intentional. `cargo metadata --no-deps` does not
+  // refresh workspace package versions in Cargo.lock after a release bump.
+  const result = spawn("cargo", ["metadata", "--format-version", "1"], {
+    cwd,
+    stdio: ["ignore", "ignore", "inherit"],
   });
   if (result.error) fail(`could not run cargo metadata: ${result.error.message}`);
   if (result.status !== 0) fail("cargo metadata failed while refreshing Cargo.lock");
@@ -242,4 +244,4 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   main(process.argv.slice(2));
 }
 
-export { parseReleaseTag, replaceWorkspaceVersion, stampChangelog };
+export { parseReleaseTag, refreshCargoLock, replaceWorkspaceVersion, stampChangelog };

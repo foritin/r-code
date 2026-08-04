@@ -10,7 +10,10 @@ use tauri_plugin_dialog::DialogExt;
 use hermes_core::InferenceOptions;
 use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
-    SessionBranch, Task, VerificationRecord, Workspace, WorkspaceMemoryMode,
+    SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
+};
+use r_code_core::plan::{
+    AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
@@ -20,6 +23,7 @@ use r_code_host::commands::{
 };
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::replay::ReplayEntry;
+use r_code_store::{EnhancedReviewTarget, EnhancedReviewView, PlanRejectResult};
 
 /// 任务创建命令。 [doc-09]
 #[tauri::command]
@@ -139,6 +143,149 @@ pub async fn cmd_task_rename(
     title: String,
 ) -> Result<Task, String> {
     r_code_host::commands::task_rename(&state, &task_id, &title).await
+}
+
+/// Update or clear the durable goal used by Plan and subsequent turns.
+#[tauri::command]
+pub async fn cmd_task_update_goal(
+    state: State<'_, CommandState>,
+    task_id: String,
+    goal: String,
+) -> Result<Task, String> {
+    r_code_host::commands::task_update_goal(&state, &task_id, &goal).await
+}
+
+/// Switch the task policy without rebuilding its native conversation history.
+#[tauri::command]
+pub async fn cmd_task_set_mode(
+    state: State<'_, CommandState>,
+    task_id: String,
+    mode: String,
+) -> Result<Task, String> {
+    let mode =
+        TaskMode::try_from_str(mode.trim()).ok_or_else(|| format!("invalid task mode: {mode}"))?;
+    r_code_host::commands::task_set_mode(&state, &task_id, mode).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_get(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<PlanView>, String> {
+    r_code_host::commands::plan_get(&state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_create(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_create(&state, &task_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_answer(
+    state: State<'_, CommandState>,
+    task_id: String,
+    input: AnswerPlanQuestionsInput,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_answer(&state, &task_id, input).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_retry_continuation(
+    state: State<'_, CommandState>,
+    task_id: String,
+    question_set_id: String,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_retry_continuation(&state, &task_id, &question_set_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_approve(
+    state: State<'_, CommandState>,
+    task_id: String,
+    plan_id: String,
+    expected_revision: u64,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_approve(&state, &task_id, &plan_id, expected_revision).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_retry_implementation(
+    state: State<'_, CommandState>,
+    task_id: String,
+    plan_id: String,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_retry_implementation(&state, &task_id, &plan_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_cancel(
+    state: State<'_, CommandState>,
+    task_id: String,
+    plan_id: String,
+    expected_revision: u64,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_cancel(&state, &task_id, &plan_id, expected_revision).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_repair_projection(
+    state: State<'_, CommandState>,
+    task_id: String,
+    plan_id: String,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_repair_projection(&state, &task_id, &plan_id).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_update_item(
+    state: State<'_, CommandState>,
+    task_id: String,
+    input: UpdatePlanItemInput,
+) -> Result<PlanView, String> {
+    r_code_host::commands::plan_update_item(&state, &task_id, input).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_review_status(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<EnhancedReviewView>, String> {
+    r_code_host::commands::plan_review_status(&state, &task_id)
+}
+
+#[tauri::command]
+pub async fn cmd_plan_review_accept_file(
+    state: State<'_, CommandState>,
+    target: EnhancedReviewTarget,
+) -> Result<PlanReviewDecision, String> {
+    r_code_host::commands::plan_review_accept_file(&state, &target)
+}
+
+#[tauri::command]
+pub async fn cmd_plan_review_accept_feature(
+    state: State<'_, CommandState>,
+    target: EnhancedReviewTarget,
+) -> Result<PlanReviewDecision, String> {
+    r_code_host::commands::plan_review_accept_feature(&state, &target)
+}
+
+#[tauri::command]
+pub async fn cmd_plan_review_reject_file(
+    state: State<'_, CommandState>,
+    target: EnhancedReviewTarget,
+) -> Result<PlanRejectResult, String> {
+    r_code_host::commands::plan_review_reject_file(&state, &target).await
+}
+
+#[tauri::command]
+pub async fn cmd_plan_review_reject_feature(
+    state: State<'_, CommandState>,
+    target: EnhancedReviewTarget,
+) -> Result<PlanRejectResult, String> {
+    r_code_host::commands::plan_review_reject_feature(&state, &target).await
 }
 
 /// 从当前上下文末端创建新的活跃会话分支。

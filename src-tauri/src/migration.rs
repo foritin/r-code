@@ -369,6 +369,27 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 18,
+            to_version: 19,
+            description: "Durable Plan/HITL state and feature-scoped review journals".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 19,
+            to_version: 20,
+            description: "Durable approved-Plan implementation handoff".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
+        MigrationStep {
+            from_version: 20,
+            to_version: 21,
+            description: "Atomic enhanced-review scope and rejection claims".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

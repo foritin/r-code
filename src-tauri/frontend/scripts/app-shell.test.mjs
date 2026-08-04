@@ -1641,7 +1641,10 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
     const { useTasksStore } = await import("/src/store/tasks.ts");
+    const { browserMockDetails } = await import("/src/lib/mock-data.ts");
     globalThis.__rCodeBrowserMockExcludedReviewPaths = ["src/api.rs"];
+    globalThis.__rCodeBrowserMockFailures = { cmd_review_git_status: "ignore boundary unavailable" };
+    browserMockDetails["mock-task-review"].runs[0].ended_at = null;
     useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
     useAppStore.getState().openRoom("mock-task-review", "changes");
   });
@@ -1649,6 +1652,13 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
   const workbench = page.getByTestId("workbench-panel");
   await workbench.waitFor({ state: "visible" });
   await workbench.getByRole("tab", { name: /变更/ }).waitFor({ state: "visible" });
+  await workbench.getByText("审核范围暂不可用，请稍后重试。", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await workbench.locator(".chg-row").count(), 0, "failed ignore checks must expose no actionable fallback rows");
+  assert.equal(await workbench.getByRole("button", { name: "接受文件", exact: true }).count(), 0);
+  await page.evaluate(() => {
+    globalThis.__rCodeBrowserMockFailures = {};
+    window.dispatchEvent(new Event("r-code:refresh-now"));
+  });
   await workbench.getByRole("button", { name: "接受文件", exact: true }).waitFor({ state: "visible" });
   await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).waitFor({ state: "visible" });
   await page.waitForFunction(

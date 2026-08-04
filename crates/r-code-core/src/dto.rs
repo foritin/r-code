@@ -126,6 +126,8 @@ pub enum TaskMode {
     Edit,
     /// 全自动模式（验证通过自动接受）
     Auto,
+    /// 只读规划模式；计划批准后由运行时显式切回执行能力。
+    Plan,
 }
 
 impl std::fmt::Display for TaskMode {
@@ -134,6 +136,20 @@ impl std::fmt::Display for TaskMode {
             Self::Ask => write!(f, "ask"),
             Self::Edit => write!(f, "edit"),
             Self::Auto => write!(f, "auto"),
+            Self::Plan => write!(f, "plan"),
+        }
+    }
+}
+
+impl TaskMode {
+    /// 尝试从持久化字符串解析。
+    pub fn try_from_str(value: &str) -> Option<Self> {
+        match value {
+            "ask" => Some(Self::Ask),
+            "edit" => Some(Self::Edit),
+            "auto" => Some(Self::Auto),
+            "plan" => Some(Self::Plan),
+            _ => None,
         }
     }
 }

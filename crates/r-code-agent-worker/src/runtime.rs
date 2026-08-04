@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use hermes_core::{Message, Session};
-use r_code_core::dto::{AgentEvent, CreateSessionInput, ProjectAccessMode};
+use r_code_core::dto::{AgentEvent, CreateSessionInput, ProjectAccessMode, TaskMode};
 use r_code_core::error::ProductError;
 
 /// 运行中引导消息的接纳结果。
@@ -98,6 +98,19 @@ pub trait AgentRuntime: Send + Sync {
         _session_id: &str,
         _workspace_path: Option<String>,
         _access_mode: ProjectAccessMode,
+    ) -> Result<(), ProductError> {
+        Ok(())
+    }
+
+    /// Atomically refresh the task mode and host-rendered task/Plan context for a cached session.
+    ///
+    /// The default keeps lightweight/third-party runtimes source-compatible. The native runtime
+    /// updates only these bindings and preserves the complete protocol message history.
+    async fn update_task_context(
+        &mut self,
+        _session_id: &str,
+        _mode: TaskMode,
+        _context: Option<String>,
     ) -> Result<(), ProductError> {
         Ok(())
     }
