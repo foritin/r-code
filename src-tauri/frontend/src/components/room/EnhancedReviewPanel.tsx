@@ -297,10 +297,16 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
       {notice && <div className="panel-note" role="status">{notice}</div>}
       {!view || visibleGroups.length === 0 ? (
         <div className="enhanced-review-empty">
-          <strong>{view?.groups.length ? "当前 Plan 的变更已全部处理" : "当前没有可增强审核的 Plan 变更"}</strong>
-          <span>{view?.groups.length
-            ? "已接受或拒绝的决定仍保存在审核账本中。"
-            : "先在计划模式批准并实施功能点；普通模式仍可查看 Git 工作区变更。"}</span>
+          <strong>{!view
+            ? "没有对应的功能计划"
+            : view.groups.length > 0
+              ? "当前 Plan 的变更已全部处理"
+              : "当前功能计划还没有可增强审核的变更"}</strong>
+          <span>{!view
+            ? "增强模式只显示由 Plan 功能点产生的变更，因此这里保持为空；其他变更请切换到“普通”模式查看。"
+            : view.groups.length > 0
+              ? "已接受或拒绝的决定仍保存在审核账本中。"
+              : "只有成功归属到该 Plan 功能点的变更才会显示；其他变更请切换到“普通”模式查看。"}</span>
         </div>
       ) : (
         <div className="enhanced-review-groups">

@@ -192,7 +192,10 @@ fn read_persisted_entries(log_dir: &Path) -> std::io::Result<Vec<LogEntry>> {
             Err(_) => continue,
         };
         for line in BufReader::new(file).lines().map_while(Result::ok) {
-            if let Ok(entry) = serde_json::from_str::<LogEntry>(&line) {
+            if let Ok(mut entry) = serde_json::from_str::<LogEntry>(&line) {
+                // Older files may predate a newly added redaction rule. Treat disk as untrusted
+                // diagnostic input and sanitize it again before hydration, preview, or export.
+                entry.message = redact_text(&entry.message);
                 entries.push(entry);
             }
         }
@@ -264,10 +267,43 @@ impl MessageVisitor {
     }
 }
 
+fn sensitive_log_field(name: &str) -> bool {
+    let normalized = name
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .map(|character| character.to_ascii_lowercase())
+        .collect::<String>();
+    matches!(
+        normalized.as_str(),
+        "authorization"
+            | "proxyauthorization"
+            | "cookie"
+            | "setcookie"
+            | "password"
+            | "passwd"
+            | "pwd"
+            | "token"
+            | "apikey"
+            | "xapikey"
+            | "clientsecret"
+            | "privatekey"
+            | "credential"
+            | "credentials"
+            | "awsaccesskeyid"
+            | "awssecretaccesskey"
+            | "awssessiontoken"
+    ) || normalized.ends_with("accesstoken")
+        || normalized.ends_with("refreshtoken")
+        || normalized.ends_with("idtoken")
+        || normalized.ends_with("sessiontoken")
+}
+
 impl Visit for MessageVisitor {
     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
             self.message = format!("{value:?}");
+        } else if sensitive_log_field(field.name()) {
+            self.fields.push(format!("{}=***", field.name()));
         } else {
             self.fields.push(format!("{}={value:?}", field.name()));
         }
@@ -276,6 +312,8 @@ impl Visit for MessageVisitor {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "message" {
             self.message = value.to_string();
+        } else if sensitive_log_field(field.name()) {
+            self.fields.push(format!("{}=***", field.name()));
         } else {
             self.fields.push(format!("{}={value}", field.name()));
         }
@@ -360,6 +398,10 @@ mod tests {
             tracing::warn!(
                 task_id = "task-1",
                 token = "secret-value",
+                api_key = "plain-api-key",
+                password = "plain-password",
+                client_secret = "plain-client-secret",
+                aws_secret_access_key = "plain-aws-secret",
                 "provider request failed"
             );
         });
@@ -373,9 +415,57 @@ mod tests {
         assert!(entry.message.contains("provider request failed"));
         assert!(entry.message.contains("task_id=task-1"));
         assert!(entry.message.contains("token=***"));
-        assert!(!entry.message.contains("secret-value"));
+        for secret in [
+            "secret-value",
+            "plain-api-key",
+            "plain-password",
+            "plain-client-secret",
+            "plain-aws-secret",
+        ] {
+            assert!(
+                !entry.message.contains(secret),
+                "credential leaked: {secret}"
+            );
+        }
+        for field in [
+            "api_key=***",
+            "password=***",
+            "client_secret=***",
+            "aws_secret_access_key=***",
+        ] {
+            assert!(entry.message.contains(field), "missing redaction: {field}");
+        }
         assert!(!entry.timestamp.is_empty());
         assert!(!entry.target.is_empty());
+    }
+
+    #[test]
+    fn persisted_legacy_logs_are_redacted_again_when_read() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(format!(
+            "{LOG_FILE_PREFIX}.{}",
+            Utc::now().date_naive().format("%Y-%m-%d")
+        ));
+        let entry = LogEntry {
+            timestamp: Utc::now().to_rfc3339(),
+            level: "ERROR".into(),
+            target: "legacy".into(),
+            message: "api_key=legacy-secret password=legacy-password github_pat_abcdefghijklmnopqrstuvwxyz123456".into(),
+        };
+        std::fs::write(
+            path,
+            format!("{}\n", serde_json::to_string(&entry).unwrap()),
+        )
+        .unwrap();
+
+        let entries = read_persisted_entries(dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].message.contains("legacy-secret"));
+        assert!(!entries[0].message.contains("legacy-password"));
+        assert!(!entries[0]
+            .message
+            .contains("github_pat_abcdefghijklmnopqrstuvwxyz123456"));
+        assert!(entries[0].message.contains("api_key=***"));
     }
 
     #[test]

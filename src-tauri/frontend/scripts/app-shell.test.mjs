@@ -98,6 +98,106 @@ test.after(async () => {
   server?.kill();
 });
 
+test("product mode labels collapse compatibility policies into Agent and Plan", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const labels = await page.evaluate(async () => {
+    const { modeLabel, modeShortLabel } = await import("/src/lib/format.ts");
+    return ["ask", "edit", "auto", "plan"].map((mode) => ({
+      mode,
+      short: modeShortLabel(mode),
+      long: modeLabel(mode),
+    }));
+  });
+  assert.deepEqual(labels.map((item) => item.short), ["Agent", "Agent", "Agent", "Plan"]);
+  assert.ok(labels.slice(0, 3).every((item) => item.long.startsWith("Agent —")));
+  assert.match(labels[3].long, /^Plan —/);
+  await page.close();
+});
+
+test("permission control stays visible and explains the workspace boundary", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject(null);
+    useAppStore.getState().setScene("home");
+  });
+
+  const trigger = page.getByRole("button", { name: /^权限：/ });
+  await trigger.waitFor({ state: "visible" });
+  assert.equal(await trigger.isDisabled(), false, "the boundary explanation must remain discoverable");
+  await trigger.click();
+
+  const menu = page.getByRole("menu", { name: "项目 Agent 权限" });
+  await menu.waitFor({ state: "visible" });
+  await menu.getByText("先附加文件夹，才能设置 Agent 的本地工具权限。", { exact: true }).waitFor({ state: "visible" });
+  const options = menu.getByRole("menuitemradio");
+  assert.equal(await options.count(), 3);
+  assert.equal(await options.nth(0).isDisabled(), true);
+  assert.equal(await options.nth(1).isDisabled(), true);
+  assert.equal(await options.nth(2).isDisabled(), true);
+
+  await page.close();
+});
+
+test("permission choices persist and remain available while a run is active", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { workspaceSetAccessMode } = await import("/src/lib/ipc.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await workspaceSetAccessMode("D:/project/rust/r-code", "risk_based");
+    await useTasksStore.getState().refreshWorkspaces();
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    useAppStore.getState().setScene("home");
+  });
+
+  const homeTrigger = page.locator(".scene-home .project-access-trigger");
+  await homeTrigger.waitFor({ state: "visible" });
+  assert.match(await homeTrigger.innerText(), /权限：替我审批/);
+  await homeTrigger.click();
+  await page.getByRole("menuitemradio", { name: /完全访问权限/ }).click();
+  await page.waitForFunction(() => document.querySelector(".scene-home .project-access-trigger")?.textContent?.includes("完全访问权限"));
+  const persistedFromHome = await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    return useTasksStore.getState().workspaces.find((workspace) => workspace.canonical_path === "D:/project/rust/r-code")?.access_mode;
+  });
+  assert.equal(persistedFromHome, "full_access");
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshDetail("mock-task-queue"),
+      useTasksStore.getState().refreshWorkspaces(),
+    ]);
+    useAppStore.getState().openRoom("mock-task-queue");
+  });
+
+  const roomTrigger = page.locator(".scene-room .project-access-trigger");
+  await roomTrigger.waitFor({ state: "visible" });
+  assert.equal(await roomTrigger.isDisabled(), false, "active runs may configure the next run's permission snapshot");
+  await roomTrigger.click();
+  await page.getByText("当前运行继续使用启动时的权限；新设置从下一轮开始生效。", { exact: true }).waitFor({ state: "visible" });
+  if (process.env.R_CODE_PERMISSION_SHOT) {
+    await page.screenshot({ path: process.env.R_CODE_PERMISSION_SHOT, fullPage: true });
+  }
+  await page.getByRole("menuitemradio", { name: /请求审批/ }).click();
+  await page.waitForFunction(() => document.querySelector(".scene-room .project-access-trigger")?.textContent?.includes("请求审批"));
+
+  const persistedFromRoom = await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    return useTasksStore.getState().workspaces.find((workspace) => workspace.canonical_path === "D:/project/rust/r-code")?.access_mode;
+  });
+  assert.equal(persistedFromRoom, "request_approval");
+
+  await page.close();
+});
+
 test("macOS uses native traffic-light chrome and Command-key labels", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.addInitScript(() => {
@@ -829,6 +929,16 @@ for (const viewport of [{ width: 800, height: 600 }, { width: 1200, height: 800 
   });
 }
 
+test("new task composer remains fully reachable in a compact desktop window", async () => {
+  const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const send = page.getByRole("button", { name: "发送", exact: true });
+  const sendBox = await send.boundingBox();
+  assert.ok(sendBox && sendBox.y >= 0 && sendBox.y + sendBox.height <= 600, "the primary action must not fall below the viewport");
+  assert.equal(await page.evaluate(() => document.documentElement.scrollHeight), 600, "the app shell must not hide the composer behind page overflow");
+  await page.close();
+});
+
 test("project conversations expose archive and confirmed permanent delete", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -1298,6 +1408,11 @@ test("Enter uses the selected run send mode and clears the accepted draft before
     await composer.press("Enter");
     assert.equal(await composer.inputValue(), "", "accepted drafts must clear before a slow IPC resolves");
     await page.waitForFunction(() => globalThis.__rCodeSendModes?.length === 1);
+    const pendingSend = page.getByRole("button", { name: "正在发送消息", exact: true });
+    await pendingSend.waitFor({ state: "visible" });
+    assert.equal(await pendingSend.getAttribute("aria-busy"), "true");
+    assert.equal(await pendingSend.locator(".send-loading-spinner").isVisible(), true);
+    assert.equal(await pendingSend.isDisabled(), true);
     assert.deepEqual(await page.evaluate(() => globalThis.__rCodeSendModes), ["queue"]);
     await page.evaluate(() => globalThis.__rCodeReleaseSend?.());
     await page.waitForFunction(() => !document.querySelector(".run-send-mode-trigger")?.hasAttribute("disabled"));
@@ -1397,6 +1512,11 @@ test("plain Enter sends from the new-conversation composer while Shift+Enter kee
     await composer.fill("Enter 直接发送");
     await composer.press("Enter");
     assert.equal(await composer.inputValue(), "", "new-conversation draft must clear before first-run IPC completes");
+    const pendingSend = page.getByRole("button", { name: "正在发送新对话", exact: true });
+    await pendingSend.waitFor({ state: "visible" });
+    assert.equal(await pendingSend.getAttribute("aria-busy"), "true");
+    assert.equal(await pendingSend.locator(".send-loading-spinner").isVisible(), true);
+    assert.equal(await pendingSend.isDisabled(), true);
     await page.evaluate(() => globalThis.__rCodeReleaseHomeSend?.());
     await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
   } finally {
@@ -1477,6 +1597,7 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
     await page.getByRole("button", { name: "设置", exact: true }).click();
     await page.getByRole("button", { name: "Agent 编排", exact: true }).click();
     await page.getByRole("heading", { name: "委派路由", exact: true }).waitFor({ state: "visible" });
+    assert.equal(await page.locator("#set-quality-reviewer").inputValue(), "r_code");
     assert.equal(await page.getByRole("textbox", { name: "主 Agent 协作 Prompt" }).count(), 0, "prompts must no longer be split across Settings");
 
     await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).click();
@@ -1521,29 +1642,76 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   await timelineSubagent.waitFor({ state: "visible" });
   await timelineSubagent.click();
 
-  const tablist = page.getByRole("tablist", { name: "子智能体工作台" });
+  const tablist = page.getByRole("tablist", { name: "任务工作台标签" });
   const tabs = tablist.getByRole("tab");
   const activeSubagent = page.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 检查并发边界" });
   const completedSubagent = page.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 核对锁顺序" });
 
   await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
-  assert.equal(await tabs.count(), 2, "opening a subagent must preserve the overview tab");
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const state = useAppStore.getState();
+    const taskId = state.currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    const workbench = state.workbenches[taskId];
+    if (!workbench) throw new Error("Task workbench is missing");
+    useAppStore.setState({
+      workbenches: {
+        ...state.workbenches,
+        [taskId]: { ...workbench, openTabs: ["summary", "plan", "review"] },
+      },
+    });
+  });
+  const workbench = page.getByTestId("workbench-panel");
+  const summaryTab = workbench.getByRole("tab", { name: /^运行与子代理/ });
+  await summaryTab.waitFor({ state: "visible" });
+  assert.deepEqual(
+    await tabs.evaluateAll((items) => items.map((item) => item.querySelector("strong")?.textContent)),
+    ["运行与子代理", "计划", "审核", "Codex CLI · 检查并发边界"],
+  );
+  assert.equal(await tabs.count(), 4, "opening a subagent must preserve every task workbench tab");
 
-  await tablist.getByRole("tab", { name: "子智能体", exact: true }).click();
+  await summaryTab.click();
   await page.getByTestId("subagent-list").waitFor({ state: "visible" });
   await activeSubagent.click();
-  assert.equal(await tabs.count(), 2, "opening the same subagent must activate its existing tab");
+  assert.equal(await tabs.count(), 4, "opening the same subagent must activate its existing tab");
   assert.equal(
     await tablist.getByRole("tab", { name: "Codex CLI · 检查并发边界", exact: true }).getAttribute("aria-selected"),
     "true",
   );
 
-  await tablist.getByRole("tab", { name: "子智能体", exact: true }).click();
+  await summaryTab.click();
   await completedSubagent.click();
-  assert.equal(await tabs.count(), 3, "a different subagent gets its own tab");
+  assert.equal(await tabs.count(), 5, "a different subagent gets its own tab without replacing task tools");
   assert.equal(
     await tablist.getByRole("tab", { name: "Codex CLI · 核对锁顺序", exact: true }).getAttribute("aria-selected"),
     "true",
+  );
+
+  const completedTab = tablist.getByRole("tab", { name: "Codex CLI · 核对锁顺序", exact: true });
+  await completedTab.focus();
+  await completedTab.press("ArrowLeft");
+  assert.equal(
+    await tablist.getByRole("tab", { name: "Codex CLI · 检查并发边界", exact: true }).getAttribute("aria-selected"),
+    "true",
+    "ArrowLeft must move and activate the previous workbench tab",
+  );
+  await page.keyboard.press("End");
+  assert.equal(await completedTab.getAttribute("aria-selected"), "true", "End must activate the final workbench tab");
+  assert.equal(
+    await completedTab.locator("button").count(),
+    0,
+    "the close control must be a sibling instead of an interactive descendant of the tab",
+  );
+
+  await workbench.getByRole("button", { name: "打开工具启动器", exact: true }).click();
+  await workbench.getByRole("dialog", { name: "工作台工具启动器" }).waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
+  assert.equal(
+    await tablist.getByRole("tab", { name: "Codex CLI · 核对锁顺序", exact: true }).getAttribute("aria-selected"),
+    "true",
+    "dismissing the launcher must restore the selected subagent tab",
   );
 
   await page.close();
@@ -1979,5 +2147,35 @@ test("poll failures expose stale data and clear after a successful retry", async
 
   await warning.getByRole("button", { name: "重试" }).click();
   await warning.waitFor({ state: "detached" });
+  await page.close();
+});
+
+test("terminal input coalesces queued keystrokes without reordering them", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const chunks = await page.evaluate(async () => {
+    const { createTerminalInputBuffer } = await import("/src/components/room/Canvas.tsx");
+    const sent = [];
+    let releaseFirst;
+    const firstSend = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    const input = createTerminalInputBuffer(async (chunk) => {
+      sent.push(chunk);
+      if (sent.length === 1) await firstSend;
+    }, () => {});
+
+    input.push("a");
+    await new Promise((resolve) => setTimeout(resolve, 12));
+    input.push("b");
+    input.push("c");
+    input.push("d");
+    releaseFirst();
+    await input.flush();
+    input.dispose();
+    return sent;
+  });
+
+  assert.deepEqual(chunks, ["a", "bcd"]);
   await page.close();
 });

@@ -12,6 +12,7 @@ export type Scene =
   | "dashboard"
   | "conversations"
   | "deck"
+  | "archive"
   | "room"
   | "inbox"
   | "projects"

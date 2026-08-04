@@ -54,6 +54,7 @@ export const browserMockTasks: Task[] = [
     inference: { reasoning_effort: "high", verbosity: "medium" },
     title: "修复任务队列并发问题",
     goal: "梳理任务队列执行路径并修复并发状态竞争。",
+    goal_active: false,
     mode: "edit",
     state: "in_progress",
     worktree_path: null,
@@ -69,6 +70,7 @@ export const browserMockTasks: Task[] = [
     inference: { thinking: "enabled", reasoning_effort: "high" },
     title: "统一错误处理规范",
     goal: "补齐 API 与任务层的错误上下文。",
+    goal_active: false,
     mode: "edit",
     state: "review_ready",
     worktree_path: null,
@@ -84,6 +86,7 @@ export const browserMockTasks: Task[] = [
     inference: {},
     title: "优化 Rust 编译性能",
     goal: "定位 workspace 构建的瓶颈。",
+    goal_active: false,
     mode: "edit",
     state: "in_progress",
     worktree_path: null,
@@ -99,6 +102,7 @@ export const browserMockTasks: Task[] = [
     inference: { reasoning_effort: "high" },
     title: "添加请求限流中间件",
     goal: "在 API 请求路径增加服务端限流。",
+    goal_active: false,
     mode: "edit",
     state: "exploring",
     worktree_path: null,
@@ -114,6 +118,7 @@ export const browserMockTasks: Task[] = [
     inference: {},
     title: "更新依赖并修复告警",
     goal: "升级工作区依赖并处理编译告警。",
+    goal_active: false,
     mode: "edit",
     state: "idle",
     worktree_path: null,
@@ -242,7 +247,7 @@ export const browserMockSettings: SettingsResponse = {
       delegation_router: "balanced",
       allow_cross_engine_delegation: true,
       quality_loop: "off",
-      quality_reviewer: "auto",
+      quality_reviewer: "r_code",
       max_review_rounds: 1,
     },
     agent_prompts: {
@@ -795,7 +800,7 @@ function mockEventLabel(kind: ProjectActivityItem["kind"]): string {
 
 export function browserMockActivityList(workspacePath?: string | null): ProjectActivityPage {
   const items: ProjectActivityItem[] = browserMockTasks
-    .filter((task) => !workspacePath || (task.workspace_path === workspacePath && task.state !== "archived"))
+    .filter((task) => task.state !== "archived" && (!workspacePath || task.workspace_path === workspacePath))
     .flatMap((task) => (browserMockDetails[task.id]?.events ?? []).map((event) => ({
       id: `${task.id}:${event.id}`,
       at: event.created_at,

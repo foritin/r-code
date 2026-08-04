@@ -14,7 +14,7 @@ use r_code_core::plan::{
     UpdatePlanItemInput,
 };
 use r_code_gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
-use r_code_store::{Database, PlanStore, TaskRepository};
+use r_code_store::{Database, PlanStore, SessionBranchRepository, TaskRepository};
 use serde::Deserialize;
 
 fn invalid(message: impl Into<String>) -> ProductError {
@@ -47,6 +47,108 @@ fn require_task_mode(
 
 fn context_required() -> ProductError {
     invalid("this host Plan tool requires gateway-owned execution context")
+}
+
+const ENTER_PLAN_CONTINUATION: &str = "[system] R-Code safely changed this task from Agent mode to Plan mode. Continue the user's existing request as a structured Plan. Investigate read-only as needed, ask only blocking questions with request_user_input, then publish the complete functional Plan with plan_publish. Do not edit files or execute implementation before the user approves the Plan.";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnterPlanModeArgs {
+    reason: String,
+}
+
+#[derive(Clone)]
+pub struct EnterPlanModeTool {
+    db: Arc<Database>,
+    plans: Arc<PlanStore>,
+}
+
+impl EnterPlanModeTool {
+    pub fn new(db: Arc<Database>, plans: Arc<PlanStore>) -> Self {
+        Self { db, plans }
+    }
+}
+
+#[async_trait]
+impl Tool for EnterPlanModeTool {
+    fn name(&self) -> &str {
+        "enter_plan_mode"
+    }
+
+    fn description(&self) -> &str {
+        "Safely change the current main task from Agent mode to Plan mode before making writes. Use when the user explicitly requests a structured plan, or when ambiguity, risk, or scope makes direct implementation unsafe. This ends the current Agent run and the host resumes the same request with read-only Plan tools. Returning to Agent mode requires explicit user approval; never use this to restart an already approved/executing Plan."
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R0
+    }
+
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+
+    fn requires_existing_path(&self) -> bool {
+        false
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+
+    fn allows_transient_retry(&self) -> bool {
+        true
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "description": "Short user-visible reason why planning is needed before implementation."
+                }
+            },
+            "required": ["reason"]
+        })
+    }
+
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(context_required())
+    }
+
+    async fn execute_with_context(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        require_task_mode(
+            &self.db,
+            &context.task_id,
+            &[TaskMode::Ask, TaskMode::Edit, TaskMode::Auto],
+            "enter_plan_mode",
+        )?;
+        let args: EnterPlanModeArgs = decode(input)?;
+        if args.reason.trim().is_empty() {
+            return Err(invalid("enter_plan_mode reason cannot be blank"));
+        }
+        let branch = SessionBranchRepository::new(&self.db).ensure_active(&context.task_id)?;
+        let view = self.plans.enter_plan_mode_and_stage_continuation(
+            &context.task_id,
+            &branch.id,
+            ENTER_PLAN_CONTINUATION,
+        )?;
+        let content = serde_json::to_string(&serde_json::json!({
+            "entered_plan_mode": true,
+            "reason": args.reason.trim(),
+            "plan": view,
+            "instruction": "Stop this Agent run. The host has queued a fresh Plan-mode continuation for the same request.",
+        }))
+        .map_err(|error| invalid(format!("serialize enter_plan_mode result: {error}")))?;
+        Ok(ToolExecutionResult::suspend_for_user(content))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +195,10 @@ impl Tool for PlanPublishTool {
 
     fn requires_workspace_scope(&self) -> bool {
         false
+    }
+
+    fn allows_transient_retry(&self) -> bool {
+        true
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -210,6 +316,10 @@ impl Tool for RequestUserInputTool {
 
     fn requires_workspace_scope(&self) -> bool {
         false
+    }
+
+    fn allows_transient_retry(&self) -> bool {
+        true
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -344,6 +454,10 @@ impl Tool for PlanItemUpdateTool {
         false
     }
 
+    fn allows_transient_retry(&self) -> bool {
+        true
+    }
+
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -411,6 +525,7 @@ mod tests {
     use super::*;
     use r_code_core::dto::{ProjectAccessMode, Task};
     use r_code_core::plan::{ApprovePlanInput, CreatePlanInput, PlanItemDraft, PublishPlanInput};
+    use r_code_store::QueuedMessageRepository;
 
     fn context(task_id: &str) -> ToolExecutionContext {
         ToolExecutionContext {
@@ -420,6 +535,48 @@ mod tests {
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::RiskBased,
         }
+    }
+
+    #[tokio::test]
+    async fn agent_can_enter_plan_mode_and_stage_a_fresh_plan_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open_in_memory().unwrap());
+        let task = Task::new(None, "Agent", "Plan this safely", TaskMode::Edit);
+        TaskRepository::new(&db).create(&task).unwrap();
+        let branch = SessionBranchRepository::new(&db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let plans = Arc::new(PlanStore::new(db.clone(), temp.path().join("plans")));
+        let tool = EnterPlanModeTool::new(db.clone(), plans.clone());
+
+        let result = tool
+            .execute_with_context(
+                serde_json::json!({"reason": "The requested change spans several dependent features."}),
+                &context(&task.id),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.directive,
+            Some(r_code_gateway::ToolExecutionDirective::SuspendForUser)
+        );
+        assert_eq!(
+            TaskRepository::new(&db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .mode,
+            TaskMode::Plan
+        );
+        let current = plans.current_for_task(&task.id).unwrap().unwrap();
+        assert_eq!(current.plan.state, r_code_core::plan::PlanState::Draft);
+        let queued = QueuedMessageRepository::new(&db)
+            .list_pending(&task.id, &branch.id)
+            .unwrap();
+        assert_eq!(queued.len(), 1);
+        assert!(queued[0].id.starts_with("plan-entry:"));
+        assert!(queued[0].message.contains("structured Plan"));
     }
 
     #[tokio::test]

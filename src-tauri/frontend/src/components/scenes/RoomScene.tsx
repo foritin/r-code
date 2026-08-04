@@ -20,7 +20,6 @@ import { Timeline, type TimelineHandle } from "../room/Timeline";
 import { Composer } from "../room/Composer";
 import { PendingPermissions } from "../room/Permissions";
 import { Canvas } from "../room/Canvas";
-import { ActivityStrip } from "../room/ActivityStrip";
 import { TaskActionsMenu } from "../TaskActionsMenu";
 import { activityTraceReducer, createActivityTraceState } from "../room/activity";
 import { IconAttach, IconHome, IconProjects, IconSidebar } from "../icons";
@@ -83,7 +82,6 @@ export function RoomScene() {
   const goHome = useAppStore((s) => s.goHome);
   const workbenchMode = useAppStore((s) => s.workbenchMode);
   const canvasTab = useAppStore((s) => s.canvasTab);
-  const workbenchLauncherOpen = useAppStore((s) => s.workbenchLauncherOpen);
   const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const hideWorkbench = useAppStore((s) => s.hideWorkbench);
   const restoreWorkbench = useAppStore((s) => s.restoreWorkbench);
@@ -216,9 +214,9 @@ export function RoomScene() {
 
   useEffect(() => {
     const workbenchVisible = workbenchMode === "docked" || workbenchMode === "focus";
-    if (!subagentPanelOpen || (canvasTab === "summary" && !workbenchLauncherOpen && workbenchVisible)) return;
+    if (!subagentPanelOpen || (canvasTab === "summary" && workbenchVisible)) return;
     closeSubagentView();
-  }, [canvasTab, closeSubagentView, subagentPanelOpen, workbenchLauncherOpen, workbenchMode]);
+  }, [canvasTab, closeSubagentView, subagentPanelOpen, workbenchMode]);
 
   useEffect(() => {
     if (workbenchMode === "focus") convoRef.current?.setAttribute("inert", "");
@@ -507,7 +505,6 @@ export function RoomScene() {
           <div className="room-archived-note">此对话已归档，只能查看历史。可在项目概览中还原，或通过右上角对话选项永久删除。</div>
         ) : (
           <>
-            <ActivityStrip state={activity} running={running} />
             <PendingPermissions taskId={currentTaskId} />
             <Composer
               taskId={currentTaskId}

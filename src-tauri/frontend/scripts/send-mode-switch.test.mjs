@@ -99,7 +99,21 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   const modeSwitch = actions.locator(".run-send-mode-label");
   const directSelect = actions.locator(".run-send-mode-trigger");
   const send = actions.locator(".running-send-button");
+  const stop = page.getByRole("button", { name: "停止当前运行", exact: true });
   await modeSwitch.waitFor({ state: "visible" });
+  await stop.waitFor({ state: "visible" });
+  assert.match(await stop.getAttribute("class"), /composer-primary-button/, "Stop should replace the primary Send button while the draft is empty");
+  const stopButtonBox = await stop.boundingBox();
+  assert.ok(stopButtonBox && stopButtonBox.width >= 40 && stopButtonBox.height >= 40, "Stop needs the same substantial target as Send");
+  assert.equal(await stop.locator("svg").count(), 1, "running controls should expose a square Stop icon");
+  const stopIconBox = await stop.locator("svg").boundingBox();
+  const stopGlyphBox = await stop.locator("svg rect").boundingBox();
+  assert.ok(stopIconBox && stopIconBox.width >= 19, "Stop icon should have enough visual weight inside the primary circle");
+  assert.ok(stopGlyphBox && stopGlyphBox.width >= 12, "Stop square must read clearly inside the primary circle");
+  const stopCopyBox = await stop.locator(".sr-only").boundingBox();
+  assert.ok(!stopCopyBox || stopCopyBox.width <= 1, "Stop copy should stay accessible without a text button");
+
+  await composer.fill("准备补充当前运行");
   await send.waitFor({ state: "visible" });
 
   const switchBox = await modeSwitch.boundingBox();
@@ -153,5 +167,68 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   await send.click();
   await page.waitForFunction(() => globalThis.__rCodeObservedSendModes?.length === 1);
   assert.deepEqual(await page.evaluate(() => globalThis.__rCodeObservedSendModes), ["steer"]);
+  await page.close();
+});
+
+test("the same send strategy stays on Home and idle follow-ups while idle sends directly", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.addInitScript(() => window.localStorage.removeItem("r-code:agent-send-mode"));
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setScene("home");
+  });
+
+  const homeComposer = page.getByRole("textbox", { name: "描述新任务" });
+  await homeComposer.waitFor({ state: "visible" });
+  const homeModeSwitch = page.locator(".scene-home .run-send-mode-label");
+  assert.equal(await homeModeSwitch.count(), 1, "Home must expose the same cycling send strategy as an active task");
+  assert.equal(
+    await page.locator(".scene-home .send-hint").count(),
+    0,
+    "normal Home composition must not fall back to the old static Enter/Shift+Enter hint",
+  );
+  assert.match(await homeModeSwitch.innerText(), /排队/);
+  await homeModeSwitch.click();
+  assert.match(await homeModeSwitch.innerText(), /引导/);
+  if (process.env.R_CODE_SEND_MODE_HOME_SHOT) {
+    await page.screenshot({ path: process.env.R_CODE_SEND_MODE_HOME_SHOT, fullPage: true });
+  }
+
+  await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    globalThis.__rCodeObservedSendModes = [];
+    globalThis.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (command === "cmd_agent_send") globalThis.__rCodeObservedSendModes.push(args.mode);
+        return browserMockInvoke(command, args);
+      },
+    };
+  });
+
+  await homeComposer.fill("从新对话验证统一发送策略");
+  await page.locator(".scene-home .composer-primary-button").click();
+  await page.waitForFunction(() => globalThis.__rCodeObservedSendModes?.length === 1);
+  assert.deepEqual(
+    await page.evaluate(() => globalThis.__rCodeObservedSendModes),
+    ["auto"],
+    "an idle Home composer must start immediately regardless of the retained strategy",
+  );
+
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  const roomComposer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+  const roomModeSwitch = page.locator(".scene-room .run-send-mode-label");
+  await roomModeSwitch.waitFor({ state: "visible" });
+  assert.match(await roomModeSwitch.innerText(), /引导/, "the selected strategy should follow the user into the task");
+
+  await roomComposer.fill("回答结束后继续追问");
+  await page.locator(".scene-room .composer-primary-button").click();
+  await page.waitForFunction(() => globalThis.__rCodeObservedSendModes?.length === 2);
+  assert.deepEqual(
+    await page.evaluate(() => globalThis.__rCodeObservedSendModes),
+    ["auto", "auto"],
+    "an idle follow-up must send immediately instead of queueing or trying to steer",
+  );
+
   await page.close();
 });

@@ -23,6 +23,9 @@ const ConversationsScene = lazy(() =>
 const ActivityScene = lazy(() =>
   import("./components/scenes/ActivityScene").then((module) => ({ default: module.ActivityScene })),
 );
+const ArchiveScene = lazy(() =>
+  import("./components/scenes/ArchiveScene").then((module) => ({ default: module.ArchiveScene })),
+);
 const RoomScene = lazy(() =>
   import("./components/scenes/RoomScene").then((module) => ({ default: module.RoomScene })),
 );
@@ -141,6 +144,7 @@ export default function App() {
           {scene === "dashboard" && <DashboardScene />}
           {scene === "conversations" && <ConversationsScene />}
           {scene === "deck" && <ActivityScene />}
+          {scene === "archive" && <ArchiveScene />}
           {scene === "room" && <RoomScene />}
           {scene === "inbox" && <InboxScene />}
           {scene === "projects" && <ProjectsScene />}

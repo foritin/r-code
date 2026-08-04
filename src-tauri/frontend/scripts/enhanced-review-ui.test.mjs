@@ -98,8 +98,8 @@ async function openEnhancedReview(page) {
   await questions.getByLabel(/聚焦核心流程/).check();
   await questions.getByLabel(/两者结合/).check();
   await questions.getByRole("button", { name: "提交回答", exact: true }).click();
-  await plan.getByRole("button", { name: "确认实施", exact: true }).waitFor();
-  await plan.getByRole("button", { name: "确认实施", exact: true }).click();
+  await plan.getByRole("button", { name: "确认", exact: true }).waitFor();
+  await plan.getByRole("button", { name: "确认", exact: true }).click();
 
   await page.evaluate(async () => {
     const [{ planGet, planUpdateItem }, { useAppStore }] = await Promise.all([
@@ -123,6 +123,33 @@ async function openEnhancedReview(page) {
   await review.waitFor({ state: "visible" });
   return review;
 }
+
+test("enhanced review stays empty when the task has no corresponding feature Plan", async () => {
+  const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.getByLabel("描述新任务").fill("直接实现一个不经过功能计划的普通改动");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await page.locator(".scene.scene-room").waitFor({ state: "visible" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setCanvasTab("changes");
+  });
+  await page.getByRole("tab", { name: "增强", exact: true }).click();
+
+  const review = page.getByTestId("enhanced-review");
+  await review.waitFor({ state: "visible" });
+  assert.match(await review.innerText(), /没有对应的功能计划/);
+  assert.match(await review.innerText(), /增强模式只显示由 Plan 功能点产生的变更/);
+  assert.equal(await review.locator(".enhanced-feature").count(), 0);
+  assert.deepEqual(runtimeErrors, []);
+  await page.close();
+});
 
 test("enhanced review keeps rejection conflicts visible, collapses groups, and removes resolved groups", async () => {
   const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
@@ -172,6 +199,46 @@ test("enhanced review keeps rejection conflicts visible, collapses groups, and r
     await review.locator(`.enhanced-feature[data-item-id="${completedItemId}"]`).count(),
     0,
     "resolved groups belong in the ledger, not the pending review list",
+  );
+  assert.deepEqual(runtimeErrors, []);
+  await page.close();
+});
+
+test("enhanced review restores the same Plan content after leaving and reopening the task", async () => {
+  const page = await browser.newPage({ viewport: { width: 1180, height: 820 } });
+  const runtimeErrors = [];
+  page.on("pageerror", (error) => runtimeErrors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(message.text());
+  });
+
+  const review = await openEnhancedReview(page);
+  const itemIds = await review.locator(".enhanced-feature").evaluateAll((groups) =>
+    groups.map((group) => group.getAttribute("data-item-id")),
+  );
+  assert.equal(itemIds.length, 2);
+
+  await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
+  await page.locator(".conversation-row")
+    .filter({ hasText: "验证增强审核的拒绝反馈与折叠行为" })
+    .locator(".conversation-main")
+    .click();
+
+  const restored = page.getByTestId("enhanced-review");
+  await restored.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    (expected) => document.querySelectorAll(".enhanced-feature").length === expected,
+    itemIds.length,
+  );
+  assert.deepEqual(
+    await restored.locator(".enhanced-feature").evaluateAll((groups) =>
+      groups.map((group) => group.getAttribute("data-item-id")),
+    ),
+    itemIds,
+  );
+  assert.equal(
+    await page.getByRole("tab", { name: "增强", exact: true }).getAttribute("aria-selected"),
+    "true",
   );
   assert.deepEqual(runtimeErrors, []);
   await page.close();

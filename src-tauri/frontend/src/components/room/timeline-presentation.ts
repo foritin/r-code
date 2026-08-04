@@ -83,7 +83,21 @@ export function buildTimelineTurns(items: readonly TimelineItem[]): TimelineTurn
   }
   if (current.user || current.body.length > 0) turns.push(current);
 
-  return turns.map(presentTurn).filter((turn) => turn.user || turn.runs.length || turn.items.length);
+  return turns
+    .map(presentTurn)
+    .map((turn) => composerOwnsQueuedMessage(turn.user) ? { ...turn, user: null } : turn)
+    .filter((turn) => turn.user || turn.runs.length || turn.items.length);
+}
+
+/**
+ * Queued messages belong to the reorderable composer queue until dispatch succeeds.
+ * Rendering them in the conversation at the same time duplicates the same content and
+ * makes queue reordering look like it rewrites chat history.
+ */
+function composerOwnsQueuedMessage(user: TimelineUserItem | null): boolean {
+  return user?.queuedState === "queued"
+    || user?.queuedState === "dispatching"
+    || user?.queuedState === "failed";
 }
 
 function presentTurn(turn: RawTurn): TimelineTurn {

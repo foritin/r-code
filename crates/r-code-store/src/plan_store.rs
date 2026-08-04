@@ -186,6 +186,118 @@ impl PlanStore {
         self.require_view(&input.task_id, &plan_id)
     }
 
+    /// Atomically reduce an active Agent task to Plan mode, create its draft aggregate, and queue
+    /// the host-owned continuation that will resume planning under a fresh runtime policy.
+    ///
+    /// This is intentionally one-way: Plan -> Agent remains gated by explicit user approval.
+    pub fn enter_plan_mode_and_stage_continuation(
+        &self,
+        task_id: &str,
+        branch_id: &str,
+        message: &str,
+    ) -> Result<PlanView, ProductError> {
+        if task_id.trim().is_empty() || branch_id.trim().is_empty() {
+            return Err(invalid("task_id and branch_id cannot be blank"));
+        }
+        if message.trim().is_empty() {
+            return Err(invalid("Plan continuation message cannot be blank"));
+        }
+
+        let plan_id = Uuid::new_v4().to_string();
+        let lock = plan_lock(&plan_id)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| ProductError::Other("Plan lock is poisoned".to_string()))?;
+        let projection_path = self
+            .canonical_projection_path(&plan_id)?
+            .to_string_lossy()
+            .into_owned();
+        let queue_id = format!("plan-entry:{plan_id}:1");
+        let now = Utc::now().to_rfc3339();
+
+        {
+            let mut conn = self.db.conn()?;
+            let tx = conn.transaction().map_err(db_err)?;
+            let task: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT state, agent_engine, mode FROM tasks WHERE id = ?1",
+                    params![task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+                .optional()
+                .map_err(db_err)?;
+            let Some((task_state, agent_engine, task_mode)) = task else {
+                return Err(invalid(format!("task does not exist: {task_id}")));
+            };
+            if task_state == "archived" {
+                return Err(invalid("an archived task cannot enter Plan mode"));
+            }
+            if agent_engine != "r_code" {
+                return Err(invalid("Plan mode requires the R-Code main Agent"));
+            }
+            if !matches!(task_mode.as_str(), "ask" | "edit" | "auto") {
+                return Err(invalid(format!(
+                    "enter_plan_mode is unavailable while task mode is {task_mode}"
+                )));
+            }
+
+            let branch_is_active: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_branches \
+                     WHERE task_id = ?1 AND id = ?2 AND is_active = 1)",
+                    params![task_id, branch_id],
+                    |row| row.get(0),
+                )
+                .map_err(db_err)?;
+            if !branch_is_active {
+                return Err(invalid("Plan entry requires the active session branch"));
+            }
+
+            let existing: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM plans WHERE task_id = ?1 \
+                     AND state NOT IN ('completed', 'cancelled') LIMIT 1",
+                    params![task_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            if let Some(existing) = existing {
+                return Err(invalid(format!(
+                    "task already has an active Plan: {existing}"
+                )));
+            }
+
+            tx.execute(
+                "INSERT INTO plans (id, task_id, revision, state, projection_path, created_at, updated_at) \
+                 VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?4)",
+                params![plan_id, task_id, projection_path, now],
+            )
+            .map_err(db_err)?;
+            tx.execute(
+                "INSERT INTO queued_messages \
+                 (id, task_id, branch_id, message, state, priority, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'queued', 1000000, ?5, ?5)",
+                params![queue_id, task_id, branch_id, message.trim(), now],
+            )
+            .map_err(db_err)?;
+            let changed = tx
+                .execute(
+                    "UPDATE tasks SET mode = 'plan', updated_at = ?1 \
+                     WHERE id = ?2 AND mode IN ('ask', 'edit', 'auto')",
+                    params![now, task_id],
+                )
+                .map_err(db_err)?;
+            if changed != 1 {
+                return Err(invalid("task mode changed while Plan entry was staged"));
+            }
+            tx.commit().map_err(db_err)?;
+        }
+
+        self.sync_projection_locked(&plan_id)?;
+        self.require_view(task_id, &plan_id)
+    }
+
     pub fn current_for_task(&self, task_id: &str) -> Result<Option<PlanView>, ProductError> {
         let conn = self.db.conn()?;
         let plan_id: Option<String> = conn
@@ -2205,9 +2317,13 @@ fn insert_outline_item<'a>(
         nodes.push(PlanOutlineNode::Item(item));
         return;
     };
+    // Reuse only the currently open (last) section. Reopening a section after a root item or a
+    // sibling produces a new visible section run, so depth-first display order always matches
+    // the persisted ordinal used by execution.
     let index = nodes
-        .iter()
-        .position(|node| matches!(node, PlanOutlineNode::Section { title, .. } if title == section))
+        .last()
+        .filter(|node| matches!(node, PlanOutlineNode::Section { title, .. } if title == section))
+        .map(|_| nodes.len() - 1)
         .unwrap_or_else(|| {
             nodes.push(PlanOutlineNode::Section {
                 title: section.clone(),

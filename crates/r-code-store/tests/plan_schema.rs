@@ -84,6 +84,18 @@ fn normalized_table_sql(conn: &Connection, table: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> bool {
+    let mut statement = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    let found = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(Result::unwrap)
+        .any(|name| name == column);
+    found
+}
+
 fn foreign_keys(conn: &Connection, table: &str) -> Vec<(String, String, String, String)> {
     let mut statement = conn
         .prepare(&format!("PRAGMA foreign_key_list({table})"))
@@ -124,7 +136,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
+fn clean_database_and_schema_18_upgrade_reach_complete_schema_24() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -152,6 +164,11 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
             "clean schema is missing trigger {trigger}"
         );
     }
+    assert!(table_has_column(
+        &clean_conn,
+        "queued_messages",
+        "sort_order"
+    ));
     drop(clean_conn);
     drop(clean);
 
@@ -173,7 +190,13 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
              DROP TABLE plan_item_dependencies;
              DROP TABLE plan_items;
              DROP TABLE plans;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22);",
+             DROP INDEX idx_queued_messages_task_dispatch;
+             DROP INDEX idx_queued_messages_task_branch;
+             ALTER TABLE queued_messages DROP COLUMN sort_order;
+             CREATE INDEX idx_queued_messages_task_branch
+                 ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
+             ALTER TABLE tasks DROP COLUMN goal_active;
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24);",
         )
         .unwrap();
         assert_eq!(schema_version(&conn), 18);
@@ -183,14 +206,12 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
     let upgraded = Database::open(&path).unwrap();
     let conn = upgraded.conn().unwrap();
     assert_eq!(schema_version(&conn), i64::from(LATEST_SCHEMA_VERSION));
-    assert_eq!(
-        TaskRepository::new(&upgraded)
-            .get(&task.id)
-            .unwrap()
-            .unwrap()
-            .goal,
-        "Must survive upgrade"
-    );
+    let upgraded_task = TaskRepository::new(&upgraded)
+        .get(&task.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(upgraded_task.goal, "Must survive upgrade");
+    assert!(!upgraded_task.goal_active);
     let tables = schema_objects(&conn, "table");
     let indexes = schema_objects(&conn, "index");
     let triggers = schema_objects(&conn, "trigger");
@@ -206,10 +227,11 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_22() {
             "upgrade is missing trigger {trigger}"
         );
     }
+    assert!(table_has_column(&conn, "queued_messages", "sort_order"));
 }
 
 #[test]
-fn schema_22_declares_every_check_and_foreign_key_contract() {
+fn schema_24_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 

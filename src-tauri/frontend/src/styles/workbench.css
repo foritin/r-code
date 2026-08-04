@@ -114,7 +114,7 @@
 
 .room-conversation-title span {
   color: var(--fg-faint);
-  font: 10px var(--font-mono);
+  font: var(--text-meta) var(--font-mono);
 }
 
 .room-workbench-toggle,
@@ -187,21 +187,38 @@
   display: flex;
   align-items: center;
   align-self: stretch;
-  gap: 8px;
+  gap: 0;
   min-width: 118px;
   max-width: 220px;
   flex: 0 1 190px;
-  padding: 0 5px 0 10px;
+  padding: 0 5px 0 0;
   border-bottom: 2px solid transparent;
   color: var(--fg-muted);
+}
+
+.workbench-tab:hover {
+  background: var(--bg-chip);
+  color: var(--fg);
+}
+
+.workbench-tab-select {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+  padding: 0 5px 0 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
 }
 
-.workbench-tab:hover,
-.workbench-tab:focus-visible {
-  background: var(--bg-chip);
-  color: var(--fg);
-  outline: none;
+.workbench-tab-select:focus-visible {
+  border-radius: 4px;
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .workbench-active-tab {
@@ -221,16 +238,16 @@
   background: var(--bg-chip);
 }
 
-.workbench-tab > svg {
+.workbench-tab-select > svg {
   flex: none;
   color: var(--fg-faint);
 }
 
-.workbench-active-tab > svg {
+.workbench-active-tab .workbench-tab-select > svg {
   color: var(--accent);
 }
 
-.workbench-tab strong {
+.workbench-tab-select strong {
   min-width: 0;
   overflow: hidden;
   flex: 1;
@@ -261,7 +278,7 @@
   border: 1px solid var(--edge-accent);
   border-radius: 999px;
   color: var(--accent);
-  font: 10px var(--font-mono);
+  font: var(--text-meta) var(--font-mono);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -299,7 +316,7 @@
 
 .workbench-launcher-intro > span {
   color: var(--accent);
-  font: 10px var(--font-mono);
+  font: var(--text-meta) var(--font-mono);
   letter-spacing: .08em;
   text-transform: uppercase;
 }
@@ -380,7 +397,7 @@
 .workbench-launcher-row small {
   overflow: hidden;
   color: var(--fg-faint);
-  font-size: 10px;
+  font-size: var(--text-meta);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -452,7 +469,7 @@
 .workbench-review-switch span {
   margin-left: 3px;
   color: inherit;
-  font: 10px var(--font-mono);
+  font: var(--text-meta) var(--font-mono);
 }
 
 .workbench-review-rail {
@@ -476,7 +493,7 @@
   background: transparent;
   color: var(--fg-muted);
   cursor: pointer;
-  font-size: 10px;
+  font-size: var(--text-meta);
   writing-mode: vertical-rl;
 }
 

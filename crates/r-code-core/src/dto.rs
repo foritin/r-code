@@ -43,6 +43,12 @@ pub struct Task {
     pub title: String,
     /// 用户输入的目标描述
     pub goal: String,
+    /// 用户是否显式启用了可持续执行、编辑、停止和删除的 Goal。
+    ///
+    /// 普通新对话也会把首条任务描述保存在 `goal` 中，供标题回退与 Plan 上下文使用；
+    /// 只有该标记为 true 时，前端才展示 Goal 生命周期控件。
+    #[serde(default)]
+    pub goal_active: bool,
     /// 交互模式
     pub mode: TaskMode,
     /// 任务状态
@@ -73,6 +79,7 @@ impl Task {
             agent_engine: AgentEngine::RCode,
             title: title.into(),
             goal: goal.into(),
+            goal_active: false,
             mode,
             state: TaskState::Idle,
             worktree_path: None,
@@ -115,16 +122,17 @@ impl AgentEngine {
     }
 }
 
-/// 任务交互模式。
+/// 持久化的任务运行策略。产品界面把 Ask/Edit/Auto 统一呈现为 Agent，只把 Plan
+/// 作为另一种交互模式；工作区权限和主 Agent 引擎分别独立配置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskMode {
-    /// 只读问答模式
+    /// Agent 的只读策略（兼容旧会话与无写权限任务）。
     #[default]
     Ask,
-    /// 受控写入模式（需审批）
+    /// Agent 的受控写入策略（需审批）。
     Edit,
-    /// 全自动模式（验证通过自动接受）
+    /// Agent 的自动执行策略（也用于已批准 Plan 的实施）。
     Auto,
     /// 只读规划模式；计划批准后由运行时显式切回执行能力。
     Plan,
@@ -1659,7 +1667,13 @@ mod tests {
         assert_eq!(task.workspace_path.as_deref(), Some("/proj"));
         assert_eq!(task.state, TaskState::Idle);
         assert_eq!(task.mode, TaskMode::Ask);
+        assert!(!task.goal_active);
         assert!(task.worktree_path.is_none());
+
+        let mut legacy = serde_json::to_value(&task).unwrap();
+        legacy.as_object_mut().unwrap().remove("goal_active");
+        let restored: Task = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.goal_active);
     }
 
     #[test]

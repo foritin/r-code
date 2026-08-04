@@ -51,6 +51,8 @@ export interface Task {
   agent_engine: TaskAgentEngine;
   title: string;
   goal: string;
+  /** true only after the user explicitly starts a persistent Goal lifecycle. */
+  goal_active: boolean;
   mode: TaskMode;
   state: TaskState;
   worktree_path: string | null;

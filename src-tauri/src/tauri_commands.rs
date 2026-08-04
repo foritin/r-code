@@ -409,6 +409,37 @@ pub async fn cmd_agent_queue_remove(
     r_code_host::commands::agent_queue_remove(&state, &task_id, &queue_id).await
 }
 
+/// 按界面从上到下的顺序重排当前分支尚未分发的消息。
+#[tauri::command]
+pub async fn cmd_agent_queue_reorder(
+    state: State<'_, CommandState>,
+    task_id: String,
+    queue_ids: Vec<String>,
+) -> Result<(), String> {
+    r_code_host::commands::agent_queue_reorder(&state, &task_id, &queue_ids).await
+}
+
+/// 编辑一条尚未分发的队列消息。
+#[tauri::command]
+pub async fn cmd_agent_queue_update(
+    state: State<'_, CommandState>,
+    task_id: String,
+    queue_id: String,
+    message: String,
+) -> Result<(), String> {
+    r_code_host::commands::agent_queue_update(&state, &task_id, &queue_id, &message).await
+}
+
+/// 将点选的队列消息优先引导进当前运行；无法安全注入时保留在队首。
+#[tauri::command]
+pub async fn cmd_agent_queue_steer(
+    state: State<'_, CommandState>,
+    task_id: String,
+    queue_id: String,
+) -> Result<String, String> {
+    r_code_host::commands::agent_queue_steer(&state, &task_id, &queue_id).await
+}
+
 /// 编辑历史用户消息，并创建新分支后重跑。
 #[tauri::command]
 pub async fn cmd_agent_resend(
