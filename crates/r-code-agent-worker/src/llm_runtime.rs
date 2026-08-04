@@ -65,8 +65,8 @@ pub enum DelegationRouterMode {
 /// 完成主回复后是否启动显式、可观察的质量复核。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QualityLoopMode {
-    Off,
     #[default]
+    Off,
     Auto,
     Always,
 }
@@ -132,7 +132,7 @@ impl Default for OrchestrationPolicy {
         Self {
             delegation_router: DelegationRouterMode::Balanced,
             allow_cross_engine_delegation: true,
-            quality_loop: QualityLoopMode::Auto,
+            quality_loop: QualityLoopMode::Off,
             quality_reviewer: QualityReviewer::Auto,
             max_review_rounds: 1,
         }
@@ -290,7 +290,12 @@ host-provided Plan tools to clarify or publish the plan. Do not edit files, run 
 invoke mutating external tools, or delegate work. If a Plan tool requests user input, stop after \
 that call and wait for the runtime to resume you. Publish todos as independently verifiable \
 functional outcomes. Each item description must state its acceptance criteria and dependencies. \
-Do not split items only by file names, directories, or technical layers.",
+Do not split items only by file names, directories, or technical layers. Codex CLI configuration is \
+independent from MCP services. Plan mode intentionally disables subagent delegation even when \
+Codex CLI is installed and authenticated. If the user asks to invoke Codex in Plan mode, explain \
+this runtime boundary and continue planning directly; for that request, do not call `mcp_discover` or `suggest_mcp`, \
+and do not claim Codex is missing or unconfigured. An approved Plan may use the configured Codex \
+collaborator during its later implementation run.",
         );
     }
     prompt
@@ -3152,6 +3157,17 @@ mod tests {
         assert!(prompt.contains("independently verifiable functional outcomes"));
         assert!(prompt.contains("acceptance criteria and dependencies"));
         assert!(prompt.contains("Do not split items only by file names"));
+        assert!(prompt.contains("Codex CLI configuration is independent from MCP services"));
+        assert!(prompt.contains("do not call `mcp_discover` or `suggest_mcp`"));
+        assert!(prompt.contains("Plan mode intentionally disables subagent delegation"));
+    }
+
+    #[test]
+    fn automatic_quality_review_is_opt_in_by_default() {
+        assert_eq!(
+            OrchestrationPolicy::default().quality_loop,
+            QualityLoopMode::Off
+        );
     }
 
     #[tokio::test]
