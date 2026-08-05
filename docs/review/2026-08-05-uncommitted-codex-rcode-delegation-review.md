@@ -1,6 +1,6 @@
 # Code Review：Codex App Server → R-Code 动态子代理委派（修订版）
 
-> **2026-08-06 发布门禁提示**：§1–§13 保留了每一轮审查当时的证据和历史结论，其中的“当前”行号、未修限制和测试数量不再代表最新工作树。功能与发布前门禁结论见 **§14**，首次真实发布与恢复状态见 **§15**。
+> **2026-08-06 发布门禁提示**：§1–§13 保留了每一轮审查当时的证据和历史结论，其中的“当前”行号、未修限制和测试数量不再代表最新工作树。功能与发布前门禁结论见 **§14**，首次真实发布与恢复结果见 **§15**。
 
 - **日期**：2026-08-05
 - **基线**：`835373a`（Merge pull request #5 from foritin/dev）
@@ -762,14 +762,24 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 
 唯一保留边界是：需要真实登录态和可用 Provider 的 Codex CLI ↔ App Server 完整端到端会话尚未纳入无凭据 CI。当前已由 fixture transport、真实进程 shim、handler 纵向测试、持久化测试和 UI 测试覆盖协议与产品边界。它是发布后/有登录环境的运维验收项，不是当前可重现的缺陷。另外，“Known Folder 缺失时提供更友好错误”或“增加专用数据目录覆盖”可作为后续非阻断加固；产品当前未声称支持伪造 portable profile 或未加载 profile 的服务账户。
 
-**发布前候选结论：PASS。** 截至首次打 tag 前，当前工作树无已知 P0/P1 产品阻断，0.3.0 的源码、数据迁移、权限边界、前端交互、Windows 打包与启动冒烟均已通过。真实发布执行中发现的 finalize 工具缺陷与恢复状态另见 §15；本段不再代表 Release 已发布完成。
+**发布前候选结论：PASS。** 截至首次打 tag 前，当前工作树无已知 P0/P1 产品阻断，0.3.0 的源码、数据迁移、权限边界、前端交互、Windows 打包与启动冒烟均已通过。真实发布执行中发现的 finalize 工具缺陷与最终恢复结果另见 §15；本段本身不作为 Release 已发布完成的证据。
 
 ## 15. 首次真实 v0.3.0 发布与 finalize 恢复
 
-首次实际发布使用不可变 annotated tag `v0.3.0`（tag object `166128f9…`，peeled commit `9dd8f286…`）触发 [Release run 31049032394](https://github.com/foritin/r-code/actions/runs/31049032394)。validate、supply-chain、Windows x64、macOS arm64/x64 与 Linux x64 全部成功；唯一失败是 `Publish completed release` 的 updater manifest finalize。Draft Release `365839301` 保留 17 个名称唯一、状态为 uploaded 且非空的构建/签名资产，`targetCommitish` 与 peeled tag commit 一致，始终未公开、未成为 Latest。
+首次实际发布使用不可变 annotated tag `v0.3.0`（tag object `166128f9…`，peeled commit `9dd8f286…`）触发 [Release run 31049032394](https://github.com/foritin/r-code/actions/runs/31049032394)。validate、supply-chain、Windows x64、macOS arm64/x64 与 Linux x64 全部成功；唯一失败是 `Publish completed release` 的 updater manifest finalize。Draft Release `365839301` 保留 17 个名称唯一、状态为 uploaded 且非空的构建/签名资产，`targetCommitish` 与 peeled tag commit 一致；在该失败 run 结束后仍保持非公开、未成为 Latest，直至后续 finalize-only 恢复成功。
 
 根因是 GitHub 对 Draft 资产返回 `releases/download/untagged-<draft-id>/...` 临时 URL。旧生成器直接把该 URL 写入候选 manifest，随后 validator 正确拒绝它不属于 `v0.3.0`，因此 10/10 platform key 全部失败关闭；没有错误 `latest.json` 或半成品 Latest 暴露给用户。修复不放宽 validator，而是把 Release API 记录只作为资产归属证据，再以 repository、immutable tag 和 asset name 生成规范下载 URL。回归用例 `publish-release canonicalizes temporary draft asset URLs` 同时验证临时 URL 被替换、签名仍逐资产匹配、伪造 API 归属继续被拒绝。
 
 恢复入口 `finalize_only=true` 只允许从默认分支 dispatch，并 checkout 该次 dispatch 的精确 SHA；产品验证与 SBOM 继续 checkout 不可变 tag。它跳过四平台重建，但会重新检查 Draft/tag commit/17 个资产/updater `.sig` 内容，再按失败关闭顺序依次执行“生成并验证 manifest → 上传 manifest/SBOM/licenses → 最后公开 Draft”；若中途失败，Release 仍保持非公开 Draft，但已成功上传的元数据资产可能保留供下次 `--clobber` 恢复。恢复模式不依据当前 Secrets 猜测旧资产签名 provenance，而是保守保留 Windows 与 macOS 未完成平台签名警告；同一 tag 的 push、完整重跑与恢复也共享 concurrency group。
 
-**当前发布状态：恢复中。** 不移动、不删除、不重建 `v0.3.0`；只有修复合入 `main`、CI 通过且 finalize-only run 完成 20 项资产、10 个 updater platform key、签名内容与 Latest 状态验收后，才可把 0.3.0 标记为发布完成。
+修复经 [PR #7](https://github.com/foritin/r-code/pull/7) 合入 `main`（`5991e555…`）后，[main CI run 31052880257](https://github.com/foritin/r-code/actions/runs/31052880257) 的格式、Clippy、安全审计、依赖策略、前端与发布元数据、子模块检查、Windows/macOS 全量测试 **8/8 通过**。随后从 `main` 精确 SHA 触发 [finalize-only Release run 31053257874](https://github.com/foritin/r-code/actions/runs/31053257874)：validate 与 supply-chain 成功，四平台 build 按恢复设计跳过，`Publish completed release` 成功。该流程没有移动、删除或重建 `v0.3.0`；远端 annotated tag object 仍为 `166128f9…`，peeled commit 仍为 `9dd8f286…`。
+
+发布后的独立验收结果：
+
+- [R-Code v0.3.0 Release](https://github.com/foritin/r-code/releases/tag/v0.3.0) 已于 `2026-08-05T22:35:22Z` 公开，`isDraft=false`、`isPrerelease=false`，并成为仓库 Latest；`targetCommitish=9dd8f286…`。
+- 资产清单为 **20/20** 个唯一、uploaded、非零资产：保留原 17 个安装包/更新签名，并新增 `latest.json`、CycloneDX SBOM 与第三方许可证清单。
+- `latest.json` 版本为 `0.3.0`，包含 **10/10** 个 updater platform key；全部 URL 固定为 `releases/download/v0.3.0/...`，不含 `untagged-*`。Windows 三个键唯一覆盖 en-US MSI、zh-CN MSI 与 NSIS，其余 macOS/Linux 键也通过逐资产类型校验。
+- 下载线上 `latest.json` 与全部 7 个 `.sig` 后复跑同一严格 validator，错误数为 0；清单中的每份签名与对应上传文件逐字匹配。线上 `latest.json` SHA-256 为 `05c764542141503fd471a79e57ea04d93d7b4eedcd42531bcc0c8c4cb0d74e3d`，与 GitHub 资产 digest 一致。
+- Release 标题和正文明确保留 Windows/macOS 未完成平台代码签名的警告；Tauri updater 资产仍有项目更新密钥签名。未把“更新完整性签名”误报为“平台代码签名”。
+
+**当前发布状态：PASS，v0.3.0 已完成发布。** 源码、主分支 CI、跨平台构建、Windows 本机打包/启动冒烟、供应链披露、线上资产与 updater manifest 均有闭环证据。唯一保留的非阻断验证边界仍是 §14.5 所述的真实登录 Codex CLI + 可用 Provider 完整 E2E；当前没有已知 P0/P1 发布阻断。
