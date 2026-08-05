@@ -302,7 +302,9 @@ jobs:
           # after every platform has succeeded, so a partial release is never latest.
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: true
+          # Each matrix job uploads only its updater payload and signature. The single finalize
+          # job builds latest.json after all platforms finish, avoiding concurrent read/overwrite.
+          uploadUpdaterJson: false
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
 
@@ -328,7 +330,7 @@ jobs:
           generateReleaseNotes: true
           releaseDraft: true
           prerelease: ${{ contains(env.RELEASE_TAG, '-unsigned.') }}
-          uploadUpdaterJson: true
+          uploadUpdaterJson: false
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
 
@@ -421,6 +423,15 @@ jobs:
       WINDOWS_SIGNED: ${{ needs.validate.outputs.windows_signed }}
       APPLE_SIGNED: ${{ needs.validate.outputs.apple_signed }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - uses: actions/download-artifact@v4
         with:
           name: r-code-supply-chain
@@ -429,24 +440,40 @@ jobs:
       - name: Verify updater manifest and publish draft
         run: |
           mkdir -p "$RUNNER_TEMP/release-manifest"
-          gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP/release-manifest"
+          gh release download "$RELEASE_TAG" --pattern '*.sig' --dir "$RUNNER_TEMP/release-manifest"
+          gh release view "$RELEASE_TAG" --json assets > "$RUNNER_TEMP/release-manifest/release.json"
+          node --input-type=module -e '
+            import fs from "node:fs";
+            import { parseReleaseTag } from "./scripts/release.mjs";
+            import { createUpdaterManifest, validateUpdaterManifest } from "./scripts/publish-release.mjs";
+            const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+            const tagInfo = parseReleaseTag(process.env.RELEASE_TAG);
+            if (!tagInfo) throw new Error(`invalid release tag ${process.env.RELEASE_TAG}`);
+            const manifest = createUpdaterManifest({
+              version: tagInfo.version,
+              tag: process.env.RELEASE_TAG,
+              repository: process.env.GH_REPO,
+              releaseAssets: release.assets,
+              signatureDirectory: process.argv[3],
+            });
+            const problems = validateUpdaterManifest(
+              manifest,
+              process.env.RELEASE_TAG,
+              tagInfo,
+              process.env.GH_REPO,
+              release.assets,
+              process.argv[3],
+            );
+            if (problems.length > 0) {
+              throw new Error(`updater manifest validation failed:\n- ${problems.join("\n- ")}`);
+            }
+            fs.writeFileSync(process.argv[1], `${JSON.stringify(manifest, null, 2)}\n`);
+          ' "$RUNNER_TEMP/release-manifest/latest.json" "$RUNNER_TEMP/release-manifest/release.json" "$RUNNER_TEMP/release-manifest"
           gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/release-manifest/latest.json" \
             "$RUNNER_TEMP/supply-chain/r-code-sbom.cdx.json" \
             "$RUNNER_TEMP/supply-chain/THIRD_PARTY_LICENSES.md" \
             --clobber
-          node -e '
-            const fs = require("node:fs");
-            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            const expectedVersion = process.env.RELEASE_TAG
-              .replace(/^v/, "")
-              .replace(/-unsigned\.\d+$/, "");
-            if (manifest.version !== expectedVersion && manifest.version !== process.env.RELEASE_TAG) {
-              throw new Error(`latest.json version ${manifest.version} does not match ${process.env.RELEASE_TAG}`);
-            }
-            for (const platform of ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"]) {
-              if (!manifest.platforms?.[platform]) throw new Error(`latest.json is missing ${platform}`);
-            }
-          ' "$RUNNER_TEMP/release-manifest/latest.json"
           if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
             notes_file="$RUNNER_TEMP/release-manifest/unsigned-release-notes.md"
             existing_body="$(gh release view "$RELEASE_TAG" --json body --jq .body)"

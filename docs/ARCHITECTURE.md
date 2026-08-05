@@ -24,8 +24,10 @@ flowchart LR
     Host --> SQLite["SQLite 产品状态"]
     Host --> JSONL["JSONL 会话事件"]
     Host --> Blobs["内容寻址 Blob"]
-    Bridge -.->|"可选外部进程"| Codex["Codex CLI"]
-    Codex <-->|"stdio JSON-RPC"| CodexMCP["r-code-host mcp-server"]
+    Host <-->|"App Server JSON-RPC\n审批 / steer / 动态工具"| Codex["Codex CLI App Server"]
+    Codex <-->|"模型请求"| CodexProvider["Codex Provider"]
+    Codex -.->|"可选 legacy 全局集成"| CodexMCP["r-code-host mcp-server"]
+    Codex -.->|"rcode_delegate_subagent 回调"| Host
 ```
 
 ### 1.1 运行边界
@@ -53,7 +55,7 @@ flowchart LR
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
 4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库。
-5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 20。
+5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 25。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
 7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
 8. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
@@ -259,9 +261,9 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - **R-Code**：复用当前 Provider，使用独立消息历史和受限工具集，不递归委派。
 - **Codex**：通过 Host bridge 拉起/连接 Codex CLI，可使用 exec JSON 事件或 MCP 协作路径。
 
-默认访问模式是 `read_only`；只有父 Agent 明确委派 `full_access` 才能使用写入和命令工具。每个子 Run 有稳定 ID、独立 JSONL 事件和 SQLite `agent_runs` 行，父上下文只接收受长度限制的总结，避免整段 transcript 膨胀主会话。
+原生 R-Code 主 Agent 发起委派时默认访问模式是 `read_only`，只有父 Agent 明确请求且父运行权限上限允许时才会获得写入和命令能力。Codex App Server 的动态委派默认是 `inherit`：只读父运行下发只读，审批类父运行下发“工具可见但变更需审批”，完全访问父运行才可下发完全访问。每个子 Run 有稳定 ID、独立 JSONL 事件和 SQLite `agent_runs` 行；schema 25 的 `require_approval` 与 `access_mode` 共同保存 UI 展示的“只读 / 需审批 / 完全访问”，重启后不靠文案反推权限。父上下文只接收受长度限制的总结，避免整段 transcript 膨胀主会话。
 
-Codex 集成包含 CLI 探测、安装、登录状态、模型偏好、MCP 注册和权限映射。CLI 和 MCP 都是可选能力：不可用时原生 R-Code 路径仍应工作，路由策略需要给出可解释的降级原因。
+Codex 集成包含 CLI 探测、安装、登录状态、模型偏好、App Server、MCP 注册和权限映射。动态同树委派要求实际选中的 Codex CLI 不低于 `0.145.0` 且 R-Code Provider 可初始化；不满足时只隐藏动态工具并产生可见降级原因，Codex 主运行与原生 R-Code 路径仍应工作。宿主只消费 App Server 的公开 reasoning summary，raw reasoning content/delta 不进入 UI 或存储。
 
 ## 8. Tool Gateway、安全与权限
 
@@ -295,7 +297,7 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 | `risk_based` | 自动 | 自动 | 询问 | 询问 | 拒绝 |
 | `full_access` | 自动 | 自动 | 自动 | 自动 | 拒绝 |
 
-显式 deny rule 在所有模式下生效。`request_approval` 不接受既有 allow rule 绕过其严格承诺；R3/R4 不能保存为 standing allow。等待审批最长 10 分钟，并且可被 Run 中止信号打断。
+显式 deny rule 在所有模式下生效。`AllowAlways` 只对同一任务、工具以及该调用提供的精确目标生效，并以批准时风险作为上限；它可以避免 `request_approval` 对同范围调用重复询问，但不能放行其他目标或更高风险。App Server profile 请求总会生成完整请求指纹，不会落成无目标通配规则。R3/R4 不能保存为 standing allow。等待审批最长 10 分钟，并且可被 Run 中止信号打断。
 
 ### 8.3 密钥与日志
 
@@ -327,7 +329,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作；schema 22 为可执行 Plan 叶子事项增加展示层级路径，支持稳定的 1、1.1、1.2 编号而不让父标题进入执行状态机；schema 23 以 `tasks.goal_active` 区分普通首条任务描述和用户显式启用的 Goal 生命周期，旧会话升级后默认不启用 Goal；schema 24 为 `queued_messages` 增加持久排序位置，确保界面从上到下的顺序就是后端实际出队顺序。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作；schema 22 为可执行 Plan 叶子事项增加展示层级路径，支持稳定的 1、1.1、1.2 编号而不让父标题进入执行状态机；schema 23 以 `tasks.goal_active` 区分普通首条任务描述和用户显式启用的 Goal 生命周期，旧会话升级后默认不启用 Goal；schema 24 为 `queued_messages` 增加持久排序位置，确保界面从上到下的顺序就是后端实际出队顺序；schema 25 为 `agent_runs` 增加受约束的 `require_approval` 审计位，和 `access_mode` 一起持久化子代理实际权限三态。
 
 新增 migration 时必须：
 
@@ -425,20 +427,56 @@ Provider 非敏感配置保存在应用 config 目录，密钥在系统凭据库
 4. 轮询使用 `usePoll`，流式 Run 使用 `onAgentEvent`，卸载时取消 listener。
 5. 同时验证深色/亮色、缩放、键盘导航和失焦恢复。
 
+### 13.4 Codex App Server 同树委派
+
+Codex 主 Agent 通过 App Server 动态工具 `rcode_delegate_subagent` 把有界任务委派给 R-Code 子代理：
+
+- **同树语义**：child 复用当前 task、parent run 与宿主生成的 child run，不调用 `task_create`；一次性 Codex 子代理不获得反向委派入口，R-Code child 也禁用递归委派。
+- **路由不变量**：hosted App Server 只覆盖并禁用 legacy `mcp_servers.r-code`，旧全局 `r_code_delegate*` 不进入该运行的工具目录；用户其他 Codex MCP 保持可用。提示词说明链接与委派格式，但不承担这条硬隔离。
+- **能力协商**：动态工具要求实际启动的 Codex CLI ≥ `0.145.0` 且 R-Code Provider 已就绪；否则隐藏该工具并让 Codex 主任务继续，不能把能力缺失误报成整轮失败。
+- **权限模型**：`inherit` 继承父预设——父为完全访问时 child 全权；父为只读时 child 保持只读；审批类父运行的 child 使用 `ToolPolicy::RequestApproval`，写入与命令经 Gateway 审批。显式 `read_only` 永不升级；Plan/严格只读不暴露 generic `mcp_call`，审批模式下 generic MCP 固定为 R2，不信任第三方 `readOnlyHint`。
+- **生命周期**：stdout 读泵与请求处理解耦，审批和动态委派以 `FuturesUnordered` 并发 dispatch；child 任务使用 abort-on-drop 句柄，取消会贯穿 Provider 建连、活跃工具、命令进程树与 MCP request。父收尾只 `drain_children_for_parent`，等待上限为 20 秒；超时后按该父运行的后代集合幂等关闭 AgentRun 和 running ToolCall，不影响同一 Task 的其他父运行。
+- **协议边界**：JSONL 逐行限长，setup 与读写泵可取消并有界回收；未知 server request 返回 JSON-RPC error；steer 应答仅匹配无 `method` 的响应帧。`permissions/requestApproval` 返回协议规定的 profile，并把文件路径 canonicalize 后与物理工作区求交，拒绝 traversal/符号链接逃逸；standing target 使用完整请求指纹。
+- **可观察推理**：只消费 App Server 公开的 reasoning summary 并本地持久化；raw reasoning content/delta 不进入 UI 或存储。动态 child 的可见消息、工具事件、审计和生命周期仍按普通子代理持久化。
+
+```mermaid
+sequenceDiagram
+    participant UI as R-Code UI
+    participant Host as R-Code Host
+    participant Codex as Codex App Server
+    participant CP as Codex Provider
+    participant RP as R-Code Provider
+    participant GW as Tool Gateway
+
+    UI->>Host: 启动 Codex 主 Run
+    Host->>Codex: thread/start + turn/start
+    Codex->>CP: 主任务上下文
+    CP-->>Codex: 调用 rcode_delegate_subagent
+    Codex->>Host: item/tool/call（有界 child goal）
+    Host->>RP: 创建同 task / parent run 的 child
+    RP->>GW: 经父权限上限执行工具
+    GW-->>RP: 审批与审计后的结果
+    RP-->>Host: 有界 child summary
+    Host-->>Codex: dynamic tool result
+    Codex->>CP: summary 进入主任务上下文
+    CP-->>Codex: 最终回复
+    Codex-->>Host: 最终回复 + 公开 reasoning summary
+    Host-->>UI: 可见时间线事件
+```
+
 ## 14. 测试与质量门
 
 本地最小验证：
 
 ```bash
-node --test scripts/release.test.mjs
+node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cd src-tauri/frontend
 npm ci
-npm run test:dev-server
-npm run test:popover
+npm test
 npm run build
 ```
 
@@ -451,7 +489,7 @@ CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows �
 - 后台 `hermes_ipc` server 是兼容路径，只有少量 handler，不能视为完整远程控制 API。
 - SQLite migration 只前滚；发布 schema 后必须把兼容性纳入回退方案。
 - 发布矩阵当前覆盖 Windows x64、macOS Apple Silicon/Intel、Linux x64；新增架构需要同时更新构建、updater manifest 和文档。
-- updater 签名与操作系统代码签名是两套机制。Release 对 Apple notarization 和 Windows Authenticode 均采用缺少 Secrets 即失败的门禁，详见 [RELEASING.md](./RELEASING.md)。
+- updater 完整性签名与操作系统代码签名是两套机制。`PAT_TOKEN` 与 Tauri updater 私钥是硬门禁；缺少 Apple Developer ID/notarization 或 Windows Authenticode Secrets 时，稳定版会按平台降级并在 Release 显著警告，而不是伪装成已签名或静默失败，详见 [RELEASING.md](./RELEASING.md)。
 - Release 会从锁定的 Cargo/npm 依赖图生成 CycloneDX SBOM 和第三方许可证清单；缺失许可证声明时发布失败。
 
 ## 16. 代码导航索引

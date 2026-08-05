@@ -16,6 +16,34 @@ import type {
 } from "../../lib/types";
 import { toolTarget } from "../../lib/format";
 
+const CODEX_REASONING_SUMMARY_EVENT = "codex_reasoning_summary";
+// 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。
+const CODEX_REASONING_SUMMARY_PREFIX = "Codex 思考摘要：";
+
+/** 解析 reasoning summary 事件（F15）：新格式为带 kind 的 JSON；旧格式按前缀回退。 */
+export function codexReasoningSummary(detail: string): string | null {
+  const trimmed = detail.trim();
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { kind?: unknown; text?: unknown };
+      if (
+        parsed.kind === "codex_reasoning_summary" &&
+        typeof parsed.text === "string" &&
+        parsed.text.trim().length > 0
+      ) {
+        return parsed.text.trim();
+      }
+    } catch {
+      // 不是 JSON 就按旧格式回退。
+    }
+  }
+  if (trimmed.startsWith(CODEX_REASONING_SUMMARY_PREFIX)) {
+    const rest = trimmed.slice(CODEX_REASONING_SUMMARY_PREFIX.length).trim();
+    return rest.length > 0 ? rest : null;
+  }
+  return null;
+}
+
 export interface PlanStep {
   description: string;
   completed: boolean;
@@ -365,6 +393,17 @@ export function buildTimeline(
             label: "上下文已自动压缩",
             detail: contextCompactionDetail(m.output_json),
           });
+        } else if (m.text === CODEX_REASONING_SUMMARY_EVENT) {
+          const detail = codexReasoningSummaryDetail(m.output_json);
+          if (detail) {
+            items.push({
+              kind: "context",
+              id: m.id ? `codex-reasoning-${m.id}` : nid("codex-reasoning"),
+              t: lastT,
+              label: "Codex 思考摘要",
+              detail,
+            });
+          }
         } else if (m.text && isInternalTimelineProtocol(m.text)) {
           // 子代理生命周期由 AgentRun 运行树呈现。协议名和载荷只属于审计视图，
           // 普通对话里不能再出现 subagent_lifecycle 等内部记录。
@@ -622,6 +661,18 @@ function contextCompactionDetail(value: string | null | undefined): string | nul
   }
 }
 
+function codexReasoningSummaryDetail(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const payload = JSON.parse(value) as Record<string, unknown>;
+    return typeof payload.text === "string" && payload.text.trim()
+      ? payload.text.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function orderedUniqueRuns(runs: AgentRun[]): AgentRun[] {
   const seen = new Set<string>();
   return [...runs]
@@ -735,7 +786,19 @@ export function applyAgentEvent(
       if (ev.phase !== "streaming" && ev.phase !== "steer_accepted") {
         finishStreamingAgents(items);
       }
-      // 活动条消费该事件；时间线不展示内部活动或推理文本。
+      if (ev.phase === "requesting" && ev.detail) {
+        const summary = codexReasoningSummary(ev.detail);
+        if (summary) {
+          items.push({
+            kind: "context",
+            id: nid(),
+            t: nowSec,
+            label: "Codex 思考摘要",
+            detail: summary,
+          });
+        }
+      }
+      // 其余活动由顶部活动条消费，不进入时间线。
       return items;
     }
     case "scoped":

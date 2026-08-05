@@ -299,6 +299,8 @@ export interface AgentRun {
   ended_at: string | null;
   usage_json: string | null;
   access_mode: SubagentAccessMode;
+  /** 旧运行可能缺失；仅 full_access + true 表示仍需宿主审批。 */
+  require_approval?: boolean;
   routing_reason: string | null;
 }
 
@@ -357,6 +359,7 @@ export interface PermissionRequest {
   tool_name: string;
   risk_level: RiskLevel;
   input_summary: string;
+  target?: string | null;
   decision: PermissionDecision;
   created_at: string;
   decided_at: string | null;
@@ -728,6 +731,8 @@ export interface AgentEventScope {
   runtime_kind?: AgentRunRuntimeKind;
   model?: string;
   access_mode?: SubagentAccessMode;
+  /** M7：FullAccess + require_approval = 审批模式（inherit 自非全权父运行）。 */
+  require_approval?: boolean;
   routing_reason?: string;
 }
 

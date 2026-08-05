@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(windows)]
@@ -39,10 +39,11 @@ use hermes_core::{
 };
 use hermes_store::{SessionStore, DURABLE_USER_MESSAGE_CANCEL_EVENT, DURABLE_USER_MESSAGE_EVENT};
 use r_code_agent_worker::{
-    AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
-    CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode, MockAgentRuntime,
-    OrchestrationPolicy, QualityLoopMode as RuntimeQualityLoopMode,
-    QualityReviewer as RuntimeQualityReviewer, SteerResult,
+    native_parent_subagent_access, AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome,
+    CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode,
+    MockAgentRuntime, OrchestrationPolicy, QualityLoopMode as RuntimeQualityLoopMode,
+    QualityReviewer as RuntimeQualityReviewer, RCodeSubagentRequest, RCodeSubagentRunner,
+    SteerResult,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEngine, AgentEvent, AgentEventScope, AgentKind, AgentRun,
@@ -65,7 +66,7 @@ use r_code_core::{
     MemoryEntry, MemoryReviewSettingsUpdate, MemoryReviewSettingsView, MemorySnapshot,
     MemorySnapshotLoadOutcome,
 };
-use r_code_gateway::permission::{PermissionCheckResult, PermissionEngine};
+use r_code_gateway::permission::{PermissionCancellation, PermissionCheckResult, PermissionEngine};
 use r_code_store::repositories::VERIFICATION_PLACEHOLDER_MODEL;
 use r_code_store::review::ReviewAction;
 use r_code_store::{
@@ -394,7 +395,9 @@ enum ExternalSteerOutcome {
 }
 
 impl ExternalAgentRegistry {
-    const MAX_CODEX_EXEC_SUBAGENTS_PER_TASK: usize = 3;
+    // One slot is occupied by the external main run. The remaining three match the native
+    // supervisor's child concurrency ceiling and also make those children individually cancellable.
+    const MAX_ACTIVE_EXTERNAL_RUNS_PER_TASK: usize = 4;
 
     async fn reserve(
         &self,
@@ -407,10 +410,10 @@ impl ExternalAgentRegistry {
             .values()
             .filter(|handle| handle.task_id == task_id)
             .count();
-        if active_for_task >= Self::MAX_CODEX_EXEC_SUBAGENTS_PER_TASK {
+        if active_for_task >= Self::MAX_ACTIVE_EXTERNAL_RUNS_PER_TASK {
             return Err(format!(
-                "当前任务最多同时运行 {} 个 Codex 子代理",
-                Self::MAX_CODEX_EXEC_SUBAGENTS_PER_TASK
+                "当前任务最多同时运行 {} 个外部主/子代理",
+                Self::MAX_ACTIVE_EXTERNAL_RUNS_PER_TASK
             ));
         }
         let cancellation = CancellationToken::new();
@@ -482,6 +485,24 @@ impl ExternalAgentRegistry {
 
     async fn remove(&self, run_id: &str) {
         self.runs.lock().await.remove(run_id);
+    }
+
+    /// 清空某个父运行的外部子运行（含取消与移除），但保留父运行自身以及同一
+    /// Task 下其他父运行的子项。按 task 全量 drain 会在一个 Codex 主运行收尾时
+    /// 误取消用户并行启动的其他外部运行。
+    async fn drain_children_for_parent(&self, task_id: &str, parent_run_id: &str) {
+        let mut runs = self.runs.lock().await;
+        runs.retain(|run_id, handle| {
+            if handle.task_id == task_id
+                && handle.parent_run_id == parent_run_id
+                && run_id != parent_run_id
+            {
+                handle.cancellation.cancel();
+                false
+            } else {
+                true
+            }
+        });
     }
 
     async fn cancel_run_for_task(&self, task_id: &str, run_id: &str) -> bool {
@@ -568,6 +589,10 @@ pub struct AgentBridge {
     sessions: HashMap<String, BridgeSession>,
     /// 单个任务一次只执行一个 run，避免同一会话的流事件彼此混淆。
     active: Option<ActiveRun>,
+    /// A naturally completed native run remains active while its final history/snapshot is being
+    /// persisted.  Marking that short phase explicitly closes the launch boundary for late
+    /// delegates and steers without allowing a new run to reuse the runtime too early.
+    closing_run_id: Option<String>,
     /// 真实模式开关；由 runtime pool 共享，生产启动后对现有/新建 bridge 同时生效。
     real_mode: Arc<AtomicBool>,
     /// 当前真实 runtime 的配置指纹（provider|base_url|model|api_key）
@@ -585,6 +610,7 @@ impl AgentBridge {
             kind: AgentRuntimeKind::Mock(MockAgentRuntime::new()),
             sessions: HashMap::new(),
             active: None,
+            closing_run_id: None,
             real_mode,
             fingerprint: None,
         }
@@ -2128,6 +2154,73 @@ fn task_has_active_main_run(
         .map_err(err_str)
 }
 
+/// Revalidate an explicit external-child launch while holding the task-local bridge lock.
+/// `agent_abort` uses the same lock and publishes `Interrupted` before cancelling runtimes, so
+/// either this check/reservation wins first (and abort will see the new child) or the stop wins
+/// first (and delegation is rejected). There is no post-stop reservation gap.
+fn active_native_parent_for_delegation(
+    db: &Database,
+    task_id: &str,
+    branch_id: &str,
+    expected_parent_id: &str,
+    bridge: &AgentBridge,
+) -> Result<AgentRun, String> {
+    let task = TaskRepository::new(db)
+        .get(task_id)
+        .map_err(err_str)?
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if !matches!(task.state, TaskState::Exploring | TaskState::InProgress) {
+        return Err("当前主运行已经停止，不能再启动新的外部子代理".to_string());
+    }
+    if bridge.closing_run_id.as_deref() == Some(expected_parent_id) {
+        return Err("当前主运行正在收尾，不能再启动新的外部子代理".to_string());
+    }
+    let active = bridge
+        .active
+        .as_ref()
+        .filter(|active| {
+            active.task_id == task_id
+                && active.branch_id == branch_id
+                && active.run_id == expected_parent_id
+        })
+        .ok_or_else(|| "当前主运行已经结束或已被替换".to_string())?;
+    let parent = AgentRunRepository::new(db)
+        .get(&active.run_id)
+        .map_err(err_str)?
+        .filter(|run| {
+            run.ended_at.is_none()
+                && run.agent_kind == AgentKind::Main
+                && run.runtime_kind == AgentRunRuntimeKind::Native
+        })
+        .ok_or_else(|| "当前原生主运行已经结束，不能再委派外部子代理".to_string())?;
+    Ok(parent)
+}
+
+/// Seal a drained native parent while holding its task-local bridge lock.
+///
+/// Explicit delegation takes this same lock through validation and registry reservation. Thus a
+/// child either reserves before this no-child check (and keeps the drain loop alive), or observes
+/// `closing_run_id` afterwards and is rejected. There is no ended-parent ghost-child window.
+async fn try_mark_native_parent_closing(
+    bridge: &mut AgentBridge,
+    external_agents: &ExternalAgentRegistry,
+    active: &ActiveRun,
+) -> bool {
+    if bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()) {
+        return true;
+    }
+    if bridge
+        .active
+        .as_ref()
+        .is_none_or(|current| current.run_id != active.run_id)
+        || external_agents.has_for_parent_run(&active.run_id).await
+    {
+        return false;
+    }
+    bridge.closing_run_id = Some(active.run_id.clone());
+    true
+}
+
 /// 从当前分支末端创建一条新的活跃分支；源分支和完整 JSONL 保持只读。
 pub async fn task_fork_context(
     state: &CommandState,
@@ -2549,7 +2642,7 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// 将既有会话附加到已打开的工作区，或移除其工作区作用域。
+/// 将空闲会话附加到已打开的工作区，或移除其工作区作用域。
 ///
 /// 工作区一旦附加即可公开受 PathGuard 限制的本地工具；工具调用的审批策略来自
 /// 工作区持久化的项目权限模式。
@@ -2582,6 +2675,11 @@ pub async fn task_set_workspace(
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能再修改工作区".to_string());
     }
+    if matches!(task.state, TaskState::Exploring | TaskState::InProgress)
+        || task_has_active_main_run(&state.db, task_id, &bridge)?
+    {
+        return Err("当前运行尚未结束，不能在执行期间切换工作区".to_string());
+    }
     repo.set_workspace_path(task_id, path.as_deref())
         .map_err(err_str)?;
     let task = repo
@@ -2589,7 +2687,7 @@ pub async fn task_set_workspace(
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found after workspace update: {task_id}"))?;
 
-    // 已经建立的 runtime session 保留对话历史，但其下一轮运行立即采用新作用域。
+    // 已经建立的 runtime session 保留对话历史；空闲时切换后下一轮采用新作用域。
     if let Some(session) = bridge.sessions.get(task_id).cloned() {
         bridge
             .kind
@@ -3644,9 +3742,11 @@ fn subagent_storage_id(parent_storage_id: &str, subagent_id: &str) -> String {
 
 /// 与内置网关工具风险分级保持一致；内部编排工具不接触工作区，按 R0 记录。
 fn observed_tool_risk(tool_name: &str) -> RiskLevel {
+    // F11：观察侧风险估算，尽量与 Gateway 实际判定一致（bash/edit/mcp 写类
+    // 工具都是 R2；真实判定以 Gateway 审计账本为准，这里只服务持久化展示）。
     match tool_name {
-        "read_file" => RiskLevel::R1,
-        "apply_patch" | "create_file" | "delete_file" => RiskLevel::R2,
+        "read_file" | "web_fetch" => RiskLevel::R1,
+        "apply_patch" | "create_file" | "delete_file" | "bash" | "edit" | "shell" => RiskLevel::R2,
         _ => RiskLevel::R0,
     }
 }
@@ -3702,30 +3802,71 @@ fn ensure_subagent_run(
         .ok_or_else(|| ProductError::Other(format!("子代理 {} 缺少父运行 ID", scope.run_id)))?;
     // 正常事件顺序会先落父代理的 delegate_task ToolCall；这里补一个最小审计锚点，
     // 以容忍 IPC 重放或多发送端调度导致的生命周期先到，避免外键阻断整棵运行树。
-    if let Some(delegated_by_tool_call_id) = &scope.delegated_by_tool_call_id {
-        let mut delegation_call = ToolCall::new(
-            &parent_run_id,
-            task_id,
-            "delegate_task",
-            serde_json::json!({ "recovered": true }).to_string(),
-            RiskLevel::R0,
-        );
-        delegation_call.id = delegated_by_tool_call_id.clone();
-        ToolCallRepository::new(db).create_if_absent(&delegation_call)?;
-    }
+    // 返回 child run 应引用的 delegated_by_tool_call_id：
+    // - 原生路径：真实 delegate_task 记录已存在（call_id 即主键），直接引用；
+    // - 外部委派路径：外部 callId 无全局唯一契约（F10），改用宿主派生 id 作
+    //   锚点主键（外部 id 存锚点 input），child run 引用该锚点以满足外键。
+    let delegated_by_tool_call_id = if let Some(external_call_id) = &scope.delegated_by_tool_call_id
+    {
+        let existing = {
+            let conn = db.conn()?;
+            // F10：外部 callId 只在"当前父 run 下已存在真实记录"时才复用——
+            // 跨任务/run 的全局匹配会让 child 审计挂到别的任务的 tool_calls 行上。
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM tool_calls WHERE id = ?1 AND run_id = ?2",
+                    rusqlite::params![external_call_id, parent_run_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| ProductError::DatabaseError(format!("database error: {error}")))?;
+            count > 0
+        };
+        if existing {
+            Some(external_call_id.clone())
+        } else {
+            let anchor_id = format!("delegate:{}", scope.run_id);
+            let mut delegation_call = ToolCall::new(
+                &parent_run_id,
+                task_id,
+                "delegate_task",
+                serde_json::json!({
+                    "recovered": true,
+                    // F10：外部 callId 只作展示/关联，不作数据库主键。
+                    "external_call_id": external_call_id,
+                    // F11：委派 assignment 审计——标签（goal 的有界摘要）与有效权限档位。
+                    "label": scope.agent_label,
+                    "access_mode": scope.access_mode,
+                    // M7：FullAccess + require_approval = 审批模式（effective access）。
+                    "require_approval": scope.require_approval,
+                })
+                .to_string(),
+                RiskLevel::R0,
+            );
+            // 宿主生成的子代理 run_id（UUID）派生唯一主键。
+            delegation_call.id = anchor_id.clone();
+            ToolCallRepository::new(db).create_if_absent(&delegation_call)?;
+            Some(anchor_id)
+        }
+    } else {
+        None
+    };
     let mut run = AgentRun::new_subagent_for_branch(
         task_id,
         branch_id,
-        parent_run_id,
+        &parent_run_id,
         scope
             .model
             .clone()
             .unwrap_or_else(|| "subagent".to_string()),
         scope.agent_label.clone(),
-        scope.delegated_by_tool_call_id.clone(),
+        delegated_by_tool_call_id,
     );
     run.id = scope.run_id.clone();
     run.runtime_kind = scope.runtime_kind;
+    run.access_mode = scope.access_mode;
+    run.require_approval =
+        scope.access_mode == SubagentAccessMode::FullAccess && scope.require_approval;
+    run.routing_reason = scope.routing_reason.clone();
     repo.create(&run)?;
     Ok(true)
 }
@@ -4003,26 +4144,30 @@ async fn persist_runtime_event(
                     ),
                     _ => {}
                 }
-                let repo = AgentRunRepository::new(db);
-                let already_finished = repo
-                    .get(&scope.run_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|run| run.ended_at.is_some());
-                if !already_finished {
-                    let review_state = match state {
-                        SubagentState::Completed => ReviewState::Answered,
-                        SubagentState::Failed => ReviewState::Failed,
-                        SubagentState::Cancelled => ReviewState::Aborted,
-                        _ => unreachable!("已过滤为子代理终态"),
-                    };
-                    let _ = repo.set_summary(&scope.run_id, detail.as_deref());
-                    let _ = repo.update_review_state(&scope.run_id, review_state);
-                    let _ = TaskEventStore::new(db).append_for_branch(
+                let review_state = match state {
+                    SubagentState::Completed => ReviewState::Answered,
+                    SubagentState::Failed => ReviewState::Failed,
+                    SubagentState::Cancelled => ReviewState::Aborted,
+                    _ => unreachable!("已过滤为子代理终态"),
+                };
+                match AgentRunRepository::new(db).finish_if_active(
+                    &scope.run_id,
+                    review_state,
+                    detail.as_deref(),
+                ) {
+                    Ok(true) => {
+                        let _ = TaskEventStore::new(db).append_for_branch(
+                            task_id,
+                            branch_id,
+                            TaskEventType::SubagentFinished,
+                        );
+                    }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(
                         task_id,
-                        branch_id,
-                        TaskEventType::SubagentFinished,
-                    );
+                        child_run_id = %scope.run_id,
+                        "failed to finish subagent run: {error}"
+                    ),
                 }
             }
             // 子日志保存自身生命周期，主日志保存运行树索引；两者都可独立回放。
@@ -4052,7 +4197,8 @@ async fn persist_runtime_event(
         }
         AgentEvent::Activity { phase, detail } => {
             // 主运行活动是易失的 UI 状态；子代理活动需要进入其独立日志，才能在完成后
-            // 仍然打开查看。这里只保存宿主已分类的阶段和受限说明，不保存推理正文。
+            // 仍然打开查看。Codex App Server 明确标为 summary 的公开思考摘要是例外：
+            // 它进入主会话供回放，但原始 reasoning content / delta 永远不会走到这里。
             if let Some(scope) = scope {
                 let _ = session_store
                     .append(
@@ -4067,6 +4213,21 @@ async fn persist_runtime_event(
                         },
                     )
                     .await;
+            } else if *phase == AgentActivityPhase::Requesting {
+                // F15：结构化解析（detail 为带 kind 的 JSON）；兼容已持久化的
+                // 旧前缀格式事件（一次性回退，不参与新事件构造）。
+                let summary = detail.as_deref().and_then(codex_reasoning_summary_text);
+                if let Some(summary) = summary {
+                    let _ = session_store
+                        .append(
+                            &event_storage_id,
+                            SessionEvent::System {
+                                event: CODEX_REASONING_SUMMARY_EVENT.into(),
+                                data: serde_json::json!({ "text": summary }),
+                            },
+                        )
+                        .await;
+                }
             }
         }
         AgentEvent::Scoped { .. } => unreachable!("split_scoped_event 已解包所有作用域"),
@@ -4629,8 +4790,22 @@ pub async fn agent_send_with_mode_and_attachments(
         .await?;
     }
     let active = bridge.active.clone();
+    let active_is_closing = active
+        .as_ref()
+        .is_some_and(|active| bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()));
     if active.is_some() && !attachments.is_empty() {
         return Err("当前运行结束后才能把附件作为新一轮消息发送".to_string());
+    }
+    if active_is_closing && matches!(mode, AgentSendMode::Steer | AgentSendMode::SendNow) {
+        // The provider has already reported completion. Preserve the user's intent durably, but
+        // never inject into or abort the runtime after the drain loop sealed its final history.
+        let priority = if mode == AgentSendMode::SendNow {
+            1_000_000
+        } else {
+            1
+        };
+        enqueue_message(&state.db, task_id, &branch.id, message, priority)?;
+        return Ok(());
     }
 
     match mode {
@@ -4944,8 +5119,14 @@ fn spawn_drain_loop_with_resources(
             } else {
                 empty_streak >= 3
             };
-            if drained && !external_agents.has_for_parent_run(&active.run_id).await {
-                break;
+            if drained {
+                // Natural completion and explicit delegation share this task-local launch
+                // boundary. Keep `active` installed until history capture finishes, but seal the
+                // run before releasing the lock so no child/steer can slip into the cleanup gap.
+                let mut bridge = agent.lock().await;
+                if try_mark_native_parent_closing(&mut bridge, &external_agents, &active).await {
+                    break;
+                }
             }
             // 事件已由 runtime 实时写入通道；以约 25 FPS 排空，在流式文本与工具状态之间
             // 保持可感知的即时性，同时避免 WebView 被每个 token 的 IPC 淹没。
@@ -4969,10 +5150,9 @@ fn spawn_drain_loop_with_resources(
             }
         }
 
-        let (was_aborted, history_snapshot) = {
+        let history_snapshot = {
             let mut bridge = agent.lock().await;
-            let was_aborted = bridge.aborted();
-            let history_snapshot = match bridge
+            match bridge
                 .kind
                 .history_snapshot(&active.runtime_session_id)
                 .await
@@ -4986,15 +5166,7 @@ fn spawn_drain_loop_with_resources(
                     );
                     None
                 }
-            };
-            if bridge
-                .active
-                .as_ref()
-                .is_some_and(|current| current.run_id == active.run_id)
-            {
-                bridge.active = None;
             }
-            (was_aborted, history_snapshot)
         };
 
         let assistant_for_memory = history_snapshot.as_ref().and_then(|messages| {
@@ -5016,60 +5188,82 @@ fn spawn_drain_loop_with_resources(
             tracing::warn!(run_id = %active.run_id, "failed to finalize workspace snapshot: {error}");
         }
 
-        if was_aborted {
-            // runtime 已等待所有子代理确认取消；现在再结束父 Run 并发布终态，
-            // 从而保证 Stop All 不会让仍在收尾的 Working 条目提前消失。
-            let _ = mark_run_aborted(&db, &active);
-            if let Some(sink) = &sink {
-                sink(
+        // Resolve potentially slow filesystem work before taking the final task-local boundary.
+        // `active` + `closing_run_id` stay installed, so sends queue and delegates reject while
+        // this snapshot is calculated.
+        let has_changes = ChangeService::new(&db, PathBuf::new())
+            .list_changes(&task_id)
+            .await
+            .map(|changes| !changes.is_empty())
+            .unwrap_or(false);
+
+        {
+            let mut bridge = agent.lock().await;
+            let was_aborted = bridge.aborted();
+            if was_aborted {
+                // runtime 已等待所有子代理确认取消；现在再结束父 Run 并发布终态，
+                // 从而保证 Stop All 不会让仍在收尾的 Working 条目提前消失。
+                let _ = mark_run_aborted(&db, &active);
+                if let Some(sink) = &sink {
+                    sink(
+                        &task_id,
+                        &AgentEvent::State {
+                            state: TaskState::Interrupted,
+                        },
+                    );
+                }
+            } else if runtime_failed {
+                let _ = AgentRunRepository::new(&db)
+                    .update_review_state(&active.run_id, ReviewState::Failed);
+                let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Interrupted);
+                let _ = TaskEventStore::new(&db).append_for_branch(
                     &task_id,
-                    &AgentEvent::State {
-                        state: TaskState::Interrupted,
-                    },
+                    &branch_id,
+                    TaskEventType::RunEnded,
                 );
-            }
-        } else if runtime_failed {
-            let _ = AgentRunRepository::new(&db)
-                .update_review_state(&active.run_id, ReviewState::Failed);
-            let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Interrupted);
-            let _ = TaskEventStore::new(&db).append_for_branch(
-                &task_id,
-                &branch_id,
-                TaskEventType::RunEnded,
-            );
-            if let Some(sink) = &sink {
-                sink(
-                    &task_id,
-                    &AgentEvent::State {
-                        state: TaskState::Interrupted,
-                    },
-                );
-            }
-        } else {
-            // 正常结束：有变更 → review_ready；零变更 → idle（“已回答”语义）。
-            let has_changes = ChangeService::new(&db, PathBuf::new())
-                .list_changes(&task_id)
-                .await
-                .map(|changes| !changes.is_empty())
-                .unwrap_or(false);
-            let final_state = if has_changes {
-                TaskState::ReviewReady
+                if let Some(sink) = &sink {
+                    sink(
+                        &task_id,
+                        &AgentEvent::State {
+                            state: TaskState::Interrupted,
+                        },
+                    );
+                }
             } else {
-                TaskState::Idle
-            };
-            let _ = AgentRunRepository::new(&db)
-                .update_review_state(&active.run_id, ReviewState::Pending);
-            let _ = TaskRepository::new(&db).update_state(&task_id, final_state);
-            let _ = TaskEventStore::new(&db).append_for_branch(
-                &task_id,
-                &branch_id,
-                TaskEventType::RunEnded,
-            );
-            if let Some(sink) = &sink {
-                sink(&task_id, &AgentEvent::State { state: final_state });
+                // 正常结束：有变更 → review_ready；零变更 → idle（“已回答”语义）。
+                let final_state = if has_changes {
+                    TaskState::ReviewReady
+                } else {
+                    TaskState::Idle
+                };
+                let _ = AgentRunRepository::new(&db)
+                    .update_review_state(&active.run_id, ReviewState::Pending);
+                let _ = TaskRepository::new(&db).update_state(&task_id, final_state);
+                let _ = TaskEventStore::new(&db).append_for_branch(
+                    &task_id,
+                    &branch_id,
+                    TaskEventType::RunEnded,
+                );
+                if let Some(sink) = &sink {
+                    sink(&task_id, &AgentEvent::State { state: final_state });
+                }
+                if let Some(assistant_text) = assistant_for_memory.as_deref() {
+                    capture_completed_memory_turn(&db, &config_dir, &active, assistant_text);
+                }
             }
-            if let Some(assistant_text) = assistant_for_memory.as_deref() {
-                capture_completed_memory_turn(&db, &config_dir, &active, assistant_text);
+
+            // Publish terminal persistence before opening the task-local launch boundary. A
+            // waiting send can now start the next run without the previous drain overwriting its
+            // Task state; a waiting delegate sees no active parent.
+            if bridge
+                .active
+                .as_ref()
+                .is_some_and(|current| current.run_id == active.run_id)
+            {
+                bridge.active = None;
+            }
+            if bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()) {
+                bridge.closing_run_id = None;
             }
         }
 
@@ -5344,9 +5538,31 @@ pub async fn agent_abort(state: &CommandState, task_id: &str) -> Result<(), Stri
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能中止运行".to_string());
     }
-    // 外部 CLI 子代理不归内置 runtime 的 supervisor 管理，先向其发送取消信号。
-    // 进程收尾仍由对应任务负责，避免过早把持久化运行记为结束。
-    let _ = state.external_agents.cancel_task(task_id).await;
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let abort_result = {
+        let mut bridge = task_agent.lock().await;
+        // Publish the stop boundary under the same task-local lock used by explicit delegation.
+        // A racing delegate either reserved before this transition (and is cancelled below) or
+        // observes Interrupted and cannot create a ghost child after Stop.
+        TaskRepository::new(&state.db)
+            .update_state(task_id, TaskState::Interrupted)
+            .map_err(err_str)?;
+        // Every delegate that reserved before this lock boundary is now visible. Cancel external
+        // children before awaiting the native runtime so a slow provider shutdown cannot let them
+        // continue after the user pressed Stop.
+        let _ = state.external_agents.cancel_task(task_id).await;
+        match bridge.active.clone() {
+            Some(active) => {
+                debug_assert_eq!(active.task_id, task_id);
+                bridge
+                    .kind
+                    .abort(&active.runtime_session_id)
+                    .await
+                    .map_err(err_str)
+            }
+            None => Ok(()),
+        }
+    };
     let cleanup = cleanup_startup_recovery_task(state, task_id)?;
     if cleanup.runs_closed != 0 {
         tracing::info!(
@@ -5357,40 +5573,13 @@ pub async fn agent_abort(state: &CommandState, task_id: &str) -> Result<(), Stri
             "closed startup-orphaned runs after explicit abort"
         );
     }
-    let task_agent = state.agent.bridge_for(task_id).await;
-    {
-        let mut bridge = task_agent.lock().await;
-        let Some(active) = bridge.active.clone() else {
-            drop(bridge);
-            TaskRepository::new(&state.db)
-                .update_state(task_id, TaskState::Interrupted)
-                .map_err(err_str)?;
-            state.emit_agent_event(
-                task_id,
-                &AgentEvent::State {
-                    state: TaskState::Interrupted,
-                },
-            );
-            return Ok(());
-        };
-        debug_assert_eq!(active.task_id, task_id);
-        bridge
-            .kind
-            .abort(&active.runtime_session_id)
-            .await
-            .map_err(err_str)?;
-    }
-    // 立即给用户明确反馈，但保留 Run 为活跃状态直到监督器确认所有子代理已退出。
-    TaskRepository::new(&state.db)
-        .update_state(task_id, TaskState::Interrupted)
-        .map_err(err_str)?;
     state.emit_agent_event(
         task_id,
         &AgentEvent::State {
             state: TaskState::Interrupted,
         },
     );
-    Ok(())
+    abort_result
 }
 
 /// 仅中止当前主运行下的一个子代理，不影响主运行或同级子代理。
@@ -5717,6 +5906,13 @@ pub async fn agent_queue_steer(
             dispatch_next_queued(queued_dispatch_resources(state), task_id.to_string()).await;
             return Ok("started".to_string());
         }
+        return Ok("queued_next".to_string());
+    }
+
+    if bridge.closing_run_id.is_some() {
+        // The selected message is already durably claimed. Put it back at the queue front and let
+        // the completing drain dispatch it after terminal persistence; never steer a sealed run.
+        restore_queue_claim_after_preaccept_failure(state, task_id, &branch.id, queue_id).await;
         return Ok("queued_next".to_string());
     }
 
@@ -8272,6 +8468,16 @@ async fn start_run_locked_with_message(
     if let AgentRuntimeKind::Mock(runtime) = &mut bridge.kind {
         push_demo_scenario(runtime, &message_text);
     }
+    // Freeze the native parent's delegation ceiling before the provider is allowed to execute its
+    // first tool call. Project settings can change while a run is active, but every child of this
+    // run must keep the TaskMode + workspace policy that the parent actually started with.
+    let (workspace_path, workspace_access_mode) = task_workspace_binding_from_db(db, task)?;
+    let (parent_access_mode, parent_require_approval) = native_parent_subagent_access(
+        task.mode,
+        workspace_path.as_ref().map(|_| workspace_access_mode),
+        SubagentAccessMode::FullAccess,
+    );
+
     // Capture before the provider is allowed to execute its first tool call. The row itself is
     // persisted after the runtime returns its run id, but the immutable trees already exist.
     let pending_snapshot = capture_workspace_snapshot(db, task);
@@ -8295,6 +8501,8 @@ async fn start_run_locked_with_message(
         .unwrap_or_else(|| "mock".to_string());
     let mut run = AgentRun::new_for_branch(&task.id, &branch.id, run_model);
     run.id = runtime_run_id;
+    run.access_mode = parent_access_mode;
+    run.require_approval = parent_require_approval;
     AgentRunRepository::new(db).create(&run).map_err(err_str)?;
     if let Some(snapshot) = prepared_memory.snapshot.as_ref() {
         if let Err(error) = MemoryStore::new(db).record_injection(&run.id, "native", snapshot) {
@@ -8330,6 +8538,7 @@ async fn start_run_locked_with_message(
         run_id: run.id,
         memory: prepared_memory.capture,
     };
+    debug_assert!(bridge.closing_run_id.is_none());
     bridge.active = Some(active.clone());
     Ok(active)
 }
@@ -9831,6 +10040,19 @@ async fn probe_codex_cli() -> CodexCliProbe {
     }
 }
 
+/// Read the version from the exact executable selected for a run. Re-running global discovery
+/// here can pick a different installation when multiple Codex versions exist on PATH, causing
+/// dynamic App Server capabilities to be enabled or hidden for the wrong binary.
+async fn probe_selected_codex_version(cli_path: Option<&Path>) -> Option<String> {
+    match cli_path {
+        Some(path) => match run_codex_cli_at(path, &["--version"]).await {
+            Ok(output) if output.status.success() => first_nonempty_line(&output.stdout),
+            _ => None,
+        },
+        None => probe_codex_cli().await.version,
+    }
+}
+
 /// 解析 `codex login status` 的公开、人类可读状态。只归纳状态和登录方式，绝不把
 /// stdout/stderr、账户名或凭据传回前端或写入日志。
 fn parse_codex_login_status(success: bool, stdout: &[u8], stderr: &[u8]) -> CodexAuthProbe {
@@ -10927,8 +11149,19 @@ const CODEX_EXEC_MAX_GOAL_CHARS: usize = 12_000;
 const CODEX_EXEC_MAX_SUMMARY_CHARS: usize = 8_000;
 const CODEX_EXEC_MAX_TOOL_OUTPUT_CHARS: usize = 12_000;
 const CODEX_EXEC_MAX_LIFECYCLE_DETAIL_CHARS: usize = 320;
+const CODEX_REASONING_SUMMARY_CHARS: usize = 800;
+const CODEX_REASONING_SUMMARY_PREFIX: &str = "Codex 思考摘要：";
+const CODEX_REASONING_SUMMARY_EVENT: &str = "codex_reasoning_summary";
+const CODEX_RCODE_DELEGATE_TOOL: &str = "rcode_delegate_subagent";
 const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const CODEX_EXEC_HARD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// 动态子代理事件队列容量（F9）。宿主消费端（DB 持久化 + 事件投影）较慢时，
+/// 超出队列的中间事件被丢弃并计数，保证内存有界；终态 summary 不受影响。
+const CODEX_CHILD_EVENT_QUEUE: usize = 2_048;
+/// 动态子代理收尾 join 的上限。worker、Codex runner 与 MCP transport 都会主动
+/// 响应取消；20 秒为进程树回收和终态事件持久化留出余量。超时后宿主会按父运行
+/// 范围幂等合成数据库终态，不能让 UI 永久显示 running。
+const CODEX_CHILD_JOIN_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy)]
 struct CodexExecLimits {
@@ -11003,6 +11236,24 @@ struct RCodeCodexSubagentRunner {
     subagent_prompt: String,
 }
 
+fn codex_permissions_for_native_child(
+    access_mode: SubagentAccessMode,
+    require_approval: bool,
+) -> CodexDelegationPermissions {
+    match access_mode {
+        SubagentAccessMode::ReadOnly => CodexDelegationPermissions::read_only(),
+        SubagentAccessMode::FullAccess if require_approval => {
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request approval is a built-in Codex permission profile")
+                .constrained_by_project_access(ProjectAccessMode::RequestApproval)
+        }
+        SubagentAccessMode::FullAccess => {
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
+                .expect("full access is a built-in Codex permission profile")
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl CodexSubagentRunner for RCodeCodexSubagentRunner {
     async fn run(
@@ -11016,23 +11267,23 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
             run_id,
             caller,
             access_mode,
+            require_approval,
             abort,
             event_sink,
         } = request;
-        let goal = bounded_text(&goal, CODEX_EXEC_MAX_GOAL_CHARS);
-        if goal.is_empty() || goal.contains('\0') {
+        // F14：goal 长度统一为硬拒绝（fail-closed），与动态委派入口一致——
+        // 截断可能让模型对超长目标产生歧义执行。
+        if goal.is_empty()
+            || goal.contains('\0')
+            || goal.chars().count() > CODEX_EXEC_MAX_GOAL_CHARS
+        {
             return Err(ProductError::Other(
-                "Codex 子代理需要一项有效的委派任务".to_string(),
+                "Codex 子代理需要一项有效的委派任务（不超过 12000 字符）".to_string(),
             ));
         }
+        let goal = goal.to_string();
         let workspace = PathGuard::new(workspace)?.root().to_path_buf();
-        let permissions = match access_mode {
-            SubagentAccessMode::ReadOnly => CodexDelegationPermissions::read_only(),
-            SubagentAccessMode::FullAccess => {
-                CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
-                    .expect("full access is a built-in Codex permission profile")
-            }
-        };
+        let permissions = codex_permissions_for_native_child(access_mode, require_approval);
         let cli = probe_codex_cli().await;
         if !cli.available {
             return Err(ProductError::Other(
@@ -11078,6 +11329,8 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
                 task_id,
                 run_id,
                 caller,
+                workspace: Some(workspace.clone()),
+                rcode_delegate: None,
             },
         )
         .await;
@@ -11243,7 +11496,11 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
             let label = namespace
                 .map(|value| format!("{value} · {tool}"))
                 .unwrap_or_else(|| tool.to_string());
-            ("Codex 工具", safe_codex_action(&label, "工具"))
+            if tool == CODEX_RCODE_DELEGATE_TOOL {
+                ("delegate_task", "委派 R-Code 子智能体".to_string())
+            } else {
+                ("Codex 工具", safe_codex_action(&label, "工具"))
+            }
         }
         "image_generation" | "imageGeneration" => {
             ("Codex 图片生成", "生成图片并保存本地产物".to_string())
@@ -11252,6 +11509,18 @@ fn codex_item_tool(item: &serde_json::Value) -> Option<(String, String, String)>
         _ => return None,
     };
     Some((call_id, name.to_string(), summary))
+}
+
+/// 从 `codex-cli 0.145.0` 之类的版本行解析 `(major, minor, patch)`。
+fn parse_codex_version(line: &str) -> Option<(u64, u64, u64)> {
+    let version = line
+        .rsplit(|character: char| !character.is_ascii_digit() && character != '.')
+        .next()?;
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    let patch = parts.next()?.parse().ok()?;
+    Some((major, minor, patch))
 }
 
 fn parse_codex_exec_json_line(line: &str) -> Option<CodexExecJsonEvent> {
@@ -11295,10 +11564,23 @@ fn parse_codex_exec_json_line(line: &str) -> Option<CodexExecJsonEvent> {
                     .filter(|event| {
                         !matches!(event, CodexExecJsonEvent::AssistantMessage(text) if text.is_empty())
                     }),
-                "reasoning" => Some(CodexExecJsonEvent::Activity {
-                    phase: AgentActivityPhase::Finalizing,
-                    detail: "Codex CLI 已完成一轮分析".to_string(),
-                }),
+                "reasoning" => Some(
+                    safe_codex_reasoning_summary(item)
+                        // F15：与 App Server 路径一致，使用结构化 detail
+                        // （{kind, text}），不再依赖字符串前缀。
+                        .map(|summary| CodexExecJsonEvent::Activity {
+                            phase: AgentActivityPhase::Requesting,
+                            detail: serde_json::json!({
+                                "kind": "codex_reasoning_summary",
+                                "text": summary,
+                            })
+                            .to_string(),
+                        })
+                        .unwrap_or_else(|| CodexExecJsonEvent::Activity {
+                            phase: AgentActivityPhase::Finalizing,
+                            detail: "Codex CLI 已完成一轮分析".to_string(),
+                        }),
+                ),
                 _ => codex_item_tool(item).map(|(call_id, _, _)| {
                     CodexExecJsonEvent::ToolCompleted {
                         call_id,
@@ -11350,6 +11632,14 @@ only when they do not share mutable files, caches, build outputs, package state,
 Keep writes and result-dependent steps sequential; never parallelize edits, package changes, Git \
 mutations, or commands that may contend for the same resource.";
 
+const CODEX_FILE_LINK_HINT: &str =
+    "Make workspace file references clickable in replies. Link every referenced existing file with \
+a workspace-relative Markdown destination. Add a one-based location when useful: \
+`[src/lib.rs:42](src/lib.rs#L42)` or `[src/lib.rs:42:7](src/lib.rs#L42C7)`. For a range, show \
+the range in the label and link to its first line, for example \
+`[src/lib.rs:42-48](src/lib.rs#L42)`. Do not wrap a file link in backticks. R-Code opens it in \
+the right-side Files workbench and highlights the target line.";
+
 fn build_codex_delegation_prompt(
     goal: &str,
     permissions: CodexDelegationPermissions,
@@ -11381,9 +11671,99 @@ fn build_codex_delegation_prompt(
     format!(
         "You are a delegated subagent inside R-Code. {capability} \
 Do not create commits, do not alter global Codex or R-Code configuration, and do not start more agents. \
-{CODEX_PARALLEL_EXECUTION_HINT} Return a concise factual summary for the parent agent. \
+{CODEX_PARALLEL_EXECUTION_HINT} {CODEX_FILE_LINK_HINT} Return a concise factual summary for the parent agent. \
 Do not expose private chain-of-thought.{editable}\n\nAssignment:\n{goal}"
     )
+}
+
+/// Apply the immutable capability ceiling captured on a native parent run to a separately
+/// configured Codex child. The global Codex profile may make the child safer, but it may never
+/// widen an Ask/Plan or approval-scoped parent.
+fn constrain_codex_permissions_to_native_parent(
+    configured: CodexDelegationPermissions,
+    parent: &AgentRun,
+) -> CodexDelegationPermissions {
+    match (parent.access_mode, parent.require_approval) {
+        (SubagentAccessMode::ReadOnly, _) => CodexDelegationPermissions::read_only(),
+        (SubagentAccessMode::FullAccess, true)
+            if configured.mode() != CodexPermissionMode::ReadOnly =>
+        {
+            configured.constrained_by_project_access(ProjectAccessMode::RequestApproval)
+        }
+        (SubagentAccessMode::FullAccess, _) => configured,
+    }
+}
+
+/// Extract only App Server's public reasoning-summary channel.
+///
+/// Raw `content`, legacy `text`, and `item/reasoning/textDelta` are deliberately ignored: those
+/// fields may contain private model reasoning. Current App Server versions expose summaries as
+/// strings; the typed-object branch keeps compatibility with older protocol snapshots.
+fn safe_codex_reasoning_summary(item: &serde_json::Value) -> Option<String> {
+    // F9：内存上界。parts 数量与单 part 长度都先于拼接受限——畸形/恶意 summary
+    // 不能通过大量 parts 或超长文本驱动全量 join + 11 轮正则脱敏。
+    const MAX_SUMMARY_PARTS: usize = 64;
+    let parts = item.get("summary")?.as_array()?;
+    if parts.len() > MAX_SUMMARY_PARTS {
+        return None;
+    }
+    let text = parts
+        .iter()
+        .filter_map(|part| {
+            part.as_str().or_else(|| {
+                (part.get("type").and_then(serde_json::Value::as_str) == Some("summary_text"))
+                    .then(|| part.get("text").and_then(serde_json::Value::as_str))
+                    .flatten()
+            })
+        })
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| bounded_text(part, CODEX_REASONING_SUMMARY_CHARS))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let safe = bounded_text(&redact_text(&text), CODEX_REASONING_SUMMARY_CHARS);
+    (!safe.is_empty()).then_some(safe)
+}
+
+/// 从 Activity detail 提取 reasoning summary 文本（F15）。新格式是带 kind 的
+/// JSON；旧格式是 `CODEX_REASONING_SUMMARY_PREFIX` 前缀文本（兼容回退）。
+fn codex_reasoning_summary_text(detail: &str) -> Option<String> {
+    let trimmed = detail.trim();
+    if trimmed.starts_with('{') {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if parsed.get("kind").and_then(serde_json::Value::as_str)
+                == Some("codex_reasoning_summary")
+            {
+                let text = parsed
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::trim);
+                if text.is_some_and(|value| !value.is_empty()) {
+                    return text.map(ToOwned::to_owned);
+                }
+            }
+        }
+    }
+    trimmed
+        .strip_prefix(CODEX_REASONING_SUMMARY_PREFIX)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn codex_reasoning_activity(summary: String) -> AgentEvent {
+    // F15：结构化事件。detail 是带 kind 字段的 JSON，前端与持久化端按结构解析，
+    // 不再依赖"Codex 思考摘要："字符串前缀（避免未来任何 Requesting 活动误撞）。
+    AgentEvent::Activity {
+        phase: AgentActivityPhase::Requesting,
+        detail: Some(
+            serde_json::json!({
+                "kind": "codex_reasoning_summary",
+                "text": summary,
+            })
+            .to_string(),
+        ),
+    }
 }
 
 fn external_agent_scope(run: &AgentRun) -> AgentEventScope {
@@ -11397,6 +11777,7 @@ fn external_agent_scope(run: &AgentRun) -> AgentEventScope {
         runtime_kind: run.runtime_kind,
         model: Some(run.model.clone()),
         access_mode: run.access_mode,
+        require_approval: run.require_approval,
         routing_reason: run.routing_reason.clone(),
     }
 }
@@ -11590,12 +11971,13 @@ modify this snapshot unless the user asks about memory.\n{value}"
         .unwrap_or_default();
     format!(
         "You are the selected main coding agent inside the independent R-Code desktop client. \
-Work directly on the user's request inside the attached workspace. You may use the configured \
-R-Code MCP tools to delegate a bounded task to an R-Code child agent when useful. Delegated \
-children are read-only by default; request full access only when the user's request explicitly \
-requires the child to edit files or run commands. Keep tool activity observable, do not expose \
+Work directly on the user's request inside the attached workspace. You may call the built-in \
+`rcode_delegate_subagent` tool to delegate a bounded task to an R-Code child agent inside this \
+same task and run tree. Its access defaults to the parent's access and can never exceed it. Do \
+not use configured global R-Code MCP delegation tools from this hosted run: those tools are for \
+standalone external sessions and create separate top-level tasks. Keep tool activity observable, do not expose \
 private chain-of-thought, and finish with a concise result and verification summary.\n\n\
-{CODEX_PARALLEL_EXECUTION_HINT}{editable}{memory}\n\n\
+{CODEX_PARALLEL_EXECUTION_HINT}\n\n{CODEX_FILE_LINK_HINT}{editable}{memory}\n\n\
 Session title: {}\n\nVisible conversation context:\n{}\n\nCurrent user request:\n{}{}",
         task.title, transcript, request, attachment_context
     )
@@ -11691,6 +12073,8 @@ async fn start_codex_main_with_resources(
     } else {
         SubagentAccessMode::FullAccess
     };
+    run.require_approval =
+        run.access_mode == SubagentAccessMode::FullAccess && permissions.requests_r_code_approval();
     run.routing_reason = Some("该会话已显式选择 Codex 作为主 Agent".to_string());
     let pending_snapshot = capture_workspace_snapshot(&db, &task);
     let cancellation = external_agents.reserve(&task.id, &run.id, &run.id).await?;
@@ -12071,6 +12455,42 @@ async fn emit_codex_observable_event(
     }
 }
 
+/// Dynamic R-Code children can stream many text deltas. Unlike one-shot Codex events, their
+/// pending text buffer must live for the whole child call so lifecycle boundaries can flush one
+/// coherent assistant message into the child JSONL.
+async fn emit_codex_rcode_child_event(
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+    event: AgentEvent,
+    pending_text: &mut HashMap<String, PendingAssistantText>,
+) {
+    if let Some(event_sink) = event_sink {
+        event_sink(event.clone());
+    }
+    if let Some(observer) = observer {
+        let parent_run_id = observer
+            .run
+            .parent_run_id
+            .as_deref()
+            .unwrap_or(&observer.run.id);
+        persist_runtime_event(
+            observer.db,
+            observer.session_store,
+            observer.sessions_dir,
+            &observer.run.task_id,
+            &observer.run.branch_id,
+            parent_run_id,
+            observer.parent_storage_id,
+            &event,
+            pending_text,
+        )
+        .await;
+        if let Some(sink) = observer.sink {
+            sink(&observer.run.task_id, &event);
+        }
+    }
+}
+
 /// 终止 Codex 的整棵进程树。
 ///
 /// Windows 通过 `taskkill /T` 回收 `.cmd` wrapper 与 Node 后代；Unix/macOS 在启动时
@@ -12095,6 +12515,107 @@ async fn terminate_codex_child(child: &mut tokio::process::Child) {
         let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
     }
     let _ = child.kill().await;
+}
+
+/// Await a background pump for a short grace period, then abort and reap it. Dropping a Tokio
+/// JoinHandle after `timeout` would detach the task, which can retain pipes and buffers past the
+/// owning Codex run.
+async fn join_task_bounded<T>(mut task: tokio::task::JoinHandle<T>, grace: Duration) {
+    if timeout(grace, &mut task).await.is_err() {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+/// Final database guard for a hosted Codex run whose delegated children did not publish a
+/// terminal lifecycle event before the bounded cleanup window elapsed.
+///
+/// The traversal is rooted at one parent run, so another concurrent parent in the same task is
+/// untouched. `finish_if_active` atomically claims each terminal transition; a late real event is
+/// therefore idempotent and cannot append a duplicate `SubagentFinished` record.
+fn force_close_codex_delegate_descendants(
+    db: &Database,
+    task_id: &str,
+    parent_run_id: &str,
+) -> usize {
+    let runs = match AgentRunRepository::new(db).list_by_task(task_id) {
+        Ok(runs) => runs,
+        Err(error) => {
+            tracing::warn!(
+                task_id,
+                parent_run_id,
+                "failed to list delegated runs during Codex cleanup: {error}"
+            );
+            return 0;
+        }
+    };
+
+    let mut descendants = HashSet::<String>::new();
+    loop {
+        let previous_len = descendants.len();
+        for run in &runs {
+            let Some(parent) = run.parent_run_id.as_deref() else {
+                continue;
+            };
+            if parent == parent_run_id || descendants.contains(parent) {
+                descendants.insert(run.id.clone());
+            }
+        }
+        if descendants.len() == previous_len {
+            break;
+        }
+    }
+
+    let fallback_summary = "父 Codex 运行已结束；R-Code 已终止未及时收尾的子代理。";
+    let unresolved_tool_output = serde_json::json!({
+        "error": "subagent_cancelled_during_parent_cleanup",
+        "message": fallback_summary,
+    });
+    let run_repo = AgentRunRepository::new(db);
+    let tool_repo = ToolCallRepository::new(db);
+    let event_store = TaskEventStore::new(db);
+    let mut closed = 0usize;
+
+    for run in runs
+        .iter()
+        .filter(|run| descendants.contains(run.id.as_str()))
+    {
+        if let Err(error) =
+            tool_repo.finish_running_for_run_as_error(&run.id, &unresolved_tool_output)
+        {
+            tracing::warn!(
+                task_id,
+                parent_run_id,
+                child_run_id = %run.id,
+                "failed to close delegated tool calls during Codex cleanup: {error}"
+            );
+        }
+        match run_repo.finish_if_active(&run.id, ReviewState::Aborted, Some(fallback_summary)) {
+            Ok(true) => {
+                closed += 1;
+                if let Err(error) = event_store.append_for_branch(
+                    task_id,
+                    &run.branch_id,
+                    TaskEventType::SubagentFinished,
+                ) {
+                    tracing::warn!(
+                        task_id,
+                        parent_run_id,
+                        child_run_id = %run.id,
+                        "failed to append delegated cleanup event: {error}"
+                    );
+                }
+            }
+            Ok(false) => {}
+            Err(error) => tracing::warn!(
+                task_id,
+                parent_run_id,
+                child_run_id = %run.id,
+                "failed to finish delegated run during Codex cleanup: {error}"
+            ),
+        }
+    }
+    closed
 }
 
 #[allow(dead_code)]
@@ -12177,7 +12698,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
     permissions: CodexDelegationPermissions,
     limits: CodexExecLimits,
 ) -> CodexExecCompletion {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::BufReader;
 
     if cancellation.is_cancelled() {
         return CodexExecCompletion {
@@ -12256,7 +12777,10 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
     )
     .await;
 
-    let mut lines = BufReader::new(stdout).lines();
+    let mut stdout = BufReader::new(stdout);
+    // M6：exec --json 同样限长读行（与 app-server 路径统一）。line_buf 由循环
+    // 持有，select 取消安全：future 被 drop 时部分行数据不丢失（F9 补全）。
+    let mut line_buf: Vec<u8> = Vec::new();
     let mut cancelled = false;
     let mut failure = None;
     let mut thread_id = None;
@@ -12300,7 +12824,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
                 terminate_codex_child(&mut child).await;
                 break;
             }
-            next = lines.next_line() => match next {
+            next = read_bounded_line_into(&mut stdout, &mut line_buf, CODEX_APP_SERVER_MAX_LINE_BYTES) => match next {
                 Ok(Some(line)) => {
                     // 任何 JSONL 行都证明进程仍在推进；即便该事件因隐私策略未映射，也重置空闲计时。
                     idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
@@ -12464,6 +12988,15 @@ const CODEX_APP_SERVER_START_TIMEOUT: Duration = Duration::from_secs(15);
 // bounded artifact-aware ceiling. Observable events never persist or emit that base64 field.
 const CODEX_APP_SERVER_MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
 const CODEX_APP_SERVER_APPROVAL_TIMEOUT: Duration = Duration::from_secs(20 * 60);
+/// Bounds long-lived approval/delegation futures even if a broken or hostile App Server floods
+/// reverse requests. The stdout channel is separately bounded, so total queued work stays finite.
+const MAX_CODEX_IN_FLIGHT_REQUESTS: usize = 32;
+const MAX_CODEX_WRITER_QUEUE: usize = 64;
+/// Each App Server stdout frame may contain a 32 MiB generated-image result. Keep only two raw
+/// frames queued so pipe backpressure caps the queue's payload budget at 64 MiB instead of the
+/// previous theoretical 2 GiB. The currently parsed frame is outside this queue budget.
+const MAX_CODEX_LINE_QUEUE: usize = 2;
+const _: () = assert!(CODEX_APP_SERVER_MAX_LINE_BYTES * MAX_CODEX_LINE_QUEUE <= 64 * 1024 * 1024);
 
 /// R-Code 对 Codex App Server 审批请求的归属。它只引用既有权限引擎，因此审批卡
 /// 会自然出现在当前任务的 Room / Inbox，而不是让 `codex exec` 在无终端环境中等待。
@@ -12473,8 +13006,146 @@ struct CodexAppServerApprovalContext {
     task_id: String,
     run_id: String,
     caller: String,
+    /// 当前任务的工作区绑定：permissions 审批的授权 profile 需要与它求交
+    /// （F3/permissions），只授予工作区内的文件系统路径。
+    workspace: Option<PathBuf>,
+    /// 仅 Codex 主运行拥有。一次性 Codex 子代理不会获得反向委派入口，避免递归。
+    rcode_delegate: Option<CodexRCodeDelegateContext>,
 }
 
+/// Ties one Codex App Server approval request to the lifetime of its handler future.
+///
+/// The synchronous flag closes the gap between a hard-dropped handler and the asynchronous map
+/// cleanup: `PermissionEngine::decide` observes the flag under its state lock and cannot publish a
+/// late standing rule.
+struct CodexPendingPermissionLease {
+    permission_engine: Arc<PermissionEngine>,
+    request_id: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CodexPendingPermissionLease {
+    fn new(
+        permission_engine: Arc<PermissionEngine>,
+        request_id: String,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            permission_engine,
+            request_id,
+            cancelled,
+        }
+    }
+}
+
+impl Drop for CodexPendingPermissionLease {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        let permission_engine = self.permission_engine.clone();
+        let request_id = self.request_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                permission_engine.cancel_request(&request_id).await;
+            });
+        }
+    }
+}
+
+/// Codex App Server 动态工具回调到当前 R-Code 任务所需的宿主资源。
+///
+/// 这里没有“创建 Task”的能力：子运行必须复用 `task_id` / `run_id`，因此不会像
+/// 全局 MCP `delegate` 那样在左栏生成第二个独立会话。
+#[derive(Clone)]
+struct CodexRCodeDelegateContext {
+    agent_pool: Arc<AgentRuntimePool>,
+    external_agents: Arc<ExternalAgentRegistry>,
+    db: Arc<Database>,
+    config_dir: PathBuf,
+    tool_gateway: Arc<r_code_gateway::ToolGateway>,
+    mcp_manager: Arc<McpManager>,
+    max_access: SubagentAccessMode,
+    /// 父运行的 Codex 权限预设（H3）：`FullAccess` 的子代理 inherit 可全权；
+    /// `ReadOnly` 的子代理 inherit 保持只读；其他（RequestApproval/AutoReview/
+    /// Custom）inherit 的子代理进入审批模式（工具可见但写入/命令需审批，F3）。
+    permission_mode: CodexPermissionMode,
+}
+
+fn codex_app_server_dynamic_tools(enabled: bool) -> Vec<serde_json::Value> {
+    if !enabled {
+        return Vec::new();
+    }
+    vec![serde_json::json!({
+        "type": "function",
+        "name": CODEX_RCODE_DELEGATE_TOOL,
+        "description": "Delegate a bounded task to an R-Code child agent inside this same R-Code task and run tree. Use this instead of any configured global R-Code MCP delegation tool, because global MCP delegation creates a standalone task/session.",
+        "inputSchema": {
+            "type": "object",
+            "required": ["goal"],
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "A concrete, self-contained goal for the child agent."
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Optional short label shown in the R-Code child-run inspector."
+                },
+                "access": {
+                    "type": "string",
+                    "enum": ["inherit", "read_only", "full_access"],
+                    "description": "Defaults to inherit. The child can never exceed the parent run's access ceiling."
+                }
+            },
+            "additionalProperties": false
+        }
+    })]
+}
+
+/// 解析动态工具 `access` 参数（F3/H3）。`inherit` 继承父预设：FullAccess 父
+/// 下发 FullAccess 档位；ReadOnly 父保持 ReadOnly（H3，不再升权成审批模式）；
+/// 其他父下发 FullAccess 档位但由 `require_approval` 在运行时钳制成审批模式。
+/// `full_access` 仍要求父运行本身是 FullAccess，否则拒绝提升。
+fn codex_rcode_delegate_access(
+    arguments: &serde_json::Value,
+    max_access: SubagentAccessMode,
+    parent_mode: CodexPermissionMode,
+) -> Result<SubagentAccessMode, String> {
+    // F14：`access` 缺失/空 → inherit；必须是字符串；其他类型（数字/对象等）
+    // 显式拒绝，绝不 fail-open 成 inherit。
+    let access = match arguments.get("access") {
+        None | Some(serde_json::Value::Null) => "inherit",
+        Some(serde_json::Value::String(value)) => value.as_str(),
+        Some(_) => return Err("access 参数必须是字符串".to_string()),
+    };
+    match access {
+        // inherit = 继承父的能力：ReadOnly 父的子代理保持只读（H3）；其余父按
+        // FullAccess 档位下发，审批边界由 `require_approval` 在运行时钳制。
+        "inherit" => Ok(match parent_mode {
+            CodexPermissionMode::ReadOnly => SubagentAccessMode::ReadOnly,
+            _ => SubagentAccessMode::FullAccess,
+        }),
+        "read_only" => Ok(SubagentAccessMode::ReadOnly),
+        "full_access" if max_access == SubagentAccessMode::FullAccess => {
+            Ok(SubagentAccessMode::FullAccess)
+        }
+        "full_access" => Err("父运行是只读模式，不能把子代理提升为完全访问".to_string()),
+        other => Err(format!("不支持的子代理访问模式：{other}")),
+    }
+}
+
+fn codex_dynamic_tool_response(success: bool, text: impl Into<String>) -> serde_json::Value {
+    let text = text.into();
+    let text = bounded_text(&redact_text(&text), CODEX_EXEC_MAX_SUMMARY_CHARS);
+    serde_json::json!({
+        "success": success,
+        "contentItems": [{
+            "type": "inputText",
+            "text": text,
+        }]
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexAppServerRequestHandling {
     Ignored,
     Handled,
@@ -12482,8 +13153,97 @@ enum CodexAppServerRequestHandling {
     Failed,
 }
 
+/// 在途并发请求的种类（M4）：审批与动态委派共用 `FuturesUnordered` dispatch，
+/// 但完成收尾语义不同——审批的 Cancelled/Failed 要终止整个 run（沿用串行
+/// 处理时的行为），委派的异常完成只告警、不影响主循环。
+#[derive(Debug)]
+enum CodexInFlightOutcome {
+    Delegate(CodexAppServerRequestHandling),
+    Approval(CodexAppServerRequestHandling),
+}
+
+fn reject_codex_request_at_in_flight_limit(
+    value: &serde_json::Value,
+    in_flight_count: usize,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+) -> bool {
+    if in_flight_count < MAX_CODEX_IN_FLIGHT_REQUESTS {
+        return false;
+    }
+    let Some(request_id) = value.get("id") else {
+        return true;
+    };
+    let _ = writer.try_send(serde_json::json!({
+        "id": request_id,
+        "error": {
+            "code": -32000,
+            "message": "R-Code 宿主的并发审批/委派请求已达上限，请稍后重试",
+        }
+    }));
+    true
+}
+
+/// 读泵产出的 stdout 事件。`TooLong` 表示单行超过 `CODEX_APP_SERVER_MAX_LINE_BYTES`
+/// （在分配上限内被拒绝，而不是先分配完整行再检查——见 `read_bounded_line`）。
+enum CodexLineEvent {
+    Line(String),
+    Eof,
+    TooLong,
+    Error,
+}
+
+fn enqueue_codex_child_event(
+    event: AgentEvent,
+    intermediate_tx: &tokio::sync::mpsc::Sender<AgentEvent>,
+    terminal_tx: &tokio::sync::mpsc::UnboundedSender<AgentEvent>,
+    dropped_intermediate: &AtomicUsize,
+) {
+    let is_terminal = matches!(
+        &event,
+        AgentEvent::Scoped { event, .. }
+            if matches!(
+                &**event,
+                AgentEvent::SubagentLifecycle {
+                    state:
+                        SubagentState::Completed
+                        | SubagentState::Failed
+                        | SubagentState::Cancelled,
+                    ..
+                }
+            )
+    );
+    if is_terminal {
+        let _ = terminal_tx.send(event);
+    } else if intermediate_tx.try_send(event).is_err() {
+        dropped_intermediate.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Drain retained child events in causal order. Terminal lifecycle events are emitted only after
+/// every intermediate event still present in the bounded queue. Otherwise a full queue can retain
+/// a ToolCall, drop its ToolResult, and race the terminal event ahead of the ToolCall; persistence
+/// would then close zero calls and subsequently create a permanently-running audit row.
+fn drain_codex_child_events_in_order(
+    intermediate_rx: &mut tokio::sync::mpsc::Receiver<AgentEvent>,
+    terminal_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentEvent>,
+) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+    while let Ok(event) = intermediate_rx.try_recv() {
+        events.push(event);
+    }
+    while let Ok(event) = terminal_rx.try_recv() {
+        events.push(event);
+    }
+    events
+}
+
 /// 启动官方 Codex App Server。该协议是用于 `on-request` 审批的双向 JSON-RPC
 /// 通道：R-Code 始终作为客户端，任务文本不会进入 shell 命令串。
+///
+/// Hosted 运行只禁用 Codex 配置里由 R-Code 管理的 `[mcp_servers.r-code]`：若保留，
+/// 模型可能选择旧 `r_code_delegate` 工具，在 R-Code 里创建第二个顶层 Task/session，
+/// 与本功能“同树委派、不开新 session”的契约冲突。其他用户配置的 Codex MCP
+/// 保持可用；同树委派入口由 R-Code 动态工具 `rcode_delegate_subagent` 提供。
 fn codex_app_server_command(
     cli_path: Option<PathBuf>,
     workspace: &Path,
@@ -12522,7 +13282,13 @@ fn codex_app_server_command(
 
         command.as_std_mut().process_group(0);
     }
+    // 精确替换并禁用 R-Code 自己管理的旧全局 MCP，禁止 `r_code_delegate*` 进入
+    // 工具目录，但不影响用户的其他 MCP。内联表带一个永不执行的占位 command：
+    // 仅覆写 `.enabled=false` 会在从未安装过 r-code MCP 的机器上形成缺 transport
+    // 的无效配置，导致 App Server 启动失败。
     command
+        .arg("-c")
+        .arg("mcp_servers.r-code={enabled=false,command='r-code-disabled'}")
         .current_dir(workspace)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -12545,26 +13311,117 @@ async fn write_codex_app_server_value(
     stdin.flush().await.map_err(|_| ())
 }
 
+/// 读取一行 JSONL。累计长度超过 `max_bytes` 立即失败，而不是像
+/// `Lines::next_line` 那样先分配完整行再让调用方检查——后者会让无换行 stdout
+/// 或恶意超长帧无限增长内存。
+async fn read_bounded_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    read_bounded_line_into(reader, &mut buf, max_bytes).await
+}
+
+/// `select!` 安全版本（M6）：部分行数据保留在调用方持有的 `buf` 中——future
+/// 被 drop（select 另一分支先 ready）时已 consume 的字节不丢失，下次调用继续。
+/// L4：非法 UTF-8 帧返回 `InvalidData` 硬错误（对端协议损坏，fail-closed），
+/// 不再静默替换 U+FFFD 后让调用方解析被污染的 JSON。
+async fn read_bounded_line_into<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    use tokio::io::AsyncBufReadExt;
+
+    fn invalid_data(message: &'static str) -> std::io::Error {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+    }
+
+    loop {
+        let chunk = reader.fill_buf().await?;
+        let chunk_len = chunk.len();
+        if chunk.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            let line = std::str::from_utf8(buf)
+                .map_err(|_| invalid_data("JSONL line is not valid UTF-8"))?
+                .to_owned();
+            buf.clear();
+            return Ok(Some(line));
+        }
+        if let Some(pos) = chunk.iter().position(|byte| *byte == b'\n') {
+            if buf.len().saturating_add(pos) > max_bytes {
+                // Consume the rejected frame through its delimiter so a caller that chooses to
+                // continue cannot reinterpret its tail as a new JSON object.
+                reader.consume(pos + 1);
+                buf.clear();
+                return Err(invalid_data("JSONL line exceeds maximum length"));
+            }
+            buf.extend_from_slice(&chunk[..pos]);
+            reader.consume(pos + 1);
+            let line = std::str::from_utf8(buf)
+                .map_err(|_| invalid_data("JSONL line is not valid UTF-8"))?
+                .to_owned();
+            buf.clear();
+            return Ok(Some(line));
+        }
+        if buf.len().saturating_add(chunk_len) > max_bytes {
+            reader.consume(chunk_len);
+            buf.clear();
+            return Err(invalid_data("JSONL line exceeds maximum length"));
+        }
+        buf.extend_from_slice(chunk);
+        reader.consume(chunk_len);
+    }
+}
+
 async fn wait_for_codex_app_server_response(
-    lines: &mut tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+    lines: &mut tokio::io::BufReader<tokio::process::ChildStdout>,
+    stdin: &mut tokio::process::ChildStdin,
     expected_id: u64,
     startup_timeout: Duration,
 ) -> Result<serde_json::Value, CodexExecFailure> {
+    // 使用绝对启动期限：初始化期间的通知不再重置总等待（通知洪泛不能延长启动）。
+    let deadline = tokio::time::Instant::now() + startup_timeout;
     loop {
-        let next = timeout(startup_timeout, lines.next_line())
-            .await
-            .map_err(|_| CodexExecFailure::ApprovalBridge)?
-            .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let next = timeout(
+            remaining,
+            read_bounded_line(lines, CODEX_APP_SERVER_MAX_LINE_BYTES),
+        )
+        .await
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?
+        .map_err(|_| CodexExecFailure::ApprovalBridge)?;
         let Some(line) = next else {
             return Err(CodexExecFailure::ApprovalBridge);
         };
-        if line.len() > CODEX_APP_SERVER_MAX_LINE_BYTES {
-            return Err(CodexExecFailure::ApprovalBridge);
-        }
         let value: serde_json::Value =
             serde_json::from_str(line.trim()).map_err(|_| CodexExecFailure::ApprovalBridge)?;
         if value.get("id").and_then(serde_json::Value::as_u64) != Some(expected_id) {
-            // 初始化期间的通知不携带用户可见内容；后续主循环会处理运行期事件。
+            // L1：初始化期间也可能收到带 id 的反向请求（如 requestUserInput）。
+            // 与主循环同样按 F5 处理——立即返回 JSON-RPC error，而不是静默
+            // 丢弃让对端回调一直挂到 startup deadline。无 id 的通知仍可忽略。
+            if value.get("method").is_some() {
+                if let Some(request_id) = value.get("id") {
+                    let method = value
+                        .get("method")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    write_codex_app_server_value(
+                        stdin,
+                        &serde_json::json!({
+                            "id": request_id,
+                            "error": {
+                                "code": -32601,
+                                "message": format!("R-Code 宿主不支持该请求：{method}"),
+                            }
+                        }),
+                    )
+                    .await
+                    .map_err(|_| CodexExecFailure::ApprovalBridge)?;
+                }
+            }
             continue;
         }
         if value.get("error").is_some() {
@@ -12599,23 +13456,113 @@ fn codex_app_server_turn_id(result: &serde_json::Value) -> Option<String> {
         .map(|value| bounded_text(value, 160))
 }
 
+/// 解析 App Server 的 steer 响应（F12）。只有响应帧（无 `method` 字段）参与
+/// 匹配：请求帧带 method 且其 id 可能撞上 R-Code 自增的 steer id，绝不能把
+/// 审批/动态工具请求误当成 steer 应答吞掉。
+fn codex_steer_response(
+    value: &serde_json::Value,
+    turn_id: &str,
+) -> Option<(u64, ExternalSteerOutcome)> {
+    if value.get("method").is_some() {
+        return None;
+    }
+    let request_id = value.get("id").and_then(serde_json::Value::as_u64)?;
+    let outcome = if value.get("error").is_some() {
+        tracing::warn!("Codex App Server rejected turn/steer");
+        ExternalSteerOutcome::Rejected
+    } else if value
+        .pointer("/result/turnId")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|accepted_turn| accepted_turn == turn_id)
+    {
+        ExternalSteerOutcome::Accepted
+    } else {
+        ExternalSteerOutcome::Unknown
+    };
+    Some((request_id, outcome))
+}
+
 fn codex_app_server_approval_summary(method: &str, params: &serde_json::Value) -> (String, String) {
-    let detail = match method {
+    let detail: String = match method {
         "item/commandExecution/requestApproval" => params
             .get("command")
             .and_then(serde_json::Value::as_str)
             .or_else(|| params.get("reason").and_then(serde_json::Value::as_str))
-            .unwrap_or("Codex 请求执行一条命令"),
+            .unwrap_or("Codex 请求执行一条命令")
+            .to_string(),
         "item/fileChange/requestApproval" => params
             .get("reason")
             .and_then(serde_json::Value::as_str)
             .or_else(|| params.get("fileChange").and_then(serde_json::Value::as_str))
-            .unwrap_or("Codex 请求修改工作区文件"),
-        "item/permissions/requestApproval" => params
-            .get("reason")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("Codex 请求扩大访问范围"),
-        _ => "Codex 请求额外权限",
+            .unwrap_or("Codex 请求修改工作区文件")
+            .to_string(),
+        "item/permissions/requestApproval" => {
+            // 把 v2 permission profile 的实际路径与网络开关纳入审批摘要；只显示
+            // 计数会让用户无法判断自己正在批准哪个目录或是否正在开启网络。
+            let requested = params
+                .get("permissions")
+                .unwrap_or(&serde_json::Value::Null);
+            let file_system = requested
+                .get("fileSystem")
+                .and_then(serde_json::Value::as_object)
+                .map(|object| {
+                    let mut grants = Vec::new();
+                    for (kind, label) in [("write", "写入"), ("read", "读取")] {
+                        if let Some(paths) = object.get(kind).and_then(serde_json::Value::as_array)
+                        {
+                            let values = paths
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(|path| bounded_text(path, 96))
+                                .collect::<Vec<_>>();
+                            if !values.is_empty() {
+                                grants.push(format!("{label}[{}]", values.join("、")));
+                            }
+                        }
+                    }
+                    if let Some(entries) =
+                        object.get("entries").and_then(serde_json::Value::as_array)
+                    {
+                        let values = entries
+                            .iter()
+                            .filter_map(|entry| {
+                                let path = entry.get("path")?.as_str()?;
+                                let access = entry
+                                    .get("access")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("访问");
+                                Some(format!("{access}:{}", bounded_text(path, 96)))
+                            })
+                            .collect::<Vec<_>>();
+                        if !values.is_empty() {
+                            grants.push(format!("条目[{}]", values.join("、")));
+                        }
+                    }
+                    if grants.is_empty() {
+                        "文件系统（未指定路径）".to_string()
+                    } else {
+                        format!("文件系统：{}", grants.join("；"))
+                    }
+                })
+                .unwrap_or_else(|| "默认沙箱".to_string());
+            let network = requested
+                .get("network")
+                .and_then(serde_json::Value::as_object)
+                .map(
+                    |object| match object.get("enabled").and_then(serde_json::Value::as_bool) {
+                        Some(true) => "网络：开启",
+                        Some(false) => "网络：关闭",
+                        None => "网络：未指定",
+                    },
+                )
+                .unwrap_or("网络：默认");
+            params
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .map(|reason| format!("{reason} · {file_system}；{network}"))
+                .unwrap_or_else(|| format!("Codex 请求扩大访问范围：{file_system}；{network}"))
+        }
+        _ => "Codex 请求额外权限".to_string(),
     };
     let tool_name = match method {
         "item/commandExecution/requestApproval" => "Codex 命令",
@@ -12625,13 +13572,399 @@ fn codex_app_server_approval_summary(method: &str, params: &serde_json::Value) -
     };
     (
         tool_name.to_string(),
-        safe_codex_action(detail, "Codex 请求额外权限"),
+        safe_codex_action(&detail, "Codex 请求额外权限"),
     )
+}
+
+/// R-Code 的 standing rule 不能替 Codex 扩大 session grant。把完整 server request
+/// 绑定成精确 target；`acceptForSession` 的后续复用由 Codex 按其协议中的已授予子集
+/// 自行管理，而新的命令、文件变更或 permission profile 会再次进入宿主审批。
+fn codex_approval_rule_target(method: &str, item_id: &str, params: &serde_json::Value) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(method.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(item_id.as_bytes());
+    hasher.update(&[0]);
+    if let Ok(encoded) = serde_json::to_vec(params) {
+        hasher.update(&encoded);
+    }
+    format!("codex-request:{}", hasher.finalize().to_hex())
+}
+
+async fn respond_codex_dynamic_tool(
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    request_id: &serde_json::Value,
+    success: bool,
+    text: impl Into<String>,
+) -> CodexAppServerRequestHandling {
+    let result = codex_dynamic_tool_response(success, text);
+    if writer
+        .try_send(serde_json::json!({ "id": request_id, "result": result }))
+        .is_err()
+    {
+        CodexAppServerRequestHandling::Failed
+    } else {
+        CodexAppServerRequestHandling::Handled
+    }
+}
+
+/// 执行 Codex App Server 的会话内动态委派工具。
+///
+/// 与全局 MCP 的 `delegate` 不同，本路径没有 Task 创建服务；它复用当前 task / parent
+/// run，并把 native 子代理的 scoped 事件直接投影进同一运行树。
+async fn handle_codex_rcode_dynamic_tool(
+    value: &serde_json::Value,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
+    approval: &CodexAppServerApprovalContext,
+    cancellation: &CancellationToken,
+    observer: Option<&CodexExecObserver<'_>>,
+    event_sink: Option<&CodexSubagentEventSink>,
+) -> CodexAppServerRequestHandling {
+    let Some(request_id) = value.get("id") else {
+        return CodexAppServerRequestHandling::Failed;
+    };
+    let params = value.get("params").cloned().unwrap_or_default();
+    let tool = params
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if tool != CODEX_RCODE_DELEGATE_TOOL {
+        return respond_codex_dynamic_tool(
+            writer,
+            request_id,
+            false,
+            format!("R-Code 宿主未注册动态工具：{tool}"),
+        )
+        .await;
+    }
+    let Some(delegate) = approval.rcode_delegate.as_ref() else {
+        return respond_codex_dynamic_tool(
+            writer,
+            request_id,
+            false,
+            "当前 Codex 运行不允许反向创建 R-Code 子代理",
+        )
+        .await;
+    };
+    let Some(arguments) = params
+        .get("arguments")
+        .and_then(serde_json::Value::as_object)
+        .map(|value| serde_json::Value::Object(value.clone()))
+    else {
+        return respond_codex_dynamic_tool(writer, request_id, false, "委派参数必须是 JSON 对象")
+            .await;
+    };
+    let Some(goal) = arguments
+        .get("goal")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return respond_codex_dynamic_tool(writer, request_id, false, "子代理目标不能为空").await;
+    };
+    if goal.contains('\0') || goal.chars().count() > CODEX_EXEC_MAX_GOAL_CHARS {
+        return respond_codex_dynamic_tool(
+            writer,
+            request_id,
+            false,
+            format!("子代理目标无效或超过 {} 字符", CODEX_EXEC_MAX_GOAL_CHARS),
+        )
+        .await;
+    }
+    let label = arguments
+        .get("label")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| bounded_text(&redact_text(value), 80));
+    let access_mode = match codex_rcode_delegate_access(
+        &arguments,
+        delegate.max_access,
+        delegate.permission_mode,
+    ) {
+        Ok(mode) => mode,
+        Err(error) => {
+            return respond_codex_dynamic_tool(writer, request_id, false, error).await;
+        }
+    };
+    let task = match TaskRepository::new(&delegate.db).get(&approval.task_id) {
+        Ok(Some(task)) => task,
+        Ok(None) => {
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                "当前 R-Code 任务已不存在",
+            )
+            .await;
+        }
+        Err(error) => {
+            tracing::warn!(
+                task_id = %approval.task_id,
+                error = %error,
+                "failed to load the current task for dynamic R-Code delegation"
+            );
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                "读取当前 R-Code 任务失败，请查看 R-Code 诊断日志",
+            )
+            .await;
+        }
+    };
+    let (workspace, workspace_access_mode) =
+        match task_workspace_binding_from_db(&delegate.db, &task) {
+            Ok((Some(workspace), access_mode)) => (PathBuf::from(workspace), access_mode),
+            Ok((None, _)) => {
+                return respond_codex_dynamic_tool(
+                    writer,
+                    request_id,
+                    false,
+                    "R-Code 子代理需要当前任务已附加本地工作区",
+                )
+                .await;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %approval.task_id,
+                    error = %error,
+                    "failed to resolve workspace binding for dynamic R-Code delegation"
+                );
+                return respond_codex_dynamic_tool(
+                    writer,
+                    request_id,
+                    false,
+                    "读取当前工作区绑定失败，请查看 R-Code 诊断日志",
+                )
+                .await;
+            }
+        };
+
+    // Runtime 仅在首次真正委派时初始化；普通 Codex 主运行不会额外加载模型服务。
+    let runner: RCodeSubagentRunner = {
+        let bridge = delegate.agent_pool.bridge_for(&task.id).await;
+        let mut bridge = bridge.lock().await;
+        if let Err(error) = ensure_real_runtime(
+            &delegate.config_dir,
+            &delegate.tool_gateway,
+            &delegate.mcp_manager,
+            &mut bridge,
+            task.provider_name.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(
+                task_id = %approval.task_id,
+                error = %error,
+                "failed to initialize the R-Code provider for dynamic delegation"
+            );
+            return respond_codex_dynamic_tool(
+                writer,
+                request_id,
+                false,
+                "R-Code 子代理模型服务初始化失败，请查看 R-Code 诊断日志",
+            )
+            .await;
+        }
+        match &bridge.kind {
+            AgentRuntimeKind::Real(runtime) => runtime.r_code_subagent_runner(),
+            AgentRuntimeKind::Mock(_) => {
+                return respond_codex_dynamic_tool(
+                    writer,
+                    request_id,
+                    false,
+                    "R-Code 子代理模型服务尚未初始化",
+                )
+                .await;
+            }
+        }
+    };
+
+    let child_run_id = uuid::Uuid::new_v4().to_string();
+    let child_cancellation = match delegate
+        .external_agents
+        .reserve(&task.id, &approval.run_id, &child_run_id)
+        .await
+    {
+        Ok(token) => token,
+        Err(error) => {
+            return respond_codex_dynamic_tool(writer, request_id, false, error).await;
+        }
+    };
+    let delegated_by_tool_call_id = params
+        .get("callId")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| bounded_text(value, 160));
+    let abort = Arc::new(AtomicBool::new(false));
+    // F9：有界事件队列 + 丢弃计数。sink 是同步闭包，无法 await 背压；
+    // try_send 失败时丢弃中间事件（只影响实时投影）。终态 lifecycle
+    // （Completed/Failed/Cancelled）走独立的无界通道——它决定 DB 中 child
+    // run 的收尾状态，绝不能因队列满被丢弃，否则 run 会长期显示运行中。
+    let (child_events_tx, mut child_events_rx) =
+        tokio::sync::mpsc::channel::<AgentEvent>(CODEX_CHILD_EVENT_QUEUE);
+    let (terminal_events_tx, mut terminal_events_rx) =
+        tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+    let dropped_events = Arc::new(AtomicUsize::new(0));
+    let dropped_events_sink = dropped_events.clone();
+    let child_event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+        enqueue_codex_child_event(
+            event,
+            &child_events_tx,
+            &terminal_events_tx,
+            dropped_events_sink.as_ref(),
+        );
+    });
+    let child_request = RCodeSubagentRequest {
+        workspace,
+        workspace_access_mode,
+        goal: goal.to_string(),
+        label,
+        task_id: task.id.clone(),
+        parent_run_id: approval.run_id.clone(),
+        run_id: child_run_id.clone(),
+        delegated_by_tool_call_id,
+        model: task.model.clone(),
+        inference: task.inference.clone(),
+        access_mode,
+        // F3：inherit 自非 FullAccess 父运行（或显式 full_access 已被父权限拒绝，
+        // 不会到达这里）时进入审批模式：工具可见，写入/命令经 Gateway 审批。
+        require_approval: access_mode == SubagentAccessMode::FullAccess
+            && delegate.permission_mode != CodexPermissionMode::FullAccess,
+        abort: abort.clone(),
+        event_sink: child_event_sink,
+    };
+    let child_run = runner.run(child_request);
+    tokio::pin!(child_run);
+    let mut parent_cancelled = false;
+    let mut child_cancelled = false;
+    let mut events_open = true;
+    let mut child_pending_text = HashMap::new();
+    let outcome = loop {
+        tokio::select! {
+            outcome = &mut child_run => break outcome,
+            event = child_events_rx.recv(), if events_open => {
+                match event {
+                    Some(event) => emit_codex_rcode_child_event(
+                        observer,
+                        event_sink,
+                        event,
+                        &mut child_pending_text,
+                    ).await,
+                    None => events_open = false,
+                }
+            }
+            _ = cancellation.cancelled(), if !parent_cancelled => {
+                parent_cancelled = true;
+                abort.store(true, Ordering::Relaxed);
+            }
+            _ = child_cancellation.cancelled(), if !child_cancelled => {
+                child_cancelled = true;
+                abort.store(true, Ordering::Relaxed);
+            }
+        }
+    };
+    for event in drain_codex_child_events_in_order(&mut child_events_rx, &mut terminal_events_rx) {
+        emit_codex_rcode_child_event(observer, event_sink, event, &mut child_pending_text).await;
+    }
+    let dropped = dropped_events.load(Ordering::Relaxed);
+    if dropped > 0 {
+        tracing::warn!(
+            task_id = %approval.task_id,
+            run_id = %child_run_id,
+            dropped,
+            "dropped dynamic child events (bounded queue)"
+        );
+    }
+    delegate.external_agents.remove(&child_run_id).await;
+
+    let (success, status, summary) = match outcome {
+        Ok(outcome) => {
+            let success = outcome.state == SubagentState::Completed;
+            let status = match outcome.state {
+                SubagentState::Queued => "queued",
+                SubagentState::Running => "running",
+                SubagentState::WaitingPermission => "waiting_permission",
+                SubagentState::Completed => "completed",
+                SubagentState::Failed => "failed",
+                SubagentState::Cancelled => "cancelled",
+            };
+            // F13：失败/取消的 child summary 含内部错误（provider URL、本地路径），
+            // 只进本地受控日志；回传 App Server 的是稳定文案，避免内部细节进入
+            // Codex 模型上下文。
+            let summary = match outcome.state {
+                SubagentState::Failed | SubagentState::Cancelled => {
+                    tracing::warn!(
+                        task_id = %approval.task_id,
+                        run_id = %child_run_id,
+                        child_state = ?outcome.state,
+                        child_error = %outcome.summary,
+                        "dynamic R-Code subagent finished unsuccessfully"
+                    );
+                    "R-Code 子代理运行失败，详见 R-Code 诊断日志".to_string()
+                }
+                _ => outcome.summary,
+            };
+            (success, status, summary)
+        }
+        Err(error) => {
+            // F13：内部错误只进本地受控日志，回传 App Server 的是稳定文案——
+            // 原始 error 可能含本地路径/配置细节，会随 Codex 工具结果进入模型上下文。
+            tracing::warn!(
+                task_id = %approval.task_id,
+                run_id = %child_run_id,
+                error = %error,
+                "dynamic R-Code subagent failed"
+            );
+            (
+                false,
+                "failed",
+                "R-Code 子代理运行失败，详见 R-Code 诊断日志".to_string(),
+            )
+        }
+    };
+    let response_text = serde_json::json!({
+        "subagent_id": child_run_id,
+        "status": status,
+        // Leave room for the JSON envelope so the outer dynamic-tool bound never cuts it into
+        // malformed JSON text.
+        "summary": bounded_text(
+            &redact_text(&summary),
+            CODEX_EXEC_MAX_SUMMARY_CHARS.saturating_sub(512),
+        ),
+    });
+    // F13：JSON escape 会使文本膨胀（引号/反斜杠/换行），序列化后仍可能超出
+    // 外层预算并被截成非法 JSON。发出前验证一次，超限则收缩 summary 重建，
+    // 保证内层 JSON 完整（Codex 侧按 JSON 解析该字段）。
+    let mut response_text = serde_json::to_string(&response_text).unwrap_or_default();
+    if response_text.len() > CODEX_EXEC_MAX_SUMMARY_CHARS {
+        let mut rebuilt = serde_json::json!({
+            "subagent_id": child_run_id,
+            "status": status,
+            "summary": bounded_text(
+                &redact_text(&summary),
+                CODEX_EXEC_MAX_SUMMARY_CHARS.saturating_sub(2_048),
+            ),
+        });
+        let encoded = serde_json::to_string(&rebuilt).unwrap_or_default();
+        if encoded.len() <= CODEX_EXEC_MAX_SUMMARY_CHARS {
+            response_text = encoded;
+        } else {
+            rebuilt["summary"] = serde_json::json!("[摘要过长已截断]");
+            response_text = serde_json::to_string(&rebuilt).unwrap_or_default();
+        }
+    }
+    let handled = respond_codex_dynamic_tool(writer, request_id, success, response_text).await;
+    if parent_cancelled && matches!(handled, CodexAppServerRequestHandling::Handled) {
+        CodexAppServerRequestHandling::Cancelled
+    } else {
+        handled
+    }
 }
 
 async fn handle_codex_app_server_request(
     value: &serde_json::Value,
-    stdin: &mut tokio::process::ChildStdin,
+    writer: &tokio::sync::mpsc::Sender<serde_json::Value>,
     approval: &CodexAppServerApprovalContext,
     cancellation: &CancellationToken,
     observer: Option<&CodexExecObserver<'_>>,
@@ -12640,12 +13973,26 @@ async fn handle_codex_app_server_request(
     let Some(method) = value.get("method").and_then(serde_json::Value::as_str) else {
         return CodexAppServerRequestHandling::Ignored;
     };
+    // 动态工具（item/tool/call）由主循环并发 dispatch，不在这里串行处理（F7）。
     if !matches!(
         method,
         "item/commandExecution/requestApproval"
             | "item/fileChange/requestApproval"
             | "item/permissions/requestApproval"
     ) {
+        // F5：协议要求 client 对每个带 id 的 server request 作出回应。
+        // 静默忽略会让 Codex 侧回调永远等待，直到 idle/hard timeout 收场。
+        // 不支持的请求返回标准 JSON-RPC error；无 id 的通知仍可安全忽略。
+        if let Some(request_id) = value.get("id") {
+            let _ = writer.try_send(serde_json::json!({
+                "id": request_id,
+                "error": {
+                    "code": -32601,
+                    "message": format!("R-Code 宿主不支持该请求：{method}"),
+                }
+            }));
+            return CodexAppServerRequestHandling::Handled;
+        }
         return CodexAppServerRequestHandling::Ignored;
     }
     let Some(request_id) = value.get("id") else {
@@ -12665,9 +14012,16 @@ async fn handle_codex_app_server_request(
             format!("codex-approval-{}", bounded_text(&source, 80))
         });
     let (tool_name, summary) = codex_app_server_approval_summary(method, &params);
+    let standing_target = codex_approval_rule_target(method, &item_id, &params);
+    let handler_cancelled = Arc::new(AtomicBool::new(false));
+    let lifetime_cancelled = handler_cancelled.clone();
+    let run_cancellation = cancellation.clone();
+    let permission_cancellation = PermissionCancellation::from_probe(move || {
+        lifetime_cancelled.load(Ordering::Acquire) || run_cancellation.is_cancelled()
+    });
     let permission = match approval
         .permission_engine
-        .check_detailed_with_access_mode(
+        .check_detailed_with_access_mode_and_lifecycle(
             &approval.task_id,
             &item_id,
             Some(&approval.run_id),
@@ -12675,20 +14029,22 @@ async fn handle_codex_app_server_request(
             &tool_name,
             RiskLevel::R2,
             &summary,
-            None,
+            Some(&standing_target),
             ProjectAccessMode::RequestApproval,
+            Some(permission_cancellation),
+            Some(CODEX_APP_SERVER_APPROVAL_TIMEOUT),
         )
         .await
     {
         PermissionCheckResult::NeedsApproval(request) => Some(request),
         PermissionCheckResult::Allowed => None,
         PermissionCheckResult::Denied(_) => {
-            if write_codex_app_server_value(
-                stdin,
-                &serde_json::json!({ "id": request_id, "result": { "decision": "decline" } }),
-            )
-            .await
-            .is_err()
+            if writer
+                .try_send(serde_json::json!({
+                    "id": request_id,
+                    "result": codex_approval_response(method, &params, "decline", approval.workspace.as_deref()),
+                }))
+                .is_err()
             {
                 return CodexAppServerRequestHandling::Failed;
             }
@@ -12697,6 +14053,11 @@ async fn handle_codex_app_server_request(
     };
 
     let decision = if let Some(permission) = permission {
+        let _pending_lease = CodexPendingPermissionLease::new(
+            approval.permission_engine.clone(),
+            permission.id.clone(),
+            handler_cancelled,
+        );
         emit_codex_observable_event(
             observer,
             event_sink,
@@ -12708,10 +14069,7 @@ async fn handle_codex_app_server_request(
         .await;
         tokio::select! {
             _ = cancellation.cancelled() => {
-                let _ = approval
-                    .permission_engine
-                    .decide(&permission.id, PermissionDecision::Deny)
-                    .await;
+                approval.permission_engine.cancel_request(&permission.id).await;
                 ("cancel", true)
             }
             result = approval.permission_engine.wait_decision(&permission.id, CODEX_APP_SERVER_APPROVAL_TIMEOUT) => {
@@ -12720,10 +14078,7 @@ async fn handle_codex_app_server_request(
                     Some(PermissionDecision::AllowAlways) => ("acceptForSession", false),
                     Some(PermissionDecision::Deny) | Some(PermissionDecision::Pending) => ("decline", false),
                     None => {
-                        let _ = approval
-                            .permission_engine
-                            .decide(&permission.id, PermissionDecision::Deny)
-                            .await;
+                        approval.permission_engine.cancel_request(&permission.id).await;
                         ("cancel", false)
                     }
                 }
@@ -12733,12 +14088,12 @@ async fn handle_codex_app_server_request(
         ("accept", false)
     };
 
-    if write_codex_app_server_value(
-        stdin,
-        &serde_json::json!({ "id": request_id, "result": { "decision": decision.0 } }),
-    )
-    .await
-    .is_err()
+    if writer
+        .try_send(serde_json::json!({
+            "id": request_id,
+            "result": codex_approval_response(method, &params, decision.0, approval.workspace.as_deref()),
+        }))
+        .is_err()
     {
         return CodexAppServerRequestHandling::Failed;
     }
@@ -12757,6 +14112,72 @@ async fn handle_codex_app_server_request(
         .await;
     }
     CodexAppServerRequestHandling::Handled
+}
+
+/// 按审批方法编码响应（F4）。command/fileChange 使用 `decision`；
+/// permissions 响应按当前协议要求返回 `permissions`（GrantedPermissionProfile）
+/// 与可选 `scope`：允许时回显请求 profile、拒绝/取消时返回空 profile。
+/// 允许的 profile 会与父运行 ceiling 求交（F3/permissions）：文件系统条目
+/// 只保留工作区内的路径——工作区外的路径不在 R-Code 委派边界内，不能由
+/// Codex 单方面扩大；无法判定归属的路径保守剔除。
+fn codex_approval_response(
+    method: &str,
+    params: &serde_json::Value,
+    decision: &str,
+    workspace: Option<&Path>,
+) -> serde_json::Value {
+    if method == "item/permissions/requestApproval" {
+        let mut granted = if matches!(decision, "accept" | "acceptForSession") {
+            params
+                .get("permissions")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({}))
+        } else {
+            serde_json::json!({})
+        };
+        if let Some(file_system) = granted.get_mut("fileSystem") {
+            // 安全决策必须使用 PathGuard 的物理路径解析。词法 starts_with 会接受
+            // `<workspace>/../outside`，也无法识别指向工作区外的符号链接。
+            let guard = workspace.and_then(|root| PathGuard::new(root.to_path_buf()).ok());
+            let inside_workspace = |path: &str| -> bool {
+                let Some(guard) = guard.as_ref() else {
+                    return false;
+                };
+                let requested = PathBuf::from(path);
+                let candidate = if requested.is_absolute() {
+                    requested
+                } else {
+                    guard.root().join(requested)
+                };
+                guard.resolve(&candidate).is_ok()
+            };
+            if let Some(entries) = file_system
+                .get_mut("entries")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                entries.retain(|entry| {
+                    entry
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(inside_workspace)
+                });
+            }
+            for legacy in ["read", "write"] {
+                if let Some(list) = file_system
+                    .get_mut(legacy)
+                    .and_then(serde_json::Value::as_array_mut)
+                {
+                    list.retain(|entry| entry.as_str().is_some_and(inside_workspace));
+                }
+            }
+        }
+        serde_json::json!({
+            "permissions": granted,
+            "scope": if decision == "acceptForSession" { "session" } else { "turn" },
+        })
+    } else {
+        serde_json::json!({ "decision": decision })
+    }
 }
 
 async fn observe_codex_app_server_event(
@@ -12827,15 +14248,13 @@ async fn observe_codex_app_server_event(
                     .await;
                 }
             } else if item_type == Some("reasoning") {
-                emit_codex_observable_event(
-                    observer,
-                    event_sink,
-                    AgentEvent::Activity {
+                let event = safe_codex_reasoning_summary(item)
+                    .map(codex_reasoning_activity)
+                    .unwrap_or_else(|| AgentEvent::Activity {
                         phase: AgentActivityPhase::Finalizing,
                         detail: Some("Codex 已完成一轮分析".to_string()),
-                    },
-                )
-                .await;
+                    });
+                emit_codex_observable_event(observer, event_sink, event).await;
             } else if let Some((call_id, _, _)) = codex_item_tool(item) {
                 let is_error = codex_item_failed(item);
                 emit_codex_observable_event(
@@ -12907,17 +14326,90 @@ async fn run_codex_app_server_process_with_images(
     cancellation: CancellationToken,
     observer: Option<CodexExecObserver<'_>>,
     event_sink: Option<&CodexSubagentEventSink>,
-    approval: CodexAppServerApprovalContext,
+    mut approval: CodexAppServerApprovalContext,
     mut steer_requests: Option<tokio::sync::mpsc::Receiver<ExternalSteerRequest>>,
     limits: CodexExecLimits,
 ) -> CodexExecCompletion {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::BufReader;
 
     if cancellation.is_cancelled() {
         return CodexExecCompletion {
             cancelled: true,
             ..Default::default()
         };
+    }
+    // F8：能力协商与降级。动态委派协议（experimentalApi / dynamicTools /
+    // summary）以本机验证过的 Codex 版本为最低门槛；R-Code Provider 未配置
+    // 时隐藏 rcode_delegate 动态工具，让主运行照常工作。
+    //
+    // 注意：这里必须用 `bridge_for`（创建 bridge）而不是 `existing_bridge_for`
+    // ——正常 Codex 主任务首次启动时 bridge 尚不存在（它由原生 agent 会话创建），
+    // 若只查已有 bridge，动态委派在首次使用时会永远被隐藏。
+    const CODEX_APP_SERVER_MIN_VERSION: (u64, u64, u64) = (0, 145, 0);
+    if approval.rcode_delegate.is_some() {
+        let selected_version = tokio::select! {
+            _ = cancellation.cancelled() => {
+                return CodexExecCompletion { cancelled: true, ..Default::default() };
+            }
+            version = probe_selected_codex_version(cli_path.as_deref()) => version,
+        };
+        let version_ok = selected_version
+            .as_deref()
+            .and_then(parse_codex_version)
+            .is_some_and(|version| version >= CODEX_APP_SERVER_MIN_VERSION);
+        let provider_ready = if version_ok {
+            let initialize_provider = async {
+                let delegate = approval
+                    .rcode_delegate
+                    .as_ref()
+                    .expect("guarded by is_some");
+                let bridge = delegate.agent_pool.bridge_for(&approval.task_id).await;
+                let requested_provider = TaskRepository::new(&delegate.db)
+                    .get(&approval.task_id)
+                    .ok()
+                    .flatten()
+                    .and_then(|task| task.provider_name);
+                let mut bridge = bridge.lock().await;
+                match ensure_real_runtime(
+                    &delegate.config_dir,
+                    &delegate.tool_gateway,
+                    &delegate.mcp_manager,
+                    &mut bridge,
+                    requested_provider.as_deref(),
+                )
+                .await
+                {
+                    Ok(()) => matches!(&bridge.kind, AgentRuntimeKind::Real(_)),
+                    Err(_) => false,
+                }
+            };
+            tokio::select! {
+                _ = cancellation.cancelled() => {
+                    return CodexExecCompletion { cancelled: true, ..Default::default() };
+                }
+                ready = initialize_provider => ready,
+            }
+        } else {
+            false
+        };
+        if !version_ok || !provider_ready {
+            let reason = if !version_ok {
+                "Codex CLI 版本过低，不支持动态子代理委派".to_string()
+            } else {
+                "R-Code 模型服务尚未初始化，动态子代理委派暂不可用".to_string()
+            };
+            tracing::info!(task_id = %approval.task_id, "{reason}，隐藏 rcode_delegate_subagent");
+            approval.rcode_delegate = None;
+            emit_codex_observable_event(
+                observer.as_ref(),
+                event_sink,
+                AgentEvent::Activity {
+                    phase: AgentActivityPhase::Finalizing,
+                    detail: Some(format!("{reason}，本次运行不会提供 R-Code 子代理委派工具")),
+                },
+            )
+            .await;
+        }
     }
     let mut child = match codex_app_server_command(cli_path, workspace)
         .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
@@ -12950,20 +14442,29 @@ async fn run_codex_app_server_process_with_images(
             let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
         })
     });
-    let mut lines = BufReader::new(stdout).lines();
+    // 直接持有 BufReader：setup 阶段与主循环读泵共用限长读行（F9），
+    // 不再使用会先分配完整行再检查的 Lines::next_line。
+    let mut lines = BufReader::new(stdout);
 
-    let setup = async {
+    let setup = tokio::select! {
+        _ = cancellation.cancelled() => None,
+        setup = async {
         write_codex_app_server_value(
             &mut stdin,
             &serde_json::json!({
                 "id": 0,
                 "method": "initialize",
-                "params": { "clientInfo": { "name": "r-code", "version": env!("CARGO_PKG_VERSION") } }
+                "params": {
+                    "clientInfo": { "name": "r-code", "version": env!("CARGO_PKG_VERSION") },
+                    "capabilities": { "experimentalApi": true }
+                }
             }),
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let _ = wait_for_codex_app_server_response(&mut lines, 0, limits.startup_timeout).await?;
+        let _ =
+            wait_for_codex_app_server_response(&mut lines, &mut stdin, 0, limits.startup_timeout)
+                .await?;
         write_codex_app_server_value(
             &mut stdin,
             &serde_json::json!({ "method": "initialized", "params": {} }),
@@ -12971,27 +14472,37 @@ async fn run_codex_app_server_process_with_images(
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
         let cwd = workspace.to_str().ok_or(CodexExecFailure::ApprovalBridge)?;
+        let mut thread_params = serde_json::json!({
+            "cwd": cwd,
+            "sandbox": permissions.sandbox().as_str(),
+            "approvalPolicy": permissions.approval_policy().as_str(),
+            "approvalsReviewer": permissions.approvals_reviewer().as_str(),
+            "config": {
+                "web_search": "live",
+            },
+        });
+        let dynamic_tools = codex_app_server_dynamic_tools(approval.rcode_delegate.is_some());
+        if !dynamic_tools.is_empty() {
+            thread_params
+                .as_object_mut()
+                .expect("thread/start params are an object")
+                .insert("dynamicTools".to_string(), dynamic_tools.into());
+        }
         write_codex_app_server_value(
             &mut stdin,
             &serde_json::json!({
                 "id": 1,
                 "method": "thread/start",
-                "params": {
-                    "cwd": cwd,
-                    "sandbox": permissions.sandbox().as_str(),
-                    "approvalPolicy": permissions.approval_policy().as_str(),
-                    "approvalsReviewer": permissions.approvals_reviewer().as_str(),
-                    "config": {
-                        "web_search": "live",
-                    },
-                }
+                "params": thread_params
             }),
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
         let thread =
-            wait_for_codex_app_server_response(&mut lines, 1, limits.startup_timeout).await?;
-        let thread_id = codex_app_server_thread_id(&thread).ok_or(CodexExecFailure::ApprovalBridge)?;
+            wait_for_codex_app_server_response(&mut lines, &mut stdin, 1, limits.startup_timeout)
+                .await?;
+        let thread_id =
+            codex_app_server_thread_id(&thread).ok_or(CodexExecFailure::ApprovalBridge)?;
         write_codex_app_server_value(
             &mut stdin,
             &serde_json::json!({
@@ -13000,26 +14511,39 @@ async fn run_codex_app_server_process_with_images(
                 "params": {
                     "threadId": thread_id,
                     "input": codex_app_server_input(prompt, image_paths),
+                    "summary": "concise",
                 }
             }),
         )
         .await
         .map_err(|_| CodexExecFailure::ApprovalBridge)?;
-        let turn = wait_for_codex_app_server_response(&mut lines, 2, limits.startup_timeout).await?;
+        let turn =
+            wait_for_codex_app_server_response(&mut lines, &mut stdin, 2, limits.startup_timeout)
+                .await?;
         let turn_id = codex_app_server_turn_id(&turn).ok_or(CodexExecFailure::ApprovalBridge)?;
         Ok::<(String, String), CodexExecFailure>((thread_id, turn_id))
-    }
-    .await;
+        } => Some(setup),
+    };
 
     let (thread_id, turn_id) = match setup {
-        Ok(ids) => ids,
-        Err(failure) => {
+        Some(Ok(ids)) => ids,
+        Some(Err(failure)) => {
             terminate_codex_child(&mut child).await;
             if let Some(stderr_task) = stderr_task {
-                let _ = timeout(Duration::from_secs(2), stderr_task).await;
+                join_task_bounded(stderr_task, Duration::from_secs(2)).await;
             }
             return CodexExecCompletion {
                 failure: Some(failure),
+                ..Default::default()
+            };
+        }
+        None => {
+            terminate_codex_child(&mut child).await;
+            if let Some(stderr_task) = stderr_task {
+                join_task_bounded(stderr_task, Duration::from_secs(2)).await;
+            }
+            return CodexExecCompletion {
+                cancelled: true,
                 ..Default::default()
             };
         }
@@ -13049,13 +14573,73 @@ async fn run_codex_app_server_process_with_images(
     let deadline_timer = tokio::time::sleep(limits.hard_timeout);
     tokio::pin!(idle_timer);
     tokio::pin!(deadline_timer);
+
+    // 单一 writer：所有响应帧（审批、动态工具、steer）经此发送，stdin 只被
+    // writer task 独占；写失败通过 fail channel 通知主循环（F2/F7）。
+    let (writer_tx, mut writer_rx) =
+        tokio::sync::mpsc::channel::<serde_json::Value>(MAX_CODEX_WRITER_QUEUE);
+    let (fail_tx, mut fail_rx) = tokio::sync::mpsc::unbounded_channel::<CodexExecFailure>();
+    let writer_task = tokio::spawn(async move {
+        while let Some(frame) = writer_rx.recv().await {
+            if write_codex_app_server_value(&mut stdin, &frame)
+                .await
+                .is_err()
+            {
+                let _ = fail_tx.send(CodexExecFailure::Stream);
+                break;
+            }
+        }
+    });
+
+    // 读泵：stdout 读取与请求处理解耦。限长读行在分配上限内拒绝超长帧；
+    // 即使 App Server 洪泛或挂起，主循环仍能响应取消/超时/steer（F2/F9）。
+    // 注意：直接把 setup 阶段的 BufReader move 进读泵——`fill_buf` 可能预读了
+    // 后续帧（如 turn/completed），`into_inner` 会丢弃缓冲区内未读数据，
+    // 导致时序依赖的帧丢失（单独跑通过、全量负载下偶发 30s 超时）。
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<CodexLineEvent>(MAX_CODEX_LINE_QUEUE);
+    let reader_task = tokio::spawn(async move {
+        let mut stdout = lines;
+        loop {
+            match read_bounded_line(&mut stdout, CODEX_APP_SERVER_MAX_LINE_BYTES).await {
+                Ok(Some(line)) => {
+                    if line_tx.send(CodexLineEvent::Line(line)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => {
+                    let _ = line_tx.send(CodexLineEvent::Eof).await;
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    let _ = line_tx.send(CodexLineEvent::TooLong).await;
+                    break;
+                }
+                Err(_) => {
+                    let _ = line_tx.send(CodexLineEvent::Error).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    // 在途动态委派与审批（F7/M4 并发）。future 借用 observer/event_sink（与主
+    // 函数同生命周期），响应经 writer 发送；主循环 break 时 bounded join 并取消。
+    use futures::StreamExt;
+    let mut in_flight: futures::stream::FuturesUnordered<
+        std::pin::Pin<Box<dyn std::future::Future<Output = CodexInFlightOutcome> + Send + '_>>,
+    > = futures::stream::FuturesUnordered::new();
+
     loop {
         tokio::select! {
             _ = cancellation.cancelled() => {
                 cancelled = true;
                 break;
             }
-            _ = &mut idle_timer => {
+            // H1：动态委派在途时挂起 idle 判定——Codex 主 Agent 等待 item/tool/call
+            // 响应期间 stdout 静默，child 活动经 child_event_sink 旁路不喂 idle_timer；
+            // 若照常计时，任何超过 idle_timeout 的委派都会误杀整个 run。此时仍有
+            // deadline 硬上限、child 自身的 Provider/MCP 超时与父取消兜底。
+            _ = &mut idle_timer, if in_flight.is_empty() => {
                 failure = Some(CodexExecFailure::IdleTimeout);
                 emit_codex_observable_event(
                     observer.as_ref(),
@@ -13077,6 +14661,10 @@ async fn run_codex_app_server_process_with_images(
                         detail: Some("已达到 30 分钟运行上限，正在自动停止 Codex".to_string()),
                     },
                 ).await;
+                break;
+            }
+            Some(writer_failure) = fail_rx.recv() => {
+                failure = Some(writer_failure);
                 break;
             }
             request = async {
@@ -13101,9 +14689,9 @@ async fn run_codex_app_server_process_with_images(
                         "expectedTurnId": turn_id,
                     }
                 });
-                if write_codex_app_server_value(&mut stdin, &payload).await.is_err() {
-                    // `write_all`/flush failure is ambiguous: the peer may have received the full
-                    // frame before the transport failed. Never convert it into an automatic retry.
+                if writer_tx.try_send(payload).is_err() {
+                    // writer 已退出 = 传输失败。`write_all`/flush 失败是模糊的：
+                    // 对端可能已收到完整帧。绝不自动重发。
                     let _ = request.response.send(ExternalSteerOutcome::Unknown);
                     failure = Some(CodexExecFailure::Stream);
                     break;
@@ -13111,83 +14699,226 @@ async fn run_codex_app_server_process_with_images(
                 pending_steers.insert(request_id, request.response);
                 idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
             }
-            next = lines.next_line() => match next {
-                Ok(Some(line)) => {
-                    if line.len() > CODEX_APP_SERVER_MAX_LINE_BYTES {
+            event = line_rx.recv() => {
+                let Some(event) = event else {
+                    failure = Some(CodexExecFailure::Stream);
+                    break;
+                };
+                match event {
+                    CodexLineEvent::Line(line) => {
+                        // 任何一行输出都是新鲜进度（通知/事件/响应皆算），
+                        // 恢复逐行重置 idle 的语义。
+                        idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+                        let value: serde_json::Value = match serde_json::from_str(line.trim()) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                failure = Some(CodexExecFailure::ApprovalBridge);
+                                break;
+                            }
+                        };
+                        // F12：只有响应帧（无 method 字段）才可能匹配 steer 应答；
+                        // 请求帧带 method，绝不进入该匹配，避免 id 碰撞时被吞。
+                        if let Some((request_id, outcome)) = codex_steer_response(&value, &turn_id)
+                        {
+                            if let Some(response) = pending_steers.remove(&request_id) {
+                                let _ = response.send(outcome);
+                                continue;
+                            }
+                        }
+                        let frame_method = value.get("method").and_then(serde_json::Value::as_str);
+                        let is_concurrent_reverse_request = matches!(
+                            frame_method,
+                            Some(
+                                "item/tool/call"
+                                    | "item/commandExecution/requestApproval"
+                                    | "item/fileChange/requestApproval"
+                                    | "item/permissions/requestApproval"
+                            )
+                        );
+                        if is_concurrent_reverse_request
+                            && reject_codex_request_at_in_flight_limit(
+                                &value,
+                                in_flight.len(),
+                                &writer_tx,
+                            )
+                        {
+                            tracing::warn!(
+                                in_flight = in_flight.len(),
+                                method = ?frame_method,
+                                "rejected Codex reverse request at the in-flight limit"
+                            );
+                            failure = Some(CodexExecFailure::ApprovalBridge);
+                            break;
+                        }
+                        if frame_method == Some("item/tool/call") {
+                            // F7 并发：动态委派独立 dispatch，主循环继续读后续请求。
+                            let writer = writer_tx.clone();
+                            let approval = approval.clone();
+                            let cancellation = cancellation.clone();
+                            let observer_ref = observer.as_ref();
+                            in_flight.push(Box::pin(async move {
+                                CodexInFlightOutcome::Delegate(
+                                    handle_codex_rcode_dynamic_tool(
+                                        &value,
+                                        &writer,
+                                        &approval,
+                                        &cancellation,
+                                        observer_ref,
+                                        event_sink,
+                                    )
+                                    .await,
+                                )
+                            }));
+                            continue;
+                        }
+                        // M4：审批请求同样独立 dispatch——等待用户批复（最长
+                        // CODEX_APP_SERVER_APPROVAL_TIMEOUT）期间主循环继续处理
+                        // 后续请求与在途委派，不再 head-of-line 阻塞整个
+                        // App Server 通道。Cancelled/Failed 的收尾语义与原串行
+                        // 处理一致，在 in_flight 完成分支统一执行。
+                        if matches!(
+                            frame_method,
+                            Some(
+                                "item/commandExecution/requestApproval"
+                                    | "item/fileChange/requestApproval"
+                                    | "item/permissions/requestApproval"
+                            )
+                        ) {
+                            let writer = writer_tx.clone();
+                            let approval = approval.clone();
+                            let cancellation = cancellation.clone();
+                            let observer_ref = observer.as_ref();
+                            in_flight.push(Box::pin(async move {
+                                CodexInFlightOutcome::Approval(
+                                    handle_codex_app_server_request(
+                                        &value,
+                                        &writer,
+                                        &approval,
+                                        &cancellation,
+                                        observer_ref,
+                                        event_sink,
+                                    )
+                                    .await,
+                                )
+                            }));
+                            continue;
+                        }
+                        match handle_codex_app_server_request(
+                            &value,
+                            &writer_tx,
+                            &approval,
+                            &cancellation,
+                            observer.as_ref(),
+                            event_sink,
+                        ).await {
+                            CodexAppServerRequestHandling::Cancelled => {
+                                cancelled = true;
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Failed => {
+                                failure = Some(CodexExecFailure::ApprovalBridge);
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Handled => {
+                                // 已处理的请求（显式拒绝的未知请求）是新鲜进度。
+                                idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+                            }
+                            CodexAppServerRequestHandling::Ignored => {}
+                        }
+                        if let Some(event_failure) = observe_codex_app_server_event(
+                            &value,
+                            observer.as_ref(),
+                            event_sink,
+                            &mut summary,
+                        ).await {
+                            failure = Some(event_failure);
+                            break;
+                        }
+                        if value.get("method").and_then(serde_json::Value::as_str) == Some("turn/completed") {
+                            completed = failure.is_none();
+                            break;
+                        }
+                    }
+                    CodexLineEvent::Eof => {
+                        failure = Some(CodexExecFailure::Stream);
+                        break;
+                    }
+                    CodexLineEvent::TooLong => {
                         failure = Some(CodexExecFailure::ApprovalBridge);
                         break;
                     }
-                    idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
-                    let value: serde_json::Value = match serde_json::from_str(line.trim()) {
-                        Ok(value) => value,
-                        Err(_) => {
-                            failure = Some(CodexExecFailure::ApprovalBridge);
-                            break;
-                        }
-                    };
-                    if let Some(request_id) = value.get("id").and_then(serde_json::Value::as_u64) {
-                        if let Some(response) = pending_steers.remove(&request_id) {
-                            let accepted = if value.get("error").is_some() {
-                                tracing::warn!(
-                                    task_id = %approval.task_id,
-                                    run_id = %approval.run_id,
-                                    "Codex App Server rejected turn/steer"
-                                );
-                                ExternalSteerOutcome::Rejected
-                            } else if value
-                                .pointer("/result/turnId")
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|accepted_turn| accepted_turn == turn_id)
-                            {
-                                ExternalSteerOutcome::Accepted
-                            } else {
-                                ExternalSteerOutcome::Unknown
-                            };
-                            let _ = response.send(accepted);
-                            continue;
-                        }
-                    }
-                    match handle_codex_app_server_request(
-                        &value,
-                        &mut stdin,
-                        &approval,
-                        &cancellation,
-                        observer.as_ref(),
-                        event_sink,
-                    ).await {
-                        CodexAppServerRequestHandling::Cancelled => {
-                            cancelled = true;
-                            break;
-                        }
-                        CodexAppServerRequestHandling::Failed => {
-                            failure = Some(CodexExecFailure::ApprovalBridge);
-                            break;
-                        }
-                        CodexAppServerRequestHandling::Handled | CodexAppServerRequestHandling::Ignored => {}
-                    }
-                    if let Some(event_failure) = observe_codex_app_server_event(
-                        &value,
-                        observer.as_ref(),
-                        event_sink,
-                        &mut summary,
-                    ).await {
-                        failure = Some(event_failure);
+                    CodexLineEvent::Error => {
+                        failure = Some(CodexExecFailure::Stream);
                         break;
                     }
-                    if value.get("method").and_then(serde_json::Value::as_str) == Some("turn/completed") {
-                        completed = failure.is_none();
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    failure = Some(CodexExecFailure::Stream);
-                    break;
-                }
-                Err(_) => {
-                    failure = Some(CodexExecFailure::Stream);
-                    break;
                 }
             }
+            Some(outcome) = in_flight.next(), if !in_flight.is_empty() => {
+                // 在途请求完成（其响应已由内部经 writer 发送），视为新鲜进度。
+                match outcome {
+                    CodexInFlightOutcome::Delegate(handling) => {
+                        // L2：Cancelled/Failed 不再静默丢弃——留日志便于线上排障与回归定位。
+                        if matches!(
+                            handling,
+                            CodexAppServerRequestHandling::Cancelled | CodexAppServerRequestHandling::Failed
+                        ) {
+                            tracing::warn!(outcome = ?handling, "Codex dynamic delegate finished abnormally");
+                        }
+                    }
+                    CodexInFlightOutcome::Approval(handling) => {
+                        // M4：审批的收尾语义与串行处理一致——用户取消或传输
+                        // 失败终止 run；Handled/Ignored 只是新鲜进度。
+                        match handling {
+                            CodexAppServerRequestHandling::Cancelled => {
+                                cancelled = true;
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Failed => {
+                                failure = Some(CodexExecFailure::ApprovalBridge);
+                                break;
+                            }
+                            CodexAppServerRequestHandling::Handled
+                            | CodexAppServerRequestHandling::Ignored => {}
+                        }
+                    }
+                }
+                idle_timer.as_mut().reset(tokio::time::Instant::now() + limits.idle_timeout);
+            }
+        }
+    }
+
+    // 收尾：取消所有在途动态委派与审批，并等待受管回收（bounded join），然后清空
+    // registry 槽位——被 drop 的 in-flight future 无法自清理。主动取消链路会终止
+    // provider / command / MCP；若第三方实现仍不合作，宿主在 bounded join 后按父运行
+    // 范围合成幂等数据库终态。
+    cancellation.cancel();
+    let child_join_timed_out = if !in_flight.is_empty() {
+        timeout(CODEX_CHILD_JOIN_TIMEOUT, async {
+            while (in_flight.next().await).is_some() {}
+        })
+        .await
+        .is_err()
+    } else {
+        false
+    };
+    if let Some(delegate) = approval.rcode_delegate.as_ref() {
+        delegate
+            .external_agents
+            .drain_children_for_parent(&approval.task_id, &approval.run_id)
+            .await;
+        let force_closed = force_close_codex_delegate_descendants(
+            &delegate.db,
+            &approval.task_id,
+            &approval.run_id,
+        );
+        if force_closed > 0 {
+            tracing::warn!(
+                task_id = %approval.task_id,
+                parent_run_id = %approval.run_id,
+                child_join_timed_out,
+                force_closed,
+                "force-closed delegated runs after hosted Codex cleanup"
+            );
         }
     }
     for (_, response) in pending_steers.drain() {
@@ -13198,10 +14929,15 @@ async fn run_codex_app_server_process_with_images(
             let _ = request.response.send(ExternalSteerOutcome::Rejected);
         }
     }
+    drop(writer_tx);
+    // 先终止 App Server（stdout EOF）再回收读泵/writer——否则 reader_task
+    // 会一直等到 2s 超时，全量测试中多个 fixture 排队会放大为分钟级延迟。
     terminate_codex_child(&mut child).await;
     let _ = child.wait().await;
+    join_task_bounded(writer_task, Duration::from_secs(2)).await;
+    join_task_bounded(reader_task, Duration::from_secs(2)).await;
     if let Some(stderr_task) = stderr_task {
-        let _ = timeout(Duration::from_secs(2), stderr_task).await;
+        join_task_bounded(stderr_task, Duration::from_secs(2)).await;
     }
     CodexExecCompletion {
         cancelled,
@@ -13262,6 +14998,8 @@ async fn run_codex_exec_subagent(
             task_id: run.task_id.clone(),
             run_id: run.id.clone(),
             caller: format!("subagent:{}", run.id),
+            workspace: Some(workspace.to_path_buf()),
+            rcode_delegate: None,
         },
     )
     .await
@@ -13388,6 +15126,27 @@ fn spawn_codex_main(
                 task_id: run.task_id.clone(),
                 run_id: run.id.clone(),
                 caller: format!("main:codex:{}", run.id),
+                workspace: Some(workspace.to_path_buf()),
+                rcode_delegate: Some(CodexRCodeDelegateContext {
+                    agent_pool: agent_pool.clone(),
+                    external_agents: external_agents.clone(),
+                    db: db.clone(),
+                    config_dir: config_dir.clone(),
+                    tool_gateway: tool_gateway.clone(),
+                    mcp_manager: mcp_manager.clone(),
+                    // Native FullAccess bypasses the gateway approval bridge, so only an
+                    // explicitly full-access Codex parent may grant it to a child.
+                    max_access: if permissions.mode() == CodexPermissionMode::FullAccess {
+                        SubagentAccessMode::FullAccess
+                    } else {
+                        SubagentAccessMode::ReadOnly
+                    },
+                    // F3：非 FullAccess 父（RequestApproval 等）inherit 的子代理进入
+                    // 审批模式——工具可见，写入/命令必须经 Gateway 审批。
+                    // H3：直接记录父的 Codex 权限预设，inherit 语义在
+                    // `codex_rcode_delegate_access` 按预设分档（ReadOnly 父不升权）。
+                    permission_mode: permissions.mode(),
+                }),
             },
             Some(steer_requests),
             CodexExecLimits::default(),
@@ -13780,16 +15539,22 @@ pub async fn agent_delegate_codex(
     if goal.is_empty() {
         return Err("Codex 子代理需要一项明确的委派任务".to_string());
     }
-    if goal.contains('\0') {
-        return Err("Codex 子代理任务不能包含空字符".to_string());
+    // F14：goal 长度统一为硬拒绝（fail-closed），与动态委派入口一致。
+    if goal.contains('\0') || goal.chars().count() > CODEX_EXEC_MAX_GOAL_CHARS {
+        return Err(format!(
+            "Codex 子代理任务无效或超过 {CODEX_EXEC_MAX_GOAL_CHARS} 字符"
+        ));
     }
-    let goal = bounded_text(goal, CODEX_EXEC_MAX_GOAL_CHARS);
+    let goal = goal.to_string();
     let task = TaskRepository::new(&state.db)
         .get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能委派 Codex 子代理".to_string());
+    }
+    if !matches!(task.state, TaskState::Exploring | TaskState::InProgress) {
+        return Err("请先启动当前 R-Code 会话，再委派 Codex 子代理".to_string());
     }
     let workspace_path = task
         .workspace_path
@@ -13817,10 +15582,30 @@ pub async fn agent_delegate_codex(
             .unwrap_or("未检测到可运行的 Codex CLI。")
             .to_string());
     }
-    if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
-        return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
+    match probe_codex_login(cli.path.as_deref()).await.state {
+        CodexAuthState::Authenticated => {}
+        CodexAuthState::NotAuthenticated => {
+            return Err(
+                "Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string(),
+            )
+        }
+        CodexAuthState::Unknown => {
+            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string())
+        }
     }
-    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
+    let configured_permissions =
+        read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
+    let subagent_prompt = SettingsService::new(state.config_dir.clone())
+        .load_agent_prompts()
+        .map_err(err_str)?
+        .subagent;
+
+    // Final validation and external slot reservation share the task-local lock with Stop.
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let parent =
+        active_native_parent_for_delegation(&state.db, task_id, &branch.id, &parent.id, &bridge)?;
+    let permissions = constrain_codex_permissions_to_native_parent(configured_permissions, &parent);
 
     let user_label = label
         .map(str::trim)
@@ -13829,7 +15614,7 @@ pub async fn agent_delegate_codex(
     let agent_label = user_label
         .map(|value| format!("Codex CLI · {value}"))
         .unwrap_or_else(|| format!("Codex CLI · {}任务", permissions.mode().display_name()));
-    let run = AgentRun::new_subagent_for_branch(
+    let mut run = AgentRun::new_subagent_for_branch(
         task_id,
         &branch.id,
         &parent.id,
@@ -13838,6 +15623,13 @@ pub async fn agent_delegate_codex(
         None,
     )
     .as_codex_exec_subagent();
+    run.access_mode = if permissions.mode() == CodexPermissionMode::ReadOnly {
+        SubagentAccessMode::ReadOnly
+    } else {
+        SubagentAccessMode::FullAccess
+    };
+    run.require_approval =
+        run.access_mode == SubagentAccessMode::FullAccess && permissions.requests_r_code_approval();
     let cancellation = state
         .external_agents
         .reserve(task_id, &parent.id, &run.id)
@@ -13858,6 +15650,7 @@ pub async fn agent_delegate_codex(
         state.external_agents.remove(&run.id).await;
         return Err(error);
     }
+    drop(bridge);
 
     let sink = state.agent_event_sink.lock().unwrap().clone();
     persist_and_emit_external_event(
@@ -13887,14 +15680,7 @@ pub async fn agent_delegate_codex(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(
-            &goal,
-            permissions,
-            &SettingsService::new(state.config_dir.clone())
-                .load_agent_prompts()
-                .map_err(err_str)?
-                .subagent,
-        ),
+        build_codex_delegation_prompt(&goal, permissions, &subagent_prompt),
         cli.path,
         permissions,
         state.permission_engine.clone(),
@@ -13920,16 +15706,22 @@ pub async fn agent_delegate_codex_mcp(
     if goal.is_empty() {
         return Err("Codex MCP 子代理需要一项明确的委派任务".to_string());
     }
-    if goal.contains('\0') {
-        return Err("Codex MCP 子代理任务不能包含空字符".to_string());
+    // F14：goal 长度统一为硬拒绝（fail-closed），与动态委派入口一致。
+    if goal.contains('\0') || goal.chars().count() > CODEX_EXEC_MAX_GOAL_CHARS {
+        return Err(format!(
+            "Codex MCP 子代理任务无效或超过 {CODEX_EXEC_MAX_GOAL_CHARS} 字符"
+        ));
     }
-    let goal = bounded_text(goal, CODEX_EXEC_MAX_GOAL_CHARS);
+    let goal = goal.to_string();
     let task = TaskRepository::new(&state.db)
         .get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found: {task_id}"))?;
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能委派 Codex MCP 子代理".to_string());
+    }
+    if !matches!(task.state, TaskState::Exploring | TaskState::InProgress) {
+        return Err("请先启动当前 R-Code 会话，再委派 Codex MCP 子代理".to_string());
     }
     let workspace_path = task
         .workspace_path
@@ -13957,14 +15749,38 @@ pub async fn agent_delegate_codex_mcp(
             .unwrap_or("未检测到可运行的 Codex CLI。")
             .to_string());
     }
-    if probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::NotAuthenticated {
-        return Err("Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string());
+    match probe_codex_login(cli.path.as_deref()).await.state {
+        CodexAuthState::Authenticated => {}
+        CodexAuthState::NotAuthenticated => {
+            return Err(
+                "Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string(),
+            )
+        }
+        CodexAuthState::Unknown => {
+            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string())
+        }
     }
-    let permissions = read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
-    if permissions.requests_r_code_approval() {
+    let configured_permissions =
+        read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
+    let initial_permissions =
+        constrain_codex_permissions_to_native_parent(configured_permissions, &parent);
+    if initial_permissions.requests_r_code_approval() {
         // `codex mcp-server` 不会向 MCP client 暴露可答复的批准请求；复用 exec
         // 委派的 App Server 桥，确保“请求批准”不会表现为无进度卡住。
         return agent_delegate_codex(state, task_id, &goal, label).await;
+    }
+    let subagent_prompt = SettingsService::new(state.config_dir.clone())
+        .load_agent_prompts()
+        .map_err(err_str)?
+        .subagent;
+
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let bridge = task_agent.lock().await;
+    let parent =
+        active_native_parent_for_delegation(&state.db, task_id, &branch.id, &parent.id, &bridge)?;
+    let permissions = constrain_codex_permissions_to_native_parent(configured_permissions, &parent);
+    if permissions.requests_r_code_approval() {
+        return Err("父运行权限已变化，请重试 Codex 委派".to_string());
     }
 
     let user_label = label
@@ -13974,7 +15790,7 @@ pub async fn agent_delegate_codex_mcp(
     let agent_label = user_label
         .map(|value| format!("Codex MCP · {value}"))
         .unwrap_or_else(|| format!("Codex MCP · {}任务", permissions.mode().display_name()));
-    let run = AgentRun::new_subagent_for_branch(
+    let mut run = AgentRun::new_subagent_for_branch(
         task_id,
         &branch.id,
         &parent.id,
@@ -13983,6 +15799,13 @@ pub async fn agent_delegate_codex_mcp(
         None,
     )
     .as_codex_mcp_subagent();
+    run.access_mode = if permissions.mode() == CodexPermissionMode::ReadOnly {
+        SubagentAccessMode::ReadOnly
+    } else {
+        SubagentAccessMode::FullAccess
+    };
+    run.require_approval =
+        run.access_mode == SubagentAccessMode::FullAccess && permissions.requests_r_code_approval();
     let cancellation = state
         .external_agents
         .reserve(task_id, &parent.id, &run.id)
@@ -14003,6 +15826,7 @@ pub async fn agent_delegate_codex_mcp(
         state.external_agents.remove(&run.id).await;
         return Err(error);
     }
+    drop(bridge);
 
     let sink = state.agent_event_sink.lock().unwrap().clone();
     persist_and_emit_external_event(
@@ -14032,14 +15856,7 @@ pub async fn agent_delegate_codex_mcp(
         branch.storage_id,
         run.clone(),
         workspace,
-        build_codex_delegation_prompt(
-            &goal,
-            permissions,
-            &SettingsService::new(state.config_dir.clone())
-                .load_agent_prompts()
-                .map_err(err_str)?
-                .subagent,
-        ),
+        build_codex_delegation_prompt(&goal, permissions, &subagent_prompt),
         cli.path,
         permissions,
         cancellation,
@@ -14844,8 +16661,9 @@ mod tests {
             delegated_by_tool_call_id: Some("delegate-call".to_string()),
             runtime_kind: AgentRunRuntimeKind::Native,
             model: Some("test-model".to_string()),
-            access_mode: SubagentAccessMode::ReadOnly,
-            routing_reason: Some("测试只读检查".to_string()),
+            access_mode: SubagentAccessMode::FullAccess,
+            require_approval: true,
+            routing_reason: Some("测试需审批检查".to_string()),
         };
         let event = AgentEvent::Scoped {
             scope: scope.clone(),
@@ -15012,6 +16830,9 @@ mod tests {
         assert_eq!(child.summary.as_deref(), Some("已找到所需信息"));
         assert_eq!(child.runtime_kind, AgentRunRuntimeKind::Native);
         assert_eq!(child.model, "test-model");
+        assert_eq!(child.access_mode, SubagentAccessMode::FullAccess);
+        assert!(child.require_approval);
+        assert_eq!(child.routing_reason.as_deref(), Some("测试需审批检查"));
         assert_eq!(
             child.delegated_by_tool_call_id.as_deref(),
             Some("delegate-call")
@@ -15116,6 +16937,7 @@ mod tests {
             runtime_kind: AgentRunRuntimeKind::CodexExec,
             model: Some("codex-cli".to_string()),
             access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
             routing_reason: Some("生命周期回归测试".to_string()),
         };
         let mut pending_text = HashMap::new();
@@ -15192,6 +17014,7 @@ mod tests {
                 runtime_kind: AgentRunRuntimeKind::CodexExec,
                 model: Some("codex-cli".to_string()),
                 access_mode: SubagentAccessMode::ReadOnly,
+                require_approval: false,
                 routing_reason: Some("测试显式委派 Codex".to_string()),
             },
             event: Box::new(AgentEvent::SubagentLifecycle {
@@ -16814,6 +18637,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn task_workspace_cannot_change_while_task_or_main_run_is_active() {
+        let (directory, state) = setup_state();
+        let first = directory.path().join("workspace-first");
+        let second = directory.path().join("workspace-second");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        let first = workspace_open(&state, &first).await.unwrap().canonical_path;
+        let second = workspace_open(&state, &second)
+            .await
+            .unwrap()
+            .canonical_path;
+        let task = task_create(&state, Some(&first), "工作区冻结", "运行中不可切换", "edit")
+            .await
+            .unwrap();
+        let tasks = TaskRepository::new(&state.db);
+
+        tasks.update_state(&task.id, TaskState::InProgress).unwrap();
+        let state_error = task_set_workspace(&state, &task.id, Some(&second))
+            .await
+            .expect_err("an in-progress task must keep its startup workspace");
+        assert!(state_error.contains("运行尚未结束"));
+        assert_eq!(
+            tasks
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .workspace_path
+                .as_deref(),
+            Some(first.as_str())
+        );
+
+        tasks.update_state(&task.id, TaskState::Idle).unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let run = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        let run_error = task_set_workspace(&state, &task.id, Some(&second))
+            .await
+            .expect_err("an active main run must keep its startup workspace");
+        assert!(run_error.contains("运行尚未结束"));
+        assert_eq!(
+            tasks
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .workspace_path
+                .as_deref(),
+            Some(first.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn task_agent_engine_is_session_scoped_and_requires_a_workspace_for_codex() {
         let (_dir, state) = setup_state();
         let workspace = workspace_open(&state, &state.project_root)
@@ -18214,6 +20090,17 @@ command = "r-code-host"
                 detail: "Codex CLI 已完成一轮分析".to_string(),
             })
         );
+        let public_summary = parse_codex_exec_json_line(
+            r#"{"type":"item.completed","item":{"type":"reasoning","summary":["已定位委派入口"],"content":["private raw reasoning"]}}"#,
+        );
+        assert!(matches!(
+            public_summary,
+            Some(CodexExecJsonEvent::Activity {
+                phase: AgentActivityPhase::Requesting,
+                detail,
+            }) if detail == r#"{"kind":"codex_reasoning_summary","text":"已定位委派入口"}"#
+                && !detail.contains("private raw reasoning")
+        ));
         let command = parse_codex_exec_json_line(
             r#"{"type":"item.started","item":{"id":"item-7","type":"command_execution","command":"curl -H 'Authorization: Bearer secret-token' https://example.test","status":"in_progress"}}"#,
         );
@@ -18247,6 +20134,993 @@ command = "r-code-host"
             Some((call_id, name, summary))
                 if call_id == "item-app" && name == "Codex 命令" && summary == "rg --files"
         ));
+        let dynamic_delegate = serde_json::json!({
+            "type": "dynamicToolCall",
+            "id": "delegate-call",
+            "tool": CODEX_RCODE_DELEGATE_TOOL,
+            "status": "inProgress"
+        });
+        assert_eq!(
+            codex_item_tool(&dynamic_delegate),
+            Some((
+                "delegate-call".to_string(),
+                "delegate_task".to_string(),
+                "委派 R-Code 子智能体".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn dynamic_child_terminal_event_drains_after_retained_events_when_queue_is_full() {
+        let (intermediate_tx, mut intermediate_rx) = tokio::sync::mpsc::channel(1);
+        let (terminal_tx, mut terminal_rx) = tokio::sync::mpsc::unbounded_channel();
+        let dropped = AtomicUsize::new(0);
+        let scope = AgentEventScope {
+            run_id: "child-ordering".to_string(),
+            agent_id: "child-ordering".to_string(),
+            parent_run_id: Some("parent-ordering".to_string()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: Some("ordering regression".to_string()),
+            delegated_by_tool_call_id: None,
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: None,
+            access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
+            routing_reason: None,
+        };
+        let scoped = |event| AgentEvent::Scoped {
+            scope: scope.clone(),
+            event: Box::new(event),
+        };
+
+        enqueue_codex_child_event(
+            scoped(AgentEvent::ToolCall {
+                name: "read_file".to_string(),
+                input: serde_json::json!({ "path": "README.md" }),
+                call_id: "call-retained".to_string(),
+            }),
+            &intermediate_tx,
+            &terminal_tx,
+            &dropped,
+        );
+        enqueue_codex_child_event(
+            scoped(AgentEvent::ToolResult {
+                call_id: "call-retained".to_string(),
+                output: serde_json::json!({ "ok": true }),
+                is_error: false,
+            }),
+            &intermediate_tx,
+            &terminal_tx,
+            &dropped,
+        );
+        enqueue_codex_child_event(
+            scoped(AgentEvent::SubagentLifecycle {
+                state: SubagentState::Completed,
+                detail: Some("done".to_string()),
+            }),
+            &intermediate_tx,
+            &terminal_tx,
+            &dropped,
+        );
+
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+        let events = drain_codex_child_events_in_order(&mut intermediate_rx, &mut terminal_rx);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            AgentEvent::Scoped { event, .. }
+                if matches!(&**event, AgentEvent::ToolCall { call_id, .. } if call_id == "call-retained")
+        ));
+        assert!(matches!(
+            &events[1],
+            AgentEvent::Scoped { event, .. }
+                if matches!(
+                    &**event,
+                    AgentEvent::SubagentLifecycle {
+                        state: SubagentState::Completed,
+                        ..
+                    }
+                )
+        ));
+    }
+
+    #[tokio::test]
+    async fn dynamic_delegate_handler_flows_through_db_and_cleans_registry() {
+        // F6 纵向测试：真实 runtime（不可达 provider 使 child 快速失败）+
+        // 真实 DB + 动态工具 handler。验证：响应含 subagent_id、child run 落库、
+        // child 槽位清理（主 run 槽位保留）、外部 callId 不再直接作审计主键。
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(
+            &state,
+            Some(&workspace),
+            "Dynamic delegate",
+            "inspect",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let task_id = task.id.clone();
+        let provider_name = format!("r-code-dynamic-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_name.clone(),
+                base_url: "http://127.0.0.1:1/v1".into(),
+                model: "test-model".into(),
+                api_key: Some("sk-dynamic-test".into()),
+                max_tokens: Some(2048),
+                temperature: Some(0.2),
+                protocol: None,
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        let bridge = state.agent.bridge_for(&task_id).await;
+        {
+            let mut bridge = bridge.lock().await;
+            ensure_real_runtime(
+                &state.config_dir,
+                &state.tool_gateway,
+                &state.mcp_manager,
+                &mut bridge,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let parent_run_id = "codex-main-dynamic".to_string();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let mut parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        parent.id = parent_run_id.clone();
+        parent.task_id = task_id.clone();
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        state
+            .external_agents
+            .reserve(&task_id, &parent_run_id, &parent_run_id)
+            .await
+            .unwrap();
+        let approval = CodexAppServerApprovalContext {
+            permission_engine: state.tool_gateway.permission_engine().clone(),
+            task_id: task_id.clone(),
+            run_id: parent_run_id.clone(),
+            caller: format!("main:codex:{parent_run_id}"),
+            workspace: Some(PathBuf::from(workspace.clone())),
+            rcode_delegate: Some(CodexRCodeDelegateContext {
+                agent_pool: state.agent.clone(),
+                external_agents: state.external_agents.clone(),
+                db: state.db.clone(),
+                config_dir: state.config_dir.clone(),
+                tool_gateway: state.tool_gateway.clone(),
+                mcp_manager: state.mcp_manager.clone(),
+                max_access: SubagentAccessMode::FullAccess,
+                permission_mode: CodexPermissionMode::RequestApproval,
+            }),
+        };
+        let (writer_tx, mut writer_rx) = tokio::sync::mpsc::channel(8);
+        let session_store = SessionStore::new(state.sessions_dir.clone());
+        let sink: Option<AgentEventSink> = None;
+        let observer = CodexExecObserver {
+            db: &state.db,
+            session_store: &session_store,
+            sessions_dir: &state.sessions_dir,
+            parent_storage_id: "parent-storage",
+            run: &parent,
+            sink: &sink,
+        };
+        let (capture_tx, _capture_rx) = tokio::sync::mpsc::unbounded_channel::<AgentEvent>();
+        let event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            let _ = capture_tx.send(event);
+        });
+        let value = serde_json::json!({
+            "id": 42,
+            "method": "item/tool/call",
+            "params": {
+                "tool": CODEX_RCODE_DELEGATE_TOOL,
+                "callId": "call-42",
+                "arguments": { "goal": "检查当前实现", "access": "inherit" },
+            },
+        });
+        let handled = tokio::time::timeout(
+            Duration::from_secs(60),
+            handle_codex_rcode_dynamic_tool(
+                &value,
+                &writer_tx,
+                &approval,
+                &CancellationToken::new(),
+                Some(&observer),
+                Some(&event_sink),
+            ),
+        )
+        .await
+        .expect("dynamic tool handler must not hang (F2)");
+        assert!(matches!(handled, CodexAppServerRequestHandling::Handled));
+        let frame = writer_rx.recv().await.expect("dynamic tool response");
+        assert_eq!(frame["id"], serde_json::json!(42));
+        let inner: serde_json::Value = serde_json::from_str(
+            frame["result"]["contentItems"][0]["text"]
+                .as_str()
+                .expect("inner JSON text"),
+        )
+        .expect("inner JSON must stay parseable (F13)");
+        let child_run_id = inner
+            .get("subagent_id")
+            .and_then(serde_json::Value::as_str)
+            .expect("child run id in response");
+        // child 因 provider 不可达而失败，但 run 生命周期事件已落库。
+        assert_eq!(inner["status"], serde_json::json!("failed"));
+        let runs = AgentRunRepository::new(&state.db);
+        assert!(
+            runs.get(child_run_id).unwrap().is_some(),
+            "child run must be persisted"
+        );
+        let child_run = runs.get(child_run_id).unwrap().unwrap();
+        assert_eq!(child_run.task_id, task_id);
+        assert_eq!(child_run.access_mode, SubagentAccessMode::FullAccess);
+        assert!(child_run.require_approval);
+        assert_eq!(
+            child_run.routing_reason.as_deref(),
+            Some("Codex 主 Agent 通过会话内工具委派 R-Code 子智能体")
+        );
+        // F10：外部 callId 不再直接作审计主键——恢复锚点使用宿主派生 id。
+        let conn = state.db.conn().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, input_json FROM tool_calls \
+                 WHERE run_id = ?1 AND tool_name = 'delegate_task'",
+            )
+            .unwrap();
+        let mut anchor_id = None;
+        let mut anchor_input = None;
+        let mut rows = stmt.query(rusqlite::params![parent_run_id]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            anchor_id = Some(row.get::<_, String>(0).unwrap());
+            anchor_input = Some(row.get::<_, String>(1).unwrap());
+        }
+        let anchor_id = anchor_id.expect("delegation audit anchor");
+        assert!(
+            anchor_id.starts_with("delegate:"),
+            "host-derived audit id, got {anchor_id}"
+        );
+        assert!(
+            anchor_input.expect("anchor input").contains("call-42"),
+            "external callId must be recorded in the anchor input"
+        );
+        // child 槽位已清理；主 run 槽位保留。
+        assert!(
+            !state
+                .external_agents
+                .cancel_run_for_task(&task_id, child_run_id)
+                .await,
+            "child slot must be released"
+        );
+        assert!(
+            state
+                .external_agents
+                .has_for_parent_run(&parent_run_id)
+                .await
+        );
+        SettingsService::new(state.config_dir.clone())
+            .set_provider_secret(&provider_name, "")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dynamic_delegate_handlers_run_concurrently_and_stay_isolated() {
+        // F7：并发 dispatch——两个 item/tool/call 同时处理，各自 child 独立
+        // 运行、独立响应，registry 槽位互不串扰。
+        let (_dir, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(
+            &state,
+            Some(&workspace),
+            "Concurrent delegate",
+            "inspect",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let task_id = task.id.clone();
+        let provider_name = format!("r-code-concurrent-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_name.clone(),
+                base_url: "http://127.0.0.1:1/v1".into(),
+                model: "test-model".into(),
+                api_key: Some("sk-concurrent-test".into()),
+                max_tokens: Some(2048),
+                temperature: Some(0.2),
+                protocol: None,
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        let bridge = state.agent.bridge_for(&task_id).await;
+        {
+            let mut bridge = bridge.lock().await;
+            ensure_real_runtime(
+                &state.config_dir,
+                &state.tool_gateway,
+                &state.mcp_manager,
+                &mut bridge,
+                None,
+            )
+            .await
+            .unwrap();
+        }
+        let parent_run_id = "codex-main-concurrent".to_string();
+        state
+            .external_agents
+            .reserve(&task_id, &parent_run_id, &parent_run_id)
+            .await
+            .unwrap();
+        let approval = CodexAppServerApprovalContext {
+            permission_engine: state.tool_gateway.permission_engine().clone(),
+            task_id: task_id.clone(),
+            run_id: parent_run_id.clone(),
+            caller: format!("main:codex:{parent_run_id}"),
+            workspace: Some(PathBuf::from(workspace.clone())),
+            rcode_delegate: Some(CodexRCodeDelegateContext {
+                agent_pool: state.agent.clone(),
+                external_agents: state.external_agents.clone(),
+                db: state.db.clone(),
+                config_dir: state.config_dir.clone(),
+                tool_gateway: state.tool_gateway.clone(),
+                mcp_manager: state.mcp_manager.clone(),
+                max_access: SubagentAccessMode::ReadOnly,
+                permission_mode: CodexPermissionMode::RequestApproval,
+            }),
+        };
+        let request = |call_id: &str, goal: &str| {
+            serde_json::json!({
+                "id": call_id.parse::<u64>().unwrap(),
+                "method": "item/tool/call",
+                "params": {
+                    "tool": CODEX_RCODE_DELEGATE_TOOL,
+                    "callId": call_id,
+                    "arguments": { "goal": goal, "access": "read_only" },
+                },
+            })
+        };
+        let (writer_a, mut writer_rx_a) = tokio::sync::mpsc::channel(8);
+        let (writer_b, mut writer_rx_b) = tokio::sync::mpsc::channel(8);
+        let request_a = request("1001", "并发任务甲");
+        let request_b = request("1002", "并发任务乙");
+        let cancellation_a = CancellationToken::new();
+        let cancellation_b = CancellationToken::new();
+        // F7：两个动态委派独立 dispatch 并行执行。用 registry 直接观测
+        // "主槽 + 两个 child 同时存在"（并发在途的硬证据），再各自回收。
+        let task_a = tokio::spawn({
+            let approval = approval.clone();
+            let writer_a = writer_a.clone();
+            async move {
+                handle_codex_rcode_dynamic_tool(
+                    &request_a,
+                    &writer_a,
+                    &approval,
+                    &cancellation_a,
+                    None,
+                    None,
+                )
+                .await
+            }
+        });
+        let task_b = tokio::spawn({
+            let approval = approval.clone();
+            let writer_b = writer_b.clone();
+            async move {
+                handle_codex_rcode_dynamic_tool(
+                    &request_b,
+                    &writer_b,
+                    &approval,
+                    &cancellation_b,
+                    None,
+                    None,
+                )
+                .await
+            }
+        });
+        let saw_both = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let count = state
+                    .external_agents
+                    .runs
+                    .lock()
+                    .await
+                    .values()
+                    .filter(|handle| handle.parent_run_id == parent_run_id)
+                    .count();
+                if count >= 3 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            saw_both.is_ok(),
+            "two children must be in-flight simultaneously (registry count never reached 3)"
+        );
+        let (a, b) = (task_a.await.unwrap(), task_b.await.unwrap());
+        assert!(matches!(a, CodexAppServerRequestHandling::Handled));
+        assert!(matches!(b, CodexAppServerRequestHandling::Handled));
+        let child_a = {
+            let frame = writer_rx_a.recv().await.expect("response A");
+            let inner: serde_json::Value = serde_json::from_str(
+                frame["result"]["contentItems"][0]["text"]
+                    .as_str()
+                    .expect("inner JSON text A"),
+            )
+            .expect("inner JSON A");
+            inner
+                .get("subagent_id")
+                .and_then(serde_json::Value::as_str)
+                .expect("child id A")
+                .to_string()
+        };
+        let child_b = {
+            let frame = writer_rx_b.recv().await.expect("response B");
+            let inner: serde_json::Value = serde_json::from_str(
+                frame["result"]["contentItems"][0]["text"]
+                    .as_str()
+                    .expect("inner JSON text B"),
+            )
+            .expect("inner JSON B");
+            inner
+                .get("subagent_id")
+                .and_then(serde_json::Value::as_str)
+                .expect("child id B")
+                .to_string()
+        };
+        assert_ne!(
+            child_a, child_b,
+            "two concurrent children must not share a run id"
+        );
+        // handle 返回 = child 已受管回收（F2）：槽位应已释放，cancel 找不到。
+        assert!(
+            !state
+                .external_agents
+                .cancel_run_for_task(&task_id, &child_a)
+                .await,
+            "child A slot must be released"
+        );
+        assert!(
+            !state
+                .external_agents
+                .cancel_run_for_task(&task_id, &child_b)
+                .await,
+            "child B slot must be released"
+        );
+        SettingsService::new(state.config_dir.clone())
+            .set_provider_secret(&provider_name, "")
+            .unwrap();
+    }
+
+    #[test]
+    fn codex_dynamic_delegate_is_in_task_and_never_elevates_read_only_parent() {
+        let tools = codex_app_server_dynamic_tools(true);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(
+            tools[0].get("name").and_then(serde_json::Value::as_str),
+            Some(CODEX_RCODE_DELEGATE_TOOL)
+        );
+        assert!(tools[0]
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|description| description.contains("same R-Code task")));
+        assert!(codex_app_server_dynamic_tools(false).is_empty());
+
+        let inherited = serde_json::json!({ "goal": "inspect" });
+        // F3/H3：inherit 继承父预设——FullAccess / 审批类父下发 FullAccess 能力档位
+        // （审批边界由 require_approval 钳制）；ReadOnly 父保持 ReadOnly，不升权。
+        assert_eq!(
+            codex_rcode_delegate_access(
+                &inherited,
+                SubagentAccessMode::FullAccess,
+                CodexPermissionMode::FullAccess
+            )
+            .unwrap(),
+            SubagentAccessMode::FullAccess
+        );
+        assert_eq!(
+            codex_rcode_delegate_access(
+                &inherited,
+                SubagentAccessMode::ReadOnly,
+                CodexPermissionMode::RequestApproval
+            )
+            .unwrap(),
+            SubagentAccessMode::FullAccess
+        );
+        // H3：ReadOnly 父的 inherit 不再升权成审批模式，child 保持只读。
+        assert_eq!(
+            codex_rcode_delegate_access(
+                &inherited,
+                SubagentAccessMode::ReadOnly,
+                CodexPermissionMode::ReadOnly
+            )
+            .unwrap(),
+            SubagentAccessMode::ReadOnly
+        );
+        let read_only = serde_json::json!({ "goal": "inspect", "access": "read_only" });
+        assert_eq!(
+            codex_rcode_delegate_access(
+                &read_only,
+                SubagentAccessMode::FullAccess,
+                CodexPermissionMode::FullAccess
+            )
+            .unwrap(),
+            SubagentAccessMode::ReadOnly
+        );
+        let elevation = serde_json::json!({ "goal": "edit", "access": "full_access" });
+        assert!(codex_rcode_delegate_access(
+            &elevation,
+            SubagentAccessMode::ReadOnly,
+            CodexPermissionMode::ReadOnly
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn permissions_approval_summary_names_paths_network_and_profiles_independently() {
+        let file_profile = serde_json::json!({
+            "reason": "需要写入构建产物",
+            "permissions": {
+                "fileSystem": {
+                    "write": ["C:/workspace/target"],
+                    "read": ["C:/workspace/Cargo.toml"],
+                },
+                "network": { "enabled": false },
+            },
+        });
+        let network_profile = serde_json::json!({
+            "permissions": {
+                "fileSystem": null,
+                "network": { "enabled": true },
+            },
+        });
+
+        let (file_tool, file_summary) =
+            codex_app_server_approval_summary("item/permissions/requestApproval", &file_profile);
+        let (network_tool, network_summary) =
+            codex_app_server_approval_summary("item/permissions/requestApproval", &network_profile);
+
+        assert!(file_summary.contains("写入[C:/workspace/target]"));
+        assert!(file_summary.contains("读取[C:/workspace/Cargo.toml]"));
+        assert!(file_summary.contains("网络：关闭"));
+        assert!(network_summary.contains("网络：开启"));
+        assert_eq!(file_tool, "Codex 访问权限");
+        assert_eq!(network_tool, "Codex 访问权限");
+        assert_ne!(
+            codex_approval_rule_target("item/permissions/requestApproval", "item-1", &file_profile,),
+            codex_approval_rule_target(
+                "item/permissions/requestApproval",
+                "item-2",
+                &network_profile,
+            ),
+            "不同 permission profile 不能共享 AllowAlways standing rule target"
+        );
+    }
+
+    #[tokio::test]
+    async fn permissions_allow_always_never_becomes_a_profile_wildcard() {
+        let engine = PermissionEngine::new();
+        let file_profile = serde_json::json!({
+            "permissions": {
+                "fileSystem": { "write": ["C:/workspace/target"] },
+                "network": { "enabled": false },
+            },
+        });
+        let network_profile = serde_json::json!({
+            "permissions": {
+                "fileSystem": null,
+                "network": { "enabled": true },
+            },
+        });
+        let (file_tool, file_summary) =
+            codex_app_server_approval_summary("item/permissions/requestApproval", &file_profile);
+        let (network_tool, network_summary) =
+            codex_app_server_approval_summary("item/permissions/requestApproval", &network_profile);
+        let file_target = codex_approval_rule_target(
+            "item/permissions/requestApproval",
+            "file-profile",
+            &file_profile,
+        );
+        let network_target = codex_approval_rule_target(
+            "item/permissions/requestApproval",
+            "network-profile",
+            &network_profile,
+        );
+        let first = engine
+            .check_detailed_with_access_mode(
+                "task",
+                "file-profile",
+                Some("run"),
+                Some("main:codex:run"),
+                &file_tool,
+                RiskLevel::R2,
+                &file_summary,
+                Some(&file_target),
+                ProjectAccessMode::RequestApproval,
+            )
+            .await;
+        let PermissionCheckResult::NeedsApproval(first) = first else {
+            panic!("first permission profile must require approval");
+        };
+        engine
+            .decide(&first.id, PermissionDecision::AllowAlways)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            engine
+                .check_detailed_with_access_mode(
+                    "task",
+                    "network-profile",
+                    Some("run"),
+                    Some("main:codex:run"),
+                    &network_tool,
+                    RiskLevel::R2,
+                    &network_summary,
+                    Some(&network_target),
+                    ProjectAccessMode::RequestApproval,
+                )
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[test]
+    fn codex_stdout_queue_has_a_fixed_raw_payload_budget() {
+        let (sender, _receiver) =
+            tokio::sync::mpsc::channel::<CodexLineEvent>(MAX_CODEX_LINE_QUEUE);
+        assert_eq!(sender.capacity(), 2);
+    }
+
+    #[test]
+    fn codex_reverse_request_limit_rejects_only_at_capacity() {
+        let (writer, mut responses) = tokio::sync::mpsc::channel(1);
+        let request = serde_json::json!({
+            "id": 77,
+            "method": "item/fileChange/requestApproval",
+            "params": {},
+        });
+
+        assert!(!reject_codex_request_at_in_flight_limit(
+            &request,
+            MAX_CODEX_IN_FLIGHT_REQUESTS - 1,
+            &writer,
+        ));
+        assert!(responses.try_recv().is_err());
+        assert!(reject_codex_request_at_in_flight_limit(
+            &request,
+            MAX_CODEX_IN_FLIGHT_REQUESTS,
+            &writer,
+        ));
+        let response = responses.try_recv().expect("capacity error response");
+        assert_eq!(response["id"], 77);
+        assert_eq!(response["error"]["code"], -32000);
+
+        // A peer that never reads stdin cannot make rejection frames accumulate in memory.
+        for _ in 0..10_000 {
+            assert!(reject_codex_request_at_in_flight_limit(
+                &request,
+                MAX_CODEX_IN_FLIGHT_REQUESTS,
+                &writer,
+            ));
+        }
+        assert_eq!(
+            responses.len(),
+            1,
+            "the bounded writer queue must stay capped"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_codex_approval_rejects_racing_allow_always() {
+        let permission_engine = Arc::new(PermissionEngine::new());
+        let cancellation = CancellationToken::new();
+        let (writer, _responses) = tokio::sync::mpsc::channel(1);
+        let value = serde_json::json!({
+            "id": 78,
+            "method": "item/fileChange/requestApproval",
+            "params": { "itemId": "cancelled-approval", "reason": "write file" },
+        });
+        let approval = CodexAppServerApprovalContext {
+            permission_engine: permission_engine.clone(),
+            task_id: "task-cancelled-approval".to_string(),
+            run_id: "run-cancelled-approval".to_string(),
+            caller: "main:codex:run-cancelled-approval".to_string(),
+            workspace: None,
+            rcode_delegate: None,
+        };
+        let handler_cancellation = cancellation.clone();
+        let handler = tokio::spawn(async move {
+            handle_codex_app_server_request(
+                &value,
+                &writer,
+                &approval,
+                &handler_cancellation,
+                None,
+                None,
+            )
+            .await
+        });
+        let request = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = permission_engine
+                    .pending_for_task("task-cancelled-approval")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approval must become pending");
+
+        cancellation.cancel();
+        assert!(permission_engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        let handling = timeout(Duration::from_secs(2), handler)
+            .await
+            .expect("cancelled handler must finish")
+            .unwrap();
+        assert!(!matches!(handling, CodexAppServerRequestHandling::Failed));
+        assert!(matches!(
+            permission_engine
+                .check(
+                    "task-cancelled-approval",
+                    "Codex 文件修改",
+                    RiskLevel::R2,
+                    Some(&codex_approval_rule_target(
+                        "item/fileChange/requestApproval",
+                        "cancelled-approval",
+                        &serde_json::json!({
+                            "itemId": "cancelled-approval",
+                            "reason": "write file"
+                        }),
+                    )),
+                )
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_codex_approval_handler_cleans_pending_and_blocks_late_grant() {
+        let permission_engine = Arc::new(PermissionEngine::new());
+        let cancellation = CancellationToken::new();
+        let (writer, _responses) = tokio::sync::mpsc::channel(1);
+        let value = serde_json::json!({
+            "id": 79,
+            "method": "item/commandExecution/requestApproval",
+            "params": { "itemId": "dropped-approval", "command": "cargo test" },
+        });
+        let approval = CodexAppServerApprovalContext {
+            permission_engine: permission_engine.clone(),
+            task_id: "task-dropped-approval".to_string(),
+            run_id: "run-dropped-approval".to_string(),
+            caller: "main:codex:run-dropped-approval".to_string(),
+            workspace: None,
+            rcode_delegate: None,
+        };
+        let handler = tokio::spawn(async move {
+            handle_codex_app_server_request(&value, &writer, &approval, &cancellation, None, None)
+                .await
+        });
+        let request = timeout(Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = permission_engine
+                    .pending_for_task("task-dropped-approval")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approval must become pending");
+
+        handler.abort();
+        assert!(handler.await.unwrap_err().is_cancelled());
+        // The lease invalidates synchronously; this assertion does not wait for its async cleanup.
+        assert!(permission_engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        timeout(Duration::from_secs(2), async {
+            while !permission_engine
+                .pending_for_task("task-dropped-approval")
+                .await
+                .is_empty()
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("dropped handler must clean its pending approval");
+    }
+
+    #[test]
+    fn permissions_approval_response_intersects_with_workspace() {
+        // F3/permissions：允许时 profile 与工作区求交——工作区外条目剔除。
+        let workspace = tempfile::tempdir().unwrap();
+        let inside = workspace.path().join("src");
+        let outside = workspace.path().parent().unwrap().join("outside-dir");
+        let traversal = workspace.path().join("..").join("outside-via-dotdot");
+        let params = serde_json::json!({
+            "permissions": {
+                "fileSystem": {
+                    "write": [inside, "src/relative-write.rs", outside, traversal],
+                    "read": [inside],
+                    "entries": [
+                        { "access": "rw", "path": inside },
+                        { "access": "rw", "path": "src/relative.rs" },
+                        { "access": "rw", "path": outside },
+                        { "access": "rw", "path": traversal },
+                    ],
+                },
+                "network": { "enabled": true },
+            },
+            "reason": "需要扩大访问",
+        });
+        let allowed = codex_approval_response(
+            "item/permissions/requestApproval",
+            &params,
+            "accept",
+            Some(workspace.path()),
+        );
+        let entries = allowed["permissions"]["fileSystem"]["entries"]
+            .as_array()
+            .expect("entries array");
+        assert_eq!(
+            entries.len(),
+            2,
+            "only absolute/relative in-workspace entries may survive: {entries:?}"
+        );
+        assert_eq!(
+            entries[0]["path"].as_str().unwrap(),
+            inside.to_string_lossy(),
+            "the absolute in-workspace entry survives"
+        );
+        assert_eq!(entries[1]["path"], serde_json::json!("src/relative.rs"));
+        let writes = allowed["permissions"]["fileSystem"]["write"]
+            .as_array()
+            .expect("legacy write array");
+        assert_eq!(writes.len(), 2, "legacy write paths use the same ceiling");
+        assert_eq!(
+            allowed["permissions"]["fileSystem"]["read"]
+                .as_array()
+                .expect("legacy read array")
+                .len(),
+            1
+        );
+        // v2 网络 profile 不受文件系统求交影响，但仍需本次用户显式批准。
+        assert_eq!(allowed["permissions"]["network"]["enabled"], true);
+        // 拒绝 → 空 profile。
+        let declined = codex_approval_response(
+            "item/permissions/requestApproval",
+            &params,
+            "decline",
+            Some(workspace.path()),
+        );
+        assert_eq!(
+            declined["permissions"]["fileSystem"],
+            serde_json::Value::Null
+        );
+        // workspace 不可判定时保守剔除全部条目。
+        let blind =
+            codex_approval_response("item/permissions/requestApproval", &params, "accept", None);
+        assert_eq!(
+            blind["permissions"]["fileSystem"]["entries"]
+                .as_array()
+                .expect("entries array")
+                .len(),
+            0
+        );
+        assert!(blind["permissions"]["fileSystem"]["write"]
+            .as_array()
+            .expect("legacy write array")
+            .is_empty());
+        assert!(blind["permissions"]["fileSystem"]["read"]
+            .as_array()
+            .expect("legacy read array")
+            .is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permissions_approval_response_rejects_symlink_escape() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = workspace.path().join("outside-link");
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        let params = serde_json::json!({
+            "permissions": {
+                "fileSystem": {
+                    "entries": [
+                        { "access": "rw", "path": link.join("new-file.txt") },
+                    ],
+                },
+            },
+        });
+
+        let allowed = codex_approval_response(
+            "item/permissions/requestApproval",
+            &params,
+            "accept",
+            Some(workspace.path()),
+        );
+        assert!(allowed["permissions"]["fileSystem"]["entries"]
+            .as_array()
+            .expect("entries array")
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_jsonl_reader_rejects_a_buffered_oversized_line() {
+        let input = b"12345\nnext\n";
+        let mut reader = tokio::io::BufReader::new(&input[..]);
+        let mut buffer = Vec::new();
+
+        let error = read_bounded_line_into(&mut reader, &mut buffer, 4)
+            .await
+            .expect_err("five bytes plus a buffered newline must exceed a four-byte limit");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(buffer.is_empty());
+        assert_eq!(
+            read_bounded_line_into(&mut reader, &mut buffer, 4)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("next"),
+            "the rejected frame must be consumed through its newline"
+        );
+    }
+
+    #[test]
+    fn steer_response_matching_never_consumes_request_frames() {
+        let turn_id = "turn-app-server";
+        // 响应帧（无 method）正常匹配。
+        let response = serde_json::json!({ "id": 1000, "result": { "turnId": "turn-app-server" } });
+        assert_eq!(
+            codex_steer_response(&response, turn_id),
+            Some((1000, ExternalSteerOutcome::Accepted))
+        );
+        // F12：请求帧（带 method）即使 id 与 pending steer 相同也绝不匹配，
+        // 否则审批/动态工具请求会被静默吞掉、Codex 侧永久等待。
+        let request = serde_json::json!({ "id": 1000, "method": "item/tool/call", "params": {} });
+        assert_eq!(codex_steer_response(&request, turn_id), None);
+        let approval = serde_json::json!({
+            "id": 1000,
+            "method": "item/commandExecution/requestApproval",
+            "params": {},
+        });
+        assert_eq!(codex_steer_response(&approval, turn_id), None);
+        // 错误响应 → Rejected；未知 turn → Unknown。
+        let error = serde_json::json!({ "id": 1001, "error": { "code": -1, "message": "nope" } });
+        assert_eq!(
+            codex_steer_response(&error, turn_id),
+            Some((1001, ExternalSteerOutcome::Rejected))
+        );
+        let mismatched = serde_json::json!({ "id": 1002, "result": { "turnId": "other" } });
+        assert_eq!(
+            codex_steer_response(&mismatched, turn_id),
+            Some((1002, ExternalSteerOutcome::Unknown))
+        );
     }
 
     #[tokio::test]
@@ -18255,13 +21129,286 @@ command = "r-code-host"
         let first = registry.reserve("task", "parent", "one").await.unwrap();
         registry.reserve("task", "parent", "two").await.unwrap();
         registry.reserve("task", "parent", "three").await.unwrap();
-        assert!(registry.reserve("task", "parent", "four").await.is_err());
+        registry.reserve("task", "parent", "four").await.unwrap();
+        assert!(registry.reserve("task", "parent", "five").await.is_err());
         assert!(registry.has_for_parent_run("parent").await);
         assert!(!registry.cancel_run_for_task("other-task", "one").await);
         assert!(registry.cancel_run_for_task("task", "one").await);
         assert!(first.is_cancelled());
         registry.remove("one").await;
-        assert!(registry.reserve("task", "parent", "four").await.is_ok());
+        assert!(registry.reserve("task", "parent", "five").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn stop_and_explicit_delegation_share_one_task_local_launch_boundary() {
+        let (_directory, state) = setup_state();
+        let state = Arc::new(state);
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(
+            &state,
+            Some(&workspace),
+            "停止竞态",
+            "不得产生幽灵子代理",
+            "edit",
+        )
+        .await
+        .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let task_bridge = state.agent.bridge_for(&task.id).await;
+        let mut launch_guard = task_bridge.lock().await;
+        launch_guard.active = Some(ActiveRun {
+            task_id: task.id.clone(),
+            branch_id: branch.id.clone(),
+            runtime_session_id: "fixture-runtime-session".to_string(),
+            run_id: parent.id.clone(),
+            memory: ActiveMemoryCapture::default(),
+        });
+
+        // The delegate wins the task lock first and reserves its child. Stop is already waiting
+        // for that same lock, so once it crosses the boundary it must cancel this new token too.
+        let abort_state = state.clone();
+        let abort_task_id = task.id.clone();
+        let stopping = tokio::spawn(async move { agent_abort(&abort_state, &abort_task_id).await });
+        tokio::task::yield_now().await;
+        let child_token = state
+            .external_agents
+            .reserve(&task.id, &parent.id, "racing-external-child")
+            .await
+            .unwrap();
+        drop(launch_guard);
+        let _ = timeout(Duration::from_secs(2), stopping)
+            .await
+            .expect("stop must cross the launch boundary")
+            .unwrap();
+
+        assert!(
+            child_token.is_cancelled(),
+            "Stop must include the racing child"
+        );
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .state,
+            TaskState::Interrupted
+        );
+        let bridge = task_bridge.lock().await;
+        assert!(active_native_parent_for_delegation(
+            &state.db, &task.id, &branch.id, &parent.id, &bridge,
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn natural_completion_and_delegation_share_one_task_local_launch_boundary() {
+        let (_directory, state) = setup_state();
+        let workspace = scoped_test_workspace(&state).await;
+        let task = task_create(
+            &state,
+            Some(&workspace),
+            "自然收尾竞态",
+            "不得产生结束父运行的幽灵子代理",
+            "edit",
+        )
+        .await
+        .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let task_bridge = state.agent.bridge_for(&task.id).await;
+        let mut completion_guard = task_bridge.lock().await;
+        let active = ActiveRun {
+            task_id: task.id.clone(),
+            branch_id: branch.id.clone(),
+            runtime_session_id: "fixture-runtime-session".to_string(),
+            run_id: parent.id.clone(),
+            memory: ActiveMemoryCapture::default(),
+        };
+        completion_guard.active = Some(active.clone());
+
+        // If a child already won reservation, completion must keep draining it.
+        state
+            .external_agents
+            .reserve(&task.id, &parent.id, "earlier-child")
+            .await
+            .unwrap();
+        assert!(
+            !try_mark_native_parent_closing(
+                &mut completion_guard,
+                &state.external_agents,
+                &active,
+            )
+            .await
+        );
+        state.external_agents.remove("earlier-child").await;
+
+        // Completion now wins the bridge lock. A delegate already waiting on that exact lock must
+        // observe the closing marker and fail before it can reserve an external slot.
+        let competing_bridge = task_bridge.clone();
+        let competing_db = state.db.clone();
+        let competing_registry = state.external_agents.clone();
+        let competing_task_id = task.id.clone();
+        let competing_branch_id = branch.id.clone();
+        let competing_parent_id = parent.id.clone();
+        let delegate = tokio::spawn(async move {
+            let bridge = competing_bridge.lock().await;
+            active_native_parent_for_delegation(
+                &competing_db,
+                &competing_task_id,
+                &competing_branch_id,
+                &competing_parent_id,
+                &bridge,
+            )?;
+            competing_registry
+                .reserve(&competing_task_id, &competing_parent_id, "late-child")
+                .await?;
+            Ok::<(), String>(())
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            try_mark_native_parent_closing(&mut completion_guard, &state.external_agents, &active,)
+                .await
+        );
+        drop(completion_guard);
+
+        let error = timeout(Duration::from_secs(2), delegate)
+            .await
+            .expect("delegate must cross the completion boundary")
+            .unwrap()
+            .expect_err("a sealed parent cannot accept a late child");
+        assert!(error.contains("收尾"));
+        assert!(!state.external_agents.has_for_parent_run(&parent.id).await);
+    }
+
+    #[tokio::test]
+    async fn external_agent_registry_drains_only_the_finished_parents_children() {
+        let registry = ExternalAgentRegistry::default();
+        let parent = registry
+            .reserve("task", "parent-a", "parent-a")
+            .await
+            .unwrap();
+        let child = registry
+            .reserve("task", "parent-a", "child-a")
+            .await
+            .unwrap();
+        let sibling = registry
+            .reserve("task", "parent-b", "child-b")
+            .await
+            .unwrap();
+
+        registry.drain_children_for_parent("task", "parent-a").await;
+
+        assert!(
+            !parent.is_cancelled(),
+            "the finishing parent removes itself later"
+        );
+        assert!(child.is_cancelled(), "the parent's child must be cancelled");
+        assert!(
+            !sibling.is_cancelled(),
+            "an unrelated parent in the same task must keep running"
+        );
+        assert!(registry.cancel_run_for_task("task", "parent-a").await);
+        assert!(!registry.cancel_run_for_task("task", "child-a").await);
+        assert!(registry.cancel_run_for_task("task", "child-b").await);
+    }
+
+    #[test]
+    fn codex_cleanup_force_closes_only_the_selected_parent_tree_once() {
+        let (_dir, state) = setup_state();
+        let task = Task::new(None, "Codex cleanup", "cleanup", TaskMode::Ask);
+        TaskRepository::new(&state.db).create(&task).unwrap();
+        let runs = AgentRunRepository::new(&state.db);
+        let parent_a = AgentRun::new(&task.id, "codex-parent-a");
+        let parent_b = AgentRun::new(&task.id, "codex-parent-b");
+        runs.create(&parent_a).unwrap();
+        runs.create(&parent_b).unwrap();
+        let child_a = AgentRun::new_subagent_for_branch(
+            &task.id,
+            "main",
+            &parent_a.id,
+            "r-code-child",
+            Some("child-a".to_string()),
+            None,
+        );
+        let grandchild_a = AgentRun::new_subagent_for_branch(
+            &task.id,
+            "main",
+            &child_a.id,
+            "r-code-grandchild",
+            Some("grandchild-a".to_string()),
+            None,
+        );
+        let sibling_b = AgentRun::new_subagent_for_branch(
+            &task.id,
+            "main",
+            &parent_b.id,
+            "r-code-sibling",
+            Some("sibling-b".to_string()),
+            None,
+        );
+        for run in [&child_a, &grandchild_a, &sibling_b] {
+            runs.create(run).unwrap();
+        }
+        let child_call = ToolCall::new(&child_a.id, &task.id, "bash", "{}", RiskLevel::R2);
+        let grandchild_call =
+            ToolCall::new(&grandchild_a.id, &task.id, "mcp_call", "{}", RiskLevel::R2);
+        let sibling_call = ToolCall::new(&sibling_b.id, &task.id, "bash", "{}", RiskLevel::R2);
+        let tools = ToolCallRepository::new(&state.db);
+        for call in [&child_call, &grandchild_call, &sibling_call] {
+            tools.create_if_absent(call).unwrap();
+        }
+
+        assert_eq!(
+            force_close_codex_delegate_descendants(&state.db, &task.id, &parent_a.id),
+            2
+        );
+        assert_eq!(
+            force_close_codex_delegate_descendants(&state.db, &task.id, &parent_a.id),
+            0,
+            "the cleanup fallback must be idempotent"
+        );
+
+        for run_id in [&child_a.id, &grandchild_a.id] {
+            let run = runs.get(run_id).unwrap().unwrap();
+            assert_eq!(run.review_state, ReviewState::Aborted);
+            assert!(run.ended_at.is_some());
+        }
+        assert!(runs.get(&sibling_b.id).unwrap().unwrap().is_active());
+
+        let conn = state.db.conn().unwrap();
+        let status = |call_id: &str| -> String {
+            conn.query_row(
+                "SELECT status FROM tool_calls WHERE id = ?1",
+                [call_id],
+                |row| row.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(status(&child_call.id), "error");
+        assert_eq!(status(&grandchild_call.id), "error");
+        assert_eq!(status(&sibling_call.id), "running");
+        drop(conn);
+
+        let finished_events = TaskEventStore::new(&state.db)
+            .list_by_task(&task.id, None, None)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.event_type == TaskEventType::SubagentFinished)
+            .count();
+        assert_eq!(finished_events, 2);
     }
 
     #[tokio::test]
@@ -18290,6 +21437,66 @@ command = "r-code-host"
             .await
             .unwrap_err();
         assert!(error.contains("启动当前 R-Code 会话"));
+    }
+
+    #[test]
+    fn explicit_codex_delegation_cannot_widen_the_native_parent_startup_ceiling() {
+        fn parent_with_startup_policy(
+            mode: TaskMode,
+            workspace_access: ProjectAccessMode,
+        ) -> AgentRun {
+            let mut parent = AgentRun::new("task", "native");
+            let (access_mode, require_approval) = native_parent_subagent_access(
+                mode,
+                Some(workspace_access),
+                SubagentAccessMode::FullAccess,
+            );
+            parent.access_mode = access_mode;
+            parent.require_approval = require_approval;
+            parent
+        }
+
+        let configured_full =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess).unwrap();
+
+        for mode in [TaskMode::Ask, TaskMode::Plan] {
+            let parent = parent_with_startup_policy(mode, ProjectAccessMode::FullAccess);
+            let effective = constrain_codex_permissions_to_native_parent(configured_full, &parent);
+            assert_eq!(effective.mode(), CodexPermissionMode::ReadOnly);
+        }
+
+        let approval_parent =
+            parent_with_startup_policy(TaskMode::Edit, ProjectAccessMode::RequestApproval);
+        let effective =
+            constrain_codex_permissions_to_native_parent(configured_full, &approval_parent);
+        assert_eq!(effective.mode(), CodexPermissionMode::RequestApproval);
+        assert_eq!(
+            effective.sandbox().as_str(),
+            "read-only",
+            "approval-scoped children must route writes through the App Server bridge"
+        );
+        assert!(effective.requests_r_code_approval());
+
+        let full_parent = parent_with_startup_policy(TaskMode::Auto, ProjectAccessMode::FullAccess);
+        let effective = constrain_codex_permissions_to_native_parent(configured_full, &full_parent);
+        assert_eq!(effective.mode(), CodexPermissionMode::FullAccess);
+        assert!(!effective.requests_r_code_approval());
+
+        let configured_read_only = CodexDelegationPermissions::read_only();
+        assert_eq!(
+            constrain_codex_permissions_to_native_parent(configured_read_only, &full_parent).mode(),
+            CodexPermissionMode::ReadOnly,
+            "a safer global profile must remain read-only under a full-access parent"
+        );
+    }
+
+    #[test]
+    fn native_to_codex_approval_child_uses_read_only_app_server_sandbox() {
+        let permissions = codex_permissions_for_native_child(SubagentAccessMode::FullAccess, true);
+        assert_eq!(permissions.mode(), CodexPermissionMode::RequestApproval);
+        assert_eq!(permissions.sandbox().as_str(), "read-only");
+        assert_eq!(permissions.approval_policy().as_str(), "on-request");
+        assert!(permissions.requests_r_code_approval());
     }
 
     #[cfg(windows)]
@@ -18386,6 +21593,99 @@ process.stdout.write('{"type":"turn.completed","usage":{"input_tokens":1,"output
         );
     }
 
+    #[test]
+    fn hosted_app_server_command_disables_only_the_legacy_r_code_mcp() {
+        // hosted Codex 运行只禁用会创建独立顶层 session 的旧 R-Code MCP；不能用
+        // `mcp_servers={}` 顺带清空用户配置的其他 Codex MCP 服务。
+        let workspace = std::env::temp_dir();
+        let command = codex_app_server_command(None, &workspace).unwrap();
+        let args: Vec<String> = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            args.iter().any(|arg| arg == "app-server"),
+            "expected the app-server subcommand in {args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair[0] == "-c"
+                && pair[1] == "mcp_servers.r-code={enabled=false,command='r-code-disabled'}"),
+            "expected the selective R-Code MCP override in {args:?}"
+        );
+        assert!(!args.iter().any(|arg| arg == "mcp_servers={}"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_setup_responds_to_cancellation() {
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-cancel-setup",
+            r#"const fs = require('node:fs');
+const readline = require('node:readline');
+const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+input.on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {
+    fs.writeFileSync('setup-ready.txt', 'ready');
+    // Deliberately never reply: cancellation must interrupt setup immediately.
+  }
+});"#,
+        ) else {
+            return;
+        };
+        let permissions =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request-approval must be a built-in preset");
+        let cancellation = CancellationToken::new();
+        let run_cancellation = cancellation.clone();
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process(
+                &workspace,
+                "wait during setup",
+                Some(shim),
+                permissions,
+                run_cancellation,
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine: Arc::new(PermissionEngine::new()),
+                    task_id: "task-cancel-setup".to_string(),
+                    run_id: "run-cancel-setup".to_string(),
+                    caller: "subagent:run-cancel-setup".to_string(),
+                    workspace: Some(workspace.clone()),
+                    rcode_delegate: None,
+                },
+                CodexExecLimits {
+                    startup_timeout: Duration::from_secs(30),
+                    idle_timeout: Duration::from_secs(30),
+                    hard_timeout: Duration::from_secs(30),
+                },
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !directory.path().join("setup-ready.txt").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("fixture must enter setup");
+        cancellation.cancel();
+
+        let completion = tokio::time::timeout(Duration::from_secs(10), run)
+            .await
+            .expect("setup cancellation must not wait for the 30-second startup timeout")
+            .unwrap();
+        assert!(completion.cancelled, "completion: {completion:?}");
+        assert!(completion.failure.is_none(), "completion: {completion:?}");
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn codex_app_server_process_returns_a_visible_summary_without_an_interactive_terminal() {
@@ -18400,7 +21700,11 @@ const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 input.on('line', (line) => {
   const message = JSON.parse(line);
   if (message.method === 'initialize') {
-    send({ id: message.id, result: {} });
+    if (message.params?.capabilities?.experimentalApi !== true) {
+      send({ id: message.id, error: { code: -32602, message: 'expected experimental API capability' } });
+    } else {
+      send({ id: message.id, result: {} });
+    }
   } else if (message.method === 'thread/start') {
     if (message.params?.config?.web_search !== 'live') {
       send({ id: message.id, error: { code: -32602, message: 'expected live web search' } });
@@ -18408,9 +21712,13 @@ input.on('line', (line) => {
       send({ id: message.id, result: { thread: { id: 'thread-app-server' } } });
     }
   } else if (message.method === 'turn/start') {
-    send({ id: message.id, result: { turn: { id: 'turn-app-server' } } });
-    send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'App Server child summary' } } });
-    send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+    if (message.params?.summary !== 'concise') {
+      send({ id: message.id, error: { code: -32602, message: 'expected concise reasoning summary' } });
+    } else {
+      send({ id: message.id, result: { turn: { id: 'turn-app-server' } } });
+      send({ method: 'item/completed', params: { item: { type: 'agentMessage', text: 'App Server child summary' } } });
+      send({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
+    }
   }
 });"#,
         ) else {
@@ -18432,6 +21740,8 @@ input.on('line', (line) => {
                 task_id: "task-app-server".to_string(),
                 run_id: "run-app-server".to_string(),
                 caller: "subagent:run-app-server".to_string(),
+                workspace: Some(directory.path().to_path_buf()),
+                rcode_delegate: None,
             },
             CodexExecLimits {
                 startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
@@ -18504,6 +21814,8 @@ input.on('line', (line) => {
                     task_id: "task-steer".to_string(),
                     run_id: "run-steer".to_string(),
                     caller: "main:codex:run-steer".to_string(),
+                    workspace: Some(directory.path().to_path_buf()),
+                    rcode_delegate: None,
                 },
                 Some(steer_receiver),
                 CodexExecLimits {
@@ -18588,6 +21900,8 @@ input.on('line', (line) => {
                     task_id: "task-ack-lost".to_string(),
                     run_id: "run-ack-lost".to_string(),
                     caller: "main:codex:run-ack-lost".to_string(),
+                    workspace: Some(directory.path().to_path_buf()),
+                    rcode_delegate: None,
                 },
                 Some(steer_receiver),
                 CodexExecLimits {
@@ -18669,6 +21983,8 @@ input.on('line', (line) => {
                     task_id: "task-approval".to_string(),
                     run_id: "run-approval".to_string(),
                     caller: "subagent:run-approval".to_string(),
+                    workspace: Some(directory.path().to_path_buf()),
+                    rcode_delegate: None,
                 },
                 CodexExecLimits {
                     startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
@@ -18707,6 +22023,189 @@ input.on('line', (line) => {
         assert_eq!(
             completion.summary.as_deref(),
             Some("Approved change completed")
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_answers_requests_while_approval_is_pending() {
+        // M4 回归：审批等待期间，后续 App Server 请求必须仍被处理——
+        // 审批独立 dispatch，不再 head-of-line 阻塞整个通道。fixture 在收到
+        // id=4 的应答后写哨兵文件；若宿主退回到串行等待审批，哨兵永远不会
+        // 出现（审批在测试决定前一直 pending）。
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let sentinel = directory.path().join("answered-during-approval");
+        let sentinel_for_script = sentinel.display().to_string().replace('\\', "/");
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-hol",
+            &format!(
+                r#"const readline = require('node:readline');
+const fs = require('node:fs');
+const input = readline.createInterface({{ input: process.stdin, crlfDelay: Infinity }});
+const send = (value) => process.stdout.write(`${{JSON.stringify(value)}}\n`);
+input.on('line', (line) => {{
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {{
+    send({{ id: message.id, result: {{}} }});
+  }} else if (message.method === 'thread/start') {{
+    send({{ id: message.id, result: {{ thread: {{ id: 'thread-hol' }} }} }});
+  }} else if (message.method === 'turn/start') {{
+    send({{ id: message.id, result: {{ turn: {{ id: 'turn-hol' }} }} }});
+    send({{ id: 3, method: 'item/fileChange/requestApproval', params: {{ itemId: 'change-hol', reason: 'modify hol.txt' }} }});
+    send({{ id: 4, method: 'item/tool/requestUserInput', params: {{ itemId: 'input-hol' }} }});
+  }} else if (message.id === 4 && !message.method) {{
+    fs.writeFileSync('{sentinel_for_script}', 'answered');
+  }} else if (message.id === 3 && !message.method) {{
+    send({{ method: 'item/completed', params: {{ item: {{ type: 'agentMessage', text: 'No head-of-line block' }} }} }});
+    send({{ method: 'turn/completed', params: {{ turn: {{ status: 'completed' }} }} }});
+  }}
+}});"#
+            ),
+        ) else {
+            return;
+        };
+        let permission_engine = Arc::new(PermissionEngine::new());
+        let engine_for_run = permission_engine.clone();
+        let permissions =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request-approval must be a built-in preset");
+        let workspace = directory.path().to_path_buf();
+        let run = tokio::spawn(async move {
+            run_codex_app_server_process(
+                &workspace,
+                "make one approved change and answer follow-ups",
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine: engine_for_run,
+                    task_id: "task-hol".to_string(),
+                    run_id: "run-hol".to_string(),
+                    caller: "subagent:run-hol".to_string(),
+                    workspace: Some(directory.path().to_path_buf()),
+                    rcode_delegate: None,
+                },
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                },
+            )
+            .await
+        });
+        let request = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, async {
+            loop {
+                if let Some(request) = permission_engine
+                    .pending_for_task("task-hol")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("Codex App Server must surface an approval request");
+        // 审批仍 pending（未决定）时，id=4 的反向请求必须已得到应答。
+        timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, async {
+            while !sentinel.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("host must answer follow-up requests while an approval is still pending");
+        permission_engine
+            .decide(&request.id, PermissionDecision::Allow)
+            .await
+            .unwrap();
+        let completion = timeout(CODEX_APP_SERVER_FIXTURE_TIMEOUT, run)
+            .await
+            .expect("Codex App Server turn must finish after approval")
+            .unwrap();
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert_eq!(completion.summary.as_deref(), Some("No head-of-line block"));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn codex_app_server_setup_answers_reverse_requests() {
+        // L1 回归：setup（initialize/thread-start/turn-start 等待）期间收到的
+        // 带 id 反向请求必须立即得到 JSON-RPC error 应答，而不是被静默丢弃
+        // 让对端回调挂到 startup deadline。fixture 在 initialize 前先发
+        // id=99 反向请求，收到应答后写哨兵文件。
+        let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
+        let directory = TempDir::new().unwrap();
+        let sentinel = directory.path().join("setup-reverse-answered");
+        let sentinel_for_script = sentinel.display().to_string().replace('\\', "/");
+        let Some(shim) = write_codex_app_server_fixture(
+            directory.path(),
+            "codex-app-server-setup-reverse",
+            &format!(
+                r#"const readline = require('node:readline');
+const fs = require('node:fs');
+const input = readline.createInterface({{ input: process.stdin, crlfDelay: Infinity }});
+const send = (value) => process.stdout.write(`${{JSON.stringify(value)}}\n`);
+input.on('line', (line) => {{
+  const message = JSON.parse(line);
+  if (message.method === 'initialize') {{
+    send({{ id: 99, method: 'item/tool/requestUserInput', params: {{ itemId: 'setup-input' }} }});
+    send({{ id: message.id, result: {{}} }});
+  }} else if (message.id === 99 && !message.method) {{
+    fs.writeFileSync('{sentinel_for_script}', 'answered');
+  }} else if (message.method === 'thread/start') {{
+    send({{ id: message.id, result: {{ thread: {{ id: 'thread-setup' }} }} }});
+  }} else if (message.method === 'turn/start') {{
+    send({{ id: message.id, result: {{ turn: {{ id: 'turn-setup' }} }} }});
+    send({{ method: 'item/completed', params: {{ item: {{ type: 'agentMessage', text: 'Setup reverse answered' }} }} }});
+    send({{ method: 'turn/completed', params: {{ turn: {{ status: 'completed' }} }} }});
+  }}
+}});"#
+            ),
+        ) else {
+            return;
+        };
+        let permission_engine = Arc::new(PermissionEngine::new());
+        let permissions =
+            CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+                .expect("request-approval must be a built-in preset");
+        let workspace = directory.path().to_path_buf();
+        let completion = timeout(
+            CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+            run_codex_app_server_process(
+                &workspace,
+                "answer setup-time reverse requests",
+                Some(shim),
+                permissions,
+                CancellationToken::new(),
+                None,
+                None,
+                CodexAppServerApprovalContext {
+                    permission_engine,
+                    task_id: "task-setup-reverse".to_string(),
+                    run_id: "run-setup-reverse".to_string(),
+                    caller: "subagent:run-setup-reverse".to_string(),
+                    workspace: Some(directory.path().to_path_buf()),
+                    rcode_delegate: None,
+                },
+                CodexExecLimits {
+                    startup_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                    hard_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
+                },
+            ),
+        )
+        .await
+        .expect("Codex App Server run timed out");
+        assert!(completion.succeeded, "completion: {completion:?}");
+        assert!(
+            sentinel.exists(),
+            "host must answer reverse requests during setup"
         );
     }
 
@@ -18972,6 +22471,34 @@ input.on('line', (line) => {
         );
         assert!(main.contains("Prefer parallel execution for independent operations"));
         assert!(main.contains("Keep writes and result-dependent steps sequential"));
+    }
+
+    #[test]
+    fn codex_prompts_require_clickable_file_references_for_main_and_subagents() {
+        let delegated = build_codex_delegation_prompt(
+            "Inspect src/lib.rs",
+            CodexDelegationPermissions::read_only(),
+            &r_code_agent_worker::AgentPromptPolicy::default().subagent,
+        );
+        assert!(delegated.contains("[src/lib.rs:42](src/lib.rs#L42)"));
+        assert!(delegated.contains("right-side Files workbench"));
+
+        let task = Task::new(
+            None,
+            "File reference check",
+            "Inspect the workspace",
+            TaskMode::Ask,
+        );
+        let main = codex_main_prompt(
+            &[],
+            &task,
+            "Inspect src/lib.rs",
+            None,
+            &r_code_agent_worker::AgentPromptPolicy::default().main_agent,
+            None,
+        );
+        assert!(main.contains("[src/lib.rs:42-48](src/lib.rs#L42)"));
+        assert!(main.contains("right-side Files workbench"));
     }
 
     #[test]

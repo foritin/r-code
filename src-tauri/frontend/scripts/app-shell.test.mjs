@@ -427,6 +427,94 @@ test("only the current text frontier owns the animated caret", async () => {
   await page.close();
 });
 
+test("Codex exposes only public reasoning summaries in the timeline", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const contract = await page.evaluate(async () => {
+    const { applyAgentEvent, buildTimeline } = await import("/src/components/room/model.ts");
+    const history = buildTimeline([
+      {
+        kind: "system",
+        id: "reasoning-history",
+        role: null,
+        text: "codex_reasoning_summary",
+        output_json: JSON.stringify({ text: "已定位委派入口" }),
+      },
+    ], [], [], new Date().toISOString());
+    const live = applyAgentEvent(
+      [],
+      { type: "activity", phase: "requesting", detail: "Codex 思考摘要：正在核对运行树" },
+      1,
+      () => "reasoning-live",
+    );
+    const ordinaryActivity = applyAgentEvent(
+      [],
+      { type: "activity", phase: "requesting", detail: "private raw reasoning" },
+      1,
+      () => "private-live",
+    );
+    return { history, live, ordinaryActivity };
+  });
+
+  assert.deepEqual(
+    contract.history.map((item) => [item.kind, item.label, item.detail]),
+    [["context", "Codex 思考摘要", "已定位委派入口"]],
+  );
+  assert.deepEqual(
+    contract.live.map((item) => [item.kind, item.label, item.detail]),
+    [["context", "Codex 思考摘要", "正在核对运行树"]],
+  );
+  assert.deepEqual(contract.ordinaryActivity, []);
+  await page.close();
+});
+
+test("active run duration refreshes on the shared second tick and isolates renders", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.bringToFront();
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await useTasksStore.getState().refreshDetail("mock-task-permission");
+    useAppStore.getState().openRoom("mock-task-permission");
+  });
+
+  const duration = page.locator(".run-summary.active .run-duration").first();
+  await duration.waitFor({ state: "visible" });
+  const initial = await duration.textContent();
+  // cadence：两次文本变化应接近 1s 的共享时钟 tick（窗口保持聚焦）。
+  const firstChangeAt = await page.evaluate(
+    (before) => new Promise((resolve) => {
+      const target = document.querySelector(".run-summary.active .run-duration");
+      const start = performance.now();
+      const observer = new MutationObserver(() => {
+        if (target?.textContent !== before) {
+          observer.disconnect();
+          resolve(Math.round(performance.now() - start));
+        }
+      });
+      observer.observe(target, { childList: true, characterData: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        resolve(-1);
+      }, 3_000);
+    }),
+    initial,
+  );
+  assert.ok(firstChangeAt > 400, `expected a ~1s tick, got ${firstChangeAt}ms`);
+  assert.ok(firstChangeAt <= 2_200, `expected a ~1s tick, got ${firstChangeAt}ms`);
+  assert.notEqual(await duration.textContent(), initial);
+  // render isolation：duration 变化期间，其他时间线内容不应被无关更新。
+  const otherContent = await page.evaluate(() => {
+    const name = document.querySelector(".run-summary.active .run-name")?.textContent;
+    const rows = document.querySelectorAll(".run-summary").length;
+    return { name, rows };
+  });
+  assert.deepEqual(otherContent, { name: "处理中", rows: 1 });
+  await page.close();
+});
+
 test("Ctrl+= zoom keeps the app shell covering the complete webview", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -800,6 +888,35 @@ test("task Files keeps highlighted deep links, dirty drafts, and existing file w
     }, fixture.previous).catch(() => {});
     await page.close();
   }
+});
+
+test("assistant file links open the right-side Files workbench at the referenced line", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    await useTasksStore.getState().refreshDetail("mock-task-complete");
+    useAppStore.getState().openRoom("mock-task-complete");
+  });
+
+  const fileLink = page.getByRole("button", { name: "打开实现文件", exact: true });
+  await fileLink.waitFor({ state: "visible" });
+  await fileLink.click();
+
+  const workbench = page.getByTestId("workbench-panel");
+  await workbench.waitFor({ state: "visible" });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="workbench-panel"]')?.getAttribute("data-workbench-kind") === "files"
+  ));
+  const activeLine = workbench.locator('.files-code-preview .file-code-line[data-line="2"]');
+  await activeLine.waitFor({ state: "visible" });
+  assert.match(await activeLine.getAttribute("class"), /is-active/);
+  assert.equal(await activeLine.getAttribute("aria-current"), "location");
+
+  await page.close();
 });
 
 test("task Files exposes file-only actions and inserts one current-task reference", async () => {
@@ -1713,6 +1830,88 @@ test("subagents open in deduplicated tabs while the overview stays available", a
     "true",
     "dismissing the launcher must restore the selected subagent tab",
   );
+
+  await page.close();
+});
+
+test("subagent permissions stay three-state across live events and persisted reloads", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const reducerContract = await page.evaluate(async () => {
+    const { activityTraceReducer, createActivityTraceState } = await import("/src/components/room/activity.ts");
+    const scope = {
+      run_id: "live-approval-child",
+      agent_id: "live-approval-child",
+      parent_run_id: "parent",
+      agent_kind: "subagent",
+      access_mode: "full_access",
+      require_approval: true,
+    };
+    const live = activityTraceReducer(createActivityTraceState(), {
+      type: "event",
+      at: 1,
+      event: {
+        type: "scoped",
+        scope,
+        event: { type: "subagent_lifecycle", state: "running", detail: "running" },
+      },
+    });
+    const persisted = activityTraceReducer(createActivityTraceState(), {
+      type: "snapshot",
+      running: false,
+      runs: [{
+        id: "persisted-approval-child",
+        task_id: "task",
+        branch_id: "main",
+        parent_run_id: "parent",
+        agent_kind: "subagent",
+        agent_label: "persisted",
+        summary: null,
+        delegated_by_tool_call_id: null,
+        model: "model",
+        runtime_kind: "native",
+        external_session_id: null,
+        review_state: "pending",
+        started_at: "2026-01-01T00:00:00.000Z",
+        ended_at: null,
+        usage_json: null,
+        access_mode: "full_access",
+        require_approval: true,
+        routing_reason: null,
+      }],
+      queuedMessages: [],
+      pendingPermissions: [],
+      at: 2,
+    });
+    return {
+      live: live.subagents.map(({ accessMode, requireApproval }) => ({ accessMode, requireApproval })),
+      persisted: persisted.subagents.map(({ accessMode, requireApproval }) => ({ accessMode, requireApproval })),
+    };
+  });
+  assert.deepEqual(reducerContract.live, [{ accessMode: "full_access", requireApproval: true }]);
+  assert.deepEqual(reducerContract.persisted, [{ accessMode: "full_access", requireApproval: true }]);
+
+  const taskRow = page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" });
+  await taskRow.locator(".sidebar-task").click();
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  await page.locator(".timeline-subagent-chip").filter({ hasText: "Codex CLI · 检查并发边界" }).click();
+
+  const workbench = page.getByTestId("workbench-panel");
+  const permission = workbench.locator(".subagent-session-permission");
+  await permission.waitFor({ state: "visible" });
+  assert.equal(await permission.innerText(), "需审批");
+
+  const summaryTab = workbench.getByRole("tab", { name: /^运行与子代理/ });
+  await summaryTab.click();
+  await workbench.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 核对锁顺序" }).click();
+  await permission.waitFor({ state: "visible" });
+  assert.equal(await permission.innerText(), "完全访问");
+
+  await summaryTab.click();
+  await workbench.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 只读复核" }).click();
+  await permission.waitFor({ state: "visible" });
+  assert.equal(await permission.innerText(), "只读");
 
   await page.close();
 });

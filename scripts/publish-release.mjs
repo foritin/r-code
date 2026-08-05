@@ -194,13 +194,287 @@ function validateReleaseRecord(record, tag, tagInfo, signingPlan = null) {
   return problems;
 }
 
-function validateUpdaterManifest(manifest, tag, tagInfo) {
-  const problems = [];
-  if (manifest.version !== tagInfo.version && manifest.version !== tag.replace(/^v/, "")) {
-    problems.push(`latest.json version ${manifest.version ?? "<missing>"} does not match ${tag}`);
+function expectedUpdaterAssets(platform, version) {
+  const assets = {
+    "windows-x86_64": [
+      `R-Code_${version}_x64_en-US.msi`,
+    ],
+    "windows-x86_64-msi": [
+      `R-Code_${version}_x64_zh-CN.msi`,
+    ],
+    "windows-x86_64-nsis": [`R-Code_${version}_x64-setup.exe`],
+    "darwin-aarch64": [`R-Code_${version}_aarch64.app.tar.gz`],
+    "darwin-aarch64-app": [`R-Code_${version}_aarch64.app.tar.gz`],
+    "darwin-x86_64": [`R-Code_${version}_x64.app.tar.gz`],
+    "darwin-x86_64-app": [`R-Code_${version}_x64.app.tar.gz`],
+    "linux-x86_64": [`R-Code_${version}_amd64.AppImage`],
+    "linux-x86_64-appimage": [`R-Code_${version}_amd64.AppImage`],
+    "linux-x86_64-deb": [`R-Code_${version}_amd64.deb`],
+  };
+  return assets[platform] ?? [];
+}
+
+function createUpdaterManifest({
+  version,
+  tag,
+  repository,
+  releaseAssets,
+  signatureDirectory,
+  notes = "",
+  pubDate = new Date().toISOString(),
+}) {
+  const preferences = {
+    "windows-x86_64": [
+      `R-Code_${version}_x64_en-US.msi`,
+      `R-Code_${version}_x64_zh-CN.msi`,
+      `R-Code_${version}_x64-setup.exe`,
+    ],
+    "windows-x86_64-msi": [
+      `R-Code_${version}_x64_zh-CN.msi`,
+    ],
+    "windows-x86_64-nsis": [`R-Code_${version}_x64-setup.exe`],
+    "darwin-aarch64": [`R-Code_${version}_aarch64.app.tar.gz`],
+    "darwin-aarch64-app": [`R-Code_${version}_aarch64.app.tar.gz`],
+    "darwin-x86_64": [`R-Code_${version}_x64.app.tar.gz`],
+    "darwin-x86_64-app": [`R-Code_${version}_x64.app.tar.gz`],
+    "linux-x86_64": [`R-Code_${version}_amd64.AppImage`],
+    "linux-x86_64-appimage": [`R-Code_${version}_amd64.AppImage`],
+    "linux-x86_64-deb": [`R-Code_${version}_amd64.deb`],
+  };
+  const assetsByName = new Map((releaseAssets ?? []).map((asset) => [asset.name, asset]));
+  const platforms = {};
+
+  for (const [platform, candidates] of Object.entries(preferences)) {
+    const asset = candidates.map((name) => assetsByName.get(name)).find(Boolean);
+    if (!asset) {
+      throw new ReleaseError(
+        `cannot build latest.json ${platform}: missing ${candidates.join(" or ")}`,
+      );
+    }
+    const signaturePath = join(signatureDirectory, `${asset.name}.sig`);
+    let signature;
+    try {
+      signature = readFileSync(signaturePath, "utf8").trim();
+    } catch (error) {
+      throw new ReleaseError(
+        `cannot build latest.json ${platform}: cannot read ${asset.name}.sig: ${error.message}`,
+      );
+    }
+    if (!signature) {
+      throw new ReleaseError(
+        `cannot build latest.json ${platform}: ${asset.name}.sig is empty`,
+      );
+    }
+    if (typeof asset.url !== "string" || asset.url.trim() === "") {
+      throw new ReleaseError(
+        `cannot build latest.json ${platform}: ${asset.name} has no download URL`,
+      );
+    }
+    platforms[platform] = { signature, url: asset.url };
   }
-  for (const platform of ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"]) {
-    if (!manifest.platforms?.[platform]) problems.push(`latest.json is missing ${platform}`);
+
+  const manifest = { version, notes, pub_date: pubDate, platforms };
+  const tagInfo = parseReleaseTag(tag);
+  if (!tagInfo || tagInfo.version !== version) {
+    throw new ReleaseError(`cannot build latest.json for mismatched tag ${tag} and version ${version}`);
+  }
+  const problems = validateUpdaterManifest(
+    manifest,
+    tag,
+    tagInfo,
+    repository,
+    releaseAssets,
+    signatureDirectory,
+  );
+  if (problems.length > 0) {
+    throw new ReleaseError(`generated updater manifest is invalid:\n- ${problems.join("\n- ")}`);
+  }
+  return manifest;
+}
+
+function parseUpdaterUrl(rawUrl) {
+  if (typeof rawUrl !== "string" || rawUrl.trim() === "") {
+    return { error: "has no URL" };
+  }
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { error: `has an invalid URL: ${rawUrl}` };
+  }
+  if (url.protocol !== "https:") return { error: `uses a non-HTTPS URL: ${rawUrl}` };
+  if (url.username || url.password || url.search || url.hash) {
+    return { error: `uses a URL with credentials, query parameters, or a fragment: ${rawUrl}` };
+  }
+  try {
+    const segments = url.pathname
+      .split("/")
+      .filter(Boolean)
+      .map((segment) => decodeURIComponent(segment));
+    if (segments.some((segment) => segment.includes("/"))) {
+      return { error: `uses an ambiguous encoded path: ${rawUrl}` };
+    }
+    return { url, segments };
+  } catch {
+    return { error: `has an invalid encoded path: ${rawUrl}` };
+  }
+}
+
+function updaterAssetName(rawUrl, repository, tag, releaseAssets) {
+  const repositoryParts = String(repository ?? "").split("/");
+  if (repositoryParts.length !== 2 || repositoryParts.some((part) => !part)) {
+    return { error: `cannot validate against invalid GitHub repository ${repository ?? "<missing>"}` };
+  }
+  const [owner, name] = repositoryParts;
+  const parsed = parseUpdaterUrl(rawUrl);
+  if (parsed.error) return parsed;
+
+  const { url, segments } = parsed;
+  let asset = null;
+  if (url.hostname.toLowerCase() === "github.com") {
+    const [urlOwner, urlName, releases, download, urlTag, assetName, ...extra] = segments;
+    if (
+      extra.length > 0
+      || releases !== "releases"
+      || download !== "download"
+      || urlOwner?.toLowerCase() !== owner.toLowerCase()
+      || urlName?.toLowerCase() !== name.toLowerCase()
+    ) {
+      return { error: `does not point to ${repository} release downloads: ${rawUrl}` };
+    }
+    if (urlTag !== tag) return { error: `points to release ${urlTag ?? "<missing>"}, not ${tag}` };
+    asset = (releaseAssets ?? []).find(
+      (candidate) => candidate.name === assetName && candidate.url === rawUrl,
+    );
+  } else if (url.hostname.toLowerCase() === "api.github.com") {
+    const [repos, urlOwner, urlName, releases, assets, assetId, ...extra] = segments;
+    if (
+      extra.length > 0
+      || repos !== "repos"
+      || releases !== "releases"
+      || assets !== "assets"
+      || !/^\d+$/.test(assetId ?? "")
+      || urlOwner?.toLowerCase() !== owner.toLowerCase()
+      || urlName?.toLowerCase() !== name.toLowerCase()
+    ) {
+      return { error: `does not identify an asset in ${repository}: ${rawUrl}` };
+    }
+    asset = (releaseAssets ?? []).find((candidate) => candidate.apiUrl === rawUrl);
+    if (asset) {
+      const releaseUrl = parseUpdaterUrl(asset.url);
+      const [assetOwner, assetRepo, releasePart, downloadPart, assetTag, assetName, ...assetExtra]
+        = releaseUrl.segments ?? [];
+      if (
+        releaseUrl.error
+        || assetExtra.length > 0
+        || releaseUrl.url.hostname.toLowerCase() !== "github.com"
+        || assetOwner?.toLowerCase() !== owner.toLowerCase()
+        || assetRepo?.toLowerCase() !== name.toLowerCase()
+        || releasePart !== "releases"
+        || downloadPart !== "download"
+        || assetTag !== tag
+        || assetName !== asset.name
+      ) {
+        return { error: `does not resolve to an asset on ${repository} release ${tag}: ${rawUrl}` };
+      }
+    }
+  } else {
+    return { error: `uses unexpected host ${url.hostname}: ${rawUrl}` };
+  }
+
+  if (!asset) return { error: `is not an asset on ${repository} release ${tag}: ${rawUrl}` };
+  return { name: asset.name };
+}
+
+function validateUpdaterManifest(
+  manifest,
+  tag,
+  tagInfo,
+  repository,
+  releaseAssets = [],
+  signatureDirectory = null,
+) {
+  const problems = [];
+  const manifestVersion = manifest?.version;
+  if (manifestVersion !== tagInfo.version) {
+    problems.push(`latest.json version ${manifestVersion ?? "<missing>"} does not match ${tag}`);
+  }
+  const platforms = [
+    "windows-x86_64",
+    "windows-x86_64-msi",
+    "windows-x86_64-nsis",
+    "darwin-aarch64",
+    "darwin-aarch64-app",
+    "darwin-x86_64",
+    "darwin-x86_64-app",
+    "linux-x86_64",
+    "linux-x86_64-appimage",
+    "linux-x86_64-deb",
+  ];
+  const resolvedAssets = new Map();
+  for (const platform of platforms) {
+    const entry = manifest?.platforms?.[platform];
+    if (!entry || typeof entry !== "object") {
+      problems.push(`latest.json is missing ${platform}`);
+      continue;
+    }
+    // Updater signatures are mandatory even when OS code-signing certificates
+    // are unavailable for a stable release. They protect update integrity.
+    if (typeof entry.signature !== "string" || entry.signature.trim() === "") {
+      problems.push(`latest.json ${platform} has an empty signature`);
+    }
+    const resolved = updaterAssetName(entry.url, repository, tag, releaseAssets);
+    if (resolved.error) {
+      problems.push(`latest.json ${platform} URL ${resolved.error}`);
+      continue;
+    }
+    const expected = expectedUpdaterAssets(platform, tagInfo.version);
+    if (!expected.includes(resolved.name)) {
+      problems.push(
+        `latest.json ${platform} points to ${resolved.name}; expected ${expected.join(" or ")}`,
+      );
+      continue;
+    }
+    resolvedAssets.set(platform, resolved.name);
+    if (signatureDirectory) {
+      const signaturePath = join(signatureDirectory, `${resolved.name}.sig`);
+      let uploadedSignature;
+      try {
+        uploadedSignature = readFileSync(signaturePath, "utf8").trim();
+      } catch (error) {
+        problems.push(
+          `latest.json ${platform} cannot read ${resolved.name}.sig: ${error.message}`,
+        );
+        continue;
+      }
+      if (entry.signature !== uploadedSignature) {
+        problems.push(`latest.json ${platform} signature does not match ${resolved.name}.sig`);
+      }
+    }
+  }
+  const windowsPlatforms = [
+    "windows-x86_64",
+    "windows-x86_64-msi",
+    "windows-x86_64-nsis",
+  ];
+  const resolvedWindowsAssets = windowsPlatforms
+    .map((platform) => resolvedAssets.get(platform))
+    .filter(Boolean);
+  const requiredWindowsAssets = [
+    `R-Code_${tagInfo.version}_x64_en-US.msi`,
+    `R-Code_${tagInfo.version}_x64_zh-CN.msi`,
+    `R-Code_${tagInfo.version}_x64-setup.exe`,
+  ];
+  if (
+    resolvedWindowsAssets.length === windowsPlatforms.length
+    && (
+      new Set(resolvedWindowsAssets).size !== windowsPlatforms.length
+      || requiredWindowsAssets.some((name) => !resolvedWindowsAssets.includes(name))
+    )
+  ) {
+    problems.push(
+      "latest.json Windows updater entries must uniquely cover en-US MSI, zh-CN MSI, and NSIS",
+    );
   }
   return problems;
 }
@@ -295,8 +569,16 @@ function verifyPublishedRelease(gh, repository, tag, tagInfo, record, signingPla
   const temporaryDirectory = mkdtempSync(join(tmpdir(), "r-code-release-"));
   try {
     github(gh, ["release", "download", tag, "--repo", repository, "--pattern", "latest.json", "--dir", temporaryDirectory]);
+    github(gh, ["release", "download", tag, "--repo", repository, "--pattern", "*.sig", "--dir", temporaryDirectory]);
     const manifest = parseJson(readFileSync(join(temporaryDirectory, "latest.json"), "utf8"), "latest.json");
-    problems.push(...validateUpdaterManifest(manifest, tag, tagInfo));
+    problems.push(...validateUpdaterManifest(
+      manifest,
+      tag,
+      tagInfo,
+      repository,
+      record.assets,
+      temporaryDirectory,
+    ));
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
@@ -444,6 +726,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
 }
 
 export {
+  createUpdaterManifest,
   parseArguments,
   platformSigningPlan,
   requiredReleaseAssets,

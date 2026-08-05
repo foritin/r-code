@@ -173,7 +173,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> Result<Task, ProductError> {
 ///
 /// 列顺序：id, task_id, branch_id, parent_run_id, agent_kind, agent_label,
 /// delegated_by_tool_call_id, model, runtime_kind, external_session_id, review_state,
-/// started_at, ended_at, usage_json, summary, access_mode, routing_reason
+/// started_at, ended_at, usage_json, summary, access_mode, routing_reason,
+/// require_approval
 fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
     let agent_kind_str: String = row.get(4).map_err(db_err)?;
     let agent_kind = parse_agent_kind(&agent_kind_str)?;
@@ -217,6 +218,7 @@ fn row_to_agent_run(row: &rusqlite::Row<'_>) -> Result<AgentRun, ProductError> {
         runtime_kind,
         access_mode,
         routing_reason: row.get(16).map_err(db_err)?,
+        require_approval: row.get::<_, i64>(17).map_err(db_err)? != 0,
         external_session_id: row.get(9).map_err(db_err)?,
         review_state,
         started_at,
@@ -599,8 +601,8 @@ impl<'a> AgentRunRepository<'a> {
         conn.execute(
             "INSERT INTO agent_runs \
              (id, task_id, branch_id, parent_run_id, agent_kind, agent_label, summary, delegated_by_tool_call_id, \
-              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, access_mode, routing_reason) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+              model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, access_mode, routing_reason, require_approval) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 run.id,
                 run.task_id,
@@ -619,6 +621,7 @@ impl<'a> AgentRunRepository<'a> {
                 run.usage_json,
                 run.access_mode.to_string(),
                 run.routing_reason,
+                i64::from(run.require_approval),
             ],
         )
         .map_err(db_err)?;
@@ -631,7 +634,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE id = ?1",
             )
             .map_err(db_err)?;
@@ -648,7 +651,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -669,7 +672,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE parent_run_id = ?1 ORDER BY started_at ASC",
             )
             .map_err(db_err)?;
@@ -691,7 +694,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 ORDER BY started_at DESC",
             )
             .map_err(db_err)?;
@@ -709,7 +712,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
             )
@@ -731,7 +734,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 AND branch_id = ?2 \
                    AND agent_kind = 'main' AND ended_at IS NULL \
                  ORDER BY started_at DESC LIMIT 1",
@@ -761,7 +764,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' \
                    AND model <> ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
@@ -788,7 +791,7 @@ impl<'a> AgentRunRepository<'a> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, task_id, branch_id, parent_run_id, agent_kind, agent_label, delegated_by_tool_call_id, \
-                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason \
+                        model, runtime_kind, external_session_id, review_state, started_at, ended_at, usage_json, summary, access_mode, routing_reason, require_approval \
                  FROM agent_runs WHERE task_id = ?1 AND agent_kind = 'main' AND model = ?2 \
                  ORDER BY started_at DESC, id DESC LIMIT 1",
             )
@@ -817,6 +820,34 @@ impl<'a> AgentRunRepository<'a> {
         )
         .map_err(db_err)?;
         Ok(())
+    }
+
+    /// Atomically finish a still-active run and preserve any summary that was already recorded.
+    ///
+    /// Cleanup paths use the affected-row result to decide whether they own the terminal event.
+    /// This prevents a late provider lifecycle event and a host timeout fallback from both
+    /// appending `SubagentFinished` for the same run.
+    pub fn finish_if_active(
+        &self,
+        id: &str,
+        review_state: ReviewState,
+        fallback_summary: Option<&str>,
+    ) -> Result<bool, ProductError> {
+        let conn = self.db.conn()?;
+        let updated = conn
+            .execute(
+                "UPDATE agent_runs \
+                 SET review_state = ?1, ended_at = ?2, summary = COALESCE(summary, ?3) \
+                 WHERE id = ?4 AND ended_at IS NULL",
+                params![
+                    review_state.to_string(),
+                    Utc::now().to_rfc3339(),
+                    fallback_summary,
+                    id,
+                ],
+            )
+            .map_err(db_err)?;
+        Ok(updated > 0)
     }
 
     /// 设置 Token 用量 JSON。
@@ -2401,7 +2432,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let child = AgentRun::new_subagent_for_branch(
+        let mut child = AgentRun::new_subagent_for_branch(
             &task.id,
             "branch-1",
             &parent.id,
@@ -2409,6 +2440,9 @@ mod tests {
             Some("检索代理".to_string()),
             Some(delegated_by_tool_call_id.to_string()),
         );
+        child.access_mode = SubagentAccessMode::FullAccess;
+        child.require_approval = true;
+        child.routing_reason = Some("父运行要求写操作逐项审批".to_string());
         repo.create(&child).unwrap();
 
         let fetched = repo.get(&child.id).unwrap().unwrap();
@@ -2528,6 +2562,27 @@ mod tests {
         let after = repo.get(&run.id).unwrap().unwrap();
         assert_eq!(after.review_state, ReviewState::Accepted);
         assert_eq!(after.ended_at.unwrap(), first_ended);
+    }
+
+    #[test]
+    fn finish_if_active_claims_the_terminal_transition_once() {
+        let db = setup_db();
+        let task = create_test_task(&db, "/proj", "Atomic Run Finish");
+        let repo = AgentRunRepository::new(&db);
+        let run = AgentRun::new(&task.id, "gpt-4");
+        repo.create(&run).unwrap();
+
+        assert!(repo
+            .finish_if_active(&run.id, ReviewState::Aborted, Some("cleanup fallback"))
+            .unwrap());
+        assert!(!repo
+            .finish_if_active(&run.id, ReviewState::Failed, Some("late duplicate"))
+            .unwrap());
+
+        let finished = repo.get(&run.id).unwrap().unwrap();
+        assert_eq!(finished.review_state, ReviewState::Aborted);
+        assert_eq!(finished.summary.as_deref(), Some("cleanup fallback"));
+        assert!(finished.ended_at.is_some());
     }
 
     /// 回归：run 结束后 get_active_run 是 None，但 get_latest_main_run 仍能找到它。

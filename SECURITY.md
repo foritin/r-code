@@ -29,6 +29,9 @@ We will acknowledge receipt, establish a private coordination channel, assess se
 - escaping the attached workspace through paths, symlinks or non-existing ancestors;
 - executing an R4 action, or bypassing the selected approval mode;
 - a read-only subagent modifying files or running commands;
+- a delegated subagent exceeding its requested access ceiling (e.g. `read_only` executing mutating MCP tools under a full-access workspace);
+- an `AllowAlways` decision authorising a different target or a higher-risk invocation than the one the user approved;
+- a third-party MCP `readOnlyHint` bypassing generic MCP approval, or an App Server permission profile escaping the physical workspace;
 - leaking Provider credentials through config, logs, support bundles or UI;
 - leaking MCP environment/header credentials, forwarding them across origins, or changing a reviewed launch plan without renewed confirmation;
 - installing an updater artifact whose signature does not match the embedded public key;
@@ -39,6 +42,8 @@ Model mistakes or a command that the user knowingly approved are not automatical
 
 ## Handling sensitive data
 
-Provider and MCP secrets are intended to live in the operating-system credential store. MCP Registry entries are unreviewed third-party metadata: adding one does not start it, and first enable requires a second exact launch-plan confirmation. Windows script and shell launchers are rejected for MCP stdio; remote MCP endpoints require HTTPS. Tool access remains constrained to an attached workspace where applicable, R4 actions are denied, and delegated subagents default to read-only. These controls reduce risk but do not make `full_access` or an enabled local MCP equivalent to a sandbox: review workspace access, MCP publishers and tool approvals as carefully as local shell access.
+Provider and MCP secrets are intended to live in the operating-system credential store. MCP Registry entries are unreviewed third-party metadata: adding one does not start it, and first enable requires a second exact launch-plan confirmation. Windows script and shell launchers are rejected for MCP stdio; remote MCP endpoints require HTTPS. Generic third-party `mcp_call` is always treated as R2 regardless of the server's `readOnlyHint`; native `web_search` and `web_fetch` retain their separately audited read classification.
+
+Tool access remains constrained to an attached workspace where applicable, R4 actions are denied, and persistent allow decisions are scoped to the exact task/tool, any target supplied by that call, and the risk level the user approved. App Server approval requests always use an exact request fingerprint; file permission profiles are resolved against the physical workspace and reject traversal or symlink escape. Delegated subagents are capped by the parent run's access mode: read-only parents produce read-only subagents, approval-mode parents produce subagents whose writes and commands require approval, and only full-access parents can delegate full access. These controls reduce risk but do not make `full_access` or an enabled local MCP equivalent to a sandbox: review workspace access, MCP publishers and tool approvals as carefully as local shell access.
 
 Never attach raw application data directories, credentials or proprietary repositories to a public issue. Generate a support-bundle preview first and inspect every file before sharing it privately.

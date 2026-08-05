@@ -31,6 +31,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt as _;
 
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
@@ -40,7 +44,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::classifier::classify_shell_command;
-use crate::gateway::{PathBinding, Tool};
+use crate::gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 
 /// 默认超时（毫秒）。
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -48,6 +52,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 const MAX_TIMEOUT_MS: u64 = 600_000;
 /// stdout / stderr 各自的输出上限（字符）。
 const MAX_STREAM_CHARS: usize = 30_000;
+const ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+enum CommandWaitResult {
+    Exited(std::io::Result<std::process::ExitStatus>),
+    TimedOut,
+    Cancelled,
+}
 
 /// `bash` 的路径绑定：只有 `cwd`，缺省时回落到工作区根。
 ///
@@ -340,119 +351,171 @@ cwd defaults to the workspace root and cannot escape it."
     }
 
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let command = input
-            .get("command")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'command' parameter".to_string()))?;
-        if command.trim().is_empty() {
-            return Err(ProductError::Other(
-                "'command' must not be empty".to_string(),
-            ));
-        }
-        if let Some(rejection) = unix_only_rejection(command) {
-            return Err(ProductError::Other(rejection));
-        }
+        execute_bash(input, None).await
+    }
 
-        // cwd 由运行时的 `PathBinding::default_root("cwd")` 注入（经 PathGuard 解析）。
-        // 缺失说明调用没走工作区绑定路径 —— fail-closed，绝不回落到进程 CWD。
-        let cwd = input.get("cwd").and_then(|v| v.as_str()).ok_or_else(|| {
-            ProductError::Other(
-                "missing 'cwd': bash must run inside a bound workspace directory".to_string(),
-            )
-        })?;
-        let cwd_path = Path::new(cwd);
-        if !cwd_path.is_dir() {
+    async fn execute_with_context_and_abort(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&AtomicBool>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        execute_bash(input, abort_flag)
+            .await
+            .map(ToolExecutionResult::from)
+    }
+}
+
+async fn execute_bash(
+    input: serde_json::Value,
+    abort_flag: Option<&AtomicBool>,
+) -> Result<String, ProductError> {
+    let command = input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'command' parameter".to_string()))?;
+    if command.trim().is_empty() {
+        return Err(ProductError::Other(
+            "'command' must not be empty".to_string(),
+        ));
+    }
+    if let Some(rejection) = unix_only_rejection(command) {
+        return Err(ProductError::Other(rejection));
+    }
+
+    // cwd 由运行时的 `PathBinding::default_root("cwd")` 注入（经 PathGuard 解析）。
+    // 缺失说明调用没走工作区绑定路径 —— fail-closed，绝不回落到进程 CWD。
+    let cwd = input.get("cwd").and_then(|v| v.as_str()).ok_or_else(|| {
+        ProductError::Other(
+            "missing 'cwd': bash must run inside a bound workspace directory".to_string(),
+        )
+    })?;
+    let cwd_path = Path::new(cwd);
+    if !cwd_path.is_dir() {
+        return Err(ProductError::Other(format!(
+            "cwd is not a directory: {cwd}"
+        )));
+    }
+
+    let timeout_ms = input
+        .get("timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(1, MAX_TIMEOUT_MS);
+
+    let plan = plan_shell(command)?;
+    let mut cmd = Command::new(plan.program());
+    match &plan {
+        ShellPlan::Inline { args, .. } => {
+            cmd.args(args);
+        }
+        ShellPlan::Script {
+            leading,
+            script_path,
+            ..
+        } => {
+            cmd.args(leading).arg(script_path);
+        }
+    }
+    cmd.current_dir(cwd_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    // Give every Unix command its own process group. `kill()` only targets the shell process;
+    // a group lets cancellation and timeout terminate cargo/node descendants as well.
+    #[cfg(unix)]
+    cmd.as_std_mut().process_group(0);
+    hide_background_console(cmd.as_std_mut());
+
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            plan.cleanup();
             return Err(ProductError::Other(format!(
-                "cwd is not a directory: {cwd}"
+                "failed to spawn {}: {err}",
+                plan.program()
             )));
         }
+    };
 
-        let timeout_ms = input
-            .get("timeout_ms")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .clamp(1, MAX_TIMEOUT_MS);
+    // 不用 `wait_with_output()`：超时时必须保留 Child 句柄，Windows 才能用
+    // taskkill 结束整棵进程树，而不是留下 node / cargo 等后代继续跑。
+    let stdout_task = child.stdout.take().map(|mut pipe| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes).await;
+            bytes
+        })
+    });
+    let stderr_task = child.stderr.take().map(|mut pipe| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes).await;
+            bytes
+        })
+    });
 
-        let plan = plan_shell(command)?;
-        let mut cmd = Command::new(plan.program());
-        match &plan {
-            ShellPlan::Inline { args, .. } => {
-                cmd.args(args);
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let wait_result = {
+        let wait = child.wait();
+        tokio::pin!(wait);
+        let deadline = tokio::time::sleep(timeout);
+        tokio::pin!(deadline);
+        loop {
+            if abort_flag.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                break CommandWaitResult::Cancelled;
             }
-            ShellPlan::Script {
-                leading,
-                script_path,
-                ..
-            } => {
-                cmd.args(leading).arg(script_path);
+            tokio::select! {
+                result = &mut wait => break CommandWaitResult::Exited(result),
+                _ = &mut deadline => break CommandWaitResult::TimedOut,
+                _ = tokio::time::sleep(ABORT_POLL_INTERVAL), if abort_flag.is_some() => {}
             }
         }
-        cmd.current_dir(cwd_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        hide_background_console(cmd.as_std_mut());
+    };
 
-        let mut child = match cmd.spawn() {
-            Ok(child) => child,
-            Err(err) => {
-                plan.cleanup();
-                return Err(ProductError::Other(format!(
-                    "failed to spawn {}: {err}",
-                    plan.program()
-                )));
-            }
-        };
-
-        // 不用 `wait_with_output()`：超时时必须保留 Child 句柄，Windows 才能用
-        // taskkill 结束整棵进程树，而不是留下 node / cargo 等后代继续跑。
-        let stdout_task = child.stdout.take().map(|mut pipe| {
-            tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let _ = pipe.read_to_end(&mut bytes).await;
-                bytes
-            })
-        });
-        let stderr_task = child.stderr.take().map(|mut pipe| {
-            tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let _ = pipe.read_to_end(&mut bytes).await;
-                bytes
-            })
-        });
-
-        let timeout = std::time::Duration::from_millis(timeout_ms);
-        let wait_result = tokio::time::timeout(timeout, child.wait()).await;
-
-        let (exit_code, timed_out, wait_error) = match wait_result {
-            Ok(Ok(status)) => (status.code(), false, None),
-            Ok(Err(err)) => (None, false, Some(format!("wait failed: {err}"))),
-            Err(_) => {
-                kill_tree(&mut child).await;
-                let _ = child.wait().await;
-                (None, true, None)
-            }
-        };
-
-        let stdout = match stdout_task {
-            Some(task) => task.await.unwrap_or_default(),
-            None => Vec::new(),
-        };
-        let stderr = match stderr_task {
-            Some(task) => task.await.unwrap_or_default(),
-            None => Vec::new(),
-        };
-        plan.cleanup();
-
-        if let Some(err) = wait_error {
-            return Err(ProductError::Other(err));
+    let (exit_code, timed_out, cancelled, wait_error) = match wait_result {
+        CommandWaitResult::Exited(Ok(status)) => (status.code(), false, false, None),
+        CommandWaitResult::Exited(Err(err)) => {
+            (None, false, false, Some(format!("wait failed: {err}")))
         }
+        CommandWaitResult::TimedOut => {
+            kill_tree(&mut child).await;
+            let _ = child.wait().await;
+            (None, true, false, None)
+        }
+        CommandWaitResult::Cancelled => {
+            // Cancellation is a cleanup protocol, not just a dropped wait future. On Windows
+            // kill_on_drop only guarantees the shell process; taskkill /T is required for
+            // cargo/node descendants. Always reap the child before reporting cancellation.
+            kill_tree(&mut child).await;
+            let _ = child.wait().await;
+            (None, false, true, None)
+        }
+    };
 
-        Ok(render_output(
-            command, exit_code, timed_out, timeout_ms, &stdout, &stderr,
-        ))
+    let stdout = match stdout_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let stderr = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+    plan.cleanup();
+
+    if let Some(err) = wait_error {
+        return Err(ProductError::Other(err));
     }
+    if cancelled {
+        return Err(ProductError::Other(
+            "bash command cancelled; process tree was terminated".to_string(),
+        ));
+    }
+
+    Ok(render_output(
+        command, exit_code, timed_out, timeout_ms, &stdout, &stderr,
+    ))
 }
 
 /// 结束子进程及其后代。
@@ -467,7 +530,18 @@ async fn kill_tree(child: &mut tokio::process::Child) {
             terminate_tree.args(["/PID", &pid.to_string(), "/T", "/F"]);
             hide_background_console(terminate_tree.as_std_mut());
             let killed = terminate_tree.output().await;
-            if killed.is_ok() {
+            if killed.is_ok_and(|output| output.status.success()) {
+                return;
+            }
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Some(pid) = child.id() {
+            // SAFETY: the child is spawned into a fresh process group whose id equals its pid.
+            // Passing the negative group id to kill(2) targets only that command tree.
+            let killed = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            if killed == 0 {
                 return;
             }
         }
@@ -704,6 +778,65 @@ mod tests {
             .await
             .unwrap();
         assert!(out.contains("[超时]"), "output was: {out}");
+    }
+
+    #[tokio::test]
+    async fn cancellation_kills_and_reaps_the_command_tree_before_returning() {
+        let dir = TempDir::new().unwrap();
+        let started = dir.path().join("bash-cancel-started");
+        let finished = dir.path().join("bash-cancel-finished");
+        #[cfg(windows)]
+        let command = format!(
+            "Set-Content -LiteralPath '{}' -Value started; Start-Sleep -Seconds 30; Set-Content -LiteralPath '{}' -Value finished",
+            started.display().to_string().replace('\'', "''"),
+            finished.display().to_string().replace('\'', "''"),
+        );
+        #[cfg(not(windows))]
+        let command = format!(
+            "printf started > '{}'; sleep 30; printf finished > '{}'",
+            started.display().to_string().replace('\'', "'\\''"),
+            finished.display().to_string().replace('\'', "'\\''"),
+        );
+        let abort = std::sync::Arc::new(AtomicBool::new(false));
+        let run_abort = abort.clone();
+        let input = serde_json::json!({
+            "command": command,
+            "cwd": dir.path().to_str().unwrap(),
+            "timeout_ms": 60_000,
+        });
+        let context = ToolExecutionContext {
+            task_id: "task-cancel-bash".to_string(),
+            run_id: "run-cancel-bash".to_string(),
+            tool_call_id: "call-cancel-bash".to_string(),
+            caller: Some("subagent:run-cancel-bash".to_string()),
+            access_mode: r_code_core::dto::ProjectAccessMode::FullAccess,
+        };
+        let run = tokio::spawn(async move {
+            BashTool
+                .execute_with_context_and_abort(input, &context, Some(run_abort.as_ref()))
+                .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !started.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("bash fixture must start before cancellation");
+        abort.store(true, Ordering::SeqCst);
+
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), run)
+            .await
+            .expect("cancelled bash must reap promptly")
+            .expect("bash test task panicked")
+            .expect_err("cancelled bash must not report success");
+        assert!(error.to_string().contains("cancelled"), "error: {error}");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            !finished.exists(),
+            "the cancelled command continued and wrote its completion marker"
+        );
     }
 
     #[cfg(windows)]

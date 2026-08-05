@@ -16,23 +16,84 @@
 //! 对应 `RiskLevel::can_persist_standing() == false`。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use chrono::Utc;
 use r_code_core::dto::{PermissionDecision, PermissionRequest, ProjectAccessMode, RiskLevel};
 use r_code_core::error::ProductError;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
+
+/// A synchronous cancellation probe evaluated while the permission state lock is held.
+///
+/// Keeping the probe inside each pending request lets cancellation sources from different
+/// runtimes participate in the same atomic terminal transition as an allow/deny decision.
+#[derive(Clone)]
+pub struct PermissionCancellation {
+    probe: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl PermissionCancellation {
+    /// Build a probe backed by the run's shared abort flag.
+    pub fn from_atomic(flag: Arc<AtomicBool>) -> Self {
+        Self::from_probe(move || flag.load(Ordering::Acquire))
+    }
+
+    /// Build a probe from another synchronous cancellation primitive.
+    pub fn from_probe(probe: impl Fn() -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            probe: Arc::new(probe),
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        (self.probe)()
+    }
+}
 
 /// Permission Engine -- 风险分级与审批流程。
 pub struct PermissionEngine {
+    /// Pending requests, terminal decisions and standing rules share one lock so a terminal
+    /// transition is committed without an intervening `.await` or partial authorization state.
+    state: Arc<Mutex<PermissionState>>,
+}
+
+#[derive(Default)]
+struct PermissionState {
     /// Standing rules: (task_id, tool_name, target) -> Decision。
-    /// R3/R4 规则不持久化（`add_standing_rule` 拒绝）。
-    standing_rules: Arc<RwLock<HashMap<StandingRuleKey, PermissionDecision>>>,
-    /// 等待审批的权限请求。
-    pending_requests: Arc<RwLock<HashMap<String, PermissionRequest>>>,
+    standing_rules: HashMap<StandingRuleKey, StandingRule>,
+    /// 等待审批的权限请求及其运行生命周期。
+    pending_requests: HashMap<String, PendingPermission>,
     /// 最近的审批决策（request_id → 决策与时间），供 `wait_decision` 挂起等待。
-    /// 超过 `DECISION_RETENTION` 的条目在等待时被惰性清理。
-    decisions: Arc<RwLock<HashMap<String, (PermissionDecision, std::time::Instant)>>>,
+    decisions: HashMap<String, (PermissionDecision, std::time::Instant)>,
+}
+
+#[derive(Clone)]
+struct PendingPermission {
+    request: PermissionRequest,
+    cancellation: Option<PermissionCancellation>,
+    expires_at: Option<std::time::Instant>,
+}
+
+impl PendingPermission {
+    fn new(
+        request: PermissionRequest,
+        cancellation: Option<PermissionCancellation>,
+        timeout: Option<std::time::Duration>,
+    ) -> Self {
+        Self {
+            request,
+            cancellation,
+            expires_at: timeout.and_then(|value| std::time::Instant::now().checked_add(value)),
+        }
+    }
+
+    fn is_valid_at(&self, now: std::time::Instant) -> bool {
+        !self
+            .cancellation
+            .as_ref()
+            .is_some_and(PermissionCancellation::is_cancelled)
+            && self.expires_at.is_none_or(|deadline| now < deadline)
+    }
 }
 
 /// 决策暂存的保留时长（超时未查询的决策会被清理）。
@@ -47,6 +108,28 @@ pub struct StandingRuleKey {
     pub tool_name: String,
     /// 目标终端 ID（终端工具用）；其他工具为 None
     pub target: Option<String>,
+}
+
+/// Standing allow rules carry the highest risk level the user actually approved.
+///
+/// Keeping the ceiling in the value preserves the public `(task, tool, target)` key while
+/// preventing an R2 "always allow" decision from silently authorizing a later R3 invocation of
+/// the same dynamic-risk tool (for example `bash`). Deny rules remain fail-closed for every risk
+/// level under the same key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StandingRule {
+    decision: PermissionDecision,
+    risk_ceiling: RiskLevel,
+}
+
+fn risk_rank(level: RiskLevel) -> u8 {
+    match level {
+        RiskLevel::R0 => 0,
+        RiskLevel::R1 => 1,
+        RiskLevel::R2 => 2,
+        RiskLevel::R3 => 3,
+        RiskLevel::R4 => 4,
+    }
 }
 
 /// 权限检查结果。
@@ -64,9 +147,26 @@ impl PermissionEngine {
     /// 创建空的权限引擎。
     pub fn new() -> Self {
         Self {
-            standing_rules: Arc::new(RwLock::new(HashMap::new())),
-            pending_requests: Arc::new(RwLock::new(HashMap::new())),
-            decisions: Arc::new(RwLock::new(HashMap::new())),
+            state: Arc::new(Mutex::new(PermissionState::default())),
+        }
+    }
+
+    fn retain_recent_decisions(state: &mut PermissionState) {
+        state
+            .decisions
+            .retain(|_, (_, at)| at.elapsed() < DECISION_RETENTION);
+    }
+
+    fn prune_invalid_requests(state: &mut PermissionState) {
+        let now = std::time::Instant::now();
+        let invalid: Vec<String> = state
+            .pending_requests
+            .iter()
+            .filter_map(|(id, entry)| (!entry.is_valid_at(now)).then_some(id.clone()))
+            .collect();
+        for id in invalid {
+            state.pending_requests.remove(&id);
+            state.decisions.insert(id, (PermissionDecision::Deny, now));
         }
     }
 
@@ -90,25 +190,32 @@ impl PermissionEngine {
         task_id: &str,
         tool_name: &str,
         target: Option<&str>,
+        risk_level: RiskLevel,
     ) -> Option<PermissionCheckResult> {
         let key = StandingRuleKey {
             task_id: task_id.to_string(),
             tool_name: tool_name.to_string(),
             target: target.map(ToOwned::to_owned),
         };
-        let rules = self.standing_rules.read().await;
+        let state = self.state.lock().await;
         // Decisions made from the generic approval card are stored without a target and therefore
         // act as a task/tool wildcard. An explicitly targeted rule still wins when both exist.
-        let decision = rules.get(&key).or_else(|| {
+        let decision = state.standing_rules.get(&key).or_else(|| {
             let mut wildcard = key.clone();
             wildcard.target = None;
-            rules.get(&wildcard)
+            state.standing_rules.get(&wildcard)
         });
         match decision {
-            Some(PermissionDecision::Deny) => Some(PermissionCheckResult::Denied(
+            Some(StandingRule {
+                decision: PermissionDecision::Deny,
+                ..
+            }) => Some(PermissionCheckResult::Denied(
                 "denied by standing rule".to_string(),
             )),
-            Some(PermissionDecision::AllowAlways | PermissionDecision::Allow) => {
+            Some(StandingRule {
+                decision: PermissionDecision::AllowAlways | PermissionDecision::Allow,
+                risk_ceiling,
+            }) if risk_rank(risk_level) <= risk_rank(*risk_ceiling) => {
                 Some(PermissionCheckResult::Allowed)
             }
             _ => None,
@@ -153,7 +260,10 @@ impl PermissionEngine {
                 "risk level R4: pre-rejected by policy".to_string(),
             );
         }
-        if let Some(result) = self.standing_result(task_id, tool_name, target).await {
+        if let Some(result) = self
+            .standing_result(task_id, tool_name, target, risk_level)
+            .await
+        {
             return result;
         }
         if !Self::requires_approval(access_mode, risk_level) {
@@ -163,11 +273,12 @@ impl PermissionEngine {
         let request = PermissionRequest::new(
             task_id, "", // tool_call_id -- check 阶段未知，由调用方后续补充
             tool_name, risk_level, "", // input_summary -- check 阶段未知
+        )
+        .with_target(target);
+        self.state.lock().await.pending_requests.insert(
+            request.id.clone(),
+            PendingPermission::new(request.clone(), None, None),
         );
-        self.pending_requests
-            .write()
-            .await
-            .insert(request.id.clone(), request.clone());
         PermissionCheckResult::NeedsApproval(request)
     }
 
@@ -185,10 +296,10 @@ impl PermissionEngine {
     ) -> PermissionRequest {
         let request =
             PermissionRequest::new(task_id, tool_call_id, tool_name, risk_level, input_summary);
-        self.pending_requests
-            .write()
-            .await
-            .insert(request.id.clone(), request.clone());
+        self.state.lock().await.pending_requests.insert(
+            request.id.clone(),
+            PendingPermission::new(request.clone(), None, None),
+        );
         request
     }
 
@@ -203,43 +314,79 @@ impl PermissionEngine {
         request_id: &str,
         decision: PermissionDecision,
     ) -> Result<(), ProductError> {
-        // 先读出请求信息（释放读锁后再可能写 standing_rules，避免死锁）
-        let request_info = {
-            let requests = self.pending_requests.read().await;
-            requests
-                .get(request_id)
-                .ok_or_else(|| {
-                    ProductError::PermissionError(format!(
-                        "permission request {request_id} not found"
-                    ))
-                })?
-                .clone()
-        };
-
-        // AllowAlways 需要先成功添加 standing rule（R3/R4 被拒绝）
-        if decision == PermissionDecision::AllowAlways {
-            self.add_standing_rule(
-                &request_info.task_id,
-                &request_info.tool_name,
-                None,
-                request_info.risk_level,
-                PermissionDecision::AllowAlways,
-            )
-            .await?;
+        if decision == PermissionDecision::Pending {
+            return Err(ProductError::PermissionError(
+                "pending is not a terminal permission decision".to_string(),
+            ));
         }
 
-        // 更新请求状态并从 pending 移除；决策写入暂存（供 wait_decision 查询）
-        let mut requests = self.pending_requests.write().await;
-        if let Some(mut req) = requests.remove(request_id) {
-            req.decision = decision;
-            req.decided_at = Some(Utc::now());
-            drop(requests);
-            self.decisions.write().await.insert(
-                request_id.to_string(),
-                (decision, std::time::Instant::now()),
+        let mut state = self.state.lock().await;
+        Self::retain_recent_decisions(&mut state);
+        let now = std::time::Instant::now();
+        let entry = state
+            .pending_requests
+            .get(request_id)
+            .ok_or_else(|| {
+                ProductError::PermissionError(format!("permission request {request_id} not found"))
+            })?
+            .clone();
+
+        // Cancellation/deadline is part of the request state and is checked under the same lock
+        // as the user decision.  Whichever transition reaches this lock first is the sole winner.
+        if !entry.is_valid_at(now) {
+            state.pending_requests.remove(request_id);
+            state
+                .decisions
+                .insert(request_id.to_string(), (PermissionDecision::Deny, now));
+            return Err(ProductError::PermissionError(format!(
+                "permission request {request_id} expired or was cancelled"
+            )));
+        }
+
+        if decision == PermissionDecision::AllowAlways {
+            if !entry.request.risk_level.can_persist_standing() {
+                return Err(ProductError::PermissionError(format!(
+                    "risk level {} cannot be persisted as standing rule",
+                    entry.request.risk_level
+                )));
+            }
+            let key = StandingRuleKey {
+                task_id: entry.request.task_id.clone(),
+                tool_name: entry.request.tool_name.clone(),
+                target: entry.request.target.clone(),
+            };
+            state.standing_rules.insert(
+                key,
+                StandingRule {
+                    decision: PermissionDecision::AllowAlways,
+                    risk_ceiling: entry.request.risk_level,
+                },
             );
         }
+
+        // No await occurs between publishing a standing rule, removing pending, and recording
+        // the winning decision, so aborting this future cannot expose a half-committed state.
+        state.pending_requests.remove(request_id);
+        state
+            .decisions
+            .insert(request_id.to_string(), (decision, now));
         Ok(())
+    }
+
+    /// Cancel a still-pending request and wake any waiter with a fail-closed Deny decision.
+    ///
+    /// This shares the same transition lock as [`Self::decide`], so a late approval cannot
+    /// create a standing rule after cancellation has won the race.
+    pub async fn cancel_request(&self, request_id: &str) -> bool {
+        let mut state = self.state.lock().await;
+        let removed = state.pending_requests.remove(request_id).is_some();
+        if removed {
+            state.decisions.insert(
+                request_id.to_string(),
+                (PermissionDecision::Deny, std::time::Instant::now()),
+            );
+        }
+        removed
     }
 
     /// 检查工具调用是否需要权限审批（完整信息版）。
@@ -286,12 +433,48 @@ impl PermissionEngine {
         target: Option<&str>,
         access_mode: ProjectAccessMode,
     ) -> PermissionCheckResult {
+        self.check_detailed_with_access_mode_and_lifecycle(
+            task_id,
+            tool_call_id,
+            run_id,
+            caller,
+            tool_name,
+            risk_level,
+            input_summary,
+            target,
+            access_mode,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Complete permission check with a cancellation/deadline lifecycle bound atomically to the
+    /// newly-created pending request.  A decision arriving after either boundary is rejected.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn check_detailed_with_access_mode_and_lifecycle(
+        &self,
+        task_id: &str,
+        tool_call_id: &str,
+        run_id: Option<&str>,
+        caller: Option<&str>,
+        tool_name: &str,
+        risk_level: RiskLevel,
+        input_summary: &str,
+        target: Option<&str>,
+        access_mode: ProjectAccessMode,
+        cancellation: Option<PermissionCancellation>,
+        timeout: Option<std::time::Duration>,
+    ) -> PermissionCheckResult {
         if risk_level == RiskLevel::R4 {
             return PermissionCheckResult::Denied(
                 "risk level R4: pre-rejected by policy".to_string(),
             );
         }
-        if let Some(result) = self.standing_result(task_id, tool_name, target).await {
+        if let Some(result) = self
+            .standing_result(task_id, tool_name, target, risk_level)
+            .await
+        {
             return result;
         }
         if !Self::requires_approval(access_mode, risk_level) {
@@ -300,11 +483,12 @@ impl PermissionEngine {
 
         let request =
             PermissionRequest::new(task_id, tool_call_id, tool_name, risk_level, input_summary)
-                .with_origin(run_id, caller);
-        self.pending_requests
-            .write()
-            .await
-            .insert(request.id.clone(), request.clone());
+                .with_origin(run_id, caller)
+                .with_target(target);
+        self.state.lock().await.pending_requests.insert(
+            request.id.clone(),
+            PendingPermission::new(request.clone(), cancellation, timeout),
+        );
         PermissionCheckResult::NeedsApproval(request)
     }
 
@@ -313,9 +497,10 @@ impl PermissionEngine {
     /// 返回 `Some(decision)` 若已批复；未批复/未知请求返回 `None`。
     /// 顺带惰性清理超过 `DECISION_RETENTION` 的旧决策。
     pub async fn try_decision(&self, request_id: &str) -> Option<PermissionDecision> {
-        let mut decisions = self.decisions.write().await;
-        decisions.retain(|_, (_, at)| at.elapsed() < DECISION_RETENTION);
-        decisions.get(request_id).map(|(d, _)| *d)
+        let mut state = self.state.lock().await;
+        Self::retain_recent_decisions(&mut state);
+        Self::prune_invalid_requests(&mut state);
+        state.decisions.get(request_id).map(|(d, _)| *d)
     }
 
     /// 挂起等待某个权限请求的审批决策（150ms 轮询）。
@@ -329,12 +514,8 @@ impl PermissionEngine {
     ) -> Option<PermissionDecision> {
         let start = std::time::Instant::now();
         loop {
-            {
-                let mut decisions = self.decisions.write().await;
-                decisions.retain(|_, (_, at)| at.elapsed() < DECISION_RETENTION);
-                if let Some((decision, _)) = decisions.get(request_id) {
-                    return Some(*decision);
-                }
+            if let Some(decision) = self.try_decision(request_id).await {
+                return Some(decision);
             }
             if start.elapsed() >= timeout {
                 return None;
@@ -365,26 +546,35 @@ impl PermissionEngine {
             tool_name: tool_name.to_string(),
             target: target.map(|s| s.to_string()),
         };
-        self.standing_rules.write().await.insert(key, decision);
+        self.state.lock().await.standing_rules.insert(
+            key,
+            StandingRule {
+                decision,
+                risk_ceiling: risk_level,
+            },
+        );
         Ok(())
     }
 
     /// 清除指定任务的所有 standing rules。
     pub async fn clear_task_rules(&self, task_id: &str) {
-        self.standing_rules
-            .write()
+        self.state
+            .lock()
             .await
+            .standing_rules
             .retain(|key, _| key.task_id != task_id);
     }
 
     /// 获取指定任务的待审批请求列表。
     pub async fn pending_for_task(&self, task_id: &str) -> Vec<PermissionRequest> {
-        self.pending_requests
-            .read()
-            .await
+        let mut state = self.state.lock().await;
+        Self::retain_recent_decisions(&mut state);
+        Self::prune_invalid_requests(&mut state);
+        state
+            .pending_requests
             .values()
-            .filter(|r| r.task_id == task_id)
-            .cloned()
+            .filter(|entry| entry.request.task_id == task_id)
+            .map(|entry| entry.request.clone())
             .collect()
     }
 
@@ -393,7 +583,13 @@ impl PermissionEngine {
     /// 审批入口需要在 `decide` 移除内存请求前记住任务归属，以便写入项目活动与
     /// 关闭同源通知；暴露只读副本不会泄露任何额外能力。
     pub async fn pending_by_id(&self, request_id: &str) -> Option<PermissionRequest> {
-        self.pending_requests.read().await.get(request_id).cloned()
+        let mut state = self.state.lock().await;
+        Self::retain_recent_decisions(&mut state);
+        Self::prune_invalid_requests(&mut state);
+        state
+            .pending_requests
+            .get(request_id)
+            .map(|entry| entry.request.clone())
     }
 }
 
@@ -479,7 +675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn request_approval_honors_allow_always_for_the_same_task_and_tool() {
+    async fn request_approval_honors_allow_always_only_for_the_same_target() {
         let engine = PermissionEngine::new();
         let first = engine
             .check_detailed_with_access_mode(
@@ -509,13 +705,24 @@ mod tests {
                     "t1",
                     "web_fetch",
                     RiskLevel::R1,
-                    Some("https://milvus.io/docs/full-text-search.md"),
+                    Some("https://milvus.io/docs/"),
                     ProjectAccessMode::RequestApproval,
                 )
                 .await,
             PermissionCheckResult::Allowed
         );
-        assert!(engine.pending_for_task("t1").await.is_empty());
+        assert!(matches!(
+            engine
+                .check_with_access_mode(
+                    "t1",
+                    "web_fetch",
+                    RiskLevel::R1,
+                    Some("https://milvus.io/docs/full-text-search.md"),
+                    ProjectAccessMode::RequestApproval,
+                )
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
     }
 
     #[tokio::test]
@@ -588,6 +795,76 @@ mod tests {
         assert_eq!(result, PermissionCheckResult::Allowed);
         // 不应创建 pending 请求
         assert!(engine.pending_for_task("t1").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn r2_allow_always_does_not_authorize_r3_for_same_tool() {
+        let engine = PermissionEngine::new();
+        let request = engine
+            .request_permission("t1", "call-r2", "bash", RiskLevel::R2, "bash cargo test")
+            .await;
+
+        engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            engine.check("t1", "bash", RiskLevel::R2, None).await,
+            PermissionCheckResult::Allowed
+        );
+
+        let escalated = engine
+            .check_detailed(
+                "t1",
+                "call-r3",
+                Some("run-1"),
+                Some("subagent:run-1"),
+                "bash",
+                RiskLevel::R3,
+                "bash npm install x",
+                None,
+            )
+            .await;
+        assert!(matches!(escalated, PermissionCheckResult::NeedsApproval(_)));
+    }
+
+    #[tokio::test]
+    async fn allow_always_is_persisted_for_the_requested_target_only() {
+        let engine = PermissionEngine::new();
+        let first = engine
+            .check_detailed(
+                "t1",
+                "call-one",
+                Some("run-1"),
+                Some("subagent:run-1"),
+                "mcp_call",
+                RiskLevel::R2,
+                "server-one/tool-one",
+                Some("server-one/tool-one"),
+            )
+            .await;
+        let PermissionCheckResult::NeedsApproval(first) = first else {
+            panic!("first target must require approval");
+        };
+        assert_eq!(first.target.as_deref(), Some("server-one/tool-one"));
+        engine
+            .decide(&first.id, PermissionDecision::AllowAlways)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            engine
+                .check("t1", "mcp_call", RiskLevel::R2, Some("server-one/tool-one"))
+                .await,
+            PermissionCheckResult::Allowed
+        );
+        assert!(matches!(
+            engine
+                .check("t1", "mcp_call", RiskLevel::R2, Some("server-two/tool-two"))
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
     }
 
     #[tokio::test]
@@ -755,6 +1032,178 @@ mod tests {
             engine.check("t1", "write_file", RiskLevel::R2, None).await,
             PermissionCheckResult::Allowed
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_conflicting_decisions_have_one_atomic_winner() {
+        let engine = Arc::new(PermissionEngine::new());
+        let request = engine
+            .request_permission("t1", "tc-race", "bash", RiskLevel::R2, "cargo test")
+            .await;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+
+        let allow_engine = engine.clone();
+        let allow_barrier = barrier.clone();
+        let allow_id = request.id.clone();
+        let allow = tokio::spawn(async move {
+            allow_barrier.wait().await;
+            allow_engine
+                .decide(&allow_id, PermissionDecision::AllowAlways)
+                .await
+        });
+
+        let deny_engine = engine.clone();
+        let deny_barrier = barrier.clone();
+        let deny_id = request.id.clone();
+        let deny = tokio::spawn(async move {
+            deny_barrier.wait().await;
+            deny_engine.decide(&deny_id, PermissionDecision::Deny).await
+        });
+
+        barrier.wait().await;
+        let allow_result = allow.await.unwrap();
+        let deny_result = deny.await.unwrap();
+        assert_ne!(allow_result.is_ok(), deny_result.is_ok());
+        assert!(engine.pending_for_task("t1").await.is_empty());
+
+        let winner = engine.try_decision(&request.id).await.unwrap();
+        let next = engine.check("t1", "bash", RiskLevel::R2, None).await;
+        match winner {
+            PermissionDecision::AllowAlways => {
+                assert_eq!(next, PermissionCheckResult::Allowed);
+            }
+            PermissionDecision::Deny => {
+                assert!(matches!(next, PermissionCheckResult::NeedsApproval(_)));
+            }
+            other => panic!("unexpected winning decision: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancellation_removes_pending_and_rejects_late_allow_always() {
+        let engine = PermissionEngine::new();
+        let request = engine
+            .request_permission("t1", "tc-cancelled", "bash", RiskLevel::R2, "cargo test")
+            .await;
+
+        assert!(engine.cancel_request(&request.id).await);
+        assert!(!engine.cancel_request(&request.id).await);
+        assert!(engine.pending_for_task("t1").await.is_empty());
+        assert_eq!(
+            engine.try_decision(&request.id).await,
+            Some(PermissionDecision::Deny)
+        );
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        assert!(matches!(
+            engine.check("t1", "bash", RiskLevel::R2, None).await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn aborted_lifecycle_rejects_allow_always_without_leaving_a_rule() {
+        let engine = PermissionEngine::new();
+        let abort = Arc::new(AtomicBool::new(false));
+        let result = engine
+            .check_detailed_with_access_mode_and_lifecycle(
+                "t-aborted",
+                "tc-aborted",
+                Some("run-aborted"),
+                Some("agent"),
+                "bash",
+                RiskLevel::R2,
+                "cargo test",
+                None,
+                ProjectAccessMode::RequestApproval,
+                Some(PermissionCancellation::from_atomic(abort.clone())),
+                Some(std::time::Duration::from_secs(60)),
+            )
+            .await;
+        let PermissionCheckResult::NeedsApproval(request) = result else {
+            panic!("R2 request must wait for approval");
+        };
+
+        abort.store(true, Ordering::SeqCst);
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        assert_eq!(
+            engine.try_decision(&request.id).await,
+            Some(PermissionDecision::Deny)
+        );
+        assert!(engine.pending_for_task("t-aborted").await.is_empty());
+        assert!(matches!(
+            engine.check("t-aborted", "bash", RiskLevel::R2, None).await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn expired_lifecycle_rejects_allow_always_without_leaving_a_rule() {
+        let engine = PermissionEngine::new();
+        let result = engine
+            .check_detailed_with_access_mode_and_lifecycle(
+                "t-expired",
+                "tc-expired",
+                Some("run-expired"),
+                Some("agent"),
+                "bash",
+                RiskLevel::R2,
+                "cargo test",
+                None,
+                ProjectAccessMode::RequestApproval,
+                None,
+                Some(std::time::Duration::ZERO),
+            )
+            .await;
+        let PermissionCheckResult::NeedsApproval(request) = result else {
+            panic!("R2 request must wait for approval");
+        };
+
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        assert_eq!(
+            engine.try_decision(&request.id).await,
+            Some(PermissionDecision::Deny)
+        );
+        assert!(matches!(
+            engine.check("t-expired", "bash", RiskLevel::R2, None).await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_a_blocked_decision_future_cannot_half_commit_allow_always() {
+        let engine = Arc::new(PermissionEngine::new());
+        let request = engine
+            .request_permission("t-drop", "tc-drop", "bash", RiskLevel::R2, "cargo test")
+            .await;
+        let state_guard = engine.state.lock().await;
+        let deciding_engine = engine.clone();
+        let request_id = request.id.clone();
+        let decision = tokio::spawn(async move {
+            deciding_engine
+                .decide(&request_id, PermissionDecision::AllowAlways)
+                .await
+        });
+        tokio::task::yield_now().await;
+
+        decision.abort();
+        assert!(decision.await.unwrap_err().is_cancelled());
+        drop(state_guard);
+
+        assert_eq!(engine.pending_for_task("t-drop").await.len(), 1);
+        assert!(engine.cancel_request(&request.id).await);
+        assert!(matches!(
+            engine.check("t-drop", "bash", RiskLevel::R2, None).await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
     }
 
     #[tokio::test]

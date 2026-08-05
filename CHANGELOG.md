@@ -6,6 +6,44 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-06
+
+### Added
+
+- Codex App Server 主 Agent 可通过会话内动态工具把有界任务委派给 R-Code 子代理：复用当前任务/运行树，不再创建独立 session；同一任务最多 3 个子代理并发，支持逐个取消。
+- Codex 运行的公开推理摘要（reasoning summary）显示在时间线并本地持久化；原始思维链内容从不进入 UI 或存储。
+- 助手回复中的工作区文件引用可点击打开右侧 Files 工作台，并跳转到指定行。
+
+### Changed
+
+- 子代理权限以“只读 / 需审批 / 完全访问”三态实时展示并写入 schema 25；重启或重新打开任务后保持与运行时一致。
+- Codex 委派的 R-Code 子代理按父运行预设继承权限：只读父运行保持只读，审批类父运行允许看到写入/命令工具但必须逐次审批，只有完全访问父运行才能直接授予完全访问；显式 `read_only` 永不升级。
+- hosted Codex 运行仅禁用由 R-Code 管理的 legacy `mcp_servers.r-code`，保留用户配置的其他 Codex MCP；同树委派由会话内动态工具提供，避免旧工具创建第二个顶层 session。
+- 动态委派审计记录使用宿主派生的唯一 ID，外部 callId 只作展示/关联；委派标签、目标摘要与有效权限档位一并入库。
+- 运行时长改为共享时钟约每秒刷新，并隔离到计时组件，避免整条时间线随计时重渲染。
+- 任务开始后锁定其工作区绑定；需要切换目录时必须先停止当前运行，避免工具访问边界在执行中变化。
+- 发布准备改为事务式写入并在失败时逐字节回滚；发布前同时核对所有 Tauri updater 平台/安装器条目、Release 资产 URL 与对应 `.sig` 内容。
+
+### Fixed
+
+- 修复审批模式子代理看到工具却因 Host 模式缺少 `bash` 而直接报错的问题；工具现在保持可见，并统一经过 Gateway 审批和审计。
+- Provider 建连、内置/外部工具、Shell 与 MCP 调用均可响应取消；Shell 会终止并回收完整进程树，父运行收尾只清理自己的子树，20 秒兜底后幂等关闭遗留 Run 与工具审计，不再永久显示“运行中”。
+- 子代理只产生一个终态事件；满队列时先排空保留的工具事件再写入终态，避免工具审计在终态之后重新变成 running。
+- Codex App Server 的审批与动态工具请求可并发处理，未知反向请求会得到 JSON-RPC 错误；setup 可取消，JSONL 单行有内存上限，steer 应答不会误吞请求帧。
+- 动态同树委派会核对实际选中的 Codex CLI（最低 `0.145.0`）与 R-Code Provider；能力不可用时只隐藏动态工具并给出可见降级原因，Codex 主任务仍可继续。
+- 取消或审批超时会原子清理 pending 请求；并发的拒绝/长期允许只有一个决策能生效，不会在已结束运行后遗留可点击卡片或错误 standing rule。
+- 主运行的停止、自然收尾与显式委派共用同一原子启动边界；收尾开始后的引导/立即发送会持久化到下一轮，不再产生已结束父运行下的“幽灵”子代理或被旧收尾覆盖的新状态。
+- Codex App Server 的在途反向请求、stdin writer 和 stdout 帧队列均有硬上限；32 MiB 大帧的原始排队预算限为 64 MiB，异常或恶意 CLI 输出不再可无界占用内存。
+- Windows updater 清单严格区分 en-US MSI、zh-CN MSI 与 NSIS setup，并要求三个唯一、完整的安装资产映射。
+
+### Security
+
+- standing allow 同时绑定任务、工具、调用提供的精确目标与批准时的风险上限；R2 授权不能放行同工具的 R3 调用，App Server profile 审批也不会扩成无目标通配符。
+- 第三方 generic `mcp_call` 始终按 R2 处理，`annotations.readOnlyHint` 仅供展示，不能降低授权要求；Plan/严格只读策略不暴露或执行 generic MCP。
+- Codex `permissions/requestApproval` 的文件范围会与物理工作区求交，拒绝 `..` 与符号链接逃逸，并以完整请求指纹隔离 session standing rule。
+- 需审批的 Codex 子进程固定使用 `read-only` sandbox 与 `on-request` 审批；更宽松的全局 Codex 配置不能绕过 R-Code 权限引擎。
+- 四平台构建只上传 updater 产物与签名，由唯一 finalize job 生成、交叉验证并上传 `latest.json`，消除并行覆盖平台键的竞态。
+
 ## [0.2.2] - 2026-08-04
 
 ### Added
@@ -106,5 +144,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.1.0]: https://github.com/foritin/r-code/releases/tag/v0.1.0
 [0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0
 [0.2.1]: https://github.com/foritin/r-code/releases/tag/v0.2.1
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.2.2...HEAD
 [0.2.2]: https://github.com/foritin/r-code/releases/tag/v0.2.2
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/foritin/r-code/releases/tag/v0.3.0
