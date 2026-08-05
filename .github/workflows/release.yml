@@ -29,12 +29,12 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
 
@@ -109,13 +109,13 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
 
@@ -124,7 +124,7 @@ jobs:
       - name: Generate and validate dependency disclosures
         run: node scripts/generate-supply-chain.mjs target/supply-chain --strict
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: r-code-supply-chain
           path: |
@@ -169,14 +169,14 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -423,16 +423,16 @@ jobs:
       WINDOWS_SIGNED: ${{ needs.validate.outputs.windows_signed }}
       APPLE_SIGNED: ${{ needs.validate.outputs.apple_signed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: r-code-supply-chain
           path: ${{ runner.temp }}/supply-chain

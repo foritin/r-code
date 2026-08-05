@@ -723,6 +723,7 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 | App Server 虽有单行 32 MiB 上限，但 64 格 stdout 队列的理论原始占用约 2 GiB | stdout 队列降为 2 格，编译期断言原始排队预算不超过 64 MiB；在途请求与 writer 也有独立硬上限。 |
 | Windows updater 的 generic / `-msi` 键都指向 en-US MSI，zh-CN 资产无正确平台映射 | 固定 generic=en-US MSI、`-msi`=zh-CN MSI、`-nsis`=setup；validator 要求三个唯一 Windows 资产完整覆盖。 |
 | 四个 matrix job 并发读改写 `latest.json` 可丢平台键 | matrix 只上传产物和签名，由单一 finalize job 生成并交叉验证唯一 manifest。 |
+| GitHub-hosted runner 已将 Node 20 action 强制迁移到 Node 24，旧 checkout、setup-node 与 artifact actions 产生弃用警告 | CI、flaky-test 与 release 工作流分别升级到 Node 24 原生的 `actions/checkout@v6`、`actions/setup-node@v5`、`actions/upload-artifact@v6` 与 `actions/download-artifact@v7`；第三方 Rust cache 与 Tauri action 的现用标签也已核验为 Node 24，且全部 job 都使用满足版本要求的 GitHub-hosted runner。 |
 
 ### 14.3 最终自动化门禁
 
@@ -730,7 +731,7 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 - `cargo test --workspace --all-features`：全工作区通过，0 failed；其中 Host 当前 372 项 lib 测试、Gateway 163 项全量测试通过。
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`：通过。
 - 前端 `npm test`：69/69 通过；`npm run build`：TypeScript + Vite 生产构建通过。
-- `node --test scripts/release.test.mjs`：25/25 通过；`node scripts/release.mjs check v0.3.0`：所有版本一致为 0.3.0。
+- `node --test scripts/release.test.mjs`：26/26 通过；`node scripts/release.mjs check v0.3.0`：所有版本一致为 0.3.0。
 - `cargo audit`：退出码 0，仅报告 18 个已允许的上游 GTK/未维护 warning；`cargo deny check`：advisories / bans / licenses / sources 全部通过（仅依赖重复警告）。
 - `node scripts/generate-supply-chain.mjs target/supply-chain --strict`：生成 756 个 CycloneDX / license 组件，严格模式通过。
 

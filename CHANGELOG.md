@@ -23,6 +23,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 运行时长改为共享时钟约每秒刷新，并隔离到计时组件，避免整条时间线随计时重渲染。
 - 任务开始后锁定其工作区绑定；需要切换目录时必须先停止当前运行，避免工具访问边界在执行中变化。
 - 发布准备改为事务式写入并在失败时逐字节回滚；发布前同时核对所有 Tauri updater 平台/安装器条目、Release 资产 URL 与对应 `.sig` 内容。
+- GitHub CI、波动测试与发布工作流统一使用 Node 24 原生的 checkout、setup-node 与 artifact actions，消除 Node 20 运行时弃用警告。
 
 ### Fixed
 

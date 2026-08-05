@@ -636,6 +636,25 @@ test("CI authenticates every private agent-core checkout", () => {
   );
 });
 
+test("workflows use Node 24 action runtimes", () => {
+  const workflows = ["ci.yml", "flaky-tests.yml", "release.yml"]
+    .map((name) => fs.readFileSync(path.join(repoRoot, ".github", "workflows", name), "utf8"))
+    .join("\n");
+
+  for (const legacyAction of [
+    "actions/checkout@v4",
+    "actions/setup-node@v4",
+    "actions/upload-artifact@v4",
+    "actions/download-artifact@v4",
+  ]) {
+    assert.doesNotMatch(workflows, new RegExp(legacyAction.replace("/", "\\/")));
+  }
+  assert.match(workflows, /actions\/checkout@v6/);
+  assert.match(workflows, /actions\/setup-node@v5/);
+  assert.match(workflows, /actions\/upload-artifact@v6/);
+  assert.match(workflows, /actions\/download-artifact@v7/);
+});
+
 test("supply-chain generator emits CycloneDX and separates workspace packages", () => {
   const components = collectComponents({
     workspace_members: ["local 1.0.0"],
