@@ -20412,6 +20412,8 @@ command = "r-code-host"
     async fn dynamic_delegate_handlers_run_concurrently_and_stay_isolated() {
         // F7：并发 dispatch——两个 item/tool/call 同时处理，各自 child 独立
         // 运行、独立响应，registry 槽位互不串扰。
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
         let (_dir, state) = setup_state();
         let workspace = scoped_test_workspace(&state).await;
         let task = task_create(
@@ -20424,12 +20426,77 @@ command = "r-code-host"
         .await
         .unwrap();
         let task_id = task.id.clone();
+
+        // Keep both provider calls behind a deterministic local barrier. The previous fixture
+        // used an unreachable port, so a fast connection refusal (notably on macOS) could finish
+        // and remove the first child before the registry poll observed the second one. This
+        // server accepts real OpenAI-compatible streaming requests but does not answer until the
+        // test has observed both child slots.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind gated provider fixture");
+        let provider_addr = listener.local_addr().expect("gated provider address");
+        let (provider_release, release_rx) = tokio::sync::watch::channel(false);
+        let (provider_request_tx, mut provider_requests) = tokio::sync::mpsc::channel(2);
+        let provider_server = tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut release_rx = release_rx.clone();
+                let provider_request_tx = provider_request_tx.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::with_capacity(4096);
+                    let mut chunk = [0_u8; 1024];
+                    let header_end = loop {
+                        if let Some(offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            break offset + 4;
+                        }
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    };
+                    let content_length = String::from_utf8_lossy(&request[..header_end])
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while request.len() < header_end.saturating_add(content_length) {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    if provider_request_tx.send(()).await.is_err() {
+                        return;
+                    }
+                    while !*release_rx.borrow() && release_rx.changed().await.is_ok() {}
+
+                    let body = concat!(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n",
+                        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
         let provider_name = format!("r-code-concurrent-{}", uuid::Uuid::new_v4());
         settings_save_provider(
             &state,
             ProviderSettingsInput {
                 name: provider_name.clone(),
-                base_url: "http://127.0.0.1:1/v1".into(),
+                base_url: format!("http://{provider_addr}/v1"),
                 model: "test-model".into(),
                 api_key: Some("sk-concurrent-test".into()),
                 max_tokens: Some(2048),
@@ -20525,38 +20592,50 @@ command = "r-code-host"
                 .await
             }
         });
-        let saw_both = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let count = state
-                    .external_agents
-                    .runs
-                    .lock()
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for _ in 0..2 {
+                provider_requests
+                    .recv()
                     .await
-                    .values()
-                    .filter(|handle| handle.parent_run_id == parent_run_id)
-                    .count();
-                if count >= 3 {
-                    return;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                    .expect("gated provider server stopped before both requests arrived");
             }
         })
-        .await;
-        assert!(
-            saw_both.is_ok(),
-            "two children must be in-flight simultaneously (registry count never reached 3)"
+        .await
+        .expect("two complete provider requests must be in-flight simultaneously");
+        let active_children = state
+            .external_agents
+            .runs
+            .lock()
+            .await
+            .values()
+            .filter(|handle| handle.parent_run_id == parent_run_id)
+            .count();
+        assert_eq!(
+            active_children, 3,
+            "the parent and both provider-blocked children must occupy isolated registry slots"
         );
-        let (a, b) = (task_a.await.unwrap(), task_b.await.unwrap());
+        provider_release
+            .send(true)
+            .expect("release gated provider responses");
+        let (a, b) = tokio::time::timeout(Duration::from_secs(30), async {
+            tokio::join!(task_a, task_b)
+        })
+        .await
+        .expect("concurrent dynamic handlers must finish after provider release");
+        provider_server.abort();
+        let (a, b) = (a.unwrap(), b.unwrap());
         assert!(matches!(a, CodexAppServerRequestHandling::Handled));
         assert!(matches!(b, CodexAppServerRequestHandling::Handled));
         let child_a = {
             let frame = writer_rx_a.recv().await.expect("response A");
+            assert_eq!(frame["result"]["success"], serde_json::json!(true));
             let inner: serde_json::Value = serde_json::from_str(
                 frame["result"]["contentItems"][0]["text"]
                     .as_str()
                     .expect("inner JSON text A"),
             )
             .expect("inner JSON A");
+            assert_eq!(inner["status"], serde_json::json!("completed"));
             inner
                 .get("subagent_id")
                 .and_then(serde_json::Value::as_str)
@@ -20565,12 +20644,14 @@ command = "r-code-host"
         };
         let child_b = {
             let frame = writer_rx_b.recv().await.expect("response B");
+            assert_eq!(frame["result"]["success"], serde_json::json!(true));
             let inner: serde_json::Value = serde_json::from_str(
                 frame["result"]["contentItems"][0]["text"]
                     .as_str()
                     .expect("inner JSON text B"),
             )
             .expect("inner JSON B");
+            assert_eq!(inner["status"], serde_json::json!("completed"));
             inner
                 .get("subagent_id")
                 .and_then(serde_json::Value::as_str)

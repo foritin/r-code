@@ -734,6 +734,12 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 - `cargo audit`：退出码 0，仅报告 18 个已允许的上游 GTK/未维护 warning；`cargo deny check`：advisories / bans / licenses / sources 全部通过（仅依赖重复警告）。
 - `node scripts/generate-supply-chain.mjs target/supply-chain --strict`：生成 756 个 CycloneDX / license 组件，严格模式通过。
 
+首轮 PR 远端 CI 额外暴露了两个只在调度/平台差异下出现的测试竞态，均先复现根因再修复：
+
+- macOS 会立即拒绝不可达端口，使第一个动态子运行可能在 registry 轮询前结束；并发测试现改用受控本地 OpenAI-compatible SSE 服务，在主槽与两个 child 槽同时可见后才统一释放响应。测试仍经过真实 handler、Provider runtime、DB 和 registry，不以放宽超时替代并发证明。
+- Linux headless 前端在启动器 DOM 已可见、下一帧焦点迁移尚未执行的窗口立即发送 Escape，按键会落到已卸载的旧标签；测试现先验证焦点确已进入启动器，再验证 Escape 恢复同一子代理详情。该等待条件就是产品的可访问性契约，焦点回归仍会超时失败。
+- 修复后本地全量门禁再次全绿；原失败的 Rust 并发用例另连续运行 10 次、前端用例连续运行 5 次，均全部通过。新的 Windows / macOS / Linux CI 是合并与打 tag 的硬闸门，任一 job 未通过都不会发布。
+
 ### 14.4 Windows 真实打包与运行冒烟
 
 最新源码在 Windows x64 本机成功重建主程序、NSIS、品牌安装器与双语 MSI：

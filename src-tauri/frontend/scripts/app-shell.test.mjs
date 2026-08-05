@@ -1822,7 +1822,12 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   );
 
   await workbench.getByRole("button", { name: "打开工具启动器", exact: true }).click();
-  await workbench.getByRole("dialog", { name: "工作台工具启动器" }).waitFor({ state: "visible" });
+  const launcher = workbench.getByRole("dialog", { name: "工作台工具启动器" });
+  await launcher.waitFor({ state: "visible" });
+  // Opening the launcher moves focus on the next animation frame. Wait for that accessibility
+  // contract before sending Escape; otherwise a loaded CI runner can dispatch the key to the
+  // just-unmounted subagent tab and turn this into a scheduler-dependent test.
+  await page.waitForFunction(() => document.activeElement?.closest(".workbench-launcher") != null);
   await page.keyboard.press("Escape");
   await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
   assert.equal(
