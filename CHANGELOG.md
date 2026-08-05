@@ -6,6 +6,10 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- 发布 finalize 会先以资产 API 元数据核对草稿 Release，再为 updater manifest 构造当前不可变标签的规范下载 URL；新增 `finalize_only` 恢复模式可安全复用完整草稿资产，并保守保留平台未签名警告。
+
 ## [0.3.0] - 2026-08-06
 
 ### Added

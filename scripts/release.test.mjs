@@ -242,10 +242,31 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
   assert.match(workflow, /Verify release credentials and select signing mode/);
   assert.match(workflow, /Missing required release secrets/);
+  assert.match(workflow, /finalize_only:[\s\S]*type: boolean/);
+  assert.match(workflow, /Require the default branch for manual releases/);
+  assert.match(workflow, /Manual releases must run from refs\/heads\/%s/);
+  assert.match(
+    workflow,
+    /group: release-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name \}\}/,
+  );
+  assert.match(workflow, /github\.event_name != 'workflow_dispatch' \|\| !inputs\.finalize_only/);
+  assert.match(workflow, /always\(\) &&\s*!cancelled\(\) &&/);
+  assert.match(workflow, /inputs\.finalize_only && needs\.build\.result == 'skipped'/);
+  assert.match(
+    workflow,
+    /ref: \$\{\{ github\.event_name == 'workflow_dispatch' && github\.sha \|\| env\.RELEASE_TAG \}\}/,
+  );
+  assert.match(workflow, /Finalize-only recovery conservatively preserves unsigned platform warnings/);
   assert.match(workflow, /validateUpdaterManifest/);
-  assert.match(workflow, /gh release view "\$RELEASE_TAG" --json assets/);
+  assert.match(workflow, /gh release view "\$RELEASE_TAG" --json assets,isDraft,tagName,targetCommitish/);
   assert.match(workflow, /gh release download "\$RELEASE_TAG" --pattern '\*\.sig'/);
   assert.match(workflow, /createUpdaterManifest/);
+  assert.match(workflow, /requiredReleaseAssets/);
+  assert.match(workflow, /release must remain a draft until finalization/);
+  assert.match(workflow, /draft release target .* does not match tag commit/);
+  assert.match(workflow, /draft release contains duplicate asset names/);
+  assert.match(workflow, /draft release is missing build assets/);
+  assert.match(workflow, /draft release has incomplete build assets/);
   assert.match(workflow, /updater manifest validation failed/);
   assert.equal(
     (workflow.match(/uploadUpdaterJson: false/g) ?? []).length,
@@ -603,6 +624,57 @@ test("publish-release builds one deterministic updater manifest after the matrix
       signatureDirectory: directory,
     }),
     /cannot read R-Code_0\.2\.1_amd64\.deb\.sig/,
+  );
+});
+
+test("publish-release canonicalizes temporary draft asset URLs", (t) => {
+  const tag = "v0.2.1";
+  const { assets } = updaterFixture(tag);
+  const draftAssets = assets.map((asset) => ({
+    ...asset,
+    url: asset.url.replace(`/download/${tag}/`, "/download/untagged-ae366bdde37668619739/"),
+  }));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "r-code-draft-manifest-test-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  for (const asset of draftAssets) {
+    fs.writeFileSync(path.join(directory, `${asset.name}.sig`), `signature for ${asset.name}\n`);
+  }
+  const manifest = createUpdaterManifest({
+    version: "0.2.1",
+    tag,
+    repository: "foritin/r-code",
+    releaseAssets: draftAssets,
+    signatureDirectory: directory,
+  });
+
+  for (const entry of Object.values(manifest.platforms)) {
+    assert.match(entry.url, /\/releases\/download\/v0\.2\.1\/R-Code_0\.2\.1_/);
+    assert.doesNotMatch(entry.url, /\/untagged-/);
+  }
+  assert.deepEqual(
+    validateUpdaterManifest(
+      manifest,
+      tag,
+      parseReleaseTag(tag),
+      "foritin/r-code",
+      draftAssets,
+      directory,
+    ),
+    [],
+  );
+
+  draftAssets[0].apiUrl = draftAssets[0].apiUrl.replace("foritin/r-code", "foritin/other");
+  assert.match(
+    validateUpdaterManifest(
+      manifest,
+      tag,
+      parseReleaseTag(tag),
+      "foritin/r-code",
+      draftAssets,
+      directory,
+    ).join("\n"),
+    /invalid GitHub asset API URL/,
   );
 });
 
