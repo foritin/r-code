@@ -265,12 +265,27 @@ function createUpdaterManifest({
         `cannot build latest.json ${platform}: ${asset.name}.sig is empty`,
       );
     }
-    if (typeof asset.url !== "string" || asset.url.trim() === "") {
+    const repositoryParts = String(repository ?? "").split("/");
+    if (repositoryParts.length !== 2 || repositoryParts.some((part) => !part)) {
       throw new ReleaseError(
-        `cannot build latest.json ${platform}: ${asset.name} has no download URL`,
+        `cannot build latest.json ${platform}: invalid GitHub repository ${repository ?? "<missing>"}`,
       );
     }
-    platforms[platform] = { signature, url: asset.url };
+    const assetRecordError = validateReleaseAssetRecord(
+      asset,
+      repositoryParts[0],
+      repositoryParts[1],
+      tag,
+    );
+    if (assetRecordError) {
+      throw new ReleaseError(
+        `cannot build latest.json ${platform}: ${assetRecordError}`,
+      );
+    }
+    platforms[platform] = {
+      signature,
+      url: canonicalReleaseDownloadUrl(repositoryParts[0], repositoryParts[1], tag, asset.name),
+    };
   }
 
   const manifest = { version, notes, pub_date: pubDate, platforms };
@@ -320,6 +335,52 @@ function parseUpdaterUrl(rawUrl) {
   }
 }
 
+function canonicalReleaseDownloadUrl(owner, repository, tag, assetName) {
+  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(assetName)}`;
+}
+
+function validateReleaseAssetRecord(asset, owner, repository, tag) {
+  if (!asset || typeof asset.name !== "string" || asset.name.trim() === "") {
+    return "release contains an asset without a name";
+  }
+
+  const api = parseUpdaterUrl(asset.apiUrl);
+  const [repos, apiOwner, apiRepository, releases, assets, assetId, ...apiExtra]
+    = api.segments ?? [];
+  if (
+    api.error
+    || api.url.hostname.toLowerCase() !== "api.github.com"
+    || apiExtra.length > 0
+    || repos !== "repos"
+    || releases !== "releases"
+    || assets !== "assets"
+    || !/^\d+$/.test(assetId ?? "")
+    || apiOwner?.toLowerCase() !== owner.toLowerCase()
+    || apiRepository?.toLowerCase() !== repository.toLowerCase()
+  ) {
+    return `${asset.name} has an invalid GitHub asset API URL`;
+  }
+
+  const download = parseUpdaterUrl(asset.url);
+  const [urlOwner, urlRepository, releasePart, downloadPart, assetTag, assetName, ...extra]
+    = download.segments ?? [];
+  if (
+    download.error
+    || download.url.hostname.toLowerCase() !== "github.com"
+    || extra.length > 0
+    || releasePart !== "releases"
+    || downloadPart !== "download"
+    || urlOwner?.toLowerCase() !== owner.toLowerCase()
+    || urlRepository?.toLowerCase() !== repository.toLowerCase()
+    || assetName !== asset.name
+    || (assetTag !== tag && !/^untagged-[0-9a-f]+$/i.test(assetTag ?? ""))
+  ) {
+    return `${asset.name} has an invalid GitHub release download URL`;
+  }
+
+  return null;
+}
+
 function updaterAssetName(rawUrl, repository, tag, releaseAssets) {
   const repositoryParts = String(repository ?? "").split("/");
   if (repositoryParts.length !== 2 || repositoryParts.some((part) => !part)) {
@@ -343,9 +404,7 @@ function updaterAssetName(rawUrl, repository, tag, releaseAssets) {
       return { error: `does not point to ${repository} release downloads: ${rawUrl}` };
     }
     if (urlTag !== tag) return { error: `points to release ${urlTag ?? "<missing>"}, not ${tag}` };
-    asset = (releaseAssets ?? []).find(
-      (candidate) => candidate.name === assetName && candidate.url === rawUrl,
-    );
+    asset = (releaseAssets ?? []).find((candidate) => candidate.name === assetName);
   } else if (url.hostname.toLowerCase() === "api.github.com") {
     const [repos, urlOwner, urlName, releases, assets, assetId, ...extra] = segments;
     if (
@@ -360,29 +419,13 @@ function updaterAssetName(rawUrl, repository, tag, releaseAssets) {
       return { error: `does not identify an asset in ${repository}: ${rawUrl}` };
     }
     asset = (releaseAssets ?? []).find((candidate) => candidate.apiUrl === rawUrl);
-    if (asset) {
-      const releaseUrl = parseUpdaterUrl(asset.url);
-      const [assetOwner, assetRepo, releasePart, downloadPart, assetTag, assetName, ...assetExtra]
-        = releaseUrl.segments ?? [];
-      if (
-        releaseUrl.error
-        || assetExtra.length > 0
-        || releaseUrl.url.hostname.toLowerCase() !== "github.com"
-        || assetOwner?.toLowerCase() !== owner.toLowerCase()
-        || assetRepo?.toLowerCase() !== name.toLowerCase()
-        || releasePart !== "releases"
-        || downloadPart !== "download"
-        || assetTag !== tag
-        || assetName !== asset.name
-      ) {
-        return { error: `does not resolve to an asset on ${repository} release ${tag}: ${rawUrl}` };
-      }
-    }
   } else {
     return { error: `uses unexpected host ${url.hostname}: ${rawUrl}` };
   }
 
   if (!asset) return { error: `is not an asset on ${repository} release ${tag}: ${rawUrl}` };
+  const assetRecordError = validateReleaseAssetRecord(asset, owner, name, tag);
+  if (assetRecordError) return { error: `${assetRecordError}: ${rawUrl}` };
   return { name: asset.name };
 }
 

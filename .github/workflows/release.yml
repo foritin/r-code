@@ -9,12 +9,17 @@ on:
         description: "要创建或更新的版本标签（例如 v0.1.0）"
         required: true
         type: string
+      finalize_only:
+        description: "复用现有完整草稿资产，仅重新生成清单并发布"
+        required: false
+        default: false
+        type: boolean
 
 env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -29,6 +34,18 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
+      - name: Require the default branch for manual releases
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_REF: ${{ github.ref }}
+        run: |
+          if [[ "$DISPATCH_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            printf '::error::Manual releases must run from refs/heads/%s, not %s\n' "$DEFAULT_BRANCH" "$DISPATCH_REF"
+            exit 1
+          fi
+
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
@@ -56,6 +73,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          FINALIZE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.finalize_only || false }}
         run: |
           required=(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY)
           missing=()
@@ -65,6 +83,13 @@ jobs:
           if (( ${#missing[@]} > 0 )); then
             printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
             exit 1
+          fi
+
+          if [[ "$FINALIZE_ONLY" == "true" ]]; then
+            echo "windows_signed=false" >> "$GITHUB_OUTPUT"
+            echo "apple_signed=false" >> "$GITHUB_OUTPUT"
+            echo "Finalize-only recovery conservatively preserves unsigned platform warnings."
+            exit 0
           fi
 
           if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
@@ -135,6 +160,7 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}
     needs: validate
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.finalize_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -413,6 +439,15 @@ jobs:
   finalize:
     name: Publish completed release
     needs: [validate, build, supply-chain]
+    if: >-
+      always() &&
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      needs.supply-chain.result == 'success' &&
+      (
+        needs.build.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && inputs.finalize_only && needs.build.result == 'skipped')
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -425,7 +460,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ env.RELEASE_TAG }}
+          # Manual recovery deliberately uses the reviewed workflow tooling from
+          # the selected branch while every product/SBOM input remains pinned to the tag.
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || env.RELEASE_TAG }}
           fetch-depth: 1
 
       - uses: actions/setup-node@v5
@@ -441,14 +478,45 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/release-manifest"
           gh release download "$RELEASE_TAG" --pattern '*.sig' --dir "$RUNNER_TEMP/release-manifest"
-          gh release view "$RELEASE_TAG" --json assets > "$RUNNER_TEMP/release-manifest/release.json"
+          git fetch --no-tags --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          export TAG_COMMIT="$(git rev-parse "$RELEASE_TAG^{}")"
+          gh release view "$RELEASE_TAG" --json assets,isDraft,tagName,targetCommitish > "$RUNNER_TEMP/release-manifest/release.json"
           node --input-type=module -e '
             import fs from "node:fs";
             import { parseReleaseTag } from "./scripts/release.mjs";
-            import { createUpdaterManifest, validateUpdaterManifest } from "./scripts/publish-release.mjs";
+            import { createUpdaterManifest, requiredReleaseAssets, validateUpdaterManifest } from "./scripts/publish-release.mjs";
             const release = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
             const tagInfo = parseReleaseTag(process.env.RELEASE_TAG);
             if (!tagInfo) throw new Error(`invalid release tag ${process.env.RELEASE_TAG}`);
+            if (release.tagName !== process.env.RELEASE_TAG) {
+              throw new Error(`release tag is ${release.tagName ?? "<missing>"}`);
+            }
+            if (!release.isDraft) throw new Error("release must remain a draft until finalization");
+            if (release.targetCommitish !== process.env.TAG_COMMIT) {
+              throw new Error(`draft release target ${release.targetCommitish ?? "<missing>"} does not match tag commit ${process.env.TAG_COMMIT}`);
+            }
+            const generatedAssets = new Set([
+              "latest.json",
+              "r-code-sbom.cdx.json",
+              "THIRD_PARTY_LICENSES.md",
+            ]);
+            const availableAssets = new Map(release.assets.map((asset) => [asset.name, asset]));
+            if (availableAssets.size !== release.assets.length) {
+              throw new Error("draft release contains duplicate asset names");
+            }
+            const missingAssets = requiredReleaseAssets(tagInfo.version)
+              .filter((name) => !generatedAssets.has(name) && !availableAssets.has(name));
+            if (missingAssets.length > 0) {
+              throw new Error(`draft release is missing build assets: ${missingAssets.join(", ")}`);
+            }
+            const invalidAssets = requiredReleaseAssets(tagInfo.version)
+              .filter((name) => !generatedAssets.has(name))
+              .map((name) => availableAssets.get(name))
+              .filter((asset) => asset.state !== "uploaded" || !Number.isSafeInteger(asset.size) || asset.size <= 0)
+              .map((asset) => asset.name);
+            if (invalidAssets.length > 0) {
+              throw new Error(`draft release has incomplete build assets: ${invalidAssets.join(", ")}`);
+            }
             const manifest = createUpdaterManifest({
               version: tagInfo.version,
               tag: process.env.RELEASE_TAG,
