@@ -1,3 +1,8 @@
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use async_trait::async_trait;
 use hermes_core::{ToolCallOutcome, ToolSource, ToolSpec};
 use serde_json::{json, Value};
@@ -45,6 +50,30 @@ pub trait ExternalToolHost: Send + Sync + 'static {
     async fn risk_for(&self, name: &str, args: &Value) -> ExternalToolRisk;
 
     async fn call(&self, name: &str, args: Value) -> Result<ToolCallOutcome, ExternalToolError>;
+
+    /// Cancellation-aware external dispatch. The default keeps existing hosts source-compatible
+    /// and force-drops their local future when the owning agent is aborted. MCP hosts override
+    /// this to also send the protocol-level cancellation notification to the remote server.
+    async fn call_with_abort(
+        &self,
+        name: &str,
+        args: Value,
+        abort: Arc<AtomicBool>,
+    ) -> Result<ToolCallOutcome, ExternalToolError> {
+        let call = self.call(name, args);
+        tokio::pin!(call);
+        loop {
+            if abort.load(Ordering::Relaxed) {
+                return Err(ExternalToolError::new(format!(
+                    "external tool {name} cancelled"
+                )));
+            }
+            tokio::select! {
+                result = &mut call => return result,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
+        }
+    }
 }
 
 pub fn external_tool_specs() -> Vec<ToolSpec> {

@@ -152,6 +152,7 @@ function detail(task: Task): TaskDetail {
         model: "gpt-5.6",
         runtime_kind: "native",
         access_mode: "read_only",
+        require_approval: false,
         routing_reason: "会话已选择 R-Code 主 Agent",
         external_session_id: null,
         review_state: isReview ? "pending" : isLive ? "answered" : "accepted",
@@ -171,7 +172,8 @@ function detail(task: Task): TaskDetail {
           delegated_by_tool_call_id: "delegate-codex-active",
           model: "gpt-5.6-sol",
           runtime_kind: "codex_exec" as const,
-          access_mode: "read_only" as const,
+          access_mode: "full_access" as const,
+          require_approval: true,
           routing_reason: "复杂并发检查由均衡路由交给 Codex",
           external_session_id: "mock-codex-thread",
           review_state: "pending" as const,
@@ -190,12 +192,33 @@ function detail(task: Task): TaskDetail {
           delegated_by_tool_call_id: "delegate-codex-done",
           model: "gpt-5.6-sol",
           runtime_kind: "codex_exec" as const,
-          access_mode: "read_only" as const,
+          access_mode: "full_access" as const,
+          require_approval: false,
           routing_reason: "复杂锁顺序核对由均衡路由交给 Codex",
           external_session_id: "mock-codex-thread-done",
           review_state: "answered" as const,
           started_at: at(11),
           ended_at: at(7),
+          usage_json: null,
+        },
+        {
+          id: `${task.id}-codex-readonly`,
+          task_id: task.id,
+          branch_id: branchId,
+          parent_run_id: runId,
+          agent_kind: "subagent" as const,
+          agent_label: "Codex CLI · 只读复核",
+          summary: "只读复核已完成。",
+          delegated_by_tool_call_id: "delegate-codex-readonly",
+          model: "gpt-5.6-sol",
+          runtime_kind: "codex_exec" as const,
+          access_mode: "read_only" as const,
+          require_approval: false,
+          routing_reason: "只读任务保持最小权限",
+          external_session_id: "mock-codex-thread-readonly",
+          review_state: "answered" as const,
+          started_at: at(15),
+          ended_at: at(13),
           usage_json: null,
         },
       ] : []),
@@ -564,7 +587,13 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
       }),
       result(9, "delegate-codex-active", { agent: "codex", label: "Codex CLI · 检查并发边界", status: "running" }),
       system(10, "subagent_lifecycle", {
-        scope: { run_id: `${taskId}-codex-active`, agent_kind: "subagent", agent_label: "Codex CLI · 检查并发边界" },
+        scope: {
+          run_id: `${taskId}-codex-active`,
+          agent_kind: "subagent",
+          agent_label: "Codex CLI · 检查并发边界",
+          access_mode: "full_access",
+          require_approval: true,
+        },
         state: "running",
         detail: "正在读取任务队列与调度器实现",
       }),
@@ -575,7 +604,13 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
       }),
       result(12, "delegate-codex-done", { agent: "codex", label: "Codex CLI · 核对锁顺序", status: "completed" }),
       system(13, "subagent_lifecycle", {
-        scope: { run_id: `${taskId}-codex-done`, agent_kind: "subagent", agent_label: "Codex CLI · 核对锁顺序" },
+        scope: {
+          run_id: `${taskId}-codex-done`,
+          agent_kind: "subagent",
+          agent_label: "Codex CLI · 核对锁顺序",
+          access_mode: "full_access",
+          require_approval: false,
+        },
         state: "completed",
         detail: "锁顺序核对完成",
       }),
@@ -606,7 +641,7 @@ export function browserMockMessages(taskId: string): SessionMessage[] {
       kind: "message",
       role: "assistant",
       text: taskId === "mock-task-complete"
-        ? `任务已完成，并生成了可预览的本地产物。浏览器 Demo 使用占位图验证预览交互。\n\n[预览图片产物](C:/Users/demo/.codex/generated_images/r-code-preview.png)\n\n[打开实现文件](src/main.rs#L12C3)`
+        ? `任务已完成，并生成了可预览的本地产物。浏览器 Demo 使用占位图验证预览交互。\n\n[预览图片产物](C:/Users/demo/.codex/generated_images/r-code-preview.png)\n\n[打开实现文件](src/main.rs#L2C3)`
         : `我会先检查相关实现，然后推进「${task.title}」。`,
       timestamp: at(12),
     },
@@ -622,6 +657,8 @@ export function browserMockSetMessages(taskId: string, messages: SessionMessage[
 export function browserMockSubagentMessages(taskId: string, subagentId: string): SessionMessage[] {
   if (taskId !== "mock-task-queue" || !subagentId.includes("codex-")) return [];
   const active = subagentId.endsWith("codex-active");
+  const accessMode = subagentId.endsWith("codex-readonly") ? "read_only" : "full_access";
+  const requireApproval = active;
   const storage = `mock-subagent-${subagentId}`;
   const system = (line: number, event: string, data: unknown): SessionMessage => ({
     id: `${storage}:${line}`,
@@ -632,9 +669,18 @@ export function browserMockSubagentMessages(taskId: string, subagentId: string):
   });
   return [
     system(1, "subagent_lifecycle", {
-      scope: { run_id: subagentId, agent_kind: "subagent", access_mode: "read_only" },
+      scope: {
+        run_id: subagentId,
+        agent_kind: "subagent",
+        access_mode: accessMode,
+        require_approval: requireApproval,
+      },
       state: "running",
-      detail: "Codex CLI 已开始只读检查工作区",
+      detail: accessMode === "read_only"
+        ? "Codex CLI 已开始只读检查工作区"
+        : requireApproval
+          ? "Codex CLI 已开始需审批检查工作区"
+          : "Codex CLI 已开始完全访问工作区",
     }),
     system(2, "subagent_activity", { phase: "requesting", detail: "已连接 Codex CLI，正在准备工作区" }),
     {
@@ -682,7 +728,12 @@ export function browserMockSubagentMessages(taskId: string, subagentId: string):
         text: "只读核对已完成：\n\n- 两处竞争窗口都来自持锁跨 `await`。\n- 现有定向测试全部通过。\n- 建议把状态快照移出临界区，并保留取消状态的原子更新。",
       } as SessionMessage,
       system(16, "subagent_lifecycle", {
-        scope: { run_id: subagentId, agent_kind: "subagent", access_mode: "read_only" },
+        scope: {
+          run_id: subagentId,
+          agent_kind: "subagent",
+          access_mode: accessMode,
+          require_approval: requireApproval,
+        },
         state: "completed",
         detail: "锁顺序核对完成",
       }),
@@ -883,7 +934,7 @@ export function browserMockChangeRequest(taskId: string): void {
     id: `${taskId}-revision-run`, task_id: taskId, branch_id: "main", parent_run_id: null,
     agent_kind: "main", agent_label: "主代理", summary: "根据审核反馈继续修改", delegated_by_tool_call_id: null,
     model: "gpt-5.6", runtime_kind: "native", external_session_id: null, review_state: "pending", started_at: updatedAt, ended_at: null, usage_json: null,
-    access_mode: "read_only", routing_reason: "会话已选择 R-Code 主 Agent",
+    access_mode: "read_only", require_approval: false, routing_reason: "会话已选择 R-Code 主 Agent",
   });
   detail.events.push({ id: detail.events.length + 1, task_id: taskId, branch_id: "main", event_type: "change_requested", created_at: updatedAt });
   const reviewNotification = browserMockNotifications.find((item) => item.task_id === taskId && item.kind === "review_ready");

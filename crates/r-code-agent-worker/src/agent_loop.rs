@@ -27,6 +27,11 @@ use hermes_core::{
 use r_code_core::dto::AgentEvent;
 use r_code_core::error::ProductError;
 
+/// Provider 请求建立连接的最大等待（vendor 层无超时，F2 兜底）。
+const LLM_PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+/// 流式响应两次事件之间的最大空闲。长推理可能数分钟无输出，10 分钟是安全上限。
+const LLM_PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 /// 单轮 agent 循环的控制结果。
 ///
 /// 可见事件经回调在产生时交付；调用方只需要根据此结果决定是否进入下一次模型请求。
@@ -37,6 +42,11 @@ pub struct AgentLoopOutcome {
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
+const AGENT_ABORT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(not(test))]
+const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 struct PendingToolCall {
@@ -53,6 +63,38 @@ fn is_parallel_read_tool(tools: &[ToolSpec], name: &str) -> bool {
         .iter()
         .find(|tool| tool.name == name)
         .is_some_and(|tool| !tool.requires_confirmation)
+}
+
+async fn execute_pending_tool(
+    tool_host: &dyn ToolHost,
+    call: &PendingToolCall,
+    abort: Option<&AtomicBool>,
+) -> Result<hermes_core::ToolCallOutcome, ProductError> {
+    if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+        return Ok(cancelled_tool_outcome(call));
+    }
+
+    let call_id = call.id.clone();
+    let tool_name = call.name.clone();
+    let execution = tool_host.call_with_id(&call_id, &tool_name, call.input.clone());
+    tokio::pin!(execution);
+    let Some(abort) = abort else {
+        return execution.await.map_err(map_hermes_err);
+    };
+
+    loop {
+        if abort.load(Ordering::Relaxed) {
+            // Built-ins, Bash and MCP use this window to perform cooperative cleanup (including
+            // process-tree termination and protocol cancellation). A broken host is force-dropped
+            // after the bounded grace so the agent itself can always terminate.
+            let _ = tokio::time::timeout(TOOL_ABORT_CLEANUP_GRACE, &mut execution).await;
+            return Ok(cancelled_tool_outcome(call));
+        }
+        tokio::select! {
+            result = &mut execution => return result.map_err(map_hermes_err),
+            _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL) => {}
+        }
+    }
 }
 
 async fn execute_pending_tools(
@@ -73,12 +115,7 @@ async fn execute_pending_tools(
                 outcomes.push(cancelled_tool_outcome(call));
                 continue;
             }
-            outcomes.push(
-                tool_host
-                    .call_with_id(&call.id, &call.name, call.input.clone())
-                    .await
-                    .map_err(map_hermes_err)?,
-            );
+            outcomes.push(execute_pending_tool(tool_host, call, abort).await?);
         }
         return Ok(outcomes);
     }
@@ -92,11 +129,11 @@ async fn execute_pending_tools(
         let results = futures::future::join_all(
             batch
                 .iter()
-                .map(|call| tool_host.call_with_id(&call.id, &call.name, call.input.clone())),
+                .map(|call| execute_pending_tool(tool_host, call, abort)),
         )
         .await;
         for result in results {
-            outcomes.push(result.map_err(map_hermes_err)?);
+            outcomes.push(result?);
         }
     }
     Ok(outcomes)
@@ -107,7 +144,7 @@ fn cancelled_tool_outcome(call: &PendingToolCall) -> hermes_core::ToolCallOutcom
         content: serde_json::json!({
             "status": "cancelled",
             "reason": format!(
-                "{} was not started because the agent run was interrupted",
+                "{} did not complete because the agent run was interrupted",
                 call.name
             )
         })
@@ -301,7 +338,29 @@ where
     request.messages = messages.clone();
     request.tools = tools.to_vec();
 
-    let mut stream = provider.stream(request).await.map_err(map_hermes_err)?;
+    // Provider 建连本身也可能卡住；同时跟踪绝对 deadline 和 abort，
+    // 取消时直接 drop vendor future，不再被固定 60s 超时窗口阻塞。
+    let connection = provider.stream(request);
+    tokio::pin!(connection);
+    let connect_deadline = tokio::time::sleep(LLM_PROVIDER_CONNECT_TIMEOUT);
+    tokio::pin!(connect_deadline);
+    let connected = loop {
+        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+            return Ok(AgentLoopOutcome {
+                had_tool_call: false,
+            });
+        }
+        break tokio::select! {
+            result = &mut connection => result,
+            _ = &mut connect_deadline => {
+                return Err(map_hermes_err(hermes_error::Error::Provider(
+                    "模型请求连接超时".to_string(),
+                )))
+            }
+            _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
+        };
+    };
+    let mut stream = connected.map_err(map_hermes_err)?;
 
     let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
     let mut current_text = String::new();
@@ -317,13 +376,32 @@ where
         if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             break;
         }
+        // 流式空闲超时：两次事件之间超过 LLM_PROVIDER_IDLE_TIMEOUT 视为卡死。
         let next = if abort.is_some() {
             tokio::select! {
-                event = stream.next() => event,
+                event = tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()) => {
+                    match event {
+                        Ok(Some(ev)) => Some(ev),
+                        Ok(None) => None,
+                        Err(_) => {
+                            return Err(map_hermes_err(hermes_error::Error::Provider(
+                                "模型流式响应空闲超时".to_string(),
+                            )))
+                        }
+                    }
+                }
                 _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
             }
         } else {
-            stream.next().await
+            match tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()).await {
+                Ok(Some(ev)) => Some(ev),
+                Ok(None) => None,
+                Err(_) => {
+                    return Err(map_hermes_err(hermes_error::Error::Provider(
+                        "模型流式响应空闲超时".to_string(),
+                    )))
+                }
+            }
         };
         let Some(ev) = next else {
             break;
@@ -532,8 +610,8 @@ fn map_hermes_err(err: hermes_error::Error) -> ProductError {
 mod tests {
     use async_trait::async_trait;
     use hermes_core::{
-        CompletionRequest, ContentBlock, Message, Role, StopReason, StreamEvent, ToolCallOutcome,
-        ToolHost, ToolSource, ToolSpec, Usage,
+        Capabilities, CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, Message,
+        Role, StopReason, StreamEvent, ToolCallOutcome, ToolHost, ToolSource, ToolSpec, Usage,
     };
     use hermes_error::{Error, Result};
     use hermes_llm::{MockProvider, RecordedTurn};
@@ -549,9 +627,62 @@ mod tests {
         run_agent_loop_iteration_with_abort_and_emit,
     };
 
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    struct PendingConnectProvider {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for PendingConnectProvider {
+        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+            Err(Error::Internal(
+                "PendingConnectProvider only supports stream".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
+            let _drop = DropFlag(self.dropped.clone());
+            self.started.store(true, Ordering::SeqCst);
+            futures::future::pending::<()>().await;
+            unreachable!("pending provider connection completed")
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                supports_streaming: true,
+                supports_tool_use: true,
+                supports_vision: false,
+                supports_prompt_caching: false,
+                max_context_tokens: 16_000,
+            }
+        }
+
+        fn name(&self) -> &str {
+            "pending-connect"
+        }
+    }
+
     /// 简单的回放 ToolHost：注册一个工具，调用时返回 `{ "echo": args }`。
     struct EchoToolHost {
         tools: Vec<ToolSpec>,
+    }
+
+    struct PendingToolHost {
+        tools: Vec<ToolSpec>,
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+        completed: Arc<AtomicBool>,
     }
 
     impl EchoToolHost {
@@ -584,6 +715,25 @@ mod tests {
             } else {
                 Err(Error::ToolNotFound(name.to_string()))
             }
+        }
+    }
+
+    #[async_trait]
+    impl ToolHost for PendingToolHost {
+        async fn list_tools(&self) -> Result<Vec<ToolSpec>> {
+            Ok(self.tools.clone())
+        }
+
+        async fn call(&self, _name: &str, _args: serde_json::Value) -> Result<ToolCallOutcome> {
+            let _drop = DropFlag(self.dropped.clone());
+            self.started.store(true, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            self.completed.store(true, Ordering::SeqCst);
+            Ok(ToolCallOutcome {
+                content: "unexpected completion".to_string(),
+                is_error: false,
+                metadata: None,
+            })
         }
     }
 
@@ -675,6 +825,116 @@ mod tests {
             enable_caching: false,
             inference: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn abort_drops_a_provider_connection_future_without_waiting_for_connect_timeout() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let provider = PendingConnectProvider {
+            started: started.clone(),
+            dropped: dropped.clone(),
+        };
+        let tool_host = EchoToolHost::new("noop");
+        let abort = Arc::new(AtomicBool::new(false));
+        let cancel_abort = abort.clone();
+        let cancel = tokio::spawn(async move {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            cancel_abort.store(true, Ordering::SeqCst);
+        });
+        let mut messages = vec![Message::user_text("hi")];
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_agent_loop_iteration_with_abort_and_emit(
+                &provider,
+                &tool_host,
+                base_request(),
+                &mut messages,
+                &[],
+                Some(abort.as_ref()),
+                false,
+                |_| {},
+            ),
+        )
+        .await
+        .expect("provider connect cancellation must not wait for the 60 second timeout")
+        .unwrap();
+        cancel.await.unwrap();
+
+        assert!(!outcome.had_tool_call);
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn abort_force_drops_a_non_cooperative_active_tool_call() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "pending-tool".to_string(),
+                name: "read_file".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "pending-tool".to_string(),
+                input: serde_json::json!({"path": "README.md"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let tool_host = PendingToolHost {
+            tools: vec![ToolSpec {
+                name: "read_file".to_string(),
+                description: "pending read".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                requires_confirmation: false,
+            }],
+            started: started.clone(),
+            dropped: dropped.clone(),
+            completed: completed.clone(),
+        };
+        let abort = Arc::new(AtomicBool::new(false));
+        let cancel_abort = abort.clone();
+        let cancel = tokio::spawn(async move {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            cancel_abort.store(true, Ordering::SeqCst);
+        });
+        let mut messages = vec![Message::user_text("read")];
+
+        let events = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_agent_loop_iteration_with_abort(
+                &provider,
+                &tool_host,
+                base_request(),
+                &mut messages,
+                &tool_host.tools,
+                Some(abort.as_ref()),
+            ),
+        )
+        .await
+        .expect("active tool cancellation must be bounded")
+        .unwrap();
+        cancel.await.unwrap();
+
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(!completed.load(Ordering::SeqCst));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult {
+                call_id,
+                is_error: true,
+                ..
+            } if call_id == "pending-tool"
+        )));
     }
 
     #[tokio::test]

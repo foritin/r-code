@@ -1,4 +1,11 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use async_trait::async_trait;
 use hermes_core::{ToolCallOutcome, ToolHost};
@@ -583,27 +590,13 @@ impl McpManager {
 
 #[async_trait]
 impl ExternalToolHost for McpManager {
-    async fn risk_for(&self, name: &str, args: &Value) -> ExternalToolRisk {
+    async fn risk_for(&self, name: &str, _args: &Value) -> ExternalToolRisk {
         match name {
             "mcp_discover" | "suggest_mcp" => ExternalToolRisk::LocalReadOnly,
             "web_search" | "web_fetch" => ExternalToolRisk::ReadOnlyRemote,
-            "mcp_call" => {
-                let server_id = args.get("server_id").and_then(Value::as_str);
-                let tool = args.get("tool").and_then(Value::as_str);
-                let cache = self.tool_cache.read().await;
-                let read_only = server_id
-                    .and_then(|server_id| cache.get(server_id))
-                    .into_iter()
-                    .flatten()
-                    .any(|descriptor| {
-                        Some(descriptor.name.as_str()) == tool && descriptor.read_only
-                    });
-                if read_only {
-                    ExternalToolRisk::ReadOnlyRemote
-                } else {
-                    ExternalToolRisk::Mutating
-                }
-            }
+            // MCP annotations.readOnlyHint is third-party advisory metadata. Generic calls always
+            // cross the mutation approval boundary; the hint may inform display copy, never authz.
+            "mcp_call" => ExternalToolRisk::Mutating,
             _ => ExternalToolRisk::Mutating,
         }
     }
@@ -680,6 +673,42 @@ impl ExternalToolHost for McpManager {
             _ => Err(ExternalToolError::new(format!(
                 "unknown external tool: {name}"
             ))),
+        }
+    }
+
+    async fn call_with_abort(
+        &self,
+        name: &str,
+        args: Value,
+        abort: Arc<AtomicBool>,
+    ) -> Result<ToolCallOutcome, ExternalToolError> {
+        if name == "mcp_call" {
+            let server_id = required_string(&args, "server_id")?;
+            let tool = required_string(&args, "tool")?;
+            let arguments = args
+                .get("arguments")
+                .cloned()
+                .filter(Value::is_object)
+                .ok_or_else(|| ExternalToolError::new("mcp_call requires object arguments"))?;
+            return self
+                .supervisor
+                .call_tool_with_abort(server_id, tool, arguments, Some(abort))
+                .await
+                .map_err(|error| ExternalToolError::new(error.to_string()));
+        }
+
+        let call = self.call(name, args);
+        tokio::pin!(call);
+        loop {
+            if abort.load(Ordering::Relaxed) {
+                return Err(ExternalToolError::new(format!(
+                    "external tool {name} cancelled"
+                )));
+            }
+            tokio::select! {
+                result = &mut call => return result,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
         }
     }
 }
@@ -857,6 +886,40 @@ mod tests {
         let payload: Value = serde_json::from_str(&outcome.content).unwrap();
         assert_eq!(payload["registry_searched"], false);
         assert_eq!(payload["servers"][0]["id"], RESEARCH_SERVER_ID);
+    }
+
+    #[tokio::test]
+    async fn third_party_read_only_hint_never_bypasses_mcp_call_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = McpManager::new(temp.path().to_path_buf());
+        manager.tool_cache.write().await.insert(
+            "untrusted".to_string(),
+            vec![McpToolDescriptor {
+                server_id: "untrusted".to_string(),
+                name: "mislabelled_mutation".to_string(),
+                description: "claims to be read-only".to_string(),
+                input_schema: json!({"type": "object"}),
+                read_only: true,
+            }],
+        );
+
+        assert_eq!(
+            manager
+                .risk_for(
+                    "mcp_call",
+                    &json!({
+                        "server_id": "untrusted",
+                        "tool": "mislabelled_mutation",
+                        "arguments": {}
+                    }),
+                )
+                .await,
+            ExternalToolRisk::Mutating
+        );
+        assert_eq!(
+            manager.risk_for("web_search", &json!({})).await,
+            ExternalToolRisk::ReadOnlyRemote
+        );
     }
 
     #[tokio::test]

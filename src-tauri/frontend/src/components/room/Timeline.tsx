@@ -5,6 +5,7 @@
  */
 import {
   forwardRef,
+  memo,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -18,6 +19,7 @@ import type { AgentEvent, AgentSendMode, SessionAttachmentMeta } from "../../lib
 import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
+import { useSharedNow } from "../../lib/shared-clock";
 import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
 import { Markdown } from "./Markdown";
 import {
@@ -118,9 +120,9 @@ function runUsageLabel(value: string | null): string | null {
   }
 }
 
-function runDurationLabel(startedAt: string, endedAt: string | null): string {
+function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
   const start = Date.parse(startedAt);
-  const end = endedAt ? Date.parse(endedAt) : Date.now();
+  const end = endedAt ? Date.parse(endedAt) : now;
   if (Number.isNaN(start) || Number.isNaN(end)) return "";
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   if (seconds < 60) return `${seconds}s`;
@@ -130,6 +132,20 @@ function runDurationLabel(startedAt: string, endedAt: string | null): string {
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
+
+/**
+ * F16：duration 的渲染隔离。共享时钟订阅下沉到本组件：`now` 每秒变化时
+ * 只有正在运行的 run 条目重新渲染，父 Timeline 不再因时钟订阅而整体重渲染。
+ */
+const RunDuration = memo(function RunDuration({ startedAt, endedAt }: {
+  startedAt: string;
+  endedAt: string | null;
+}) {
+  const now = useSharedNow(endedAt ? null : 1000);
+  const duration = runDurationLabel(startedAt, endedAt, now);
+  if (!duration) return null;
+  return <span className="run-duration">{duration}</span>;
+});
 
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   { taskId, workspacePath, cur, running, reviewing, onAgentEvent, onInspectSubagent, selectedSubagentId },
@@ -567,7 +583,6 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         const expanded = expandedRunIds.has(it.id);
         const detailId = `${it.id}-details`;
         const usage = runUsageLabel(it.usageJson);
-        const duration = runDurationLabel(it.startedAt, it.endedAt);
         const abnormal = it.state === "failed" || it.state === "aborted";
         return (
           <div
@@ -585,7 +600,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             >
               <span className={`run-summary-mark${it.state === "active" ? " active" : ""}`} aria-hidden="true" />
               <span className="run-name">{it.state === "active" ? "处理中" : "已处理"}</span>
-              {duration && <span className="run-duration">{duration}</span>}
+              <RunDuration startedAt={it.startedAt} endedAt={it.endedAt} />
               {abnormal && <span className="run-status">{it.label}</span>}
               <span className="run-chevron" aria-hidden="true">
                 {expanded ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}

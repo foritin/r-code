@@ -413,6 +413,13 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 24,
+            to_version: 25,
+            description: "Persisted approval clamp for delegated agent runs".to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 

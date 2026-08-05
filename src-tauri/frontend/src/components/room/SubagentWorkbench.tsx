@@ -78,6 +78,13 @@ interface SessionToolGroupEntry {
 
 type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroupEntry;
 
+interface SubagentPermission {
+  accessMode: SubagentAccessMode;
+  requireApproval: boolean;
+}
+
+type SubagentPermissionMode = SubagentAccessMode | "request_approval";
+
 /**
  * 子智能体总览和每个子智能体会话都是独立标签页。
  * 标签以稳定的运行 ID 去重；重新打开已有会话时只切换激活项。
@@ -396,10 +403,14 @@ function SubagentInspector({
       failedToolCount: transcript.filter((entry) => entry.kind === "tool" && entry.state === "fail").length,
     };
   }, [entries]);
-  const accessMode = useMemo(
-    () => resolveSessionAccessMode(messages, child.accessMode),
-    [child.accessMode, messages],
+  const permission = useMemo(
+    () => resolveSessionPermission(messages, {
+      accessMode: child.accessMode,
+      requireApproval: child.requireApproval,
+    }),
+    [child.accessMode, child.requireApproval, messages],
   );
+  const permissionMode = effectivePermissionMode(permission);
 
   const stop = async () => {
     if (stopping || !active) return;
@@ -425,7 +436,7 @@ function SubagentInspector({
           onClick={() => setExpanded((value) => !value)}
         >
           <span>已处理 {elapsedCompact(child.startedAt, child.endedAt ?? now)}</span>
-          <span className={`subagent-session-permission mode-${accessMode}`}>{accessModeLabel(accessMode)}</span>
+          <span className={`subagent-session-permission mode-${permissionMode}`}>{permissionModeLabel(permissionMode)}</span>
           <IconChevronDown width={13} height={13} />
         </button>
 
@@ -433,7 +444,7 @@ function SubagentInspector({
           <div className="subagent-session-body" id={`subagent-session-${child.id}`}>
             <div className="subagent-session-meta" aria-label="子智能体编排信息">
               <span><b>执行器</b>{child.runtimeKind === "codex_exec" ? "Codex CLI" : "R-Code"}</span>
-              <span><b>权限</b>{accessModeLabel(accessMode)}</span>
+              <span><b>权限</b>{permissionModeLabel(permissionMode)}</span>
               {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
             </div>
             {error && <div className="subagent-session-error">读取子智能体记录失败：{error}</div>}
@@ -578,12 +589,14 @@ function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly Age
     if (run.agent_kind !== "subagent" || merged.has(run.id)) continue;
     const startedAt = parseTimestamp(run.started_at);
     const endedAt = run.ended_at ? parseTimestamp(run.ended_at) : null;
+    const accessMode = run.access_mode ?? "read_only";
     merged.set(run.id, {
       id: run.id,
       label: run.agent_label?.trim() || "子智能体",
       runtimeKind: run.runtime_kind,
       model: run.model || null,
-      accessMode: run.access_mode ?? "read_only",
+      accessMode,
+      requireApproval: accessMode === "full_access" && (run.require_approval ?? false),
       routingReason: compactText(run.routing_reason),
       status: runStatus(run),
       phase: run.ended_at ? "idle" : "requesting",
@@ -827,27 +840,46 @@ function visibleText(value: string | null | undefined, limit = 20_000): string |
   return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
 }
 
-function resolveSessionAccessMode(
+function resolveSessionPermission(
   messages: readonly SessionMessage[],
-  fallback: SubagentAccessMode,
-): SubagentAccessMode {
+  fallback: SubagentPermission,
+): SubagentPermission {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.kind !== "system" || message.text !== "subagent_lifecycle") continue;
     const data = parseObject(message.output_json);
-    const scope = data?.scope;
+    const scope = data?.scope && typeof data.scope === "object" && !Array.isArray(data.scope)
+      ? data.scope as Record<string, unknown>
+      : null;
     const value = typeof data?.access_mode === "string"
       ? data.access_mode
-      : scope && typeof scope === "object" && !Array.isArray(scope)
-        ? (scope as Record<string, unknown>).access_mode
+      : scope
+        ? scope.access_mode
         : null;
-    if (value === "full_access" || value === "read_only") return value;
+    if (value === "full_access" || value === "read_only") {
+      const requireApproval = typeof data?.require_approval === "boolean"
+        ? data.require_approval
+        : typeof scope?.require_approval === "boolean"
+          ? scope.require_approval
+          : false;
+      return {
+        accessMode: value,
+        requireApproval: value === "full_access" && requireApproval,
+      };
+    }
   }
   return fallback;
 }
 
-function accessModeLabel(mode: SubagentAccessMode): string {
-  return mode === "full_access" ? "完全访问" : "只读";
+function effectivePermissionMode(permission: SubagentPermission): SubagentPermissionMode {
+  if (permission.accessMode === "read_only") return "read_only";
+  return permission.requireApproval ? "request_approval" : "full_access";
+}
+
+function permissionModeLabel(mode: SubagentPermissionMode): string {
+  if (mode === "read_only") return "只读";
+  if (mode === "request_approval") return "需审批";
+  return "完全访问";
 }
 
 function toolStateLabel(state: ToolState): string {

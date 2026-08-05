@@ -19,9 +19,10 @@ const PATHS = {
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const RELEASE_TAG = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-unsigned\.([1-9]\d*))?$/;
 
+class ReleaseError extends Error {}
+
 function fail(message) {
-  console.error(`release: ${message}`);
-  process.exit(1);
+  throw new ReleaseError(message);
 }
 
 function read(path) {
@@ -67,17 +68,17 @@ function parseReleaseTag(tag) {
   };
 }
 
-function writeJson(path, value, newline) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}${newline}`);
+function jsonText(value, newline) {
+  return `${JSON.stringify(value, null, 2)}${newline}`;
 }
 
-function versionSnapshot() {
-  const cargoToml = read(PATHS.cargoToml);
-  const cargoLock = read(PATHS.cargoLock);
-  const tauri = JSON.parse(read(PATHS.tauri));
-  const installerTauri = JSON.parse(read(PATHS.installerTauri));
-  const packageJson = JSON.parse(read(PATHS.packageJson));
-  const packageLock = JSON.parse(read(PATHS.packageLock));
+function versionSnapshot(paths = PATHS) {
+  const cargoToml = read(paths.cargoToml);
+  const cargoLock = read(paths.cargoLock);
+  const tauri = JSON.parse(read(paths.tauri));
+  const installerTauri = JSON.parse(read(paths.installerTauri));
+  const packageJson = JSON.parse(read(paths.packageJson));
+  const packageLock = JSON.parse(read(paths.packageLock));
   const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "(r-code-[^"]+)"\r?\nversion = "([^"]+)"/g)]
     .map((match) => ({ name: match[1], version: match[2] }));
 
@@ -94,8 +95,8 @@ function versionSnapshot() {
   };
 }
 
-function checkVersions(tag) {
-  const versions = versionSnapshot();
+function checkVersions(tag, paths = PATHS) {
+  const versions = versionSnapshot(paths);
   const expected = versions.workspace;
   if (!SEMVER.test(expected)) fail(`workspace version is not SemVer: ${expected}`);
 
@@ -122,7 +123,7 @@ function checkVersions(tag) {
     }
     const escaped = expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const releaseHeading = new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m");
-    if (!releaseHeading.test(read(PATHS.changelog))) {
+    if (!releaseHeading.test(read(paths.changelog))) {
       fail(`CHANGELOG.md has no dated section for ${expected}; run \"node scripts/release.mjs prepare ${expected}\" first`);
     }
   }
@@ -176,16 +177,90 @@ function refreshCargoLock(spawn = spawnSync, cwd = ROOT) {
   if (result.status !== 0) fail("cargo metadata failed while refreshing Cargo.lock");
 }
 
-function prepare(version) {
+function applyFileTransaction(
+  { writes, backupPaths, afterWrite },
+  {
+    readFile = readFileSync,
+    writeFile = (path, content) => writeFileSync(path, content),
+  } = {},
+) {
+  const backups = new Map(backupPaths.map((path) => [path, readFile(path)]));
+  let completed = false;
+  let operationError = null;
+  const rollbackErrors = [];
+
+  try {
+    for (const { path, content } of writes) writeFile(path, content, "prepare");
+    afterWrite();
+    completed = true;
+  } catch (error) {
+    operationError = error;
+  } finally {
+    if (!completed) {
+      for (const [path, content] of backups) {
+        try {
+          writeFile(path, content, "rollback");
+        } catch (error) {
+          rollbackErrors.push(`${path}: ${error.message}`);
+        }
+      }
+    }
+  }
+
+  if (operationError) {
+    if (rollbackErrors.length > 0) {
+      throw new ReleaseError(
+        `${operationError.message}; rollback was incomplete:\n- ${rollbackErrors.join("\n- ")}`,
+        { cause: operationError },
+      );
+    }
+    throw operationError;
+  }
+}
+
+function validatePreparedOutputs(version, outputs) {
+  if (workspaceVersion(outputs.cargoToml) !== version) {
+    fail(`prepared Cargo.toml does not contain version ${version}`);
+  }
+  for (const [name, text] of [
+    ["src-tauri/tauri.conf.json", outputs.tauri],
+    ["installer/tauri.conf.json", outputs.installerTauri],
+    ["src-tauri/frontend/package.json", outputs.packageJson],
+  ]) {
+    if (JSON.parse(text).version !== version) {
+      fail(`prepared ${name} does not contain version ${version}`);
+    }
+  }
+  const packageLock = JSON.parse(outputs.packageLock);
+  if (packageLock.version !== version || packageLock.packages?.[""]?.version !== version) {
+    fail(`prepared src-tauri/frontend/package-lock.json does not contain version ${version}`);
+  }
+  const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}$`, "m").test(outputs.changelog)) {
+    fail(`prepared CHANGELOG.md has no dated section for ${version}`);
+  }
+}
+
+function prepare(
+  version,
+  {
+    paths = PATHS,
+    root = ROOT,
+    spawn = spawnSync,
+    readFile = readFileSync,
+    writeFile = (path, content) => writeFileSync(path, content),
+  } = {},
+) {
   if (!version || version.startsWith("v") || !SEMVER.test(version)) {
     fail("prepare expects a SemVer without the v prefix, for example: 0.2.0");
   }
 
-  const cargoToml = read(PATHS.cargoToml);
-  const tauriText = read(PATHS.tauri);
-  const installerTauriText = read(PATHS.installerTauri);
-  const packageText = read(PATHS.packageJson);
-  const packageLockText = read(PATHS.packageLock);
+  const cargoToml = read(paths.cargoToml);
+  const tauriText = read(paths.tauri);
+  const installerTauriText = read(paths.installerTauri);
+  const packageText = read(paths.packageJson);
+  const packageLockText = read(paths.packageLock);
+  const changelog = read(paths.changelog);
   const tauri = JSON.parse(tauriText);
   const installerTauri = JSON.parse(installerTauriText);
   const packageJson = JSON.parse(packageText);
@@ -193,7 +268,7 @@ function prepare(version) {
 
   const nextCargoToml = replaceWorkspaceVersion(cargoToml, version);
   const nextChangelog = stampChangelog(
-    read(PATHS.changelog),
+    changelog,
     version,
     repositoryUrl(cargoToml),
   );
@@ -204,15 +279,35 @@ function prepare(version) {
   if (!packageLock.packages?.[""]) fail("package-lock.json is missing packages['']");
   packageLock.packages[""].version = version;
 
-  writeFileSync(PATHS.cargoToml, nextCargoToml);
-  writeJson(PATHS.tauri, tauri, newlineOf(tauriText));
-  writeJson(PATHS.installerTauri, installerTauri, newlineOf(installerTauriText));
-  writeJson(PATHS.packageJson, packageJson, newlineOf(packageText));
-  writeJson(PATHS.packageLock, packageLock, newlineOf(packageLockText));
-  writeFileSync(PATHS.changelog, nextChangelog);
+  const outputs = {
+    cargoToml: nextCargoToml,
+    tauri: jsonText(tauri, newlineOf(tauriText)),
+    installerTauri: jsonText(installerTauri, newlineOf(installerTauriText)),
+    packageJson: jsonText(packageJson, newlineOf(packageText)),
+    packageLock: jsonText(packageLock, newlineOf(packageLockText)),
+    changelog: nextChangelog,
+  };
+  validatePreparedOutputs(version, outputs);
 
-  refreshCargoLock();
-  checkVersions(`v${version}`);
+  const writes = [
+    { path: paths.cargoToml, content: outputs.cargoToml },
+    { path: paths.tauri, content: outputs.tauri },
+    { path: paths.installerTauri, content: outputs.installerTauri },
+    { path: paths.packageJson, content: outputs.packageJson },
+    { path: paths.packageLock, content: outputs.packageLock },
+    { path: paths.changelog, content: outputs.changelog },
+  ];
+  applyFileTransaction(
+    {
+      writes,
+      backupPaths: [...writes.map(({ path }) => path), paths.cargoLock],
+      afterWrite: () => {
+        refreshCargoLock(spawn, root);
+        checkVersions(`v${version}`, paths);
+      },
+    },
+    { readFile, writeFile },
+  );
   console.log(`release: prepared v${version}`);
   console.log("release: review the diff, run the verification suite, commit, then create and push the tag");
 }
@@ -241,7 +336,19 @@ function main(argv) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
-  main(process.argv.slice(2));
+  try {
+    main(process.argv.slice(2));
+  } catch (error) {
+    console.error(`release: ${error.message}`);
+    process.exitCode = 1;
+  }
 }
 
-export { parseReleaseTag, refreshCargoLock, replaceWorkspaceVersion, stampChangelog };
+export {
+  applyFileTransaction,
+  parseReleaseTag,
+  prepare,
+  refreshCargoLock,
+  replaceWorkspaceVersion,
+  stampChangelog,
+};

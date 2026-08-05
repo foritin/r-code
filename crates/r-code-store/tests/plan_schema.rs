@@ -136,7 +136,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_24() {
+fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -169,6 +169,11 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_24() {
         "queued_messages",
         "sort_order"
     ));
+    assert!(table_has_column(
+        &clean_conn,
+        "agent_runs",
+        "require_approval"
+    ));
     drop(clean_conn);
     drop(clean);
 
@@ -196,7 +201,8 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_24() {
              CREATE INDEX idx_queued_messages_task_branch
                  ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
              ALTER TABLE tasks DROP COLUMN goal_active;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24);",
+             ALTER TABLE agent_runs DROP COLUMN require_approval;
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25);",
         )
         .unwrap();
         assert_eq!(schema_version(&conn), 18);
@@ -228,10 +234,11 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_24() {
         );
     }
     assert!(table_has_column(&conn, "queued_messages", "sort_order"));
+    assert!(table_has_column(&conn, "agent_runs", "require_approval"));
 }
 
 #[test]
-fn schema_24_declares_every_check_and_foreign_key_contract() {
+fn schema_25_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 

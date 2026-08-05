@@ -1,16 +1,19 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
   parseReleaseTag,
+  prepare,
   refreshCargoLock,
   replaceWorkspaceVersion,
   stampChangelog,
 } from "./release.mjs";
 import {
+  createUpdaterManifest,
   parseArguments,
   platformSigningPlan,
   requiredReleaseAssets,
@@ -69,6 +72,81 @@ test("stampChangelog preserves CRLF without creating mixed line endings", () => 
 
   assert.equal(actual.replaceAll("\r\n", "").includes("\n"), false);
   assert.doesNotMatch(actual, /\r\r\n/);
+});
+
+function prepareFixture(t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "r-code-release-test-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const paths = {
+    cargoToml: path.join(directory, "Cargo.toml"),
+    cargoLock: path.join(directory, "Cargo.lock"),
+    tauri: path.join(directory, "src-tauri", "tauri.conf.json"),
+    installerTauri: path.join(directory, "installer", "tauri.conf.json"),
+    packageJson: path.join(directory, "src-tauri", "frontend", "package.json"),
+    packageLock: path.join(directory, "src-tauri", "frontend", "package-lock.json"),
+    changelog: path.join(directory, "CHANGELOG.md"),
+  };
+  for (const file of Object.values(paths)) fs.mkdirSync(path.dirname(file), { recursive: true });
+
+  const crlf = "\r\n";
+  const contents = new Map([
+    [paths.cargoToml, `[workspace]${crlf}${crlf}[workspace.package]${crlf}version = "0.1.0"${crlf}repository = "https://github.com/foritin/r-code"${crlf}`],
+    [paths.cargoLock, `[[package]]${crlf}name = "r-code-core"${crlf}version = "0.1.0"${crlf}`],
+    [paths.tauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
+    [paths.installerTauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
+    [paths.packageJson, `{${crlf}  "name": "r-code",${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
+    [paths.packageLock, `{${crlf}  "name": "r-code",${crlf}  "version": "0.1.0",${crlf}  "packages": {${crlf}    "": {${crlf}      "name": "r-code",${crlf}      "version": "0.1.0"${crlf}    }${crlf}  }${crlf}}${crlf}`],
+    [paths.changelog, `# Changelog${crlf}${crlf}## [Unreleased]${crlf}${crlf}### Fixed${crlf}${crlf}- Transactional release preparation.${crlf}`],
+  ]);
+  for (const [file, content] of contents) fs.writeFileSync(file, content);
+  return {
+    directory,
+    paths,
+    originals: new Map([...contents.keys()].map((file) => [file, fs.readFileSync(file)])),
+  };
+}
+
+test("prepare rolls back every file byte-for-byte after an intermediate write failure", (t) => {
+  const fixture = prepareFixture(t);
+  let preparedWrites = 0;
+  assert.throws(
+    () => prepare("0.2.0", {
+      paths: fixture.paths,
+      root: fixture.directory,
+      spawn: () => assert.fail("cargo metadata must not run after a write failure"),
+      writeFile: (file, content, phase) => {
+        if (phase === "prepare" && ++preparedWrites === 3) {
+          throw new Error("injected intermediate write failure");
+        }
+        fs.writeFileSync(file, content);
+      },
+    }),
+    /injected intermediate write failure/,
+  );
+
+  assert.equal(preparedWrites, 3);
+  for (const [file, original] of fixture.originals) {
+    assert.deepEqual(fs.readFileSync(file), original, `${file} must be restored exactly`);
+  }
+});
+
+test("prepare also restores Cargo.lock when dependency refresh fails", (t) => {
+  const fixture = prepareFixture(t);
+  assert.throws(
+    () => prepare("0.2.0", {
+      paths: fixture.paths,
+      root: fixture.directory,
+      spawn: () => {
+        fs.writeFileSync(fixture.paths.cargoLock, "partially refreshed lockfile\n");
+        return { status: 1 };
+      },
+    }),
+    /cargo metadata failed/,
+  );
+
+  for (const [file, original] of fixture.originals) {
+    assert.deepEqual(fs.readFileSync(file), original, `${file} must be restored exactly`);
+  }
 });
 
 test("macOS packaging keeps native window chrome and app/dmg targets", () => {
@@ -164,6 +242,17 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
   assert.match(workflow, /Verify release credentials and select signing mode/);
   assert.match(workflow, /Missing required release secrets/);
+  assert.match(workflow, /validateUpdaterManifest/);
+  assert.match(workflow, /gh release view "\$RELEASE_TAG" --json assets/);
+  assert.match(workflow, /gh release download "\$RELEASE_TAG" --pattern '\*\.sig'/);
+  assert.match(workflow, /createUpdaterManifest/);
+  assert.match(workflow, /updater manifest validation failed/);
+  assert.equal(
+    (workflow.match(/uploadUpdaterJson: false/g) ?? []).length,
+    2,
+    "matrix jobs must leave latest.json generation to the single finalize job",
+  );
+  assert.doesNotMatch(workflow, /uploadUpdaterJson: true/);
   assert.equal(
     (workflow.match(/token: \$\{\{ secrets\.PAT_TOKEN \}\}/g) ?? []).length,
     2,
@@ -296,21 +385,224 @@ test("publish-release requires a public warning for unsigned stable releases", (
   assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, signingPlan), []);
 });
 
-test("publish-release verifies the updater manifest contract", () => {
-  const tag = "v0.2.1-unsigned.1";
-  const tagInfo = parseReleaseTag(tag);
+function updaterFixture(tag) {
+  const version = parseReleaseTag(tag).version;
+  const names = {
+    "windows-x86_64": `R-Code_${version}_x64_en-US.msi`,
+    "windows-x86_64-msi": `R-Code_${version}_x64_zh-CN.msi`,
+    "windows-x86_64-nsis": `R-Code_${version}_x64-setup.exe`,
+    "darwin-aarch64": `R-Code_${version}_aarch64.app.tar.gz`,
+    "darwin-aarch64-app": `R-Code_${version}_aarch64.app.tar.gz`,
+    "darwin-x86_64": `R-Code_${version}_x64.app.tar.gz`,
+    "darwin-x86_64-app": `R-Code_${version}_x64.app.tar.gz`,
+    "linux-x86_64": `R-Code_${version}_amd64.AppImage`,
+    "linux-x86_64-appimage": `R-Code_${version}_amd64.AppImage`,
+    "linux-x86_64-deb": `R-Code_${version}_amd64.deb`,
+  };
+  const assets = [...new Set(Object.values(names))].map((name, index) => ({
+    name,
+    apiUrl: `https://api.github.com/repos/foritin/r-code/releases/assets/${1000 + index}`,
+    url: `https://github.com/foritin/r-code/releases/download/${tag}/${name}`,
+  }));
   const manifest = {
-    version: "0.2.1",
+    version,
     platforms: Object.fromEntries(
-      ["windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"]
-        .map((platform) => [platform, {}]),
+      Object.entries(names).map(([platform, name]) => {
+        const asset = assets.find((candidate) => candidate.name === name);
+        return [platform, { signature: "trusted updater signature", url: asset.apiUrl }];
+      }),
     ),
   };
-  assert.deepEqual(validateUpdaterManifest(manifest, tag, tagInfo), []);
+  return { assets, manifest, names };
+}
+
+test("publish-release verifies signed updater entries against the exact release assets", () => {
+  const tag = "v0.2.1-unsigned.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  assert.deepEqual(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets),
+    [],
+  );
   delete manifest.platforms["darwin-x86_64"];
   assert.match(
-    validateUpdaterManifest(manifest, tag, tagInfo).join("\n"),
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets).join("\n"),
     /latest\.json is missing darwin-x86_64/,
+  );
+});
+
+test("publish-release requires distinct canonical Windows updater payloads", () => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  manifest.platforms["windows-x86_64-msi"] = {
+    ...manifest.platforms["windows-x86_64"],
+  };
+
+  const problems = validateUpdaterManifest(
+    manifest,
+    tag,
+    tagInfo,
+    "foritin/r-code",
+    assets,
+  ).join("\n");
+  assert.match(problems, /windows-x86_64-msi points to .*_x64_en-US\.msi/);
+});
+
+test("publish-release rejects empty signatures, unsafe URLs, other tags, and wrong architectures", () => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  manifest.platforms["windows-x86_64"].signature = "  ";
+  manifest.platforms["darwin-aarch64"].url = assets.find(
+    (asset) => asset.name.endsWith("_x64.app.tar.gz"),
+  ).apiUrl;
+  manifest.platforms["darwin-x86_64"].url =
+    "https://github.com/foritin/r-code/releases/download/v0.2.0/R-Code_0.2.1_x64.app.tar.gz";
+  manifest.platforms["linux-x86_64"].url =
+    "http://github.com/foritin/other/releases/download/v0.2.1/R-Code_0.2.1_amd64.AppImage";
+
+  const problems = validateUpdaterManifest(
+    manifest,
+    tag,
+    tagInfo,
+    "foritin/r-code",
+    assets,
+  ).join("\n");
+  assert.match(problems, /windows-x86_64 has an empty signature/);
+  assert.match(problems, /darwin-aarch64 points to .*_x64\.app\.tar\.gz/);
+  assert.match(problems, /darwin-x86_64 URL points to release v0\.2\.0, not v0\.2\.1/);
+  assert.match(problems, /linux-x86_64 URL uses a non-HTTPS URL/);
+});
+
+test("publish-release accepts direct GitHub download URLs only for recorded current-tag assets", () => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  for (const entry of Object.values(manifest.platforms)) {
+    entry.url = assets.find((asset) => asset.apiUrl === entry.url).url;
+  }
+  assert.deepEqual(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets),
+    [],
+  );
+
+  manifest.platforms["linux-x86_64"].url =
+    "https://github.com/foritin/other/releases/download/v0.2.1/R-Code_0.2.1_amd64.AppImage";
+  assert.match(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets).join("\n"),
+    /does not point to foritin\/r-code release downloads/,
+  );
+});
+
+test("publish-release requires updater signatures for stable releases with unsigned OS artifacts", () => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  assert.ok(unsignedPlatformNames(platformSigningPlan(tagInfo, [])).length > 0);
+  assert.deepEqual(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets),
+    [],
+  );
+  manifest.platforms["linux-x86_64"].signature = "";
+  assert.match(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets).join("\n"),
+    /linux-x86_64 has an empty signature/,
+  );
+});
+
+test("publish-release matches every updater manifest signature to its uploaded sig payload", (t) => {
+  const tag = "v0.2.1";
+  const tagInfo = parseReleaseTag(tag);
+  const { assets, manifest } = updaterFixture(tag);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "r-code-signature-test-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  for (const asset of assets) {
+    const payload = Buffer.from(`signature for ${asset.name}\n`).toString("base64");
+    fs.writeFileSync(path.join(directory, `${asset.name}.sig`), payload);
+  }
+  for (const entry of Object.values(manifest.platforms)) {
+    const asset = assets.find((candidate) => candidate.apiUrl === entry.url);
+    entry.signature = fs.readFileSync(path.join(directory, `${asset.name}.sig`), "utf8").trim();
+  }
+
+  assert.deepEqual(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets, directory),
+    [],
+  );
+  manifest.platforms["windows-x86_64-nsis"].signature = "wrong";
+  assert.match(
+    validateUpdaterManifest(manifest, tag, tagInfo, "foritin/r-code", assets, directory).join("\n"),
+    /windows-x86_64-nsis signature does not match .*setup\.exe\.sig/,
+  );
+});
+
+test("publish-release builds one deterministic updater manifest after the matrix finishes", (t) => {
+  const tag = "v0.2.1";
+  const { assets } = updaterFixture(tag);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "r-code-manifest-build-test-"));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  for (const asset of assets) {
+    fs.writeFileSync(path.join(directory, `${asset.name}.sig`), `signature for ${asset.name}\n`);
+  }
+  const manifest = createUpdaterManifest({
+    version: "0.2.1",
+    tag,
+    repository: "foritin/r-code",
+    releaseAssets: assets,
+    signatureDirectory: directory,
+    notes: "release notes",
+    pubDate: "2026-08-05T00:00:00.000Z",
+  });
+
+  assert.equal(manifest.version, "0.2.1");
+  assert.equal(manifest.notes, "release notes");
+  assert.equal(manifest.pub_date, "2026-08-05T00:00:00.000Z");
+  assert.equal(Object.keys(manifest.platforms).length, 10);
+  assert.equal(
+    manifest.platforms["windows-x86_64"].url,
+    assets.find((asset) => asset.name.endsWith("_x64_en-US.msi")).url,
+  );
+  assert.equal(
+    manifest.platforms["windows-x86_64-msi"].url,
+    assets.find((asset) => asset.name.endsWith("_x64_zh-CN.msi")).url,
+  );
+  assert.equal(
+    manifest.platforms["windows-x86_64-nsis"].url,
+    assets.find((asset) => asset.name.endsWith("_x64-setup.exe")).url,
+  );
+  assert.equal(
+    new Set([
+      manifest.platforms["windows-x86_64"].url,
+      manifest.platforms["windows-x86_64-msi"].url,
+      manifest.platforms["windows-x86_64-nsis"].url,
+    ]).size,
+    3,
+  );
+  assert.deepEqual(
+    validateUpdaterManifest(
+      manifest,
+      tag,
+      parseReleaseTag(tag),
+      "foritin/r-code",
+      assets,
+      directory,
+    ),
+    [],
+  );
+
+  fs.rmSync(path.join(directory, "R-Code_0.2.1_amd64.deb.sig"));
+  assert.throws(
+    () => createUpdaterManifest({
+      version: "0.2.1",
+      tag,
+      repository: "foritin/r-code",
+      releaseAssets: assets,
+      signatureDirectory: directory,
+    }),
+    /cannot read R-Code_0\.2\.1_amd64\.deb\.sig/,
   );
 });
 
@@ -342,6 +634,25 @@ test("CI authenticates every private agent-core checkout", () => {
     installerConfig.bundle.icon.includes("../icons/icon.png"),
     "the installer needs a portable PNG icon so generate_context works on macOS/Linux",
   );
+});
+
+test("workflows use Node 24 action runtimes", () => {
+  const workflows = ["ci.yml", "flaky-tests.yml", "release.yml"]
+    .map((name) => fs.readFileSync(path.join(repoRoot, ".github", "workflows", name), "utf8"))
+    .join("\n");
+
+  for (const legacyAction of [
+    "actions/checkout@v4",
+    "actions/setup-node@v4",
+    "actions/upload-artifact@v4",
+    "actions/download-artifact@v4",
+  ]) {
+    assert.doesNotMatch(workflows, new RegExp(legacyAction.replace("/", "\\/")));
+  }
+  assert.match(workflows, /actions\/checkout@v6/);
+  assert.match(workflows, /actions\/setup-node@v5/);
+  assert.match(workflows, /actions\/upload-artifact@v6/);
+  assert.match(workflows, /actions\/download-artifact@v7/);
 });
 
 test("supply-chain generator emits CycloneDX and separates workspace packages", () => {

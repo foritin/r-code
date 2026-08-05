@@ -15,7 +15,7 @@ flowchart LR
     Push --> Validate["Actions 校验 tag / version / changelog"]
     Validate --> Supply["生成 SBOM / 许可证清单"]
     Validate --> Matrix["Windows x64 / macOS 双架构 / Linux x64 构建到 Draft"]
-    Supply --> Finalize["确认四平台 latest.json 后发布 Draft"]
+    Supply --> Finalize["汇总资产并生成唯一 latest.json 后发布 Draft"]
     Matrix --> Finalize
     Finalize --> Update["GitHub Release + Tauri updater"]
 ```
@@ -108,6 +108,7 @@ Release 的 `supply-chain` job 使用 `--strict`；任何依赖缺少许可证�
 - `Cargo.toml`；
 - `Cargo.lock` 中所有 `r-code-*` workspace package；
 - `src-tauri/tauri.conf.json`；
+- `installer/tauri.conf.json`；
 - `src-tauri/frontend/package.json`；
 - `src-tauri/frontend/package-lock.json` 根 package。
 
@@ -115,7 +116,7 @@ Release 的 `supply-chain` job 使用 `--strict`；任何依赖缺少许可证�
 
 ```bash
 node scripts/release.mjs check
-node scripts/release.mjs prepare 0.2.0
+node scripts/release.mjs prepare X.Y.Z
 ```
 
 `check` 只读地检查一致性。`prepare` 会同步主应用和品牌安装器版本、刷新 `Cargo.lock`，并把 `CHANGELOG.md` 的 `[Unreleased]` 内容移动到带当天日期的版本节。版本参数不带 `v`，Git tag 带 `v`。
@@ -124,22 +125,22 @@ node scripts/release.mjs prepare 0.2.0
 
 ## 5. 正式发布步骤
 
-以下示例发布 `0.1.0`。执行前先把版本号替换为实际目标。
+以下命令用 `X.Y.Z` 表示待发布版本；执行前替换为实际版本号。
 
 完成版本准备、验证、提交并推送 `main` 后，推荐由发布闸门脚本创建 tag、触发四平台构建、等待工作流并验收 Release：
 
 ```bash
 # 只做预检，不创建 tag
-node scripts/publish-release.mjs v0.1.0 --dry-run
+node scripts/publish-release.mjs vX.Y.Z --dry-run
 
 # 稳定版本：证书齐全时签名；缺失时降级并在 Latest 页面警告
-node scripts/publish-release.mjs v0.1.0
+node scripts/publish-release.mjs vX.Y.Z
 
 # 尚未配置平台证书时的测试预发布
-node scripts/publish-release.mjs v0.1.0-unsigned.1
+node scripts/publish-release.mjs vX.Y.Z-unsigned.1
 ```
 
-脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的基础 Actions Secrets。平台证书缺失会在本地预检和 Actions 日志中警告，并按平台降级；工作流成功后还会核对 Release 状态、公开警告、20 个发行资产和四平台 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag；只想让远端继续运行可加 `--no-wait`。
+脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的基础 Actions Secrets。平台证书缺失会在本地预检和 Actions 日志中警告，并按平台降级；工作流成功后还会核对 Release 状态、公开警告、20 个发行资产，以及四平台基础项和安装器变体的 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag。`--no-wait` 会在远端工作流登记后立即返回，因而跳过本地对 Release、20 个资产和 updater manifest 的发布后验收；使用后必须再以默认等待模式或等价命令完成验收。
 
 ### 5.1 冻结并准备版本
 
@@ -156,7 +157,7 @@ node scripts/release.mjs check
 确认 `CHANGELOG.md` 的 `[Unreleased]` 完整后：
 
 ```bash
-node scripts/release.mjs prepare 0.1.0
+node scripts/release.mjs prepare X.Y.Z
 git diff -- Cargo.toml Cargo.lock src-tauri/tauri.conf.json installer/tauri.conf.json \
   src-tauri/frontend/package.json src-tauri/frontend/package-lock.json CHANGELOG.md
 ```
@@ -164,28 +165,32 @@ git diff -- Cargo.toml Cargo.lock src-tauri/tauri.conf.json installer/tauri.conf
 ### 5.2 验证候选版本
 
 ```bash
-node --test scripts/release.test.mjs
-node scripts/release.mjs check v0.1.0
+node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+node scripts/release.mjs check vX.Y.Z
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 
 cd src-tauri/frontend
 npm ci
-npm run test:dev-server
-npm run test:popover
+npm test
 npm run build
 cd ../..
 
-# Windows：构建最终品牌安装器
+# Windows：构建最终品牌安装器（包含 NSIS payload）
 ./scripts/build-branded-installer.ps1
+
+# Windows：同时实构建并核验 WiX MSI；PowerShell 中执行
+Push-Location src-tauri
+cargo tauri build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":false}}'
+Pop-Location
 
 # macOS：本机 ad-hoc 候选包；正式候选包追加 --signed
 # Intel 本地包可追加 --target x86_64-apple-darwin
 bash ./scripts/build-macos.sh
 ```
 
-至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。
+至少在目标平台做一次安装包 smoke test：安装、启动、创建纯聊天任务、打开工作区、触发一次审批、执行只读工具、验证 updater 检查不会报签名/manifest 错误。`0.3.x` 还必须覆盖 Codex 同树委派（不新增 session）、RequestApproval 下的 Bash 审批、逐个取消 child、公开 reasoning summary、文件链接右侧跳行、约 1 秒计时刷新，以及重启后的三态权限恢复。缺少外部 Provider 或 Codex 账号时，应在可用环境完成这组联网验收；本机至少验证能力不可用时会隐藏动态工具且主任务继续。
 
 ### 5.3 提交、打 tag、推送
 
@@ -195,10 +200,10 @@ bash ./scripts/build-macos.sh
 git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json \
   installer/tauri.conf.json \
   src-tauri/frontend/package.json src-tauri/frontend/package-lock.json CHANGELOG.md
-git commit -m "chore(release): v0.1.0"
-git tag -a v0.1.0 -m "R-Code v0.1.0"
+git commit -m "chore(release): vX.Y.Z"
+git tag -a vX.Y.Z -m "R-Code vX.Y.Z"
 git push origin main
-git push origin v0.1.0
+git push origin vX.Y.Z
 ```
 
 若团队使用签名 Git tag，可把 `git tag -a` 换成 `git tag -s`。不要在 CI 失败后删除并重建同名 tag；修复发布代码后使用新的 patch 版本，保持已经公开的 tag 不可变。
@@ -208,13 +213,13 @@ git push origin v0.1.0
 当平台签名凭据尚未配置、但需要发布可下载测试包时，使用带递增序号的显式标签：
 
 ```bash
-git tag -a v0.1.0-unsigned.1 -m "R-Code v0.1.0 unsigned prerelease 1"
-git push origin v0.1.0-unsigned.1
+git tag -a vX.Y.Z-unsigned.1 -m "R-Code vX.Y.Z unsigned prerelease 1"
+git push origin vX.Y.Z-unsigned.1
 ```
 
-Release workflow 会校验其基础版本仍是 `0.1.0`，跳过 Windows Authenticode 与 Apple Developer ID/公证步骤，保留 Tauri updater 签名，并在 Release 顶部写入未签名警告。该 Release 会发布为 prerelease，但不会被标记为 Latest；`/releases/latest/download/latest.json` 不会指向它。
+Release workflow 会校验其基础版本仍是 `X.Y.Z`，跳过 Windows Authenticode 与 Apple Developer ID/公证步骤，保留 Tauri updater 签名，并在 Release 顶部写入未签名警告。该 Release 会发布为 prerelease，但不会被标记为 Latest；`/releases/latest/download/latest.json` 不会指向它。
 
-同一基础版本需要重试时创建 `v0.1.0-unsigned.2`，不得移动或覆盖已经公开的标签。稳定标签 `v0.1.0` 会按当时可用的证书逐平台签名，并在所有平台完成后成为 Latest。
+同一基础版本需要重试时创建 `vX.Y.Z-unsigned.2`，不得移动或覆盖已经公开的标签。稳定标签 `vX.Y.Z` 会按当时可用的证书逐平台签名，并在所有平台完成后成为 Latest。
 
 ### 5.4 观察 GitHub Actions
 
@@ -231,12 +236,12 @@ Tag push 后工作流按以下顺序运行：
 1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
 2. `supply-chain` 生成并严格校验 SBOM/许可证清单。
 3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
-4. `finalize` 确认 Draft 中存在四个平台的 updater 项，上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
+4. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag：
 
 ```bash
-gh workflow run Release --repo foritin/r-code -f tag=v0.1.0
+gh workflow run Release --repo foritin/r-code -f tag=vX.Y.Z
 ```
 
 `workflow_dispatch` 不是创建 tag 的替代品。工作流会先统一检查私有子模块令牌和 updater 私钥；缺少它们会失败。Windows/macOS 签名凭据按平台探测：整组齐全时签名，缺少任一项时该平台降级并给出警告。
@@ -248,10 +253,10 @@ gh workflow run Release --repo foritin/r-code -f tag=v0.1.0
 - Release 不是 Draft，tag 和标题正确；
 - Windows x64、macOS arm64/x64、Linux x64 目标产物都存在；
 - updater 归档均有对应 `.sig`；
-- 品牌安装器、NSIS、MSI 的 Authenticode 验证通过；
+- 已配置 Windows 证书时，品牌安装器、NSIS、MSI 的 Authenticode 验证必须通过；未配置时，Release 标题/正文必须明确标出 Windows 未签名及 SmartScreen 风险；
 - `r-code-sbom.cdx.json` 与 `THIRD_PARTY_LICENSES.md` 存在且内容对应当前版本；
 - `latest.json` 能通过 `https://github.com/foritin/r-code/releases/latest/download/latest.json` 获取；
-- manifest 中 version、platform key、下载 URL 和 signature 正确；
+- manifest 中 version、基础与安装器 platform key、下载 URL 和 signature 正确，且每个 signature 与同名资产的 `.sig` 内容一致；
 - 从前一个已发布版本执行一次真实更新并能重新启动。
 
 最后在 `main` 上重新运行 `node scripts/release.mjs check`，确认发布提交没有后续版本漂移。
