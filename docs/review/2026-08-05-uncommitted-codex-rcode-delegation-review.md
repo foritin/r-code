@@ -1,6 +1,6 @@
 # Code Review：Codex App Server → R-Code 动态子代理委派（修订版）
 
-> **2026-08-06 发布门禁提示**：§1–§13 保留了每一轮审查当时的证据和历史结论，其中的“当前”行号、未修限制和测试数量不再代表最新工作树。请以 **§14 发布前最终复核** 作为 0.3.0 的权威结论。
+> **2026-08-06 发布门禁提示**：§1–§13 保留了每一轮审查当时的证据和历史结论，其中的“当前”行号、未修限制和测试数量不再代表最新工作树。功能与发布前门禁结论见 **§14**，首次真实发布与恢复状态见 **§15**。
 
 - **日期**：2026-08-05
 - **基线**：`835373a`（Merge pull request #5 from foritin/dev）
@@ -724,6 +724,7 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 | Windows updater 的 generic / `-msi` 键都指向 en-US MSI，zh-CN 资产无正确平台映射 | 固定 generic=en-US MSI、`-msi`=zh-CN MSI、`-nsis`=setup；validator 要求三个唯一 Windows 资产完整覆盖。 |
 | 四个 matrix job 并发读改写 `latest.json` 可丢平台键 | matrix 只上传产物和签名，由单一 finalize job 生成并交叉验证唯一 manifest。 |
 | GitHub-hosted runner 已将 Node 20 action 强制迁移到 Node 24，旧 checkout、setup-node 与 artifact actions 产生弃用警告 | CI、flaky-test 与 release 工作流分别升级到 Node 24 原生的 `actions/checkout@v6`、`actions/setup-node@v5`、`actions/upload-artifact@v6` 与 `actions/download-artifact@v7`；第三方 Rust cache 与 Tauri action 的现用标签也已核验为 Node 24，且全部 job 都使用满足版本要求的 GitHub-hosted runner。 |
+| Draft Release 的资产 URL 是 `untagged-*` 临时路径，finalize 若直接复制会被当前 tag 校验拒绝 | 先核验目标 Draft、peeled tag commit、资产 API URL、唯一名称、uploaded 状态、非零大小和完整集合，再由 repository + immutable tag + asset name 构造规范 URL；新增受默认分支/SHA/concurrency 约束的 `finalize_only` 恢复路径。 |
 
 ### 14.3 最终自动化门禁
 
@@ -731,7 +732,7 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 - `cargo test --workspace --all-features`：全工作区通过，0 failed；其中 Host 当前 372 项 lib 测试、Gateway 163 项全量测试通过。
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`：通过。
 - 前端 `npm test`：69/69 通过；`npm run build`：TypeScript + Vite 生产构建通过。
-- `node --test scripts/release.test.mjs`：26/26 通过；`node scripts/release.mjs check v0.3.0`：所有版本一致为 0.3.0。
+- `node --test scripts/release.test.mjs`：27/27 通过；`node scripts/release.mjs check v0.3.0`：所有版本一致为 0.3.0。
 - `cargo audit`：退出码 0，仅报告 18 个已允许的上游 GTK/未维护 warning；`cargo deny check`：advisories / bans / licenses / sources 全部通过（仅依赖重复警告）。
 - `node scripts/generate-supply-chain.mjs target/supply-chain --strict`：生成 756 个 CycloneDX / license 组件，严格模式通过。
 
@@ -757,8 +758,18 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 
 首次冒烟脚本曾同时把 `USERPROFILE` 指向一个空目录，结果 Tauri setup 报 `unknown path` 并以 Windows fast-fail `0xC0000409` 退出。对照试验确认：同一二进制只在这个不完整的伪 Windows profile 下失败，保留真实 Known Folders 后立即通过。这是冒烟 harness 的环境构造错误，不是 0.3.0 产物崩溃；未为掩盖它而修改产品代码。
 
-### 14.5 已知验证边界与最终结论
+### 14.5 已知验证边界与发布前结论
 
 唯一保留边界是：需要真实登录态和可用 Provider 的 Codex CLI ↔ App Server 完整端到端会话尚未纳入无凭据 CI。当前已由 fixture transport、真实进程 shim、handler 纵向测试、持久化测试和 UI 测试覆盖协议与产品边界。它是发布后/有登录环境的运维验收项，不是当前可重现的缺陷。另外，“Known Folder 缺失时提供更友好错误”或“增加专用数据目录覆盖”可作为后续非阻断加固；产品当前未声称支持伪造 portable profile 或未加载 profile 的服务账户。
 
-**最终结论：PASS。** 截至 2026-08-06，当前工作树无已知 P0/P1 发布阻断，0.3.0 的源码、数据迁移、权限边界、前端交互、发布脚本、Windows 打包与启动冒烟均已通过。
+**发布前候选结论：PASS。** 截至首次打 tag 前，当前工作树无已知 P0/P1 产品阻断，0.3.0 的源码、数据迁移、权限边界、前端交互、Windows 打包与启动冒烟均已通过。真实发布执行中发现的 finalize 工具缺陷与恢复状态另见 §15；本段不再代表 Release 已发布完成。
+
+## 15. 首次真实 v0.3.0 发布与 finalize 恢复
+
+首次实际发布使用不可变 annotated tag `v0.3.0`（tag object `166128f9…`，peeled commit `9dd8f286…`）触发 [Release run 31049032394](https://github.com/foritin/r-code/actions/runs/31049032394)。validate、supply-chain、Windows x64、macOS arm64/x64 与 Linux x64 全部成功；唯一失败是 `Publish completed release` 的 updater manifest finalize。Draft Release `365839301` 保留 17 个名称唯一、状态为 uploaded 且非空的构建/签名资产，`targetCommitish` 与 peeled tag commit 一致，始终未公开、未成为 Latest。
+
+根因是 GitHub 对 Draft 资产返回 `releases/download/untagged-<draft-id>/...` 临时 URL。旧生成器直接把该 URL 写入候选 manifest，随后 validator 正确拒绝它不属于 `v0.3.0`，因此 10/10 platform key 全部失败关闭；没有错误 `latest.json` 或半成品 Latest 暴露给用户。修复不放宽 validator，而是把 Release API 记录只作为资产归属证据，再以 repository、immutable tag 和 asset name 生成规范下载 URL。回归用例 `publish-release canonicalizes temporary draft asset URLs` 同时验证临时 URL 被替换、签名仍逐资产匹配、伪造 API 归属继续被拒绝。
+
+恢复入口 `finalize_only=true` 只允许从默认分支 dispatch，并 checkout 该次 dispatch 的精确 SHA；产品验证与 SBOM 继续 checkout 不可变 tag。它跳过四平台重建，但会重新检查 Draft/tag commit/17 个资产/updater `.sig` 内容，再按失败关闭顺序依次执行“生成并验证 manifest → 上传 manifest/SBOM/licenses → 最后公开 Draft”；若中途失败，Release 仍保持非公开 Draft，但已成功上传的元数据资产可能保留供下次 `--clobber` 恢复。恢复模式不依据当前 Secrets 猜测旧资产签名 provenance，而是保守保留 Windows 与 macOS 未完成平台签名警告；同一 tag 的 push、完整重跑与恢复也共享 concurrency group。
+
+**当前发布状态：恢复中。** 不移动、不删除、不重建 `v0.3.0`；只有修复合入 `main`、CI 通过且 finalize-only run 完成 20 项资产、10 个 updater platform key、签名内容与 Latest 状态验收后，才可把 0.3.0 标记为发布完成。

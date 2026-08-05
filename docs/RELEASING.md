@@ -238,13 +238,21 @@ Tag push 后工作流按以下顺序运行：
 3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
 4. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
 
-任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。修复临时环境问题后，可对失败的 Actions run 使用 Re-run failed jobs；也可手动运行 Release workflow 并输入**已经存在**的 tag：
+任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。若失败来自临时 runner/网络问题且无需改变 tag 内代码，可对失败的 Actions run 使用 Re-run failed jobs，或从 `main` 完整重跑已有 tag：
 
 ```bash
-gh workflow run Release --repo foritin/r-code -f tag=vX.Y.Z
+gh workflow run Release --repo foritin/r-code --ref main -f tag=vX.Y.Z -f finalize_only=false
 ```
 
-`workflow_dispatch` 不是创建 tag 的替代品。工作流会先统一检查私有子模块令牌和 updater 私钥；缺少它们会失败。Windows/macOS 签名凭据按平台探测：整组齐全时签名，缺少任一项时该平台降级并给出警告。
+若四个平台与 supply-chain job 已全部成功、只有 `Publish completed release` 因 finalize 工具代码失败，可先在 `main` 修复并通过 CI，再复用仍为 Draft 的原资产：
+
+```bash
+gh workflow run Release --repo foritin/r-code --ref main -f tag=vX.Y.Z -f finalize_only=true
+```
+
+该模式不会重建产品：validate 与 supply-chain 仍 checkout 不可变 tag，finalize 则 checkout 本次 dispatch 的精确 `main` SHA。它会要求 Release 仍为 Draft、target commit 与 tag 的 peeled commit 一致、17 个构建资产名称唯一且均为 uploaded/非空，然后才生成规范 tag URL、上传清单并公开 Release。由于恢复时当前 Secrets 不能证明原构建的签名状态，`finalize_only` 会保守地把 Windows/macOS 都标为未完成平台签名；需要保留“完全签名”声明时应完整重跑构建而不是复用资产。
+
+`workflow_dispatch` 不是创建 tag 的替代品，并且只能从仓库默认分支触发；finalize checkout 本次 dispatch 的精确 SHA，而不是恢复期间可能继续移动的分支头。工作流会先统一检查私有子模块令牌和 updater 私钥；缺少它们会失败。Windows/macOS 签名凭据按平台探测：整组齐全时签名，缺少任一项时该平台降级并给出警告。同一 tag 的 push、完整重跑与 finalize-only 恢复共享 concurrency group，不能并发修改同一个 Draft。
 
 ### 5.5 发布后验收
 
@@ -276,7 +284,11 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 
 ### 7.1 构建失败，Release 仍是 Draft
 
-优先重跑失败 job。若是代码或配置问题：
+先按失败范围选择恢复方式：
+
+- 临时 runner/网络故障，且 tag 内代码无需变化：重跑失败 job；
+- 四个平台与 supply-chain 均成功，仅 finalize 工具缺陷：修复并合入 `main` 后使用 5.4 节的 `finalize_only=true`，不要重打 tag，也不要先公开 Draft 来换取规范 URL；
+- 产品代码、依赖或 tag 内构建配置有问题：
 
 1. 不移动现有 tag；
 2. 让失败 Draft 保持非公开，必要时在 GitHub UI 删除该 Draft；
