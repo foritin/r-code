@@ -746,12 +746,12 @@ F1–F17 修复**全部落实且测试复跑一致**，但 H1–H3 均为生产�
 | `R-Code_0.3.0_x64_en-US.msi` | 10,387,456 | `1D8293F58ADE89AF3394D1B9F340396C0A7562D6ADCC7919F7E94BF0BDC81FB7` |
 | `R-Code_0.3.0_x64_zh-CN.msi` | 10,383,360 | `737D10BEFDECFDFDF3BDAE3091AC0C4E766726CD9A9BAFB5064B03BE2797E26D` |
 
-直接启动该 Release `r-code-host.exe`，保持真实 Windows `USERPROFILE`、仅将可变应用缓存环境指向临时目录：进程在 12 秒观察窗口内持续存活，随后只终止本次启动的精确 PID。
+直接启动该 Release `r-code-host.exe`，保持真实 Windows `USERPROFILE`，并临时覆盖 `APPDATA` / `LOCALAPPDATA` 以减少一般子进程缓存污染：进程在 12 秒观察窗口内持续存活，随后只终止本次启动的精确 PID。这是启动冒烟，**不声称应用数据完全隔离**：Tauri 在 Windows 上的 `app_data_dir()` 通过 `SHGetKnownFolderPath(FOLDERID_RoamingAppData)` 解析，而不是只读这两个环境变量。如需严格数据隔离，应使用临时 Windows 用户、Windows Sandbox 或 VM。
 
 首次冒烟脚本曾同时把 `USERPROFILE` 指向一个空目录，结果 Tauri setup 报 `unknown path` 并以 Windows fast-fail `0xC0000409` 退出。对照试验确认：同一二进制只在这个不完整的伪 Windows profile 下失败，保留真实 Known Folders 后立即通过。这是冒烟 harness 的环境构造错误，不是 0.3.0 产物崩溃；未为掩盖它而修改产品代码。
 
 ### 14.5 已知验证边界与最终结论
 
-唯一保留边界是：需要真实登录态和可用 Provider 的 Codex CLI ↔ App Server 完整端到端会话尚未纳入无凭据 CI。当前已由 fixture transport、真实进程 shim、handler 纵向测试、持久化测试和 UI 测试覆盖协议与产品边界。它是发布后/有登录环境的运维验收项，不是当前可重现的缺陷。
+唯一保留边界是：需要真实登录态和可用 Provider 的 Codex CLI ↔ App Server 完整端到端会话尚未纳入无凭据 CI。当前已由 fixture transport、真实进程 shim、handler 纵向测试、持久化测试和 UI 测试覆盖协议与产品边界。它是发布后/有登录环境的运维验收项，不是当前可重现的缺陷。另外，“Known Folder 缺失时提供更友好错误”或“增加专用数据目录覆盖”可作为后续非阻断加固；产品当前未声称支持伪造 portable profile 或未加载 profile 的服务账户。
 
 **最终结论：PASS。** 截至 2026-08-06，当前工作树无已知 P0/P1 发布阻断，0.3.0 的源码、数据迁移、权限边界、前端交互、发布脚本、Windows 打包与启动冒烟均已通过。
