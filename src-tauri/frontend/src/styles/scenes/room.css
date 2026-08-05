@@ -1202,6 +1202,7 @@
   background:transparent; color:var(--fg-muted); cursor:pointer; font:11px var(--font-ui); text-align:left;
 }
 .subagent-session-permission { margin-left:3px; padding:2px 6px; border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--fg-faint); font:9px var(--font-mono); }
+.subagent-session-permission.mode-request_approval { border-color:var(--edge-warning); color:var(--warning); }
 .subagent-session-permission.mode-full_access { border-color:color-mix(in srgb,var(--accent) 42%,var(--border)); color:var(--accent); }
 .subagent-session-summary svg { margin-left:auto; transition:transform var(--dur-2) var(--ease); }
 .subagent-session-summary[aria-expanded="false"] svg { transform:rotate(-90deg); }

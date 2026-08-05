@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 24;
+pub const LATEST_SCHEMA_VERSION: u32 = 25;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -53,6 +53,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(22, MIGRATION_022, false),
     MigrationSpec::new(23, MIGRATION_023, false),
     MigrationSpec::new(24, MIGRATION_024, false),
+    MigrationSpec::new(25, MIGRATION_025, false),
 ];
 
 impl MigrationSpec {
@@ -1395,6 +1396,15 @@ CREATE INDEX idx_queued_messages_task_dispatch
     ON queued_messages(task_id, state, sort_order ASC, priority DESC, created_at ASC);
 "#;
 
+/// Migration 025: preserve the effective approval boundary of delegated runs.
+/// `access_mode = full_access` plus this flag represents a write-capable child whose
+/// mutating actions still cross the host approval gate. Existing runs predate that
+/// distinction and therefore retain the historical no-extra-clamp interpretation.
+const MIGRATION_025: &str = r#"
+ALTER TABLE agent_runs ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0
+    CHECK (require_approval IN (0, 1));
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1897,6 +1907,32 @@ mod tests {
             .map(Result::unwrap)
             .collect::<Vec<_>>();
         assert_eq!(ids, ["urgent", "normal-old", "normal-new"]);
+    }
+
+    #[test]
+    fn migration_v25_defaults_existing_runs_to_no_approval_clamp() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations_with_specs(&conn, &MIGRATIONS[..24], None).unwrap();
+        conn.execute_batch(
+            "INSERT INTO tasks (id, title, goal, mode, state, created_at, updated_at) \
+             VALUES ('approval-task', 'Approval', 'Approval', 'ask', 'idle', \
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'); \
+             INSERT INTO agent_runs \
+                 (id, task_id, model, review_state, started_at, access_mode) \
+             VALUES ('approval-run', 'approval-task', 'model', 'pending', \
+                     '2026-01-01T00:00:00Z', 'full_access');",
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        let require_approval: i64 = conn
+            .query_row(
+                "SELECT require_approval FROM agent_runs WHERE id = 'approval-run'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(require_approval, 0);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use r_code_core::error::ProductError;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
-use crate::permission::{PermissionCheckResult, PermissionEngine};
+use crate::permission::{PermissionCancellation, PermissionCheckResult, PermissionEngine};
 
 /// 路径参数缺失时的处理策略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,9 +258,119 @@ pub trait Tool: Send + Sync {
     ) -> Result<ToolExecutionResult, ProductError> {
         self.execute(input).await.map(ToolExecutionResult::from)
     }
+
+    /// Execute while observing the run cancellation flag.
+    ///
+    /// The default adapter makes every in-process built-in cancellation-safe by dropping its
+    /// execution future once the run is aborted. Process-owning tools must override this hook and
+    /// finish their resource cleanup before returning; `BashTool` uses it to kill and reap the
+    /// complete process tree.
+    async fn execute_with_context_and_abort(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        let execution = self.execute_with_context(input, context);
+        tokio::pin!(execution);
+        loop {
+            if abort_flag.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(cancelled_tool_error(self.name()));
+            }
+            if abort_flag.is_none() {
+                return execution.await;
+            }
+            tokio::select! {
+                result = &mut execution => return result,
+                _ = tokio::time::sleep(TOOL_ABORT_POLL_INTERVAL) => {}
+            }
+        }
+    }
 }
 
 const MAX_TRANSIENT_TOOL_ATTEMPTS: usize = 3;
+const TOOL_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+const APPROVAL_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+const APPROVAL_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+#[cfg(not(test))]
+const EXTERNAL_ABORT_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+#[cfg(test)]
+const EXTERNAL_ABORT_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
+
+fn cancelled_tool_error(tool_name: &str) -> ProductError {
+    ProductError::Other(format!(
+        "tool {tool_name} cancelled before execution completed"
+    ))
+}
+
+/// Owns a pending approval for exactly as long as the gateway future is alive.
+///
+/// Normal allow/deny/timeout paths remove the request before this guard is dropped. If the
+/// surrounding task is force-aborted instead, `Drop` schedules a fail-closed cancellation so an
+/// orphaned approval cannot be granted later and create a standing rule.
+struct PendingPermissionLease {
+    engine: Arc<PermissionEngine>,
+    request_id: String,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PendingPermissionLease {
+    fn new(
+        engine: Arc<PermissionEngine>,
+        request_id: String,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        Self {
+            engine,
+            request_id,
+            cancelled,
+        }
+    }
+}
+
+impl Drop for PendingPermissionLease {
+    fn drop(&mut self) {
+        // Invalidate synchronously before scheduling async map cleanup. A concurrent late
+        // `AllowAlways` therefore fails even if it reaches the engine before the cleanup task.
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::Release);
+        let engine = self.engine.clone();
+        let request_id = self.request_id.clone();
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                engine.cancel_request(&request_id).await;
+            });
+        }
+    }
+}
+
+async fn execute_external_abortable<Fut>(
+    tool_name: &str,
+    execution: Fut,
+    abort_flag: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<ToolCallOutcome, ProductError>
+where
+    Fut: Future<Output = Result<ToolCallOutcome, ProductError>>,
+{
+    let execution = execution;
+    tokio::pin!(execution);
+    loop {
+        if abort_flag.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            // MCP/Bash-style external adapters may need an async protocol/resource cleanup step.
+            // Give the cooperative future a small bounded window, then force-drop it so an
+            // uncooperative third-party implementation cannot outlive the cancelled run.
+            let _ = tokio::time::timeout(EXTERNAL_ABORT_CLEANUP_GRACE, &mut execution).await;
+            return Err(cancelled_tool_error(tool_name));
+        }
+        if abort_flag.is_none() {
+            return execution.await;
+        }
+        tokio::select! {
+            result = &mut execution => return result,
+            _ = tokio::time::sleep(TOOL_ABORT_POLL_INTERVAL) => {}
+        }
+    }
+}
 
 fn is_transient_storage_contention(error: &ProductError) -> bool {
     let ProductError::DatabaseError(message) = error else {
@@ -309,7 +419,10 @@ async fn execute_registered_tool(
             )));
         }
 
-        match tool.execute_with_context(input.clone(), context).await {
+        match tool
+            .execute_with_context_and_abort(input.clone(), context, abort_flag)
+            .await
+        {
             Ok(result) => return Ok(result),
             Err(error) if is_transient_storage_contention(&error) && attempt < max_attempts => {
                 tracing::warn!(
@@ -619,9 +732,14 @@ impl ToolGateway {
             audit.id = call_id.to_string();
         }
         audit.caller = caller.map(|s| s.to_string());
+        // F3：RequestApproval 子代理（inherit 自非 FullAccess 父运行）的工具调用
+        // 必须进入权限引擎审批，而不是在这里被硬拒绝——否则 bash/edit 从"不可见"
+        // 变成"可见但永远被拒"，审批能力无法打通。ReadOnly 子代理仍被硬拒绝
+        // （它们看不到写工具；scoped_input 的 tool_allowed 已先行拦截）。
         if is_subagent_caller(caller)
             && (!tool.requires_workspace_scope()
                 || (access_mode != ProjectAccessMode::FullAccess
+                    && access_mode != ProjectAccessMode::RequestApproval
                     && !subagent_read_only_tool_allowed(tool_name)))
         {
             let reason = format!("subagent caller may not execute tool: {tool_name}");
@@ -645,9 +763,18 @@ impl ToolGateway {
             }
         }
 
+        let lease_cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lifecycle_cancelled = lease_cancelled.clone();
+        let run_abort = abort_flag.clone();
+        let cancellation = PermissionCancellation::from_probe(move || {
+            lifecycle_cancelled.load(std::sync::atomic::Ordering::Acquire)
+                || run_abort
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        });
         let check_result = self
             .permission_engine
-            .check_detailed_with_access_mode(
+            .check_detailed_with_access_mode_and_lifecycle(
                 task_id,
                 &audit.id,
                 Some(run_id),
@@ -657,6 +784,8 @@ impl ToolGateway {
                 input_summary,
                 target,
                 access_mode,
+                Some(cancellation),
+                Some(APPROVAL_WAIT_TIMEOUT),
             )
             .await;
 
@@ -669,15 +798,26 @@ impl ToolGateway {
             }
             PermissionCheckResult::NeedsApproval(req) => {
                 // 挂起等待批复；abort 时提前返回
-                let timeout = std::time::Duration::from_secs(600);
-                let poll = std::time::Duration::from_millis(150);
+                let _pending_lease = PendingPermissionLease::new(
+                    self.permission_engine.clone(),
+                    req.id.clone(),
+                    lease_cancelled,
+                );
                 let start = std::time::Instant::now();
                 loop {
                     if abort_flag
                         .as_ref()
                         .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                     {
+                        self.permission_engine.cancel_request(&req.id).await;
                         let msg = format!("tool {tool_name} cancelled while awaiting approval");
+                        audit.fail(&msg);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(msg));
+                    }
+                    if start.elapsed() >= APPROVAL_WAIT_TIMEOUT {
+                        self.permission_engine.cancel_request(&req.id).await;
+                        let msg = format!("tool {tool_name} approval timed out");
                         audit.fail(&msg);
                         self.ledger.write().await.push(audit);
                         return Err(ProductError::PermissionError(msg));
@@ -696,13 +836,7 @@ impl ToolGateway {
                             PermissionDecision::Pending => {}
                         }
                     }
-                    if start.elapsed() >= timeout {
-                        let msg = format!("tool {tool_name} approval timed out");
-                        audit.fail(&msg);
-                        self.ledger.write().await.push(audit);
-                        return Err(ProductError::PermissionError(msg));
-                    }
-                    tokio::time::sleep(poll).await;
+                    tokio::time::sleep(APPROVAL_POLL_INTERVAL).await;
                 }
             }
         };
@@ -745,14 +879,32 @@ impl ToolGateway {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<ToolCallOutcome, ProductError>>,
     {
+        // `mcp_call` is a multiplexed entry point. A standing rule for one server/tool pair
+        // must not become a wildcard grant for every installed MCP tool.
+        let permission_target = if tool_name == "mcp_call" {
+            Some(
+                serde_json::json!({
+                    "server_id": input.get("server_id").and_then(serde_json::Value::as_str),
+                    "tool": input.get("tool").and_then(serde_json::Value::as_str),
+                })
+                .to_string(),
+            )
+        } else {
+            None
+        };
         let mut audit = ToolCall::new(run_id, task_id, tool_name, input.to_string(), risk_level);
         if let Some(call_id) = call_id {
             audit.id = call_id.to_string();
         }
         audit.caller = caller.map(ToOwned::to_owned);
 
+        // M5：RequestApproval 子代理（inherit 自审批类父运行）放行——后续权限引擎
+        // 会对 R2+ 发起审批（与内置工具路径一致）。显式 ReadOnly 子代理的 mutating
+        // external 已在 SessionToolHost 的 policy 层硬拒（external_access_mode 把
+        // 两档折叠成同一 access_mode，gateway 无法区分，故此处不再重复拦截）。
         if is_subagent_caller(caller)
             && access_mode != ProjectAccessMode::FullAccess
+            && access_mode != ProjectAccessMode::RequestApproval
             && !matches!(risk_level, RiskLevel::R0 | RiskLevel::R1)
         {
             let reason = format!(
@@ -778,9 +930,18 @@ impl ToolGateway {
             }
         }
 
+        let lease_cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let lifecycle_cancelled = lease_cancelled.clone();
+        let run_abort = abort_flag.clone();
+        let cancellation = PermissionCancellation::from_probe(move || {
+            lifecycle_cancelled.load(std::sync::atomic::Ordering::Acquire)
+                || run_abort
+                    .as_ref()
+                    .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        });
         let check_result = self
             .permission_engine
-            .check_detailed_with_access_mode(
+            .check_detailed_with_access_mode_and_lifecycle(
                 task_id,
                 &audit.id,
                 Some(run_id),
@@ -788,8 +949,10 @@ impl ToolGateway {
                 tool_name,
                 risk_level,
                 input_summary,
-                None,
+                permission_target.as_deref(),
                 access_mode,
+                Some(cancellation),
+                Some(APPROVAL_WAIT_TIMEOUT),
             )
             .await;
 
@@ -801,15 +964,26 @@ impl ToolGateway {
                 return Err(ProductError::PermissionError(reason));
             }
             PermissionCheckResult::NeedsApproval(request) => {
-                let timeout = std::time::Duration::from_secs(600);
-                let poll = std::time::Duration::from_millis(150);
+                let _pending_lease = PendingPermissionLease::new(
+                    self.permission_engine.clone(),
+                    request.id.clone(),
+                    lease_cancelled,
+                );
                 let start = std::time::Instant::now();
                 loop {
                     if abort_flag
                         .as_ref()
                         .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
                     {
+                        self.permission_engine.cancel_request(&request.id).await;
                         let message = format!("tool {tool_name} cancelled while awaiting approval");
+                        audit.fail(&message);
+                        self.ledger.write().await.push(audit);
+                        return Err(ProductError::PermissionError(message));
+                    }
+                    if start.elapsed() >= APPROVAL_WAIT_TIMEOUT {
+                        self.permission_engine.cancel_request(&request.id).await;
+                        let message = format!("tool {tool_name} approval timed out");
                         audit.fail(&message);
                         self.ledger.write().await.push(audit);
                         return Err(ProductError::PermissionError(message));
@@ -826,18 +1000,12 @@ impl ToolGateway {
                             PermissionDecision::Pending => {}
                         }
                     }
-                    if start.elapsed() >= timeout {
-                        let message = format!("tool {tool_name} approval timed out");
-                        audit.fail(&message);
-                        self.ledger.write().await.push(audit);
-                        return Err(ProductError::PermissionError(message));
-                    }
-                    tokio::time::sleep(poll).await;
+                    tokio::time::sleep(APPROVAL_POLL_INTERVAL).await;
                 }
             }
         }
 
-        match execute().await {
+        match execute_external_abortable(tool_name, execute(), abort_flag.as_deref()).await {
             Ok(outcome) => {
                 if outcome.is_error {
                     audit.fail(&outcome.content);
@@ -1151,6 +1319,419 @@ mod tests {
         let engine = Arc::new(PermissionEngine::new());
         let gw = ToolGateway::new(engine.clone());
         (engine, gw)
+    }
+
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct PendingCancellationTool {
+        started: Arc<std::sync::atomic::AtomicBool>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+        completed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait]
+    impl Tool for PendingCancellationTool {
+        fn name(&self) -> &str {
+            "pending_cancel"
+        }
+
+        fn description(&self) -> &str {
+            "pending cancellation fixture"
+        }
+
+        fn risk_level(&self) -> RiskLevel {
+            RiskLevel::R0
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+            let _drop = DropFlag(self.dropped.clone());
+            self.started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            self.completed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok("unexpected completion".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_drops_an_active_builtin_execution_future() {
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let tool = PendingCancellationTool {
+            started: started.clone(),
+            dropped: dropped.clone(),
+            completed: completed.clone(),
+        };
+        let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_abort = abort.clone();
+        let cancel = tokio::spawn(async move {
+            while !started.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            cancel_abort.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let context = ToolExecutionContext {
+            task_id: "task".to_string(),
+            run_id: "run".to_string(),
+            tool_call_id: "call".to_string(),
+            caller: Some("agent".to_string()),
+            access_mode: ProjectAccessMode::FullAccess,
+        };
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            execute_registered_tool(&tool, serde_json::json!({}), &context, Some(abort.as_ref())),
+        )
+        .await
+        .expect("built-in cancellation must be prompt")
+        .expect_err("cancelled built-in must not succeed");
+        cancel.await.unwrap();
+
+        assert!(error.to_string().contains("cancelled"));
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn abort_force_drops_a_non_cooperative_external_future_after_cleanup_grace() {
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_abort = abort.clone();
+        let cancel_started = started.clone();
+        let cancel = tokio::spawn(async move {
+            while !cancel_started.load(std::sync::atomic::Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            cancel_abort.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let future_dropped = dropped.clone();
+        let future_completed = completed.clone();
+        let execution = async move {
+            let _drop = DropFlag(future_dropped);
+            started.store(true, std::sync::atomic::Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            future_completed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolCallOutcome {
+                content: "unexpected completion".to_string(),
+                is_error: false,
+                metadata: None,
+            })
+        };
+
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            execute_external_abortable("pending_external", execution, Some(abort.as_ref())),
+        )
+        .await
+        .expect("external cancellation must be bounded")
+        .expect_err("cancelled external call must not succeed");
+        cancel.await.unwrap();
+
+        assert!(error.to_string().contains("cancelled"));
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(!completed.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cancelling_builtin_approval_wait_removes_pending_and_blocks_late_grant() {
+        let (engine, mut gateway) = make_gateway();
+        gateway.register(Box::new(WriteTool));
+        let gateway = Arc::new(gateway);
+        let abort = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let execution = {
+            let gateway = gateway.clone();
+            let abort = abort.clone();
+            tokio::spawn(async move {
+                gateway
+                    .execute_with_wait_with_access_mode(
+                        "task-cancel-pending",
+                        "run-cancel-pending",
+                        Some("call-cancel-pending"),
+                        "write_file",
+                        serde_json::json!({ "path": "cancelled.txt", "content": "nope" }),
+                        Some("agent"),
+                        "write cancelled.txt",
+                        Some(abort),
+                        ProjectAccessMode::RequestApproval,
+                    )
+                    .await
+            })
+        };
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = engine
+                    .pending_for_task("task-cancel-pending")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("approval request must become pending");
+
+        abort.store(true, std::sync::atomic::Ordering::SeqCst);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), execution)
+            .await
+            .expect("approval cancellation must be prompt")
+            .unwrap()
+            .expect_err("cancelled approval must not execute");
+
+        assert!(error.to_string().contains("cancelled"));
+        assert!(engine
+            .pending_for_task("task-cancel-pending")
+            .await
+            .is_empty());
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn cancelling_external_approval_wait_removes_pending_and_blocks_late_grant() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (engine, gateway) = make_gateway();
+        let gateway = Arc::new(gateway);
+        let abort = Arc::new(AtomicBool::new(false));
+        let executed = Arc::new(AtomicBool::new(false));
+
+        let execution = {
+            let gateway = gateway.clone();
+            let abort = abort.clone();
+            let executed = executed.clone();
+            tokio::spawn(async move {
+                gateway
+                    .execute_external_with_wait(
+                        "task-cancel-external",
+                        "run-cancel-external",
+                        Some("call-cancel-external"),
+                        "mcp_call",
+                        serde_json::json!({ "server_id": "fixture", "tool": "write" }),
+                        Some("agent"),
+                        "fixture/write",
+                        Some(abort),
+                        ProjectAccessMode::RequestApproval,
+                        RiskLevel::R2,
+                        move || async move {
+                            executed.store(true, Ordering::SeqCst);
+                            Ok(ToolCallOutcome {
+                                content: "unexpected execution".to_string(),
+                                is_error: false,
+                                metadata: None,
+                            })
+                        },
+                    )
+                    .await
+            })
+        };
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = engine
+                    .pending_for_task("task-cancel-external")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("external approval request must become pending");
+
+        abort.store(true, Ordering::SeqCst);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(2), execution)
+            .await
+            .expect("external approval cancellation must be prompt")
+            .unwrap()
+            .expect_err("cancelled external approval must not execute");
+
+        assert!(error.to_string().contains("cancelled"));
+        assert!(!executed.load(Ordering::SeqCst));
+        assert!(engine
+            .pending_for_task("task-cancel-external")
+            .await
+            .is_empty());
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn dropping_builtin_approval_wait_cleans_pending_and_blocks_late_grant() {
+        let (engine, mut gateway) = make_gateway();
+        gateway.register(Box::new(WriteTool));
+        let gateway = Arc::new(gateway);
+
+        let execution = {
+            let gateway = gateway.clone();
+            tokio::spawn(async move {
+                gateway
+                    .execute_with_wait_with_access_mode(
+                        "task-drop-pending",
+                        "run-drop-pending",
+                        Some("call-drop-pending"),
+                        "write_file",
+                        serde_json::json!({ "path": "dropped.txt", "content": "nope" }),
+                        Some("agent"),
+                        "write dropped.txt",
+                        None,
+                        ProjectAccessMode::RequestApproval,
+                    )
+                    .await
+            })
+        };
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = engine
+                    .pending_for_task("task-drop-pending")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("approval request must become pending");
+
+        execution.abort();
+        assert!(execution.await.unwrap_err().is_cancelled());
+        // Drop invalidates the lifecycle synchronously, before its async pending-map cleanup.
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !engine
+                .pending_for_task("task-drop-pending")
+                .await
+                .is_empty()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropping the gateway future must cancel its pending approval");
+
+        assert!(matches!(
+            engine
+                .check("task-drop-pending", "write_file", RiskLevel::R2, None,)
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropping_external_approval_wait_cleans_pending_and_blocks_late_grant() {
+        let (engine, gateway) = make_gateway();
+        let gateway = Arc::new(gateway);
+
+        let execution = {
+            let gateway = gateway.clone();
+            tokio::spawn(async move {
+                gateway
+                    .execute_external_with_wait(
+                        "task-drop-external",
+                        "run-drop-external",
+                        Some("call-drop-external"),
+                        "mcp_call",
+                        serde_json::json!({ "server_id": "fixture", "tool": "write" }),
+                        Some("agent"),
+                        "fixture/write",
+                        None,
+                        ProjectAccessMode::RequestApproval,
+                        RiskLevel::R2,
+                        || async {
+                            Ok(ToolCallOutcome {
+                                content: "unexpected execution".to_string(),
+                                is_error: false,
+                                metadata: None,
+                            })
+                        },
+                    )
+                    .await
+            })
+        };
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = engine
+                    .pending_for_task("task-drop-external")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("external approval request must become pending");
+
+        execution.abort();
+        assert!(execution.await.unwrap_err().is_cancelled());
+        assert!(engine
+            .decide(&request.id, PermissionDecision::AllowAlways)
+            .await
+            .is_err());
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while !engine
+                .pending_for_task("task-drop-external")
+                .await
+                .is_empty()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropping the external gateway future must cancel its pending approval");
+
+        assert!(matches!(
+            engine
+                .check(
+                    "task-drop-external",
+                    "mcp_call",
+                    RiskLevel::R2,
+                    Some(
+                        &serde_json::json!({
+                            "server_id": "fixture",
+                            "tool": "write"
+                        })
+                        .to_string()
+                    ),
+                )
+                .await,
+            PermissionCheckResult::NeedsApproval(_)
+        ));
     }
 
     #[tokio::test]

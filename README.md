@@ -13,16 +13,22 @@ R-Code organizes conversations, model runs, tool approvals, file changes, verifi
 
 ## Highlights
 
-- Native model providers with optional Codex CLI/MCP collaboration.
+- Native model providers with optional Codex CLI App Server/MCP collaboration, including same-task Codex → R-Code delegation.
 - Plan mode with durable goals, structured human-in-the-loop questions, feature-oriented todos, and a crash-safe enhanced review workflow.
 - Evolving memory that is off by default and stored only in AppData, with global approval, project review, and frozen snapshot injection.
 - Keyless native web access, an optional built-in deep-research MCP, third-party MCP management, and official Registry discovery.
-- Session branches, resend, steer, queues, and a streaming timeline.
-- R-Code/Codex subagent delegation with optional quality review.
+- Session branches, resend, steer, queues, a streaming timeline, and clickable file/line references that open the right-side Files workbench.
+- R-Code/Codex subagent delegation with optional quality review, per-child cancellation, and visible read-only / approval-required / full-access states.
 - Workspace file, search, Git, and Shell tools behind one audit boundary.
 - Risk levels, per-call approval, read-only subagents, and path-escape protection.
 - Baseline-aware diffs, verification, file/task rollback, and crash recovery.
 - Integrated PTY terminal and Codex/Claude transcript replay.
+
+### Codex collaboration
+
+Codex main-agent runs use the official App Server connection. With Codex CLI `0.145.0` or newer and an available R-Code Provider, Codex can call a bounded in-session tool that creates a child run under the current R-Code task instead of opening another sidebar session. If either capability is unavailable, R-Code hides that dynamic tool and the Codex main run continues normally.
+
+R-Code shows only public reasoning summaries emitted by the App Server, never raw chain-of-thought. Child runs inherit the parent permission ceiling, persist their effective three-state permission, and can be cancelled individually. Assistant references such as `[src/main.rs:42](src/main.rs#L42)` open the workspace file in the right-side workbench at the requested line.
 
 ## Supported platforms
 
@@ -93,7 +99,7 @@ git submodule update --init -- .agents
 
 ```bash
 # Release metadata
-node --test scripts/release.test.mjs
+node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 
 # Rust
@@ -137,10 +143,10 @@ See [RELEASING.md](./docs/RELEASING.md) for output paths, signing variables, and
 The version, changelog, tag, and GitHub Release flow is validated as one chain:
 
 ```bash
-node scripts/release.mjs prepare 0.1.0
+node scripts/release.mjs prepare X.Y.Z
 # Review, verify, commit, push main, and wait for CI; then:
-node scripts/publish-release.mjs v0.1.0 --dry-run
-node scripts/publish-release.mjs v0.1.0
+node scripts/publish-release.mjs vX.Y.Z --dry-run
+node scripts/publish-release.mjs vX.Y.Z
 ```
 
 The publish gate creates the immutable tag, triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/RELEASING.md) for credentials, recovery, and post-release acceptance.

@@ -343,6 +343,11 @@ pub struct AgentRun {
     /// 子智能体工作区能力；主运行保留默认值，仅用于统一 IPC 形状。
     #[serde(default)]
     pub access_mode: SubagentAccessMode,
+    /// `FullAccess` 能力档位是否仍由宿主审批钳制。
+    ///
+    /// 旧运行缺省为 false；`ReadOnly` 运行忽略此位。
+    #[serde(default)]
+    pub require_approval: bool,
     /// 自动路由或显式选择该执行器的可见原因，不包含模型私有推理。
     #[serde(default)]
     pub routing_reason: Option<String>,
@@ -385,6 +390,7 @@ impl AgentRun {
             model: model.into(),
             runtime_kind: AgentRunRuntimeKind::Native,
             access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
             routing_reason: None,
             external_session_id: None,
             review_state: ReviewState::Pending,
@@ -710,6 +716,10 @@ pub struct PermissionRequest {
     pub risk_level: RiskLevel,
     /// 输入摘要（脱敏后）
     pub input_summary: String,
+    /// Standing-rule 作用目标；缺失表示当前工具的任务级通配规则。
+    /// 旧记录没有此字段，因此保持可选并默认缺失。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     /// 审批状态
     pub decision: PermissionDecision,
     /// 创建时间
@@ -736,6 +746,7 @@ impl PermissionRequest {
             tool_name: tool_name.into(),
             risk_level,
             input_summary: input_summary.into(),
+            target: None,
             decision: PermissionDecision::Pending,
             created_at: Utc::now(),
             decided_at: None,
@@ -750,6 +761,12 @@ impl PermissionRequest {
     ) -> Self {
         self.run_id = run_id.map(Into::into);
         self.caller = caller.map(Into::into);
+        self
+    }
+
+    /// 绑定 standing-rule 的最小授权目标，防止聚合工具的任务级通配授权。
+    pub fn with_target(mut self, target: Option<impl Into<String>>) -> Self {
+        self.target = target.map(Into::into);
         self
     }
 
@@ -1447,6 +1464,11 @@ pub struct AgentEventScope {
     /// 本次委派的能力边界；旧事件安全地按只读处理。
     #[serde(default)]
     pub access_mode: SubagentAccessMode,
+    /// 能力档位之外的审批钳制（M7）：`access_mode = FullAccess` 且此位为 true 时
+    /// 表示"审批模式"（inherit 自 RequestApproval 等非全权父运行）。审计锚点据
+    /// 此记录 effective access；旧事件缺省 false（无审批钳制）。
+    #[serde(default)]
+    pub require_approval: bool,
     /// 为什么选择此子智能体执行器。仅记录策略结论，不记录思维链。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_reason: Option<String>,
@@ -1747,6 +1769,7 @@ mod tests {
         .unwrap();
         assert!(legacy.run_id.is_none());
         assert!(legacy.caller.is_none());
+        assert!(legacy.target.is_none());
 
         let request = PermissionRequest::new(
             "task-1",
@@ -1755,9 +1778,11 @@ mod tests {
             RiskLevel::R2,
             "write src/lib.rs",
         )
-        .with_origin(Some("run-1"), Some("subagent:child-1"));
+        .with_origin(Some("run-1"), Some("subagent:child-1"))
+        .with_target(Some("workspace/src/lib.rs"));
         assert_eq!(request.run_id.as_deref(), Some("run-1"));
         assert_eq!(request.caller.as_deref(), Some("subagent:child-1"));
+        assert_eq!(request.target.as_deref(), Some("workspace/src/lib.rs"));
     }
 
     #[test]
@@ -1798,6 +1823,8 @@ mod tests {
         assert!(legacy.delegated_by_tool_call_id.is_none());
         assert_eq!(legacy.runtime_kind, AgentRunRuntimeKind::Native);
         assert!(legacy.external_session_id.is_none());
+        assert_eq!(legacy.access_mode, SubagentAccessMode::ReadOnly);
+        assert!(!legacy.require_approval);
 
         let child = AgentRun::new_subagent_for_branch(
             "task-1",
@@ -1844,6 +1871,7 @@ mod tests {
         assert_eq!(legacy.runtime_kind, AgentRunRuntimeKind::Native);
         assert!(legacy.model.is_none());
         assert_eq!(legacy.access_mode, SubagentAccessMode::ReadOnly);
+        assert!(!legacy.require_approval);
 
         let codex = AgentEventScope {
             runtime_kind: AgentRunRuntimeKind::CodexExec,

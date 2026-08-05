@@ -53,6 +53,8 @@ export interface ActivitySubagent {
   runtimeKind: AgentRun["runtime_kind"];
   model: string | null;
   accessMode: SubagentAccessMode;
+  /** full_access 能力档位仍需逐项经过宿主审批。 */
+  requireApproval: boolean;
   routingReason: string | null;
   status: SubagentStatus;
   phase: ActivityPhase;
@@ -210,12 +212,15 @@ function applyScopedEvent(
 
   const priorIndex = state.subagents.findIndex((child) => child.id === scope.run_id);
   const prior = priorIndex >= 0 ? state.subagents[priorIndex] : undefined;
+  const accessMode = scope.access_mode ?? prior?.accessMode ?? "read_only";
   const child: ActivitySubagent = {
     id: scope.run_id,
     label: scope.agent_label?.trim() || prior?.label || "子代理",
     runtimeKind: scope.runtime_kind ?? prior?.runtimeKind ?? "native",
     model: scope.model?.trim() || prior?.model || null,
-    accessMode: scope.access_mode ?? prior?.accessMode ?? "read_only",
+    accessMode,
+    requireApproval: accessMode === "full_access"
+      && (scope.require_approval ?? prior?.requireApproval ?? false),
     routingReason: safeChildDetail(scope.routing_reason) ?? prior?.routingReason ?? null,
     status: prior?.status ?? "queued",
     phase: prior?.phase ?? "requesting",
@@ -489,12 +494,15 @@ function mergePersistedSubagents(
     const startedAt = parseTimestamp(run.started_at);
     const endedAt = run.ended_at ? parseTimestamp(run.ended_at) : null;
     const prior = live.get(run.id);
+    const accessMode = run.access_mode ?? prior?.accessMode ?? "read_only";
     live.set(run.id, {
       id: run.id,
       label: run.agent_label?.trim() || "子代理",
       runtimeKind: run.runtime_kind,
       model: run.model || null,
-      accessMode: run.access_mode ?? prior?.accessMode ?? "read_only",
+      accessMode,
+      requireApproval: accessMode === "full_access"
+        && (run.require_approval ?? prior?.requireApproval ?? false),
       routingReason: safeChildDetail(run.routing_reason ?? undefined) ?? prior?.routingReason ?? null,
       status: persistedSubagentStatus(run),
       phase: prior?.phase ?? (run.ended_at ? "idle" : "requesting"),

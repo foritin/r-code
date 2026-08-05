@@ -16,6 +16,8 @@ use crate::{
     McpServerState, McpServerStatus, McpToolDescriptor,
 };
 
+const MCP_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
 #[derive(Debug, Error)]
 pub enum McpRuntimeError {
     #[error(transparent)]
@@ -225,6 +227,23 @@ impl McpSupervisor {
         tool_name: &str,
         args: Value,
     ) -> Result<ToolCallOutcome, McpRuntimeError> {
+        self.call_tool_with_abort(server_id, tool_name, args, None)
+            .await
+    }
+
+    pub async fn call_tool_with_abort(
+        &self,
+        server_id: &str,
+        tool_name: &str,
+        args: Value,
+        abort: Option<Arc<AtomicBool>>,
+    ) -> Result<ToolCallOutcome, McpRuntimeError> {
+        if abort
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(McpClientError::Cancelled.into());
+        }
         let slot = match self.slot(server_id).await {
             Ok(slot) => slot,
             Err(McpRuntimeError::UnknownServer(_)) => {
@@ -235,15 +254,39 @@ impl McpSupervisor {
         if !slot.config.read().await.enabled {
             return Ok(unavailable_outcome(server_id, "disabled"));
         }
-        let session = match self.ensure_session(server_id, &slot).await {
+        let connect = self.ensure_session(server_id, &slot);
+        tokio::pin!(connect);
+        let session_result = loop {
+            if abort
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                break Err(McpRuntimeError::Client(McpClientError::Cancelled));
+            }
+            if abort.is_none() {
+                break connect.await;
+            }
+            tokio::select! {
+                result = &mut connect => break result,
+                _ = tokio::time::sleep(MCP_ABORT_POLL_INTERVAL) => {}
+            }
+        };
+        let session = match session_result {
             Ok(session) => session,
+            Err(McpRuntimeError::Client(McpClientError::Cancelled)) => {
+                return Err(McpClientError::Cancelled.into());
+            }
             Err(McpRuntimeError::Client(_)) => {
                 return Ok(unavailable_outcome(server_id, "connection_failed"));
             }
             Err(error) => return Err(error),
         };
-        match session.call_tool(tool_name, args).await {
+        match session
+            .call_tool_with_abort(tool_name, args, abort.clone())
+            .await
+        {
             Ok(outcome) => Ok(outcome),
+            Err(McpClientError::Cancelled) => Err(McpClientError::Cancelled.into()),
             Err(error) => {
                 tracing::warn!(server_id, tool_name, %error, "MCP tool call failed");
                 self.publish_status(

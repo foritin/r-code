@@ -15,8 +15,8 @@ jobs:
     name: Frontend and Release Metadata
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -39,7 +39,7 @@ jobs:
     name: Format Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           # GITHUB_TOKEN is scoped to this repository and cannot clone the
           # private agent-core submodule. PAT_TOKEN is a read-only fine-grained
@@ -56,7 +56,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
@@ -81,7 +81,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
@@ -94,7 +94,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
@@ -109,7 +109,7 @@ jobs:
     name: Dependency Deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
@@ -124,7 +124,7 @@ jobs:
     name: Submodule Pin Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive

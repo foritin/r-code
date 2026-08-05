@@ -171,7 +171,22 @@ test("queue stays above the composer and drag order becomes the dispatch order",
   });
   await page.waitForFunction(() => document.querySelectorAll(".composer-queue-row").length === 3);
   const thirdHandle = rows.nth(2).locator(".queue-reorder-handle");
-  assert.equal(await thirdHandle.evaluate((element) => getComputedStyle(element).opacity), "0");
+  // 新行位于队列顶部，恰好落在 headless 鼠标默认位置 (0,0) 时会被 :hover
+  // 命中（handle 变为可见）。先把鼠标移开，再等待 100ms 过渡收敛，然后断言
+  // handle 默认隐藏——避免"严格等于 0"在过渡窗口/悬停下的时序脆弱断言。
+  await page.mouse.move(640, 480);
+  await page.waitForFunction(
+    () => {
+      const handles = document.querySelectorAll(".queue-reorder-handle");
+      return (
+        handles.length === 3 && Number(getComputedStyle(handles[2]).opacity) < 0.05
+      );
+    },
+    { timeout: 4_000 },
+  );
+  assert.ok(
+    Number(await thirdHandle.evaluate((element) => getComputedStyle(element).opacity)) < 0.05,
+  );
   await rows.nth(2).hover();
   await page.waitForFunction(() => getComputedStyle(document.querySelectorAll(".queue-reorder-handle")[2]).opacity === "1");
   if (process.env.R_CODE_QUEUE_SHOT) {

@@ -1,4 +1,11 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 #[cfg(windows)]
 use std::path::Path;
@@ -7,8 +14,11 @@ use async_trait::async_trait;
 use hermes_core::ToolCallOutcome;
 use http::{HeaderName, HeaderValue};
 use rmcp::{
-    model::{CallToolRequestParams, ClientInfo, Implementation, ProtocolVersion},
-    service::{Peer, RoleClient, RunningService},
+    model::{
+        CallToolRequest, CallToolRequestParams, ClientInfo, ClientRequest, Implementation,
+        ProtocolVersion, ServerResult,
+    },
+    service::{Peer, PeerRequestOptions, RoleClient, RunningService},
     transport::{
         streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
         TokioChildProcess,
@@ -46,6 +56,8 @@ pub enum McpClientError {
     Closed,
     #[error("MCP tool arguments must be a JSON object")]
     InvalidArguments,
+    #[error("MCP tool call cancelled")]
+    Cancelled,
     #[error("MCP request failed: {0}")]
     Request(String),
     #[error("MCP session shutdown failed: {0}")]
@@ -60,6 +72,12 @@ pub trait SecretResolver: Send + Sync {
 #[derive(Default)]
 pub struct EmptySecretResolver;
 
+/// 单个 MCP 工具调用的最大时长（F2）。超过即报超时错误，避免子代理/主 agent
+/// 因 MCP 服务端无响应而无限挂起——宿主取消无法打断进行中的请求。
+pub const MCP_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+const MCP_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+const MCP_CANCEL_NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
 #[async_trait]
 impl SecretResolver for EmptySecretResolver {
     async fn resolve(&self, _reference: &SecretRef) -> Result<Option<String>, McpClientError> {
@@ -71,6 +89,30 @@ impl SecretResolver for EmptySecretResolver {
 pub trait McpClientSession: Send + Sync {
     async fn list_tools(&self, server_id: &str) -> Result<Vec<McpToolDescriptor>, McpClientError>;
     async fn call_tool(&self, name: &str, args: Value) -> Result<ToolCallOutcome, McpClientError>;
+    async fn call_tool_with_abort(
+        &self,
+        name: &str,
+        args: Value,
+        abort: Option<Arc<AtomicBool>>,
+    ) -> Result<ToolCallOutcome, McpClientError> {
+        let call = self.call_tool(name, args);
+        tokio::pin!(call);
+        loop {
+            if abort
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                return Err(McpClientError::Cancelled);
+            }
+            if abort.is_none() {
+                return call.await;
+            }
+            tokio::select! {
+                result = &mut call => return result,
+                _ = tokio::time::sleep(MCP_ABORT_POLL_INTERVAL) => {}
+            }
+        }
+    }
     async fn close(&self) -> Result<(), McpClientError>;
     fn is_closed(&self) -> bool;
 }
@@ -291,6 +333,15 @@ impl McpClientSession for RmcpSession {
     }
 
     async fn call_tool(&self, name: &str, args: Value) -> Result<ToolCallOutcome, McpClientError> {
+        self.call_tool_with_abort(name, args, None).await
+    }
+
+    async fn call_tool_with_abort(
+        &self,
+        name: &str,
+        args: Value,
+        abort: Option<Arc<AtomicBool>>,
+    ) -> Result<ToolCallOutcome, McpClientError> {
         if self.is_closed() {
             return Err(McpClientError::Closed);
         }
@@ -299,11 +350,72 @@ impl McpClientSession for RmcpSession {
             Value::Null => Map::new(),
             _ => return Err(McpClientError::InvalidArguments),
         };
-        let result = self
+        if abort
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(McpClientError::Cancelled);
+        }
+        let params = CallToolRequestParams::new(name.to_string()).with_arguments(arguments);
+        let request = ClientRequest::CallToolRequest(CallToolRequest::new(params));
+        // Use rmcp's cancellable request handle rather than dropping `Peer::call_tool`: dropping
+        // the convenience future only stops the local waiter, while the remote MCP server can
+        // continue mutating state. RequestHandle::cancel emits `notifications/cancelled` with the
+        // exact request id.
+        let mut handle = self
             .peer
-            .call_tool(CallToolRequestParams::new(name.to_string()).with_arguments(arguments))
+            .send_cancellable_request(request, PeerRequestOptions::no_options())
             .await
             .map_err(|error| McpClientError::Request(error.to_string()))?;
+        enum Wait<T> {
+            Response(T),
+            Cancelled,
+            TimedOut,
+        }
+        let deadline = tokio::time::sleep(MCP_CALL_TIMEOUT);
+        tokio::pin!(deadline);
+        let wait = loop {
+            if abort
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            {
+                break Wait::Cancelled;
+            }
+            break tokio::select! {
+                response = &mut handle.rx => Wait::Response(response),
+                _ = &mut deadline => Wait::TimedOut,
+                _ = tokio::time::sleep(MCP_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
+            };
+        };
+        let response = match wait {
+            Wait::Response(response) => response
+                .map_err(|_| McpClientError::Request("MCP transport closed".to_string()))?
+                .map_err(|error| McpClientError::Request(error.to_string()))?,
+            Wait::Cancelled => {
+                let _ = tokio::time::timeout(
+                    MCP_CANCEL_NOTIFY_TIMEOUT,
+                    handle.cancel(Some("R-Code agent run cancelled".to_string())),
+                )
+                .await;
+                return Err(McpClientError::Cancelled);
+            }
+            Wait::TimedOut => {
+                let _ = tokio::time::timeout(
+                    MCP_CANCEL_NOTIFY_TIMEOUT,
+                    handle.cancel(Some("R-Code MCP tool timeout".to_string())),
+                )
+                .await;
+                return Err(McpClientError::Request(format!("MCP 工具 {name} 调用超时")));
+            }
+        };
+        let result = match response {
+            ServerResult::CallToolResult(result) => result,
+            _ => {
+                return Err(McpClientError::Request(
+                    "MCP returned an unexpected response".to_string(),
+                ))
+            }
+        };
         let text = result
             .content
             .iter()
@@ -345,6 +457,86 @@ impl McpClientSession for RmcpSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct DropFlag(Arc<AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    struct PendingSession {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+        completed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl McpClientSession for PendingSession {
+        async fn list_tools(
+            &self,
+            _server_id: &str,
+        ) -> Result<Vec<McpToolDescriptor>, McpClientError> {
+            Ok(Vec::new())
+        }
+
+        async fn call_tool(
+            &self,
+            _name: &str,
+            _args: Value,
+        ) -> Result<ToolCallOutcome, McpClientError> {
+            let _drop = DropFlag(self.dropped.clone());
+            self.started.store(true, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            self.completed.store(true, Ordering::SeqCst);
+            Ok(ToolCallOutcome {
+                content: "unexpected completion".to_string(),
+                is_error: false,
+                metadata: None,
+            })
+        }
+
+        async fn close(&self) -> Result<(), McpClientError> {
+            Ok(())
+        }
+
+        fn is_closed(&self) -> bool {
+            false
+        }
+    }
+
+    #[tokio::test]
+    async fn default_abort_adapter_drops_a_non_cooperative_session_call() {
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let session = PendingSession {
+            started: started.clone(),
+            dropped: dropped.clone(),
+            completed: completed.clone(),
+        };
+        let abort = Arc::new(AtomicBool::new(false));
+        let cancel_abort = abort.clone();
+        let cancel = tokio::spawn(async move {
+            while !started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+            cancel_abort.store(true, Ordering::SeqCst);
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            session.call_tool_with_abort("pending", Value::Null, Some(abort)),
+        )
+        .await
+        .expect("MCP cancellation must be prompt");
+        cancel.await.unwrap();
+
+        assert!(matches!(result, Err(McpClientError::Cancelled)));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(!completed.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn stdio_arguments_remain_separate_and_never_form_a_shell_string() {

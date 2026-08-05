@@ -1,6 +1,6 @@
 # R-Code Privacy Notice
 
-Last updated: 2026-08-04
+Last updated: 2026-08-06
 
 This notice describes the data flows implemented by the open-source R-Code desktop application. It is a technical baseline for a public release, not a substitute for legal review or for the privacy terms of a distributor, organisation, model provider or hosted service.
 
@@ -40,6 +40,10 @@ When you use an LLM Provider, R-Code sends data needed to answer the request to 
 The Provider processes and retains that data under its own terms and privacy policy. Before attaching confidential code or personal data, review the endpoint, account and data-retention settings shown in R-Code and the Provider's current policy. A custom Provider URL sends data to the operator of that URL.
 
 Codex CLI collaboration uses the Codex installation and account configured on the device. Its network traffic, authentication and service-side retention are governed by the applicable Codex/OpenAI configuration and terms, not by R-Code's local storage policy.
+
+When a Codex main agent delegates work to an R-Code child agent, the original request and Codex context are processed by the Codex Provider. Codex sends a bounded child goal to the R-Code Provider configured for that task; workspace content read by authorised tools and their results may also reach that Provider. The child's bounded result summary is returned through the App Server tool response and can therefore enter the Codex Provider context. Review the privacy and retention terms of both Providers before using this path.
+
+R-Code displays and persists only the public reasoning summary published by the App Server protocol; raw reasoning content and deltas are ignored. This does not mean that only a reasoning summary is stored locally: visible child messages, tool events, lifecycle state, summaries and approval/audit records are retained under the same SQLite and JSONL rules as other subagents. Child workspace activity remains subject to the local Gateway permission boundary.
 
 General MCP services are separate third-party integrations. A remote MCP receives the tool arguments sent to it; a local stdio MCP runs as a separate process with the operating-system access granted to that program. Review the service, publisher, requested credentials and data policy before enabling it.
 

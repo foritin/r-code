@@ -281,6 +281,15 @@ impl McpClientSession for ResearchSession {
         self.client.call_tool(name, args).await
     }
 
+    async fn call_tool_with_abort(
+        &self,
+        name: &str,
+        args: Value,
+        abort: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<ToolCallOutcome, McpClientError> {
+        self.client.call_tool_with_abort(name, args, abort).await
+    }
+
     async fn close(&self) -> Result<(), McpClientError> {
         self.client.close().await?;
         let Some(mut server) = self.server.lock().await.take() else {

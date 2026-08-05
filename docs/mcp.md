@@ -50,7 +50,8 @@ Agent 只看到固定的 `mcp_discover`、`mcp_call` 和 `suggest_mcp` 工具，
 
 - `mcp_discover` 只查询本机已配置目录，不访问 Registry；
 - `mcp_call` 在每次调用前重新检查开关状态；
-- 声明为只读的远程工具按 R1 处理，其他外部 MCP 工具按 R2 处理；
+- generic 第三方 `mcp_call` 一律按 R2 处理；服务返回的 `annotations.readOnlyHint` 只用于展示，不能降低授权要求；
+- Plan 与严格只读策略不会向模型暴露 generic `mcp_call`，即使构造旧工具调用也会在执行边界拒绝；原生 `web_search` / `web_fetch` 仍按各自受信 Host 的 R1 策略处理；
 - 实际调用进入与内置工具相同的权限判断和审计记录；
 - 未知服务、未知工具、关闭状态和连接失败均采用失败关闭，不会隐式换用另一个服务。
 

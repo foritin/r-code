@@ -13,16 +13,22 @@ R-Code 把对话、模型执行、工具审批、文件变更、验证和回放�
 
 ## 能力概览
 
-- 原生模型 Provider 与可选 Codex CLI/MCP 协作；
+- 原生模型 Provider 与可选 Codex CLI App Server/MCP 协作，包括同一任务内的 Codex → R-Code 委派；
 - Plan 模式：持久目标、结构化 human-in-the-loop 问题、按功能拆分的待办，以及可崩溃恢复的增强审核；
 - 默认关闭、仅存 AppData 的演进记忆；支持全局审批、项目自动复盘和冻结快照注入；
 - 无密钥原生联网、可关闭的内置深度调研 MCP、第三方 MCP 管理与官方 Registry 市场；
-- 会话分支、重发、Steer、消息队列和流式时间线；
-- R-Code/Codex 子智能体委派与可选质量复核；
+- 会话分支、重发、Steer、消息队列、流式时间线，以及可打开右侧 Files 并跳行的文件引用；
+- R-Code/Codex 子智能体委派、可选质量复核、逐个取消，以及“只读 / 需审批 / 完全访问”状态；
 - 工作区文件、搜索、Git、Shell 工具及统一审计；
 - 风险分级、逐次审批、只读子智能体和路径逃逸防护；
 - 变更基线、diff、验证、按文件/任务回滚与崩溃恢复；
 - PTY 集成终端和 Codex/Claude transcript 回放。
+
+### Codex 协作
+
+Codex 主 Agent 使用官方 App Server 连接。安装 Codex CLI `0.145.0` 或更高版本且 R-Code Provider 可用时，Codex 可调用会话内的有界工具，在当前 R-Code 任务下创建 child run，而不会在侧边栏另开 session。任一能力不可用时，R-Code 只隐藏该动态工具，Codex 主任务仍会继续。
+
+R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展示 raw chain-of-thought。子代理继承父运行的权限上限、持久保存实际三态权限，并可逐个取消。助手输出如 `[src/main.rs:42](src/main.rs#L42)` 的工作区相对引用会在右侧 Files 工作台打开对应文件并跳转到指定行。
 
 ## 支持平台
 
@@ -93,7 +99,7 @@ git submodule update --init -- .agents
 
 ```bash
 # 版本元数据
-node --test scripts/release.test.mjs
+node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 
 # Rust
@@ -137,10 +143,10 @@ cargo tauri build --bundles appimage,deb
 版本、CHANGELOG、tag 和 GitHub Release 已形成一条可校验链路：
 
 ```bash
-node scripts/release.mjs prepare 0.1.0
+node scripts/release.mjs prepare X.Y.Z
 # 审阅、验证、提交并推送 main，等待 CI 通过后：
-node scripts/publish-release.mjs v0.1.0 --dry-run
-node scripts/publish-release.mjs v0.1.0
+node scripts/publish-release.mjs vX.Y.Z --dry-run
+node scripts/publish-release.mjs vX.Y.Z
 ```
 
 发布闸门会创建不可变 tag、触发四平台 GitHub Actions 构建、等待完成并核对上传资产。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。

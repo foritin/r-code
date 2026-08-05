@@ -11,6 +11,7 @@
 | [演进记忆](./memory.md) | 全局/项目作用域、自动触发、Reviewer、审批、注入、持久化与隐私边界 |
 | [Plan 模式与增强审核](./plan-mode.md) · [English](./plan-mode.en.md) | 目标、结构化人工确认、Plan 投影、功能待办、增强审核、并发与崩溃恢复 |
 | [发布手册](./RELEASING.md) | 版本、CHANGELOG、tag、GitHub Release、签名、失败恢复和首次发布清单 |
+| [Codex → R-Code 委派复核记录](./review/2026-08-05-uncommitted-codex-rcode-delegation-review.md) | 0.3.0 前对未提交实现的多轮审阅、修复证据、剩余边界与最终验证记录 |
 | [CHANGELOG](../CHANGELOG.md) | 每个版本的用户可见变化与发布历史 |
 | [Security Policy](../SECURITY.md) | 支持范围、私密漏洞报告和安全边界 |
 | [Privacy Notice](../PRIVACY.md) | 本地存储、模型 Provider、Codex、更新和支持包的数据流 |

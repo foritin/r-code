@@ -21,9 +21,10 @@ pub mod runtime;
 
 pub use agent_loop::run_agent_loop_iteration;
 pub use llm_runtime::{
-    AgentPromptPolicy, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
-    CodexSubagentRunner, DelegationRouterMode, LlmAgentRuntime, OrchestrationPolicy,
-    QualityLoopMode, QualityReviewer, DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT,
+    native_parent_subagent_access, AgentPromptPolicy, CodexSubagentEventSink, CodexSubagentOutcome,
+    CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode, LlmAgentRuntime,
+    OrchestrationPolicy, QualityLoopMode, QualityReviewer, RCodeSubagentOutcome,
+    RCodeSubagentRequest, RCodeSubagentRunner, DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT,
 };
 pub use mock_runtime::MockAgentRuntime;
 pub use recovery::{scan_orphaned_runs, RecoveryState};
