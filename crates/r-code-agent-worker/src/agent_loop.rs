@@ -43,6 +43,13 @@ pub struct AgentLoopOutcome {
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
 const AGENT_ABORT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+// P1-E：vendor 层流空闲 watchdog 的可恢复终止标记（openai.rs 与其一致）。
+const STREAM_IDLE_TIMEOUT_REASON: &str = "stream_idle_timeout";
+/// P1-E：流中断（未产出内容）时最多重放次数（Reasonix maxStreamRecoveries=5）。
+const MAX_STREAM_RECOVERIES: u32 = 5;
+/// P1-E：流恢复退避基数（500ms * 2^(n-1)，对齐 Reasonix run_loop.go）。
+const STREAM_RECOVERY_BASE_MS: u64 = 500;
 #[cfg(not(test))]
 const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
@@ -355,249 +362,303 @@ where
     request.messages = messages.clone();
     request.tools = tools.to_vec();
 
+    // P1-E：冻结请求供流中断重放（重试字节与首试逐字节一致，不破坏前缀缓存）。
+    let frozen_request = request.clone();
+    let mut stream_recoveries: u32 = 0;
+
     // Provider 建连本身也可能卡住；同时跟踪绝对 deadline 和 abort，
     // 取消时直接 drop vendor future，不再被固定 60s 超时窗口阻塞。
-    let connection = provider.stream(request);
-    tokio::pin!(connection);
-    let connect_deadline = tokio::time::sleep(LLM_PROVIDER_CONNECT_TIMEOUT);
-    tokio::pin!(connect_deadline);
-    let connected = loop {
-        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            return Ok(AgentLoopOutcome {
-                had_tool_call: false,
-            });
-        }
-        break tokio::select! {
-            result = &mut connection => result,
-            _ = &mut connect_deadline => {
-                return Err(map_hermes_err(hermes_error::Error::Provider(
-                    "模型请求连接超时".to_string(),
-                )))
-            }
-            _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
-        };
-    };
-    let mut stream = connected.map_err(map_hermes_err)?;
+    // 连接阶段失败不在此重试（vendor 层 send_with_retry 已按 408/429/5xx
+    // 与传输错误指数退避，abort 语义保持）。
+    let outcome = 'attempt: loop {
+        // 每轮重试重置流状态（重放语义：整轮从头再来，未产出内容才可重放）
+        let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
+        let mut current_text = String::new();
+        // id -> (name, 累积的 input_json 片段)
+        let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
+        let mut tool_calls: Vec<PendingToolCall> = Vec::new();
+        let mut tool_results: Vec<ContentBlock> = Vec::new();
+        let mut total_usage = Usage::default();
+        let mut streaming_started = false;
+        let mut had_tool_call = false;
 
-    let mut assistant_blocks: Vec<ContentBlock> = Vec::new();
-    let mut current_text = String::new();
-    // id -> (name, 累积的 input_json 片段)
-    let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
-    let mut tool_calls: Vec<PendingToolCall> = Vec::new();
-    let mut tool_results: Vec<ContentBlock> = Vec::new();
-    let mut total_usage = Usage::default();
-    let mut streaming_started = false;
-    let mut had_tool_call = false;
-
-    loop {
-        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-            break;
-        }
-        // 流式空闲超时：两次事件之间超过 LLM_PROVIDER_IDLE_TIMEOUT 视为卡死。
-        let next = if abort.is_some() {
-            tokio::select! {
-                event = tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()) => {
-                    match event {
-                        Ok(Some(ev)) => Some(ev),
-                        Ok(None) => None,
-                        Err(_) => {
-                            return Err(map_hermes_err(hermes_error::Error::Provider(
-                                "模型流式响应空闲超时".to_string(),
-                            )))
-                        }
-                    }
-                }
-                _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
+        let connection = provider.stream(frozen_request.clone());
+        tokio::pin!(connection);
+        let connect_deadline = tokio::time::sleep(LLM_PROVIDER_CONNECT_TIMEOUT);
+        tokio::pin!(connect_deadline);
+        let connected = loop {
+            if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                return Ok(AgentLoopOutcome {
+                    had_tool_call: false,
+                });
             }
-        } else {
-            match tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()).await {
-                Ok(Some(ev)) => Some(ev),
-                Ok(None) => None,
-                Err(_) => {
+            break tokio::select! {
+                result = &mut connection => result,
+                _ = &mut connect_deadline => {
                     return Err(map_hermes_err(hermes_error::Error::Provider(
-                        "模型流式响应空闲超时".to_string(),
+                        "模型请求连接超时".to_string(),
                     )))
                 }
-            }
+                _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
+            };
         };
-        let Some(ev) = next else {
-            break;
-        };
-        match ev {
-            StreamEvent::TextDelta { text } => {
-                current_text.push_str(&text);
-                if emit_activity && !streaming_started {
-                    emit(AgentEvent::Activity {
-                        phase: r_code_core::dto::AgentActivityPhase::Streaming,
-                        detail: None,
-                    });
-                    streaming_started = true;
-                }
-                emit(AgentEvent::Message { text, delta: true });
-            }
-            StreamEvent::ToolUseStart { id, name } => {
-                tracing::debug!(tool_id = %id, tool_name = %name, "tool use start");
-                flush_text(&mut current_text, &mut assistant_blocks);
-                pending_tools.insert(id, (name, String::new()));
-            }
-            StreamEvent::ToolUseDelta { id, input_json } => {
-                if let Some((_, acc)) = pending_tools.get_mut(&id) {
-                    acc.push_str(&input_json);
-                }
-            }
-            StreamEvent::ToolUseComplete { id, input } => {
-                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                    break;
-                }
-                flush_text(&mut current_text, &mut assistant_blocks);
-                let name = pending_tools
-                    .remove(&id)
-                    .map(|(n, _)| n)
-                    .unwrap_or_default();
-                // 追加 ToolUse 块到 assistant 消息
-                assistant_blocks.push(ContentBlock::ToolUse {
-                    id: id.clone(),
-                    name: name.clone(),
-                    input: input.clone(),
-                });
-                // emit ToolCall 事件
-                had_tool_call = true;
-                if emit_activity {
-                    emit(AgentEvent::Activity {
-                        phase: r_code_core::dto::AgentActivityPhase::Tool,
-                        // 工具名是安全的可观察信息；参数由独立 ToolCall 事件按需展示，
-                        // 避免将潜在敏感路径或命令重复写入活动栏。
-                        detail: Some(name.clone()),
-                    });
-                }
-                emit(AgentEvent::ToolCall {
-                    name: name.clone(),
-                    input: input.clone(),
-                    call_id: id.clone(),
-                });
-                tool_calls.push(PendingToolCall { id, name, input });
-            }
-            StreamEvent::HostedToolUse {
-                id,
-                name,
-                input,
-                provider_content,
-            } => {
-                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
-                    break;
-                }
-                flush_text(&mut current_text, &mut assistant_blocks);
-                if let Some(block) = provider_content.and_then(provider_content_to_custom) {
-                    assistant_blocks.push(block);
-                }
-                tracing::debug!(tool_id = %id, tool_name = %name, "provider-hosted tool use");
-                if emit_activity {
-                    emit(AgentEvent::Activity {
-                        phase: r_code_core::dto::AgentActivityPhase::Tool,
-                        detail: Some(name.clone()),
-                    });
-                }
-                emit(AgentEvent::ToolCall {
-                    name,
-                    input,
-                    call_id: id,
-                });
-            }
-            StreamEvent::HostedToolResult {
-                id,
-                name: _,
-                output,
-                is_error,
-                provider_content,
-            } => {
-                flush_text(&mut current_text, &mut assistant_blocks);
-                if let Some(block) = provider_content.and_then(provider_content_to_custom) {
-                    assistant_blocks.push(block);
-                }
-                emit(AgentEvent::ToolResult {
-                    call_id: id,
-                    output,
-                    is_error,
-                });
-            }
-            StreamEvent::Stop { reason } => {
-                // Anthropic server tools normally finish inside one response. A rare
-                // `pause_turn` asks the client to replay the provider blocks and continue;
-                // treat that as a protocol continuation, never as a local tool execution.
-                if matches!(reason, hermes_core::StopReason::Other(ref value) if value == "pause_turn")
-                {
-                    had_tool_call = true;
-                }
+        let mut stream = connected.map_err(map_hermes_err)?;
+
+        loop {
+            if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 break;
             }
-            StreamEvent::Usage(u) => {
-                total_usage += u;
+            // 流式空闲超时：两次事件之间超过 LLM_PROVIDER_IDLE_TIMEOUT 视为卡死。
+            let next = if abort.is_some() {
+                tokio::select! {
+                    event = tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()) => {
+                        match event {
+                            Ok(Some(ev)) => Some(ev),
+                            Ok(None) => None,
+                            Err(_) => {
+                                return Err(map_hermes_err(hermes_error::Error::Provider(
+                                    "模型流式响应空闲超时".to_string(),
+                                )))
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(50)) => continue,
+                }
+            } else {
+                match tokio::time::timeout(LLM_PROVIDER_IDLE_TIMEOUT, stream.next()).await {
+                    Ok(Some(ev)) => Some(ev),
+                    Ok(None) => None,
+                    Err(_) => {
+                        return Err(map_hermes_err(hermes_error::Error::Provider(
+                            "模型流式响应空闲超时".to_string(),
+                        )))
+                    }
+                }
+            };
+            let Some(ev) = next else {
+                break;
+            };
+            match ev {
+                StreamEvent::TextDelta { text } => {
+                    current_text.push_str(&text);
+                    if emit_activity && !streaming_started {
+                        emit(AgentEvent::Activity {
+                            phase: r_code_core::dto::AgentActivityPhase::Streaming,
+                            detail: None,
+                        });
+                        streaming_started = true;
+                    }
+                    emit(AgentEvent::Message { text, delta: true });
+                }
+                StreamEvent::ToolUseStart { id, name } => {
+                    tracing::debug!(tool_id = %id, tool_name = %name, "tool use start");
+                    flush_text(&mut current_text, &mut assistant_blocks);
+                    pending_tools.insert(id, (name, String::new()));
+                }
+                StreamEvent::ToolUseDelta { id, input_json } => {
+                    if let Some((_, acc)) = pending_tools.get_mut(&id) {
+                        acc.push_str(&input_json);
+                    }
+                }
+                StreamEvent::ToolUseComplete { id, input } => {
+                    if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        break;
+                    }
+                    flush_text(&mut current_text, &mut assistant_blocks);
+                    let name = pending_tools
+                        .remove(&id)
+                        .map(|(n, _)| n)
+                        .unwrap_or_default();
+                    // 追加 ToolUse 块到 assistant 消息
+                    assistant_blocks.push(ContentBlock::ToolUse {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                    // emit ToolCall 事件
+                    had_tool_call = true;
+                    if emit_activity {
+                        emit(AgentEvent::Activity {
+                            phase: r_code_core::dto::AgentActivityPhase::Tool,
+                            // 工具名是安全的可观察信息；参数由独立 ToolCall 事件按需展示，
+                            // 避免将潜在敏感路径或命令重复写入活动栏。
+                            detail: Some(name.clone()),
+                        });
+                    }
+                    emit(AgentEvent::ToolCall {
+                        name: name.clone(),
+                        input: input.clone(),
+                        call_id: id.clone(),
+                    });
+                    tool_calls.push(PendingToolCall { id, name, input });
+                }
+                StreamEvent::HostedToolUse {
+                    id,
+                    name,
+                    input,
+                    provider_content,
+                } => {
+                    if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        break;
+                    }
+                    flush_text(&mut current_text, &mut assistant_blocks);
+                    if let Some(block) = provider_content.and_then(provider_content_to_custom) {
+                        assistant_blocks.push(block);
+                    }
+                    tracing::debug!(tool_id = %id, tool_name = %name, "provider-hosted tool use");
+                    if emit_activity {
+                        emit(AgentEvent::Activity {
+                            phase: r_code_core::dto::AgentActivityPhase::Tool,
+                            detail: Some(name.clone()),
+                        });
+                    }
+                    emit(AgentEvent::ToolCall {
+                        name,
+                        input,
+                        call_id: id,
+                    });
+                }
+                StreamEvent::HostedToolResult {
+                    id,
+                    name: _,
+                    output,
+                    is_error,
+                    provider_content,
+                } => {
+                    flush_text(&mut current_text, &mut assistant_blocks);
+                    if let Some(block) = provider_content.and_then(provider_content_to_custom) {
+                        assistant_blocks.push(block);
+                    }
+                    emit(AgentEvent::ToolResult {
+                        call_id: id,
+                        output,
+                        is_error,
+                    });
+                }
+                StreamEvent::Stop { reason } => {
+                    // Anthropic server tools normally finish inside one response. A rare
+                    // `pause_turn` asks the client to replay the provider blocks and continue;
+                    // treat that as a protocol continuation, never as a local tool execution.
+                    if matches!(reason, hermes_core::StopReason::Other(ref value) if value == "pause_turn")
+                    {
+                        had_tool_call = true;
+                    }
+                    // P1-E：流空闲 watchdog（vendor 层 120s 无数据）以可恢复标记终止。
+                    // 仅当本轮**尚未产出任何内容**（无文本、无工具、无块）时用冻结请求
+                    // 重放——已产出内容后重放会造成重复输出，宁可直接结束（Reasonix
+                    // 同语义）。abort 在退避期间可立即中断。
+                    let idle_timeout = matches!(
+                        reason,
+                        hermes_core::StopReason::Other(ref value)
+                            if value == STREAM_IDLE_TIMEOUT_REASON
+                    );
+                    if idle_timeout
+                        && !streaming_started
+                        && assistant_blocks.is_empty()
+                        && pending_tools.is_empty()
+                        && tool_calls.is_empty()
+                        && stream_recoveries < MAX_STREAM_RECOVERIES
+                    {
+                        stream_recoveries += 1;
+                        let delay = Duration::from_millis(
+                            STREAM_RECOVERY_BASE_MS * 2u64.pow(stream_recoveries - 1),
+                        );
+                        tracing::warn!(
+                            attempt = stream_recoveries,
+                            ?delay,
+                            "provider stream idle before any output, replaying frozen request"
+                        );
+                        let recovery_deadline = tokio::time::sleep(delay);
+                        tokio::pin!(recovery_deadline);
+                        loop {
+                            if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                                break;
+                            }
+                            tokio::select! {
+                                _ = &mut recovery_deadline => break,
+                                _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
+                            }
+                        }
+                        if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                            break 'attempt Ok(AgentLoopOutcome {
+                                had_tool_call: false,
+                            });
+                        }
+                        continue 'attempt;
+                    }
+                    break;
+                }
+                StreamEvent::Usage(u) => {
+                    total_usage += u;
+                }
             }
         }
-    }
 
-    flush_text(&mut current_text, &mut assistant_blocks);
+        flush_text(&mut current_text, &mut assistant_blocks);
 
-    if !tool_calls.is_empty() {
-        let outcomes = execute_pending_tools(tool_host, tools, &tool_calls, abort).await?;
-        for (call, outcome) in tool_calls.into_iter().zip(outcomes) {
-            // 一旦 assistant 已经声明了一组 ToolUse，就必须为每个调用闭合协议对；
-            // 即使并发期间收到中断，也会为未启动调用合成可记录的取消结果。
-            let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
-                .unwrap_or(serde_json::Value::String(outcome.content.clone()));
-            emit(AgentEvent::ToolResult {
-                call_id: call.id.clone(),
-                output: output_val,
-                is_error: outcome.is_error,
-            });
-            tool_results.push(ContentBlock::ToolResult {
-                tool_use_id: call.id,
-                content: outcome.content,
-                is_error: outcome.is_error,
+        if !tool_calls.is_empty() {
+            let outcomes = execute_pending_tools(tool_host, tools, &tool_calls, abort).await?;
+            for (call, outcome) in tool_calls.into_iter().zip(outcomes) {
+                // 一旦 assistant 已经声明了一组 ToolUse，就必须为每个调用闭合协议对；
+                // 即使并发期间收到中断，也会为未启动调用合成可记录的取消结果。
+                let output_val: serde_json::Value = serde_json::from_str(&outcome.content)
+                    .unwrap_or(serde_json::Value::String(outcome.content.clone()));
+                emit(AgentEvent::ToolResult {
+                    call_id: call.id.clone(),
+                    output: output_val,
+                    is_error: outcome.is_error,
+                });
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: call.id,
+                    content: outcome.content,
+                    is_error: outcome.is_error,
+                });
+            }
+        }
+
+        // 追加 assistant 消息（含 Text + ToolUse 块）
+        if !assistant_blocks.is_empty() {
+            messages.push(Message {
+                role: Role::Assistant,
+                content: assistant_blocks,
             });
         }
-    }
 
-    // 追加 assistant 消息（含 Text + ToolUse 块）
-    if !assistant_blocks.is_empty() {
-        messages.push(Message {
-            role: Role::Assistant,
-            content: assistant_blocks,
-        });
-    }
+        // 只要工具实际完成，就必须回填 ToolResult 供下一轮迭代使用。部分 OpenAI
+        // 兼容流会在 ToolUseComplete 后直接关闭，不再额外发送 Stop(ToolUse)；
+        // 不能因此丢掉工具结果并构造出不合法的 assistant.tool_calls 历史。
+        if !tool_results.is_empty() {
+            messages.push(Message {
+                role: Role::User,
+                content: tool_results,
+            });
+        }
 
-    // 只要工具实际完成，就必须回填 ToolResult 供下一轮迭代使用。部分 OpenAI
-    // 兼容流会在 ToolUseComplete 后直接关闭，不再额外发送 Stop(ToolUse)；
-    // 不能因此丢掉工具结果并构造出不合法的 assistant.tool_calls 历史。
-    if !tool_results.is_empty() {
-        messages.push(Message {
-            role: Role::User,
-            content: tool_results,
-        });
-    }
+        // P0-B：把本轮累计 usage 经事件链暴露给宿主。Codex 线路在 run 完成时写库
+        // （commands.rs set_usage），原生线路复用同一事件链与同一 JSON 形状——
+        // hermes Usage 的 serde 输出键（input_tokens/output_tokens/cache_read_tokens/
+        // cache_write_tokens）即前端 runUsageLabel 与 usage_json 列的契约。仅当
+        // provider 报告了非零用量时发出，避免无 usage 的 provider 制造噪音事件。
+        if total_usage.input_tokens > 0
+            || total_usage.output_tokens > 0
+            || total_usage.cache_read_tokens.unwrap_or(0) > 0
+            || total_usage.cache_write_tokens.unwrap_or(0) > 0
+        {
+            let usage_json =
+                serde_json::to_string(&total_usage).unwrap_or_else(|_| "{}".to_string());
+            emit(AgentEvent::Usage { usage_json });
+        }
 
-    // P0-B：把本轮累计 usage 经事件链暴露给宿主。Codex 线路在 run 完成时写库
-    // （commands.rs set_usage），原生线路复用同一事件链与同一 JSON 形状——
-    // hermes Usage 的 serde 输出键（input_tokens/output_tokens/cache_read_tokens/
-    // cache_write_tokens）即前端 runUsageLabel 与 usage_json 列的契约。仅当
-    // provider 报告了非零用量时发出，避免无 usage 的 provider 制造噪音事件。
-    if total_usage.input_tokens > 0
-        || total_usage.output_tokens > 0
-        || total_usage.cache_read_tokens.unwrap_or(0) > 0
-        || total_usage.cache_write_tokens.unwrap_or(0) > 0
-    {
-        let usage_json = serde_json::to_string(&total_usage).unwrap_or_else(|_| "{}".to_string());
-        emit(AgentEvent::Usage { usage_json });
-    }
+        tracing::debug!(
+            input_tokens = total_usage.input_tokens,
+            output_tokens = total_usage.output_tokens,
+            had_tool_call,
+            "agent loop iteration complete"
+        );
 
-    tracing::debug!(
-        input_tokens = total_usage.input_tokens,
-        output_tokens = total_usage.output_tokens,
-        had_tool_call,
-        "agent loop iteration complete"
-    );
-
-    Ok(AgentLoopOutcome { had_tool_call })
+        break 'attempt Ok(AgentLoopOutcome { had_tool_call });
+    };
+    outcome
 }
 
 /// 将累积的文本刷出为 `Text` 内容块。
@@ -639,6 +700,7 @@ fn map_hermes_err(err: hermes_error::Error) -> ProductError {
 
 #[cfg(test)]
 mod tests {
+    use super::STREAM_IDLE_TIMEOUT_REASON;
     use async_trait::async_trait;
     use hermes_core::{
         Capabilities, CompletionRequest, CompletionResponse, ContentBlock, LlmProvider, Message,
@@ -1715,6 +1777,122 @@ mod tests {
 
         // 幂等：再次修复零修改。
         assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
+    }
+
+    /// P1-E：流空闲 watchdog 标记且未产出任何内容时，用冻结请求重放并成功产出。
+    #[tokio::test]
+    async fn idle_stream_before_any_output_replays_the_frozen_request() {
+        let provider = MockProvider::new("mock");
+        // 第一轮：未产出任何内容即空闲超时（vendor watchdog 的可恢复标记）。
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::Other(STREAM_IDLE_TIMEOUT_REASON.to_string()),
+        }]));
+        // 第二轮：重放后正常结束。
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta {
+                text: "recovered".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            CompletionRequest {
+                model: "mock".into(),
+                system: None,
+                messages: messages.clone(),
+                tools: tools.clone(),
+                hosted_tools: vec![],
+                max_tokens: 128,
+                temperature: None,
+                enable_caching: false,
+                inference: Default::default(),
+            },
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        // 重放成功：最终消息只含一轮文本，无重复产出。
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "recovered")));
+        let assistant_text = messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| b.as_text())
+            .collect::<Vec<_>>()
+            .join("");
+        assert_eq!(assistant_text, "recovered");
+    }
+
+    /// P1-E：已产出内容后的空闲超时**不重放**（避免重复输出），按中断正常收尾。
+    #[tokio::test]
+    async fn idle_stream_after_output_does_not_replay() {
+        let provider = MockProvider::new("mock");
+        // 唯一一轮：先产出文本，然后空闲超时标记。
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta {
+                text: "partial".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::Other(STREAM_IDLE_TIMEOUT_REASON.to_string()),
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            CompletionRequest {
+                model: "mock".into(),
+                system: None,
+                messages: messages.clone(),
+                tools: tools.clone(),
+                hosted_tools: vec![],
+                max_tokens: 128,
+                temperature: None,
+                enable_caching: false,
+                inference: Default::default(),
+            },
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        // 只消费了一轮（mock 无剩余轮次也不报错：重放被跳过）。
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "partial")));
+        let assistant_text = messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| b.as_text())
+            .collect::<Vec<_>>()
+            .join("");
+        assert_eq!(assistant_text, "partial");
     }
 
     /// 判断 ToolResult 是否为修复合成的 cancelled 结果（内容为
