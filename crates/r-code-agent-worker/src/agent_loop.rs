@@ -157,8 +157,20 @@ fn cancelled_tool_outcome(call: &PendingToolCall) -> hermes_core::ToolCallOutcom
 /// 修复旧版本在中断工具期间可能留下的悬空 `ToolUse`。
 ///
 /// Provider 要求 assistant 发出的每个工具调用在下一条 user 工具消息中都有对应结果。
-/// 合成的错误结果不会重新执行工具，只把“已被中断”这一事实补回协议历史；修复后的
-/// 工作集会随下一次 history snapshot 持久化，从而让既有受损会话自动恢复。
+/// 合成的错误结果不会重新执行工具，只把“已被中断”这一事实补回协议历史。
+///
+/// P1-D 修复固化契约（PRD §5）：
+/// 1. **幂等且一次固化**：对已健康的历史（每个 ToolUse 都有对应 ToolResult）本函数
+///    零修改返回 0——调用方得以把历史原对象直接透传（零拷贝快路径思想）。修复只
+///    发生在真正悬挂的位置，插入合成 ToolResult 后该位置立即健康，因此同一份历史
+///    永远不会被修复两次，也不会重复插入。
+/// 2. **修复结果随工作集固化**：本函数只改写 `messages` 工作集；调用方负责把修复
+///    后的工作集写回持久化历史——同 run 内由 `llm_runtime.rs` 迭代结束的
+///    `session.messages = messages.clone()` 同步（后续轮直接透传健康历史），跨 run
+///    由宿主收尾时的 `SessionEvent::HistorySnapshot` 落盘 JSONL（下次恢复即健康）。
+/// 3. **已知缺口**：`llm_runtime.rs` 迭代 Err 路径（如 provider 连接失败）不同步
+///    session，此时本函数的修复结果随工作集丢弃，下次 run 会重新修复（幂等、不
+///    膨胀，但“修复一次固化”的保证降级为“成功收尾时固化”）。
 fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
     let mut index = 0usize;
     let mut repaired = 0usize;
@@ -327,6 +339,11 @@ pub async fn run_agent_loop_iteration_with_abort_and_emit<F>(
 where
     F: FnMut(AgentEvent),
 {
+    // P1-D：线路侧一次性修复——只在真正悬挂时改写历史，健康历史零修改直接透传
+    // （repair 返回 0 即原对象透传）。修复结果随工作集固化：同 run 后续轮由调用方
+    // 从 session 取回的已是健康历史（不再重复扫描插入），跨 run 由宿主收尾的
+    // HistorySnapshot 落盘。注意：迭代 Err 时调用方不同步 session，修复会随工作集
+    // 丢弃并在下次 run 重做（幂等，见 repair_dangling_tool_uses 文档）。
     let repaired_tool_results = repair_dangling_tool_uses(messages);
     if repaired_tool_results > 0 {
         tracing::warn!(
@@ -632,12 +649,12 @@ mod tests {
     use r_code_core::dto::AgentEvent;
     use std::sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use std::time::Duration;
 
     use super::{
-        run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
+        repair_dangling_tool_uses, run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
         run_agent_loop_iteration_with_abort_and_emit,
     };
 
@@ -729,6 +746,51 @@ mod tests {
             } else {
                 Err(Error::ToolNotFound(name.to_string()))
             }
+        }
+    }
+
+    /// 记录每次 `stream` 收到的请求消息，再回放一段固定文本。
+    ///
+    /// 用于断言后续请求透传的是修复后的健康历史（字节级），而非重新修复/重复插入。
+    struct RecordingProvider {
+        requests: Arc<Mutex<Vec<Vec<Message>>>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingProvider {
+        async fn complete(&self, _request: CompletionRequest) -> Result<CompletionResponse> {
+            Err(Error::Internal(
+                "RecordingProvider only supports stream".to_string(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<futures::stream::BoxStream<'static, StreamEvent>> {
+            self.requests.lock().unwrap().push(request.messages);
+            Ok(Box::pin(futures::stream::iter(vec![
+                StreamEvent::TextDelta {
+                    text: "recovered".to_string(),
+                },
+                StreamEvent::Stop {
+                    reason: StopReason::EndTurn,
+                },
+            ])))
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                supports_streaming: true,
+                supports_tool_use: true,
+                supports_vision: false,
+                supports_prompt_caching: false,
+                max_context_tokens: 16_000,
+            }
+        }
+
+        fn name(&self) -> &str {
+            "recording"
         }
     }
 
@@ -1469,6 +1531,214 @@ mod tests {
         ));
         assert_eq!(messages[3].text_content(), "continue after interrupt");
         assert_eq!(messages.last().unwrap().text_content(), "recovered");
+    }
+
+    #[test]
+    fn repair_is_idempotent_and_healthy_history_is_passed_through_unchanged() {
+        let mut messages = vec![
+            Message::user_text("start"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "orphaned-tool".to_string(),
+                    name: "collect_subagents".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message::user_text("continue after interrupt"),
+        ];
+
+        // 首次修复：插入一条合成 ToolResult，该位置立即健康。
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 1);
+        assert!(matches!(
+            messages[2].content.as_slice(),
+            [ContentBlock::ToolResult { tool_use_id, is_error: true, .. }]
+                if tool_use_id == "orphaned-tool"
+        ));
+        let repaired_bytes = serde_json::to_string(&messages).unwrap();
+
+        // 幂等：已健康的历史再次修复返回 0，且逐字节不变——这是“健康历史直接
+        // 透传原对象”（零拷贝快路径）的前提，保证修复动作只发生一次。
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
+        assert_eq!(serde_json::to_string(&messages).unwrap(), repaired_bytes);
+
+        // 连续调用同样零修改。
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
+        assert_eq!(serde_json::to_string(&messages).unwrap(), repaired_bytes);
+    }
+
+    #[tokio::test]
+    async fn repaired_history_is_persisted_and_passed_through_on_the_next_request() {
+        let requests = Arc::new(Mutex::new(Vec::<Vec<Message>>::new()));
+        let provider = RecordingProvider {
+            requests: requests.clone(),
+        };
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![
+            Message::user_text("start"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "orphaned-tool".to_string(),
+                    name: "collect_subagents".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message::user_text("continue after interrupt"),
+        ];
+
+        // 第一次请求：修复在发送前一次性完成（线路侧），请求体已是修复后历史。
+        run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &[])
+            .await
+            .unwrap();
+        assert!(matches!(
+            messages[2].content.as_slice(),
+            [ContentBlock::ToolResult { tool_use_id, is_error: true, .. }]
+                if tool_use_id == "orphaned-tool"
+        ));
+
+        // 模拟 session 落盘：等价于调用方迭代结束同步 session.messages（同 run）
+        // 与宿主收尾写 SessionEvent::HistorySnapshot（跨 run）——修复结果随工作集固化。
+        let persisted = messages.clone();
+
+        // 模拟下一次 run 从持久化历史恢复（SessionStore::load + replace_history），
+        // 再次发起请求。
+        let mut restored = persisted.clone();
+        run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut restored, &[])
+            .await
+            .unwrap();
+
+        // 透传断言：第二次请求体与落盘的修复后历史逐字节一致——未重新修复、
+        // 未重复插入，健康历史原样透传（DeepSeek 前缀稳定）。
+        let recorded = requests.lock().unwrap();
+        assert_eq!(recorded.len(), 2, "exactly two provider requests");
+        assert_eq!(
+            serde_json::to_string(&recorded[0]).unwrap(),
+            serde_json::to_string(&messages[..4]).unwrap(),
+            "first request must carry the repaired history"
+        );
+        assert_eq!(
+            serde_json::to_string(&recorded[1]).unwrap(),
+            serde_json::to_string(&persisted).unwrap(),
+            "second request must pass through the repaired history unchanged"
+        );
+
+        // 无重复插入：第二次迭代只追加本轮产物，历史前缀与落盘快照逐字节一致。
+        assert_eq!(restored.len(), persisted.len() + 1, "append-only growth");
+        assert_eq!(
+            serde_json::to_string(&restored[..persisted.len()]).unwrap(),
+            serde_json::to_string(&persisted).unwrap(),
+            "history prefix must stay byte-identical"
+        );
+        let synthetic_result_count = restored
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|block| block.is_tool_result() && block_content_is_synthetic(block))
+            .count();
+        assert_eq!(
+            synthetic_result_count, 1,
+            "synthetic cancelled result must be inserted exactly once"
+        );
+    }
+
+    #[test]
+    fn repair_closes_multiple_dangling_tool_uses_in_one_pass_without_touching_healthy_pairs() {
+        let mut messages = vec![
+            Message::user_text("start"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "dangling-a".to_string(),
+                    name: "read_file".to_string(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message::user_text("interrupted before result"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::ToolUse {
+                        id: "healthy-1".to_string(),
+                        name: "search".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "dangling-b".to_string(),
+                        name: "edit".to_string(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "healthy-1".to_string(),
+                    content: "ok".to_string(),
+                    is_error: false,
+                }],
+            },
+        ];
+
+        // 一次修复闭合全部悬挂：dangling-a 单独插入新消息；dangling-b 并入既有
+        // 结果消息；已配对的 healthy-1 保持原样。
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 2);
+        let synthetic_ids: Vec<&str> = messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter_map(|block| match block {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    is_error: true,
+                    ..
+                } => Some(tool_use_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(synthetic_ids, vec!["dangling-a", "dangling-b"]);
+
+        let healthy = messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .find(|block| {
+                matches!(
+                    block,
+                    ContentBlock::ToolResult { tool_use_id, .. }
+                        if tool_use_id.as_str() == "healthy-1"
+                )
+            })
+            .expect("healthy-1 result must be preserved");
+        assert!(matches!(
+            healthy,
+            ContentBlock::ToolResult { content, is_error: false, .. }
+                if content.as_str() == "ok"
+        ));
+
+        // 幂等：再次修复零修改。
+        assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
+    }
+
+    /// 判断 ToolResult 是否为修复合成的 cancelled 结果（内容为
+    /// `{"reason": ..., "status": "cancelled"}` JSON 文本）。
+    fn block_content_is_synthetic(block: &ContentBlock) -> bool {
+        match block {
+            ContentBlock::ToolResult {
+                content,
+                is_error: true,
+                ..
+            } => matches!(
+                serde_json::from_str::<serde_json::Value>(content)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("status")
+                            .and_then(|s| s.as_str())
+                            .map(str::to_string)
+                    })
+                    .as_deref(),
+                Some("cancelled")
+            ),
+            _ => false,
+        }
     }
 
     #[tokio::test]

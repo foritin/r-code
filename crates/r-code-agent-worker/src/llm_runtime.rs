@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -1820,6 +1820,9 @@ impl SessionToolHost {
                 tools.extend(delegation_tool_specs(supervisor.codex_available()));
             }
         }
+        // P1-C：gateway 段 + external 段 + delegation 段拼装后按名称整体排序，
+        // 保证最终请求体 tools 数组跨轮/跨重启字节一致（PRD §3 A4/A15）。
+        tools.sort_by(|a, b| a.name.cmp(&b.name));
         tools
     }
 
@@ -2392,6 +2395,12 @@ struct SubagentSupervisor {
     workspace_scope: Option<WorkspaceScope>,
     codex_subagent_runner: Option<Arc<dyn CodexSubagentRunner>>,
     cross_engine_delegation_enabled: Arc<AtomicBool>,
+    /// P1-C：run 内冻结的 codex 可用性判定（PRD §3 A15）。`delegate_task` 的
+    /// description/enum 依赖 [`SubagentSupervisor::codex_available`]，首次查询后
+    /// 冻结，保证同一 run 内 tools 内容字节稳定；跨 run（supervisor 重建）重新
+    /// 判定，可用性变化属合法缓存重置点（P2-H 归因）。0=未判定，1=不可用，
+    /// 2=可用。用 `AtomicU8` 而非 `OnceLock` 以保持 `Clone` 派生。
+    codex_available_cache: Arc<AtomicU8>,
     semaphore: Arc<Semaphore>,
     children: Arc<Mutex<HashMap<String, SubagentHandle>>>,
     orchestration: OrchestrationPolicy,
@@ -2558,6 +2567,7 @@ impl SubagentSupervisor {
             workspace_scope,
             codex_subagent_runner,
             cross_engine_delegation_enabled,
+            codex_available_cache: Arc::new(AtomicU8::new(0)),
             semaphore: Arc::new(Semaphore::new(MAX_PARALLEL_SUBAGENTS)),
             children: Arc::new(Mutex::new(HashMap::new())),
             orchestration,
@@ -2614,9 +2624,21 @@ impl SubagentSupervisor {
     }
 
     fn codex_available(&self) -> bool {
-        self.cross_engine_delegation_enabled.load(Ordering::SeqCst)
-            && self.codex_configured()
-            && self.workspace_scope.is_some()
+        // P1-C：首次使用时冻结判定结果，避免同一 run 内 delegate_task 的
+        // description/enum 随可用性变化而漂移（PRD §3 A15）。并发首查会重复
+        // 计算，但输入确定，写入值恒相同，无副作用。
+        match self.codex_available_cache.load(Ordering::SeqCst) {
+            2 => true,
+            1 => false,
+            _ => {
+                let available = self.cross_engine_delegation_enabled.load(Ordering::SeqCst)
+                    && self.codex_configured()
+                    && self.workspace_scope.is_some();
+                self.codex_available_cache
+                    .store(if available { 2 } else { 1 }, Ordering::SeqCst);
+                available
+            }
+        }
     }
 
     fn codex_configured(&self) -> bool {
@@ -5065,6 +5087,182 @@ mod tests {
                         } if detail == "Codex 正在读取边界文件"
                     )
         )));
+    }
+
+    #[tokio::test]
+    async fn session_tool_host_tool_specs_is_stable_across_calls_and_registration_order() {
+        // P1-C：最终请求体 tools 顺序必须跨轮一致（PRD §3 A4/A15）——
+        // 同一 host 连续两次调用输出相同；注册顺序打乱的两组 gateway 输出相同，
+        // 且整体按名称字典序。
+        let directory = TempDir::new().unwrap();
+        let workspace_scope = WorkspaceScope {
+            guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
+            access_mode: ProjectAccessMode::RequestApproval,
+        };
+        let make_host = |register_order: bool| {
+            let mut gateway = ToolGateway::new(Arc::new(PermissionEngine::new()));
+            if register_order {
+                gateway.register(Box::new(SuspendTool {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                }));
+                gateway.register(Box::new(r_code_gateway::ReadFileTool));
+            } else {
+                gateway.register(Box::new(r_code_gateway::ReadFileTool));
+                gateway.register(Box::new(SuspendTool {
+                    calls: Arc::new(AtomicUsize::new(0)),
+                }));
+            }
+            SessionToolHost {
+                gateway: Arc::new(gateway),
+                external_tools: None,
+                task_id: "task-1".to_string(),
+                run_id: "run-1".to_string(),
+                abort: Arc::new(AtomicBool::new(false)),
+                workspace_scope: Some(workspace_scope.clone()),
+                policy: ToolPolicy::Plan,
+                caller: "agent".to_string(),
+                delegation: None,
+                delegation_disabled: Arc::new(AtomicBool::new(true)),
+                suspension_gate: Arc::new(AtomicBool::new(false)),
+                continuation_gate: Arc::new(AtomicBool::new(false)),
+            }
+        };
+        let names = |host: &SessionToolHost| -> Vec<String> {
+            host.tool_specs()
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect()
+        };
+
+        let host_a = make_host(true);
+        let host_b = make_host(false);
+        assert_eq!(names(&host_a), names(&host_a));
+        assert_eq!(names(&host_a), names(&host_b));
+        assert_eq!(
+            names(&host_a),
+            vec!["read_file".to_string(), "request_user_input".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn delegation_codex_availability_is_frozen_within_a_run() {
+        // P1-C/A15：delegate_task 的 description/enum 依赖 codex_available()；
+        // 同一 run（同一 supervisor）内判定结果冻结，可用性中途变化不造成 tools
+        // 内容漂移；新 run（新 supervisor）重新判定。
+        let directory = TempDir::new().unwrap();
+        let workspace_scope = WorkspaceScope {
+            guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
+            access_mode: ProjectAccessMode::RequestApproval,
+        };
+        let enabled = Arc::new(AtomicBool::new(true));
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let supervisor = Arc::new(SubagentSupervisor::new(
+            Arc::new(MockProvider::new("mock")),
+            test_gateway(),
+            None,
+            event_tx,
+            "task-1".to_string(),
+            "parent-run".to_string(),
+            "mock-model".to_string(),
+            512,
+            None,
+            InferenceOptions::default(),
+            Arc::new(AtomicBool::new(false)),
+            Some(workspace_scope.clone()),
+            Some(Arc::new(RecordingCodexRunner {
+                calls: AtomicUsize::new(0),
+            })),
+            enabled.clone(),
+            OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
+        ));
+        let host = SessionToolHost {
+            gateway: test_gateway(),
+            external_tools: None,
+            task_id: "task-1".to_string(),
+            run_id: "parent-run".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: Some(workspace_scope),
+            policy: ToolPolicy::Main,
+            caller: "agent".to_string(),
+            delegation: Some(supervisor),
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
+        };
+        let delegate_enum = |host: &SessionToolHost| -> Vec<serde_json::Value> {
+            host.tool_specs()
+                .into_iter()
+                .find(|tool| tool.name == "delegate_task")
+                .expect("delegation enabled so delegate_task must be present")
+                .input_schema["properties"]["agent"]["enum"]
+                .as_array()
+                .expect("agent enum must be an array")
+                .clone()
+        };
+
+        // 首次查询：codex 可用 → enum 含 "codex"，description 提及 Codex CLI。
+        let first_specs = host.tool_specs();
+        let first_delegate = first_specs
+            .iter()
+            .find(|tool| tool.name == "delegate_task")
+            .unwrap();
+        assert!(delegate_enum(&host).iter().any(|value| value == "codex"));
+        assert!(first_delegate.description.contains("Codex CLI"));
+
+        // 同一 run 内禁用 Codex：判定冻结，description/enum 保持不变。
+        enabled.store(false, Ordering::SeqCst);
+        let second_specs = host.tool_specs();
+        let second_delegate = second_specs
+            .iter()
+            .find(|tool| tool.name == "delegate_task")
+            .unwrap();
+        assert!(delegate_enum(&host).iter().any(|value| value == "codex"));
+        assert!(second_delegate.description.contains("Codex CLI"));
+        assert_eq!(first_delegate.description, second_delegate.description);
+
+        // 新 run（新 supervisor，enabled=false）：重新判定，enum 不含 "codex"。
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let fresh_supervisor = Arc::new(SubagentSupervisor::new(
+            Arc::new(MockProvider::new("mock")),
+            test_gateway(),
+            None,
+            event_tx,
+            "task-1".to_string(),
+            "parent-run".to_string(),
+            "mock-model".to_string(),
+            512,
+            None,
+            InferenceOptions::default(),
+            Arc::new(AtomicBool::new(false)),
+            Some(WorkspaceScope {
+                guard: PathGuard::new(directory.path().to_path_buf()).unwrap(),
+                access_mode: ProjectAccessMode::RequestApproval,
+            }),
+            Some(Arc::new(RecordingCodexRunner {
+                calls: AtomicUsize::new(0),
+            })),
+            Arc::new(AtomicBool::new(false)),
+            OrchestrationPolicy::default(),
+            AgentPromptPolicy::default(),
+        ));
+        let fresh_host = SessionToolHost {
+            gateway: test_gateway(),
+            external_tools: None,
+            task_id: "task-1".to_string(),
+            run_id: "parent-run".to_string(),
+            abort: Arc::new(AtomicBool::new(false)),
+            workspace_scope: None,
+            policy: ToolPolicy::Main,
+            caller: "agent".to_string(),
+            delegation: Some(fresh_supervisor),
+            delegation_disabled: Arc::new(AtomicBool::new(false)),
+            suspension_gate: Arc::new(AtomicBool::new(false)),
+            continuation_gate: Arc::new(AtomicBool::new(false)),
+        };
+        assert!(!delegate_enum(&fresh_host)
+            .iter()
+            .any(|value| value == "codex"));
     }
 
     #[test]

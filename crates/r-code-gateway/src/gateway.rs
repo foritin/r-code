@@ -551,8 +551,13 @@ impl ToolGateway {
     }
 
     /// 列出所有已注册工具的规格。
+    ///
+    /// 输出按工具名稳定排序（P1-C，PRD §3 A4）：`HashMap` 的迭代顺序进程内稳定
+    /// 但应用重启后随机，排序保证 tools 数组字节跨重启一致，避免重启后首个请求
+    /// 的 tools 前缀 miss DeepSeek 前缀缓存。
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.tools
+        let mut specs = self
+            .tools
             .values()
             .map(|tool| ToolSpec {
                 name: tool.name().to_string(),
@@ -561,7 +566,9 @@ impl ToolGateway {
                 source: ToolSource::Builtin,
                 requires_confirmation: tool.risk_level().requires_confirmation(),
             })
-            .collect()
+            .collect::<Vec<_>>();
+        specs.sort_by(|a, b| a.name.cmp(&b.name));
+        specs
     }
 
     /// 执行工具调用（含权限检查与审计记账）。
@@ -1854,6 +1861,32 @@ mod tests {
 
         // 来源为 Builtin
         assert!(matches!(echo_spec.source, ToolSource::Builtin));
+    }
+
+    #[tokio::test]
+    async fn tool_specs_order_is_stable_across_registration_order() {
+        // P1-C：HashMap 迭代顺序进程内稳定但重启后随机，不同注册顺序必须产出
+        // 同一字节序列，否则重启后首个请求的 tools 前缀必 miss DeepSeek 前缀缓存
+        // （PRD §3 A4）。
+        let (_, mut gw_a) = make_gateway();
+        gw_a.register(Box::new(WriteTool));
+        gw_a.register(Box::new(EchoTool));
+        let (_, mut gw_b) = make_gateway();
+        gw_b.register(Box::new(EchoTool));
+        gw_b.register(Box::new(WriteTool));
+
+        let names = |gw: &ToolGateway| -> Vec<String> {
+            gw.tool_specs()
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect()
+        };
+        assert_eq!(names(&gw_a), names(&gw_b));
+        // 名称本身按字典序稳定排序。
+        assert_eq!(
+            names(&gw_a),
+            vec!["echo".to_string(), "write_file".to_string()]
+        );
     }
 
     #[tokio::test]
