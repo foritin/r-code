@@ -20,8 +20,7 @@
 
 ## UI 参考图
 
-- [`ui/light/`](./ui/light/)：亮色 UI 原型图。
-- [`ui/dark/`](./ui/dark/)：暗色 UI 原型图。
-- [`ui/signature-dark/`](./ui/signature-dark/)：R-Code 个性化暗色原型图。
+- [`ui/light/`](./ui/light/)：亮色 UI 参考图。
+- [`ui/dark/`](./ui/dark/)：暗色 UI 参考图。
 
 `ui/` 只存放静态参考图，不包含可执行 Demo、生成脚本或实现合同。
