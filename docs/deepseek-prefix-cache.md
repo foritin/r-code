@@ -1,6 +1,6 @@
 # DeepSeek Provider 前缀缓存与响应速度优化 PRD
 
-> 状态：**草案 v3（已过三轮独立复核，待评审）**
+> 状态：**已实施（2026-08-07，分支 `feat/deepseek-prefix-cache`；P1-F 的 missing-reasoning 回放因 hermes 无 reasoning 事件流未实施，见 §5 P1-F 注释）**
 > 范围：仅 DeepSeek Provider 的请求字节稳定性、缓存观测与响应路径优化；不含 Anthropic / OpenAI 兼容 / Responses 口的重构。
 > 目标读者：维护者、评审者、实施者。
 > 参照实现：Reasonix（`esengine/DeepSeek-Reasonix`，MIT）——围绕 DeepSeek 字节级自动前缀缓存专门设计的 agent。
