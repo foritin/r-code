@@ -1434,6 +1434,17 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// 单次模型请求的 token 用量（agent loop 单轮内累计）。
+    ///
+    /// 键与 `hermes_core::Usage` 的 serde 输出一致（`input_tokens` /
+    /// `output_tokens` / `cache_read_tokens` / `cache_write_tokens`），宿主据此写入
+    /// `AgentRun.usage_json`，前端 `runUsageLabel` 直接解析；与 Codex 线路写入
+    /// 同一列的 JSON 形状保持一致。仅当 provider 报告非零用量时发出；会话
+    /// JSONL 与 WebView 事件流不消费此事件。
+    Usage {
+        /// 与 Codex 路径写入 `usage_json` 列相同形状的 JSON 文本。
+        usage_json: String,
+    },
 }
 
 /// 嵌套 Agent 事件的运行树作用域。

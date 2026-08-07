@@ -104,17 +104,38 @@ function runTimeLabel(value: string): string {
   });
 }
 
-function runUsageLabel(value: string | null): string | null {
+/**
+ * 解析 run 的 usage_json（后端键为 snake_case）并格式化为用量文案。
+ * 缓存命中字段：cache_read_tokens（命中）/ cache_write_tokens（未命中，DeepSeek
+ * prompt_cache_hit/miss_tokens 归一后的键名）。两者都显式存在时展示命中率百分比；
+ * 任一缺失时只展示命中 token 数（比例未知，不臆造）；两者都缺失时保持原有
+ * 输入/输出 行为完全不变。导出仅供前端回归测试直接断言。
+ */
+export function runUsageLabel(value: string | null): string | null {
   if (!value) return null;
   try {
     const usage = JSON.parse(value) as Record<string, unknown>;
     const input = typeof usage.input_tokens === "number" ? usage.input_tokens : null;
     const output = typeof usage.output_tokens === "number" ? usage.output_tokens : null;
-    if (input == null && output == null) return null;
-    return [
+    const cacheRead = typeof usage.cache_read_tokens === "number" ? usage.cache_read_tokens : null;
+    const cacheWrite = typeof usage.cache_write_tokens === "number" ? usage.cache_write_tokens : null;
+    if (input == null && output == null && cacheRead == null && cacheWrite == null) return null;
+    const parts = [
       input == null ? null : `输入 ${input.toLocaleString()}`,
       output == null ? null : `输出 ${output.toLocaleString()}`,
-    ].filter(Boolean).join(" · ");
+    ];
+    if (cacheRead != null || cacheWrite != null) {
+      const read = cacheRead ?? 0;
+      const readText = `命中 ${read.toLocaleString()}`;
+      if (cacheRead != null && cacheWrite != null) {
+        const total = read + cacheWrite;
+        const ratio = total > 0 ? Math.round((read / total) * 100) : null;
+        parts.push(ratio != null ? `${readText} (${ratio}%)` : readText);
+      } else {
+        parts.push(readText);
+      }
+    }
+    return parts.filter(Boolean).join(" · ");
   } catch {
     return null;
   }

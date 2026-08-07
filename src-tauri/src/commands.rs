@@ -3786,6 +3786,20 @@ fn split_scoped_event(mut event: &AgentEvent) -> (Option<&AgentEventScope>, &Age
     (scope, event)
 }
 
+/// P0-B：原生线路的 token 用量事件写库。带 scope 的事件属于子代理运行，否则
+/// 属于主运行；usage_json 键与 Codex 路径写入同一列的 JSON 形状一致（含
+/// cache_read_tokens/cache_write_tokens），前端 runUsageLabel 直接解析。
+fn persist_native_usage_event(db: &Database, main_run_id: &str, event: &AgentEvent) {
+    let (scope, inner) = split_scoped_event(event);
+    let AgentEvent::Usage { usage_json } = inner else {
+        return;
+    };
+    let run_id = scope
+        .map(|value| value.run_id.as_str())
+        .unwrap_or(main_run_id);
+    let _ = AgentRunRepository::new(db).set_usage(run_id, usage_json);
+}
+
 fn ensure_subagent_run(
     db: &Database,
     task_id: &str,
@@ -4231,6 +4245,10 @@ async fn persist_runtime_event(
             }
         }
         AgentEvent::Scoped { .. } => unreachable!("split_scoped_event 已解包所有作用域"),
+        AgentEvent::Usage { .. } => {
+            // P0-B：usage 持久化由 drain 循环在转发前直接完成（set_usage 写
+            // usage_json 列）；此处仅保持 match 穷尽。会话 JSONL 不记录 token 用量。
+        }
     }
 }
 
@@ -5083,6 +5101,14 @@ fn spawn_drain_loop_with_resources(
             };
 
             for event in &events {
+                // P0-B：原生线路每轮报告的 usage 直接写入对应 AgentRun（主运行或带
+                // scope 的子代理运行）的 usage_json 列，复用 Codex 线路同一写库 API。
+                // 不写会话 JSONL、不转发 WebView——前端从 usage_json 列读取
+                // （Timeline runUsageLabel 解析 cache_read_tokens/cache_write_tokens）。
+                if matches!(split_scoped_event(event).1, AgentEvent::Usage { .. }) {
+                    persist_native_usage_event(&db, &active.run_id, event);
+                    continue;
+                }
                 if matches!(
                     event,
                     AgentEvent::State {
@@ -16964,6 +16990,70 @@ mod tests {
             1,
             "子代理工具结果不能污染主分支时间锚点"
         );
+    }
+
+    #[tokio::test]
+    async fn native_usage_event_persists_to_main_and_subagent_runs() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+        let usage = r#"{"input_tokens":120,"output_tokens":30,"cache_read_tokens":80,"cache_write_tokens":40}"#;
+
+        // P0-B：无 scope 的 Usage 事件写入主运行 usage_json（与 Codex 路径同一列）。
+        persist_native_usage_event(
+            &state.db,
+            &parent.id,
+            &AgentEvent::Usage {
+                usage_json: usage.to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&parent.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.usage_json.as_deref(), Some(usage));
+
+        // 带 scope 的 Usage 事件（子代理每轮经 emit_scoped 转发）写入子运行，
+        // 不覆盖主运行的 usage_json。
+        let child = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&child).unwrap();
+        let scope = AgentEventScope {
+            run_id: child.id.clone(),
+            agent_id: "child-agent".to_string(),
+            parent_run_id: Some(parent.id.clone()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: None,
+            delegated_by_tool_call_id: None,
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: Some("test-model".to_string()),
+            access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
+            routing_reason: None,
+        };
+        persist_native_usage_event(
+            &state.db,
+            &parent.id,
+            &AgentEvent::Scoped {
+                scope,
+                event: Box::new(AgentEvent::Usage {
+                    usage_json: usage.to_string(),
+                }),
+            },
+        );
+        let fetched_child = AgentRunRepository::new(&state.db)
+            .get(&child.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched_child.usage_json.as_deref(), Some(usage));
+        let fetched_parent = AgentRunRepository::new(&state.db)
+            .get(&parent.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched_parent.usage_json.as_deref(), Some(usage));
     }
 
     #[tokio::test]

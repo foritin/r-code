@@ -559,6 +559,20 @@ where
         });
     }
 
+    // P0-B：把本轮累计 usage 经事件链暴露给宿主。Codex 线路在 run 完成时写库
+    // （commands.rs set_usage），原生线路复用同一事件链与同一 JSON 形状——
+    // hermes Usage 的 serde 输出键（input_tokens/output_tokens/cache_read_tokens/
+    // cache_write_tokens）即前端 runUsageLabel 与 usage_json 列的契约。仅当
+    // provider 报告了非零用量时发出，避免无 usage 的 provider 制造噪音事件。
+    if total_usage.input_tokens > 0
+        || total_usage.output_tokens > 0
+        || total_usage.cache_read_tokens.unwrap_or(0) > 0
+        || total_usage.cache_write_tokens.unwrap_or(0) > 0
+    {
+        let usage_json = serde_json::to_string(&total_usage).unwrap_or_else(|_| "{}".to_string());
+        emit(AgentEvent::Usage { usage_json });
+    }
+
     tracing::debug!(
         input_tokens = total_usage.input_tokens,
         output_tokens = total_usage.output_tokens,
@@ -1645,5 +1659,63 @@ mod tests {
                 .unwrap_err();
 
         assert!(err.to_string().contains("tool host"));
+    }
+
+    #[tokio::test]
+    async fn usage_event_carries_run_usage_json_with_cache_fields() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta {
+                text: "hello".to_string(),
+            },
+            StreamEvent::Usage(Usage {
+                input_tokens: 120,
+                output_tokens: 30,
+                cache_read_tokens: Some(80),
+                cache_write_tokens: Some(40),
+            }),
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &[])
+                .await
+                .unwrap();
+
+        // P0-B：单轮累计 usage 以 Usage 事件暴露给宿主，JSON 键与 Codex 路径写入
+        // usage_json 列的形状一致（含 cache 字段），前端 runUsageLabel 可直接解析。
+        let usage_event = events.iter().find_map(|e| match e {
+            AgentEvent::Usage { usage_json } => Some(usage_json.as_str()),
+            _ => None,
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(usage_event.expect("non-zero usage must emit Usage event"))
+                .unwrap();
+        assert_eq!(parsed["input_tokens"], 120);
+        assert_eq!(parsed["output_tokens"], 30);
+        assert_eq!(parsed["cache_read_tokens"], 80);
+        assert_eq!(parsed["cache_write_tokens"], 40);
+    }
+
+    #[tokio::test]
+    async fn zero_usage_suppresses_usage_event() {
+        let provider = MockProvider::new("mock");
+        provider.push_text_turn("hello", Usage::default());
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &[])
+                .await
+                .unwrap();
+
+        assert!(
+            !events.iter().any(|e| matches!(e, AgentEvent::Usage { .. })),
+            "provider 未报告用量时不应发出 Usage 事件"
+        );
     }
 }
