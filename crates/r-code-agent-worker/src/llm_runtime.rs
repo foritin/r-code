@@ -41,6 +41,7 @@ use uuid::Uuid;
 use crate::agent_loop::{
     run_agent_loop_iteration_streaming_with_abort, run_agent_loop_iteration_with_abort_and_emit,
 };
+use crate::cache_shape::{capture, compare, PrefixShape};
 use crate::runtime::{AgentRuntime, SteerResult};
 
 /// 单个 run 的最大迭代轮数（防失控兜底）。
@@ -661,8 +662,8 @@ struct SessionState {
     active_run_id: Option<String>,
     /// P2-G：历史改写版本号。压缩（折叠/剪枝）改写 provider 可见历史时递增。
     /// P2-H 归因（cache_shape.rs）通过此计数区分“压缩改写”与“纯本地元数据
-    /// 编辑”（PRD §5 P2-G 第 5 点；cache_shape.rs 目前无可调接口，先落此内部
-    /// 计数，P2-H 实施时读取联动）。
+    /// 编辑”：run 循环每轮请求发送前经 `capture_run_prefix_shape` 把它作为
+    /// `provider_visible_version` 捕获（PRD §5 P2-G 第 5 点）。
     rewrite_version: u32,
 }
 
@@ -1400,14 +1401,24 @@ fn normalize_compacted_roles(messages: &[Message]) -> Vec<Message> {
 
 /// P2-G：压缩改写历史后递增会话级 rewrite_version。
 ///
-/// P2-H 归因联动点：cache_shape.rs（docs/deepseek-prefix-cache.md §5 P2-H）目前
-/// 尚无接口可调，先落此内部计数；P2-H 实施时从 `SessionState::rewrite_version`
-/// 读取，把“压缩改写 provider 可见字节”与“纯本地元数据编辑”区分开。
+/// P2-H 归因联动点：run 循环每轮请求发送前经 `capture_run_prefix_shape` 读取
+/// 此计数（docs/deepseek-prefix-cache.md §5 P2-H），把“压缩改写 provider
+/// 可见字节”与“纯本地元数据编辑”区分开。
 async fn bump_rewrite_version(ctx: &RunLoopCtx) {
     let mut sessions = ctx.sessions.lock().await;
     if let Some(session) = sessions.get_mut(&ctx.session_id) {
         session.rewrite_version = session.rewrite_version.wrapping_add(1);
     }
+}
+
+/// P2-H：run 循环的前缀形状捕获接线点（cache_shape.rs）。
+///
+/// `provider_visible_version` 接 `SessionState::rewrite_version`（P2-G 压缩改写
+/// 时 bump）；`local_metadata_version` 目前无实际 bump 来源（决策回执、preview
+/// 替换等纯本地编辑尚无版本计数），传常量 0——按 cache_shape.rs 规则它只记录、
+/// 不参与归因，未来接入本地编辑计数后替换此常量即可。
+fn capture_run_prefix_shape(system: &str, tools: &[ToolSpec], rewrite_version: u32) -> PrefixShape {
+    capture(system, tools, u64::from(rewrite_version), 0)
 }
 
 fn task_context_requires_continuation(context: Option<&str>) -> bool {
@@ -1475,6 +1486,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             "context window below {COMPACT_SMALL_WINDOW_TOKENS}; auto-compaction thresholds may be ineffective"
         );
     }
+
+    // P2-H：run 级前缀形状追踪。prev 为 `PrefixShape::empty()` 时 compare 返回
+    // None——首轮捕获只建立基线，不产生伪归因；之后每轮请求发送前重新捕获比对，
+    // 缓存变化时按归因（system/tools/rewrite 等）记录日志（PRD §5 P2-H）。
+    let mut prev_prefix_shape = PrefixShape::empty();
 
     loop {
         if ctx.abort.load(Ordering::Relaxed) {
@@ -1662,6 +1678,27 @@ async fn run_loop(ctx: RunLoopCtx) {
         // P2-G：本轮实际发送的文本字符数（system + 注入后的 messages + tools），
         // 供迭代结束后用真实 usage 反推 tokPerChar 校准。
         let sent_chars = request_chars(&system_prompt, &messages, tools_json_len);
+
+        // P2-H：请求发送前捕获本轮前缀形状并与上一轮比对，命中缓存重置点时
+        // 记录归因日志。rewrite_version 须在压缩块之后重新读取——本轮压缩刚
+        // bump 的版本要体现在本轮 shape 里，归因才落在首个发送压缩历史的请求上。
+        let rewrite_version = {
+            let sessions = ctx.sessions.lock().await;
+            sessions
+                .get(&ctx.session_id)
+                .map(|session| session.rewrite_version)
+                .unwrap_or(0)
+        };
+        let prefix_shape = capture_run_prefix_shape(&system_prompt, &tools, rewrite_version);
+        let cache_change = compare(&prev_prefix_shape, &prefix_shape);
+        if cache_change.is_cache_change() {
+            tracing::info!(
+                session_id = %ctx.session_id,
+                cause = %cache_change,
+                "P2-H prefix cache shape changed"
+            );
+        }
+        prev_prefix_shape = prefix_shape;
 
         let result = run_agent_loop_iteration_streaming_with_abort(
             ctx.provider.as_ref(),
@@ -6877,5 +6914,38 @@ mod compaction_tests {
         };
         assert!(outcome.had_tool_call);
         assert_eq!(outcome.usage.input_tokens, 1_234);
+    }
+
+    #[test]
+    fn p2h_capture_wiring_attributes_compaction_rewrite() {
+        // P2-H 接线点：run 循环以 SessionState::rewrite_version 作
+        // provider_visible_version 捕获前缀形状。同 run 正常迭代（system/tools/
+        // 版本均不变）compare 返回 None；压缩 bump rewrite_version 后归因 Rewrite。
+        let tools = vec![ToolSpec {
+            name: "read_file".to_string(),
+            description: "read a file".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            source: ToolSource::Builtin,
+            requires_confirmation: false,
+        }];
+        const SYSTEM: &str = "you are r-code, a coding agent.";
+        // 首轮捕获：prev 为 empty（run 开始无历史）→ None，不产生伪归因。
+        let baseline = capture_run_prefix_shape(SYSTEM, &tools, 0);
+        assert_eq!(
+            compare(&PrefixShape::empty(), &baseline),
+            crate::cache_shape::CacheChangeCause::None
+        );
+        // 正常迭代：形状逐字节稳定 → None。
+        let next = capture_run_prefix_shape(SYSTEM, &tools, 0);
+        assert_eq!(
+            compare(&baseline, &next),
+            crate::cache_shape::CacheChangeCause::None
+        );
+        // 压缩改写历史 bump rewrite_version → Rewrite（provider 可见字节被改写）。
+        let after_compaction = capture_run_prefix_shape(SYSTEM, &tools, 1);
+        assert_eq!(
+            compare(&next, &after_compaction),
+            crate::cache_shape::CacheChangeCause::Rewrite
+        );
     }
 }

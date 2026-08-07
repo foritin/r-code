@@ -3786,6 +3786,11 @@ fn split_scoped_event(mut event: &AgentEvent) -> (Option<&AgentEventScope>, &Age
     (scope, event)
 }
 
+/// 把 usage_json 文本解析为 JSON 对象（缺失/非法/非对象时为空对象）。
+fn usage_json_map(json: &str) -> serde_json::Map<String, serde_json::Value> {
+    serde_json::from_str(json).unwrap_or_default()
+}
+
 /// P0-B：原生线路的 token 用量事件写库。带 scope 的事件属于子代理运行，否则
 /// 属于主运行；usage_json 键与 Codex 路径写入同一列的 JSON 形状一致（含
 /// cache_read_tokens/cache_write_tokens），前端 runUsageLabel 直接解析。
@@ -3797,7 +3802,58 @@ fn persist_native_usage_event(db: &Database, main_run_id: &str, event: &AgentEve
     let run_id = scope
         .map(|value| value.run_id.as_str())
         .unwrap_or(main_run_id);
-    let _ = AgentRunRepository::new(db).set_usage(run_id, usage_json);
+    let repo = AgentRunRepository::new(db);
+    // P1-E §8：同一轮内 StreamReplay 先于 Usage 落库，覆盖式写入会丢掉
+    // stream_retries 键；保留已有重试计数（run 级累计，跨轮不递减）。
+    let preserved_retries = repo
+        .get(run_id)
+        .ok()
+        .flatten()
+        .and_then(|run| run.usage_json)
+        .map(|json| usage_json_map(&json))
+        .and_then(|map| map.get("stream_retries").cloned());
+    let payload = match preserved_retries {
+        Some(retries) => {
+            let mut merged = usage_json_map(usage_json);
+            merged.insert("stream_retries".to_string(), retries);
+            serde_json::to_string(&merged).unwrap_or_else(|_| usage_json.clone())
+        }
+        None => usage_json.clone(),
+    };
+    let _ = repo.set_usage(run_id, &payload);
+}
+
+/// P1-E §8：流恢复重放计数写库（对齐 Reasonix `agent.go:2976-2978` 的
+/// `RequestAttemptCounter`，同样在 agent 层统计；vendor 连接层重试不在 agent
+/// 层视野内，不纳入计数）。复用 usage_json 列：每收到一次 StreamReplay 事件把
+/// `stream_retries` 键加一（run 级累计，跨轮不递减），前端 runStreamRetriesLabel
+/// 解析同一 JSON 展示「重试 N 次」；与 Usage 事件同深度——不写会话 JSONL、
+/// 不转发 WebView。
+fn persist_native_stream_replay_event(db: &Database, main_run_id: &str, event: &AgentEvent) {
+    let (scope, inner) = split_scoped_event(event);
+    let AgentEvent::StreamReplay { .. } = inner else {
+        return;
+    };
+    let run_id = scope
+        .map(|value| value.run_id.as_str())
+        .unwrap_or(main_run_id);
+    let repo = AgentRunRepository::new(db);
+    let mut usage = repo
+        .get(run_id)
+        .ok()
+        .flatten()
+        .and_then(|run| run.usage_json)
+        .map(|json| usage_json_map(&json))
+        .unwrap_or_default();
+    let retries = usage
+        .get("stream_retries")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    usage.insert("stream_retries".to_string(), serde_json::json!(retries));
+    if let Ok(json) = serde_json::to_string(&usage) {
+        let _ = repo.set_usage(run_id, &json);
+    }
 }
 
 fn ensure_subagent_run(
@@ -4248,6 +4304,11 @@ async fn persist_runtime_event(
         AgentEvent::Usage { .. } => {
             // P0-B：usage 持久化由 drain 循环在转发前直接完成（set_usage 写
             // usage_json 列）；此处仅保持 match 穷尽。会话 JSONL 不记录 token 用量。
+        }
+        AgentEvent::StreamReplay { .. } => {
+            // P1-E §8：重放计数由 drain 循环在转发前累计进 usage_json 的
+            // stream_retries 键（与 Usage 同深度）；此处仅保持 match 穷尽。
+            // 会话 JSONL 不记录重试次数。
         }
     }
 }
@@ -5107,6 +5168,13 @@ fn spawn_drain_loop_with_resources(
                 // （Timeline runUsageLabel 解析 cache_read_tokens/cache_write_tokens）。
                 if matches!(split_scoped_event(event).1, AgentEvent::Usage { .. }) {
                     persist_native_usage_event(&db, &active.run_id, event);
+                    continue;
+                }
+                // P1-E §8：流恢复重放计数与 Usage 同深度——累计进 usage_json 的
+                // stream_retries 键，前端 run 条目展示「重试 N 次」；不写会话
+                // JSONL、不转发 WebView。
+                if matches!(split_scoped_event(event).1, AgentEvent::StreamReplay { .. }) {
+                    persist_native_stream_replay_event(&db, &active.run_id, event);
                     continue;
                 }
                 if matches!(
@@ -17057,6 +17125,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn native_stream_replay_event_accumulates_and_survives_usage_overwrite() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let parent = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&parent).unwrap();
+
+        // P1-E §8：每次 StreamReplay 事件把 usage_json 的 stream_retries 键加一
+        // （run 级累计）；事件的 attempt 载荷是本轮序号，不影响累计语义。
+        for attempt in 1..=2 {
+            persist_native_stream_replay_event(
+                &state.db,
+                &parent.id,
+                &AgentEvent::StreamReplay { attempt },
+            );
+        }
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&parent.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fetched.usage_json.as_deref(),
+            Some(r#"{"stream_retries":2}"#)
+        );
+
+        // 同一轮内 Usage 事件后写：覆盖 usage 键但保留 stream_retries 计数。
+        persist_native_usage_event(
+            &state.db,
+            &parent.id,
+            &AgentEvent::Usage {
+                usage_json: r#"{"input_tokens":120,"output_tokens":30}"#.to_string(),
+            },
+        );
+        let fetched = AgentRunRepository::new(&state.db)
+            .get(&parent.id)
+            .unwrap()
+            .unwrap();
+        let merged: serde_json::Value =
+            serde_json::from_str(fetched.usage_json.as_deref().unwrap()).unwrap();
+        assert_eq!(merged["input_tokens"], 120);
+        assert_eq!(merged["output_tokens"], 30);
+        assert_eq!(merged["stream_retries"], 2);
+
+        // 带 scope 的 StreamReplay 事件（子代理经 emit_scoped 转发）写入子运行，
+        // 不影响主运行的计数。
+        let child = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&child).unwrap();
+        let scope = AgentEventScope {
+            run_id: child.id.clone(),
+            agent_id: "child-agent".to_string(),
+            parent_run_id: Some(parent.id.clone()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: None,
+            delegated_by_tool_call_id: None,
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: Some("test-model".to_string()),
+            access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
+            routing_reason: None,
+        };
+        persist_native_stream_replay_event(
+            &state.db,
+            &parent.id,
+            &AgentEvent::Scoped {
+                scope,
+                event: Box::new(AgentEvent::StreamReplay { attempt: 1 }),
+            },
+        );
+        let fetched_child = AgentRunRepository::new(&state.db)
+            .get(&child.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fetched_child.usage_json.as_deref(),
+            Some(r#"{"stream_retries":1}"#)
+        );
+        let fetched_parent = AgentRunRepository::new(&state.db)
+            .get(&parent.id)
+            .unwrap()
+            .unwrap();
+        let parent_json: serde_json::Value =
+            serde_json::from_str(fetched_parent.usage_json.as_deref().unwrap()).unwrap();
+        assert_eq!(parent_json["stream_retries"], 2);
+    }
+
+    #[tokio::test]
     async fn terminal_subagent_closes_tool_calls_missing_a_result_event() {
         let (_dir, state) = setup_state();
         let task = task_create(&state, None, "T", "g", "ask").await.unwrap();
@@ -20391,12 +20547,62 @@ command = "r-code-host"
         .await
         .unwrap();
         let task_id = task.id.clone();
+        // P1-E 连接层重试（不可达端口退避 ~90s）会拖垮 60s 超时，改用本地固定
+        // 返回 400（不可重试）的 fixture，让 child 快速失败。读取完整请求后再响应，
+        // 模式同 F7 的 gated provider fixture。
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind failing provider fixture");
+        let provider_addr = listener.local_addr().expect("failing provider address");
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    let mut request = Vec::with_capacity(4096);
+                    let mut chunk = [0_u8; 1024];
+                    let header_end = loop {
+                        if let Some(offset) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            break offset + 4;
+                        }
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    };
+                    let content_length = String::from_utf8_lossy(&request[..header_end])
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+                        .unwrap_or(0);
+                    while request.len() < header_end.saturating_add(content_length) {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    let body = r#"{"error":{"message":"fixture: always failing provider","type":"invalid_request_error"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
         let provider_name = format!("r-code-dynamic-{}", uuid::Uuid::new_v4());
         settings_save_provider(
             &state,
             ProviderSettingsInput {
                 name: provider_name.clone(),
-                base_url: "http://127.0.0.1:1/v1".into(),
+                base_url: format!("http://{provider_addr}/v1"),
                 model: "test-model".into(),
                 api_key: Some("sk-dynamic-test".into()),
                 max_tokens: Some(2048),
@@ -20500,7 +20706,7 @@ command = "r-code-host"
             .get("subagent_id")
             .and_then(serde_json::Value::as_str)
             .expect("child run id in response");
-        // child 因 provider 不可达而失败，但 run 生命周期事件已落库。
+        // child 因 provider 返回 400（不可重试）而失败，但 run 生命周期事件已落库。
         assert_eq!(inner["status"], serde_json::json!("failed"));
         let runs = AgentRunRepository::new(&state.db);
         assert!(

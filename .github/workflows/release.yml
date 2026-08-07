@@ -591,6 +591,22 @@ jobs:
             "$RUNNER_TEMP/supply-chain/r-code-sbom.cdx.json" \
             "$RUNNER_TEMP/supply-chain/THIRD_PARTY_LICENSES.md" \
             --clobber
+          # Inline this version's CHANGELOG section into the release body so the notes
+          # describe what changed instead of only linking the full changelog.
+          version="${RELEASE_TAG#v}"
+          changelog_section="$(node --input-type=module -e '
+            import fs from "node:fs";
+            const version = process.argv[1];
+            const lines = fs.readFileSync("CHANGELOG.md", "utf8").split(/\r?\n/);
+            const start = lines.findIndex((line) => line.startsWith("## [" + version + "]"));
+            if (start === -1) {
+              process.stdout.write("");
+            } else {
+              let end = lines.findIndex((line, index) => index > start && line.startsWith("## ["));
+              if (end === -1) end = lines.length;
+              process.stdout.write(lines.slice(start + 1, end).join("\n").trim());
+            }
+          ' "$version")"
           if [[ "$RELEASE_TAG" == *-unsigned.* ]]; then
             notes_file="$RUNNER_TEMP/release-manifest/unsigned-release-notes.md"
             existing_body="$(gh release view "$RELEASE_TAG" --json body --jq .body)"
@@ -626,6 +642,9 @@ jobs:
                   printf '%s\n' "> **此 Latest 版本包含未完成平台代码签名的安装包：$platform_list。**"
                   printf '%s\n' '> Windows 可能显示 SmartScreen 警告；macOS 可能触发 Gatekeeper。请仅从本仓库 Release 页面下载，并在安装前核对来源。'
                   printf '%s\n' '> Tauri updater 产物仍使用项目更新密钥签名并经过四平台清单校验。'
+                  if [[ -n "$changelog_section" ]]; then
+                    printf '\n%s\n' "$changelog_section"
+                  fi
                   printf '\n%s\n' "$existing_body"
                 } > "$notes_file"
               fi
@@ -641,6 +660,15 @@ jobs:
                 --notes-file "$notes_file" \
                 --verify-tag
             else
-              gh release edit "$RELEASE_TAG" --draft=false --latest --verify-tag
+              if [[ -n "$changelog_section" ]]; then
+                notes_file="$RUNNER_TEMP/release-manifest/stable-release-notes.md"
+                {
+                  printf '%s\n' "$changelog_section"
+                  printf '\n%s\n' "$existing_body"
+                } > "$notes_file"
+                gh release edit "$RELEASE_TAG" --draft=false --latest --title "R-Code $RELEASE_TAG" --notes-file "$notes_file" --verify-tag
+              else
+                gh release edit "$RELEASE_TAG" --draft=false --latest --verify-tag
+              fi
             fi
           fi

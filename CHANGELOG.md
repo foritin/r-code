@@ -6,6 +6,18 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- DeepSeek 线路长会话显著提速降价：请求前缀改为逐字节稳定以命中 DeepSeek 字节级自动前缀缓存——system prompt 移除秒级时间戳并在 run 内冻结复用；时间（分钟级）、任务上下文、Plan 模式与委派提示统一改为尾部消息注入且不落历史；工具列表按名称排序，Codex 可用性判定在 run 内冻结；历史严格只追加，悬挂工具调用的修复结果落盘固化。真实 API 14 轮实测尾部命中率 93%（基线存档 `docs/deepseek-cache-baseline.md`）。
+- 网络抖动下运行不再直接失败：连接层指数退避重试（≤10 次，仅 408/429/5xx/连接类，4xx 与鉴权失败不重试）；流式响应在产出任何内容前停滞超过 120s（空闲 watchdog）时，用与首试逐字节一致的冻结请求静默重放（≤5 次），失败尝试不写会话；发生重放时运行条目显示「重试 N 次」。
+- 用量统计可观测缓存收益：DeepSeek 流式请求启用 `stream_options.include_usage`，解析 `prompt_cache_hit/miss_tokens`（兼容 OpenAI `prompt_tokens_details.cached_tokens`），原生 Agent 线路 usage 持久化，时间线运行条目显示缓存命中率；前缀形状（system/tools 哈希 + 改写版本）逐轮归因记录缓存变化原因。
+- 长会话接入分层压缩：相对上下文窗口 50% 提示一次、60% 剪除旧工具结果、80% 摘要折叠（保留首个小 user 轮次与尾部原文），连续 2 次压缩即防抖暂停，token 估算用真实 usage 逐轮校准。
+- GitHub Release 说明内联当版本 CHANGELOG 内容，不再仅给出 Full Changelog 跳转链接。
+
+### Fixed
+
+- thinking 模式（deepseek-reasoner）请求兼容性：assistant tool_calls 轮恒发 `reasoning_content` 键、tool 消息恒发 `name` 键，消除 DeepSeek 400 类报错并保持请求字节确定。
+
 ## [0.3.1] - 2026-08-07
 
 ### Security

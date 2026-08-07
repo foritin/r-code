@@ -12,8 +12,10 @@
 //! 长度并生成 `Usage { cache_read_tokens, cache_write_tokens }`——报告出的命中率
 //! 就是客户端把请求前缀保持得有多稳定的直接度量。
 //!
-//! 压缩轮不计入 tail_avg：当前守卫场景无压缩（P2-G 未接入），全部轮次均为
-//! append-only 工具轮；未来接入压缩后需按轮标记并排除压缩轮（PRD P2-H 方案 2）。
+//! 压缩轮不计入 tail_avg：P2-G 压缩已接入 llm_runtime 主 run 循环，但本守卫
+//! 场景驱动 `run_agent_loop_iteration` 单轮路径且上下文低于压缩阈值，全部轮次
+//! 均为 append-only 工具轮；未来守卫场景覆盖压缩后需按轮标记并排除压缩轮
+//! （PRD P2-H 方案 2）。
 //!
 //! 有效性验证：`R_CODE_CACHE_GUARD_DRIFT=1` 时向 system 注入逐轮漂移（模拟
 //! P0-A 未落地的时间戳），守卫应归因 [`CacheChangeCause::System`] 并拉低命中率

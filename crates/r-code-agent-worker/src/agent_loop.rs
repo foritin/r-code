@@ -591,6 +591,12 @@ where
                                 usage: total_usage.clone(),
                             });
                         }
+                        // P1-E §8：重试计数对用户可见——每次实际重放前发出事件，
+                        // attempt 为本轮内第几次重放（agent 层统计，对齐 Reasonix
+                        // RequestAttemptCounter；vendor 连接层重试不在此计数）。
+                        emit(AgentEvent::StreamReplay {
+                            attempt: stream_recoveries,
+                        });
                         continue 'attempt;
                     }
                     break;
@@ -1903,6 +1909,110 @@ mod tests {
             .collect::<Vec<_>>()
             .join("");
         assert_eq!(assistant_text, "partial");
+    }
+
+    /// P1-E §8：每次冻结请求重放发出 StreamReplay 事件，attempt 逐次递增
+    /// （对齐 Reasonix RequestAttemptCounter 的 agent 层统计）。
+    #[tokio::test]
+    async fn stream_replay_emits_attempt_events_with_increasing_count() {
+        let provider = MockProvider::new("mock");
+        // 前两轮：未产出任何内容即空闲超时（vendor watchdog 的可恢复标记）。
+        for _ in 0..2 {
+            provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+                reason: StopReason::Other(STREAM_IDLE_TIMEOUT_REASON.to_string()),
+            }]));
+        }
+        // 第三轮：重放后正常结束。
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta {
+                text: "recovered".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            CompletionRequest {
+                model: "mock".into(),
+                system: None,
+                messages: messages.clone(),
+                tools: tools.clone(),
+                hosted_tools: vec![],
+                max_tokens: 128,
+                temperature: None,
+                enable_caching: false,
+                inference: Default::default(),
+            },
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        let attempts: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::StreamReplay { attempt } => Some(*attempt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(attempts, vec![1, 2]);
+    }
+
+    /// P1-E §8：未发生重放时不发 StreamReplay 事件（重试计数对用户不可见）。
+    #[tokio::test]
+    async fn no_stream_replay_event_without_idle_timeout() {
+        let provider = MockProvider::new("mock");
+        // 唯一一轮：正常产出并结束，无空闲超时。
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta { text: "ok".into() },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            CompletionRequest {
+                model: "mock".into(),
+                system: None,
+                messages: messages.clone(),
+                tools: tools.clone(),
+                hosted_tools: vec![],
+                max_tokens: 128,
+                temperature: None,
+                enable_caching: false,
+                inference: Default::default(),
+            },
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        assert!(!events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::StreamReplay { .. })));
     }
 
     /// 判断 ToolResult 是否为修复合成的 cancelled 结果（内容为

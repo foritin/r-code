@@ -148,3 +148,30 @@ test("runUsageLabel shows cache hit tokens and ratio when cache fields exist", a
   assert.equal(out.huge, "输入 1,000,000 · 命中 999,999 (100%)");
   await page.close();
 });
+
+test("runStreamRetriesLabel shows retry count only when replays happened", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const out = await page.evaluate(async () => {
+    const { runStreamRetriesLabel } = await import("/src/components/room/Timeline.tsx");
+    return {
+      empty: runStreamRetriesLabel(null),
+      blank: runStreamRetriesLabel(""),
+      invalid: runStreamRetriesLabel("not-json"),
+      absent: runStreamRetriesLabel('{"input_tokens":1200,"output_tokens":420}'),
+      zero: runStreamRetriesLabel('{"input_tokens":10,"stream_retries":0}'),
+      two: runStreamRetriesLabel('{"input_tokens":10,"stream_retries":2}'),
+      retriesOnly: runStreamRetriesLabel('{"stream_retries":1}'),
+      stringValue: runStreamRetriesLabel('{"stream_retries":"2"}'),
+    };
+  });
+  assert.equal(out.empty, null);
+  assert.equal(out.blank, null);
+  assert.equal(out.invalid, null);
+  assert.equal(out.absent, null, "missing stream_retries key stays hidden");
+  assert.equal(out.zero, null, "zero retries stays hidden");
+  assert.equal(out.two, "重试 2 次");
+  assert.equal(out.retriesOnly, "重试 1 次");
+  assert.equal(out.stringValue, null, "non-number value must be treated as missing");
+  await page.close();
+});

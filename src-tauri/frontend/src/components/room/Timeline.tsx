@@ -141,6 +141,24 @@ export function runUsageLabel(value: string | null): string | null {
   }
 }
 
+/**
+ * 解析 run 的 usage_json 中的流重放计数（stream_retries 键，P1-E §8：agent 层
+ * 冻结请求重放的 run 级累计次数，对齐 Reasonix RequestAttemptCounter）。
+ * 仅在 >0 时返回「重试 N 次」，否则返回 null（与用量文案同一 JSON，缺键/非法
+ * 输入一律不展示）。导出仅供前端回归测试直接断言。
+ */
+export function runStreamRetriesLabel(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    const usage = JSON.parse(value) as Record<string, unknown>;
+    const retries = typeof usage.stream_retries === "number" ? usage.stream_retries : null;
+    if (retries == null || retries <= 0) return null;
+    return `重试 ${retries} 次`;
+  } catch {
+    return null;
+  }
+}
+
 function runDurationLabel(startedAt: string, endedAt: string | null, now: number): string {
   const start = Date.parse(startedAt);
   const end = endedAt ? Date.parse(endedAt) : now;
@@ -604,6 +622,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         const expanded = expandedRunIds.has(it.id);
         const detailId = `${it.id}-details`;
         const usage = runUsageLabel(it.usageJson);
+        const streamRetries = runStreamRetriesLabel(it.usageJson);
         const abnormal = it.state === "failed" || it.state === "aborted";
         return (
           <div
@@ -635,6 +654,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
                   <span><b>开始</b>{runTimeLabel(it.startedAt)}</span>
                   {it.endedAt && <span><b>结束</b>{runTimeLabel(it.endedAt)}</span>}
                   {usage && <span><b>用量</b>{usage} tokens</span>}
+                  {streamRetries && <span>{streamRetries}</span>}
                 </div>
                 {it.agentSummary && (
                   <div className="run-detail-summary">

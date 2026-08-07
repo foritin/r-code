@@ -1445,6 +1445,18 @@ pub enum AgentEvent {
         /// 与 Codex 路径写入 `usage_json` 列相同形状的 JSON 文本。
         usage_json: String,
     },
+    /// 流恢复重放计数（P1-E §8 缓解）。
+    ///
+    /// 每次冻结请求重放发出一次，`attempt` 为本轮内第几次重放（1 起）。仅统计
+    /// agent 层重放，对齐 Reasonix `RequestAttemptCounter`（`agent.go:2976-2978`，
+    /// 同样在 agent 层计数）；vendor 连接层重试（send_with_retry）不在 agent 层
+    /// 视野内，不纳入计数。宿主把累计次数写进 `AgentRun.usage_json` 的
+    /// `stream_retries` 键供前端 run 条目展示；会话 JSONL 与 WebView 事件流
+    /// 不消费此事件。
+    StreamReplay {
+        /// 当前重试次数（本轮内第几次重放，从 1 开始）。
+        attempt: u32,
+    },
 }
 
 /// 嵌套 Agent 事件的运行树作用域。

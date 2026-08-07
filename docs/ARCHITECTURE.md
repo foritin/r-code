@@ -254,6 +254,17 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 - 编排策略包含委派路由、是否允许跨引擎、质量循环模式、Reviewer 和最大轮数。
 - 质量循环可以关闭、自动或总是运行；Reviewer 返回 `PASS` 或 `REVISE`，修订意见会进入下一轮可见草稿。
 
+### 6.3 DeepSeek 前缀缓存与请求字节稳定
+
+DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开关）：相邻请求公共前缀逐字节一致即命中，命中部分免 prefill、按低价计费。运行时围绕这一性质设计（PRD 与验收：`docs/deepseek-prefix-cache.md`，基线：`docs/deepseek-cache-baseline.md`）：
+
+- **system 冻结**：system prompt 为常量拼接，run 开始构建一次、全程复用；时间（分钟级）、task_context、plan mode、委派提示等动态内容一律作为尾部 user 消息注入发送副本、迭代后摘除，不落历史（历史严格 append-only）；memory_context 以独立头部消息承载，不拼进主 system。
+- **请求字节确定性**：tools 按名称排序（gateway 与 SessionToolHost 两级）；`codex_available()` 在 run 内冻结；thinking 模式恒发 `reasoning_content` 键、tool 消息恒发 `name` 键；悬空工具调用对在发送前一次性修复并固化。
+- **重试与恢复**：连接层指数退避（≤10 次，仅 408/429/5xx/连接类）、未产出内容前的空闲流用冻结请求重放（≤5 次，字节与首试一致，失败不写 session）；120s SSE 空闲 watchdog；重放次数经 `AgentEvent::StreamReplay` 累计进 `usage_json.stream_retries`，UI 展示「重试 N 次」。
+- **可观测**：usage 解析 `prompt_cache_hit/miss_tokens`（回落 OpenAI `prompt_tokens_details.cached_tokens`，DeepSeek 字段优先）；原生线路持久化 `usage_json`，Timeline 展示命中率；`PrefixShape`（system/tools 哈希 + `rewrite_version`）每轮请求前 capture/compare，前缀变化时 tracing 记录归因 cause（`cache_shape.rs`）。
+- **分层压缩**：50% 提示 / 60% 剪旧工具结果 / 80% 摘要折叠（复用 vendor `hermes-compaction` 策略 + 自实现决策状态机与机械折叠兜底），带防抖（连续 2 次暂停）与真实 usage 的 tokens/字符校准；压缩是唯一的常规缓存重置点，`rewrite_version` 计入 PrefixShape 归因。
+- **守卫与探针**：`crates/r-code-agent-worker/tests/cache_guard.rs` 用字节前缀 mock 断言多轮 tail_avg ≥90%（env `R_CODE_CACHE_GUARD=1` 启用，默认 skip）；真实 API 探针 `vendor/agent-core/crates/hermes-llm/tests/deepseek_cache_probe.rs`（`#[ignore]`，需 `DEEPSEEK_API_KEY`）。
+
 ## 7. 子智能体与 Codex 协作
 
 子智能体由 `SubagentSupervisor` 管理，后端可以是：
@@ -402,6 +413,8 @@ Agent 操作终端仍受 Gateway 的风险分类和审批约束；终端本身�
 Provider 非敏感配置保存在应用 config 目录，密钥在系统凭据库。配置加载顺序支持全局配置叠加工作区设置，并在保存时校验协议和必填字段。
 
 `provider_catalog.rs` 定义预设、允许协议、默认 endpoint、reasoning replay 能力等；`provider_models.rs` 负责模型发现。原生请求通过 `hermes-llm` 统一 Provider trait，任务可单独选择 Provider、模型和 inference options。
+
+DeepSeek 线路的字节级前缀缓存设计见 §6.3：`deepseek.rs` 声明 `supports_prompt_caching = true`（DeepSeekProvider 独立覆盖，不影响其他 OpenAI 兼容 provider），流式请求仅对 `api.deepseek.com` 与 `api.openai.com` 启用 `stream_options.include_usage`。
 
 修改 Provider 时要同时检查：Catalog DTO、设置页表单、模型发现、配置指纹、runtime 重建条件，以及密钥迁移/删除行为。
 
