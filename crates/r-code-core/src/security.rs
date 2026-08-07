@@ -450,7 +450,7 @@ impl PathGuard {
 
     fn strip_workspace_root(&self, path: &Path) -> Option<PathBuf> {
         path.strip_prefix(&self.root)
-            .or_else(|_| path.strip_prefix(&self.lexical_root))
+            .or(path.strip_prefix(&self.lexical_root))
             .map(Path::to_path_buf)
             .ok()
             .or_else(|| {
@@ -469,7 +469,7 @@ impl PathGuard {
                     let root = strip_verbatim(&self.root);
                     let lexical_root = strip_verbatim(&self.lexical_root);
                     path.strip_prefix(root)
-                        .or_else(|_| path.strip_prefix(lexical_root))
+                        .or(path.strip_prefix(lexical_root))
                         .map(Path::to_path_buf)
                         .ok()
                 }
