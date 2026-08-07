@@ -46,6 +46,12 @@ function Test-ManagedHostPath {
 
   try {
     $fullPath = Get-NormalizedPath $Path
+    # Win32_Process.ExecutablePath 可能以 \\?\ 前缀返回（NT 路径形式，
+    # 常见于 Rust/Go 等原生启动器创建的长路径进程），与 GetFullPath 的
+    # DOS 形式不一致，先剥离再比较，避免漏匹配导致进程残留与卸载失败。
+    if ($fullPath.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) {
+      $fullPath = $fullPath.Substring(4)
+    }
     $fileName = [IO.Path]::GetFileName($fullPath)
     return $fullPath.StartsWith($hostPrefix, [StringComparison]::OrdinalIgnoreCase) -and
       $fileName -match '^r-code-mcp-host-[a-f0-9]{64}\.exe$'
