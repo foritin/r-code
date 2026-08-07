@@ -13,11 +13,34 @@ version = 2
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-# Tauri/GTK 与 PTY 的维护性公告属于传递依赖；继续显示但不阻断。真实漏洞仍默认 deny，
-# workspace 自身一旦被标记为 unmaintained/unsound 也仍会阻断。
-unmaintained = "workspace"
-unsound = "workspace"
-ignore = []
+# 不接受按类别永久放行。每个暂时保留的传递风险都必须明确列在下面，
+# 并由 desktop-maintainers 在 Review-by 日期前重新评估或移除。
+unmaintained = "all"
+unsound = "all"
+ignore = [
+    # Owner: desktop-maintainers. Review-by: 2026-12-31.
+    # Tauri 的 GTK3 后端仍经 gtk-rs 0.18 传递依赖；迁移 GTK4/上游替代前保留。
+    "RUSTSEC-2024-0411", # gdkwayland-sys
+    "RUSTSEC-2024-0412", # gdk
+    "RUSTSEC-2024-0413", # atk
+    "RUSTSEC-2024-0414", # gdkx11-sys
+    "RUSTSEC-2024-0415", # gtk
+    "RUSTSEC-2024-0416", # atk-sys
+    "RUSTSEC-2024-0417", # gdkx11
+    "RUSTSEC-2024-0418", # gdk-sys
+    "RUSTSEC-2024-0419", # gtk3-macros
+    "RUSTSEC-2024-0420", # gtk-sys
+    # Owner: desktop-maintainers. Review-by: 2026-12-31.
+    # 这些是上游宏/PTY/Unicode 传递链；升级或替换上游后必须删除相应例外。
+    "RUSTSEC-2017-0008", # serial
+    "RUSTSEC-2024-0370", # proc-macro-error
+    "RUSTSEC-2024-0429", # glib VariantStrIter unsoundness
+    "RUSTSEC-2025-0075", # unic-char-range
+    "RUSTSEC-2025-0080", # unic-common
+    "RUSTSEC-2025-0081", # unic-char-property
+    "RUSTSEC-2025-0098", # unic-ucd-version
+    "RUSTSEC-2025-0100", # unic-ucd-ident
+]
 
 [licenses]
 version = 2
@@ -53,5 +76,8 @@ wildcards = "allow"
 [sources]
 # 只允许 crates.io
 unknown-registry = "deny"
-unknown-git = "allow"  # 允许 git 依赖（agent-core submodule）
+unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# fix-path-env 尚无满足当前 Tauri 约束的 crates.io 替代。Cargo.toml 锁定了
+# 精确 rev；任何新 git source 都会被 unknown-git = "deny" 阻断。
+allow-git = ["https://github.com/tauri-apps/fix-path-env-rs"]

@@ -5,11 +5,12 @@
 //!
 //! [doc-18 M10-04] [doc-07 §6]
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use r_code_core::error::ProductError;
 use r_code_core::secret::redact_text;
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 /// 支持包生成器 -- 创建诊断包用于 bug 报告。
 ///
@@ -116,12 +117,17 @@ impl SupportBundle {
         let contents = self.collect(db_path).await?;
         std::fs::create_dir_all(&self.output_dir)?;
 
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.fZ");
         let file_name = format!("r-code-support-bundle-{timestamp}.json");
         let out_path = self.output_dir.join(file_name);
 
         let json = serde_json::to_string_pretty(&contents)?;
-        std::fs::write(&out_path, json)?;
+        // Write beside the final path and persist with a same-directory rename, so callers never
+        // observe a partially written support bundle. The timestamp has sub-second precision and
+        // the temporary file is unique, avoiding same-second export collisions.
+        let mut temporary = tempfile::NamedTempFile::new_in(&self.output_dir)?;
+        temporary.write_all(json.as_bytes())?;
+        temporary.persist(&out_path).map_err(|error| error.error)?;
         Ok(out_path)
     }
 
@@ -186,7 +192,16 @@ impl SupportBundle {
 
     /// 收集数据库统计。表缺失 / DB 不存在时返回 0（降级）。
     fn collect_db_stats(&self, db_path: &Path) -> DbStats {
-        let conn = match Connection::open(db_path) {
+        // `Connection::open` creates a missing file, which would make preview() write despite its
+        // contract. Read-only opening keeps both preview and export diagnostic-only.
+        if !db_path.is_file() {
+            return DbStats {
+                task_count: 0,
+                run_count: 0,
+                tool_call_count: 0,
+            };
+        }
+        let conn = match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(c) => c,
             Err(_) => {
                 return DbStats {
@@ -423,7 +438,7 @@ mod tests {
     // ── 降级 ──────────────────────────────────────────────────────
 
     #[tokio::test]
-    async fn generate_missing_db_returns_zero_stats() {
+    async fn preview_missing_db_returns_zero_stats_without_creating_a_database() {
         let dir = TempDir::new().unwrap();
         let db_path = dir.path().join("nonexistent.db");
         let bundle = SupportBundle::new(dir.path().to_path_buf(), dir.path().join("logs"));
@@ -432,6 +447,10 @@ mod tests {
         assert_eq!(contents.db_stats.task_count, 0);
         assert_eq!(contents.db_stats.run_count, 0);
         assert_eq!(contents.db_stats.tool_call_count, 0);
+        assert!(
+            !db_path.exists(),
+            "preview must not create a missing SQLite file"
+        );
     }
 
     #[tokio::test]

@@ -53,7 +53,7 @@ Multiple features may edit interleaved lines in one file. Rejecting feature A pe
 - Trusted write capture and rejection share a per-path coordinator. Multi-file operations lock canonical paths in sorted order to avoid lock-order inversion.
 - Multi-file rejection computes every target first; any conflict prevents all writes.
 - A durable rejection journal and rollback blobs are saved before mutation. Partial I/O failures are rolled back, and startup resumes unfinished recovery.
-- Workspace paths are canonicalized and checked again at the boundary; symbolic links cannot escape the workspace.
+- Workspace paths are canonicalized and checked again at the boundary. Existing-file reads, replacements, and deletes use a workspace-directory capability fixed when the operation starts, and Plan's tracked-write wrapper forwards that capability to its inner tool, so symbolic links cannot escape the workspace.
 - Review blobs and ledgers live in AppData. R-Code does not create private Plan or memory metadata in the project directory.
 - Permanently deleting a task or forgetting a project releases referenced blobs transactionally and removes only trusted UUID Plan directories. Startup retries orphan cleanup, and database-provided projection paths are never trusted as deletion targets.
 

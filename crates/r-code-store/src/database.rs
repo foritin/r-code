@@ -21,6 +21,23 @@ impl Database {
     /// 打开文件数据库（WAL 模式 + foreign_keys ON）。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ProductError> {
         let path = path.as_ref();
+        let db = Self::open_configured(path)?;
+        db.run_migrations()?;
+        Ok(db)
+    }
+
+    /// 打开已经通过产品启动迁移流程验证的文件数据库。
+    ///
+    /// 桌面与 MCP 启动入口必须先使用 `MigrationManager` 创建一致性备份、执行迁移并
+    /// 验证完整性，再调用本方法建立连接池。它刻意不执行 migration，避免绕过失败恢复
+    /// 流程；schema 不处于当前版本时会直接报错。
+    pub fn open_after_migration(path: impl AsRef<Path>) -> Result<Self, ProductError> {
+        let db = Self::open_configured(path.as_ref())?;
+        db.ensure_current_schema()?;
+        Ok(db)
+    }
+
+    fn open_configured(path: &Path) -> Result<Self, ProductError> {
         // `journal_mode` is persistent database state and may require a write lock. Configure it
         // once before r2d2 starts opening connections; doing this in `with_init` lets eager pool
         // connections race each other and produces transient `database is locked` failures.
@@ -48,7 +65,6 @@ impl Database {
             .map_err(|e| ProductError::DatabaseError(format!("pool build failed: {e}")))?;
 
         let db = Self { pool };
-        db.run_migrations()?;
         Ok(db)
     }
 
@@ -72,6 +88,32 @@ impl Database {
             .get()
             .map_err(|e| ProductError::DatabaseError(format!("pool get failed: {e}")))?;
         migrations::run_migrations(&conn)
+    }
+
+    fn ensure_current_schema(&self) -> Result<(), ProductError> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| ProductError::DatabaseError(format!("pool get failed: {e}")))?;
+        let version: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                ProductError::MigrationError(format!(
+                    "read schema version after guarded migration failed: {e}"
+                ))
+            })?;
+        if version == i64::from(migrations::LATEST_SCHEMA_VERSION) {
+            Ok(())
+        } else {
+            Err(ProductError::MigrationError(format!(
+                "database schema version {version} is not ready; expected {}",
+                migrations::LATEST_SCHEMA_VERSION
+            )))
+        }
     }
 
     /// 获取连接池中的连接（用于 repository 操作）。
@@ -142,5 +184,18 @@ mod tests {
             assert_eq!(synchronous, 1);
             assert_eq!(busy_timeout, 5_000);
         }
+    }
+
+    #[test]
+    fn open_after_migration_rejects_unprepared_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("r-code.db");
+        let _ = rusqlite::Connection::open(&db_path).unwrap();
+
+        let error = match Database::open_after_migration(&db_path) {
+            Ok(_) => panic!("unprepared database must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("schema version"));
     }
 }

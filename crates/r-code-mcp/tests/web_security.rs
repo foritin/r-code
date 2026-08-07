@@ -111,6 +111,10 @@ fn private_metadata_and_documentation_ranges_are_blocked() {
         "fe80::1",
         "2001:db8::1",
         "::ffff:127.0.0.1",
+        "::127.0.0.1",
+        "::10.0.0.1",
+        "::169.254.169.254",
+        "::192.0.2.1",
     ] {
         assert!(
             is_blocked_ip(address.parse().unwrap()),
@@ -121,6 +125,7 @@ fn private_metadata_and_documentation_ranges_are_blocked() {
     assert!(!is_blocked_ip(
         "2606:2800:220:1:248:1893:25c8:1946".parse().unwrap()
     ));
+    assert!(!is_blocked_ip("::93.184.216.34".parse().unwrap()));
 }
 
 #[tokio::test]
@@ -134,6 +139,25 @@ async fn private_dns_answer_prevents_any_request() {
                 "93.184.216.34".parse().unwrap(),
                 "127.0.0.1".parse().unwrap(),
             ],
+        )]),
+        http.clone(),
+    );
+
+    assert!(matches!(
+        client.fetch("https://example.test/", None).await,
+        Err(WebError::BlockedAddress)
+    ));
+    assert_eq!(http.request_count(), 0);
+}
+
+#[tokio::test]
+async fn ipv4_compatible_private_dns_answer_prevents_any_request() {
+    let http = Arc::new(FakeHttp::default());
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        HashMap::from([(
+            "example.test".to_string(),
+            vec!["::127.0.0.1".parse().unwrap()],
         )]),
         http.clone(),
     );

@@ -5,8 +5,7 @@
 //! rejecting removes exactly one feature's contribution with an inverse three-way merge.
 
 use std::collections::HashMap;
-use std::fs;
-use std::io::{self, ErrorKind, Write};
+use std::io::{self, ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
@@ -16,10 +15,9 @@ use r_code_core::plan::{
     PlanChangeEvent, PlanChangeEventState, PlanExecutionStatus, PlanItemState, PlanReviewDecision,
     PlanReviewDecisionKind, PlanReviewScope,
 };
-use r_code_core::security::PathGuard;
+use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use uuid::Uuid;
 
@@ -224,30 +222,45 @@ impl PathCoordinator {
 
 /// File operations are injectable so atomic failure and recovery can be verified deterministically.
 pub trait PlanReviewFileSystem: Send + Sync {
-    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>>;
-    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()>;
+    fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>>;
+    fn write_snapshot(
+        &self,
+        guard: &PathGuard,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> io::Result<()>;
 }
 
 #[derive(Debug, Default)]
 pub struct OsPlanReviewFileSystem;
 
 impl PlanReviewFileSystem for OsPlanReviewFileSystem {
-    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
-        match fs::read(path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error),
-        }
+    fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>> {
+        let (_, mut file) = match guard.open_existing_file(path, WorkspaceFileAccess::Read) {
+            Ok(file) => file,
+            Err(ProductError::PathNotFound(_)) => return Ok(None),
+            Err(error) => return Err(product_error_to_io(error)),
+        };
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(Some(bytes))
     }
 
-    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()> {
+    fn write_snapshot(
+        &self,
+        guard: &PathGuard,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> io::Result<()> {
         match content {
-            None => match fs::remove_file(path) {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            },
-            Some(content) => atomic_overwrite(path, content),
+            None => guard
+                .remove_file_if_exists(path)
+                .map(|_| ())
+                .map_err(product_error_to_io),
+            Some(content) => guard
+                .atomic_write_file(path, content)
+                .map(|_| ())
+                .map_err(product_error_to_io),
         }
     }
 }
@@ -335,7 +348,7 @@ impl<'a> PlanReviewStore<'a> {
         }
         let before = Snapshot::from_option(
             self.file_system
-                .read_snapshot(&resolved.absolute)
+                .read_snapshot(&resolved.guard, &resolved.absolute)
                 .map_err(io_error)?,
         );
         Ok(PlanWriteGuard {
@@ -356,7 +369,7 @@ impl<'a> PlanReviewStore<'a> {
     ) -> Result<RecordPlanWriteOutcome, ProductError> {
         let after = Snapshot::from_option(
             self.file_system
-                .read_snapshot(&guard.resolved.absolute)
+                .read_snapshot(&guard.resolved.guard, &guard.resolved.absolute)
                 .map_err(io_error)?,
         );
         self.persist_write_observation(
@@ -792,7 +805,7 @@ impl<'a> PlanReviewStore<'a> {
         for path in resolved {
             let rollback = Snapshot::from_option(
                 self.file_system
-                    .read_snapshot(&path.absolute)
+                    .read_snapshot(&path.guard, &path.absolute)
                     .map_err(io_error)?,
             );
             let events = self.load_feature_events_for_path(target, &path.relative)?;
@@ -871,7 +884,7 @@ impl<'a> PlanReviewStore<'a> {
     ) -> Result<(), ProductError> {
         let current = Snapshot::from_option(
             self.file_system
-                .read_snapshot(&file.resolved.absolute)
+                .read_snapshot(&file.resolved.guard, &file.resolved.absolute)
                 .map_err(io_error)?,
         );
         if current != file.rollback {
@@ -886,7 +899,11 @@ impl<'a> PlanReviewStore<'a> {
             )));
         }
         self.file_system
-            .write_snapshot(&file.resolved.absolute, file.desired.bytes.as_deref())
+            .write_snapshot(
+                &file.resolved.guard,
+                &file.resolved.absolute,
+                file.desired.bytes.as_deref(),
+            )
             .map_err(io_error)?;
         let now = Utc::now().to_rfc3339();
         let conn = self.db.conn()?;
@@ -941,7 +958,7 @@ impl<'a> PlanReviewStore<'a> {
     ) -> Result<(), ProductError> {
         let current = Snapshot::from_option(
             self.file_system
-                .read_snapshot(&path.absolute)
+                .read_snapshot(&path.guard, &path.absolute)
                 .map_err(io_error)?,
         );
         if current == *rollback {
@@ -960,7 +977,7 @@ impl<'a> PlanReviewStore<'a> {
             )));
         }
         self.file_system
-            .write_snapshot(&path.absolute, rollback.bytes.as_deref())
+            .write_snapshot(&path.guard, &path.absolute, rollback.bytes.as_deref())
             .map_err(io_error)?;
         self.mark_operation_file_rolled_back(operation_id, &path.relative)
     }
@@ -1171,7 +1188,7 @@ impl<'a> PlanReviewStore<'a> {
                 self.snapshot_from_blob(journal.expected_exists, journal.expected_hash.as_deref())?;
             let current = Snapshot::from_option(
                 self.file_system
-                    .read_snapshot(&path.absolute)
+                    .read_snapshot(&path.guard, &path.absolute)
                     .map_err(io_error)?,
             );
             if current == rollback || current == expected {
@@ -1187,10 +1204,11 @@ impl<'a> PlanReviewStore<'a> {
                 found_conflict = true;
                 continue;
             }
-            if let Err(error) = self
-                .file_system
-                .write_snapshot(&path.absolute, rollback.bytes.as_deref())
-            {
+            if let Err(error) = self.file_system.write_snapshot(
+                &path.guard,
+                &path.absolute,
+                rollback.bytes.as_deref(),
+            ) {
                 retryable_error.get_or_insert_with(|| error.to_string());
                 continue;
             }
@@ -1696,7 +1714,11 @@ impl<'a> PlanReviewStore<'a> {
             ));
         }
         let relative = portable_relative_path(relative_path)?;
-        Ok(ResolvedWorkspacePath { absolute, relative })
+        Ok(ResolvedWorkspacePath {
+            absolute,
+            relative,
+            guard: configured_guard,
+        })
     }
 
     fn task_workspace_root(&self, task_id: &str) -> Result<PathBuf, ProductError> {
@@ -1835,6 +1857,9 @@ impl Snapshot {
 struct ResolvedWorkspacePath {
     absolute: PathBuf,
     relative: String,
+    /// Absolute paths are retained for locking and display only. Filesystem I/O uses this
+    /// directory capability, which remains bound to the task workspace after path resolution.
+    guard: PathGuard,
 }
 
 struct CapturedOwnership {
@@ -2133,24 +2158,15 @@ fn increment_optional_ref(
     Ok(())
 }
 
-fn atomic_overwrite(path: &Path, content: &[u8]) -> io::Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            ErrorKind::InvalidInput,
-            format!("file has no parent directory: {path:?}"),
-        )
-    })?;
-    let prior_permissions = fs::metadata(path)
-        .ok()
-        .map(|metadata| metadata.permissions());
-    let mut temp = NamedTempFile::new_in(parent)?;
-    temp.write_all(content)?;
-    temp.flush()?;
-    temp.as_file().sync_all()?;
-    if let Some(permissions) = prior_permissions {
-        temp.as_file().set_permissions(permissions)?;
-    }
-    temp.persist(path).map(|_| ()).map_err(|error| error.error)
+fn product_error_to_io(error: ProductError) -> io::Error {
+    let kind = match &error {
+        ProductError::PathNotFound(_) => ErrorKind::NotFound,
+        ProductError::PathEscape(_) | ProductError::PermissionError(_) => {
+            ErrorKind::PermissionDenied
+        }
+        _ => ErrorKind::Other,
+    };
+    io::Error::new(kind, error.to_string())
 }
 
 fn portable_relative_path(path: &Path) -> Result<String, ProductError> {

@@ -15,16 +15,43 @@
 //! [doc-06 §3.4-3.6] [doc-12 §3] [doc-18 M5-04]
 
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use r_code_core::dto::{FileBaseline, FileChange, FileChangeType};
 use r_code_core::error::ProductError;
+use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use rusqlite::params;
 
 use crate::patch_engine::hash_content;
 use crate::repositories::BlobStore;
 use crate::Database;
+
+/// Read an existing workspace file through a previously-created directory capability.
+///
+/// `PathGuard::resolve` is deliberately not used as the final I/O primitive here: a
+/// replacement symlink between validation and `std::fs::read` would otherwise escape the
+/// workspace boundary. A missing file is a normal rollback state; all other guard errors stay
+/// fail-closed.
+fn read_guarded_file_if_exists(
+    guard: &PathGuard,
+    path: &Path,
+) -> Result<Option<Vec<u8>>, ProductError> {
+    let (_, mut file) = match guard.open_existing_file(path, WorkspaceFileAccess::Read) {
+        Ok(file) => file,
+        Err(ProductError::PathNotFound(_)) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        ProductError::RollbackError(format!(
+            "failed to read guarded rollback target {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(Some(bytes))
+}
 
 /// ChangeService -- 管理文件基线、变更记录与回滚。
 ///
@@ -554,6 +581,59 @@ impl<'a> ChangeService<'a> {
         Ok(RollbackResult::Restored { path })
     }
 
+    /// Capability-scoped variant of [`restore_snapshot_at`](Self::restore_snapshot_at).
+    ///
+    /// Desktop callers must use this form for workspace files. It keeps both the conflict check
+    /// and the restoration inside the `PathGuard` directory handle, so a later symlink swap
+    /// cannot redirect a rejected review into a file outside the attached workspace.
+    pub async fn restore_snapshot_at_guarded(
+        &self,
+        guard: &PathGuard,
+        path_key: &str,
+        physical_path: &Path,
+        before_hash: Option<&str>,
+        after_hash: Option<&str>,
+    ) -> Result<RollbackResult, ProductError> {
+        let path = path_key.to_string();
+        let actual_hash = read_guarded_file_if_exists(guard, physical_path)?
+            .as_deref()
+            .map(hash_content);
+
+        // A repeated reject is idempotent even though the file no longer matches `after_hash`.
+        if actual_hash.as_deref() == before_hash {
+            return Ok(RollbackResult::AlreadyClean { path });
+        }
+        if actual_hash.as_deref() != after_hash {
+            return Ok(RollbackResult::ConflictDetected {
+                path,
+                reason: format!(
+                    "external modification (expected: {}, actual: {})",
+                    after_hash.unwrap_or("absent"),
+                    actual_hash.as_deref().unwrap_or("absent")
+                ),
+            });
+        }
+
+        match before_hash {
+            Some(hash) => {
+                let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+                let content = blob_store.get(hash)?.ok_or_else(|| {
+                    ProductError::RollbackError(format!("review snapshot blob not found: {hash}"))
+                })?;
+                if hash_content(&content) != hash {
+                    return Err(ProductError::RollbackError(format!(
+                        "review snapshot blob is corrupted: {hash}"
+                    )));
+                }
+                guard.atomic_write_file(physical_path, &content)?;
+            }
+            None => {
+                guard.remove_file_if_exists(physical_path)?;
+            }
+        }
+        Ok(RollbackResult::Restored { path })
+    }
+
     /// 使用持久化路径键回滚一个文件。
     ///
     /// `path_key` 用于关联历史 baseline / change 记录，`physical_path` 才是实际
@@ -672,6 +752,101 @@ impl<'a> ChangeService<'a> {
                     reason: format!("external modification (expected: {exp}, actual: {act})"),
                 })
             }
+        }
+    }
+
+    /// Capability-scoped variant of [`rollback_file_at`](Self::rollback_file_at).
+    ///
+    /// The persisted `path_key` remains a compatibility key for the review ledger, while every
+    /// actual read, replace, and removal uses the supplied workspace directory capability.
+    pub async fn rollback_file_at_guarded(
+        &self,
+        guard: &PathGuard,
+        task_id: &str,
+        path_key: &str,
+        physical_path: &Path,
+    ) -> Result<RollbackResult, ProductError> {
+        let path_str = path_key.to_string();
+        let changes = self.list_changes(task_id).await?;
+        let path_changes: Vec<&FileChange> = changes
+            .iter()
+            .filter(|change| change.path == path_str)
+            .collect();
+
+        let baseline = match self.get_baseline(task_id, &path_str).await? {
+            Some(baseline) => baseline,
+            None if !path_changes.is_empty() && path_changes[0].before_hash.is_none() => {
+                let expected_hash = path_changes
+                    .last()
+                    .and_then(|change| change.after_hash.as_deref());
+                let actual_hash = read_guarded_file_if_exists(guard, physical_path)?
+                    .as_deref()
+                    .map(hash_content);
+                return match (expected_hash, actual_hash.as_deref()) {
+                    (Some(expected), Some(actual)) if expected == actual => {
+                        guard.remove_file_if_exists(physical_path)?;
+                        Ok(RollbackResult::Restored { path: path_str })
+                    }
+                    (Some(_), None) | (None, None) => {
+                        Ok(RollbackResult::AlreadyClean { path: path_str })
+                    }
+                    (Some(expected), Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "external modification (expected: {expected}, actual: {actual})"
+                        ),
+                    }),
+                    (None, Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                        path: path_str,
+                        reason: format!(
+                            "file exists but the task expected it to be absent (actual: {actual})"
+                        ),
+                    }),
+                };
+            }
+            None => return Ok(RollbackResult::NoBaseline { path: path_str }),
+        };
+
+        let blob_store = BlobStore::new(self.db, self.blobs_dir.clone());
+        let baseline_content = blob_store.get(&baseline.blob_key)?.ok_or_else(|| {
+            ProductError::RollbackError(format!("baseline blob not found: {}", baseline.blob_key))
+        })?;
+        let expected_hash: Option<&str> = if path_changes.is_empty() {
+            Some(&baseline.content_hash)
+        } else {
+            path_changes
+                .last()
+                .and_then(|change| change.after_hash.as_deref())
+        };
+        let actual_hash = read_guarded_file_if_exists(guard, physical_path)?
+            .as_deref()
+            .map(hash_content);
+
+        match (expected_hash, &actual_hash) {
+            (Some(expected), Some(actual)) if expected == actual => {
+                if *actual == baseline.content_hash {
+                    Ok(RollbackResult::AlreadyClean { path: path_str })
+                } else {
+                    guard.atomic_write_file(physical_path, &baseline_content)?;
+                    Ok(RollbackResult::Restored { path: path_str })
+                }
+            }
+            (None, None) => {
+                guard.atomic_write_file(physical_path, &baseline_content)?;
+                Ok(RollbackResult::Restored { path: path_str })
+            }
+            (Some(expected), None) => Ok(RollbackResult::ConflictDetected {
+                path: path_str,
+                reason: format!("file externally deleted (expected hash: {expected})"),
+            }),
+            (None, Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                path: path_str,
+                reason: format!("file exists but expected to be deleted (actual hash: {actual})"),
+            }),
+            (Some(expected), Some(actual)) => Ok(RollbackResult::ConflictDetected {
+                path: path_str,
+                reason: format!("external modification (expected: {expected}, actual: {actual})"),
+            }),
         }
     }
 

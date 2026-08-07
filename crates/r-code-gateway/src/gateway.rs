@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
 use r_code_core::dto::{PermissionDecision, ProjectAccessMode, RiskLevel, ToolCall};
 use r_code_core::error::ProductError;
+use r_code_core::security::PathGuard;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -286,6 +287,22 @@ pub trait Tool: Send + Sync {
             }
         }
     }
+
+    /// Execute with the optional capability-scoped workspace handle owned by the host.
+    ///
+    /// The default keeps existing tools unchanged. Filesystem tools override this hook and use
+    /// `workspace_guard` for the actual I/O, rather than trusting a model-provided path that was
+    /// merely validated earlier in the call chain.
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        _workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        self.execute_with_context_and_abort(input, context, abort_flag)
+            .await
+    }
 }
 
 const MAX_TRANSIENT_TOOL_ATTEMPTS: usize = 3;
@@ -404,6 +421,7 @@ async fn execute_registered_tool(
     input: serde_json::Value,
     context: &ToolExecutionContext,
     abort_flag: Option<&std::sync::atomic::AtomicBool>,
+    workspace_guard: Option<&PathGuard>,
 ) -> Result<ToolExecutionResult, ProductError> {
     let max_attempts = if tool.allows_transient_retry() {
         MAX_TRANSIENT_TOOL_ATTEMPTS
@@ -420,7 +438,12 @@ async fn execute_registered_tool(
         }
 
         match tool
-            .execute_with_context_and_abort(input.clone(), context, abort_flag)
+            .execute_with_context_and_abort_with_workspace(
+                input.clone(),
+                context,
+                abort_flag,
+                workspace_guard,
+            )
             .await
         {
             Ok(result) => return Ok(result),
@@ -580,6 +603,33 @@ impl ToolGateway {
         caller: Option<&str>,
         access_mode: ProjectAccessMode,
     ) -> Result<ToolCallOutcome, ProductError> {
+        self.execute_call_with_access_mode_and_workspace_guard(
+            task_id,
+            run_id,
+            tool_name,
+            input,
+            caller,
+            access_mode,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a call with the effective permission mode and an optional workspace capability.
+    ///
+    /// Only the trusted host supplies `workspace_guard`; tool inputs remain model-controlled and
+    /// are never themselves a filesystem authority.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_call_with_access_mode_and_workspace_guard(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        access_mode: ProjectAccessMode,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolCallOutcome, ProductError> {
         // 1. 查找工具
         let tool = self
             .tools
@@ -642,7 +692,9 @@ impl ToolGateway {
         // 6. 根据检查结果处理
         match check_result {
             PermissionCheckResult::Allowed => {
-                let outcome = execute_registered_tool(tool.as_ref(), input, &context, None).await;
+                let outcome =
+                    execute_registered_tool(tool.as_ref(), input, &context, None, workspace_guard)
+                        .await;
                 match outcome {
                     Ok(result) => {
                         audit.succeed(&result.content);
@@ -718,6 +770,39 @@ impl ToolGateway {
         input_summary: &str,
         abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         access_mode: ProjectAccessMode,
+    ) -> Result<ToolCallOutcome, ProductError> {
+        self.execute_with_wait_with_access_mode_and_workspace_guard(
+            task_id,
+            run_id,
+            call_id,
+            tool_name,
+            input,
+            caller,
+            input_summary,
+            abort_flag,
+            access_mode,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a call after approval, with an optional capability-scoped workspace handle.
+    ///
+    /// The separate method preserves the public legacy API for host integrations that have no
+    /// workspace, while scoped Agent runs can give built-in file tools a stable directory handle.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn execute_with_wait_with_access_mode_and_workspace_guard(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        call_id: Option<&str>,
+        tool_name: &str,
+        input: serde_json::Value,
+        caller: Option<&str>,
+        input_summary: &str,
+        abort_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        access_mode: ProjectAccessMode,
+        workspace_guard: Option<&PathGuard>,
     ) -> Result<ToolCallOutcome, ProductError> {
         let tool = self
             .tools
@@ -843,7 +928,15 @@ impl ToolGateway {
         debug_assert!(approved);
 
         // 已获许可：执行并记账。所有权信息来自 gateway，而不是模型输入。
-        match execute_registered_tool(tool.as_ref(), input, &context, abort_flag.as_deref()).await {
+        match execute_registered_tool(
+            tool.as_ref(),
+            input,
+            &context,
+            abort_flag.as_deref(),
+            workspace_guard,
+        )
+        .await
+        {
             Ok(result) => {
                 audit.succeed(&result.content);
                 self.ledger.write().await.push(audit);
@@ -1392,7 +1485,13 @@ mod tests {
 
         let error = tokio::time::timeout(
             std::time::Duration::from_secs(1),
-            execute_registered_tool(&tool, serde_json::json!({}), &context, Some(abort.as_ref())),
+            execute_registered_tool(
+                &tool,
+                serde_json::json!({}),
+                &context,
+                Some(abort.as_ref()),
+                None,
+            ),
         )
         .await
         .expect("built-in cancellation must be prompt")

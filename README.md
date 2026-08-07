@@ -28,7 +28,7 @@ R-Code organizes conversations, model runs, tool approvals, file changes, verifi
 
 Codex main-agent runs use the official App Server connection. With Codex CLI `0.145.0` or newer and an available R-Code Provider, Codex can call a bounded in-session tool that creates a child run under the current R-Code task instead of opening another sidebar session. If either capability is unavailable, R-Code hides that dynamic tool and the Codex main run continues normally.
 
-R-Code shows only public reasoning summaries emitted by the App Server, never raw chain-of-thought. Child runs inherit the parent permission ceiling, persist their effective three-state permission, and can be cancelled individually. Assistant references such as `[src/main.rs:42](src/main.rs#L42)` open the workspace file in the right-side workbench at the requested line.
+R-Code shows only public reasoning summaries emitted by the App Server, never raw chain-of-thought. Child runs inherit the parent permission ceiling, persist their effective three-state permission, and can be cancelled individually. Assistant references such as `src/main.rs:42` open the workspace file in the right-side workbench at the requested line.
 
 ## Supported platforms
 
@@ -98,8 +98,8 @@ git submodule update --init -- .agents
 ## Verification
 
 ```bash
-# Release metadata
-node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+# Release metadata and release-quality gate
+node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 
 # Rust
@@ -113,6 +113,8 @@ npm ci
 npm test
 npm run build
 ```
+
+When changing dependencies or release automation, also run `npm --prefix src-tauri/frontend audit --package-lock-only --audit-level=high` and `cargo deny check advisories` (install the pinned `cargo-deny` version from CI if it is not already available).
 
 Local packaging:
 
@@ -149,7 +151,7 @@ node scripts/publish-release.mjs vX.Y.Z --dry-run
 node scripts/publish-release.mjs vX.Y.Z
 ```
 
-The publish gate creates the immutable tag, triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/RELEASING.md) for credentials, recovery, and post-release acceptance.
+The publish gate creates the immutable tag only after the exact `main` commit has a complete successful CI run; the release workflow verifies that provenance and every required CI job again before it can access release work. It then triggers the four-platform GitHub Actions build, waits for it, and verifies the uploaded assets. Stable releases sign each platform when its credentials are available; missing platform certificates produce an explicit unsigned warning instead of blocking the release, while updater integrity signing remains mandatory. Follow [the release guide](./docs/RELEASING.md) for credentials, repository controls, recovery, and post-release acceptance.
 
 ## Repository layout
 
@@ -177,6 +179,7 @@ r-code/
 - [Plan mode and enhanced review](./docs/plan-mode.en.md)
 - [Web tools and MCP](./docs/mcp.md)
 - [Evolving memory](./docs/memory.md)
+- [Installation, backup, recovery, and uninstall](./docs/OPERATIONS.en.md)
 - [Release guide](./docs/RELEASING.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)

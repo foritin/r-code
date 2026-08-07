@@ -20,6 +20,7 @@ use tokio::time::{sleep, Duration, Instant};
 use crate::commands::{
     agent_abort, agent_send, session_messages, task_create_with_agent, task_detail, CommandState,
 };
+use crate::migration::MigrationManager;
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MAX_RPC_LINE_BYTES: usize = 512 * 1024;
@@ -93,9 +94,27 @@ impl McpService {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let db_path = db_dir.join("r-code.db");
+        // The MCP process can be launched without the desktop shell. It must therefore use the
+        // same guarded migration path instead of allowing `Database::open` to mutate user data
+        // before a WAL-safe backup and recovery point exist.
+        let migration = MigrationManager::new(db_path.clone());
+        let migration_result = migration.migrate().await.map_err(|error| {
+            format!(
+                "database migration failed; MCP startup aborted ({}): {error}",
+                db_path.display()
+            )
+        })?;
+        if let Some(backup_path) = migration_result.backup_path {
+            eprintln!("R-Code MCP created pre-migration database backup: {backup_path}");
+        }
         let project_root = std::env::current_dir().map_err(|e| e.to_string())?;
         let state = CommandState::new(
-            Arc::new(Database::open(&db_path).map_err(|e| e.to_string())?),
+            Arc::new(Database::open_after_migration(&db_path).map_err(|error| {
+                format!(
+                    "database was not ready after guarded migration ({}): {error}",
+                    db_path.display()
+                )
+            })?),
             blobs_dir,
             sessions_dir,
             config_dir,
@@ -586,5 +605,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn persistent_open_runs_guarded_migration_before_building_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("app-data");
+        let db_dir = base.join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let db_path = db_dir.join("r-code.db");
+        // A pre-existing old database must be backed up and migrated by the MCP-only startup
+        // path; this test would fail if it reverted to `Database::open` directly.
+        drop(rusqlite::Connection::open(&db_path).unwrap());
+
+        let service = McpService::open(base).await.unwrap();
+        let version: i64 = service
+            .state
+            .db
+            .conn()
+            .unwrap()
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            version,
+            i64::from(r_code_store::migrations::LATEST_SCHEMA_VERSION)
+        );
+        assert!(std::fs::read_dir(&db_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("pre-migration")
+            }));
     }
 }

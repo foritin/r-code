@@ -43,9 +43,9 @@ flowchart LR
 
 ### 3.1 GitHub Actions 权限
 
-`.github/workflows/release.yml` 对构建和最终发布 job 声明 `contents: write`。如果组织级策略禁止 `GITHUB_TOKEN` 写 Release，需要在仓库 Settings → Actions → General 中允许工作流写入，或按组织策略改用受控的发布 App/token。
+`.github/workflows/release.yml` 的默认权限和 metadata 校验 job 都是 `contents: read`；只有需要上传发行资产或发布 Draft 的构建/finalize job 才声明 `contents: write`。如果组织级策略禁止 `GITHUB_TOKEN` 写 Release，需要在仓库 Settings → Actions → General 中允许工作流写入，或按组织策略改用受控的发布 App/token。所有 checkout 都设置 `persist-credentials: false`，避免 PAT 或 `GITHUB_TOKEN` 留在 runner Git 配置中。
 
-不要把长期 PAT 写入 workflow 文件。`vendor/agent-core` 是私有子模块，仓库 Secret `PAT_TOKEN` 必须是一个只授予 `foritin/agent-core` **Contents: read** 的 fine-grained token；CI 和 Release 仅通过 `actions/checkout` 使用它，不把令牌写入脚本、日志或仓库。父仓 gitlink 负责锁定精确 commit，PAT 只负责让 runner 读取该 commit。
+不要把长期 PAT 写入 workflow 文件。`vendor/agent-core` 是私有子模块，仓库 Secret `PAT_TOKEN` 必须是一个只授予 `foritin/agent-core` **Contents: read** 的 fine-grained token；CI 和 Release 仅通过 `actions/checkout` 使用它，不把令牌写入脚本、日志或仓库。父仓 gitlink 负责锁定精确 commit，PAT 只负责让 runner 读取该 commit。Release 的 tag/版本/CI 质量校验 job 不读取 `PAT_TOKEN` 或 updater 私钥；这些 Secret 只在后续的发布前置校验和实际构建 job 中使用。
 
 ### 3.2 Tauri updater 签名
 
@@ -97,9 +97,17 @@ Windows Authenticode 已接入 Release workflow。要生成平台信任的 Windo
 
 Release 的 `supply-chain` job 使用 `--strict`；任何依赖缺少许可证声明都会失败。需要本地复核时运行 `node scripts/generate-supply-chain.mjs target/supply-chain --strict`。清单用于发行审计，具体许可证文本仍以各依赖包自带文件为准。
 
-### 3.5 GitHub 安全入口
+### 3.5 GitHub 安全入口与仓库外控制
 
-建议在仓库 Settings → Security 中启用 Private vulnerability reporting，使 [SECURITY.md](../SECURITY.md) 指向的私密报告入口可用。
+下列控制不在 Git 中，必须由仓库管理员在 GitHub 设置中单独确认；没有它们，workflow 文件本身不能构成完整的生产发布边界：
+
+- 为 `main` 建立 ruleset/branch protection：限制直接推送和强推，要求审阅，并把完整 `CI` 作为必需状态检查；
+- 为 `v*` 建立 tag protection/ruleset：限制创建、更新和删除发布标签的主体，禁止覆盖已公开 tag；
+- 创建受审批保护的 `release` Environment，并把发布审批、`PAT_TOKEN`、Tauri updater 私钥和平台签名 Secret 按组织密钥策略纳入该环境；
+- 在 Settings → Code security and analysis 中启用 GitHub Secret Scanning、Push Protection 和 Dependabot alerts；仓库内的 `.github/dependabot.yml` 只负责定期创建 Cargo、npm 与 GitHub Actions 更新 PR，不能替代 alerts 或人工审阅；
+- 在 Settings → Security 中启用 Private vulnerability reporting，使 [SECURITY.md](../SECURITY.md) 指向的私密报告入口可用。
+
+每次调整 ruleset、Environment 或 Secret 权限后，应使用一个无凭据的测试 tag 或 workflow dry-run 验证：未授权用户不能推进发布，获批的发布人仍能读取所需的最小权限凭据。不要把这些检查结果只留在口头约定中。
 
 ## 4. 版本和 CHANGELOG 规则
 
@@ -140,7 +148,7 @@ node scripts/publish-release.mjs vX.Y.Z
 node scripts/publish-release.mjs vX.Y.Z-unsigned.1
 ```
 
-脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的基础 Actions Secrets。平台证书缺失会在本地预检和 Actions 日志中警告，并按平台降级；工作流成功后还会核对 Release 状态、公开警告、20 个发行资产，以及四平台基础项和安装器变体的 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag。`--no-wait` 会在远端工作流登记后立即返回，因而跳过本地对 Release、20 个资产和 updater manifest 的发布后验收；使用后必须再以默认等待模式或等价命令完成验收。
+脚本不会在当前电脑串行构建四个平台，而是把不可变 tag 推到 GitHub，再由 Release workflow 并行构建 Windows x64、macOS arm64/x64 和 Linux x64。它会拒绝脏工作区、非 `main`、未同步的 `origin/main`、重复 tag、未通过的当前提交 CI，以及缺失的基础 Actions Secrets。Release workflow 会独立验证 tag 的 peeled commit 已在默认分支历史中，并要求该**精确 commit**存在成功的完整 `CI` push run，且前端、依赖审计、secret 扫描、格式、Clippy、三平台测试、Cargo audit/deny 和子模块指针等全部质量 job 都成功。平台证书缺失会在本地预检和 Actions 日志中警告，并按平台降级；工作流成功后还会核对 Release 状态、公开警告、20 个发行资产，以及四平台基础项和安装器变体的 updater manifest。可信自动化可加 `--yes` 跳过手工输入 tag。`--no-wait` 会在远端工作流登记后立即返回，因而跳过本地对 Release、20 个资产和 updater manifest 的发布后验收；使用后必须再以默认等待模式或等价命令完成验收。
 
 ### 5.1 冻结并准备版本
 
@@ -165,14 +173,16 @@ git diff -- Cargo.toml Cargo.lock src-tauri/tauri.conf.json installer/tauri.conf
 ### 5.2 验证候选版本
 
 ```bash
-node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check vX.Y.Z
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+cargo deny check advisories
 
 cd src-tauri/frontend
 npm ci
+npm audit --package-lock-only --audit-level=high
 npm test
 npm run build
 cd ../..
@@ -201,8 +211,9 @@ git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json \
   installer/tauri.conf.json \
   src-tauri/frontend/package.json src-tauri/frontend/package-lock.json CHANGELOG.md
 git commit -m "chore(release): vX.Y.Z"
-git tag -a vX.Y.Z -m "R-Code vX.Y.Z"
 git push origin main
+# 等待该精确 main commit 的完整 CI 成功后，才创建和推送 tag。
+git tag -a vX.Y.Z -m "R-Code vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
@@ -233,10 +244,11 @@ gh run watch --repo foritin/r-code <run-id> --exit-status
 
 Tag push 后工作流按以下顺序运行：
 
-1. `validate` checkout 该 tag，并校验 tag、各版本文件和 dated CHANGELOG section。
-2. `supply-chain` 生成并严格校验 SBOM/许可证清单。
-3. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
-4. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
+1. `validate` checkout 该 tag，校验 tag、各版本文件和 dated CHANGELOG section；再确认 tag 的 peeled commit 可从默认分支到达，并查询该精确 commit 的 `CI` push run 与所有必需 job 是否成功。
+2. `release-prerequisites` 只检查后续特权 job 所需的基础 Secret 是否存在；metadata 校验阶段不读取 PAT 或 updater 私钥。
+3. `supply-chain` 生成并严格校验 SBOM/许可证清单。
+4. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
+5. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。若失败来自临时 runner/网络问题且无需改变 tag 内代码，可对失败的 Actions run 使用 Re-run failed jobs，或从 `main` 完整重跑已有 tag：
 
@@ -316,6 +328,7 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 - [ ] `vendor/agent-core` gitlink 指向可访问且已审核的 commit。
 - [ ] updater 私钥已备份，Secrets 与内置公钥配对验证通过。
 - [ ] GitHub Actions 具有创建 Release 的权限。
+- [ ] `main` ruleset、`v*` tag protection、受审批保护的 `release` Environment、Secret Scanning、Push Protection、Dependabot alerts 均已由仓库管理员启用并做过实际权限验证。
 - [ ] 若平台证书尚未配置，已确认 Release 标题/正文列出未签名平台，并接受 Windows SmartScreen 与 macOS Gatekeeper 的分发影响；若已配置，则 macOS 两种架构签名/公证和 Windows Authenticode 时间戳验签均通过。
 - [ ] README 的支持平台、安装入口和截图与实际 Release 一致。
 - [ ] `SECURITY.md` 的私密报告入口可用。
@@ -330,6 +343,8 @@ Release 发布后可以修正文案或补链接，但不要把用户可见的重
 | --- | --- |
 | `.github/workflows/ci.yml` | 合并前质量门和版本漂移检查 |
 | `.github/workflows/release.yml` | tag 校验、四目标构建、Apple/Windows 签名、供应链清单、Draft 聚合与发布 |
+| `scripts/verify-release-quality-gate.mjs` | 验证 tag 精确 commit 的完整 CI run 与发布关键 job |
+| `.github/dependabot.yml` | Cargo、npm 与 GitHub Actions 依赖更新节奏 |
 | `scripts/generate-supply-chain.mjs` | 生成 CycloneDX SBOM 与第三方许可证清单 |
 | `.github/release.yml` | GitHub 自动 Release Notes 分类 |
 | `scripts/release.mjs` | 版本同步、CHANGELOG 盖章和 tag 一致性校验 |

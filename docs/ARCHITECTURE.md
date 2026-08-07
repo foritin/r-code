@@ -55,7 +55,7 @@ flowchart LR
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
 4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库。
-5. 打开 `db/r-code.db` 并执行 SQLite migration，目前 schema 版本为 25。
+5. 在打开连接池前由 `MigrationManager` 串行执行受保护的 SQLite migration：已有数据库先做完整性校验和 WAL 安全快照，失败会恢复快照并中止启动；目前 schema 版本为 25。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
 7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
 8. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
@@ -279,6 +279,8 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 4. 在 canonical 结果上再次检查 containment；
 5. 遇到权限、IO 或无法证明安全的情况 fail-closed。
 
+对既有工作区文件，安全边界不止停在路径检查：`PathGuard` 持有创建时打开的工作区目录 capability，读取、枚举、原子写入、变更回滚、审核读取和工作区图片预览都相对该句柄执行，不会在逻辑校验后再按环境绝对路径打开文件。Plan 审核的跟踪写入包装器也会把同一 capability 传给内层写工具，避免包装层意外退回普通路径 I/O。Git、搜索、glob 和 Bash 等子进程仍需要把工作区路径作为 `cwd` 传给操作系统；它们先经过路径边界校验，但当前跨平台 API 没有等价的 capability-aware `cwd`，这是持续收紧的跨进程边界。
+
 ### 8.2 风险等级
 
 | 风险 | 含义 | 示例行为 |
@@ -341,6 +343,8 @@ flowchart TD
 
 当前没有自动 downgrade migration。发布后如需回退应用，应确认新 schema 能被旧二进制读取，否则只能前滚修复。
 
+正式桌面与独立 MCP 启动入口都会在创建连接池前运行 `MigrationManager`：同一数据目录的升级先用跨入口锁串行化；已有数据库先做完整性校验，再用 SQLite 在线备份生成可校验的 WAL 安全升级前快照；迁移或迁移后校验失败时恢复该快照并中止启动，不把部分迁移的数据库交给产品层。用户侧完整备份、恢复和卸载步骤见[安装、备份与恢复手册](./OPERATIONS.md)。
+
 ### 9.2 演进记忆纵向链路
 
 记忆默认关闭。开启后，Host 在每个顶层 Run 开始前从 `MemoryStore` 加载并冻结全局/项目快照，把同一快照注入主 Agent 与其子代理；成功结束后只把可见用户文本和最终助手文本交给脱敏缓冲。默认累计 10 个有效轮次触发一次复盘，可配置为 5–50；明确的“请记住”前缀可立即触发，管理页也能手动触发。
@@ -374,11 +378,11 @@ flowchart LR
 
 `VerificationService` 根据项目特征选择验证配置，记录命令、状态和输出。验证记录服务于审核，不等价于发布 CI；发布前仍必须执行仓库级完整验证。
 
-文件编辑 IPC 使用 revision hash 做乐观并发控制，避免 UI 用过期内容覆盖磁盘新版本。大文件和图片预览还有独立大小限制，外部图片只允许来自工作区或 Codex 生成目录。
+文件编辑 IPC 使用 revision hash 做乐观并发控制，避免 UI 用过期内容覆盖磁盘新版本。大文件和图片预览还有独立大小限制；工作区图片和允许的 Codex 生成图片均以 capability 句柄打开，并在实际读取时再次执行大小上限，避免元数据检查后的符号链接替换或文件增长导致越界读取。
 
 普通审核以 Git 工作区和 `.gitignore` 为边界，按行/文件记账；接受不等于 stage。增强审核只查询当前已批准 Plan 的 `plan_change_events`，按功能事项分组，不把无关 Git 变更混入。可信写工具记录 before/after Blob 和宿主当前 feature；`in_progress` 与可恢复的 `blocked` 功能只提供实时视图，进入不可继续写入的 `completed`/`failed`/`cancelled` 后才允许最终决策。执行中 Plan 没有 `in_progress` 项时 context 进入 `paused`，写工具会 fail-closed，直到模型显式把合法的 blocked 项恢复为 `in_progress`。无法可靠归属的 Shell、MCP 或外部代理写入保持 unassigned，只进入普通审核。
 
-拒绝功能变更使用逆向三方合并：以该功能事件的 after 为 base、当前文件为 ours、before 为 theirs，从当前内容中移除该功能能证明拥有的改动，同时保留其他功能的后来写入。路径级协调器使写入捕获与拒绝使用同一把规范化路径锁；多文件操作按路径排序取锁，并先计算全部结果。冲突时 fail-closed。正式写盘前先保存 durable journal、desired/rollback Blob，原子替换失败时回滚，启动时恢复非终态 journal。
+拒绝功能变更使用逆向三方合并：以该功能事件的 after 为 base、当前文件为 ours、before 为 theirs，从当前内容中移除该功能能证明拥有的改动，同时保留其他功能的后来写入。路径级协调器使写入捕获与拒绝使用同一把规范化路径锁；多文件操作按路径排序取锁，并先计算全部结果。冲突时 fail-closed。正式写盘前先保存 durable journal、desired/rollback Blob，原子替换失败时回滚，启动时恢复非终态 journal；实际读取、替换和删除通过同一工作区 capability 完成。
 
 ## 11. 终端子系统
 
@@ -469,7 +473,7 @@ sequenceDiagram
 本地最小验证：
 
 ```bash
-node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -478,9 +482,12 @@ cd src-tauri/frontend
 npm ci
 npm test
 npm run build
+npm audit --package-lock-only --audit-level=high
+cd ../..
+cargo deny check advisories
 ```
 
-CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows 运行 Rust workspace 测试。发布工作流会再次验证 tag、版本与 CHANGELOG，然后构建 Windows x64、macOS arm64/x64 与 Linux x64 安装包。
+CI 在 Linux 检查前端、锁定依赖审计、已验证 secret 扫描、格式、Clippy、Cargo audit/deny 和子模块指针，并在 Linux、macOS、Windows 都运行 Rust workspace 测试。发布工作流除了验证 tag、版本与 CHANGELOG，还要求 tag 的 peeled commit 已进入默认分支，且该精确 commit 的完整 `CI` push run 及所有发布关键 job 都成功，随后才构建 Windows x64、macOS arm64/x64 与 Linux x64 安装包。
 
 ## 15. 已知约束与维护风险
 
@@ -491,6 +498,7 @@ CI 在 Linux 检查格式、Clippy、前端和依赖策略，在 macOS/Windows �
 - 发布矩阵当前覆盖 Windows x64、macOS Apple Silicon/Intel、Linux x64；新增架构需要同时更新构建、updater manifest 和文档。
 - updater 完整性签名与操作系统代码签名是两套机制。`PAT_TOKEN` 与 Tauri updater 私钥是硬门禁；缺少 Apple Developer ID/notarization 或 Windows Authenticode Secrets 时，稳定版会按平台降级并在 Release 显著警告，而不是伪装成已签名或静默失败，详见 [RELEASING.md](./RELEASING.md)。
 - Release 会从锁定的 Cargo/npm 依赖图生成 CycloneDX SBOM 和第三方许可证清单；缺失许可证声明时发布失败。
+- GitHub ruleset、tag protection、受审批保护的 release Environment、Secret Scanning/Push Protection 与 Dependabot 属于仓库管理员配置，不能由仓库代码自行启用；发布前必须按 [RELEASING.md](./RELEASING.md) 的外部控制清单确认。
 
 ## 16. 代码导航索引
 

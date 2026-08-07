@@ -1,16 +1,16 @@
 //! 备份管理 -- 创建与恢复数据库备份。
 //!
 //! 定期备份到 `backup_dir`（通常位于 userData 目录），含校验和验证与恢复机制。
-//! 备份采用文件级拷贝：以 `{db_stem}-{timestamp}.db` 命名。
-//!
-//! 注意：备份前应确保数据库连接已关闭或已 checkpoint（WAL 模式下，
-//! 最后一个连接关闭时 SQLite 自动 checkpoint，主 .db 文件即为一致状态）。
+//! 备份通过 SQLite `VACUUM INTO` 创建，而不是直接复制主数据库文件；因此即使源库
+//! 仍处于 WAL 模式，备份也会包含尚未 checkpoint 的数据。
 //!
 //! [doc-06 §4.2]
 
 use std::path::{Path, PathBuf};
 
 use r_code_core::error::ProductError;
+use rusqlite::{Connection, OpenFlags};
+use uuid::Uuid;
 
 /// 备份管理器 -- 创建和恢复数据库备份。
 pub struct BackupManager {
@@ -25,24 +25,76 @@ impl BackupManager {
 
     /// 备份数据库文件。
     ///
-    /// 将 SQLite 文件拷贝到 `backup_dir`，文件名带时间戳。
+    /// 使用 SQLite `VACUUM INTO` 创建一个一致性快照，文件名带时间戳。
+    /// 该命令会读取 WAL 中尚未 checkpoint 的页，因此无需关闭正在使用的源数据库。
     /// 返回备份文件路径。
     pub fn backup(&self, db_path: &Path) -> Result<PathBuf, ProductError> {
+        self.backup_with_label(db_path, "backup")
+    }
+
+    /// 创建一次升级前备份。
+    ///
+    /// 迁移调用方使用单独的标签，方便用户和支持人员识别可用于恢复的升级前快照。
+    pub fn backup_pre_migration(&self, db_path: &Path) -> Result<PathBuf, ProductError> {
+        self.backup_with_label(db_path, "pre-migration")
+    }
+
+    fn backup_with_label(&self, db_path: &Path, label: &str) -> Result<PathBuf, ProductError> {
+        if !db_path.is_file() {
+            return Err(ProductError::DatabaseError(format!(
+                "backup source is not a database file: {}",
+                db_path.display()
+            )));
+        }
         std::fs::create_dir_all(&self.backup_dir)?;
 
         let stem = db_path.file_stem().and_then(|s| s.to_str()).unwrap_or("db");
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
-        let backup_name = format!("{stem}-{timestamp}.db");
+        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+        // UUID avoids silently overwriting an earlier snapshot when two processes start in the
+        // same clock tick (for example a desktop launch racing an MCP launch).
+        let backup_name = format!("{stem}-{label}-{timestamp}-{}.db", Uuid::new_v4());
         let backup_path = self.backup_dir.join(backup_name);
+        let partial_path = backup_path.with_extension("db.partial");
 
-        std::fs::copy(db_path, &backup_path)
-            .map_err(|e| ProductError::DatabaseError(format!("backup copy failed: {e}")))?;
-        Ok(backup_path)
+        let result = (|| {
+            let source = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| {
+                    ProductError::DatabaseError(format!("backup source open failed: {e}"))
+                })?;
+            source
+                .execute_batch("PRAGMA busy_timeout=5000;")
+                .map_err(|e| {
+                    ProductError::DatabaseError(format!("backup source setup failed: {e}"))
+                })?;
+
+            let partial_path_text = partial_path.to_string_lossy();
+            source
+                .execute("VACUUM INTO ?1", [&partial_path_text])
+                .map_err(|e| ProductError::DatabaseError(format!("backup snapshot failed: {e}")))?;
+            drop(source);
+
+            if !self.verify(&partial_path)? {
+                return Err(ProductError::DatabaseError(
+                    "backup integrity check failed".to_string(),
+                ));
+            }
+            std::fs::rename(&partial_path, &backup_path)
+                .map_err(|e| ProductError::DatabaseError(format!("finalize backup failed: {e}")))?;
+            Ok(backup_path.clone())
+        })();
+
+        if result.is_err() {
+            let _ = std::fs::remove_file(&partial_path);
+        }
+        result
     }
 
     /// 从备份恢复数据库。
     ///
-    /// 用备份文件覆盖当前数据库。恢复前清除 WAL/SHM 边车文件以避免陈旧状态。
+    /// 用备份文件原子覆盖当前数据库，并在替换后清除旧 WAL/SHM 边车文件。
+    ///
+    /// 调用方必须先关闭目标数据库的所有连接；恢复后本方法会重新打开文件进行
+    /// `integrity_check`，任何失败都会显式返回给调用方。
     pub fn restore(&self, backup_path: &Path, db_path: &Path) -> Result<(), ProductError> {
         if !backup_path.exists() {
             return Err(ProductError::DatabaseError(format!(
@@ -54,15 +106,71 @@ impl BackupManager {
             std::fs::create_dir_all(parent)?;
         }
 
-        // 清除 WAL/SHM 边车文件，避免恢复后 SQLite 读取陈旧的 WAL
-        for sidecar in ["-wal", "-shm"] {
-            let sidecar_path = format!("{}{sidecar}", db_path.display());
-            let _ = std::fs::remove_file(&sidecar_path);
+        if !self.verify(backup_path)? {
+            return Err(ProductError::DatabaseError(format!(
+                "backup integrity check failed: {}",
+                backup_path.display()
+            )));
         }
 
-        std::fs::copy(backup_path, db_path)
-            .map_err(|e| ProductError::DatabaseError(format!("restore copy failed: {e}")))?;
-        Ok(())
+        // Stage the complete backup before touching the live database. This prevents a failed
+        // copy from replacing a recoverable database with a truncated file.
+        let restore_staging = db_path.with_extension(format!("db.restore-{}", Uuid::new_v4()));
+        let restore_result = (|| {
+            std::fs::copy(backup_path, &restore_staging)
+                .map_err(|e| ProductError::DatabaseError(format!("restore copy failed: {e}")))?;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&restore_staging)
+                .and_then(|file| file.sync_all())
+                .map_err(|e| {
+                    ProductError::DatabaseError(format!("flush staged restore failed: {e}"))
+                })?;
+            if !self.verify(&restore_staging)? {
+                return Err(ProductError::DatabaseError(
+                    "staged restore integrity check failed".to_string(),
+                ));
+            }
+
+            // `rename` replaces an existing file atomically when source and destination are in
+            // the same directory (POSIX rename / Windows MoveFileEx with replace-existing).
+            // Never delete the live primary database first: a crash in that gap would leave the
+            // next startup with no database at all. Callers close all SQLite handles before
+            // restore, so an open-handle failure leaves the previous database intact.
+            std::fs::rename(&restore_staging, db_path).map_err(|e| {
+                ProductError::DatabaseError(format!("activate restored database failed: {e}"))
+            })?;
+
+            // Clear WAL/SHM only after the primary database is safely replaced. A crash before
+            // this cleanup leaves stale sidecars beside the new database; SQLite rejects those
+            // by their database/WAL identity and the next startup can remove them. Cleaning them
+            // first would instead risk discarding uncheckpointed data if activation failed.
+            for sidecar in ["-wal", "-shm"] {
+                let sidecar_path = PathBuf::from(format!("{}{sidecar}", db_path.display()));
+                match std::fs::remove_file(&sidecar_path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(ProductError::DatabaseError(format!(
+                            "remove stale SQLite sidecar {} failed: {error}",
+                            sidecar_path.display()
+                        )));
+                    }
+                }
+            }
+
+            if !self.verify(db_path)? {
+                return Err(ProductError::DatabaseError(
+                    "restored database integrity check failed".to_string(),
+                ));
+            }
+            Ok(())
+        })();
+
+        if restore_result.is_err() {
+            let _ = std::fs::remove_file(&restore_staging);
+        }
+        restore_result
     }
 
     /// 列出可用备份（按文件名升序，等价于时间戳顺序）。
@@ -86,7 +194,9 @@ impl BackupManager {
         if !backup_path.exists() {
             return Ok(false);
         }
-        match rusqlite::Connection::open(backup_path) {
+        // Read-only open prevents a raced-away backup path from being recreated as an empty
+        // SQLite file and incorrectly passing integrity_check.
+        match rusqlite::Connection::open_with_flags(backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(conn) => {
                 let ok: bool = conn
                     .query_row("PRAGMA integrity_check;", [], |row| {
@@ -160,6 +270,30 @@ mod tests {
         let mgr = BackupManager::new(tmp.path().join("backups"));
         let backup_path = mgr.backup(&db_path).unwrap();
         assert!(mgr.verify(&backup_path).unwrap());
+    }
+
+    #[test]
+    fn backup_includes_uncheckpointed_wal_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("wal-source.db");
+        let source = Connection::open(&db_path).unwrap();
+        source
+            .execute_batch(
+                "PRAGMA journal_mode=WAL;\
+                 PRAGMA wal_autocheckpoint=0;\
+                 CREATE TABLE t (v INTEGER);\
+                 INSERT INTO t VALUES (1);",
+            )
+            .unwrap();
+        assert!(PathBuf::from(format!("{}-wal", db_path.display())).exists());
+
+        let mgr = BackupManager::new(tmp.path().join("backups"));
+        let backup_path = mgr.backup(&db_path).unwrap();
+
+        // Keep the source connection open so the write remains in the WAL. A raw copy of only
+        // the main .db file would not be a valid snapshot here; VACUUM INTO is.
+        assert_eq!(count_rows(&backup_path), 1);
+        drop(source);
     }
 
     #[test]

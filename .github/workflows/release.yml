@@ -22,12 +22,16 @@ concurrency:
   group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   validate:
     name: Validate release metadata
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
     outputs:
       windows_signed: ${{ steps.release-mode.outputs.windows_signed }}
       apple_signed: ${{ steps.release-mode.outputs.apple_signed }}
@@ -46,24 +50,53 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
           ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
 
       - name: Verify tag, versions and changelog
         run: node scripts/release.mjs check "$RELEASE_TAG"
 
-      - name: Verify release credentials and select signing mode
+      - name: Verify immutable tag provenance and CI quality gate
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_commit="$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{}")"
+          if ! git merge-base --is-ancestor "$tag_commit" "origin/$DEFAULT_BRANCH"; then
+            printf '::error::Release tag %s (%s) is not reachable from origin/%s\n' "$RELEASE_TAG" "$tag_commit" "$DEFAULT_BRANCH"
+            exit 1
+          fi
+
+          quality_dir="$RUNNER_TEMP/release-quality-gate"
+          mkdir -p "$quality_dir"
+          gh api \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GH_REPO/actions/workflows/ci.yml/runs?event=push&status=completed&head_sha=$tag_commit&per_page=100" \
+            > "$quality_dir/ci-runs.json"
+          ci_run_id="$(node scripts/verify-release-quality-gate.mjs select \
+            --runs "$quality_dir/ci-runs.json" \
+            --tag-commit "$tag_commit" \
+            --default-branch "$DEFAULT_BRANCH")"
+          gh api \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GH_REPO/actions/runs/$ci_run_id/jobs?per_page=100" \
+            > "$quality_dir/ci-jobs.json"
+          node scripts/verify-release-quality-gate.mjs verify-jobs \
+            --jobs "$quality_dir/ci-jobs.json"
+
+      - name: Select platform signing mode
         id: release-mode
         shell: bash
         env:
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
           WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
@@ -75,16 +108,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           FINALIZE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.finalize_only || false }}
         run: |
-          required=(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY)
-          missing=()
-          for name in "${required[@]}"; do
-            if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
-          done
-          if (( ${#missing[@]} > 0 )); then
-            printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
-            exit 1
-          fi
-
           if [[ "$FINALIZE_ONLY" == "true" ]]; then
             echo "windows_signed=false" >> "$GITHUB_OUTPUT"
             echo "apple_signed=false" >> "$GITHUB_OUTPUT"
@@ -125,31 +148,55 @@ jobs:
             printf '::warning title=Ad-hoc macOS artifacts::Missing %s. The stable release will continue and clearly warn users.\n' "${missing_apple[*]}"
           fi
 
+  release-prerequisites:
+    name: Verify release integrity credentials
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require release secrets used by later privileged jobs
+        shell: bash
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          required=(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY)
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then missing+=("$name"); fi
+          done
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
   supply-chain:
     name: Generate SBOM and license inventory
-    needs: validate
+    needs: [validate, release-prerequisites]
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Generate and validate dependency disclosures
         run: node scripts/generate-supply-chain.mjs target/supply-chain --strict
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: r-code-supply-chain
           path: |
@@ -159,7 +206,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.platform }}
-    needs: validate
+    needs: [validate, release-prerequisites]
     if: ${{ github.event_name != 'workflow_dispatch' || !inputs.finalize_only }}
     strategy:
       fail-fast: false
@@ -195,14 +242,15 @@ jobs:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ env.RELEASE_TAG }}
           token: ${{ secrets.PAT_TOKEN }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
           cache: npm
@@ -212,11 +260,11 @@ jobs:
         working-directory: src-tauri/frontend
         run: npm ci
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: ${{ matrix.rust-target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Install Linux dependencies
         if: matrix.platform == 'linux-x64'
@@ -308,7 +356,7 @@ jobs:
         if: >-
           (matrix.platform == 'windows-x64' && needs.validate.outputs.windows_signed == 'true') ||
           (startsWith(matrix.platform, 'macos-') && needs.validate.outputs.apple_signed == 'true')
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -339,7 +387,7 @@ jobs:
           matrix.platform == 'linux-x64' ||
           (matrix.platform == 'windows-x64' && needs.validate.outputs.windows_signed != 'true') ||
           (startsWith(matrix.platform, 'macos-') && needs.validate.outputs.apple_signed != 'true')
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -458,18 +506,19 @@ jobs:
       WINDOWS_SIGNED: ${{ needs.validate.outputs.windows_signed }}
       APPLE_SIGNED: ${{ needs.validate.outputs.apple_signed }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # Manual recovery deliberately uses the reviewed workflow tooling from
           # the selected branch while every product/SBOM input remains pinned to the tag.
           ref: ${{ github.event_name == 'workflow_dispatch' && github.sha || env.RELEASE_TAG }}
           fetch-depth: 1
+          persist-credentials: false
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 20
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: r-code-supply-chain
           path: ${{ runner.temp }}/supply-chain

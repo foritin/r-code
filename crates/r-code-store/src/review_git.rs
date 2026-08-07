@@ -5,12 +5,13 @@
 //! Git is only touched by the delivery methods at the bottom of this module.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use chrono::Utc;
 use r_code_core::dto::FileChangeType;
 use r_code_core::error::ProductError;
-use r_code_core::security::PathGuard;
+use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -418,10 +419,14 @@ impl<'a> ReviewLedgerService<'a> {
                 workspace_root.join(requested)
             };
             let physical = guard.resolve(&physical)?;
-            let actual = if physical.exists() {
-                Some(hash_content(&std::fs::read(&physical)?))
-            } else {
-                None
+            let actual = match guard.open_existing_file(&physical, WorkspaceFileAccess::Read) {
+                Ok((_safe_path, mut file)) => {
+                    let mut bytes = Vec::new();
+                    file.read_to_end(&mut bytes)?;
+                    Some(hash_content(&bytes))
+                }
+                Err(ProductError::PathNotFound(_)) => None,
+                Err(error) => return Err(error),
             };
             if actual.as_deref() != snapshot.after_hash.as_deref() {
                 let reason = format!(

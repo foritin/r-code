@@ -13,14 +13,16 @@
 //! 内容搜索（`search`）与文件名匹配（`glob`）在 [`crate::tools_search`]；
 //! shell 命令执行（`bash`）在 [`crate::tools_command`]。
 
+use std::io::Read;
 use std::path::{Component, Path};
 
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
 use r_code_core::process::hide_background_console;
+use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 
-use crate::gateway::{PathBinding, Tool};
+use crate::gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 
 /// `read_file` 不带 limit 时，单次最多返回的行数。
 ///
@@ -29,6 +31,119 @@ use crate::gateway::{PathBinding, Tool};
 const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
 /// `read_file` 单次返回的字符上限（约 100 KiB）。
 const MAX_READ_CHARS: usize = 100_000;
+
+/// Read text through the host-owned workspace capability when one is available.
+///
+/// Unscoped calls retain the historic behaviour for standalone tools and their unit tests. Agent
+/// runs always provide a guard, so their actual file handle is opened under the fixed workspace
+/// directory rather than by a model-supplied ambient path.
+fn read_text_file(path: &str, workspace_guard: Option<&PathGuard>) -> Result<String, ProductError> {
+    match workspace_guard {
+        Some(guard) => {
+            let (_, mut file) =
+                guard.open_existing_file(Path::new(path), WorkspaceFileAccess::Read)?;
+            let mut content = String::new();
+            file.read_to_string(&mut content)
+                .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+            Ok(content)
+        }
+        None => std::fs::read_to_string(path)
+            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}"))),
+    }
+}
+
+fn list_directory_names(
+    path: &str,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<Vec<String>, ProductError> {
+    let mut names = match workspace_guard {
+        Some(guard) => guard
+            .list_existing_directory(Path::new(path))?
+            .1
+            .into_iter()
+            .map(|entry| entry.name.to_string_lossy().to_string())
+            .collect(),
+        None => {
+            let entries = std::fs::read_dir(path)
+                .map_err(|e| ProductError::Other(format!("cannot list {path}: {e}")))?;
+            let mut names = Vec::new();
+            for entry in entries {
+                let entry =
+                    entry.map_err(|e| ProductError::Other(format!("dir entry error: {e}")))?;
+                names.push(entry.file_name().to_string_lossy().to_string());
+            }
+            names
+        }
+    };
+    names.sort();
+    Ok(names)
+}
+
+fn atomic_write_scoped(
+    path: &Path,
+    content: &[u8],
+    workspace_guard: Option<&PathGuard>,
+) -> Result<(), ProductError> {
+    match workspace_guard {
+        Some(guard) => guard.atomic_write_file(path, content).map(|_| ()),
+        None => atomic_write(path, content),
+    }
+}
+
+fn create_new_file_scoped(
+    path: &Path,
+    content: &[u8],
+    workspace_guard: Option<&PathGuard>,
+) -> Result<(), ProductError> {
+    match workspace_guard {
+        Some(guard) => guard.create_new_file(path, content).map(|_| ()),
+        None => {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|e| {
+                    ProductError::Other(format!("failed to create {}: {e}", path.display()))
+                })?;
+            file.write_all(content).map_err(|e| {
+                ProductError::Other(format!("failed to write {}: {e}", path.display()))
+            })
+        }
+    }
+}
+
+fn remove_file_scoped(
+    path: &Path,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<(), ProductError> {
+    match workspace_guard {
+        Some(guard) => {
+            if guard.remove_file_if_exists(path)? {
+                Ok(())
+            } else {
+                Err(ProductError::PathNotFound(format!(
+                    "path does not exist: {path:?}"
+                )))
+            }
+        }
+        None => std::fs::remove_file(path)
+            .map_err(|e| ProductError::Other(format!("failed to delete {}: {e}", path.display()))),
+    }
+}
+
+fn reject_if_cancelled(
+    tool_name: &str,
+    abort_flag: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(), ProductError> {
+    if abort_flag.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+        Err(ProductError::Other(format!(
+            "tool {tool_name} cancelled before execution completed"
+        )))
+    } else {
+        Ok(())
+    }
+}
 
 // ============================================================================
 // read_file  [doc-02 §5] -- R1
@@ -73,79 +188,96 @@ Output is truncated with a note if it would be too large; read the note and page
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
-
-        let offset = input
-            .get("offset")
-            .and_then(|v| v.as_u64())
-            .map(|n| n.max(1) as usize)
-            .unwrap_or(1);
-        let limit = input
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .map(|n| n.max(1) as usize)
-            .unwrap_or(DEFAULT_READ_LINE_LIMIT);
-        let paging_requested = input.get("offset").is_some() || input.get("limit").is_some();
-
-        // 未分页且文件不大：原样返回，与历史行为完全一致。
-        if !paging_requested
-            && content.len() <= MAX_READ_CHARS
-            && content.lines().count() <= DEFAULT_READ_LINE_LIMIT
-        {
-            return Ok(content);
-        }
-
-        let all_lines: Vec<&str> = content.lines().collect();
-        let total = all_lines.len();
-        let start = offset.saturating_sub(1);
-        if start >= total && total > 0 {
-            return Err(ProductError::Other(format!(
-                "offset {offset} is past the end of {path} ({total} lines)"
-            )));
-        }
-
-        let mut body = String::new();
-        let mut emitted = 0usize;
-        let mut char_capped = false;
-        for line in all_lines.iter().skip(start).take(limit) {
-            if body.len() + line.len() + 1 > MAX_READ_CHARS {
-                char_capped = true;
-                break;
-            }
-            body.push_str(line);
-            body.push('\n');
-            emitted += 1;
-        }
-
-        let last = start + emitted;
-        let has_more = last < total;
-        if has_more || start > 0 {
-            let mut note = format!(
-                "\n[{path} 共 {total} 行；本次返回第 {}–{last} 行",
-                start + 1
-            );
-            if has_more {
-                let reason = if char_capped {
-                    format!("已达单次 {MAX_READ_CHARS} 字符上限")
-                } else {
-                    format!("已达单次上限 {limit} 行")
-                };
-                note.push_str(&format!(
-                    "（{reason}）。继续读取请调用 read_file 并设 offset={}]\n",
-                    last + 1
-                ));
-            } else {
-                note.push_str("，已到文件末尾]\n");
-            }
-            body.push_str(&note);
-        }
-        Ok(body)
+        execute_read_file(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_read_file(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_read_file(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let content = read_text_file(path, workspace_guard)?;
+
+    let offset = input
+        .get("offset")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(1);
+    let limit = input
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(DEFAULT_READ_LINE_LIMIT);
+    let paging_requested = input.get("offset").is_some() || input.get("limit").is_some();
+
+    // 未分页且文件不大：原样返回，与历史行为完全一致。
+    if !paging_requested
+        && content.len() <= MAX_READ_CHARS
+        && content.lines().count() <= DEFAULT_READ_LINE_LIMIT
+    {
+        return Ok(content);
+    }
+
+    let all_lines: Vec<&str> = content.lines().collect();
+    let total = all_lines.len();
+    let start = offset.saturating_sub(1);
+    if start >= total && total > 0 {
+        return Err(ProductError::Other(format!(
+            "offset {offset} is past the end of {path} ({total} lines)"
+        )));
+    }
+
+    let mut body = String::new();
+    let mut emitted = 0usize;
+    let mut char_capped = false;
+    for line in all_lines.iter().skip(start).take(limit) {
+        if body.len() + line.len() + 1 > MAX_READ_CHARS {
+            char_capped = true;
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+        emitted += 1;
+    }
+
+    let last = start + emitted;
+    let has_more = last < total;
+    if has_more || start > 0 {
+        let mut note = format!(
+            "\n[{path} 共 {total} 行；本次返回第 {}–{last} 行",
+            start + 1
+        );
+        if has_more {
+            let reason = if char_capped {
+                format!("已达单次 {MAX_READ_CHARS} 字符上限")
+            } else {
+                format!("已达单次上限 {limit} 行")
+            };
+            note.push_str(&format!(
+                "（{reason}）。继续读取请调用 read_file 并设 offset={}]\n",
+                last + 1
+            ));
+        } else {
+            note.push_str("，已到文件末尾]\n");
+        }
+        body.push_str(&note);
+    }
+    Ok(body)
 }
 
 // ============================================================================
@@ -181,22 +313,34 @@ impl Tool for ListFilesTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let entries = match std::fs::read_dir(path) {
-            Ok(e) => e,
-            Err(e) => return Ok(format!("Error: cannot list {path}: {e}")),
-        };
-        let mut names: Vec<String> = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| ProductError::Other(format!("dir entry error: {e}")))?;
-            names.push(entry.file_name().to_string_lossy().to_string());
-        }
-        names.sort();
-        serde_json::to_string(&names).map_err(|e| ProductError::Other(format!("JSON error: {e}")))
+        execute_list_files(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_list_files(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_list_files(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let names = match list_directory_names(path, workspace_guard) {
+        Ok(names) => names,
+        Err(error) => return Ok(format!("Error: cannot list {path}: {error}")),
+    };
+    serde_json::to_string(&names).map_err(|e| ProductError::Other(format!("JSON error: {e}")))
 }
 
 // ============================================================================
@@ -287,22 +431,40 @@ impl Tool for LoadSkillTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-
-        // 路径穿越拒绝 [doc-02 §5]
-        let p = Path::new(path);
-        if p.components().any(|c| matches!(c, Component::ParentDir)) {
-            return Err(ProductError::PathEscape(format!(
-                "path traversal rejected: {path}"
-            )));
-        }
-
-        std::fs::read_to_string(p)
-            .map_err(|e| ProductError::Other(format!("failed to read skill {path}: {e}")))
+        execute_load_skill(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_load_skill(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_load_skill(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+
+    // 路径穿越拒绝 [doc-02 §5]
+    let p = Path::new(path);
+    if p.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(ProductError::PathEscape(format!(
+            "path traversal rejected: {path}"
+        )));
+    }
+
+    read_text_file(path, workspace_guard)
+        .map_err(|e| ProductError::Other(format!("failed to read skill {path}: {e}")))
 }
 
 // ============================================================================
@@ -360,72 +522,89 @@ since you read it, the edit fails instead of clobbering."
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let old_string = input
-            .get("old_string")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'old_string' parameter".to_string()))?;
-        let new_string = input
-            .get("new_string")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'new_string' parameter".to_string()))?;
-        let replace_all = input
-            .get("replace_all")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        execute_edit(&input, None)
+    }
 
-        if old_string.is_empty() {
-            return Err(ProductError::Other(
-                "'old_string' must not be empty; use create_file to write a new file".to_string(),
-            ));
-        }
-        if old_string == new_string {
-            return Err(ProductError::Other(
-                "'old_string' and 'new_string' are identical; nothing to do".to_string(),
-            ));
-        }
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_edit(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
 
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+fn execute_edit(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let old_string = input
+        .get("old_string")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'old_string' parameter".to_string()))?;
+    let new_string = input
+        .get("new_string")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'new_string' parameter".to_string()))?;
+    let replace_all = input
+        .get("replace_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-        let occurrences = content.matches(old_string).count();
-        if occurrences == 0 {
-            return Err(ProductError::Other(format!(
-                "'old_string' was not found in {path}. \
+    if old_string.is_empty() {
+        return Err(ProductError::Other(
+            "'old_string' must not be empty; use create_file to write a new file".to_string(),
+        ));
+    }
+    if old_string == new_string {
+        return Err(ProductError::Other(
+            "'old_string' and 'new_string' are identical; nothing to do".to_string(),
+        ));
+    }
+
+    let content = read_text_file(path, workspace_guard)?;
+
+    let occurrences = content.matches(old_string).count();
+    if occurrences == 0 {
+        return Err(ProductError::Other(format!(
+            "'old_string' was not found in {path}. \
 Re-read the file: it may have changed, or the indentation / line endings may differ."
-            )));
-        }
-        if occurrences > 1 && !replace_all {
-            let lines = match_line_numbers(&content, old_string);
-            let shown: Vec<String> = lines.iter().take(10).map(usize::to_string).collect();
-            return Err(ProductError::Other(format!(
-                "'old_string' matches {occurrences} places in {path} (lines {}). \
+        )));
+    }
+    if occurrences > 1 && !replace_all {
+        let lines = match_line_numbers(&content, old_string);
+        let shown: Vec<String> = lines.iter().take(10).map(usize::to_string).collect();
+        return Err(ProductError::Other(format!(
+            "'old_string' matches {occurrences} places in {path} (lines {}). \
 Add surrounding context to make it unique, or set replace_all=true.",
-                shown.join(", ")
-            )));
-        }
+            shown.join(", ")
+        )));
+    }
 
-        let updated = if replace_all {
-            content.replace(old_string, new_string)
-        } else {
-            content.replacen(old_string, new_string, 1)
-        };
-        atomic_write(Path::new(path), updated.as_bytes())?;
+    let updated = if replace_all {
+        content.replace(old_string, new_string)
+    } else {
+        content.replacen(old_string, new_string, 1)
+    };
+    atomic_write_scoped(Path::new(path), updated.as_bytes(), workspace_guard)?;
 
-        let first_line = match_line_numbers(&content, old_string)
-            .first()
-            .copied()
-            .unwrap_or(0);
-        if replace_all {
-            Ok(format!(
-                "edited {path}: replaced {occurrences} occurrence(s)"
-            ))
-        } else {
-            Ok(format!("edited {path} at line {first_line}"))
-        }
+    let first_line = match_line_numbers(&content, old_string)
+        .first()
+        .copied()
+        .unwrap_or(0);
+    if replace_all {
+        Ok(format!(
+            "edited {path}: replaced {occurrences} occurrence(s)"
+        ))
+    } else {
+        Ok(format!("edited {path} at line {first_line}"))
     }
 }
 
@@ -483,19 +662,36 @@ impl Tool for ApplyPatchTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let content = input
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
-
-        let file_path = Path::new(path);
-        atomic_write(file_path, content.as_bytes())?;
-        Ok(format!("patched {path}"))
+        execute_apply_patch(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_apply_patch(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_apply_patch(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let content = input
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
+
+    atomic_write_scoped(Path::new(path), content.as_bytes(), workspace_guard)?;
+    Ok(format!("patched {path}"))
 }
 
 // ============================================================================
@@ -538,27 +734,36 @@ impl Tool for CreateFileTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-        let content = input
-            .get("content")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
-
-        let file_path = Path::new(path);
-        // create_new=true 保证原子性：文件已存在则失败
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(file_path)
-            .map_err(|e| ProductError::Other(format!("failed to create {path}: {e}")))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| ProductError::Other(format!("failed to write {path}: {e}")))?;
-        Ok(format!("created {path}"))
+        execute_create_file(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_create_file(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_create_file(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let content = input
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
+
+    create_new_file_scoped(Path::new(path), content.as_bytes(), workspace_guard)?;
+    Ok(format!("created {path}"))
 }
 
 // ============================================================================
@@ -594,15 +799,32 @@ impl Tool for DeleteFileTool {
         })
     }
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-
-        std::fs::remove_file(path)
-            .map_err(|e| ProductError::Other(format!("failed to delete {path}: {e}")))?;
-        Ok(format!("deleted {path}"))
+        execute_delete_file(&input, None)
     }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        reject_if_cancelled(self.name(), abort_flag)?;
+        execute_delete_file(&input, workspace_guard).map(ToolExecutionResult::from)
+    }
+}
+
+fn execute_delete_file(
+    input: &serde_json::Value,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<String, ProductError> {
+    let path = input
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+
+    remove_file_scoped(Path::new(path), workspace_guard)?;
+    Ok(format!("deleted {path}"))
 }
 
 // ============================================================================
@@ -670,6 +892,63 @@ mod tests {
             .execute(serde_json::json!({ "path": "/nonexistent/file.txt" }))
             .await;
         assert!(result.is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_guarded_file_tools_reject_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let outer = TempDir::new().unwrap();
+        let root = outer.path().join("workspace");
+        let outside_dir = outer.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside_dir).unwrap();
+        let outside_file = outside_dir.join("secret.txt");
+        fs::write(&outside_file, "secret").unwrap();
+        let guard = PathGuard::new(root.clone()).unwrap();
+
+        let escape_file = root.join("escape-file");
+        let escape_dir = root.join("escape-dir");
+        symlink(&outside_file, &escape_file).unwrap();
+        symlink(&outside_dir, &escape_dir).unwrap();
+        let escape_file = escape_file.to_string_lossy().to_string();
+        let escape_dir = escape_dir.to_string_lossy().to_string();
+
+        assert!(
+            execute_read_file(&serde_json::json!({ "path": escape_file }), Some(&guard)).is_err()
+        );
+        assert!(
+            execute_load_skill(&serde_json::json!({ "path": escape_file }), Some(&guard)).is_err()
+        );
+        let listed =
+            execute_list_files(&serde_json::json!({ "path": escape_dir }), Some(&guard)).unwrap();
+        assert!(listed.contains("path escape"), "listing was: {listed}");
+        assert!(execute_edit(
+            &serde_json::json!({
+                "path": escape_file,
+                "old_string": "secret",
+                "new_string": "changed"
+            }),
+            Some(&guard)
+        )
+        .is_err());
+        assert!(execute_apply_patch(
+            &serde_json::json!({ "path": escape_file, "content": "changed" }),
+            Some(&guard)
+        )
+        .is_err());
+        assert!(execute_create_file(
+            &serde_json::json!({ "path": format!("{escape_dir}/created.txt"), "content": "new" }),
+            Some(&guard)
+        )
+        .is_err());
+        assert!(
+            execute_delete_file(&serde_json::json!({ "path": escape_file }), Some(&guard)).is_err()
+        );
+
+        assert_eq!(fs::read_to_string(&outside_file).unwrap(), "secret");
+        assert!(!outside_dir.join("created.txt").exists());
     }
 
     #[tokio::test]

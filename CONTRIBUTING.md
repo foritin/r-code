@@ -60,7 +60,7 @@ git submodule update --init -- .agents
 
 ```bash
 # 版本与发布元数据
-node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 
 # Rust
@@ -74,6 +74,8 @@ npm ci
 npm test
 npm run build
 ```
+
+依赖或 CI/Release 工作流改动还必须运行 `npm --prefix src-tauri/frontend audit --package-lock-only --audit-level=high` 和 `cargo deny check advisories`；后者需要按 CI 固定版本安装 `cargo-deny`。不要仅因为本机缺少工具而跳过相应的安全门。
 
 平台相关改动还应在受影响平台实测：Windows 安装器与 WebView2、macOS 两种架构及签名路径、Linux AppImage/deb 等不能只依赖另一平台的结果。
 

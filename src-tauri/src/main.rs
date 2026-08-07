@@ -58,6 +58,17 @@ fn main() {
     tracing::info!("R-Code Host starting (Tauri shell)...");
 
     tauri::Builder::default()
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
+                .on_navigation(|_, url| {
+                    let allow = !r_code_host::should_block_navigation(url.as_str());
+                    if !allow {
+                        tracing::warn!(url = %url, "blocked dangerous WebView navigation");
+                    }
+                    allow
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
@@ -99,7 +110,22 @@ fn main() {
                 Err(error) => tracing::warn!(%error, "provider secret migration skipped"),
             }
             let db_path = db_dir.join("r-code.db");
-            let db = Arc::new(r_code_store::Database::open(&db_path)?);
+            // Migration is deliberately completed before the connection pool is created. This
+            // gives the upgrade path exclusive ownership of SQLite handles so it can make a
+            // WAL-safe pre-migration snapshot and restore it if migration or integrity checks
+            // fail. Do not replace this with `Database::open`, which is retained for isolated
+            // callers and tests but has no product-level recovery boundary.
+            let migration = r_code_host::MigrationManager::new(db_path.clone());
+            let migration_result = tauri::async_runtime::block_on(migration.migrate()).map_err(
+                |error| {
+                    tracing::error!(%error, db_path = %db_path.display(), "database migration failed; desktop startup aborted");
+                    error
+                },
+            )?;
+            if let Some(backup_path) = migration_result.backup_path {
+                tracing::info!(%backup_path, "created pre-migration database backup");
+            }
+            let db = Arc::new(r_code_store::Database::open_after_migration(&db_path)?);
 
             // 项目根：开发期取进程 cwd（工作区选择/切换后续里程碑）
             let project_root = std::env::current_dir()?;

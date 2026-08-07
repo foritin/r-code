@@ -2040,7 +2040,7 @@ impl SessionToolHost {
         let summary = summarize_input(name, &args);
         match self
             .gateway
-            .execute_with_wait_with_access_mode(
+            .execute_with_wait_with_access_mode_and_workspace_guard(
                 &self.task_id,
                 &self.run_id,
                 call_id,
@@ -2050,6 +2050,7 @@ impl SessionToolHost {
                 &summary,
                 Some(self.abort.clone()),
                 access_mode,
+                self.workspace_scope.as_ref().map(|scope| &scope.guard),
             )
             .await
         {

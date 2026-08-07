@@ -75,8 +75,13 @@ impl SecurityConfig {
 ///
 /// Check if a URL should be blocked (external navigation).
 pub fn should_block_navigation(url: &str) -> bool {
-    let blocked = ["javascript:", "file:", "vbscript:", "data:"];
-    blocked.iter().any(|s| url.starts_with(s))
+    let scheme = url
+        .split_once(':')
+        .map(|(scheme, _)| scheme.trim().to_ascii_lowercase());
+    matches!(
+        scheme.as_deref(),
+        Some("javascript" | "file" | "vbscript" | "data")
+    )
 }
 
 /// 检查 `window.open` 调用是否应被阻断。
@@ -201,6 +206,7 @@ mod tests {
     #[test]
     fn should_block_navigation_blocks_dangerous_schemes() {
         assert!(should_block_navigation("javascript:alert(1)"));
+        assert!(should_block_navigation("JaVaScRiPt:alert(1)"));
         assert!(should_block_navigation("file:///etc/passwd"));
         assert!(should_block_navigation("vbscript:foo"));
         assert!(should_block_navigation("data:text/html,<script>"));

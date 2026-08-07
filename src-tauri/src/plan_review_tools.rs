@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
 use r_code_core::plan::PlanExecutionStatus;
+use r_code_core::security::PathGuard;
 use r_code_gateway::{
     PathBinding, Tool, ToolExecutionContext, ToolExecutionResult, ToolPolicyGuard,
 };
@@ -201,6 +202,86 @@ impl TrackedWriteTool {
             )),
         }
     }
+
+    /// Run the tracked write while preserving the host-owned workspace capability all the way
+    /// to the inner tool. The path lease prevents review races, but it is not a filesystem
+    /// capability: without this forwarding a wrapped `edit`/`apply_patch` could fall back to
+    /// ambient path I/O after its path was rebound.
+    async fn execute_tracked(
+        &self,
+        mut input: serde_json::Value,
+        context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        let store = self.services.store();
+        let execution_status = store.execution_status_for_run(&context.task_id, &context.run_id)?;
+        let workspace_root = self.services.workspace_root(&context.task_id)?;
+        let (path_key, requested_path) = self.tracked_path(&input)?;
+        if execution_status == PlanExecutionStatus::Paused {
+            return Err(ProductError::PermissionError(
+                PLAN_EXECUTION_PAUSED.to_string(),
+            ));
+        }
+        if execution_status == PlanExecutionStatus::NoExecutingPlan {
+            // Ordinary writes share the rejection lock but perform no before/after reads and
+            // create no enhanced-review event.
+            let guard = store
+                .begin_coordinated_write(&workspace_root, &context.task_id, requested_path)
+                .await?;
+            Self::bind_guard_path(&mut input, path_key, guard.path())?;
+            let result = self
+                .inner
+                .execute_with_context_and_abort_with_workspace(
+                    input,
+                    context,
+                    abort_flag,
+                    workspace_guard,
+                )
+                .await;
+            drop(guard);
+            return result;
+        }
+
+        let guard = store
+            .begin_feature_write(
+                &workspace_root,
+                &context.task_id,
+                &context.run_id,
+                requested_path,
+            )
+            .await
+            .map_err(|error| {
+                ProductError::Other(format!("无法建立增强审核归属，写入未执行: {error}"))
+            })?;
+
+        // The inner tool must mutate exactly the verified path covered by the lease.
+        Self::bind_guard_path(&mut input, path_key, guard.path())?;
+        let original = self
+            .inner
+            .execute_with_context_and_abort_with_workspace(
+                input,
+                context,
+                abort_flag,
+                workspace_guard,
+            )
+            .await;
+        let captured = store.finish_feature_write(
+            guard,
+            FinishPlanWriteInput {
+                tool_call_id: context.tool_call_id.clone(),
+            },
+        );
+        match captured {
+            Ok(
+                RecordPlanWriteOutcome::Captured { .. }
+                | RecordPlanWriteOutcome::Duplicate { .. }
+                | RecordPlanWriteOutcome::Unassigned { .. }
+                | RecordPlanWriteOutcome::Unchanged { .. },
+            ) => original,
+            Err(capture) => Err(Self::combined_capture_error(original, capture)),
+        }
+    }
 }
 
 #[async_trait]
@@ -243,60 +324,21 @@ impl Tool for TrackedWriteTool {
 
     async fn execute_with_context(
         &self,
-        mut input: serde_json::Value,
+        input: serde_json::Value,
         context: &ToolExecutionContext,
     ) -> Result<ToolExecutionResult, ProductError> {
-        let store = self.services.store();
-        let execution_status = store.execution_status_for_run(&context.task_id, &context.run_id)?;
-        let workspace_root = self.services.workspace_root(&context.task_id)?;
-        let (path_key, requested_path) = self.tracked_path(&input)?;
-        if execution_status == PlanExecutionStatus::Paused {
-            return Err(ProductError::PermissionError(
-                PLAN_EXECUTION_PAUSED.to_string(),
-            ));
-        }
-        if execution_status == PlanExecutionStatus::NoExecutingPlan {
-            // Ordinary writes share the rejection lock but perform no before/after reads and
-            // create no enhanced-review event.
-            let guard = store
-                .begin_coordinated_write(&workspace_root, &context.task_id, requested_path)
-                .await?;
-            Self::bind_guard_path(&mut input, path_key, guard.path())?;
-            let result = self.inner.execute_with_context(input, context).await;
-            drop(guard);
-            return result;
-        }
+        self.execute_tracked(input, context, None, None).await
+    }
 
-        let guard = store
-            .begin_feature_write(
-                &workspace_root,
-                &context.task_id,
-                &context.run_id,
-                requested_path,
-            )
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        context: &ToolExecutionContext,
+        abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        self.execute_tracked(input, context, abort_flag, workspace_guard)
             .await
-            .map_err(|error| {
-                ProductError::Other(format!("无法建立增强审核归属，写入未执行: {error}"))
-            })?;
-
-        // The inner tool must mutate exactly the verified path covered by the lease.
-        Self::bind_guard_path(&mut input, path_key, guard.path())?;
-        let original = self.inner.execute_with_context(input, context).await;
-        let captured = store.finish_feature_write(
-            guard,
-            FinishPlanWriteInput {
-                tool_call_id: context.tool_call_id.clone(),
-            },
-        );
-        match captured {
-            Ok(
-                RecordPlanWriteOutcome::Captured { .. }
-                | RecordPlanWriteOutcome::Duplicate { .. }
-                | RecordPlanWriteOutcome::Unassigned { .. }
-                | RecordPlanWriteOutcome::Unchanged { .. },
-            ) => original,
-            Err(capture) => Err(Self::combined_capture_error(original, capture)),
-        }
     }
 }
 

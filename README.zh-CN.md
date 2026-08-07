@@ -28,7 +28,7 @@ R-Code 把对话、模型执行、工具审批、文件变更、验证和回放�
 
 Codex 主 Agent 使用官方 App Server 连接。安装 Codex CLI `0.145.0` 或更高版本且 R-Code Provider 可用时，Codex 可调用会话内的有界工具，在当前 R-Code 任务下创建 child run，而不会在侧边栏另开 session。任一能力不可用时，R-Code 只隐藏该动态工具，Codex 主任务仍会继续。
 
-R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展示 raw chain-of-thought。子代理继承父运行的权限上限、持久保存实际三态权限，并可逐个取消。助手输出如 `[src/main.rs:42](src/main.rs#L42)` 的工作区相对引用会在右侧 Files 工作台打开对应文件并跳转到指定行。
+R-Code 只显示 App Server 发布的公开 reasoning summary，不读取或展示 raw chain-of-thought。子代理继承父运行的权限上限、持久保存实际三态权限，并可逐个取消。助手输出如 `src/main.rs:42` 的工作区相对引用会在右侧 Files 工作台打开对应文件并跳转到指定行。
 
 ## 支持平台
 
@@ -98,8 +98,8 @@ git submodule update --init -- .agents
 ## 验证
 
 ```bash
-# 版本元数据
-node --test scripts/release.test.mjs scripts/flaky-test-report.test.mjs
+# 版本元数据与发布质量门
+node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scripts/flaky-test-report.test.mjs
 node scripts/release.mjs check
 
 # Rust
@@ -113,6 +113,8 @@ npm ci
 npm test
 npm run build
 ```
+
+变更依赖或发布自动化时，还要运行 `npm --prefix src-tauri/frontend audit --package-lock-only --audit-level=high` 与 `cargo deny check advisories`（本机没有 `cargo-deny` 时，按 CI 中固定的版本安装后再执行）。
 
 本地打包：
 
@@ -149,7 +151,7 @@ node scripts/publish-release.mjs vX.Y.Z --dry-run
 node scripts/publish-release.mjs vX.Y.Z
 ```
 
-发布闸门会创建不可变 tag、触发四平台 GitHub Actions 构建、等待完成并核对上传资产。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
+发布闸门只会在 `main` 上该精确 commit 的完整 CI 成功后创建不可变 tag；Release workflow 会再次核对 tag 来源和每个必需 CI job，之后才进入四平台构建、等待与资产验收。稳定版会为已配置凭据的平台签名；缺少平台证书时改为明确警告而不阻断发布，但 updater 完整性签名仍为必需。首次发布的 Secrets、仓库控制、失败恢复和发布后验收见 [发布手册](./docs/RELEASING.md)。
 
 ## 项目结构
 
@@ -177,6 +179,7 @@ r-code/
 - [Plan 模式与增强审核](./docs/plan-mode.md)
 - [联网工具与 MCP](./docs/mcp.md)
 - [演进记忆](./docs/memory.md)
+- [安装、备份、恢复与卸载](./docs/OPERATIONS.md)
 - [发布手册](./docs/RELEASING.md)
 - [Security Policy](./SECURITY.md)
 - [Privacy Notice](./PRIVACY.md)

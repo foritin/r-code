@@ -10,13 +10,52 @@
 //!
 //! [doc-19 §6]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use r_code_core::error::ProductError;
+use r_code_store::BackupManager;
 use rusqlite::Connection;
 
 /// 目标 schema 版本（由实际 store migration 作为唯一来源）。
 const TARGET_VERSION: u32 = r_code_store::migrations::LATEST_SCHEMA_VERSION;
+const MIGRATION_LOCK_TIMEOUT_MS: u32 = 30_000;
+
+/// Cross-process guard for the full upgrade critical section.
+///
+/// Desktop and MCP can be launched independently against the same AppData directory. A separate
+/// SQLite lock database gives us an OS-backed exclusive lock that is released automatically if a
+/// process crashes, without keeping a stale marker file behind. The guard covers snapshot,
+/// migration, verification, and any restore so a losing process can never restore an old snapshot
+/// over a successful upgrade performed by the winner.
+struct MigrationLock {
+    _connection: Connection,
+}
+
+impl MigrationLock {
+    fn acquire(db_path: &Path) -> Result<Self, ProductError> {
+        Self::acquire_with_timeout(db_path, MIGRATION_LOCK_TIMEOUT_MS)
+    }
+
+    fn acquire_with_timeout(db_path: &Path, timeout_ms: u32) -> Result<Self, ProductError> {
+        let lock_path = PathBuf::from(format!("{}.migration-lock", db_path.display()));
+        let connection = Connection::open(&lock_path).map_err(|error| {
+            ProductError::MigrationError(format!(
+                "open migration coordination lock {} failed: {error}",
+                lock_path.display()
+            ))
+        })?;
+        connection
+            .execute_batch(&format!("PRAGMA busy_timeout={timeout_ms}; BEGIN EXCLUSIVE;"))
+            .map_err(|error| {
+                ProductError::MigrationError(format!(
+                    "another R-Code process is upgrading this database or the migration lock is unavailable: {error}"
+                ))
+            })?;
+        Ok(Self {
+            _connection: connection,
+        })
+    }
+}
 
 /// Migration strategy for upgrading from previous versions.
 /// [doc-19 §6]
@@ -66,7 +105,7 @@ impl MigrationManager {
     fn connect(&self) -> Result<Connection, ProductError> {
         let conn = Connection::open(&self.db_path)
             .map_err(|e| ProductError::DatabaseError(format!("migration open failed: {e}")))?;
-        conn.execute_batch("PRAGMA busy_timeout=5000;")
+        conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")
             .map_err(|e| ProductError::DatabaseError(format!("set busy_timeout: {e}")))?;
         Ok(conn)
     }
@@ -101,7 +140,9 @@ impl MigrationManager {
                 |row| row.get(0),
             )
             .map_err(|e| ProductError::DatabaseError(format!("read schema_version: {e}")))?;
-        Ok(version as u32)
+        u32::try_from(version).map_err(|_| {
+            ProductError::MigrationError(format!("invalid negative schema version: {version}"))
+        })
     }
 
     /// List pending migration steps.
@@ -139,8 +180,38 @@ impl MigrationManager {
     /// 1. Backup current database
     /// 2. Apply migrations in order
     /// 3. Verify integrity
+    /// 4. Restore the pre-migration snapshot and abort startup if any step fails
     pub async fn migrate(&self) -> Result<MigrationResult, ProductError> {
-        let pending = self.pending_steps()?;
+        self.migrate_with_runner(r_code_store::migrations::run_migrations)
+    }
+
+    fn migrate_with_runner<F>(&self, runner: F) -> Result<MigrationResult, ProductError>
+    where
+        F: FnOnce(&Connection) -> Result<(), ProductError>,
+    {
+        if self.db_path.exists() && !self.db_path.is_file() {
+            return Err(ProductError::MigrationError(format!(
+                "database path is not a regular file: {}",
+                self.db_path.display()
+            )));
+        }
+        let _migration_lock = MigrationLock::acquire(&self.db_path)?;
+
+        // Record this before `current_version` opens a fresh database file. New installations
+        // have no user state yet, so they do not need a pre-migration backup.
+        let database_existed = self.db_path.is_file();
+        let current_version = self.current_version()?;
+        if current_version > TARGET_VERSION {
+            return Err(ProductError::MigrationError(format!(
+                "database schema version {current_version} is newer than this application supports ({TARGET_VERSION}); refusing to open it"
+            )));
+        }
+        self.verify_database_integrity("before migration")?;
+
+        let pending = known_steps()
+            .into_iter()
+            .filter(|step| step.to_version > current_version)
+            .collect::<Vec<_>>();
         if pending.is_empty() {
             return Ok(MigrationResult {
                 steps_applied: vec![],
@@ -150,32 +221,108 @@ impl MigrationManager {
             });
         }
 
-        // 1. Backup current database
-        let backup_path = self.backup()?;
+        // 1. Back up existing user data using SQLite's WAL-safe snapshot API, unlike a plain
+        // filesystem copy of the main .db file.
+        let backup = if database_existed {
+            let manager = BackupManager::new(self.backup_directory());
+            let path = manager.backup_pre_migration(&self.db_path)?;
+            if !manager.verify(&path)? {
+                return Err(ProductError::MigrationError(format!(
+                    "pre-migration backup integrity check failed: {}",
+                    path.display()
+                )));
+            }
+            Some((manager, path))
+        } else {
+            None
+        };
 
-        // 2. Apply migrations in order (reuses r-code-store migration runner)
+        // 2. Apply migrations in order (reuses r-code-store migration runner). Drop the
+        // connection before restoration: on Windows an open SQLite handle would prevent the
+        // recovered snapshot from replacing the failed database file.
         let conn = self.connect()?;
-        r_code_store::migrations::run_migrations(&conn)?;
-
-        // 3. Verify integrity
-        let integrity: String = conn
-            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
-            .map_err(|e| ProductError::DatabaseError(format!("integrity check: {e}")))?;
-        if integrity != "ok" {
-            return Ok(MigrationResult {
-                steps_applied: pending,
-                backup_path: backup_path.map(|p| p.display().to_string()),
-                success: false,
-                warnings: vec![format!("integrity check failed: {integrity}")],
-            });
+        let migration_result =
+            runner(&conn).and_then(|_| self.verify_connection_integrity(&conn, "after migration"));
+        drop(conn);
+        if let Err(error) = migration_result {
+            return Err(self.restore_after_failure(error, backup.as_ref()));
         }
+
+        let resulting_version = match self.current_version() {
+            Ok(version) if version == TARGET_VERSION => version,
+            Ok(version) => {
+                return Err(self.restore_after_failure(
+                    ProductError::MigrationError(format!(
+                        "migration completed at schema version {version}, expected {TARGET_VERSION}"
+                    )),
+                    backup.as_ref(),
+                ));
+            }
+            Err(error) => return Err(self.restore_after_failure(error, backup.as_ref())),
+        };
+        debug_assert_eq!(resulting_version, TARGET_VERSION);
 
         Ok(MigrationResult {
             steps_applied: pending,
-            backup_path: backup_path.map(|p| p.display().to_string()),
+            backup_path: backup.as_ref().map(|(_, path)| path.display().to_string()),
             success: true,
             warnings: vec![],
         })
+    }
+
+    fn backup_directory(&self) -> PathBuf {
+        self.db_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    fn verify_database_integrity(&self, phase: &str) -> Result<(), ProductError> {
+        let conn = self.connect()?;
+        let result = self.verify_connection_integrity(&conn, phase);
+        drop(conn);
+        result
+    }
+
+    fn verify_connection_integrity(
+        &self,
+        conn: &Connection,
+        phase: &str,
+    ) -> Result<(), ProductError> {
+        let integrity: String = conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+            .map_err(|e| ProductError::DatabaseError(format!("{phase} integrity check: {e}")))?;
+        if integrity == "ok" {
+            Ok(())
+        } else {
+            Err(ProductError::MigrationError(format!(
+                "{phase} integrity check failed: {integrity}"
+            )))
+        }
+    }
+
+    fn restore_after_failure(
+        &self,
+        failure: ProductError,
+        backup: Option<&(BackupManager, PathBuf)>,
+    ) -> ProductError {
+        let failure_message = failure.to_string();
+        match backup {
+            Some((manager, backup_path)) => match manager.restore(backup_path, &self.db_path) {
+                Ok(()) => ProductError::MigrationError(format!(
+                    "migration failed ({failure_message}); restored pre-migration backup {} and aborted startup",
+                    backup_path.display()
+                )),
+                Err(restore_error) => ProductError::MigrationError(format!(
+                    "migration failed ({failure_message}); automatic restore also failed ({restore_error}). \
+                     The verified pre-migration backup is still available at {}",
+                    backup_path.display()
+                )),
+            },
+            None => ProductError::MigrationError(format!(
+                "migration failed for a newly created database ({failure_message}); startup aborted"
+            )),
+        }
     }
 
     /// Export database contents to JSON (for user backup before migration).
@@ -208,29 +355,6 @@ impl MigrationManager {
         Ok(serde_json::to_string_pretty(&serde_json::Value::Object(
             db_json,
         ))?)
-    }
-
-    /// Backup current database to a timestamped file in the same directory.
-    /// Returns None if the database file doesn't exist yet.
-    fn backup(&self) -> Result<Option<PathBuf>, ProductError> {
-        if !self.db_path.exists() {
-            return Ok(None);
-        }
-        let parent = self
-            .db_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
-        let stem = self
-            .db_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("db");
-        let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S");
-        let backup_name = format!("{stem}-pre-migration-{timestamp}.db");
-        let backup_path = parent.join(backup_name);
-        std::fs::copy(&self.db_path, &backup_path)?;
-        Ok(Some(backup_path))
     }
 }
 
@@ -492,6 +616,22 @@ mod tests {
         assert!(mgr.needs_migration().unwrap());
     }
 
+    #[test]
+    fn migration_lock_prevents_overlapping_upgrade_attempts() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("test.db");
+        let first = MigrationLock::acquire_with_timeout(&db_path, 10).unwrap();
+
+        let error = match MigrationLock::acquire_with_timeout(&db_path, 10) {
+            Ok(_) => panic!("second migration lock acquisition must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("another R-Code process"));
+
+        drop(first);
+        MigrationLock::acquire_with_timeout(&db_path, 10).unwrap();
+    }
+
     // ── pending_steps ─────────────────────────────────────────────
 
     #[test]
@@ -546,10 +686,68 @@ mod tests {
         let result = mgr.migrate().await.unwrap();
         assert!(result.success);
         assert!(!result.steps_applied.is_empty());
+        let backup_path = PathBuf::from(result.backup_path.unwrap());
+        assert!(backup_path.exists());
+        assert!(backup_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .contains("pre-migration"));
+        assert!(
+            BackupManager::new(backup_path.parent().unwrap().to_path_buf())
+                .verify(&backup_path)
+                .unwrap()
+        );
 
         // After: latest version, no migration needed
         assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION);
         assert!(!mgr.needs_migration().unwrap());
+    }
+
+    #[tokio::test]
+    async fn failed_migration_restores_the_pre_migration_snapshot() {
+        let (_dir, db_path) = setup_fresh_db();
+        let mgr = MigrationManager::new(db_path.clone());
+        mgr.migrate().await.unwrap();
+
+        // Make the version ledger report a pending migration without changing the physical v25
+        // schema. The test runner below then persists a marker and fails, which lets us prove
+        // that the failed write is replaced with the snapshot rather than merely reported.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "DELETE FROM schema_version WHERE version = ?",
+            [TARGET_VERSION],
+        )
+        .unwrap();
+        drop(conn);
+
+        let error = mgr
+            .migrate_with_runner(|conn| {
+                conn.execute_batch("CREATE TABLE forced_migration_failure (id INTEGER);")
+                    .map_err(|error| ProductError::MigrationError(error.to_string()))?;
+                Err(ProductError::MigrationError(
+                    "forced migration failure".to_string(),
+                ))
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("restored pre-migration backup"));
+
+        let restored = Connection::open(&db_path).unwrap();
+        let marker_exists: i64 = restored
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master \
+                 WHERE type = 'table' AND name = 'forced_migration_failure'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let restored_version: i64 = restored
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(marker_exists, 0);
+        assert_eq!(restored_version, i64::from(TARGET_VERSION - 1));
     }
 
     #[tokio::test]

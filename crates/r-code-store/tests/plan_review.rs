@@ -7,6 +7,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use chrono::Utc;
 use r_code_core::dto::{AgentRun, Task, TaskMode};
 use r_code_core::error::ProductError;
+use r_code_core::security::PathGuard;
 use r_code_store::{
     AgentRunRepository, Database, EnhancedReviewTarget, FinishPlanWriteInput,
     OsPlanReviewFileSystem, PathCoordinator, PlanReviewFileSystem, PlanReviewStore, TaskRepository,
@@ -317,16 +318,21 @@ impl FailingFileSystem {
 }
 
 impl PlanReviewFileSystem for FailingFileSystem {
-    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
-        OsPlanReviewFileSystem.read_snapshot(path)
+    fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>> {
+        OsPlanReviewFileSystem.read_snapshot(guard, path)
     }
 
-    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()> {
+    fn write_snapshot(
+        &self,
+        guard: &PathGuard,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> io::Result<()> {
         let call = self.writes.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_on.contains(&call) {
             return Err(io::Error::other(format!("injected write failure {call}")));
         }
-        OsPlanReviewFileSystem.write_snapshot(path, content)
+        OsPlanReviewFileSystem.write_snapshot(guard, path, content)
     }
 }
 
@@ -349,7 +355,7 @@ impl BlockingReadFileSystem {
 }
 
 impl PlanReviewFileSystem for BlockingReadFileSystem {
-    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
+    fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>> {
         let call = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
         if call == self.block_on_read {
             if let Some(entered) = self.entered.lock().unwrap().take() {
@@ -363,11 +369,16 @@ impl PlanReviewFileSystem for BlockingReadFileSystem {
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .map_err(|error| io::Error::other(error.to_string()))?;
         }
-        OsPlanReviewFileSystem.read_snapshot(path)
+        OsPlanReviewFileSystem.read_snapshot(guard, path)
     }
 
-    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()> {
-        OsPlanReviewFileSystem.write_snapshot(path, content)
+    fn write_snapshot(
+        &self,
+        guard: &PathGuard,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> io::Result<()> {
+        OsPlanReviewFileSystem.write_snapshot(guard, path, content)
     }
 }
 

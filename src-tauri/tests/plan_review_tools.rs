@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use r_code_core::dto::{AgentRun, ProjectAccessMode, RiskLevel, Task, TaskMode};
 use r_code_core::error::ProductError;
+use r_code_core::security::PathGuard;
 use r_code_gateway::{Tool, ToolExecutionContext, ToolExecutionResult};
 use r_code_host::plan_review_tools::{PlanReviewServices, TrackedWriteTool};
 use r_code_store::{
@@ -168,6 +169,71 @@ impl Tool for FakeWriteTool {
     }
 }
 
+/// Inner tool used to prove the Plan wrapper forwards the host-owned directory capability.
+struct WorkspaceCapabilityTool {
+    observed_root: Arc<Mutex<Option<PathBuf>>>,
+}
+
+impl WorkspaceCapabilityTool {
+    fn new() -> (Self, Arc<Mutex<Option<PathBuf>>>) {
+        let observed_root = Arc::new(Mutex::new(None));
+        (
+            Self {
+                observed_root: observed_root.clone(),
+            },
+            observed_root,
+        )
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceCapabilityTool {
+    fn name(&self) -> &str {
+        "edit"
+    }
+
+    fn description(&self) -> &str {
+        "workspace capability probe"
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R2
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({ "type": "object" })
+    }
+
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(ProductError::Other(
+            "workspace capability probe requires a host context".into(),
+        ))
+    }
+
+    async fn execute_with_context_and_abort_with_workspace(
+        &self,
+        input: serde_json::Value,
+        _context: &ToolExecutionContext,
+        _abort_flag: Option<&std::sync::atomic::AtomicBool>,
+        workspace_guard: Option<&PathGuard>,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        let guard = workspace_guard.ok_or_else(|| {
+            ProductError::Other("workspace capability was not forwarded to the inner tool".into())
+        })?;
+        *self.observed_root.lock().unwrap() = Some(guard.root().to_path_buf());
+        let path = input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| ProductError::Other("missing path".into()))?;
+        let content = input
+            .get("content")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("changed");
+        guard.atomic_write_file(Path::new(path), content.as_bytes())?;
+        Ok(ToolExecutionResult::success("written through capability"))
+    }
+}
+
 struct CountingFileSystem {
     reads: AtomicUsize,
     fail_on_read: Option<usize>,
@@ -189,16 +255,21 @@ impl CountingFileSystem {
 }
 
 impl PlanReviewFileSystem for CountingFileSystem {
-    fn read_snapshot(&self, path: &Path) -> io::Result<Option<Vec<u8>>> {
+    fn read_snapshot(&self, guard: &PathGuard, path: &Path) -> io::Result<Option<Vec<u8>>> {
         let read = self.reads.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_on_read == Some(read) {
             return Err(io::Error::other("injected capture read failure"));
         }
-        self.os.read_snapshot(path)
+        self.os.read_snapshot(guard, path)
     }
 
-    fn write_snapshot(&self, path: &Path, content: Option<&[u8]>) -> io::Result<()> {
-        self.os.write_snapshot(path, content)
+    fn write_snapshot(
+        &self,
+        guard: &PathGuard,
+        path: &Path,
+        content: Option<&[u8]>,
+    ) -> io::Result<()> {
+        self.os.write_snapshot(guard, path, content)
     }
 }
 
@@ -233,6 +304,35 @@ async fn successful_write_is_captured_and_forwards_context() {
     assert_eq!(
         view.groups[0].files[0].events[0].tool_call_id,
         "tool-success"
+    );
+}
+
+#[tokio::test]
+async fn tracked_write_forwards_workspace_capability_to_inner_tool() {
+    let fixture = Fixture::new(true);
+    let services = fixture.services(Arc::new(CountingFileSystem::new(None)));
+    let (inner, observed_root) = WorkspaceCapabilityTool::new();
+    let tracked = TrackedWriteTool::new(Box::new(inner), services.clone());
+    let workspace_guard = PathGuard::new(fixture.workspace.clone()).unwrap();
+
+    let result = tracked
+        .execute_with_context_and_abort_with_workspace(
+            serde_json::json!({ "path": "capability.txt", "content": "guarded" }),
+            &fixture.context("tool-capability"),
+            None,
+            Some(&workspace_guard),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.content, "written through capability");
+    assert_eq!(
+        *observed_root.lock().unwrap(),
+        Some(workspace_guard.root().to_path_buf())
+    );
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join("capability.txt")).unwrap(),
+        "guarded"
     );
 }
 

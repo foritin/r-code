@@ -240,11 +240,25 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(workflow, /GH_REPO: \$\{\{ github\.repository \}\}/);
   assert.match(workflow, /r-code-sbom\.cdx\.json/);
   assert.match(workflow, /THIRD_PARTY_LICENSES\.md/);
-  assert.match(workflow, /Verify release credentials and select signing mode/);
+  assert.match(workflow, /Select platform signing mode/);
+  assert.match(workflow, /name: Verify release integrity credentials/);
   assert.match(workflow, /Missing required release secrets/);
   assert.match(workflow, /finalize_only:[\s\S]*type: boolean/);
   assert.match(workflow, /Require the default branch for manual releases/);
   assert.match(workflow, /Manual releases must run from refs\/heads\/%s/);
+  assert.match(workflow, /name: Verify immutable tag provenance and CI quality gate/);
+  assert.match(workflow, /actions: read/);
+  assert.match(workflow, /git merge-base --is-ancestor/);
+  assert.match(workflow, /actions\/workflows\/ci\.yml\/runs\?event=push&status=completed&head_sha=\$tag_commit/);
+  assert.match(workflow, /verify-release-quality-gate\.mjs select/);
+  assert.match(workflow, /verify-release-quality-gate\.mjs verify-jobs/);
+  const validateJob = workflow.match(/  validate:\n([\s\S]*?)(?=\n  release-prerequisites:)/)?.[1];
+  assert.ok(validateJob, "release validation job must exist");
+  assert.doesNotMatch(validateJob, /PAT_TOKEN|TAURI_SIGNING_PRIVATE_KEY/);
+  const prerequisitesJob = workflow.match(/  release-prerequisites:\n([\s\S]*?)(?=\n  supply-chain:)/)?.[1];
+  assert.ok(prerequisitesJob, "release prerequisite job must exist");
+  assert.match(prerequisitesJob, /permissions:\n      contents: read/);
+  assert.match(prerequisitesJob, /PAT_TOKEN[\s\S]*TAURI_SIGNING_PRIVATE_KEY/);
   assert.match(
     workflow,
     /group: release-\$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.tag \|\| github\.ref_name \}\}/,
@@ -678,7 +692,7 @@ test("publish-release canonicalizes temporary draft asset URLs", (t) => {
   );
 });
 
-test("CI authenticates every private agent-core checkout", () => {
+test("CI authenticates every private agent-core checkout and covers Linux", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "ci.yml"),
     "utf8",
@@ -695,9 +709,20 @@ test("CI authenticates every private agent-core checkout", () => {
   );
   assert.match(
     workflow,
-    /name: Test[\s\S]*fail-fast:\s*false[\s\S]*macos-latest, windows-latest/,
-    "one platform failure must not cancel the other platform test result",
+    /name: Test[\s\S]*fail-fast:\s*false[\s\S]*ubuntu-latest, macos-latest, windows-latest/,
+    "one platform failure must not cancel the other supported platform test result",
   );
+  assert.match(
+    workflow,
+    /name: Test[\s\S]*name: Install Linux dependencies[\s\S]*if: matrix\.os == 'ubuntu-latest'/,
+    "Linux workspace tests must install the Tauri host libraries before cargo test",
+  );
+  assert.match(workflow, /name: Frontend dependency audit/);
+  assert.match(workflow, /npm audit --package-lock-only --audit-level=high/);
+  assert.match(workflow, /name: Secret scanning/);
+  assert.match(workflow, /trufflesecurity\/trufflehog@0f58ae7c5036094a1e3e750d18772af92821b503/);
+  assert.match(workflow, /base: ""[\s\S]*head: \$\{\{ github\.sha \}\}/);
+  assert.match(workflow, /version: 3\.90\.5@sha256:214da7bcbf60f71db229bc5b6d790bf46eb1e8d068faa59838c1dba59738bc85/);
 
   const installerConfig = JSON.parse(
     fs.readFileSync(path.join(repoRoot, "installer", "tauri.conf.json"), "utf8"),
@@ -708,23 +733,28 @@ test("CI authenticates every private agent-core checkout", () => {
   );
 });
 
-test("workflows use Node 24 action runtimes", () => {
+test("workflows pin third-party Actions to immutable revisions", () => {
   const workflows = ["ci.yml", "flaky-tests.yml", "release.yml"]
     .map((name) => fs.readFileSync(path.join(repoRoot, ".github", "workflows", name), "utf8"))
     .join("\n");
 
-  for (const legacyAction of [
-    "actions/checkout@v4",
-    "actions/setup-node@v4",
-    "actions/upload-artifact@v4",
-    "actions/download-artifact@v4",
-  ]) {
-    assert.doesNotMatch(workflows, new RegExp(legacyAction.replace("/", "\\/")));
+  for (const [action, revision] of Object.entries({
+    "actions/checkout": "d23441a48e516b6c34aea4fa41551a30e30af803",
+    "actions/setup-node": "a0853c24544627f65ddf259abe73b1d18a591444",
+    "actions/upload-artifact": "b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+    "actions/download-artifact": "37930b1c2abaa49bbe596cd826c3c89aef350131",
+    "dtolnay/rust-toolchain": "4360b52568e2003a75bf9bc1d59f33a8e3fc893c",
+    "Swatinem/rust-cache": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+    "tauri-apps/tauri-action": "1deb371b0cd8bd54025b384f1cd735e725c4060f",
+    "trufflesecurity/trufflehog": "0f58ae7c5036094a1e3e750d18772af92821b503",
+  })) {
+    const escaped = action.replace("/", "\\/");
+    assert.match(workflows, new RegExp(`${escaped}@${revision}`));
   }
-  assert.match(workflows, /actions\/checkout@v6/);
-  assert.match(workflows, /actions\/setup-node@v5/);
-  assert.match(workflows, /actions\/upload-artifact@v6/);
-  assert.match(workflows, /actions\/download-artifact@v7/);
+
+  for (const match of workflows.matchAll(/^\s*uses:\s+([^\s@]+)@([^\s#]+)/gm)) {
+    assert.match(match[2], /^[a-f0-9]{40}$/, `${match[1]} must use a full commit SHA`);
+  }
 });
 
 test("supply-chain generator emits CycloneDX and separates workspace packages", () => {

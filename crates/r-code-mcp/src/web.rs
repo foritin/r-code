@@ -573,7 +573,22 @@ fn is_blocked_ipv6(address: Ipv6Addr) -> bool {
         || (segments[0] & 0xfe00) == 0xfc00
         || (segments[0] & 0xffc0) == 0xfe80
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-        || address.to_ipv4_mapped().is_some_and(is_blocked_ipv4)
+        || embedded_ipv4(address).is_some_and(is_blocked_ipv4)
+}
+
+/// Return an IPv4 address encoded in one of the IPv6 forms that has an
+/// unambiguous direct IPv4 equivalent.
+///
+/// `Ipv6Addr::to_ipv4_mapped` only recognizes `::ffff:a.b.c.d`. The older,
+/// still-parseable IPv4-compatible form `::a.b.c.d` reaches the same IPv4
+/// endpoint but would otherwise bypass the IPv4 private-range checks.
+fn embedded_ipv4(address: Ipv6Addr) -> Option<Ipv4Addr> {
+    let octets = address.octets();
+    let is_compatible = octets[..12].iter().all(|octet| *octet == 0);
+    let is_mapped =
+        octets[..10].iter().all(|octet| *octet == 0) && octets[10] == 0xff && octets[11] == 0xff;
+    (is_compatible || is_mapped)
+        .then(|| Ipv4Addr::new(octets[12], octets[13], octets[14], octets[15]))
 }
 
 pub struct WebToolHost {

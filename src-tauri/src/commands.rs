@@ -23,7 +23,7 @@
 //! [doc-09] [doc-11]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -61,7 +61,7 @@ use r_code_core::plan::{
 };
 use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
-use r_code_core::security::PathGuard;
+use r_code_core::security::{PathGuard, WorkspaceFileAccess};
 use r_code_core::{
     MemoryEntry, MemoryReviewSettingsUpdate, MemoryReviewSettingsView, MemorySnapshot,
     MemorySnapshotLoadOutcome,
@@ -6316,10 +6316,14 @@ async fn reconcile_legacy_task_changes_uncached(
             Some(tree) => git.blob_at_tree(tree, &repo_path).map_err(err_str)?,
             None => None,
         };
-        let after = if physical.is_file() {
-            Some(std::fs::read(&physical).map_err(err_str)?)
-        } else {
-            None
+        let after = match guard.open_existing_file(&physical, WorkspaceFileAccess::Read) {
+            Ok((_safe_path, mut file)) => {
+                let mut bytes = Vec::new();
+                file.read_to_end(&mut bytes).map_err(err_str)?;
+                Some(bytes)
+            }
+            Err(ProductError::PathNotFound(_)) => None,
+            Err(error) => return Err(err_str(error)),
         };
         if before == after {
             continue;
@@ -6402,6 +6406,7 @@ pub async fn rollback_file(
 ) -> Result<String, String> {
     let svc = ChangeService::new(&state.db, state.blobs_dir.clone());
     let root = attached_task_workspace_root(state, task_id)?;
+    let guard = PathGuard::new(root.clone()).map_err(err_str)?;
     let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
     let requested_physical = resolve_workspace_path(&root, path)?;
     let mut snapshot = review.file_snapshot(task_id, path).map_err(err_str)?;
@@ -6422,7 +6427,8 @@ pub async fn rollback_file(
     let (path_key, result) = if let Some(snapshot) = snapshot {
         let physical_path = resolve_workspace_path(&root, &snapshot.path)?;
         let result = svc
-            .restore_snapshot_at(
+            .restore_snapshot_at_guarded(
+                &guard,
                 &snapshot.path,
                 &physical_path,
                 snapshot.before_hash.as_deref(),
@@ -6434,7 +6440,7 @@ pub async fn rollback_file(
     } else {
         let (path_key, physical_path) = rollback_target(&svc, task_id, &root, path).await?;
         let result = svc
-            .rollback_file_at(task_id, &path_key, &physical_path)
+            .rollback_file_at_guarded(&guard, task_id, &path_key, &physical_path)
             .await
             .map_err(err_str)?;
         (path_key, result)
@@ -6465,6 +6471,7 @@ pub async fn rollback_file(
 pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<String>, String> {
     let svc = ChangeService::new(&state.db, state.blobs_dir.clone());
     let root = attached_task_workspace_root(state, task_id)?;
+    let guard = PathGuard::new(root.clone()).map_err(err_str)?;
     let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
     let review_status = review.status(task_id).map_err(err_str)?;
     let mut rendered_results = Vec::new();
@@ -6482,7 +6489,7 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
         for path in paths {
             let (path_key, physical_path) = rollback_target(&svc, task_id, &root, &path).await?;
             results.push(
-                svc.rollback_file_at(task_id, &path_key, &physical_path)
+                svc.rollback_file_at_guarded(&guard, task_id, &path_key, &physical_path)
                     .await
                     .map_err(err_str)?,
             );
@@ -7160,8 +7167,12 @@ fn read_workspace_git_blob(
         return Ok(None);
     }
     let guard = PathGuard::new(workspace_root.to_path_buf()).map_err(err_str)?;
-    let safe_path = guard.resolve_existing(physical_path).map_err(err_str)?;
-    std::fs::read(safe_path).map(Some).map_err(err_str)
+    let (_safe_path, mut file) = guard
+        .open_existing_file(physical_path, WorkspaceFileAccess::Read)
+        .map_err(err_str)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(err_str)?;
+    Ok(Some(bytes))
 }
 
 // ============================================================================
@@ -8710,28 +8721,77 @@ fn local_image_preview_with_codex_home(
     reference: &str,
     codex_home: &Path,
 ) -> Result<(LocalFileTarget, Vec<u8>), String> {
-    let target = resolve_local_file_target(state, workspace_path, reference)?;
+    let mut target = resolve_local_file_target(state, workspace_path, reference)?;
     if target.is_directory || target.mime_type.is_none() {
         return Err("local resource is not a supported raster image".to_string());
-    }
-    if target.scope == LocalFileScope::External {
-        let generated_images = codex_home.join("generated_images").canonicalize().ok();
-        let target_path = Path::new(&target.absolute_path).canonicalize().ok();
-        let is_codex_artifact = generated_images
-            .zip(target_path)
-            .is_some_and(|(root, path)| path.starts_with(root));
-        if !is_codex_artifact {
-            return Err(
-                "external image preview is limited to Codex generated_images artifacts".to_string(),
-            );
-        }
     }
     if target.size_bytes.unwrap_or(0) > MAX_IMAGE_PREVIEW_BYTES {
         return Err("image is larger than the 32 MiB preview limit".to_string());
     }
-    let bytes = std::fs::read(&target.absolute_path)
-        .map_err(|error| format!("cannot read image preview: {error}"))?;
+
+    // Do not reopen a workspace file by its ambient absolute path after
+    // `resolve_local_file_target` has classified it.  A symlink replacement in
+    // that interval could otherwise make an in-workspace preview read a file
+    // outside the attached project.  Both permitted roots are opened as fixed
+    // capabilities, and the final stream read is bounded independently of the
+    // earlier metadata snapshot.
+    let (canonical, file) = match target.scope {
+        LocalFileScope::Workspace => {
+            let workspace_path = workspace_path.ok_or_else(|| {
+                "workspace image preview requires an attached workspace".to_string()
+            })?;
+            let root = attached_workspace_root(state, workspace_path)?;
+            let guard = PathGuard::new(root).map_err(err_str)?;
+            guard
+                .open_existing_file(
+                    Path::new(target.relative_path.as_deref().ok_or_else(|| {
+                        "workspace image preview is missing its relative path".to_string()
+                    })?),
+                    WorkspaceFileAccess::Read,
+                )
+                .map_err(err_str)?
+        }
+        LocalFileScope::External => {
+            let external_preview_error = || {
+                "external image preview is limited to Codex generated_images artifacts".to_string()
+            };
+            let generated_images = codex_home
+                .join("generated_images")
+                .canonicalize()
+                .map_err(|_| external_preview_error())?;
+            let target_path = Path::new(&target.absolute_path)
+                .canonicalize()
+                .map_err(|_| external_preview_error())?;
+            if !target_path.starts_with(&generated_images) {
+                return Err(
+                    "external image preview is limited to Codex generated_images artifacts"
+                        .to_string(),
+                );
+            }
+            let guard = PathGuard::new(generated_images).map_err(err_str)?;
+            guard
+                .open_existing_file(Path::new(&target.absolute_path), WorkspaceFileAccess::Read)
+                .map_err(err_str)?
+        }
+    };
+    target.absolute_path = platform_display_path(&canonical);
+    target.size_bytes = Some(file.metadata().map_err(err_str)?.len());
+    let bytes = read_bounded_preview_bytes(file, MAX_IMAGE_PREVIEW_BYTES)?;
     Ok((target, bytes))
+}
+
+/// Read at most `max_bytes` from a preview stream without trusting a prior metadata length.
+/// The extra byte makes a concurrent file growth fail closed rather than allocating an
+/// unbounded preview buffer.
+fn read_bounded_preview_bytes(file: impl Read, max_bytes: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read image preview: {error}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err("image is larger than the 32 MiB preview limit".to_string());
+    }
+    Ok(bytes)
 }
 
 /// Read a bounded raster image for an in-app preview. SVG and arbitrary external files are
@@ -8794,43 +8854,27 @@ pub async fn file_list(
     let guard = PathGuard::new(root.clone()).map_err(err_str)?;
     let requested = path.unwrap_or("").trim();
     let directory = if requested.is_empty() {
-        guard.root().to_path_buf()
+        guard.root()
     } else {
-        resolve_workspace_path(guard.root(), requested)?
+        Path::new(requested)
     };
-    if !directory.is_dir() {
-        return Err(format!("cannot list non-directory path: {requested}"));
-    }
+    let (_canonical_directory, directory_entries) =
+        guard.list_existing_directory(directory).map_err(err_str)?;
 
     let mut entries = Vec::new();
     let mut truncated = false;
-    for entry in std::fs::read_dir(&directory).map_err(err_str)? {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        if entry
-            .file_type()
-            .map(|file_type| file_type.is_symlink())
-            .unwrap_or(true)
-        {
+    for entry in directory_entries {
+        if !entry.is_directory && !entry.is_file {
             continue;
         }
-        let resolved = match guard.resolve(&entry.path()) {
-            Ok(path) => path,
-            Err(_) => continue,
-        };
-        let is_directory = resolved.is_dir();
-        if !is_directory && !resolved.is_file() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if tree_entry_is_hidden(&name, is_directory) {
+        let name = entry.name.to_string_lossy().to_string();
+        if tree_entry_is_hidden(&name, entry.is_directory) {
             continue;
         }
         entries.push(FileTreeEntry {
-            path: relative_workspace_path(guard.root(), &resolved)?,
+            path: relative_workspace_path(guard.root(), &entry.path)?,
             name,
-            is_directory,
+            is_directory: entry.is_directory,
         });
         if entries.len() > MAX_TREE_ENTRIES {
             entries.pop();
@@ -8853,11 +8897,12 @@ pub async fn file_read(
     path: &str,
 ) -> Result<FileContent, String> {
     let root = attached_workspace_root(state, workspace_path)?;
-    let canon = resolve_workspace_path(&root, path)?;
-    if !canon.is_file() {
-        return Err(format!("cannot read non-file path: {path}"));
-    }
-    let bytes = std::fs::read(&canon).map_err(err_str)?;
+    let guard = PathGuard::new(root).map_err(err_str)?;
+    let (canon, mut file) = guard
+        .open_existing_file(Path::new(path), WorkspaceFileAccess::Read)
+        .map_err(err_str)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(err_str)?;
     Ok(file_content_from_bytes(&canon, &bytes))
 }
 
@@ -8873,11 +8918,12 @@ pub async fn file_write(
         return Err("文件内容超过内置编辑器 512 KiB 保存上限".to_string());
     }
     let root = attached_workspace_root(state, workspace_path)?;
-    let canon = resolve_workspace_path(&root, path)?;
-    if !canon.is_file() {
-        return Err(format!("cannot write non-file path: {path}"));
-    }
-    let current = std::fs::read(&canon).map_err(err_str)?;
+    let guard = PathGuard::new(root).map_err(err_str)?;
+    let (canon, mut file) = guard
+        .open_existing_file(Path::new(path), WorkspaceFileAccess::ReadWrite)
+        .map_err(err_str)?;
+    let mut current = Vec::new();
+    file.read_to_end(&mut current).map_err(err_str)?;
     if current.len() > MAX_READ_BYTES
         || current.contains(&0)
         || std::str::from_utf8(&current).is_err()
@@ -8889,7 +8935,9 @@ pub async fn file_write(
         return Err("文件已在磁盘上变更，请重新加载后再保存".to_string());
     }
     let next = content.as_bytes();
-    std::fs::write(&canon, next).map_err(err_str)?;
+    file.set_len(0).map_err(err_str)?;
+    file.seek(SeekFrom::Start(0)).map_err(err_str)?;
+    file.write_all(next).map_err(err_str)?;
     Ok(file_content_from_bytes(&canon, next))
 }
 
@@ -19479,6 +19527,18 @@ mod tests {
         )
         .await;
         assert!(stale.is_err());
+    }
+
+    #[test]
+    fn bounded_image_preview_reader_rejects_growth_beyond_the_limit() {
+        let bytes = read_bounded_preview_bytes(std::io::Cursor::new(b"abcde"), 4)
+            .expect_err("the fifth byte must trip the preview limit");
+        assert!(bytes.contains("preview limit"));
+
+        assert_eq!(
+            read_bounded_preview_bytes(std::io::Cursor::new(b"abcd"), 4).unwrap(),
+            b"abcd"
+        );
     }
 
     #[tokio::test]
