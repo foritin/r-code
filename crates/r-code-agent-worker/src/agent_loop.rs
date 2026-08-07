@@ -35,10 +35,15 @@ const LLM_PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// 单轮 agent 循环的控制结果。
 ///
 /// 可见事件经回调在产生时交付；调用方只需要根据此结果决定是否进入下一次模型请求。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 注意：不含 `Copy`——`usage` 字段（hermes_core::Usage）不实现 Copy。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
+    /// P2-G：本轮累计真实 usage（provider 未报告时为全零）。调用方（run_loop）
+    /// 用它反推 tokPerChar 校准分层压缩的 token 估算（docs/deepseek-prefix-cache.md §5 P2-G）。
+    pub usage: Usage,
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
@@ -390,6 +395,7 @@ where
             if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Ok(AgentLoopOutcome {
                     had_tool_call: false,
+                    usage: total_usage.clone(),
                 });
             }
             break tokio::select! {
@@ -582,6 +588,7 @@ where
                         if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                             break 'attempt Ok(AgentLoopOutcome {
                                 had_tool_call: false,
+                                usage: total_usage.clone(),
                             });
                         }
                         continue 'attempt;
@@ -656,7 +663,10 @@ where
             "agent loop iteration complete"
         );
 
-        break 'attempt Ok(AgentLoopOutcome { had_tool_call });
+        break 'attempt Ok(AgentLoopOutcome {
+            had_tool_call,
+            usage: total_usage.clone(),
+        });
     };
     outcome
 }

@@ -17,9 +17,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
+use hermes_compaction::{LlmSummaryCompaction, SlidingWindowCompaction};
 use hermes_core::{
-    CompletionRequest, HostedToolSpec, InferenceOptions, LlmProvider, Message, Session,
-    SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
+    CompactionStrategy, CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions,
+    LlmProvider, Message, Role, Session, SessionMeta, ToolCallOutcome, ToolHost, ToolSource,
+    ToolSpec,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
@@ -657,6 +659,11 @@ struct SessionState {
     next_memory_context: Option<String>,
     /// 监督器所属的主运行 ID，防止旧运行收尾时误清理新运行状态。
     active_run_id: Option<String>,
+    /// P2-G：历史改写版本号。压缩（折叠/剪枝）改写 provider 可见历史时递增。
+    /// P2-H 归因（cache_shape.rs）通过此计数区分“压缩改写”与“纯本地元数据
+    /// 编辑”（PRD §5 P2-G 第 5 点；cache_shape.rs 目前无可调接口，先落此内部
+    /// 计数，P2-H 实施时读取联动）。
+    rewrite_version: u32,
 }
 
 /// 会话持有的本地文件能力边界。
@@ -813,6 +820,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 supervisor: None,
                 next_memory_context: None,
                 active_run_id: None,
+                rewrite_version: 0,
             },
         );
         Ok(session)
@@ -1124,6 +1132,284 @@ struct RunLoopCtx {
     memory_context: Option<String>,
 }
 
+// ---------------------------------------------------------------------------
+// P2-G：分层压缩（长会话）。对齐 Reasonix `internal/agent/compact.go`：
+// 50% 仅提示一次、60% 剪旧工具结果、80% 摘要折叠；折叠保留 system /
+// 小 user 轮次 verbatim（≤1500 token / 窗口 15%）/ 旧摘要 / 尾部 16K 预算；
+// 连续 2 次压缩即暂停（防抖）；token 估算用上一轮真实 usage 反推 tokPerChar
+// （0.05~2 过滤，reasoning 不计）。压缩是可选优化：任何异常降级为不压缩，
+// 绝不 panic/Err 终止 run（PRD docs/deepseek-prefix-cache.md §5 P2-G）。
+// ---------------------------------------------------------------------------
+
+/// 50% 档：仅提示一次（不改写历史）。
+const COMPACT_HINT_RATIO: f32 = 0.50;
+/// 60% 档：剪中间旧工具结果（保留头尾）。
+const COMPACT_PRUNE_RATIO: f32 = 0.60;
+/// 80% 档：摘要折叠（LLM 摘要，失败时机械折叠兜底）。
+const COMPACT_FOLD_RATIO: f32 = 0.80;
+/// 防抖上限：同 run 连续 2 次压缩后暂停自动压缩（提示窗口太小）。
+const COMPACT_DEBOUNCE_LIMIT: u32 = 2;
+/// context window 低于该值时显示非阻断警告。
+const COMPACT_SMALL_WINDOW_TOKENS: u32 = 16_384;
+/// 无真实 usage 时的保守 tokPerChar 默认。
+const COMPACT_DEFAULT_TOK_PER_CHAR: f32 = 0.25;
+/// tokPerChar 校准过滤范围（tokens/字符）。
+const COMPACT_TOK_PER_CHAR_MIN: f32 = 0.05;
+const COMPACT_TOK_PER_CHAR_MAX: f32 = 2.0;
+/// 机械折叠的尾部预算（默认 16K token；64k 模型约占 25%，按窗口再取 1/4）。
+const COMPACT_TAIL_TOKENS: u32 = 16_384;
+/// 小 user 轮次 verbatim 保留上限（token）。
+const COMPACT_MAX_PINNED_FIRST_USER_TOKENS: u32 = 1_500;
+/// 小 user 轮次不超过窗口的比例。
+const COMPACT_PINNED_RATIO: f32 = 0.15;
+/// 60% 档滑动窗口参数（保留头部 N 条 + 尾部 N 条）。
+const COMPACT_PRUNE_KEEP_FIRST: usize = 2;
+const COMPACT_PRUNE_KEEP_RECENT: usize = 10;
+/// 50% 档提示文本（经 steer 通道注入，同 run 只注入一次）。
+const COMPACT_HINT_TEXT: &str =
+    "上下文已接近模型窗口上限。请在后续回复中精简内容：优先引用已执行工具的结果与既有计划，避免重复输出历史信息。";
+
+/// P2-G 压缩决策结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactAction {
+    /// 低于阈值，无需动作。
+    None,
+    /// 连续压缩已达防抖上限，暂停自动压缩（窗口太小）。
+    Debounced,
+    /// 50% 档：仅注入一次压缩提示（不改写历史）。
+    Hint,
+    /// 60% 档：剪中间旧工具结果（保留头尾）。
+    Prune,
+    /// 80% 档：摘要折叠（LLM 摘要，失败时机械折叠兜底）。
+    Fold,
+}
+
+/// P2-G 分层压缩状态机（per-run）。
+#[derive(Debug)]
+struct CompactionState {
+    /// 窗口基准（provider capabilities 的 max_context_tokens；0 = 未声明，不压缩）。
+    window_tokens: u32,
+    /// 当前 tokPerChar（tokens/字符），由上一轮真实 usage 反推，0.05~2 过滤。
+    tok_per_char: f32,
+    /// 同 run 连续压缩次数（折叠/剪枝各计一次；估算回落阈值以下时复位）。
+    consecutive_compactions: u32,
+    /// 同 run 是否已注入过 50% 档提示（只提示一次）。
+    hint_injected: bool,
+    /// 最近一次压缩前的原始消息（归档，用于可追溯）。
+    archive: Option<Vec<Message>>,
+    /// run 内压缩总次数。
+    total_compactions: u32,
+}
+
+impl CompactionState {
+    fn new(window_tokens: u32) -> Self {
+        Self {
+            window_tokens,
+            tok_per_char: COMPACT_DEFAULT_TOK_PER_CHAR,
+            consecutive_compactions: 0,
+            hint_injected: false,
+            archive: None,
+            total_compactions: 0,
+        }
+    }
+
+    /// 用上一轮真实 usage（input_tokens）反推 tokPerChar；0.05~2 范围过滤，
+    /// reasoning 不计（message_chars 已排除 Thinking 块）。
+    fn calibrate(&mut self, input_tokens: u32, chars: usize) {
+        if input_tokens == 0 || chars == 0 {
+            return;
+        }
+        let ratio = input_tokens as f32 / chars as f32;
+        if (COMPACT_TOK_PER_CHAR_MIN..=COMPACT_TOK_PER_CHAR_MAX).contains(&ratio) {
+            self.tok_per_char = ratio;
+        }
+    }
+
+    /// 估算 token 量：字符数 × tokPerChar。
+    fn estimate_tokens(&self, chars: usize) -> u32 {
+        (chars as f32 * self.tok_per_char) as u32
+    }
+
+    /// 每轮迭代发送请求前的压缩检查（防抖 + 分层决策）。
+    fn check(&mut self, estimated_tokens: u32) -> CompactAction {
+        if self.window_tokens == 0 {
+            // 无窗口基准：无法判断，降级为不压缩（可选优化）。
+            return CompactAction::None;
+        }
+        let ratio = estimated_tokens as f32 / self.window_tokens as f32;
+        if ratio < COMPACT_HINT_RATIO {
+            // 低于阈值：说明压缩（或用户行为）让历史回落，防抖计数复位。
+            self.consecutive_compactions = 0;
+            return CompactAction::None;
+        }
+        if self.consecutive_compactions >= COMPACT_DEBOUNCE_LIMIT {
+            return CompactAction::Debounced;
+        }
+        if ratio >= COMPACT_FOLD_RATIO {
+            CompactAction::Fold
+        } else if ratio >= COMPACT_PRUNE_RATIO {
+            CompactAction::Prune
+        } else if !self.hint_injected {
+            CompactAction::Hint
+        } else {
+            CompactAction::None
+        }
+    }
+
+    /// 压缩动作前归档原始消息（可追溯，保留最近一次）。
+    fn archive_messages(&mut self, messages: &[Message]) {
+        self.archive = Some(messages.to_vec());
+    }
+
+    /// 压缩（折叠/剪枝）成功后登记：防抖计数 + 总次数。
+    fn record_compaction(&mut self) {
+        self.consecutive_compactions += 1;
+        self.total_compactions += 1;
+    }
+}
+
+/// P2-G：消息文本字符数（Text 块 + ToolResult 正文；Thinking/reasoning 不计）。
+fn message_chars(message: &Message) -> usize {
+    message
+        .content
+        .iter()
+        .map(|block| match block {
+            ContentBlock::Text { text } | ContentBlock::ToolResult { content: text, .. } => {
+                text.chars().count()
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+/// P2-G：一次请求的文本字符数（system + 消息历史 + tools 序列化长度）。
+/// 与 calibrate 的口径一致，保证 tokPerChar 反推与估算同源。
+fn request_chars(system: &str, messages: &[Message], tools_json_len: usize) -> usize {
+    system.chars().count() + messages.iter().map(message_chars).sum::<usize>() + tools_json_len
+}
+
+/// 构造 hermes-compaction 策略所需的临时 Session（只读用途，不落库）。
+/// `model` 供 LlmSummaryCompaction 构造摘要请求时使用（需与当前运行模型一致，
+/// 否则摘要请求会被 provider 拒绝）。
+fn temp_compaction_session(messages: Vec<Message>, model: &str) -> Session {
+    let mut meta = SessionMeta::new(model, "compaction");
+    meta.id = "compaction-internal".into();
+    let mut session = Session::new(meta);
+    session.messages = messages;
+    session
+}
+
+/// P2-G 60% 档：剪中间旧工具结果，保留头尾（vendor `SlidingWindowCompaction`）。
+/// 压缩产物若未实际变小（消息过少等），返回 None 降级为不压缩。
+async fn prune_messages(messages: &[Message], model: &str) -> Option<Vec<Message>> {
+    if messages.len() <= COMPACT_PRUNE_KEEP_FIRST + COMPACT_PRUNE_KEEP_RECENT {
+        return None;
+    }
+    let session = temp_compaction_session(messages.to_vec(), model);
+    let strategy =
+        SlidingWindowCompaction::new(COMPACT_PRUNE_KEEP_FIRST, COMPACT_PRUNE_KEEP_RECENT);
+    match strategy.compact(&session).await {
+        Ok(compacted) if compacted.len() < messages.len() => Some(compacted),
+        _ => None,
+    }
+}
+
+/// P2-G 80% 档：LLM 摘要折叠（`LlmSummaryCompaction`）；摘要失败或产物无效时
+/// 降级为确定性机械折叠兜底（不循环、不丢 verbatim 小轮次）。
+async fn fold_messages(
+    provider: Arc<dyn LlmProvider>,
+    model: &str,
+    messages: &[Message],
+    window_tokens: u32,
+    tok_per_char: f32,
+) -> Option<Vec<Message>> {
+    let session = temp_compaction_session(messages.to_vec(), model);
+    let strategy = LlmSummaryCompaction::new(provider);
+    match strategy.compact(&session).await {
+        Ok(folded) if folded.len() < messages.len() => Some(folded),
+        _ => {
+            let folded = mechanical_fold(messages, window_tokens, tok_per_char);
+            (folded.len() < messages.len()).then_some(folded)
+        }
+    }
+}
+
+/// P2-G 机械折叠兜底（对齐 Reasonix `compact.go:293-315`）：
+/// 保留 (a) system——历史消息无 system 角色（Role 契约只有 User/Assistant，
+/// 请求 system 字段不受影响）；(b) 全部小 user 轮次 verbatim（估算
+/// ≤ min(1500, 窗口 15%)）；(c) 旧摘要（含 "[compaction:" 标记，不重复折叠）；
+/// (d) 尾部预算（默认 16K token，64k 模型约占 25%）。其余折叠为占位消息。
+fn mechanical_fold(messages: &[Message], window_tokens: u32, tok_per_char: f32) -> Vec<Message> {
+    let pinned_cap_tokens = ((window_tokens as f32 * COMPACT_PINNED_RATIO) as u32)
+        .min(COMPACT_MAX_PINNED_FIRST_USER_TOKENS);
+    let tail_budget = COMPACT_TAIL_TOKENS.min(window_tokens / 4);
+
+    let mut keep: Vec<usize> = Vec::new();
+    for (i, message) in messages.iter().enumerate() {
+        let is_small_user_turn = message.role == Role::User
+            && !message
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+            && (message_chars(message) as f32 * tok_per_char) as u32 <= pinned_cap_tokens;
+        let is_old_summary = message.text_content().contains("[compaction:");
+        if is_small_user_turn || is_old_summary {
+            keep.push(i);
+        }
+    }
+
+    // 尾部预算：从后往前累计（含工具结果等未完成上下文）。
+    let mut tail_tokens = 0u32;
+    let mut tail_start = messages.len();
+    for (i, message) in messages.iter().enumerate().rev() {
+        tail_tokens += (message_chars(message) as f32 * tok_per_char) as u32;
+        tail_start = i;
+        if tail_tokens >= tail_budget {
+            break;
+        }
+    }
+    keep.extend(tail_start..messages.len());
+    keep.sort_unstable();
+    keep.dedup();
+
+    let folded_count = messages.len() - keep.len();
+    if folded_count == 0 {
+        return messages.to_vec();
+    }
+    let mut result: Vec<Message> = keep.into_iter().map(|i| messages[i].clone()).collect();
+    result.push(Message::user_text(format!(
+        "[compaction: mechanical_fold folded {folded_count} messages; kept small user turns verbatim + prior summaries + trailing {tail_tokens} tokens; window {window_tokens}]"
+    )));
+    result
+}
+
+/// P2-G：压缩产物角色归一化。hermes-compaction 的占位/摘要消息以 Assistant 角色
+/// 承载（`Message::system_text`，见 hermes-core Role 契约说明），但 OpenAI 兼容
+/// API 要求 assistant 后必须跟 user（或结束）。把以 "[compaction:" 开头的备注
+/// 消息统一降级为 User 角色（文本保留，与现有 "[system]" 前缀 user 消息惯例
+/// 一致），避免压缩后相邻 Assistant 消息触发 400。
+fn normalize_compacted_roles(messages: &[Message]) -> Vec<Message> {
+    let mut out = messages.to_vec();
+    for message in &mut out {
+        if message.text_content().starts_with("[compaction:") {
+            message.role = Role::User;
+        }
+    }
+    out
+}
+
+/// P2-G：压缩改写历史后递增会话级 rewrite_version。
+///
+/// P2-H 归因联动点：cache_shape.rs（docs/deepseek-prefix-cache.md §5 P2-H）目前
+/// 尚无接口可调，先落此内部计数；P2-H 实施时从 `SessionState::rewrite_version`
+/// 读取，把“压缩改写 provider 可见字节”与“纯本地元数据编辑”区分开。
+async fn bump_rewrite_version(ctx: &RunLoopCtx) {
+    let mut sessions = ctx.sessions.lock().await;
+    if let Some(session) = sessions.get_mut(&ctx.session_id) {
+        session.rewrite_version = session.rewrite_version.wrapping_add(1);
+    }
+}
+
 fn task_context_requires_continuation(context: Option<&str>) -> bool {
     context
         .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
@@ -1176,6 +1462,19 @@ async fn run_loop(ctx: RunLoopCtx) {
     // memory_context 保持 run 冻结，作为头部独立消息随每轮请求发送（见
     // build_memory_context_message）。
     let memory_message = build_memory_context_message(ctx.memory_context.as_deref());
+
+    // P2-G：分层压缩（长会话）。窗口基准取 provider capabilities 的
+    // max_context_tokens；未声明（0）时整体降级为不压缩（可选优化，不阻断 run）。
+    let window_tokens = ctx.provider.capabilities().max_context_tokens;
+    let mut compactor = CompactionState::new(window_tokens);
+    if window_tokens > 0 && window_tokens < COMPACT_SMALL_WINDOW_TOKENS {
+        // 非阻断警告：窗口过小，分层阈值几乎不可用。
+        tracing::warn!(
+            session_id = %ctx.session_id,
+            window_tokens,
+            "context window below {COMPACT_SMALL_WINDOW_TOKENS}; auto-compaction thresholds may be ineffective"
+        );
+    }
 
     loop {
         if ctx.abort.load(Ordering::Relaxed) {
@@ -1235,6 +1534,86 @@ async fn run_loop(ctx: RunLoopCtx) {
             continuation_gate: ctx.continuation_gate.clone(),
         };
         let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools);
+        let tools_json_len = serde_json::to_string(&tools)
+            .map(|json| json.len())
+            .unwrap_or(0);
+
+        // ---- P2-G：发送请求前的分层压缩检查（可选优化：任何异常都降级为
+        // 不压缩，绝不 panic/Err 终止 run）。压缩改写只作用于本地发送副本
+        // messages，迭代结束同步回会话时自动持久化（见下方结束判断）。
+        if window_tokens > 0 {
+            let estimated_tokens =
+                compactor.estimate_tokens(request_chars(&system_prompt, &messages, tools_json_len));
+            match compactor.check(estimated_tokens) {
+                CompactAction::None => {}
+                CompactAction::Debounced => {
+                    // 连续 2 次压缩后仍超窗：暂停自动压缩并提示窗口太小。
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        estimated_tokens,
+                        window_tokens,
+                        "auto-compaction paused: window too small ({COMPACT_DEBOUNCE_LIMIT} consecutive compactions)"
+                    );
+                }
+                CompactAction::Hint => {
+                    // 50% 档：仅提示一次（经 steer 通道注入，同 run 只一次）。
+                    {
+                        let mut sessions = ctx.sessions.lock().await;
+                        if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                            session.steer_queue.push_back(COMPACT_HINT_TEXT.to_string());
+                        }
+                    }
+                    compactor.hint_injected = true;
+                    tracing::info!(
+                        session_id = %ctx.session_id,
+                        estimated_tokens,
+                        window_tokens,
+                        "context near {COMPACT_HINT_RATIO} of window; injected one-time compaction hint"
+                    );
+                }
+                CompactAction::Prune => {
+                    // 60% 档：剪中间旧工具结果（保留头尾）。
+                    compactor.archive_messages(&messages);
+                    if let Some(compacted) = prune_messages(&messages, &ctx.model).await {
+                        let compacted = normalize_compacted_roles(&compacted);
+                        tracing::info!(
+                            session_id = %ctx.session_id,
+                            before = messages.len(),
+                            after = compacted.len(),
+                            "P2-G prune compaction applied"
+                        );
+                        messages = compacted;
+                        compactor.record_compaction();
+                        bump_rewrite_version(&ctx).await;
+                    }
+                }
+                CompactAction::Fold => {
+                    // 80% 档：摘要折叠（LLM 摘要；失败时机械折叠兜底）。
+                    compactor.archive_messages(&messages);
+                    if let Some(compacted) = fold_messages(
+                        ctx.provider.clone(),
+                        &ctx.model,
+                        &messages,
+                        window_tokens,
+                        compactor.tok_per_char,
+                    )
+                    .await
+                    {
+                        let compacted = normalize_compacted_roles(&compacted);
+                        tracing::info!(
+                            session_id = %ctx.session_id,
+                            before = messages.len(),
+                            after = compacted.len(),
+                            "P2-G fold compaction applied"
+                        );
+                        messages = compacted;
+                        compactor.record_compaction();
+                        bump_rewrite_version(&ctx).await;
+                    }
+                }
+            }
+        }
+
         // 这是主会话的 run loop。Ask 只收紧工具权限，不改变 Agent 身份；子代理使用
         // run_child 中的 build_subagent_system_prompt。
         //
@@ -1280,6 +1659,10 @@ async fn run_loop(ctx: RunLoopCtx) {
             inference: ctx.inference.clone(),
         };
 
+        // P2-G：本轮实际发送的文本字符数（system + 注入后的 messages + tools），
+        // 供迭代结束后用真实 usage 反推 tokPerChar 校准。
+        let sent_chars = request_chars(&system_prompt, &messages, tools_json_len);
+
         let result = run_agent_loop_iteration_streaming_with_abort(
             ctx.provider.as_ref(),
             &tool_host,
@@ -1304,6 +1687,9 @@ async fn run_loop(ctx: RunLoopCtx) {
 
         match result {
             Ok(outcome) => {
+                // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
+                // 保持旧值继续保守估算）。
+                compactor.calibrate(outcome.usage.input_tokens, sent_chars);
                 let reaches_tool_limit =
                     outcome.had_tool_call && tool_iterations + 1 >= MAX_ITERATIONS;
                 let suspended_for_user = ctx.suspension_gate.load(Ordering::SeqCst);
@@ -1538,6 +1924,19 @@ Do not mention private reasoning.\n\n{}",
             state: TaskState::ReviewReady,
         });
     }
+
+    // P2-G 收尾可追溯：归档的压缩前原始消息保留在 compactor.archive（内存），
+    // 连同压缩次数一起落到日志，便于事后核对压缩动作。
+    if compactor.total_compactions > 0 {
+        let archived_len = compactor.archive.as_ref().map_or(0, Vec::len);
+        tracing::info!(
+            session_id = %ctx.session_id,
+            total_compactions = compactor.total_compactions,
+            archived_messages = archived_len,
+            "run finished with P2-G compactions"
+        );
+    }
+
     ctx.running.store(false, Ordering::Relaxed);
 }
 
@@ -6238,5 +6637,245 @@ mod tests {
         );
         assert!(child.contains("read-only delegated subagent"));
         assert!(child.contains("CHILD CUSTOM RELATIONSHIP"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P2-G 分层压缩单测（docs/deepseek-prefix-cache.md §5 P2-G 验收）。
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+    use hermes_core::{Capabilities, CompletionRequest, CompletionResponse, StreamEvent, Usage};
+    use hermes_error::Error as HermesError;
+
+    /// 摘要 provider：complete/stream 一律失败，用于验证 fold 的机械折叠兜底。
+    struct FailingSummaryProvider;
+
+    #[async_trait]
+    impl LlmProvider for FailingSummaryProvider {
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> hermes_error::Result<CompletionResponse> {
+            Err(HermesError::NotImplemented("FailingSummaryProvider".into()))
+        }
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> hermes_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
+            Err(HermesError::NotImplemented("FailingSummaryProvider".into()))
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                supports_streaming: false,
+                supports_tool_use: false,
+                supports_vision: false,
+                supports_prompt_caching: false,
+                max_context_tokens: 100_000,
+            }
+        }
+        fn name(&self) -> &str {
+            "failing-summary"
+        }
+    }
+
+    /// 长会话构造：首条目标 + N 轮（长 assistant 轮次 + 短 user 轮次）。
+    fn long_session(rounds: usize) -> Vec<Message> {
+        let mut messages = vec![Message::user_text("goal")];
+        for i in 0..rounds {
+            messages.push(Message::assistant_text(format!(
+                "long assistant turn {i} {}",
+                "x".repeat(2000)
+            )));
+            messages.push(Message::user_text(format!("small turn {i}")));
+        }
+        messages
+    }
+
+    #[test]
+    fn tok_per_char_calibration_filters_out_of_range_ratios() {
+        let mut state = CompactionState::new(100_000);
+        assert!((state.tok_per_char - COMPACT_DEFAULT_TOK_PER_CHAR).abs() < 1e-6);
+        // 0.25 在 [0.05, 2] 内：采纳。
+        state.calibrate(1_000, 4_000);
+        assert!((state.tok_per_char - 0.25).abs() < 1e-6);
+        // 0.0001 < 0.05：忽略。
+        state.calibrate(1, 10_000);
+        assert!((state.tok_per_char - 0.25).abs() < 1e-6);
+        // 500 > 2：忽略。
+        state.calibrate(50_000, 100);
+        assert!((state.tok_per_char - 0.25).abs() < 1e-6);
+        // 1.0 采纳。
+        state.calibrate(5_000, 5_000);
+        assert!((state.tok_per_char - 1.0).abs() < 1e-6);
+        // input_tokens == 0（provider 未报告）：忽略。
+        state.calibrate(0, 100);
+        assert!((state.tok_per_char - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn estimate_uses_calibrated_tok_per_char() {
+        let mut state = CompactionState::new(100_000);
+        state.calibrate(1_000, 4_000); // 0.25
+        assert_eq!(state.estimate_tokens(8_000), 2_000);
+    }
+
+    #[test]
+    fn layered_thresholds_pick_heaviest_action_and_hint_once() {
+        let mut state = CompactionState::new(100_000);
+        assert_eq!(state.check(40_000), CompactAction::None); // 40%：无动作
+        assert_eq!(state.check(55_000), CompactAction::Hint); // 55%：仅提示
+        state.hint_injected = true; // 调用方注入 steer 后标记（run loop Hint 分支语义）
+        assert_eq!(state.check(55_000), CompactAction::None); // 同 run 只提示一次
+        assert_eq!(state.check(65_000), CompactAction::Prune); // 65%：剪旧工具结果
+        assert_eq!(state.check(90_000), CompactAction::Fold); // 90%：摘要折叠
+    }
+
+    #[test]
+    fn debounce_pauses_after_two_consecutive_compactions_and_resets() {
+        let mut state = CompactionState::new(100_000);
+        assert_eq!(state.check(90_000), CompactAction::Fold);
+        state.record_compaction();
+        // 压缩后仍超窗：第二次压缩。
+        assert_eq!(state.check(85_000), CompactAction::Fold);
+        state.record_compaction();
+        // 连续 2 次后暂停自动压缩。
+        assert_eq!(state.check(85_000), CompactAction::Debounced);
+        // 估算回落阈值以下后防抖复位，可再次压缩。
+        assert_eq!(state.check(40_000), CompactAction::None);
+        assert_eq!(state.check(65_000), CompactAction::Prune);
+    }
+
+    #[test]
+    fn unknown_window_disables_compaction() {
+        let mut state = CompactionState::new(0);
+        assert_eq!(state.check(1_000_000), CompactAction::None);
+    }
+
+    #[test]
+    fn message_chars_excludes_thinking_blocks() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "secret reasoning".into(),
+                    signature: None,
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "result".into(),
+                    is_error: false,
+                },
+            ],
+        };
+        assert_eq!(message_chars(&message), "answer".len() + "result".len());
+    }
+
+    #[test]
+    fn compaction_markers_are_normalized_to_user_role() {
+        let messages = vec![
+            Message::system_text(
+                "[compaction: sliding_window compressed 5 messages, range 2..200, kept first 2 + last 10]",
+            ),
+            Message::assistant_text("follow up"),
+        ];
+        let normalized = normalize_compacted_roles(&messages);
+        assert_eq!(normalized[0].role, Role::User);
+        assert_eq!(normalized[1].role, Role::Assistant);
+    }
+
+    #[test]
+    fn archive_keeps_pre_compaction_messages() {
+        let mut state = CompactionState::new(100_000);
+        let messages = vec![Message::user_text("goal")];
+        state.archive_messages(&messages);
+        assert_eq!(state.archive.as_ref().map(Vec::len), Some(1));
+        assert_eq!(state.archive.as_ref().unwrap()[0].text_content(), "goal");
+    }
+
+    #[tokio::test]
+    async fn over_window_session_triggers_prune_keeping_head_and_tail() {
+        let mut messages = vec![Message::user_text("goal")];
+        for i in 0..100 {
+            messages.push(Message::assistant_text(format!(
+                "turn {i} with tool planning"
+            )));
+            messages.push(Message::user_text(format!("result of tool {i}")));
+        }
+        let pruned = prune_messages(&messages, "test-model")
+            .await
+            .expect("prune shrinks");
+        assert!(pruned.len() < messages.len());
+        // 头部（首条用户目标）与尾部（最近工具结果）保留。
+        assert!(pruned[0].text_content().contains("goal"));
+        assert!(pruned
+            .last()
+            .unwrap()
+            .text_content()
+            .contains("result of tool 99"));
+        // 压缩占位符存在。
+        assert!(pruned
+            .iter()
+            .any(|m| m.text_content().contains("[compaction:")));
+    }
+
+    #[test]
+    fn mechanical_fold_preserves_small_user_turns_verbatim() {
+        let messages = long_session(40);
+        let folded = mechanical_fold(&messages, 100_000, 0.25);
+        assert!(folded.len() < messages.len(), "fold must shrink");
+        // 全部小 user 轮次 verbatim 保留。
+        for i in 0..40 {
+            assert!(
+                folded
+                    .iter()
+                    .any(|m| m.text_content().contains(&format!("small turn {i}"))),
+                "small user turn {i} must be kept verbatim"
+            );
+        }
+        // 折叠占位符存在。
+        assert!(folded
+            .iter()
+            .any(|m| m.text_content().contains("[compaction: mechanical_fold")));
+    }
+
+    #[tokio::test]
+    async fn fold_falls_back_to_mechanical_fold_when_summary_fails() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FailingSummaryProvider);
+        let messages = long_session(40);
+        let folded = fold_messages(provider, "test-model", &messages, 100_000, 0.25)
+            .await
+            .expect("mechanical fallback never fails");
+        assert!(folded.len() < messages.len());
+        assert!(folded
+            .iter()
+            .any(|m| m.text_content().contains("small turn 5")));
+    }
+
+    #[tokio::test]
+    async fn small_session_is_not_compacted() {
+        let messages = vec![
+            Message::user_text("goal"),
+            Message::assistant_text("hello"),
+            Message::user_text("thanks"),
+        ];
+        assert!(prune_messages(&messages, "test-model").await.is_none());
+        let folded = mechanical_fold(&messages, 100_000, 0.25);
+        assert_eq!(folded.len(), messages.len());
+    }
+
+    #[test]
+    fn agent_loop_outcome_carries_usage() {
+        // P2-G：AgentLoopOutcome 携带本轮真实 usage，供 tokPerChar 校准。
+        let outcome = crate::agent_loop::AgentLoopOutcome {
+            had_tool_call: true,
+            usage: Usage::new(1_234, 56),
+        };
+        assert!(outcome.had_tool_call);
+        assert_eq!(outcome.usage.input_tokens, 1_234);
     }
 }
