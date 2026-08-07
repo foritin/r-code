@@ -6,9 +6,23 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-07
+
+### Security
+
+- 文件 I/O 改为经受工作区目录 capability 限制的句柄打开（`cap_std`），消除路径校验后符号链接替换带来的 TOCTOU 竞态逃逸窗口。
+- 修复 IPv4-compatible IPv6 地址（`::a.b.c.d`）绕过私网/IP 拦截检查的 SSRF 缺口；仅对能无歧义映射为 IPv4 的形式套用 IPv4 拦截规则。
+- 发布与 CI 工作流按最小权限收紧（`contents: read`），第三方 actions 固定到提交 SHA，并启用 Dependabot 依赖更新。
+
 ### Fixed
 
+- 桌面端与 MCP 进程独立启动时并发升级同一数据目录，由独立的 SQLite 锁数据库串行化备份、迁移与恢复关键区，防止后到进程用旧快照覆盖新数据。
 - 发布 finalize 会先以资产 API 元数据核对草稿 Release，再为 updater manifest 构造当前不可变标签的规范下载 URL；新增 `finalize_only` 恢复模式可安全复用完整草稿资产，并保守保留平台未签名警告。
+
+### Changed
+
+- 发布流程新增不可变 tag 溯源与 CI 质量门校验；发布前核对 tag 精确提交的完整 CI run，缺失时拒绝创建 tag。
+- 仓库文档精简：移除历史归档（`docs/archive`）与过时 UI 参考图，仅保留当前亮/暗两套；新增 DeepSeek Provider 前缀缓存优化 PRD 与安装/备份/恢复运维手册。
 
 ## [0.3.0] - 2026-08-06
 
@@ -150,5 +164,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.2.0]: https://github.com/foritin/r-code/releases/tag/v0.2.0
 [0.2.1]: https://github.com/foritin/r-code/releases/tag/v0.2.1
 [0.2.2]: https://github.com/foritin/r-code/releases/tag/v0.2.2
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/foritin/r-code/releases/tag/v0.3.0
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/foritin/r-code/releases/tag/v0.3.1
