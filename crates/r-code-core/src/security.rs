@@ -453,7 +453,7 @@ impl PathGuard {
             .or(path.strip_prefix(&self.lexical_root))
             .map(Path::to_path_buf)
             .ok()
-            .or_else(|| {
+            .or({
                 // Windows canonical paths commonly add `\\?\` while user-facing paths do
                 // not. Compare the equivalent normal spellings as a final lexical step.
                 #[cfg(windows)]
