@@ -6,6 +6,8 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-07
+
 ### Changed
 
 - DeepSeek 线路长会话显著提速降价：请求前缀改为逐字节稳定以命中 DeepSeek 字节级自动前缀缓存——system prompt 移除秒级时间戳并在 run 内冻结复用；时间（分钟级）、任务上下文、Plan 模式与委派提示统一改为尾部消息注入且不落历史；工具列表按名称排序，Codex 可用性判定在 run 内冻结；历史严格只追加，悬挂工具调用的修复结果落盘固化。真实 API 14 轮实测尾部命中率 93%（基线存档 `docs/deepseek-cache-baseline.md`）。
@@ -177,5 +179,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.2.1]: https://github.com/foritin/r-code/releases/tag/v0.2.1
 [0.2.2]: https://github.com/foritin/r-code/releases/tag/v0.2.2
 [0.3.0]: https://github.com/foritin/r-code/releases/tag/v0.3.0
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/foritin/r-code/releases/tag/v0.3.1
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
