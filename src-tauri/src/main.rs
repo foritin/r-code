@@ -226,18 +226,18 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
         .plugin(tauri_plugin_opener::init())
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, _event| {
             #[cfg(target_os = "windows")]
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
                 // Only intercept close when the restore affordance really exists. If Windows
                 // refused tray creation, fall through to Tauri's normal close/exit behavior.
                 let action = windows_close_action(
-                    window.label() == "main",
-                    window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some(),
+                    _window.label() == "main",
+                    _window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some(),
                 );
                 if action == WindowsLifecycleAction::HideToTray {
                     api.prevent_close();
-                    apply_windows_lifecycle_action(window.app_handle(), action);
+                    apply_windows_lifecycle_action(_window.app_handle(), action);
                 }
             }
         })
