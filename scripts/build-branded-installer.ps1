@@ -50,7 +50,7 @@ if (-not $SkipInnerBuild) {
         $tauriArgs = @(
             "tauri", "build",
             "--bundles", "nsis",
-            "--config", '{"bundle":{"createUpdaterArtifacts":false}}'
+            "--config", "tauri.local-package.conf.json"
         )
         if ($Target) {
             $tauriArgs += @("--target", $Target)
@@ -126,11 +126,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Installer composition failed with exit code $LASTEXITCODE"
 }
 
-$hash = Get-FileHash -LiteralPath $outputPath -Algorithm SHA256
+$hashStream = [IO.File]::OpenRead($outputPath)
+try {
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha256.ComputeHash($hashStream)
+    } finally {
+        $sha256.Dispose()
+    }
+} finally {
+    $hashStream.Dispose()
+}
+$hash = [BitConverter]::ToString($hashBytes).Replace("-", "")
 $result = [pscustomobject]@{
     Path = $outputPath
     SizeBytes = (Get-Item -LiteralPath $outputPath).Length
-    SHA256 = $hash.Hash
+    SHA256 = $hash
     Payload = $InnerInstaller
 }
 $result | Format-List

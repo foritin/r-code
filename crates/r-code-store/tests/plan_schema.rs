@@ -136,7 +136,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
+fn clean_database_and_schema_18_upgrade_reach_complete_schema_26() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -174,6 +174,11 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
         "agent_runs",
         "require_approval"
     ));
+    assert!(table_has_column(
+        &clean_conn,
+        "memory_review_turns",
+        "explicit_remember"
+    ));
     drop(clean_conn);
     drop(clean);
 
@@ -182,6 +187,8 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
     let v18 = Database::open(&path).unwrap();
     let task = Task::new(None, "Existing task", "Must survive upgrade", TaskMode::Ask);
     TaskRepository::new(&v18).create(&task).unwrap();
+    let run = AgentRun::new(&task.id, "test-model");
+    AgentRunRepository::new(&v18).create(&run).unwrap();
     {
         let conn = v18.conn().unwrap();
         conn.execute_batch(
@@ -202,7 +209,17 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
                  ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
              ALTER TABLE tasks DROP COLUMN goal_active;
              ALTER TABLE agent_runs DROP COLUMN require_approval;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25);",
+             ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memory_review_turns (
+                 id, run_id, task_id, branch_id, global_generation,
+                 user_text, assistant_text, captured_at
+             ) VALUES ('legacy-turn', ?1, ?2, 'legacy-branch', 0,
+                 'legacy user text', 'legacy assistant text', '2026-01-01T00:00:00Z')",
+            params![run.id, task.id],
         )
         .unwrap();
         assert_eq!(schema_version(&conn), 18);
@@ -235,10 +252,32 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_25() {
     }
     assert!(table_has_column(&conn, "queued_messages", "sort_order"));
     assert!(table_has_column(&conn, "agent_runs", "require_approval"));
+    assert!(table_has_column(
+        &conn,
+        "memory_review_turns",
+        "explicit_remember"
+    ));
+    let legacy_explicit: i64 = conn
+        .query_row(
+            "SELECT explicit_remember FROM memory_review_turns WHERE id = 'legacy-turn'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        legacy_explicit, 0,
+        "migration 26 must not retroactively authorize legacy evidence"
+    );
+    assert!(conn
+        .execute(
+            "UPDATE memory_review_turns SET explicit_remember = 2 WHERE id = 'legacy-turn'",
+            [],
+        )
+        .is_err());
 }
 
 #[test]
-fn schema_25_declares_every_check_and_foreign_key_contract() {
+fn schema_26_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 

@@ -1,4 +1,4 @@
-//! Codex 子代理的权限配置映射。
+//! Codex 主运行与子代理的权限配置映射。
 //!
 //! 这里的值与 Codex `config.toml` / App Server 使用的公开枚举保持一一对应。
 //! 解析配置时绝不把未知字符串回传给 CLI：未来版本或手写错误会降级为只读，
@@ -6,9 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use r_code_core::dto::ProjectAccessMode;
+use r_code_core::dto::{ProjectAccessMode, SubagentAccessMode};
 
-/// 设置页展示的 Codex 子代理权限预设。
+/// 设置页展示的 Codex 权限预设。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexPermissionMode {
@@ -142,7 +142,8 @@ impl CodexApprovalsReviewer {
 
 /// 一个在进程启动前解析完成的、只含已验证枚举值的 Codex 权限快照。
 ///
-/// 每次子代理启动都会重新读取 config.toml；因此设置保存后不需要重启 R-Code。
+/// 每次顶层 Codex 运行或 Codex 子代理启动都会重新读取 config.toml；因此设置保存后
+/// 不需要重启 R-Code。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CodexDelegationPermissions {
     mode: CodexPermissionMode,
@@ -218,9 +219,12 @@ impl CodexDelegationPermissions {
         }
     }
 
-    /// Apply the project-level selector without allowing it to elevate a more restrictive
-    /// global Codex profile. This keeps the UI truthful for the current workspace while honoring
-    /// a user's global safety ceiling.
+    /// Resolve the top-level Codex profile from the current project's permission selector.
+    ///
+    /// Project FullAccess is the explicit authority for this run, so it overrides the global
+    /// child-default profile instead of inheriting a lower sandbox or approval policy. Restricted
+    /// projects still clamp a more permissive global profile and preserve an already read-only
+    /// profile.
     pub(crate) const fn constrained_by_project_access(self, mode: ProjectAccessMode) -> Self {
         match mode {
             ProjectAccessMode::RequestApproval => {
@@ -242,8 +246,28 @@ impl CodexDelegationPermissions {
                     Self::from_project_access(mode)
                 }
             }
-            // Full access is an upper bound, not an instruction to weaken a safer global profile.
-            ProjectAccessMode::FullAccess => self,
+            ProjectAccessMode::FullAccess => Self::from_project_access(mode),
+        }
+    }
+
+    /// Resolve an inherited Codex child profile from the immutable native-parent snapshot.
+    ///
+    /// Explicit child read-only is resolved before this method and arrives as a read-only child
+    /// request. For inherited children, a FullAccess parent is authoritative and suppresses global
+    /// child approval defaults; a restricted parent can only keep or reduce the configured profile.
+    pub(crate) const fn inherited_from_native_parent(
+        self,
+        parent_access: SubagentAccessMode,
+        parent_requires_approval: bool,
+    ) -> Self {
+        match (parent_access, parent_requires_approval) {
+            (SubagentAccessMode::ReadOnly, _) => Self::read_only(),
+            (SubagentAccessMode::FullAccess, true) => {
+                self.constrained_by_project_access(ProjectAccessMode::RequestApproval)
+            }
+            (SubagentAccessMode::FullAccess, false) => {
+                Self::from_project_access(ProjectAccessMode::FullAccess)
+            }
         }
     }
 
@@ -384,24 +408,151 @@ mod tests {
     }
 
     #[test]
-    fn project_access_never_elevates_global_permissions() {
+    fn project_and_native_child_permission_truth_table_preserves_authority_boundaries() {
+        let read_only = CodexDelegationPermissions::read_only();
+        let request = CodexDelegationPermissions::from_mode(CodexPermissionMode::RequestApproval)
+            .expect("request approval is a built-in profile");
+        let review = CodexDelegationPermissions::from_mode(CodexPermissionMode::AutoReview)
+            .expect("auto review is a built-in profile");
         let full = CodexDelegationPermissions::from_mode(CodexPermissionMode::FullAccess)
             .expect("full access is a built-in profile");
-        let request = full.constrained_by_project_access(ProjectAccessMode::RequestApproval);
-        assert_eq!(request.mode(), CodexPermissionMode::RequestApproval);
-        assert_eq!(request.sandbox().as_str(), "read-only");
-        assert_eq!(request.approval_policy().as_str(), "on-request");
-        assert_eq!(request.approvals_reviewer().as_str(), "user");
-        assert!(request.requests_r_code_approval());
 
-        let read_only = CodexDelegationPermissions::read_only();
-        assert_eq!(
-            read_only.constrained_by_project_access(ProjectAccessMode::FullAccess),
-            read_only
-        );
-        assert_eq!(
-            read_only.constrained_by_project_access(ProjectAccessMode::RiskBased),
-            read_only
-        );
+        let top_level_cases = [
+            (
+                "project FullAccess overrides the global read-only default",
+                read_only,
+                ProjectAccessMode::FullAccess,
+                CodexDelegationPermissions::from_project_access(ProjectAccessMode::FullAccess),
+            ),
+            (
+                "RequestApproval clamps a globally full-access profile",
+                full,
+                ProjectAccessMode::RequestApproval,
+                CodexDelegationPermissions::from_project_access(ProjectAccessMode::RequestApproval),
+            ),
+            (
+                "RiskBased clamps a globally full-access profile",
+                full,
+                ProjectAccessMode::RiskBased,
+                CodexDelegationPermissions::from_project_access(ProjectAccessMode::RiskBased),
+            ),
+            (
+                "a restricted project preserves an already read-only profile",
+                read_only,
+                ProjectAccessMode::RequestApproval,
+                read_only,
+            ),
+            (
+                "RiskBased does not elevate an explicit user-approval profile",
+                request,
+                ProjectAccessMode::RiskBased,
+                request,
+            ),
+        ];
+        for (reason, configured, project, expected) in top_level_cases {
+            assert_eq!(
+                configured.constrained_by_project_access(project),
+                expected,
+                "{reason}"
+            );
+        }
+
+        let approval_clamp =
+            CodexDelegationPermissions::from_project_access(ProjectAccessMode::RequestApproval);
+        let inherited_cases = [
+            (
+                "read-only parent clamps global read-only",
+                read_only,
+                SubagentAccessMode::ReadOnly,
+                false,
+                read_only,
+            ),
+            (
+                "read-only parent clamps global request-approval",
+                request,
+                SubagentAccessMode::ReadOnly,
+                false,
+                read_only,
+            ),
+            (
+                "read-only parent clamps global auto-review",
+                review,
+                SubagentAccessMode::ReadOnly,
+                false,
+                read_only,
+            ),
+            (
+                "read-only parent clamps global full-access",
+                full,
+                SubagentAccessMode::ReadOnly,
+                false,
+                read_only,
+            ),
+            (
+                "approval parent preserves a safer global read-only default",
+                read_only,
+                SubagentAccessMode::FullAccess,
+                true,
+                read_only,
+            ),
+            (
+                "approval parent clamps global request-approval",
+                request,
+                SubagentAccessMode::FullAccess,
+                true,
+                approval_clamp,
+            ),
+            (
+                "approval parent clamps global auto-review",
+                review,
+                SubagentAccessMode::FullAccess,
+                true,
+                approval_clamp,
+            ),
+            (
+                "approval parent clamps global full-access",
+                full,
+                SubagentAccessMode::FullAccess,
+                true,
+                approval_clamp,
+            ),
+            (
+                "full parent overrides the global read-only default",
+                read_only,
+                SubagentAccessMode::FullAccess,
+                false,
+                full,
+            ),
+            (
+                "full parent overrides the global request-approval default",
+                request,
+                SubagentAccessMode::FullAccess,
+                false,
+                full,
+            ),
+            (
+                "full parent overrides the global auto-review default",
+                review,
+                SubagentAccessMode::FullAccess,
+                false,
+                full,
+            ),
+            (
+                "full parent preserves global full-access",
+                full,
+                SubagentAccessMode::FullAccess,
+                false,
+                full,
+            ),
+        ];
+        for (reason, configured, parent_access, parent_requires_approval, expected) in
+            inherited_cases
+        {
+            assert_eq!(
+                configured.inherited_from_native_parent(parent_access, parent_requires_approval),
+                expected,
+                "{reason}"
+            );
+        }
     }
 }

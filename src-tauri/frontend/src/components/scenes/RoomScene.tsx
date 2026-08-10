@@ -15,7 +15,7 @@ import {
 } from "../../lib/ipc";
 import { useProviders } from "../../lib/provider";
 import { StatusBar } from "../ui/StatusBar";
-import type { AgentEvent, AgentSendMode, ProjectAccessMode } from "../../lib/types";
+import type { AgentEvent, AgentSendMode, ProjectAccessMode, SessionBranch } from "../../lib/types";
 import { Timeline, type TimelineHandle } from "../room/Timeline";
 import { Composer } from "../room/Composer";
 import { PendingPermissions } from "../room/Permissions";
@@ -38,6 +38,19 @@ interface TaskSubagentView {
   openIds: string[];
 }
 const taskSubagentViews = new Map<string, TaskSubagentView>();
+
+function historicalBranchLabel(branch: SessionBranch, index: number): string {
+  const timestamp = Date.parse(branch.created_at);
+  const date = Number.isNaN(timestamp)
+    ? "时间未知"
+    : new Date(timestamp).toLocaleString([], {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  return `历史 ${index + 1} · ${date}`;
+}
 
 interface RoomSplitBounds {
   min: number;
@@ -96,6 +109,7 @@ export function RoomScene() {
 
   const [scopeBusy, setScopeBusy] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
+  const [historyBranchId, setHistoryBranchId] = useState<string | null>(null);
   const boundProvider = useTasksStore((s) =>
     currentTaskId ? s.details[currentTaskId]?.task.provider_name ?? null : null
   );
@@ -140,6 +154,25 @@ export function RoomScene() {
         .join("|"),
     };
   }, [detail]);
+  const historicalBranches = useMemo(
+    () => [...(detail?.branches ?? [])]
+      .filter((branch) => branch.id !== detail?.active_branch.id)
+      .sort((left, right) => right.created_at.localeCompare(left.created_at)),
+    [detail?.active_branch.id, detail?.branches],
+  );
+
+  useEffect(() => {
+    setHistoryBranchId(null);
+  }, [currentTaskId]);
+
+  useEffect(() => {
+    if (
+      historyBranchId &&
+      !historicalBranches.some((branch) => branch.id === historyBranchId)
+    ) {
+      setHistoryBranchId(null);
+    }
+  }, [historicalBranches, historyBranchId]);
 
   // A docked tool should gain horizontal room first. The host preserves the left edge whenever
   // the active monitor has space on the right and no-ops for maximized/fullscreen windows.
@@ -436,8 +469,25 @@ export function RoomScene() {
           <IconProjects width={16} height={16} />
           <div className="room-conversation-title">
             <strong>{task?.title || "任务会话"}</strong>
-            <span>{workspace?.display_name ?? "未附加项目"} · {archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
+            <span>{workspace?.display_name ?? "未附加项目"} · {historyBranchId ? "历史分支，只读" : archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
           </div>
+          {historicalBranches.length > 0 && (
+            <label className="room-history-picker">
+              <span>对话记录</span>
+              <select
+                aria-label="选择对话历史分支"
+                value={historyBranchId ?? ""}
+                onChange={(event) => setHistoryBranchId(event.target.value || null)}
+              >
+                <option value="">当前对话</option>
+                {historicalBranches.map((branch, index) => (
+                  <option key={branch.id} value={branch.id}>
+                    {historicalBranchLabel(branch, index)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {task && <TaskActionsMenu task={task} detail={detail} className="room-task-actions" />}
           <button
             type="button"
@@ -490,9 +540,21 @@ export function RoomScene() {
             工作区操作失败：{scopeError}
           </StatusBar>
         )}
+        {historyBranchId && (
+          <div className="room-history-banner" role="status">
+            <div>
+              <strong>历史分支 · 只读</strong>
+              <span>这里只浏览清空前的记录；当前对话、运行状态和排队消息均未切换。</span>
+            </div>
+            <button type="button" className="quiet-link" onClick={() => setHistoryBranchId(null)}>
+              返回当前对话
+            </button>
+          </div>
+        )}
         <Timeline
           ref={tlRef}
           taskId={currentTaskId}
+          branchId={historyBranchId}
           workspacePath={workspacePath}
           cur={null}
           running={running}
@@ -501,12 +563,13 @@ export function RoomScene() {
           selectedSubagentId={selectedSubagentId}
           onInspectSubagent={inspectSubagent}
         />
-        {archived ? (
+        {historyBranchId ? null : archived ? (
           <div className="room-archived-note">此对话已归档，只能查看历史。可在项目概览中还原，或通过右上角对话选项永久删除。</div>
         ) : (
           <>
             <PendingPermissions taskId={currentTaskId} />
             <Composer
+              key={currentTaskId}
               taskId={currentTaskId}
               workspacePath={workspacePath}
               workspaceAttached={workspaceAttached}

@@ -7,6 +7,7 @@
 //!
 //! [doc-08] [agent-core/12 §6] [agent-core/10]
 
+pub mod codex_app_server;
 pub mod codex_mcp;
 pub mod codex_permissions;
 pub mod commands;
@@ -28,6 +29,7 @@ pub mod provider_catalog;
 pub mod provider_models;
 pub mod recovery;
 pub mod replay;
+pub mod rtk;
 pub mod search;
 pub mod security_config;
 pub mod settings;

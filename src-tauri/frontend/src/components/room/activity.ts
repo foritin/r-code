@@ -40,8 +40,12 @@ export type ActivitySubagentEventKind =
 export interface ActivitySubagentEvent {
   id: string;
   kind: ActivitySubagentEventKind;
+  /** 后端工具调用的稳定关联键，用于把 started/result 合并为同一条操作。 */
+  callId?: string;
   label: string;
   detail: string | null;
+  /** 后端已脱敏、截断的工具结果；仅 tool_result 事件设置。 */
+  outputJson?: string | null;
   at: number;
   isError?: boolean;
 }
@@ -251,14 +255,30 @@ function applyScopedEvent(
       child.phase = "tool";
       child.status = "running";
       child.detail = observableChildToolCall(event.name, event.input);
-      appendChildEvent(child, "tool_call", observableToolName(event.name), child.detail, at);
+      appendChildEvent(
+        child,
+        "tool_call",
+        observableToolName(event.name),
+        child.detail,
+        at,
+        false,
+        event.call_id,
+      );
       break;
     case "tool_result":
       child.phase = "tool";
       child.status = "running";
       child.detail = event.is_error ? "工具执行失败" : "工具已完成";
-      appendChildEvent(child, "tool_result", event.is_error ? "工具失败" : "工具完成", child.detail, at,
-        event.is_error);
+      appendChildEvent(
+        child,
+        "tool_result",
+        event.is_error ? "工具失败" : "工具完成",
+        child.detail,
+        at,
+        event.is_error,
+        event.call_id,
+        safeChildToolOutput(event.output),
+      );
       break;
     case "message":
       child.phase = "streaming";
@@ -342,10 +362,19 @@ function appendChildEvent(
   label: string,
   detail: string | null,
   at: number,
-  isError = false
+  isError = false,
+  callId?: string,
+  outputJson?: string | null,
 ) {
   const previous = child.events[child.events.length - 1];
-  if (previous?.kind === kind && previous.label === label && previous.detail === detail) {
+  const safeCallId = callId?.trim().slice(0, 160) || undefined;
+  if (
+    previous?.kind === kind
+    && previous.label === label
+    && previous.detail === detail
+    && previous.callId === safeCallId
+    && previous.outputJson === outputJson
+  ) {
     return;
   }
   child.events = [
@@ -353,12 +382,25 @@ function appendChildEvent(
     {
       id: `${child.id}:${at}:${child.events.length}`,
       kind,
+      ...(safeCallId ? { callId: safeCallId } : {}),
       label,
       detail,
+      ...(outputJson !== undefined ? { outputJson } : {}),
       at,
       ...(isError ? { isError: true } : {}),
     },
   ].slice(-60);
+}
+
+function safeChildToolOutput(value: unknown): string | null {
+  if (value == null) return null;
+  try {
+    const json = JSON.stringify(value);
+    if (!json) return null;
+    return json.length > 12_000 ? `${json.slice(0, 11_999)}…` : json;
+  } catch {
+    return null;
+  }
 }
 
 /**

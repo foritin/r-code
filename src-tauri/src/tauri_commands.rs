@@ -12,6 +12,7 @@ use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
+use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
@@ -24,6 +25,38 @@ use r_code_host::commands::{
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::replay::ReplayEntry;
 use r_code_store::{EnhancedReviewTarget, EnhancedReviewView, PlanRejectResult};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct CommandError {
+    code: &'static str,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
+}
+
+impl From<ProductError> for CommandError {
+    fn from(error: ProductError) -> Self {
+        let (code, limit) = match &error {
+            ProductError::ProjectConversationLimitReached { limit } => {
+                (PROJECT_CONVERSATION_LIMIT_REACHED_CODE, Some(*limit))
+            }
+            _ => ("COMMAND_FAILED", None),
+        };
+        Self {
+            code,
+            message: error.to_string(),
+            limit,
+        }
+    }
+}
+
+/// Explicit application exit. Window close is intentionally different on Windows: it hides the
+/// main window to the notification area so active agents and terminals can continue running.
+#[tauri::command]
+pub fn cmd_app_quit(app: AppHandle) {
+    app.exit(0);
+}
 
 /// 任务创建命令。 [doc-09]
 #[tauri::command]
@@ -35,8 +68,8 @@ pub async fn cmd_task_create(
     mode: String,
     provider_name: Option<String>,
     agent_engine: Option<String>,
-) -> Result<Task, String> {
-    r_code_host::commands::task_create_with_agent(
+) -> Result<Task, CommandError> {
+    r_code_host::commands::task_create_with_agent_typed(
         &state,
         workspace_path.as_deref(),
         &title,
@@ -46,6 +79,27 @@ pub async fn cmd_task_create(
         agent_engine.as_deref(),
     )
     .await
+    .map_err(CommandError::from)
+}
+
+/// 项目“+”专用：立即持久化一个按项目递增命名的空白对话。
+#[tauri::command]
+pub async fn cmd_project_conversation_create(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+) -> Result<Task, CommandError> {
+    r_code_host::commands::project_conversation_create_typed(&state, &workspace_path)
+        .await
+        .map_err(CommandError::from)
+}
+
+/// 提前准备空白会话的 runtime/session；不会创建 Agent Run 或写入用户消息。
+#[tauri::command]
+pub async fn cmd_task_prepare(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<(), String> {
+    r_code_host::commands::task_prepare(&state, &task_id).await
 }
 
 /// 列出任务命令。
@@ -295,6 +349,15 @@ pub async fn cmd_task_fork_context(
     task_id: String,
 ) -> Result<SessionBranch, String> {
     r_code_host::commands::task_fork_context(&state, &task_id).await
+}
+
+/// 在同一任务中切换到空白上下文；旧分支与 JSONL 只读保留。
+#[tauri::command]
+pub async fn cmd_task_clear_context(
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<SessionBranch, String> {
+    r_code_host::commands::task_clear_context(&state, &task_id).await
 }
 
 /// 手动压缩当前分支的模型上下文；完整聊天记录继续保留用于回看与审计。
@@ -1006,6 +1069,16 @@ pub async fn cmd_session_messages(
     r_code_host::commands::session_messages(&state, &task_id).await
 }
 
+/// Read a historical branch without changing the active conversation.
+#[tauri::command]
+pub async fn cmd_session_messages_for_branch(
+    state: State<'_, CommandState>,
+    task_id: String,
+    branch_id: String,
+) -> Result<Vec<SessionMessage>, String> {
+    r_code_host::commands::session_messages_for_branch(&state, &task_id, &branch_id).await
+}
+
 /// 读取子代理独立会话日志（详情面板数据源）。
 #[tauri::command]
 pub async fn cmd_subagent_session_messages(
@@ -1035,9 +1108,15 @@ pub async fn cmd_memory_update_settings(
 #[tauri::command]
 pub async fn cmd_memory_review_now(
     state: State<'_, CommandState>,
-    task_id: String,
+    workspace_id: Option<String>,
+    workspace_path: Option<String>,
 ) -> Result<Option<String>, String> {
-    r_code_host::commands::memory_review_now(&state, &task_id).await
+    r_code_host::commands::memory_review_now(
+        &state,
+        workspace_id.as_deref(),
+        workspace_path.as_deref(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -1288,6 +1367,23 @@ pub async fn cmd_settings_delete_provider(
     r_code_host::commands::settings_delete_provider(&state, &name).await
 }
 
+/// Detect the verified RTK binary and R-Code-owned enable marker.
+#[tauri::command]
+pub async fn cmd_rtk_status(
+    state: State<'_, CommandState>,
+) -> Result<r_code_host::rtk::RtkStatus, String> {
+    r_code_host::commands::rtk_status(&state).await
+}
+
+/// Install RTK from its verified official release when needed, then atomically toggle policy.
+#[tauri::command]
+pub async fn cmd_rtk_set_enabled(
+    state: State<'_, CommandState>,
+    enabled: bool,
+) -> Result<r_code_host::rtk::RtkStatus, String> {
+    r_code_host::commands::rtk_set_enabled(&state, enabled).await
+}
+
 /// 获取 Codex CLI 外部协作入口状态（只读）。
 #[tauri::command]
 pub async fn cmd_codex_integration_status() -> Result<serde_json::Value, String> {
@@ -1296,8 +1392,10 @@ pub async fn cmd_codex_integration_status() -> Result<serde_json::Value, String>
 
 /// 前端展示固定命令并获得用户明确确认后，安装官方 Codex CLI npm 包。
 #[tauri::command]
-pub async fn cmd_codex_install_cli() -> Result<serde_json::Value, String> {
-    r_code_host::commands::codex_install_cli().await
+pub async fn cmd_codex_install_cli(
+    state: State<'_, CommandState>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::codex_install_cli(&state).await
 }
 
 /// 在用户可见的终端中发起 Codex CLI 登录。
@@ -1341,12 +1439,14 @@ pub async fn cmd_codex_cli_preferences() -> Result<CodexCliPreferences, String> 
 /// 保存 Codex CLI 的模型、推理强度、回复详细度与子代理权限；空模型字段恢复默认。
 #[tauri::command]
 pub async fn cmd_codex_save_cli_preferences(
+    state: State<'_, CommandState>,
     model: Option<String>,
     reasoning_effort: Option<String>,
     verbosity: Option<String>,
     permission_mode: Option<String>,
 ) -> Result<CodexCliPreferences, String> {
     r_code_host::commands::codex_save_cli_preferences(
+        &state,
         model.as_deref(),
         reasoning_effort.as_deref(),
         verbosity.as_deref(),
@@ -1471,4 +1571,43 @@ pub async fn cmd_verification_output(
     id: String,
 ) -> Result<String, String> {
     r_code_host::commands::verification_output(&state, &id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn project_limit_error_serializes_the_stable_tauri_contract() {
+        let payload = serde_json::to_value(CommandError::from(
+            ProductError::ProjectConversationLimitReached { limit: 5 },
+        ))
+        .unwrap();
+
+        assert_eq!(
+            payload,
+            json!({
+                "code": "PROJECT_CONVERSATION_LIMIT_REACHED",
+                "message": "该项目最多保留 5 个未归档对话，请先归档一个后再新建",
+                "limit": 5,
+            })
+        );
+    }
+
+    #[test]
+    fn unrelated_command_error_does_not_impersonate_the_limit_contract() {
+        let payload = serde_json::to_value(CommandError::from(ProductError::Other(
+            "该项目最多保留 5 个未归档对话，请先归档一个后再新建".to_string(),
+        )))
+        .unwrap();
+
+        assert_eq!(
+            payload,
+            json!({
+                "code": "COMMAND_FAILED",
+                "message": "该项目最多保留 5 个未归档对话，请先归档一个后再新建",
+            })
+        );
+    }
 }

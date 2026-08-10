@@ -16,8 +16,8 @@ import {
   quickOpen,
   runVerification,
   sessionMessages,
+  taskClearContext,
   taskCompactContext,
-  taskCreate,
   taskForkContext,
   taskRename,
   taskSetModel,
@@ -38,6 +38,7 @@ import type {
 import { resolveActive, type ProviderChoice } from "../../lib/provider";
 import { useAsyncAction } from "../../lib/hooks";
 import { usePoll } from "../../lib/poll";
+import { readComposerDraft, updateComposerDraft } from "../../lib/composer-drafts";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
@@ -185,7 +186,7 @@ export function Composer({
   onActivitySent,
   onShowSubagents,
 }: Props) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => readComposerDraft(taskId));
   const [error, setError] = useState<string | null>(null);
   const [goalSaveError, setGoalSaveError] = useState<string | null>(null);
   const [goalMode, setGoalMode] = useState(false);
@@ -221,12 +222,19 @@ export function Composer({
   const initializedTaskRef = useRef<string | null>(null);
   const consumedFileReferencesRef = useRef(new Set<string>());
   const messageDraftBeforeGoalRef = useRef("");
+  const messageTextRef = useRef(text);
+
+  const setMessageText = useCallback((update: string | ((current: string) => string)) => {
+    const next = typeof update === "function" ? update(messageTextRef.current) : update;
+    messageTextRef.current = next;
+    updateComposerDraft(taskId, next);
+    setText(next);
+  }, [taskId]);
 
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const setCurrentProject = useTasksStore((s) => s.setCurrentProject);
   const task = useTasksStore((s) => s.details[taskId]?.task);
-  const openRoom = useAppStore((s) => s.openRoom);
   const setCanvasTab = useAppStore((s) => s.setCanvasTab);
   const setScene = useAppStore((s) => s.setScene);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
@@ -279,7 +287,10 @@ export function Composer({
     // otherwise the replay can erase a file reference that the following effect consumed.
     if (initializedTaskRef.current === taskId) return;
     initializedTaskRef.current = taskId;
-    setText("");
+    const restoredDraft = readComposerDraft(taskId);
+    messageTextRef.current = restoredDraft;
+    messageDraftBeforeGoalRef.current = restoredDraft;
+    setText(restoredDraft);
     setInputHistory([]);
     historyIndexRef.current = null;
     historyDraftRef.current = "";
@@ -301,13 +312,26 @@ export function Composer({
     attachments.clear();
   }, [taskId, attachments.clear]);
 
+  // Composer notices confirm lightweight actions such as /clear and /fork. They are not errors
+  // and must not permanently consume the scarce space above the input; a newer notice resets the
+  // timer while error bars keep their existing explicit-dismiss contract.
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   useEffect(() => {
     if (!taskFileReference) return;
     const requestKey = `${taskId}:${taskFileReference.requestId}`;
     if (consumedFileReferencesRef.current.has(requestKey)) return;
     consumedFileReferencesRef.current.add(requestKey);
     const reference = fileReferenceText(taskFileReference.path);
-    setText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${reference}`);
+    if (goalMode) {
+      setText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${reference}`);
+    } else {
+      setMessageText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${reference}`);
+    }
     setAt(null);
     setSlashDismissed(true);
     requestAnimationFrame(() => {
@@ -317,7 +341,7 @@ export function Composer({
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     });
     acknowledgeTaskFileReference(taskId, taskFileReference.requestId);
-  }, [acknowledgeTaskFileReference, taskFileReference, taskId]);
+  }, [acknowledgeTaskFileReference, goalMode, setMessageText, taskFileReference, taskId]);
 
   const loadInputHistory = useCallback(() => {
     const inFlight = historyRequestRef.current;
@@ -375,7 +399,7 @@ export function Composer({
     // Commit the controlled value before returning from the key handler so a fast edit
     // cannot race React's batched render and append to the value being restored.
     flushSync(() => {
-      setText(value);
+      setMessageText(value);
       setAt(null);
       setSlashDismissed(true);
     });
@@ -383,7 +407,7 @@ export function Composer({
     if (!textarea) return;
     textarea.focus();
     textarea.setSelectionRange(value.length, value.length);
-  }, []);
+  }, [setMessageText]);
 
   useEffect(() => {
     if (slashActive < slashItems.length) return;
@@ -417,7 +441,7 @@ export function Composer({
       const pos = ta?.selectionStart ?? text.length;
       const insert = `@${path} `;
       const next = text.slice(0, at?.start ?? pos) + insert + text.slice(pos);
-      setText(next);
+      setMessageText(next);
       setAt(null);
       requestAnimationFrame(() => {
         if (ta) {
@@ -427,7 +451,7 @@ export function Composer({
         }
       });
     },
-    [text, at]
+    [text, at, setMessageText]
   );
 
   const transmit = useCallback(async (
@@ -455,10 +479,21 @@ export function Composer({
         })),
       );
       await agentSend(taskId, message, mode, files);
+      const firstTurnTitle = /^新对话(?:\s+\d+)?$/.test(task?.title.trim() ?? "") && !task?.goal.trim()
+        ? (message.trim() || `分析 ${files[0]?.name ?? "附加文件"}`).slice(0, 48)
+        : null;
+      if (firstTurnTitle) {
+        // The run has already started; this local metadata write does not sit on the first-token
+        // path. It preserves the title behavior of the former Home draft flow.
+        await taskRename(taskId, firstTurnTitle).catch(() => undefined);
+      }
       // IPC 成功后才把引导标为"已接纳"，失败时由下方 catch 回滚时间线。
       onActivitySent(mode);
       rememberInput(message);
-      await refreshDetail(taskId);
+      await Promise.all([
+        refreshDetail(taskId),
+        firstTurnTitle ? refreshTasks().catch(() => undefined) : Promise.resolve(),
+      ]);
       return true;
     } catch (e) {
       // 后端在无 provider 配置等情况下返回错误字符串 —— 必须可见
@@ -468,7 +503,7 @@ export function Composer({
     } finally {
       setSending(false);
     }
-  }, [sending, taskId, onSent, onSendFailed, onActivitySent, refreshDetail, rememberInput]);
+  }, [sending, task, taskId, onSent, onSendFailed, onActivitySent, refreshDetail, refreshTasks, rememberInput]);
 
   const executeSlash = useCallback(async (
     parsed: ParsedSlashCommand,
@@ -493,18 +528,10 @@ export function Composer({
 
     switch (command.name) {
       case "clear": {
-        const next = await taskCreate(
-          workspacePath,
-          "新对话",
-          "",
-          task?.mode ?? (workspaceAttached ? "edit" : "ask"),
-          providerName,
-          agentEngine,
-        );
-        if (model) await taskSetModel(next.id, model);
-        await refreshTasks();
-        await refreshDetail(next.id);
-        openRoom(next.id);
+        const branch = await taskClearContext(taskId);
+        await Promise.all([refreshTasks(), refreshDetail(taskId)]);
+        onSendFailed();
+        setNotice(`当前任务已切换到空白上下文（分支 ${branch.id.slice(0, 8)}）；原聊天记录仍保留在历史分支中。`);
         return;
       }
       case "resume":
@@ -678,7 +705,6 @@ export function Composer({
     onAbort,
     onSendFailed,
     onShowSubagents,
-    openRoom,
     providerName,
     queuedMessages.length,
     refreshDetail,
@@ -824,14 +850,14 @@ export function Composer({
     const parsed = msg ? parseSlashCommand(msg, workflowSkills) : null;
     // 提交动作在前端被接纳时就清空受控草稿，不能让 IPC/Agent 启动时延把旧文本
     // 留在输入框里；失败时仅在用户尚未开始新草稿的情况下恢复。
-    setText("");
+    setMessageText("");
     setAt(null);
     setSlashDismissed(false);
     leaveInputHistory();
     if (!parsed) {
       const sent = await transmit(msg, mode, sendableAttachments);
       if (sent && attachments.attachments.length > 0) attachments.clear();
-      if (!sent) setText((current) => current.length > 0 ? current : draft);
+      if (!sent) setMessageText((current) => current.length > 0 ? current : draft);
       return;
     }
 
@@ -842,7 +868,7 @@ export function Composer({
       await executeSlash(parsed, mode);
     } catch (cause) {
       setError(String(cause));
-      setText((current) => current.length > 0 ? current : draft);
+      setMessageText((current) => current.length > 0 ? current : draft);
     } finally {
       setCommandBusy(false);
     }
@@ -856,6 +882,7 @@ export function Composer({
     leaveInputHistory,
     saveTaskGoal,
     sendableAttachments,
+    setMessageText,
     sending,
     text,
     transmit,
@@ -1037,7 +1064,7 @@ export function Composer({
 
   const pickSlash = useCallback((command: SlashCommandDefinition) => {
     const next = slashCommandInsertion(command);
-    setText(next);
+    setMessageText(next);
     setAt(null);
     setSlashDismissed(false);
     setSlashActive(0);
@@ -1047,7 +1074,7 @@ export function Composer({
       textarea.focus();
       textarea.setSelectionRange(next.length, next.length);
     });
-  }, []);
+  }, [setMessageText]);
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return;
@@ -1482,7 +1509,8 @@ export function Composer({
           }
           onChange={(e) => {
             leaveInputHistory();
-            setText(e.target.value);
+            if (goalMode) setText(e.target.value);
+            else setMessageText(e.target.value);
             setSlashActive(0);
             setGoalSaveError(null);
             setSlashDismissed(goalMode);

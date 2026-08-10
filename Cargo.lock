@@ -1234,6 +1234,7 @@ checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
+ "zlib-rs",
 ]
 
 [[package]]
@@ -1789,7 +1790,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermes-compaction"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -1803,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-config"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "dirs 5.0.1",
  "hermes-error",
@@ -1816,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1830,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-error"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "serde_json",
  "serde_yaml",
@@ -1840,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-ipc"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -1856,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-llm"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1872,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-mcp"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "futures",
@@ -1891,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-store"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "chrono",
  "flate2",
@@ -1908,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "hermes-tauri"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "hermes-config",
@@ -3498,7 +3499,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-agent-worker"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3522,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-core"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "cap-std",
@@ -3548,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-gateway"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3571,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-host"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3580,6 +3581,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "fix-path-env",
+ "flate2",
  "futures",
  "hermes-config",
  "hermes-core",
@@ -3600,10 +3602,13 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
+ "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
  "thiserror 2.0.19",
@@ -3616,11 +3621,12 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zip",
 ]
 
 [[package]]
 name = "r-code-installer"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "dirs 5.0.1",
  "serde",
@@ -3635,7 +3641,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-mcp"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "blake3",
@@ -3660,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-store"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "blake3",
  "chrono",
@@ -3682,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "r-code-terminal"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5062,6 +5068,22 @@ dependencies = [
  "thiserror 2.0.19",
  "url",
  "windows 0.61.3",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3214becf9ef5783c0ae99a3bb25adf5353a7a16ebf53e74b909e29205735c6c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
  "zbus",
 ]
 
@@ -6996,15 +7018,35 @@ checksum = "caa8cd6af31c3b31c6631b8f483848b91589021b28fffe50adada48d4f4d2ed1"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
+ "zopfli",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"
 
 [[package]]
 name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]
 
 [[package]]
 name = "zvariant"

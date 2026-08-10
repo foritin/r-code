@@ -5,12 +5,19 @@
 
 use thiserror::Error;
 
+/// Stable IPC-facing code for the per-project active conversation limit.
+pub const PROJECT_CONVERSATION_LIMIT_REACHED_CODE: &str = "PROJECT_CONVERSATION_LIMIT_REACHED";
+
 /// R-Code 产品专属错误。
 ///
 /// 不修改公共 `hermes_error::Error` 枚举。
 /// 通过 `From<ProductError> for hermes_error::Error` 互转。
 #[derive(Debug, Clone, Error)]
 pub enum ProductError {
+    /// A workspace already owns the maximum number of unarchived conversations.
+    #[error("该项目最多保留 {limit} 个未归档对话，请先归档一个后再新建")]
+    ProjectConversationLimitReached { limit: usize },
+
     /// Worktree 操作失败
     #[error("worktree error: {0}")]
     WorktreeError(String),
@@ -91,6 +98,9 @@ pub enum ProductError {
 impl From<ProductError> for hermes_error::Error {
     fn from(err: ProductError) -> Self {
         match err {
+            ProductError::ProjectConversationLimitReached { limit } => Self::Other(format!(
+                "该项目最多保留 {limit} 个未归档对话，请先归档一个后再新建"
+            )),
             ProductError::WorktreeError(msg) => Self::Storage(format!("worktree: {msg}")),
             ProductError::PathEscape(msg) => Self::PermissionDenied(format!("path escape: {msg}")),
             ProductError::PathNotFound(msg) => Self::ToolHost(format!("path not found: {msg}")),
@@ -148,6 +158,23 @@ mod tests {
         let err = ProductError::DatabaseError("connection failed".to_string());
         let hermes_err: hermes_error::Error = err.into();
         assert!(matches!(hermes_err, hermes_error::Error::Storage(_)));
+    }
+
+    #[test]
+    fn project_conversation_limit_exposes_stable_code_and_limit() {
+        assert_eq!(
+            PROJECT_CONVERSATION_LIMIT_REACHED_CODE,
+            "PROJECT_CONVERSATION_LIMIT_REACHED"
+        );
+        let error = ProductError::ProjectConversationLimitReached { limit: 5 };
+        assert_eq!(
+            error.to_string(),
+            "该项目最多保留 5 个未归档对话，请先归档一个后再新建"
+        );
+        assert!(matches!(
+            error,
+            ProductError::ProjectConversationLimitReached { limit: 5 }
+        ));
     }
 
     #[test]

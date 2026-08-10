@@ -110,8 +110,11 @@ durable, reusable information supported by the supplied evidence: explicit user 
 constraints, stable project conventions/decisions, and verified recurring pitfalls. Never retain \
 credentials, tokens, private keys, personal data, raw logs, local absolute paths, temporary task \
 state, guesses, or assistant-only claims. Use global scope only for cross-project user preferences; \
-use project scope for repository-specific facts. Global proposals still require user approval. \
-Prefer no proposal over a weak one. Return exactly one JSON object with this shape and no prose: \
+use project scope for repository-specific facts. A project proposal must use basis=explicit_user and \
+may cite only turns whose explicit_remember field is true; assistant text never grants permission. \
+Do not emit project proposals with basis=verified_result because this envelope has no structured \
+host-result evidence. Global proposals still require user approval. Prefer no proposal over a weak \
+one. Return exactly one JSON object with this shape and no prose: \
 {\"proposals\":[{\"scope\":\"global|project|skip\",\"kind\":\"preference|constraint|convention|decision|pitfall\",\"operation\":\"add|replace|noop\",\"target_memory_ordinal\":null,\"target_version\":null,\"content\":null,\"reason\":\"\",\"basis\":\"explicit_user|verified_result\",\"evidence_ordinals\":[1],\"confidence\":0.0}]}"
 }
 

@@ -7,15 +7,15 @@
  * - 相邻命令与文件操作归成可展开的活动；
  * - 原始协议名和 JSON 永不直接进入产品时间线。
  */
-import { toolVerb } from "../../lib/format";
 import type { TimelineItem } from "./model";
+import { toolActivityKind, type ToolActivityKind } from "./tool-activity";
 
 export type TimelineUserItem = Extract<TimelineItem, { kind: "you" }>;
 export type TimelineRunItem = Extract<TimelineItem, { kind: "run" }>;
 export type TimelineToolItem = Extract<TimelineItem, { kind: "tool" }>;
 export type TimelineBaseDisplayItem = Exclude<TimelineItem, { kind: "you" | "run" | "tool" }>;
 
-export type TimelineToolGroupKind = "command" | "file" | "lookup" | "tool";
+export type TimelineToolGroupKind = ToolActivityKind;
 
 export interface TimelineToolGroupItem {
   kind: "tool_group";
@@ -193,11 +193,7 @@ function presentTurn(turn: RawTurn): TimelineTurn {
 }
 
 function toolGroupKind(tool: TimelineToolItem): TimelineToolGroupKind {
-  const verb = toolVerb(tool.name);
-  if (verb === "run") return "command";
-  if (verb === "edit" || verb === "write") return "file";
-  if (verb === "read" || verb === "search") return "lookup";
-  return "tool";
+  return toolActivityKind(tool.name);
 }
 
 function protocolToolKind(name: string): "delegate" | "collect" | null {

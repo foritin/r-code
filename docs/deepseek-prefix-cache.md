@@ -1,7 +1,7 @@
 # DeepSeek Provider 前缀缓存与响应速度优化 PRD
 
 > 状态：**已实施（2026-08-07，分支 `feat/deepseek-prefix-cache`；两处已记录例外：P1-F 的 missing-reasoning 回放因 hermes 无 reasoning 事件流未实施、P2-G 命中率恢复场景测试未建，见 §5 对应注释。Review 收尾已补齐：§8 两项缓解（双套 usage 字段解析、重试计数展示）与 P2-H 运行时归因接线）**
-> 范围：仅 DeepSeek Provider 的请求字节稳定性、缓存观测与响应路径优化；不含 Anthropic / OpenAI 兼容 / Responses 口的重构。
+> 范围：DeepSeek Provider 的请求字节稳定性、缓存观测与响应路径优化；主路径为 Chat Completions，并覆盖用户手动切换到 Responses、Anthropic Messages 兼容口及 DeepSeek 自定义网关时的协议适配。
 > 目标读者：维护者、评审者、实施者。
 > 参照实现：Reasonix（`esengine/DeepSeek-Reasonix`，MIT）——围绕 DeepSeek 字节级自动前缀缓存专门设计的 agent。
 
@@ -39,6 +39,16 @@ DeepSeek 的 prefix cache 是**字节级自动**的：两次请求的公共前�
 - Reasonix 的 `internal/provider/openai/realcache_test.go`（`//go:build live` 探针）用构造的大块稳定文本重复请求实测前缀命中；其 mock（`cachehit_e2e_test.go:59-74`）按"与前一次请求逐字节相同的消息前缀"推导 hit tokens。
 - "90%+ 命中率"是 Reasonix **release 门禁守卫**（`cachehit_e2e_test.go:378-477`，默认阈值 90、非严格模式仅警告）与营销文案（`docs/index.html:160-161`）中的宣称；"~1/5 成本"对应 DeepSeek cache-hit/miss 定价比。**r-code 的真实命中率以本 PRD §6 的 P0-B 基线实测为准。**
 - DeepSeek 无 `cache_control` 类开关（Reasonix `internal/provider/anthropic/anthropic_test.go:651` 明言 "DeepSeek ignores cache_control; system/tools must omit it"）。
+
+### 2.1 手动切换协议时的缓存契约（2026-08-09 补齐）
+
+| 线路 | Provider 身份 | 缓存开关 | usage 观测 |
+| --- | --- | --- | --- |
+| Chat Completions | `DeepSeekProvider` | 服务端自动缓存；自定义网关也请求 `stream_options.include_usage`，不支持时移除该字段兼容重试 | `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` |
+| Responses | `DeepSeekResponses` | 服务端自动缓存；`store: false`，每轮稳定重放完整历史 | `input_tokens_details.cached_tokens`；miss 按 `input_tokens - cached_tokens` 推导，若服务端给出 DeepSeek 显式 hit/miss 字段则优先使用 |
+| Anthropic Messages | `DeepSeekAnthropic` | 服务端自动缓存；即使 `enable_caching=true` 也不注入 Anthropic `cache_control` | 读取 `cache_read_input_tokens` / `cache_creation_input_tokens`；按 Anthropic 口的排除式 `input_tokens` 归一成总输入及 hit/miss，含流式 `message_start` |
+
+三条线路都声明 DeepSeek V4 的 1M context window，并保持普通 OpenAI Responses、官方 Anthropic 与其它兼容 provider 的既有行为。DeepSeek 身份由 `deepseek`/`deepseek_*` provider id 或精确官方 host 保留；不会用模型名猜测，也不会把 `api.deepseek.com.example` 一类相似域名误判为官方服务。
 
 ---
 
@@ -259,9 +269,13 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 | 真实 API | `#[ignore]` 集成测试（需 key） | 实测 `prompt_cache_hit_tokens` 增长曲线；探针设计参考 Reasonix `realcache_test.go`（前缀需明显超过 64-token 缓存块粒度） |
 | 产品 | UI 命中率展示 | P0-B 之后，状态栏/会话详情显示累计命中率（`runUsageLabel` 扩展） |
 
+协议切换回归位于 `vendor/agent-core/crates/hermes-llm/tests/deepseek_protocol_routes.rs`：使用本机 loopback HTTP/SSE 逐条验证 Chat 自定义网关、Responses、Anthropic 兼容口与旧网关兼容回退的 endpoint、公共请求前缀、缓存 usage 及能力声明。它证明 R-Code 的协议适配，不宣称任意第三方网关都完整兼容 DeepSeek。
+
 **发布门槛**（两个时点，缺一不可）：① **P0-A 落地前**采集 10 轮以上工具会话的缓存命中率基线并**存档**（预期 ≈0%，作为"优化前"对照）；② **P0-A 完成后**复测同场景，基线应 ≥85%（作为"优化后"对照）。基线采集细节见 P0-B 验收；若未达 85%，回退路径见 §8。
 
 **实测记录（2026-08-07）**：① 未单独采集（P0-A 先行实施），以冷启动全 miss 数据替代，存档于 `docs/deepseek-cache-baseline.md`。② **达成**：真实 API 14 轮探针 tail_avg(3)=93.0% ≥85%（第 12-13 轮单轮 95.4%/97.0%；字节前缀 mock 守卫 tail_avg=96.5%，commit `69c49e9`）。10 轮内 tail_avg（82.2%）偏低属短会话结构性稀释——每轮追加占比高，轮次增加后趋近 95%+，完整曲线与分析见基线文档。命中按 ~128 token 块量化；探针跨运行仍命中（round 0 hit=128）证明服务端缓存持久。
+
+**协议切换实测（2026-08-09）**：使用同一段稳定长 system、每条线路连续 3 次低输出请求，官方 Responses（`deepseek-v4-flash`，`/v1/responses`）3/3 返回非空且每轮解析为 input=248、cache hit=128、miss=120；官方 Anthropic Messages（`deepseek-v4-pro`，`/anthropic/v1/messages`）3/3 返回非空，归一后每轮 input=169、cache hit=128、miss=41。实测同时发现并修复 Anthropic `message_delta` 将 `usage` 与 `stop_reason` 放在同一帧时丢失 output usage 的问题。忽略型实网探针位于 `deepseek_cache_probe.rs`；自定义网关使用 loopback HTTP/SSE 覆盖 endpoint 拼接、usage 解析及不支持 `stream_options` 时的兼容回退，未对未知第三方服务作可用性承诺。
 
 ### 6.1 受影响测试清单（实施时同步更新）
 
@@ -282,7 +296,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 ## 7. 非目标（明确不做）
 
 - ❌ 不修改 DeepSeek API 参数换取缓存（DeepSeek 无显式缓存开关；`cache_control` 仅 Anthropic 口用，OpenAI 兼容口忽略，Reasonix `anthropic_test.go:651` 佐证）。
-- ❌ 不做 Responses 口 / Anthropic 口的对齐改造（本 PRD 只覆盖 DeepSeek OpenAI 兼容口）。
+- ❌ 不为未知第三方网关猜测 DeepSeek 身份或承诺完整兼容；自定义 profile 需沿用 `deepseek` 预设或使用 `deepseek_*` id 显式声明。
 - ❌ 不做多会话分离的架构重构（R-Code 当前无 planner/executor 双模型架构；若未来引入，遵循 §4 原则 6）。
 - ❌ 不改变时间感知、记忆、任务上下文、委派提示的**用户可见语义**，只改承载位置。
 - ❌ 输出截断续写（DeepSeek Beta `prefix` 参数，Reasonix `openai.go:535-606`）本期**暂缓**：仅官方 `/chat/completions` 时收益有限，记为后续可选项。

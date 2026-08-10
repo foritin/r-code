@@ -19,12 +19,156 @@ use hermes_ipc::IpcServer;
 use r_code_host::commands::CommandState;
 use tauri::{Emitter, Manager};
 
+#[cfg(target_os = "windows")]
+use tauri::{
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
+
 mod tauri_commands;
 
 /// Tauri 命令：ping -- 验证前后端 IPC 通道。
 #[tauri::command]
 fn ping() -> bool {
     true
+}
+
+#[cfg(target_os = "windows")]
+const MAIN_TRAY_ID: &str = "r-code-main-tray";
+#[cfg(target_os = "windows")]
+const TRAY_SHOW_ID: &str = "r-code-tray-show";
+#[cfg(target_os = "windows")]
+const TRAY_HIDE_ID: &str = "r-code-tray-hide";
+#[cfg(target_os = "windows")]
+const TRAY_QUIT_ID: &str = "r-code-tray-quit";
+
+#[cfg(target_os = "windows")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowsLifecycleAction {
+    Restore,
+    HideToTray,
+    Quit,
+    None,
+}
+
+#[cfg(target_os = "windows")]
+fn windows_close_action(is_main_window: bool, tray_available: bool) -> WindowsLifecycleAction {
+    if is_main_window && tray_available {
+        WindowsLifecycleAction::HideToTray
+    } else {
+        WindowsLifecycleAction::None
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_tray_menu_action(menu_id: &str) -> WindowsLifecycleAction {
+    match menu_id {
+        TRAY_SHOW_ID => WindowsLifecycleAction::Restore,
+        TRAY_HIDE_ID => WindowsLifecycleAction::HideToTray,
+        TRAY_QUIT_ID => WindowsLifecycleAction::Quit,
+        _ => WindowsLifecycleAction::None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_tray_click_action(
+    is_left_button: bool,
+    is_button_release: bool,
+) -> WindowsLifecycleAction {
+    if is_left_button && is_button_release {
+        WindowsLifecycleAction::Restore
+    } else {
+        WindowsLifecycleAction::None
+    }
+}
+
+/// Restore the hidden main window from the notification area. Showing, unminimizing and focusing
+/// are deliberately separate best-effort operations: Windows can report a stale minimized state
+/// after a display or virtual-desktop transition, but one failed step must not block the others.
+#[cfg(target_os = "windows")]
+fn show_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("cannot restore R-Code because the main window is missing");
+        return;
+    };
+    if let Err(error) = window.show() {
+        tracing::warn!(%error, "failed to show the R-Code main window");
+    }
+    if let Err(error) = window.unminimize() {
+        tracing::warn!(%error, "failed to restore the R-Code main window");
+    }
+    if let Err(error) = window.set_focus() {
+        tracing::warn!(%error, "failed to focus the R-Code main window");
+    }
+    if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+        let _ = tray.set_tooltip(Some("R-Code"));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn hide_main_window(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        tracing::warn!("cannot hide R-Code because the main window is missing");
+        return;
+    };
+    match window.hide() {
+        Ok(()) => {
+            if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
+                let _ = tray.set_tooltip(Some("R-Code — 正在后台运行"));
+            }
+        }
+        Err(error) => tracing::warn!(%error, "failed to hide the R-Code main window"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn apply_windows_lifecycle_action(app: &tauri::AppHandle, action: WindowsLifecycleAction) {
+    match action {
+        WindowsLifecycleAction::Restore => show_main_window(app),
+        WindowsLifecycleAction::HideToTray => hide_main_window(app),
+        WindowsLifecycleAction::Quit => app.exit(0),
+        WindowsLifecycleAction::None => {}
+    }
+}
+
+/// Windows follows the familiar Discord/WeChat/OneDrive tray contract:
+/// left click restores the window, right click exposes explicit show/hide/quit actions.
+/// Tray setup is non-fatal; the close handler checks that this icon exists before hiding so a
+/// shell restriction or icon failure can never leave the user with an unreachable application.
+#[cfg(target_os = "windows")]
+fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "打开 R-Code", true, None::<&str>)?;
+    let hide = MenuItem::with_id(app, TRAY_HIDE_ID, "隐藏到系统托盘", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出 R-Code", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
+
+    let mut tray = TrayIconBuilder::with_id(MAIN_TRAY_ID)
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("R-Code")
+        .on_menu_event(|app, event| {
+            apply_windows_lifecycle_action(app, windows_tray_menu_action(event.id().as_ref()));
+        })
+        .on_tray_icon_event(|tray, event| {
+            let action = match event {
+                TrayIconEvent::Click {
+                    button,
+                    button_state,
+                    ..
+                } => windows_tray_click_action(
+                    matches!(button, MouseButton::Left),
+                    matches!(button_state, MouseButtonState::Up),
+                ),
+                _ => WindowsLifecycleAction::None,
+            };
+            apply_windows_lifecycle_action(tray.app_handle(), action);
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }
 
 fn main() {
@@ -57,7 +201,16 @@ fn main() {
     r_code_host::init_logging();
     tracing::info!("R-Code Host starting (Tauri shell)...");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // A tray application must remain single-instance: launching R-Code again while its window is
+    // hidden restores the existing process instead of opening a second SQLite/MCP owner. The
+    // single-instance plugin must be registered first so it can intercept before other plugins.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        show_main_window(app);
+    }));
+
+    builder
         .plugin(
             tauri::plugin::Builder::<tauri::Wry, ()>::new("navigation-guard")
                 .on_navigation(|_, url| {
@@ -73,6 +226,21 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
         .plugin(tauri_plugin_opener::init())
+        .on_window_event(|window, event| {
+            #[cfg(target_os = "windows")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // Only intercept close when the restore affordance really exists. If Windows
+                // refused tray creation, fall through to Tauri's normal close/exit behavior.
+                let action = windows_close_action(
+                    window.label() == "main",
+                    window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some(),
+                );
+                if action == WindowsLifecycleAction::HideToTray {
+                    api.prevent_close();
+                    apply_windows_lifecycle_action(window.app_handle(), action);
+                }
+            }
+        })
         .setup(|app| {
             // 持久化状态：AppData/r-code/{db,blobs,sessions,config}
             let base = app.path().app_data_dir()?.join("r-code");
@@ -108,6 +276,15 @@ fn main() {
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "provider secret migration skipped"),
+            }
+            match r_code_host::settings::SettingsService::new(config_dir.clone())
+                .migrate_legacy_provider_kinds()
+            {
+                Ok(count) if count > 0 => {
+                    tracing::info!(count, "persisted stable provider identities")
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "provider identity migration skipped"),
             }
             let db_path = db_dir.join("r-code.db");
             // Migration is deliberately completed before the connection pool is created. This
@@ -280,6 +457,11 @@ fn main() {
 
             tracing::info!(data_dir = %base.display(), "CommandState initialized (persistent)");
 
+            #[cfg(target_os = "windows")]
+            if let Err(error) = setup_windows_tray(app) {
+                tracing::warn!(%error, "system tray is unavailable; close will exit normally");
+            }
+
             // 后台启动 IPC server（保留外部 CLI / agent worker 通道）
             tauri::async_runtime::spawn(async {
                 if let Err(e) = run_ipc_server().await {
@@ -291,7 +473,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             ping,
+            tauri_commands::cmd_app_quit,
             tauri_commands::cmd_task_create,
+            tauri_commands::cmd_project_conversation_create,
+            tauri_commands::cmd_task_prepare,
             tauri_commands::cmd_task_list,
             tauri_commands::cmd_task_archive,
             tauri_commands::cmd_task_restore,
@@ -319,6 +504,7 @@ fn main() {
             tauri_commands::cmd_plan_review_reject_file,
             tauri_commands::cmd_plan_review_reject_feature,
             tauri_commands::cmd_task_fork_context,
+            tauri_commands::cmd_task_clear_context,
             tauri_commands::cmd_task_compact_context,
             tauri_commands::cmd_task_detail,
             tauri_commands::cmd_task_detail_batch,
@@ -396,6 +582,7 @@ fn main() {
             tauri_commands::cmd_prepare_workbench_window,
             tauri_commands::cmd_replay,
             tauri_commands::cmd_session_messages,
+            tauri_commands::cmd_session_messages_for_branch,
             tauri_commands::cmd_subagent_session_messages,
             tauri_commands::cmd_memory_overview,
             tauri_commands::cmd_memory_update_settings,
@@ -428,6 +615,8 @@ fn main() {
             tauri_commands::cmd_settings_save_provider,
             tauri_commands::cmd_settings_select_provider,
             tauri_commands::cmd_settings_delete_provider,
+            tauri_commands::cmd_rtk_status,
+            tauri_commands::cmd_rtk_set_enabled,
             tauri_commands::cmd_codex_integration_status,
             tauri_commands::cmd_codex_install_cli,
             tauri_commands::cmd_codex_start_login,
@@ -442,15 +631,21 @@ fn main() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                let manager = app_handle.state::<CommandState>().mcp_manager.clone();
+                let state = app_handle.state::<CommandState>();
+                let manager = state.mcp_manager.clone();
+                let codex_app_server = state.codex_app_server.clone();
                 let outcome = tauri::async_runtime::block_on(async move {
-                    tokio::time::timeout(std::time::Duration::from_secs(2), manager.shutdown())
-                        .await
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async move {
+                        let (mcp_result, ()) =
+                            tokio::join!(manager.shutdown(), codex_app_server.shutdown());
+                        mcp_result
+                    })
+                    .await
                 });
                 match outcome {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => tracing::warn!(%error, "MCP shutdown reported an error"),
-                    Err(_) => tracing::warn!("MCP shutdown timed out after two seconds"),
+                    Err(_) => tracing::warn!("MCP/Codex transport shutdown timed out after two seconds"),
                 }
             }
         });
@@ -496,4 +691,63 @@ async fn run_ipc_server() -> anyhow::Result<()> {
     server.serve().await?;
 
     Ok(())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn main_close_hides_only_when_a_restore_tray_is_available() {
+        assert_eq!(
+            windows_close_action(true, true),
+            WindowsLifecycleAction::HideToTray
+        );
+        assert_eq!(
+            windows_close_action(true, false),
+            WindowsLifecycleAction::None,
+            "without a tray affordance the native close must exit normally"
+        );
+        assert_eq!(
+            windows_close_action(false, true),
+            WindowsLifecycleAction::None,
+            "secondary windows must retain their native close behavior"
+        );
+    }
+
+    #[test]
+    fn tray_menu_keeps_restore_hide_and_explicit_quit_distinct() {
+        assert_eq!(
+            windows_tray_menu_action(TRAY_SHOW_ID),
+            WindowsLifecycleAction::Restore
+        );
+        assert_eq!(
+            windows_tray_menu_action(TRAY_HIDE_ID),
+            WindowsLifecycleAction::HideToTray
+        );
+        assert_eq!(
+            windows_tray_menu_action(TRAY_QUIT_ID),
+            WindowsLifecycleAction::Quit
+        );
+        assert_eq!(
+            windows_tray_menu_action("unknown-menu-item"),
+            WindowsLifecycleAction::None
+        );
+    }
+
+    #[test]
+    fn only_a_released_left_tray_click_restores_the_window() {
+        assert_eq!(
+            windows_tray_click_action(true, true),
+            WindowsLifecycleAction::Restore
+        );
+        assert_eq!(
+            windows_tray_click_action(true, false),
+            WindowsLifecycleAction::None
+        );
+        assert_eq!(
+            windows_tray_click_action(false, true),
+            WindowsLifecycleAction::None
+        );
+    }
 }

@@ -299,7 +299,7 @@
 
 .footbar { display: flex; align-items: center; gap:var(--sp-5); margin-top:var(--sp-5); }
 
-@media (max-width:820px) {
+@media (max-width:1050px) {
   .settings-layout { grid-template-columns:1fr; gap:var(--sp-8); }
   .settings-nav { position:static; grid-template-columns:repeat(5,max-content); overflow-x:auto; padding-bottom:var(--sp-3); }
   .settings-nav button { padding:0 var(--sp-6); white-space:nowrap; }
@@ -357,6 +357,27 @@
 .codex-inline-note { display:flex; align-items:flex-start; gap:var(--sp-3); margin:var(--sp-4) 0 0; color:var(--success); font-size:var(--text-meta); line-height:1.5; }
 .codex-inline-note svg { flex:none; margin-top:1px; }
 .codex-inline-warning { margin:var(--sp-4) 0 0; color:var(--warning); font-size:var(--text-meta); line-height:1.5; }
+.rtk-control { display:grid; grid-template-columns:40px minmax(0,1fr) auto; align-items:center; gap:var(--sp-5); margin-top:var(--sp-7); padding:var(--sp-5) var(--sp-6); border:1px solid var(--border); border-radius:var(--radius-sm); background:color-mix(in srgb,var(--bg-panel) 78%,var(--bg-card)); transition:border-color var(--dur-2) var(--ease),background var(--dur-2) var(--ease); }
+.rtk-control.state-enabled { border-color:color-mix(in srgb,var(--success) 42%,var(--border)); background:color-mix(in srgb,var(--tint-success) 38%,var(--bg-panel)); }
+.rtk-control.state-enabling { border-color:color-mix(in srgb,var(--accent) 45%,var(--border)); background:color-mix(in srgb,var(--tint-accent) 46%,var(--bg-panel)); }
+.rtk-mark { display:grid; width:36px; height:36px; place-items:center; border:1px solid var(--border-strong); border-radius:var(--radius-xs); background:var(--bg-card); color:var(--fg-muted); font:600 10px/1 var(--font-mono); letter-spacing:.08em; box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--fg) 3%,transparent); }
+.rtk-control.state-enabled .rtk-mark { border-color:color-mix(in srgb,var(--success) 45%,var(--border)); color:var(--success); }
+.rtk-control.state-enabling .rtk-mark { border-color:color-mix(in srgb,var(--accent) 50%,var(--border)); color:var(--accent); }
+.rtk-control-copy { min-width:0; }
+.rtk-control-title { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-3); }
+.rtk-control-title strong { color:var(--fg); font-size:var(--text-sm); font-weight:var(--weight-strong); }
+.rtk-state-badge { display:inline-flex; align-items:center; gap:var(--sp-2); padding:1px var(--sp-3); border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--fg-faint); font-size:var(--text-meta); line-height:1.4; }
+.rtk-state-badge::before { width:5px; height:5px; border-radius:50%; background:currentColor; content:""; }
+.rtk-control.state-enabled .rtk-state-badge { border-color:color-mix(in srgb,var(--success) 40%,var(--border)); color:var(--success); }
+.rtk-control.state-enabling .rtk-state-badge { border-color:color-mix(in srgb,var(--accent) 42%,var(--border)); color:var(--accent); }
+.rtk-control p { margin:var(--sp-2) 0 0; color:var(--fg-muted); font-size:var(--text-meta); line-height:1.55; }
+.rtk-control-meta { display:flex; align-items:center; flex-wrap:wrap; gap:var(--sp-2); margin-top:var(--sp-2); color:var(--fg-faint); font:var(--text-meta) var(--font-mono); }
+.rtk-control-meta > span:first-child { white-space:nowrap; }
+.rtk-control-meta a { padding-left:var(--sp-2); border-left:1px solid var(--border); }
+.rtk-control-meta a,.rtk-control-meta .quiet-link { color:var(--fg-faint); font:inherit; text-decoration:none; }
+.rtk-control-meta a:hover,.rtk-control-meta .quiet-link:hover { color:var(--accent); }
+.rtk-switch { align-self:center; }
+.rtk-switch:disabled { cursor:wait; opacity:.5; }
 .codex-runtime-preferences { margin-top:var(--sp-8); padding-top:var(--sp-8); border-top:1px solid var(--border); }
 .codex-runtime-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--sp-7); margin-bottom:var(--sp-5); }
 .codex-runtime-head h4 { margin:0; color:var(--fg); font-size:var(--text-base); font-weight:var(--weight-strong); }
@@ -395,6 +416,7 @@
   .codex-setup-steps li:last-child { border-bottom:0; }
   .codex-login-options { align-items:flex-start; flex-direction:column; }
   .codex-login-options > div:last-child { width:100%; flex-wrap:wrap; }
+  .rtk-control { grid-template-columns:36px minmax(0,1fr) auto; padding:var(--sp-5); }
   .settings-control-row { grid-template-columns:1fr; gap:var(--sp-4); padding:var(--sp-5) 0 var(--sp-6); }
 }
 

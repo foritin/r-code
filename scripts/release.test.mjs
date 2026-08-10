@@ -176,11 +176,30 @@ test("macOS local builder supports explicit ad-hoc and notarized modes", () => {
   assert.doesNotMatch(script, /find .*maxdepth/, "macOS BSD find does not support -maxdepth");
 });
 
+test("Windows local packaging uses a file-backed Tauri override", () => {
+  const script = fs.readFileSync(
+    path.join(repoRoot, "scripts", "build-branded-installer.ps1"),
+    "utf8",
+  );
+  const override = JSON.parse(
+    fs.readFileSync(
+      path.join(repoRoot, "src-tauri", "tauri.local-package.conf.json"),
+      "utf8",
+    ),
+  );
+
+  assert.match(script, /"--config", "tauri\.local-package\.conf\.json"/);
+  assert.match(script, /\[Security\.Cryptography\.SHA256\]::Create\(\)/);
+  assert.equal(override.bundle.createUpdaterArtifacts, false);
+  assert.doesNotMatch(script, /--config[^\r\n]*\{.*createUpdaterArtifacts/);
+  assert.doesNotMatch(script, /Get-FileHash/);
+});
+
 test("release workflow falls back per platform while preserving explicit unsigned prereleases", () => {
   const workflow = fs.readFileSync(
     path.join(repoRoot, ".github", "workflows", "release.yml"),
     "utf8",
-  );
+  ).replace(/\r\n/g, "\n");
 
   assert.match(workflow, /runner: macos-latest[\s\S]*rust-target: aarch64-apple-darwin/);
   assert.match(workflow, /runner: macos-15-intel[\s\S]*rust-target: x86_64-apple-darwin/);

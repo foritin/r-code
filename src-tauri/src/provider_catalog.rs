@@ -427,11 +427,16 @@ pub const PRESETS: &[Preset] = &[
         label: "Kimi For Coding（订阅）",
         protocol: Protocol::AnthropicMessages,
         native: P_A,
-        auth: AuthStyle::Bearer,
+        auth: AuthStyle::XApiKey,
         base_url: "https://api.kimi.com/coding/",
         reasoning_replay: false,
-        model: "kimi-for-coding",
-        models: &["kimi-for-coding"],
+        model: "k3-256k",
+        models: &[
+            "k3",
+            "k3-256k",
+            "kimi-for-coding",
+            "kimi-for-coding-highspeed",
+        ],
         category: Category::CnOfficial,
         website_url: "https://www.kimi.com/code/",
         api_key_url: None,
@@ -445,7 +450,7 @@ pub const PRESETS: &[Preset] = &[
         template_vars: &[],
         max_output_tokens: Some(32_768),
         context_window: Some(262_144),
-        note: Some("必须用 kimi-for-coding 这个路由别名，填真实模型名不走订阅"),
+        note: None,
     },
     Preset {
         id: "zhipu",
@@ -1098,6 +1103,26 @@ pub fn find(id: &str) -> Option<&'static Preset> {
     PRESETS.iter().find(|preset| preset.id == id)
 }
 
+/// Infer a stable identity once for configurations written before `provider_kind` existed.
+/// New saves persist the selected catalog identity and never need these mutable-name/URL hints.
+pub fn infer_legacy_provider_kind(id: &str, base_url: &str) -> Option<&'static str> {
+    let normalized_id = id.trim().to_ascii_lowercase();
+    if normalized_id == "deepseek"
+        || normalized_id == "deepseek_anthropic"
+        || normalized_id.starts_with("deepseek_")
+    {
+        return Some("deepseek");
+    }
+    if url::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.deepseek.com"))
+    {
+        return Some("deepseek");
+    }
+    find(id).map(|preset| preset.id)
+}
+
 fn normalize_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_ascii_lowercase()
 }
@@ -1517,6 +1542,23 @@ mod tests {
                 preset.id
             );
         }
+    }
+
+    #[test]
+    fn kimi_coding_catalog_matches_the_live_subscription_contract() {
+        let preset = find("kimi_coding").unwrap();
+        assert_eq!(preset.auth, AuthStyle::XApiKey);
+        assert_eq!(preset.model, "k3-256k");
+        assert_eq!(
+            preset.models,
+            &[
+                "k3",
+                "k3-256k",
+                "kimi-for-coding",
+                "kimi-for-coding-highspeed",
+            ]
+        );
+        assert_eq!(preset.context_window, Some(262_144));
     }
 
     #[test]

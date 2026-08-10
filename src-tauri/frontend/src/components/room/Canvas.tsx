@@ -617,6 +617,9 @@ function SummaryPanel({
     ? activity.subagents.filter((child) => child.status === "completed").length
     : subagentRuns.filter((run) => run.ended_at != null && run.review_state !== "failed" && run.review_state !== "aborted").length;
   const subagentCount = Math.max(activity.subagents.length, subagentRuns.length);
+  const subagentAvatars = activity.subagents.length > 0
+    ? activity.subagents.map((child) => ({ identity: child.id, runtimeKind: child.runtimeKind }))
+    : subagentRuns.map((run) => ({ identity: run.id, runtimeKind: run.runtime_kind }));
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
   const hasDistinctGoal = Boolean(task.goal_active && task.goal.trim() && task.goal.trim() !== title);
   const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "纯聊天");
@@ -653,9 +656,18 @@ function SummaryPanel({
       {subagentCount > 0 && (
         <button type="button" className="sum-subagents-button" onClick={onShowSubagents} aria-label="打开子智能体列表">
           <span className="sum-subagent-stack" aria-hidden="true">
-            {Array.from({ length: Math.min(3, subagentCount) }, (_, index) => (
-              <SubagentAvatar index={index} size="sm" key={index} />
-            ))}
+            {Array.from({ length: Math.min(3, subagentCount) }, (_, index) => {
+              const avatar = subagentAvatars[index];
+              return (
+                <SubagentAvatar
+                  index={index}
+                  identity={avatar?.identity}
+                  runtimeKind={avatar?.runtimeKind}
+                  size="sm"
+                  key={avatar?.identity ?? index}
+                />
+              );
+            })}
           </span>
           <span className="sum-subagent-copy">
             <strong>

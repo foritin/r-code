@@ -60,6 +60,52 @@ const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_millis(100);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderStreamErrorDisposition {
+    Retryable,
+    Fatal,
+}
+
+/// Anthropic 兼容服务会在 HTTP 200 的 SSE 流里发送 `event: error`。Provider
+/// 将其编码为 `<error_type>: <message>`；这里必须区分可恢复服务端故障和配置错误，
+/// 绝不能把任一类当作正常 Stop 静默完成。
+fn provider_stream_error_disposition(reason: &str) -> Option<ProviderStreamErrorDisposition> {
+    let error_type = reason
+        .split_once(':')
+        .map_or(reason, |(error_type, _)| error_type)
+        .trim()
+        .to_ascii_lowercase();
+    match error_type.as_str() {
+        "overloaded_error" | "rate_limit_error" | "api_error" => {
+            Some(ProviderStreamErrorDisposition::Retryable)
+        }
+        value if value.ends_with("_error") => Some(ProviderStreamErrorDisposition::Fatal),
+        _ => None,
+    }
+}
+
+fn public_provider_stream_error(
+    reason: &str,
+    disposition: ProviderStreamErrorDisposition,
+) -> ProductError {
+    let error_type = reason
+        .split_once(':')
+        .map_or(reason, |(error_type, _)| error_type)
+        .trim()
+        .to_ascii_lowercase();
+    let message = match (disposition, error_type.as_str()) {
+        (_, "authentication_error" | "permission_error") => "模型服务鉴权失败，请检查访问密钥",
+        (ProviderStreamErrorDisposition::Fatal, "invalid_request_error") => {
+            "模型服务拒绝了请求，请检查模型与线路配置"
+        }
+        (ProviderStreamErrorDisposition::Retryable, _) => {
+            "模型服务暂时不可用，自动重试后仍未恢复，请稍后再试"
+        }
+        _ => "模型服务返回错误，请查看诊断日志",
+    };
+    ProductError::Other(message.to_string())
+}
+
 #[derive(Debug, Clone)]
 struct PendingToolCall {
     id: String,
@@ -385,6 +431,7 @@ where
         let mut tool_results: Vec<ContentBlock> = Vec::new();
         let mut total_usage = Usage::default();
         let mut streaming_started = false;
+        let mut received_stream_event = false;
         let mut had_tool_call = false;
 
         let connection = provider.stream(frozen_request.clone());
@@ -444,14 +491,17 @@ where
             let Some(ev) = next else {
                 break;
             };
+            received_stream_event = true;
             match ev {
                 StreamEvent::TextDelta { text } => {
                     current_text.push_str(&text);
-                    if emit_activity && !streaming_started {
-                        emit(AgentEvent::Activity {
-                            phase: r_code_core::dto::AgentActivityPhase::Streaming,
-                            detail: None,
-                        });
+                    if !streaming_started {
+                        if emit_activity {
+                            emit(AgentEvent::Activity {
+                                phase: r_code_core::dto::AgentActivityPhase::Streaming,
+                                detail: None,
+                            });
+                        }
                         streaming_started = true;
                     }
                     emit(AgentEvent::Message { text, delta: true });
@@ -542,27 +592,31 @@ where
                     });
                 }
                 StreamEvent::Stop { reason } => {
+                    let other_reason = match &reason {
+                        hermes_core::StopReason::Other(value) => Some(value.as_str()),
+                        _ => None,
+                    };
                     // Anthropic server tools normally finish inside one response. A rare
                     // `pause_turn` asks the client to replay the provider blocks and continue;
                     // treat that as a protocol continuation, never as a local tool execution.
-                    if matches!(reason, hermes_core::StopReason::Other(ref value) if value == "pause_turn")
-                    {
+                    if other_reason == Some("pause_turn") {
                         had_tool_call = true;
                     }
                     // P1-E：流空闲 watchdog（vendor 层 120s 无数据）以可恢复标记终止。
                     // 仅当本轮**尚未产出任何内容**（无文本、无工具、无块）时用冻结请求
                     // 重放——已产出内容后重放会造成重复输出，宁可直接结束（Reasonix
                     // 同语义）。abort 在退避期间可立即中断。
-                    let idle_timeout = matches!(
-                        reason,
-                        hermes_core::StopReason::Other(ref value)
-                            if value == STREAM_IDLE_TIMEOUT_REASON
-                    );
-                    if idle_timeout
-                        && !streaming_started
-                        && assistant_blocks.is_empty()
-                        && pending_tools.is_empty()
-                        && tool_calls.is_empty()
+                    let idle_timeout = other_reason == Some(STREAM_IDLE_TIMEOUT_REASON);
+                    let provider_error = other_reason.and_then(provider_stream_error_disposition);
+                    let has_output = streaming_started
+                        || !current_text.is_empty()
+                        || !assistant_blocks.is_empty()
+                        || !pending_tools.is_empty()
+                        || !tool_calls.is_empty();
+                    let retryable_provider_error =
+                        provider_error == Some(ProviderStreamErrorDisposition::Retryable);
+                    if (idle_timeout || retryable_provider_error)
+                        && !has_output
                         && stream_recoveries < MAX_STREAM_RECOVERIES
                     {
                         stream_recoveries += 1;
@@ -599,12 +653,44 @@ where
                         });
                         continue 'attempt;
                     }
+                    if let (Some(detail), Some(disposition)) = (other_reason, provider_error) {
+                        tracing::warn!(
+                            provider_stream_error = %detail,
+                            ?disposition,
+                            stream_recoveries,
+                            has_output,
+                            "provider SSE error terminated the model turn"
+                        );
+                        return Err(public_provider_stream_error(detail, disposition));
+                    }
+                    if idle_timeout && !has_output {
+                        return Err(ProductError::Other(
+                            "模型流式响应中断，自动重试后仍未恢复".to_string(),
+                        ));
+                    }
                     break;
                 }
                 StreamEvent::Usage(u) => {
                     total_usage += u;
                 }
             }
+        }
+
+        let was_aborted = abort.is_some_and(|flag| flag.load(Ordering::Relaxed));
+        if !was_aborted && !has_persistable_assistant_output(&current_text, &assistant_blocks) {
+            tracing::warn!(
+                received_stream_event,
+                pending_tool_count = pending_tools.len(),
+                input_tokens = total_usage.input_tokens,
+                output_tokens = total_usage.output_tokens,
+                "provider stream ended without persistable assistant output"
+            );
+            let message = if received_stream_event {
+                "模型服务未返回可显示内容，请重试或检查模型线路配置"
+            } else {
+                "模型服务返回了空响应，请重试或检查模型线路配置"
+            };
+            return Err(ProductError::Other(message.to_string()));
         }
 
         flush_text(&mut current_text, &mut assistant_blocks);
@@ -684,6 +770,15 @@ fn flush_text(current_text: &mut String, blocks: &mut Vec<ContentBlock>) {
             text: std::mem::take(current_text),
         });
     }
+}
+
+fn has_persistable_assistant_output(current_text: &str, blocks: &[ContentBlock]) -> bool {
+    !current_text.trim().is_empty()
+        || blocks.iter().any(|block| match block {
+            ContentBlock::Text { text } => !text.trim().is_empty(),
+            ContentBlock::Thinking { thinking, .. } => !thinking.trim().is_empty(),
+            _ => true,
+        })
 }
 
 fn provider_content_to_custom(content: serde_json::Value) -> Option<ContentBlock> {
@@ -1793,6 +1888,116 @@ mod tests {
 
         // 幂等：再次修复零修改。
         assert_eq!(repair_dangling_tool_uses(&mut messages), 0);
+    }
+
+    #[tokio::test]
+    async fn recoverable_provider_sse_error_before_output_replays_frozen_request() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::Other("overloaded_error: temporarily overloaded".into()),
+        }]));
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::TextDelta {
+                text: "recovered".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(messages.last().unwrap().text_content(), "recovered");
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::StreamReplay { attempt: 1 })));
+    }
+
+    #[tokio::test]
+    async fn fatal_provider_sse_error_is_never_reported_as_a_successful_empty_turn() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::Other("invalid_request_error: unsupported model".into()),
+        }]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+
+        let error = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |_| {},
+        )
+        .await
+        .expect_err("SSE error must fail the iteration");
+
+        assert!(error.to_string().contains("拒绝了请求"));
+        assert_eq!(
+            messages.len(),
+            1,
+            "failed turns must not append an empty reply"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_or_metadata_only_streams_fail_without_appending_an_assistant_reply() {
+        let cases = vec![
+            vec![],
+            vec![
+                StreamEvent::Usage(Usage::new(12, 0)),
+                StreamEvent::Stop {
+                    reason: StopReason::EndTurn,
+                },
+            ],
+        ];
+
+        for stream_events in cases {
+            let provider = MockProvider::new("mock");
+            provider.push_turn(RecordedTurn::ok(stream_events));
+            let tool_host = EchoToolHost::new("");
+            let tools = tool_host.list_tools().await.unwrap();
+            let mut messages = vec![Message::user_text("hi")];
+
+            let error = run_agent_loop_iteration_with_abort_and_emit(
+                &provider,
+                &tool_host,
+                base_request(),
+                &mut messages,
+                &tools,
+                None,
+                true,
+                |_| {},
+            )
+            .await
+            .expect_err("a content-free provider stream must fail the iteration");
+
+            assert!(error.to_string().contains("模型服务"));
+            assert_eq!(
+                messages.len(),
+                1,
+                "content-free turns must not append an empty assistant reply"
+            );
+        }
     }
 
     /// P1-E：流空闲 watchdog 标记且未产出任何内容时，用冻结请求重放并成功产出。

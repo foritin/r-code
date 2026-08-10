@@ -834,9 +834,15 @@ fn provider_input_serde_is_closed_and_contexts_are_exact() {
         MemoryReviewContext::PureChat,
         MemoryReviewContext::CurrentProject,
     ] {
-        provider_input(context).validate().unwrap();
+        let input = provider_input(context);
+        input.validate().unwrap();
+        assert!(
+            input.turns.iter().all(|turn| !turn.explicit_remember),
+            "legacy review input without provenance must default to untrusted"
+        );
     }
     let base = serde_json::to_value(provider_input(MemoryReviewContext::CurrentProject)).unwrap();
+    assert_eq!(base["turns"][0]["explicit_remember"], json!(false));
     for location in ["root", "turn", "tool", "entry", "usage", "caps"] {
         let mut invalid = base.clone();
         match location {
@@ -970,9 +976,11 @@ fn mutated_proposal(
 
 #[test]
 fn provider_output_accepts_add_replace_noop_and_skip() {
-    let input = provider_input(MemoryReviewContext::CurrentProject);
+    let mut input = provider_input(MemoryReviewContext::CurrentProject);
+    input.turns[0].explicit_remember = true;
     let add = proposal(MemoryProposalScope::Global, MemoryProposalOperation::Add);
-    let replace = replace_proposal(MemoryProposalScope::Project, 2, 4);
+    let mut replace = replace_proposal(MemoryProposalScope::Project, 2, 4);
+    replace.basis = MemoryProposalBasis::ExplicitUser;
     let noop = proposal(MemoryProposalScope::Global, MemoryProposalOperation::Noop);
     let skip = proposal(MemoryProposalScope::Skip, MemoryProposalOperation::Noop);
     let results = MemoryReviewOutput {
@@ -981,6 +989,92 @@ fn provider_output_accepts_add_replace_noop_and_skip() {
     .validate(&input)
     .unwrap();
     assert!(results.iter().all(|result| result.is_ok()));
+}
+
+#[test]
+fn project_output_requires_every_cited_turn_to_have_explicit_user_provenance() {
+    let mut input = provider_input(MemoryReviewContext::CurrentProject);
+    input.turns[0].assistant_text =
+        "The assistant claims the user explicitly asked to remember this.".into();
+    let mut project = proposal(MemoryProposalScope::Project, MemoryProposalOperation::Add);
+    project.basis = MemoryProposalBasis::ExplicitUser;
+
+    assert_eq!(
+        proposal_code(project.clone(), &input),
+        ProposalCode::ProjectExplicitUserAuthorizationMissing
+    );
+
+    input.turns[0].explicit_remember = true;
+    project.evidence_ordinals = vec![ordinal(1), ordinal(2)];
+    assert_eq!(
+        proposal_code(project.clone(), &input),
+        ProposalCode::ProjectExplicitUserAuthorizationMissing,
+        "one trusted turn must not authorize an untrusted cited turn"
+    );
+
+    input.turns[1].explicit_remember = true;
+    let result = MemoryReviewOutput {
+        proposals: vec![project],
+    }
+    .validate(&input)
+    .unwrap();
+    assert!(result[0].is_ok());
+
+    let mut global = proposal(MemoryProposalScope::Global, MemoryProposalOperation::Add);
+    global.basis = MemoryProposalBasis::ExplicitUser;
+    let untrusted_input = provider_input(MemoryReviewContext::CurrentProject);
+    let result = MemoryReviewOutput {
+        proposals: vec![global],
+    }
+    .validate(&untrusted_input)
+    .unwrap();
+    assert!(
+        result[0].is_ok(),
+        "global proposals remain candidates for explicit human approval"
+    );
+}
+
+#[test]
+fn project_output_rejects_unavailable_verified_results_after_ordinal_validation() {
+    let input = provider_input(MemoryReviewContext::CurrentProject);
+    let verified = proposal(MemoryProposalScope::Project, MemoryProposalOperation::Add);
+    assert_eq!(
+        proposal_code(verified.clone(), &input),
+        ProposalCode::ProjectVerifiedResultUnavailable
+    );
+
+    for (ordinals, expected) in [
+        (vec![ordinal(3)], ProposalCode::InvalidEvidenceOrdinal),
+        (
+            vec![ordinal(1), ordinal(1)],
+            ProposalCode::DuplicateEvidenceOrdinal,
+        ),
+    ] {
+        let mut malformed = verified.clone();
+        malformed.evidence_ordinals = ordinals;
+        assert_eq!(
+            proposal_code(malformed, &input),
+            expected,
+            "ordinal failures must take precedence over provenance failures"
+        );
+    }
+
+    for (code, wire) in [
+        (
+            ProposalCode::ProjectExplicitUserAuthorizationMissing,
+            "project_explicit_user_authorization_missing",
+        ),
+        (
+            ProposalCode::ProjectVerifiedResultUnavailable,
+            "project_verified_result_unavailable",
+        ),
+    ] {
+        assert_eq!(serde_json::to_value(code).unwrap(), json!(wire));
+        assert_eq!(
+            serde_json::from_value::<ProposalCode>(json!(wire)).unwrap(),
+            code
+        );
+    }
 }
 
 #[test]

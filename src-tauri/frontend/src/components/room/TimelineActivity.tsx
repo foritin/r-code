@@ -1,4 +1,4 @@
-import { memo, useId, useState } from "react";
+import { memo, useEffect, useId, useState } from "react";
 import {
   IconActivity,
   IconChevronDown,
@@ -7,7 +7,7 @@ import {
   IconSearch,
   IconTerminal,
 } from "../icons";
-import { ToolCard, ToolPayloadDetails } from "./ToolCard";
+import { hasMcpConfirmationPayload, ToolCard, ToolPayloadDetails } from "./ToolCard";
 import { SubagentAvatar } from "./SubagentIdentity";
 import type {
   TimelineSubagentEntry,
@@ -16,6 +16,7 @@ import type {
   TimelineToolGroupKind,
   TimelineToolItem,
 } from "./timeline-presentation";
+import { toolActivityProgress, toolActivityTitle } from "./tool-activity";
 
 interface ActivityGroupProps {
   item: TimelineToolGroupItem;
@@ -23,13 +24,25 @@ interface ActivityGroupProps {
 }
 
 export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "" }: ActivityGroupProps) {
-  const [open, setOpen] = useState(false);
+  const hasMcpConfirmation = item.tools.some((tool) => (
+    hasMcpConfirmationPayload(tool.name, tool.outputJson)
+  ));
+  const [open, setOpen] = useState(hasMcpConfirmation);
   const generatedId = useId().replace(/:/g, "");
   const detailId = `timeline-activity-${generatedId}`;
   const hasDetails = item.tools.some((tool) => Boolean(tool.inputJson?.trim() || tool.outputJson?.trim()));
-  const title = toolGroupTitle(item.groupKind, item.tools);
   const state = groupState(item.tools);
+  const title = toolActivityTitle(
+    item.groupKind,
+    item.tools.length,
+    state,
+    item.tools[0]?.target || item.tools[0]?.name || "",
+  );
   const single = item.tools.length === 1 ? item.tools[0] : null;
+
+  useEffect(() => {
+    if (hasMcpConfirmation) setOpen(true);
+  }, [hasMcpConfirmation]);
 
   return (
     <div
@@ -49,7 +62,9 @@ export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "
           <ActivityIcon kind={item.groupKind} />
         </span>
         <span className="timeline-activity-title" title={title}>{title}</span>
-        <span className={`timeline-activity-state state-${state}`}>{groupStateLabel(state, item.tools.length)}</span>
+        <span className={`timeline-activity-state state-${state}`}>
+          {toolActivityProgress(item.tools.map((tool) => tool.state))}
+        </span>
         {hasDetails && (
           <span className="timeline-activity-chevron" aria-hidden="true">
             {open ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
@@ -62,6 +77,7 @@ export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "
           {single ? (
             <div className="timeline-activity-single-detail">
               <ToolPayloadDetails
+                toolName={single.name}
                 inputJson={single.inputJson}
                 outputJson={single.outputJson}
                 state={single.state}
@@ -138,7 +154,13 @@ export function TimelineSubagentGroup({
               title={[agent.summary, agent.model].filter(Boolean).join(" · ") || undefined}
               onClick={() => agent.runId && onInspectSubagent?.(agent.runId)}
             >
-              <SubagentAvatar index={index} size="xs" className="timeline-subagent-avatar" />
+              <SubagentAvatar
+                index={index}
+                identity={agent.id}
+                runtimeKind={agent.runtimeKind}
+                size="xs"
+                className="timeline-subagent-avatar"
+              />
               <span>{agent.label}</span>
             </button>
           );
@@ -156,45 +178,10 @@ function ActivityIcon({ kind }: { kind: TimelineToolGroupKind }) {
   return <IconActivity width={14} height={14} />;
 }
 
-function toolGroupTitle(kind: TimelineToolGroupKind, tools: readonly TimelineToolItem[]): string {
-  const active = tools.some((tool) => tool.state === "active");
-  const failed = tools.some((tool) => tool.state === "fail");
-  const target = compactTarget(tools[0]?.target || tools[0]?.name || "");
-
-  if (kind === "command") {
-    if (tools.length > 1) return active ? "正在运行多个命令" : failed ? "多个命令中有执行失败" : "运行了多个命令";
-    if (active) return target ? `正在运行 ${target}` : "正在运行命令";
-    if (failed) return target ? `命令执行失败：${target}` : "命令执行失败";
-    return target ? `已运行 ${target}` : "已运行命令";
-  }
-  if (kind === "file") {
-    if (active) return "正在编辑文件";
-    return failed ? "文件编辑未完成" : "已编辑的文件";
-  }
-  if (kind === "lookup") {
-    if (tools.length > 1) return active ? "正在检查多个文件" : "检查了多个文件";
-    if (active) return target ? `正在检查 ${target}` : "正在检查文件";
-    return target ? `已检查 ${target}` : "已检查文件";
-  }
-  if (tools.length > 1) return active ? "正在使用多个工具" : "使用了多个工具";
-  return active ? `正在使用 ${target || "工具"}` : `已使用 ${target || "工具"}`;
-}
-
-function compactTarget(value: string): string {
-  const normalized = value.trim().replace(/\s+/g, " ");
-  return normalized.length > 72 ? `${normalized.slice(0, 71)}…` : normalized;
-}
-
 function groupState(tools: readonly TimelineToolItem[]): "active" | "ok" | "fail" {
   if (tools.some((tool) => tool.state === "active")) return "active";
   if (tools.some((tool) => tool.state === "fail")) return "fail";
   return "ok";
-}
-
-function groupStateLabel(state: "active" | "ok" | "fail", count: number): string {
-  if (state === "active") return "运行中";
-  if (state === "fail") return "失败";
-  return count > 1 ? `${count} 项完成` : "完成";
 }
 
 function subagentGroupStatus(agents: readonly TimelineSubagentEntry[]): string {

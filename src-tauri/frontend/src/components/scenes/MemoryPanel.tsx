@@ -76,13 +76,13 @@ function configuredReviewer(config: AppConfig | null, current: ReviewerSelection
 }
 
 export function MemoryPanel({ workspace, config }: { workspace: Workspace | null; config: AppConfig | null }) {
-  const tasks = useTasksStore((state) => state.tasks);
   const refreshWorkspaces = useTasksStore((state) => state.refreshWorkspaces);
   const [overview, setOverview] = useState<MemoryOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   const [draftKind, setDraftKind] = useState<MemoryKind>("convention");
   const [draftContent, setDraftContent] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -96,6 +96,12 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
     const timer = window.setTimeout(() => setNotice(null), 3_000);
     return () => window.clearTimeout(timer);
   }, [notice]);
+
+  useEffect(() => {
+    if (!reviewError) return;
+    const timer = window.setTimeout(() => setReviewError(null), 3_000);
+    return () => window.clearTimeout(timer);
+  }, [reviewError]);
 
   const load = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -148,10 +154,25 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
       .slice(0, 8);
   }, [overview, workspace]);
 
-  const latestTask = useMemo(() => tasks
-    .filter((task) => workspace ? task.workspace_path === workspace.canonical_path : task.workspace_path == null)
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null,
-  [tasks, workspace]);
+  const reviewLatest = useCallback(async () => {
+    setBusy("review-now");
+    setNotice(null);
+    setReviewError(null);
+    try {
+      const jobId = await memoryReviewNow({
+        workspaceId: workspace?.id ?? null,
+        workspacePath: workspace?.canonical_path ?? null,
+      });
+      await load(true);
+      setNotice(jobId
+        ? "已加入复盘队列，可在下方查看进度"
+        : "最近完成的会话没有新的可复盘内容");
+    } catch {
+      setReviewError("暂时无法提交复盘，请稍后重试");
+    } finally {
+      setBusy(null);
+    }
+  }, [load, workspace]);
 
   const providerNames = Object.keys(config?.providers ?? {});
 
@@ -166,6 +187,7 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
   const reviewer = configuredReviewer(config, settings.reviewer);
   const projectEnabled = !workspace || activeMode !== "off";
   const effectivelyEnabled = settings.enabled && projectEnabled;
+  const manualReviewEnabled = settings.enabled && (!workspace || activeMode === "inherit");
   const engineTitle = !settings.enabled
     ? "记忆已关闭"
     : workspace && activeMode === "off"
@@ -247,9 +269,9 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
         <button type="button" className={`rc-button${effectivelyEnabled ? " rc-button-quiet" : " rc-button-primary"}`} disabled={busy != null} onClick={handleEngineAction}>{engineActionLabel}</button>
       </section>
 
-      {(error || notice) && <div className={`memory-banner ${error ? "error" : "success"}`} role={error ? "alert" : "status"}>
-        {!error && <IconCheck width={14} height={14} />}
-        <span>{error ?? notice}</span>
+      {(error || reviewError || notice) && <div className={`memory-banner ${error || reviewError ? "error" : "success"}`} role={error || reviewError ? "alert" : "status"}>
+        {!error && !reviewError && <IconCheck width={14} height={14} />}
+        <span>{error ?? reviewError ?? notice}</span>
         {error && <button onClick={() => { setError(null); void load(); }}>重试</button>}
       </div>}
 
@@ -282,7 +304,16 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
       <section className="memory-section">
         <div className="memory-section-heading">
           <div><h3>记忆 <span>{entries.length}</span></h3><p>新对话会自动读取这里的内容。</p></div>
-          <button className="rc-button rc-button-quiet" disabled={!latestTask || !settings.enabled || busy != null} title={!latestTask ? "当前作用域还没有可复盘的会话" : "立即复盘最新会话"} onClick={() => latestTask && void runAction("review-now", () => memoryReviewNow(latestTask.id), "已提交一次手动复盘")}>立即复盘</button>
+          <button
+            className="rc-button rc-button-quiet"
+            disabled={!manualReviewEnabled || busy != null}
+            title={!settings.enabled
+              ? "请先启用记忆"
+              : workspace && activeMode !== "inherit"
+                ? "将项目模式切换为读写后才能复盘"
+                : "立即复盘当前范围内最近完成的会话"}
+            onClick={() => void reviewLatest()}
+          >{busy === "review-now" ? "正在提交…" : "立即复盘"}</button>
         </div>
 
         <div className="memory-entry-list">
@@ -419,7 +450,7 @@ function JobSection({ jobs, busy, runAction }: {
     <div className="memory-section-heading"><div><h3>最近复盘</h3><p>复盘在主回答完成后异步执行；失败不会影响对话，也不会写入未验证正文。</p></div></div>
     <div className="memory-job-list">{jobs.map((job) => <div className="memory-job" key={job.id}>
       <span className={`memory-job-state ${job.status}`}>{labels[job.status]}</span>
-      <div><strong>{job.provider_name} · {job.model}</strong><small>{job.trigger === "cadence" ? "周期触发" : job.trigger === "manual" ? "手动触发" : "明确记住"} · {formatTime(job.updated_at)}</small></div>
+      <div><strong>{job.provider_name} · {job.model}</strong><small>{job.trigger === "cadence" ? "周期触发" : job.trigger === "manual" ? "手动触发" : "明确记住"}{job.status === "succeeded" && job.effect_count != null ? job.effect_count > 0 ? ` · 产生 ${job.effect_count} 项变更` : " · 未发现可复用记忆" : ""} · {formatTime(job.updated_at)}</small></div>
       {job.error_code && <code>{job.error_code}</code>}
       {(job.status === "failed" || job.status === "interrupted") && <button className="rc-button rc-button-quiet" disabled={busy != null} onClick={() => void runAction(`retry:${job.id}`, () => memoryRetryJob(job.id), "复盘已重新排队")}>重试</button>}
       {(job.status === "queued" || job.status === "running") && <button className="rc-button rc-button-quiet" disabled={busy != null} onClick={() => void runAction(`cancel:${job.id}`, () => memoryCancelJob(job.id), "复盘已取消")}>取消</button>}

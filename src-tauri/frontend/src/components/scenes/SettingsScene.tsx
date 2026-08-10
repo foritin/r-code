@@ -11,6 +11,8 @@ import {
   codexStartLogin,
   logsTail,
   providerModels,
+  rtkSetEnabled,
+  rtkStatus,
   settingsDeleteProvider,
   settingsGet,
   settingsSaveProvider,
@@ -36,6 +38,7 @@ import type {
   ProviderPreset,
   ProviderProtocol,
   ProviderStatus,
+  RtkStatus,
   SupportBundlePreview,
   WorkflowSkill,
   WorkflowSkillDraft,
@@ -52,6 +55,7 @@ import {
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
 import { IconCheck, IconRefresh, IconSearch } from "../icons";
+import { pushToast } from "../../store/toast";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -680,7 +684,7 @@ function ProviderSection({
       return;
     }
     const profile = providers[selectedProvider] as ProviderConfig | undefined;
-    const preset = presetOf(selectedProvider);
+    const preset = presetOf(profile?.provider_kind ?? selectedProvider);
     setProfileName(selectedProvider);
     setPresetName(preset?.id ?? CUSTOM_PRESET);
     setFields({
@@ -771,6 +775,7 @@ function ProviderSection({
       if (!name) throw new Error("请为这项配置填写名称");
       await settingsSaveProvider({
         name,
+        providerKind: activePreset?.id ?? "",
         baseUrl: fields.base_url,
         model: fields.model,
         apiKey: keyInput.trim() || null,
@@ -2179,6 +2184,128 @@ function CodexRuntimePreferences({
   );
 }
 
+type RtkTransition = "enabling" | "disabling" | null;
+
+function RtkIntegrationControl() {
+  const [status, setStatus] = useState<RtkStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [transition, setTransition] = useState<RtkTransition>(null);
+  const [optimisticEnabled, setOptimisticEnabled] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = await rtkStatus();
+      setStatus(next);
+      setOptimisticEnabled(next.enabled);
+    } catch {
+      setStatus(null);
+      setOptimisticEnabled(false);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const toggle = async (enabled: boolean) => {
+    if (transition || loading) return;
+    const previous = status;
+    setOptimisticEnabled(enabled);
+    setTransition(enabled ? "enabling" : "disabling");
+    try {
+      const next = await rtkSetEnabled(enabled);
+      setStatus(next);
+      setOptimisticEnabled(next.enabled);
+    } catch {
+      setStatus(previous);
+      setOptimisticEnabled(previous?.enabled ?? false);
+      pushToast({
+        kind: "warn",
+        title: enabled ? "RTK 未能启用" : "RTK 未能关闭",
+        body: "请稍后重试；详细原因已写入诊断日志。",
+        timeout: 5200,
+      });
+    } finally {
+      setTransition(null);
+    }
+  };
+
+  const busy = transition !== null;
+  const state = transition === "enabling"
+    ? "enabling"
+    : transition === "disabling"
+      ? "disabling"
+      : status?.enabled
+        ? "enabled"
+        : status?.available
+          ? "available"
+          : "unavailable";
+  const badge = loading
+    ? "正在检测"
+    : transition === "enabling"
+      ? status?.available ? "正在配置" : "正在安装"
+      : transition === "disabling"
+        ? "正在关闭"
+        : status?.enabled
+          ? "已启用"
+          : status?.available
+            ? "已安装"
+            : status
+              ? "未安装"
+              : "暂不可用";
+  const detail = loading
+    ? "正在确认本机 RTK 与 R-Code 策略状态。"
+    : transition === "enabling"
+      ? status?.available
+        ? "正在为之后创建的 Codex 会话启用命令策略。"
+        : "正在从 rtk-ai/rtk 官方 Release 下载并校验适合当前系统的版本。"
+      : transition === "disabling"
+        ? "正在停用新会话策略；已安装的 RTK 会完整保留。"
+        : status?.enabled
+          ? "之后启动的 Codex 主 Agent 与子代理会优先使用 RTK；当前运行不会重启。"
+          : status?.available
+            ? "已检测到可用的 RTK。开启后从下一次 Codex 运行开始生效。"
+            : status
+              ? "开启时自动检测系统安装；若不存在，将安全安装到 R-Code 的应用数据目录。"
+              : "暂时无法读取状态。可重试，详细原因会保留在诊断日志。";
+  const installation = status?.available
+    ? `${status.version ?? "RTK"} · ${status.managed ? "R-Code 托管" : "系统安装"}`
+    : status?.platform ?? "按当前系统选择版本";
+
+  return (
+    <div className={`rtk-control state-${state}`} aria-busy={loading || busy}>
+      <div className="rtk-mark" aria-hidden="true">RTK</div>
+      <div className="rtk-control-copy">
+        <div className="rtk-control-title">
+          <strong>RTK 命令压缩</strong>
+          <span className="rtk-state-badge" role="status" aria-live="polite">{badge}</span>
+        </div>
+        <p>{detail}</p>
+        <div className="rtk-control-meta">
+          <span>{installation}</span>
+          <a href="https://github.com/rtk-ai/rtk" target="_blank" rel="noreferrer">官方项目</a>
+          {!loading && !status && (
+            <button className="quiet-link" onClick={() => void load()}>重新检测</button>
+          )}
+        </div>
+      </div>
+      <input
+        id="rtk-enabled"
+        className="switch rtk-switch"
+        type="checkbox"
+        role="switch"
+        aria-label="为新 Codex 会话启用 RTK"
+        checked={optimisticEnabled}
+        disabled={loading || busy || !status}
+        onChange={(event) => void toggle(event.target.checked)}
+      />
+    </div>
+  );
+}
+
 function CodexIntegrationSection({
   config,
   reloadConfig,
@@ -2384,6 +2511,8 @@ function CodexIntegrationSection({
 
       {notice && <p className="codex-inline-note" role="status"><IconCheck width={14} height={14} />{notice}</p>}
       {status?.cli_error && setupState === "install_cli" && <p className="codex-inline-warning">{status.cli_error}</p>}
+
+      <RtkIntegrationControl />
 
       {setupState === "ready" && (
         <CodexRuntimePreferences

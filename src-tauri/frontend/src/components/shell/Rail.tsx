@@ -8,6 +8,7 @@ import { isTaskLive, taskStateLabel, taskTitle, visualTaskState } from "../../li
 import type { Task, Workspace } from "../../lib/types";
 import { ProjectActionsMenu } from "../ProjectActionsMenu";
 import { TaskActionsMenu } from "../TaskActionsMenu";
+import { useCreateConversation } from "../useCreateConversation";
 import {
   IconActivity,
   IconArchive,
@@ -47,6 +48,7 @@ export function Rail() {
   const needsTaskIds = useTasksStore(selectNeedsYouTaskIds);
   const needsCount = needsTaskIds.size;
   const runningCount = useTasksStore((s) => selectRunning(s).length);
+  const { createConversation, creating: creatingConversation } = useCreateConversation();
 
   usePoll(async () => {
     await refreshTasks();
@@ -96,7 +98,14 @@ export function Rail() {
         </button>
       </div>
       <div className="sidebar-create">
-        <button className="sidebar-new" onClick={goHome} title="新对话" aria-label="新对话">
+        <button
+          className="sidebar-new"
+          onClick={() => void createConversation(currentWorkspacePath)}
+          title={creatingConversation ? "正在创建新对话" : "新对话"}
+          aria-label="新对话"
+          aria-busy={creatingConversation}
+          disabled={creatingConversation}
+        >
           <IconPlus width={17} height={17} />
           <span className="rail-label">新对话</span>
         </button>
@@ -117,7 +126,12 @@ export function Rail() {
         <div className="sidebar-section-head">
           <span className="rail-label">项目</span>
           {runningCount > 0 && <small className="rail-label">{runningCount} 运行中</small>}
-          <button className="sidebar-project-manage" onClick={() => setScene("projects")} aria-label="添加项目" title="添加本地项目">
+          <button
+            className="sidebar-project-manage"
+            onClick={() => setScene("projects")}
+            aria-label="添加项目"
+            title="添加本地项目"
+          >
             <IconPlus width={13} height={13} />
             <span className="rail-label">添加</span>
           </button>
