@@ -736,6 +736,11 @@ test("CI authenticates every private agent-core checkout and covers Linux", () =
     /name: Test[\s\S]*name: Install Linux dependencies[\s\S]*if: matrix\.os == 'ubuntu-latest'/,
     "Linux workspace tests must install the Tauri host libraries before cargo test",
   );
+  assert.match(
+    workflow,
+    /cargo test --workspace --all-features -- --test-threads=1/,
+    "cross-platform workspace tests must serialize process-global integration fixtures",
+  );
   assert.match(workflow, /name: Frontend dependency audit/);
   assert.match(workflow, /npm audit --package-lock-only --audit-level=high/);
   assert.match(workflow, /name: Secret scanning/);

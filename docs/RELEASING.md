@@ -177,7 +177,7 @@ node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scrip
 node scripts/release.mjs check vX.Y.Z
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo test --workspace --all-features -- --test-threads=1
 cargo deny check advisories
 
 cd src-tauri/frontend
