@@ -93,6 +93,16 @@ impl McpService {
         for dir in [&db_dir, &blobs_dir, &sessions_dir, &config_dir] {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
+        // `mcp-server` exits the desktop bootstrap path before its settings migrations run.
+        // Persist legacy provider identity here as well so a directly launched MCP process uses
+        // the same DeepSeek request shaping, cache accounting, and protocol capabilities as the
+        // desktop runtime. Fail closed instead of silently treating an identifiable legacy
+        // provider as a generic gateway.
+        crate::settings::SettingsService::new(config_dir.clone())
+            .migrate_legacy_provider_kinds()
+            .map_err(|error| {
+                format!("provider identity migration failed; MCP startup aborted: {error}")
+            })?;
         let db_path = db_dir.join("r-code.db");
         // The MCP process can be launched without the desktop shell. It must therefore use the
         // same guarded migration path instead of allowing `Database::open` to mutate user data
@@ -641,5 +651,39 @@ mod tests {
                     .to_string_lossy()
                     .contains("pre-migration")
             }));
+    }
+
+    #[tokio::test]
+    async fn persistent_open_migrates_legacy_provider_identity_before_agent_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("app-data");
+        let config_dir = base.join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            r#"
+default_provider = "renamed-legacy-profile"
+
+[providers.renamed-legacy-profile]
+base_url = "https://api.deepseek.com"
+api_key = ""
+model = "deepseek-chat"
+"#,
+        )
+        .unwrap();
+
+        let service = McpService::open(base).await.unwrap();
+        let migrated = crate::settings::SettingsService::new(service.state.config_dir.clone())
+            .load_global_unvalidated()
+            .unwrap();
+        assert_eq!(
+            migrated.providers["renamed-legacy-profile"]
+                .provider_kind
+                .as_deref(),
+            Some("deepseek")
+        );
+        assert!(std::fs::read_to_string(config_dir.join("config.toml"))
+            .unwrap()
+            .contains("provider_kind = \"deepseek\""));
     }
 }

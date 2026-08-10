@@ -21,7 +21,6 @@ use crate::codex_permissions::CodexDelegationPermissions;
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const MCP_START_TIMEOUT: Duration = Duration::from_secs(12);
-const MCP_CALL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_MCP_LINE_BYTES: usize = 512 * 1024;
 
 /// 一个完成的 Codex MCP 调用中可以安全投影到产品状态的字段。
@@ -89,9 +88,7 @@ impl CodexMcpRegistry {
                 .expect("Codex MCP connection must exist after successful startup");
             tokio::select! {
                 _ = cancellation.cancelled() => None,
-                result = timeout(MCP_CALL_TIMEOUT, connection.call_codex(prompt, workspace, permissions)) => {
-                    Some(result.unwrap_or(Err(CodexMcpError::CallTimeout)))
-                },
+                result = connection.call_codex(prompt, workspace, permissions) => Some(result),
             }
         };
 
@@ -149,9 +146,7 @@ impl CodexMcpRegistry {
                 .expect("Codex MCP connection must exist after successful startup");
             tokio::select! {
                 _ = cancellation.cancelled() => None,
-                result = timeout(MCP_CALL_TIMEOUT, connection.reply(thread_id, prompt)) => {
-                    Some(result.unwrap_or(Err(CodexMcpError::CallTimeout)))
-                },
+                result = connection.reply(thread_id, prompt) => Some(result),
             }
         };
         match request {
@@ -177,7 +172,6 @@ impl CodexMcpRegistry {
 pub enum CodexMcpError {
     Launch,
     StartupTimeout,
-    CallTimeout,
     ApprovalBridgeRequired,
     Disconnected,
     Protocol,
@@ -189,7 +183,6 @@ impl std::fmt::Display for CodexMcpError {
         let message = match self {
             Self::Launch => "无法启动 Codex MCP 服务。",
             Self::StartupTimeout => "Codex MCP 服务启动超时。",
-            Self::CallTimeout => "Codex MCP 连续 15 分钟没有完成本次委派，R-Code 已停止该会话。",
             Self::ApprovalBridgeRequired => {
                 "“请求批准”模式需要 R-Code 的 Codex 审批桥，不能通过 MCP 直连运行。"
             }
@@ -450,6 +443,7 @@ fn codex_mcp_server_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    crate::rtk::configure_codex_child(&mut command);
     hide_background_console(command.as_std_mut());
     Ok(command)
 }

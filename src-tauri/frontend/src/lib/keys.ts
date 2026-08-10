@@ -55,10 +55,16 @@ export const KEYMAP: Record<KeyAction, KeyBinding> = {
 };
 
 const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform || navigator.userAgent);
+const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.platform || navigator.userAgent);
 
 /** 统一的平台判断，供原生标题栏留白和快捷键文案共用。 */
 export function isMacPlatform(): boolean {
   return IS_MAC;
+}
+
+/** Windows 的关闭按钮会交给原生层隐藏到通知区域。 */
+export function isWindowsPlatform(): boolean {
+  return IS_WINDOWS;
 }
 
 /** 修饰键的平台化标签：macOS 上是 ⌘，其余是 Ctrl。 */

@@ -772,7 +772,7 @@ export function HomeScene() {
                 <ModelSwitcher
                   taskId={null}
                   providerName={activeProvider?.name ?? null}
-                  model={activeModel || null}
+                  model={draftModel}
                   inference={draftInference}
                   choices={providerChoices}
                   fallback={fallback}

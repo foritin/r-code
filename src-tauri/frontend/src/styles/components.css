@@ -82,22 +82,54 @@
   overflow-wrap: anywhere; white-space: normal;
 }
 
-.model-group + .model-group { margin-top: var(--sp-2); }
-.model-group-head {
-  display: flex; align-items: baseline; gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4) var(--sp-1);
-  color: var(--fg-faint);
-  font-size: var(--kicker-size); font-weight: var(--kicker-weight);
-  letter-spacing: var(--kicker-tracking);
+.model-group {
+  overflow: hidden;
+  margin: var(--sp-2) var(--sp-1) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-chip));
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
 }
-.model-group-head::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-.model-group-head small { color: var(--fg-faint); font-weight: var(--weight-normal); letter-spacing: 0; }
-
-.model-custom { padding: var(--sp-1) var(--sp-2) var(--sp-3); }
+.model-group + .model-group { margin-top: var(--sp-2); }
+.model-group.current { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
+.model-group.expanded { border-color: var(--border-strong); background: var(--bg-card); }
+.model-group.current.expanded { border-color: var(--edge-accent); }
+.model-group-toggle {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center; gap: var(--sp-3);
+  width: 100%; min-height: var(--control-h-lg); padding: 0 var(--sp-4);
+  border: 0; background: transparent; color: var(--fg-muted);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.model-group-toggle:hover { background: var(--bg-chip); color: var(--fg); }
+.model-group-title {
+  min-width: 0; overflow: hidden; color: inherit; font-size: var(--text-sm);
+  font-weight: var(--weight-strong); text-overflow: ellipsis; white-space: nowrap;
+}
+.model-current-provider-badge {
+  padding: 2px var(--sp-2); border: 1px solid var(--edge-accent);
+  border-radius: 999px; background: var(--tint-accent); color: var(--accent);
+  font-size: var(--text-meta); line-height: 1.25; white-space: nowrap;
+}
+.model-group-chevron {
+  color: var(--fg-faint); transition: transform var(--dur-2) var(--ease-out);
+}
+.model-group.expanded .model-group-chevron { transform: rotate(180deg); }
+.model-group-body {
+  padding: var(--sp-1) var(--sp-1) var(--sp-2);
+  border-top: 1px solid var(--border);
+  animation: modelGroupReveal var(--dur-2) var(--ease-out);
+}
+.model-group-body .menu-item { min-height: var(--control-h-lg); }
+.model-custom { padding: var(--sp-2) var(--sp-1) var(--sp-1); }
 .model-custom .input { min-height: var(--control-h); font-size: var(--text-sm); }
 /* 二级菜单比普通菜单长，给足高度免得自定义输入被裁掉 */
-.model-menu.popover--scroll {  }
 .menu-item.model-custom-open { color: var(--fg-muted); }
+
+@keyframes modelGroupReveal {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* 一个紧凑入口承载模型及其专属参数；二级页替代横向级联，窄窗口也不会溢出。 */
 .model-config-menu { width: min(340px, calc(100vw - var(--sp-10))); }

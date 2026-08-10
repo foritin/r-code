@@ -35,6 +35,7 @@ import type {
   ProviderModelsInput,
   ProviderModelsResponse,
   ProviderSettingsInput,
+  RtkStatus,
   SearchMatch,
   SessionBranch,
   SessionMessage,
@@ -73,6 +74,8 @@ import {
   browserMockSetMessages,
   browserMockSettings,
   browserMockSetupCodexCollaboration as browserMockSetupCollaboration,
+  browserMockRtkStatus,
+  browserMockSetRtkEnabled,
   browserMockSubagentMessages,
   browserMockTasks,
   browserMockWorkspaces,
@@ -263,6 +266,61 @@ function optionalStringArg(args: MockArgs, key: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function memoryReviewScopeArg(args: MockArgs, key: "workspaceId" | "workspacePath"): string | null {
+  if (!Object.prototype.hasOwnProperty.call(args, key) || args[key] === null) return null;
+  const value = args[key];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("复盘范围无效");
+  }
+  return value;
+}
+
+function hasReviewableMemoryExchange(taskId: string): boolean {
+  let hasUserMessage = false;
+  for (const message of browserMockMessages(taskId)) {
+    if (message.kind !== "message" || !message.text?.trim()) continue;
+    if (message.role === "user") {
+      hasUserMessage = true;
+      continue;
+    }
+    if (message.role === "assistant" && hasUserMessage && !message.text.trimStart().startsWith("[error]")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function selectMemoryReviewTask(args: MockArgs): { task: Task; workspaceId: string | null } | null {
+  const workspaceId = memoryReviewScopeArg(args, "workspaceId");
+  const workspacePath = memoryReviewScopeArg(args, "workspacePath");
+  if ((workspaceId == null) !== (workspacePath == null)) {
+    throw new Error("复盘范围无效");
+  }
+  if (workspaceId && workspacePath) {
+    const workspace = browserMockWorkspaces.find(
+      (item) => item.id === workspaceId && item.canonical_path === workspacePath,
+    );
+    if (!workspace) throw new Error("复盘范围无效");
+    if (workspace.memory_mode !== "inherit") throw new Error("当前项目记忆不可写");
+  }
+
+  const task = [...browserMockTasks]
+    .filter((item) => item.workspace_path === workspacePath)
+    .filter((item) => item.state === "idle" || item.state === "review_ready")
+    .filter((item) => hasReviewableMemoryExchange(item.id))
+    .filter((item) => !mockMemoryOverview.recent_jobs.some((job) =>
+      job.task_id === item.id && ["queued", "running", "failed", "interrupted"].includes(job.status)
+    ))
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] ?? null;
+  return task ? { task, workspaceId } : null;
+}
+
+function performanceProbeArgs(command: string, args: MockArgs): MockArgs {
+  if (command !== "cmd_memory_review_now") return args;
+  const selection = selectMemoryReviewTask(args);
+  return selection ? { ...args, taskId: selection.task.id } : args;
+}
+
 function taskById(taskId: string): Task {
   const task = browserMockTasks.find((item) => item.id === taskId);
   if (!task) throw new Error(`Demo 中不存在任务 ${taskId}`);
@@ -302,9 +360,27 @@ function markTaskNotificationsRead(taskId: string): void {
   }
 }
 
+const MAX_PROJECT_CONVERSATIONS = 5;
+const PROJECT_CONVERSATION_LIMIT_ERROR = {
+  code: "PROJECT_CONVERSATION_LIMIT_REACHED",
+  message: "该项目最多保留 5 个未归档对话，请先归档一个后再新建",
+  limit: MAX_PROJECT_CONVERSATIONS,
+} as const;
+
+function assertProjectConversationCapacity(workspacePath: string | null): void {
+  if (!workspacePath) return;
+  const activeCount = browserMockTasks.filter(
+    (task) => task.workspace_path === workspacePath && task.state !== "archived",
+  ).length;
+  if (activeCount >= MAX_PROJECT_CONVERSATIONS) {
+    throw { ...PROJECT_CONVERSATION_LIMIT_ERROR };
+  }
+}
+
 function createTask(args: MockArgs): Task {
   const createdAt = nowIso();
   const workspacePath = optionalStringArg(args, "workspacePath");
+  assertProjectConversationCapacity(workspacePath);
   const providerName = optionalStringArg(args, "providerName") ?? browserMockSettings.config.default_provider ?? "openai";
   const provider = browserMockSettings.config.providers?.[providerName];
   const agentEngine = (optionalStringArg(args, "agentEngine") ??
@@ -321,7 +397,7 @@ function createTask(args: MockArgs): Task {
     goal: stringArg(args, "goal"),
     goal_active: false,
     mode: (args.mode as TaskMode | undefined) ?? (workspacePath ? "edit" : "ask"),
-    state: "exploring",
+    state: "idle",
     worktree_path: null,
     created_at: createdAt,
     updated_at: createdAt,
@@ -331,7 +407,7 @@ function createTask(args: MockArgs): Task {
     task_id: task.id,
     parent_branch_id: null,
     forked_from_message_id: null,
-    storage_id: "main",
+    storage_id: task.id,
     is_active: true,
     created_at: createdAt,
   };
@@ -349,6 +425,32 @@ function createTask(args: MockArgs): Task {
   };
   browserMockSetMessages(task.id, []);
   return task;
+}
+
+function projectConversationSequence(title: string): number | null {
+  if (!title.startsWith("新对话")) return null;
+  const suffix = title.slice("新对话".length).trim();
+  if (!suffix) return 1;
+  if (!/^\d+$/.test(suffix)) return null;
+  const sequence = Number(suffix);
+  return Number.isSafeInteger(sequence) && sequence >= 2 ? sequence : null;
+}
+
+function createProjectConversation(args: MockArgs): Task {
+  const workspacePath = stringArg(args, "workspacePath");
+  assertProjectConversationCapacity(workspacePath);
+
+  const highestSequence = browserMockTasks
+    .filter((task) => task.workspace_path === workspacePath)
+    .reduce((highest, task) => Math.max(highest, projectConversationSequence(task.title) ?? 0), 0);
+  const nextSequence = highestSequence + 1;
+  return createTask({
+    ...args,
+    workspacePath,
+    title: nextSequence === 1 ? "新对话" : `新对话 ${nextSequence}`,
+    goal: "",
+    mode: "edit",
+  });
 }
 
 function sendMessage(args: MockArgs): void {
@@ -995,6 +1097,59 @@ function forkTask(taskId: string, messageId: string | null = null): SessionBranc
   return branch;
 }
 
+function clearTaskContext(taskId: string): SessionBranch {
+  const task = taskById(taskId);
+  // The browser preview store may still hold the previous detail object. Mutate a copy so the
+  // subsequent cmd_task_detail response has a new identity and React observes the branch change.
+  const detail = copy(detailById(taskId));
+  if (task.state === "exploring" || task.state === "in_progress") {
+    throw new Error("当前运行尚未结束，请先停止或等待完成后再清空上下文");
+  }
+  historicalBranchMessages.set(
+    `${taskId}:${detail.active_branch.id}`,
+    copy(browserMockMessages(taskId)),
+  );
+  detail.active_branch.is_active = false;
+  const branch: SessionBranch = {
+    id: nextId("branch"),
+    task_id: taskId,
+    parent_branch_id: detail.active_branch.id,
+    forked_from_message_id: null,
+    storage_id: nextId("storage"),
+    is_active: true,
+    created_at: nowIso(),
+  };
+  detail.branches = [
+    ...detail.branches.filter((item) => item.id !== detail.active_branch.id),
+    detail.active_branch,
+    branch,
+  ];
+  detail.active_branch = branch;
+  detail.runs = [];
+  detail.events = [];
+  detail.permissions = [];
+  detail.queued_messages = [];
+  if (!task.goal_active) task.goal = "";
+  touchTask(task);
+  detail.task = copy(task);
+  addEvent(detail, "session_cleared");
+  browserMockSetMessages(taskId, []);
+  browserMockDetails[taskId] = detail;
+  return branch;
+}
+
+const historicalBranchMessages = new Map<string, SessionMessage[]>();
+
+function messagesForBranch(taskId: string, branchId: string): SessionMessage[] {
+  const detail = detailById(taskId);
+  const branch = detail.branches.find((item) => item.id === branchId);
+  if (!branch || branch.task_id !== taskId) {
+    throw new Error("会话分支不属于当前任务");
+  }
+  if (detail.active_branch.id === branchId) return browserMockMessages(taskId);
+  return historicalBranchMessages.get(`${taskId}:${branchId}`) ?? [];
+}
+
 function abortTask(taskId: string): void {
   const task = taskById(taskId);
   const detail = detailById(taskId);
@@ -1190,9 +1345,13 @@ function setConfigValue(key: string, value: unknown): void {
 
 function saveProvider(provider: ProviderSettingsInput): void {
   browserMockSettings.config.providers ??= {};
+  const existing = browserMockSettings.config.providers[provider.name];
   browserMockSettings.config.providers[provider.name] = {
     base_url: provider.baseUrl,
     model: provider.model,
+    provider_kind: provider.providerKind == null
+      ? existing?.provider_kind
+      : provider.providerKind.trim() || undefined,
     max_tokens: provider.maxTokens ?? undefined,
     temperature: provider.temperature ?? undefined,
     protocol: provider.protocol ?? undefined,
@@ -1297,7 +1456,7 @@ function mockMcpViewFromRequest(request: McpUpsertRequest): McpServerView {
 /** 执行一条浏览器 Demo IPC，并返回与正式后端同形状的数据。 */
 export async function browserMockInvoke(command: string, args: MockArgs = {}): Promise<unknown> {
   (globalThis as { __rCodePerformanceIpcProbe?: (name: string, args: MockArgs) => void })
-    .__rCodePerformanceIpcProbe?.(command, args);
+    .__rCodePerformanceIpcProbe?.(command, performanceProbeArgs(command, args));
   const delayMs = (globalThis as { __rCodeBrowserMockDelayMs?: Record<string, number> })
     .__rCodeBrowserMockDelayMs?.[command] ?? 0;
   if (delayMs > 0) {
@@ -1308,8 +1467,11 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
   if (forcedFailure) throw new Error(forcedFailure);
   switch (command) {
     case "ping": return true;
+    case "cmd_app_quit": return null;
 
     case "cmd_task_create": return copy(createTask(args));
+    case "cmd_project_conversation_create": return copy(createProjectConversation(args));
+    case "cmd_task_prepare": return undefined;
     case "cmd_task_list": {
       const workspacePath = optionalStringArg(args, "workspacePath");
       const includeArchived = args.includeArchived === true;
@@ -1406,6 +1568,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_plan_review_reject_file": return copy(rejectMockPlanReview(mockPlanReviewTarget(args), "file"));
     case "cmd_plan_review_reject_feature": return copy(rejectMockPlanReview(mockPlanReviewTarget(args), "feature"));
     case "cmd_task_fork_context": return copy(forkTask(stringArg(args, "taskId")));
+    case "cmd_task_clear_context": return copy(clearTaskContext(stringArg(args, "taskId")));
     case "cmd_task_compact_context": {
       const count = browserMockMessages(stringArg(args, "taskId")).filter((item) => item.kind === "message").length;
       return { compacted: count > 4, before_messages: count, after_messages: count > 4 ? 3 : count };
@@ -1832,6 +1995,10 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       { event_type: "run_ended", timestamp: nowIso(), summary: "运行已完成", evidence_level: "verified" },
     ]);
     case "cmd_session_messages": return copy(browserMockMessages(stringArg(args, "taskId")));
+    case "cmd_session_messages_for_branch": return copy(messagesForBranch(
+      stringArg(args, "taskId"),
+      stringArg(args, "branchId"),
+    ));
     case "cmd_subagent_session_messages": return copy(browserMockSubagentMessages(stringArg(args, "taskId"), stringArg(args, "subagentId")));
 
     case "cmd_memory_overview": return copy(mockMemoryOverview);
@@ -1850,13 +2017,18 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return copy(mockMemoryOverview.settings);
     }
     case "cmd_memory_review_now": {
+      const forcedResult = (globalThis as { __rCodeBrowserMockMemoryReviewResult?: string | null })
+        .__rCodeBrowserMockMemoryReviewResult;
+      if (forcedResult !== undefined) return forcedResult;
       if (!mockMemoryOverview.settings.enabled || !mockMemoryOverview.settings.reviewer) return null;
+      const selection = selectMemoryReviewTask(args);
+      if (!selection) return null;
       const id = `memory-job-${++sequence}`;
       mockMemoryOverview.recent_jobs.unshift({
-        sequence: String(sequence), id, task_id: stringArg(args, "taskId"), source_workspace_id: null,
+        sequence: String(sequence), id, task_id: selection.task.id, source_workspace_id: selection.workspaceId,
         trigger: "manual", status: "queued", provider_name: mockMemoryOverview.settings.reviewer.provider_name,
         model: mockMemoryOverview.settings.reviewer.model, attempt: 0, suppressed_turn_count: 0,
-        error_code: null, created_at: nowIso(), updated_at: nowIso(),
+        error_code: null, effect_count: null, created_at: nowIso(), updated_at: nowIso(),
       });
       return id;
     }
@@ -2026,6 +2198,8 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       if (browserMockSettings.config.default_provider === name) browserMockSettings.config.default_provider = undefined;
       return undefined;
     }
+    case "cmd_rtk_status": return copy(browserMockRtkStatus() satisfies RtkStatus);
+    case "cmd_rtk_set_enabled": return copy(browserMockSetRtkEnabled(args.enabled === true));
     case "cmd_codex_integration_status": return copy(browserMockCodexIntegrationStatus());
     case "cmd_codex_install_cli": return copy(browserMockInstallCli());
     case "cmd_codex_start_login":

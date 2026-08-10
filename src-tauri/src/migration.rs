@@ -544,6 +544,14 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 25,
+            to_version: 26,
+            description: "Persisted explicit-user provenance for memory review evidence"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -654,7 +662,9 @@ mod tests {
         assert_eq!(steps[6].to_version, 7);
         assert_eq!(steps[7].to_version, 8);
         assert_eq!(steps[8].to_version, 9);
-        assert_eq!(steps.last().unwrap().to_version, TARGET_VERSION);
+        let last = steps.last().unwrap();
+        assert_eq!(last.from_version, TARGET_VERSION - 1);
+        assert_eq!(last.to_version, TARGET_VERSION);
     }
 
     // ── dry_run ───────────────────────────────────────────────────
@@ -710,10 +720,12 @@ mod tests {
         let mgr = MigrationManager::new(db_path.clone());
         mgr.migrate().await.unwrap();
 
-        // Make the version ledger report a pending migration without changing the physical v25
-        // schema. The test runner below then persists a marker and fails, which lets us prove
-        // that the failed write is replaced with the snapshot rather than merely reported.
+        // Restore a coherent previous-version fixture before injecting the next migration failure.
+        // The failing runner writes a marker, letting us prove the whole database is replaced by
+        // the pre-migration snapshot rather than merely reporting an error.
         let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;")
+            .unwrap();
         conn.execute(
             "DELETE FROM schema_version WHERE version = ?",
             [TARGET_VERSION],
@@ -746,8 +758,17 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
+        let provenance_column_exists: i64 = restored
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('memory_review_turns')
+                 WHERE name = 'explicit_remember'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(marker_exists, 0);
         assert_eq!(restored_version, i64::from(TARGET_VERSION - 1));
+        assert_eq!(provenance_column_exists, 0);
     }
 
     #[tokio::test]

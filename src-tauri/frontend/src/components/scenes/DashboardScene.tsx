@@ -17,12 +17,15 @@ import {
   IconArrowRight,
   IconEditor,
   IconFile,
+  IconPlus,
   IconProjects,
   IconRestore,
   IconShield,
+  IconText,
   IconTrash,
 } from "../icons";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { useCreateConversation } from "../useCreateConversation";
 
 /** 项目仪表盘：唯一包含「项目动态」右栏的场景，数据来自 cmd_workspace_dashboard。 */
 export function DashboardScene() {
@@ -34,8 +37,10 @@ export function DashboardScene() {
   const refreshDashboard = useTasksStore((s) => s.refreshDashboard);
   const refreshProjectActivity = useTasksStore((s) => s.refreshProjectActivity);
   const openRoom = useAppStore((s) => s.openRoom);
+  const openKnowledge = useAppStore((s) => s.openKnowledge);
   const setScene = useAppStore((s) => s.setScene);
   const [error, setError] = useState<string | null>(null);
+  const { createConversation, isCreating } = useCreateConversation();
 
   const workspace = dashboard?.workspace ?? workspaces.find((item) => item.canonical_path === workspacePath);
   const refresh = async () => {
@@ -85,8 +90,17 @@ export function DashboardScene() {
               <p>查看正在推进的任务、需要处理的事项与归档记录。</p>
             </div>
             <div className="dashboard-header-actions">
+              <button className="rc-button rc-button-quiet" onClick={() => openKnowledge("memory")}><IconText width={15} height={15} />项目记忆</button>
               <button className="rc-button rc-button-quiet" onClick={() => setScene("editor")}><IconEditor width={15} height={15} />项目文件</button>
-              <button className="rc-button rc-button-primary" onClick={() => setScene("home")}>新建任务</button>
+              <button
+                className="rc-button rc-button-primary"
+                onClick={() => void createConversation(workspacePath)}
+                disabled={isCreating(workspacePath)}
+                aria-busy={isCreating(workspacePath)}
+              >
+                <IconPlus width={15} height={15} />
+                {isCreating(workspacePath) ? "正在创建…" : "新建任务"}
+              </button>
             </div>
           </header>
 

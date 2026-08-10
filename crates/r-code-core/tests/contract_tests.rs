@@ -541,6 +541,7 @@ memories_dir = "{base}/m"
             max_tokens: Some(4096),
             temperature: Some(0.7),
             protocol: None,
+            provider_kind: None,
         };
         let debug = format!("{pc:?}");
         assert!(debug.contains("***"), "api_key masked as ***");

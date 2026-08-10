@@ -14,7 +14,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { agentResend, onAgentEvent as listenAgentEvent, sessionMessages } from "../../lib/ipc";
+import {
+  agentResend,
+  onAgentEvent as listenAgentEvent,
+  sessionMessages,
+  sessionMessagesForBranch,
+} from "../../lib/ipc";
 import type { AgentEvent, AgentSendMode, SessionAttachmentMeta } from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
@@ -43,6 +48,8 @@ export interface TimelineHandle {
 
 interface Props {
   taskId: string;
+  /** Historical branch to render read-only; null/undefined keeps the live active branch. */
+  branchId?: string | null;
   workspacePath: string | null;
   /** 播放头秒数；null = live */
   cur: number | null;
@@ -187,7 +194,17 @@ const RunDuration = memo(function RunDuration({ startedAt, endedAt }: {
 });
 
 export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
-  { taskId, workspacePath, cur, running, reviewing, onAgentEvent, onInspectSubagent, selectedSubagentId },
+  {
+    taskId,
+    branchId = null,
+    workspacePath,
+    cur,
+    running,
+    reviewing,
+    onAgentEvent,
+    onInspectSubagent,
+    selectedSubagentId,
+  },
   ref
 ) {
   const [items, setItems] = useState<TimelineItem[]>([]);
@@ -222,6 +239,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const pinnedRef = useRef(true);
   const prependScrollHeightRef = useRef<number | null>(null);
   const previousTurnCountRef = useRef(0);
+  const reloadGenerationRef = useRef(0);
 
   useEffect(() => {
     setVisibleTurnLimit(80);
@@ -234,9 +252,13 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const nowSec = useCallback(() => Math.max(0, (Date.now() - startRef.current) / 1000), []);
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGenerationRef.current;
     try {
-      const msgs = await sessionMessages(taskId);
-      const d = useTasksStore.getState().details[taskId];
+      const msgs = branchId
+        ? await sessionMessagesForBranch(taskId, branchId)
+        : await sessionMessages(taskId);
+      if (generation !== reloadGenerationRef.current) return;
+      const d = branchId ? undefined : useTasksStore.getState().details[taskId];
       const startIso =
         msgs.find((m) => m.kind === "meta")?.timestamp ??
         d?.task.created_at ??
@@ -254,9 +276,10 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       );
       setError(null);
     } catch (e) {
+      if (generation !== reloadGenerationRef.current) return;
       setError(String(e));
     }
-  }, [taskId]);
+  }, [taskId, branchId]);
 
   // 任务切换：重置并加载历史
   useEffect(() => {
@@ -272,6 +295,10 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setVisibleTurnLimit(80);
     previousTurnCountRef.current = 0;
     void reload();
+    return () => {
+      // A delayed historical read must never replace the live timeline after the user returns.
+      reloadGenerationRef.current += 1;
+    };
   }, [reload]);
 
   useEffect(() => {
@@ -291,6 +318,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
 
   // 事件或运行快照变化：非流式重建；流式期间只同步 AgentRun，避免覆盖尚未落盘的增量。
   useEffect(() => {
+    if (branchId) return;
     const detail = useTasksStore.getState().details[taskId];
     if (liveRef.current) {
       if (detail) {
@@ -300,10 +328,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     }
     void reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventsLen, runsStamp, taskId]);
+  }, [eventsLen, runsStamp, taskId, branchId]);
 
   // 流式事件订阅
   useEffect(() => {
+    if (branchId) return;
     let dead = false;
     let un: (() => void) | undefined;
     const refreshTimers = new Set<ReturnType<typeof window.setTimeout>>();
@@ -346,13 +375,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       un?.();
       refreshTimers.forEach((timer) => window.clearTimeout(timer));
     };
-  }, [taskId, refreshDetail, reload, nowSec, nid, onAgentEvent]);
+  }, [taskId, branchId, refreshDetail, reload, nowSec, nid, onAgentEvent]);
 
   useImperativeHandle(
     ref,
     () => ({
       reload: () => void reload(),
       onSent: (text, mode, attachments = []) => {
+        if (branchId) return;
         setItems((prev) => [
           ...prev,
           {
@@ -369,7 +399,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         ]);
       },
     }),
-    [reload, nid, nowSec]
+    [reload, nid, nowSec, branchId]
   );
 
   // live 且贴底时自动滚底
@@ -386,11 +416,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setEditError(null);
   }, [resending]);
   const beginEdit = useCallback((messageId: string, text: string) => {
-    if (running || resending) return;
+    if (branchId || running || resending) return;
     setEditingMessageId(messageId);
     setEditingText(text);
     setEditError(null);
-  }, [running, resending]);
+  }, [branchId, running, resending]);
   const toggleRun = useCallback((runId: string) => {
     setExpandedRunIds((current) => {
       const next = new Set(current);
@@ -402,7 +432,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const resendEdited = useCallback(async () => {
     const messageId = editingMessageId;
     const message = editingText.trim();
-    if (!messageId || !message || running || resending) return;
+    if (branchId || !messageId || !message || running || resending) return;
     setResending(true);
     setEditError(null);
     try {
@@ -416,7 +446,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     } finally {
       setResending(false);
     }
-  }, [editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
+  }, [branchId, editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
   const turns = useMemo(() => buildTimelineTurns(items), [items]);
   const visibleTurns = useMemo(
     () => turns.length > visibleTurnLimit ? turns.slice(turns.length - visibleTurnLimit) : turns,
@@ -448,7 +478,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setVisibleTurnLimit((current) => Math.min(turns.length, current + 80));
   }, [turns.length]);
   const provisionalAgentId = useMemo(() => {
-    if (!reviewing) return null;
+    if (branchId || !reviewing) return null;
     for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
       const turnItems = turns[turnIndex].items;
       for (let itemIndex = turnItems.length - 1; itemIndex >= 0; itemIndex--) {
@@ -456,7 +486,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       }
     }
     return null;
-  }, [reviewing, turns]);
+  }, [branchId, reviewing, turns]);
   type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
 
   const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
@@ -488,7 +518,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
           it.queuedState === "failed"
             ? it.queuedState
             : null;
-        const editing = Boolean(it.messageId && editingMessageId === it.messageId);
+        const editing = Boolean(!branchId && it.messageId && editingMessageId === it.messageId);
         return (
           <div
             className={
@@ -504,7 +534,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             <div className="who">
               <span className="message-author">YOU</span>
               {modeLabel && <span className="user-send-mode">{modeLabel}</span>}
-              {it.messageId && !running && !editing && !workflow && it.imageCount === 0 && (
+              {it.messageId && !branchId && !running && !editing && !workflow && it.imageCount === 0 && (
                 <button
                   type="button"
                   className="message-edit"

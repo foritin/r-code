@@ -216,9 +216,14 @@ svg { flex: none; }
   display: block; color: var(--fg-faint); font-size: var(--text-meta); line-height: var(--lh-tight);
 }
 .menu-item .menu-item-key { margin-left: auto; color: var(--fg-faint); font-size: var(--text-meta); white-space: nowrap; }
+.menu-item .menu-item-check {
+  display: inline-flex; flex: none; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-left: auto; color: var(--accent);
+}
+.menu-item .menu-item-key + .menu-item-check { margin-left: 0; }
 .menu-item > svg { color: var(--accent); }
 /* 堆叠式菜单项（标题 + 说明各占一行） */
-.menu-item.stacked { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.menu-item.stacked { align-items: center; }
 
 /* ---------- 状态条（原语） ----------
    原先 errbar / notebar / okbar / comp-error / deck-error / home-error /

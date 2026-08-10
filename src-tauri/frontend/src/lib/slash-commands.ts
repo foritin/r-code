@@ -40,8 +40,8 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   {
     name: "clear",
     aliases: ["new", "reset"],
-    title: "新建空白会话",
-    description: "保留当前记录，创建一个不继承上下文的新会话。",
+    title: "清空当前上下文",
+    description: "当前任务切换到空白消息上下文；历史分支仍会保留用于审计。",
     category: "session",
     kind: "local",
     locations: ["home", "room"],

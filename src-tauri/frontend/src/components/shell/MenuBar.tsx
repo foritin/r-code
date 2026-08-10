@@ -2,10 +2,10 @@ import { useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { selectNeedsYou, useTasksStore } from "../../store/tasks";
-import { notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
+import { appQuit, notificationList, notificationMarkAllRead, notificationMarkRead } from "../../lib/ipc";
 import type { Notification, NotificationPage } from "../../lib/types";
 import { requestOnboarding } from "../../lib/onboarding";
-import { isMacPlatform, keyLabel } from "../../lib/keys";
+import { isMacPlatform, isWindowsPlatform, keyLabel } from "../../lib/keys";
 import { usePoll } from "../../lib/poll";
 import { Menu, MenuItem, MenuSeparator } from "../ui/Menu";
 import {
@@ -25,6 +25,7 @@ import {
  */
 export function MenuBar() {
   const macOS = isMacPlatform();
+  const windows = isWindowsPlatform();
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
   const goBack = useAppStore((s) => s.goBack);
@@ -104,7 +105,13 @@ export function MenuBar() {
               <MenuItem close={close} onSelect={() => setScene("projects")}>打开项目…</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("editor")}>当前项目文件</MenuItem>
               <MenuSeparator />
-              <MenuItem close={close} onSelect={() => void getCurrentWindow().close().catch(() => {})}>关闭窗口</MenuItem>
+              <MenuItem close={close} onSelect={() => void getCurrentWindow().close().catch(() => {})}>
+                {windows ? "隐藏到系统托盘" : "关闭窗口"}
+              </MenuItem>
+              {windows && <>
+                <MenuSeparator />
+                <MenuItem close={close} onSelect={() => void appQuit().catch(() => {})}>退出 R-Code</MenuItem>
+              </>}
             </>}
           </Menu>
           <Menu
@@ -194,7 +201,14 @@ export function MenuBar() {
         <span className="winctl app-window-controls" aria-label="窗口控制">
           <button className="wc" onClick={() => void getCurrentWindow().minimize().catch(() => {})} aria-label="最小化"><IconMinimize /></button>
           <button className="wc" onClick={() => void getCurrentWindow().toggleMaximize().catch(() => {})} aria-label="最大化或还原"><IconMaximize /></button>
-          <button className="wc close" onClick={() => void getCurrentWindow().close().catch(() => {})} aria-label="关闭"><IconClose /></button>
+          <button
+            className="wc close"
+            onClick={() => void getCurrentWindow().close().catch(() => {})}
+            aria-label={windows ? "关闭到系统托盘" : "关闭"}
+            title={windows ? "关闭到系统托盘，后台任务继续运行" : "关闭"}
+          >
+            <IconClose />
+          </button>
         </span>
       )}
     </header>

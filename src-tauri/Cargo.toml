@@ -56,6 +56,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 dirs = { workspace = true }
 blake3 = { workspace = true }
+sha2 = { workspace = true }
 base64 = { workspace = true }
 tempfile = { workspace = true }
 
@@ -66,8 +67,16 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = "2"
 anyhow = { workspace = true }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+# 托盘隐藏后再次从桌面/任务栏启动时，唤回已有窗口而不是创建第二个数据库进程。
+tauri = { workspace = true, features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+zip = { workspace = true }
+
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
 
 # Finder 启动的 macOS GUI 应用不会继承登录 shell 的 PATH。固定到已审核的 Tauri
 # helper revision，确保 Homebrew/npm/nvm 安装的 Codex CLI 与 Node.js 能被发现。

@@ -8,6 +8,7 @@ import { pushToast } from "../store/toast";
 import { IconEditor, IconFolderOpen, IconMore, IconPlus, IconText, IconTrash } from "./icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { Menu, MenuItem, MenuSeparator } from "./ui/Menu";
+import { useCreateConversation } from "./useCreateConversation";
 
 interface PendingRemoval {
   taskIds: string[];
@@ -23,7 +24,6 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
   const refreshActivity = useTasksStore((state) => state.refreshActivity);
   const setCurrentProject = useTasksStore((state) => state.setCurrentProject);
   const scene = useAppStore((state) => state.scene);
-  const openNewConversation = useAppStore((state) => state.openNewConversation);
   const openDashboard = useAppStore((state) => state.openDashboard);
   const openConversations = useAppStore((state) => state.openConversations);
   const setScene = useAppStore((state) => state.setScene);
@@ -31,6 +31,8 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
   const [checking, setChecking] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+  const { createConversation: createPreparedConversation, isCreating } = useCreateConversation();
+  const creatingConversation = isCreating(workspace.canonical_path);
 
   const projectTasks = useMemo(
     () => tasks.filter((task) => task.workspace_path === workspace.canonical_path),
@@ -44,8 +46,8 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
   }, [setCurrentProject, setScene, workspace.canonical_path]);
 
   const createConversation = useCallback(() => {
-    openNewConversation(workspace.canonical_path);
-  }, [openNewConversation, workspace.canonical_path]);
+    void createPreparedConversation(workspace.canonical_path);
+  }, [createPreparedConversation, workspace.canonical_path]);
 
   const openKnowledge = useCallback(() => {
     setCurrentProject(workspace.canonical_path);
@@ -93,7 +95,7 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
         placement="right"
         gap={18}
         label={`${workspace.display_name} 项目操作`}
-        disabled={checking || removing}
+        disabled={checking || removing || creatingConversation}
         menuClassName="project-actions-popover"
         trigger={(
           <button
@@ -110,7 +112,7 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
         {({ close }) => <>
           <MenuItem close={close} onSelect={createConversation}>
             <IconPlus width={15} height={15} />
-            新建对话
+            {creatingConversation ? "正在创建…" : "新建对话"}
           </MenuItem>
           <MenuSeparator />
           <MenuItem close={close} onSelect={() => openDashboard(workspace.canonical_path)}>

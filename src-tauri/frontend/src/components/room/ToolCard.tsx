@@ -16,6 +16,8 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlight } from "../../lib/highlight";
 import { COPIED_RESET_MS, copyText } from "../../lib/clipboard";
 import { toolVerb } from "../../lib/format";
+import { mcpMarketInstall, mcpToggle } from "../../lib/ipc";
+import type { McpLaunchPreview, McpMarketInstallRequest } from "../../lib/types";
 import { useAppStore } from "../../store/app";
 import { formatToolPayload, type ToolState } from "./model";
 
@@ -45,10 +47,17 @@ export const ToolCard = memo(function ToolCard({
   dim = "",
   t,
 }: ToolCardProps) {
-  const [open, setOpen] = useState(false);
+  const hasMcpConfirmation = hasMcpConfirmationPayload(name, outputJson);
+  const [open, setOpen] = useState(hasMcpConfirmation);
   // 判据必须与 formatToolPayload 一致（它对纯空白返回 null），
   // 否则会出现「按钮可展开、展开后写着没有载荷」。
   const hasPayload = Boolean(inputJson?.trim() || outputJson?.trim());
+
+  // Agent 只负责准备精确方案，真正安装/启用必须由用户点击确认。结果通常在工具
+  // 从 active 变为 ok 时才到达，因此不能只依赖 useState 的首次初始化。
+  useEffect(() => {
+    if (hasMcpConfirmation) setOpen(true);
+  }, [hasMcpConfirmation]);
 
   return (
     <div
@@ -87,6 +96,7 @@ export const ToolCard = memo(function ToolCard({
       {open && (
         <div className="tcard-body">
           <ToolPayloadDetails
+            toolName={name}
             inputJson={inputJson}
             outputJson={outputJson}
             state={state}
@@ -102,17 +112,23 @@ export const ToolCard = memo(function ToolCard({
  * 再套一层重复标题。组件只在父级真正展开时挂载，因此解析成本仍然按需发生。
  */
 export const ToolPayloadDetails = memo(function ToolPayloadDetails({
+  toolName,
   inputJson,
   outputJson,
   state,
-}: Pick<ToolCardProps, "inputJson" | "outputJson" | "state">) {
+}: Pick<ToolCardProps, "inputJson" | "outputJson" | "state"> & { toolName?: string }) {
   const openKnowledge = useAppStore((store) => store.openKnowledge);
   const input = useMemo(() => formatToolPayload(inputJson, "input"), [inputJson]);
   const output = useMemo(() => formatToolPayload(outputJson, "output"), [outputJson]);
-  const mcpSuggestion = useMemo(() => readMcpSuggestion(outputJson), [outputJson]);
+  const mcpSuggestion = useMemo(() => readMcpSuggestion(toolName, outputJson), [toolName, outputJson]);
+  const mcpConfirmation = useMemo(
+    () => readMcpConfirmation(toolName, outputJson),
+    [toolName, outputJson],
+  );
 
   return (
     <>
+      {mcpConfirmation && <McpConfirmationCard action={mcpConfirmation} />}
       {mcpSuggestion && (
         <div className="tcard-mcp-suggestion">
           <div>
@@ -128,19 +144,212 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
           </button>
         </div>
       )}
-      {input && <Payload label="输入" view={input} />}
-      {output && (
+      {!mcpConfirmation && input && <Payload label="输入" view={input} />}
+      {!mcpConfirmation && output && (
         <Payload label={state === "fail" ? "错误输出" : "输出"} view={output} tone={state} />
       )}
-      {!input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
+      {!mcpConfirmation && !input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
     </>
   );
 });
 
+type McpConfirmationAction =
+  | {
+      kind: "install";
+      message: string;
+      request: McpMarketInstallRequest;
+      preview: McpLaunchPreview;
+    }
+  | {
+      kind: "enable";
+      message: string;
+      serverId: string;
+      preview: McpLaunchPreview | null;
+    };
+
+function McpConfirmationCard({ action }: { action: McpConfirmationAction }) {
+  const openKnowledge = useAppStore((store) => store.openKnowledge);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const preview = action.preview;
+  const expired = preview
+    ? Number.isFinite(Date.parse(preview.expires_at)) && Date.parse(preview.expires_at) <= Date.now()
+    : false;
+  const title = action.kind === "install"
+    ? `添加 ${action.request.server.title}`
+    : `启用 ${action.serverId}`;
+  const serverId = action.kind === "install" ? action.request.server_id : action.serverId;
+
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (action.kind === "install") {
+        await mcpMarketInstall(action.request, action.preview.token);
+        setDone("MCP 已安全添加并保持关闭。配置所需凭据后，可再确认启用。");
+      } else {
+        const result = await mcpToggle(action.serverId, true, action.preview?.token ?? null);
+        if (result.confirmation) {
+          throw new Error("启动方案已经变化，请重新发起启用确认。");
+        }
+        setDone("MCP 已启用；服务仍按需启动，不会在后台空转。");
+      }
+    } catch (cause) {
+      console.error("MCP confirmation action failed", cause);
+      setError("操作未完成，确认可能已失效。请让 Agent 重新准备；详细原因可在诊断日志中查看。");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="tcard-mcp-confirmation" role="group" aria-label={title}>
+      <div className="tcard-mcp-confirmation-head">
+        <span>MCP · 需要你的确认</span>
+        <strong>{title}</strong>
+        <p>{action.message}</p>
+      </div>
+      {preview ? <McpLaunchPlan preview={preview} /> : (
+        <div className="tcard-mcp-launch builtin"><span>启动方案已审批</span><code>{serverId}</code></div>
+      )}
+      <p className="tcard-mcp-risk">
+        {action.kind === "install"
+          ? "Registry 仍处于预览阶段，条目未经 R-Code 或 Registry 安全审核。添加只写入本机配置，不会立即运行。"
+          : "确认后该服务可在 Agent 实际调用时启动；本地服务将拥有其进程自身的系统权限。"}
+      </p>
+      {error && <div className="tcard-mcp-result is-error" role="alert">{error}</div>}
+      {done && <div className="tcard-mcp-result" role="status">{done}</div>}
+      <div className="tcard-mcp-actions">
+        {done ? (
+          <button type="button" className="btn" onClick={() => openKnowledge("mcp", null)}>
+            打开 MCP 管理
+          </button>
+        ) : (
+          <>
+            <button type="button" className="btn" onClick={() => openKnowledge("mcp", null)}>
+              稍后处理
+            </button>
+            <button type="button" className="btn accent" disabled={busy || expired} onClick={() => void confirm()}>
+              {busy ? "处理中…" : expired ? "确认已过期" : action.kind === "install" ? "确认添加" : "确认并启用"}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function McpLaunchPlan({ preview }: { preview: McpLaunchPreview }) {
+  const transport = preview.transport;
+  if (transport.type === "stdio") {
+    return (
+      <div className="tcard-mcp-launch">
+        <span>本机进程</span>
+        <pre>{[
+          `可执行文件: ${transport.executable}`,
+          ...transport.args.map((arg, index) => `参数 ${index + 1}: ${arg}`),
+        ].join("\n")}</pre>
+        {transport.environment_names.length > 0 && (
+          <small>凭据环境变量：{transport.environment_names.join("、")}</small>
+        )}
+      </div>
+    );
+  }
+  return (
+    <div className="tcard-mcp-launch">
+      <span>远程 HTTPS</span>
+      <pre>{`地址: ${transport.url}`}</pre>
+      {transport.header_names.length > 0 && <small>凭据请求头：{transport.header_names.join("、")}</small>}
+    </div>
+  );
+}
+
+export function hasMcpConfirmationPayload(
+  toolName: string | null | undefined,
+  raw: string | null | undefined,
+): boolean {
+  if (toolName !== "mcp_prepare_install" && toolName !== "mcp_prepare_enable") return false;
+  return Boolean(raw && raw.length <= 128_000 && /"action"\s*:\s*"confirm_mcp_(?:install|enable)"/.test(raw));
+}
+
+function readMcpConfirmation(
+  toolName: string | null | undefined,
+  raw: string | null | undefined,
+): McpConfirmationAction | null {
+  if (!hasMcpConfirmationPayload(toolName, raw)) return null;
+  try {
+    const value: unknown = JSON.parse(raw as string);
+    if (!isRecord(value) || value.status !== "confirmation_required") return null;
+    const message = typeof value.message === "string" && value.message.trim()
+      ? value.message.trim()
+      : "请核对完整启动方案后再继续。";
+    if (toolName === "mcp_prepare_install" && value.action === "confirm_mcp_install") {
+      const request = readInstallRequest(value.request);
+      const preview = readLaunchPreview(value.preview);
+      if (!request || !preview || preview.server_id !== request.server_id) return null;
+      return { kind: "install", message, request, preview };
+    }
+    if (toolName === "mcp_prepare_enable" && value.action === "confirm_mcp_enable") {
+      const serverId = typeof value.server_id === "string" ? value.server_id.trim() : "";
+      if (!serverId) return null;
+      const preview = value.preview == null ? null : readLaunchPreview(value.preview);
+      if (value.preview != null && !preview) return null;
+      if (preview && preview.server_id !== serverId) return null;
+      return { kind: "enable", message, serverId, preview };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readLaunchPreview(value: unknown): McpLaunchPreview | null {
+  if (!isRecord(value) || !isRecord(value.transport)) return null;
+  const transport = value.transport;
+  const common = typeof value.token === "string"
+    && typeof value.server_id === "string"
+    && typeof value.fingerprint === "string"
+    && typeof value.expires_at === "string";
+  if (!common) return null;
+  if (transport.type === "stdio") {
+    if (typeof transport.executable !== "string"
+      || !isStringArray(transport.args)
+      || !isStringArray(transport.environment_names)) return null;
+  } else if (transport.type === "streamable_http") {
+    if (typeof transport.url !== "string" || !isStringArray(transport.header_names)) return null;
+  } else {
+    return null;
+  }
+  return value as unknown as McpLaunchPreview;
+}
+
+function readInstallRequest(value: unknown): McpMarketInstallRequest | null {
+  if (!isRecord(value) || !isRecord(value.server)) return null;
+  const server = value.server;
+  if (typeof value.option_id !== "string"
+    || typeof value.server_id !== "string"
+    || typeof server.name !== "string"
+    || typeof server.title !== "string"
+    || typeof server.version !== "string"
+    || !Array.isArray(server.install_options)) return null;
+  const selected = server.install_options.some((option) => isRecord(option) && option.id === value.option_id);
+  return selected ? value as unknown as McpMarketInstallRequest : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 function readMcpSuggestion(
+  toolName: string | null | undefined,
   raw: string | null | undefined,
 ): { reason: string; marketQuery: string | null } | null {
-  if (!raw?.trim() || raw.length > 16_000) return null;
+  if (toolName !== "suggest_mcp" || !raw?.trim() || raw.length > 16_000) return null;
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (value.action !== "open_mcp_settings") return null;

@@ -1101,6 +1101,8 @@ pub enum TaskEventType {
     RunAborted,
     /// 用户消息编辑后创建了新的会话分支
     SessionBranched,
+    /// 用户清空当前消息上下文并切换到新的空白分支
+    SessionCleared,
     /// 受委派子代理已创建或开始排队。
     SubagentStarted,
     /// 受委派子代理进入终态。
@@ -1135,6 +1137,7 @@ impl std::fmt::Display for TaskEventType {
             Self::QueueDispatched => write!(f, "queue_dispatched"),
             Self::RunAborted => write!(f, "run_aborted"),
             Self::SessionBranched => write!(f, "session_branched"),
+            Self::SessionCleared => write!(f, "session_cleared"),
             Self::SubagentStarted => write!(f, "subagent_started"),
             Self::SubagentFinished => write!(f, "subagent_finished"),
             Self::ToolCall => write!(f, "tool_call"),
@@ -1244,6 +1247,22 @@ impl SessionBranch {
             task_id,
             parent_branch_id: Some(parent_branch_id.into()),
             forked_from_message_id: Some(forked_from_message_id.into()),
+            is_active: true,
+            created_at: Utc::now(),
+        }
+    }
+
+    /// 为同一任务创建不继承任何消息的空白活跃分支。父分支仅用于审计与恢复，
+    /// 不会把父分支 JSONL 中的消息复制进新的模型上下文。
+    pub fn reset(task_id: impl Into<String>, parent_branch_id: impl Into<String>) -> Self {
+        let task_id = task_id.into();
+        let id = Uuid::new_v4().to_string();
+        Self {
+            storage_id: format!("{task_id}--{id}"),
+            id,
+            task_id,
+            parent_branch_id: Some(parent_branch_id.into()),
+            forked_from_message_id: None,
             is_active: true,
             created_at: Utc::now(),
         }

@@ -26,7 +26,7 @@ interface Props {
   onChanged?: () => void;
   onDraftChanged?: (selection: {
     providerName: string;
-    model: string;
+    model: string | null;
     inference: InferenceOptions;
   }) => void;
   scopeLabel?: string;
@@ -36,7 +36,7 @@ interface Props {
 
 interface PendingSwitch {
   provider: ProviderChoice;
-  model: string;
+  model: string | null;
 }
 
 type View = "root" | "models" | "thinking" | "reasoning" | "verbosity";
@@ -66,21 +66,34 @@ export function ModelSwitcher({
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [customFor, setCustomFor] = useState<string | null>(null);
   const [customValue, setCustomValue] = useState("");
+  const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const active = resolveActive(choices, fallback, providerName, model);
   const capabilities = useMemo(
     () => capabilitiesFor(active.provider, active.model),
     [active.provider, active.model],
   );
   const normalized = normalizeInference(inference, capabilities);
+  const configuredChoices = useMemo(
+    () => choices
+      .filter((choice) => choice.ready)
+      .sort((left, right) => Number(right.name === active.name) - Number(left.name === active.name)),
+    [choices, active.name],
+  );
 
-  const applyModel = useAsyncAction(async (provider: ProviderChoice, nextModel: string) => {
+  const openModels = () => {
+    setExpandedProvider(active.name || configuredChoices[0]?.name || null);
+    setCustomFor(null);
+    setView("models");
+  };
+
+  const applyModel = useAsyncAction(async (provider: ProviderChoice, nextModel: string | null) => {
     if (taskId) {
       if (provider.name !== active.name) await taskSetProvider(taskId, provider.name);
-      await taskSetModel(taskId, nextModel === provider.model ? null : nextModel);
+      await taskSetModel(taskId, nextModel);
     } else {
       onDraftChanged?.({ providerName: provider.name, model: nextModel, inference: {} });
     }
-    rememberModel(provider.name, nextModel);
+    if (nextModel) rememberModel(provider.name, nextModel);
     setPending(null);
     setView("root");
     onChanged?.();
@@ -88,17 +101,17 @@ export function ModelSwitcher({
 
   const saveInference = useAsyncAction(async (next: InferenceOptions) => {
     if (taskId) await taskSetInference(taskId, next);
-    else onDraftChanged?.({ providerName: active.name, model: active.model, inference: next });
+    else onDraftChanged?.({ providerName: active.name, model, inference: next });
     onChanged?.();
   }, { label: "保存模型配置" });
 
-  const chooseModel = (provider: ProviderChoice, nextModel: string) => {
+  const chooseModel = (provider: ProviderChoice, nextModel: string | null) => {
     if (running || !provider.ready) return;
-    if (provider.name === active.name && nextModel === active.model) {
+    if (provider.name === active.name && nextModel === model) {
       setView("root");
       return;
     }
-    if (provider.name === active.name) {
+    if (!taskId || provider.name === active.name) {
       void applyModel.run(provider, nextModel);
       return;
     }
@@ -128,8 +141,9 @@ export function ModelSwitcher({
   const title = running
     ? "当前运行结束后可修改模型配置"
     : `${active.provider?.label ?? "未选择"} / ${active.model || "未配置"} / ${summary}`;
+  const readyClass = active.provider?.ready ? " ready" : "";
   const trigger = variant === "pill" ? (
-    <button type="button" className="provider-pill ready model-config-trigger" title={title} disabled={running}>
+    <button type="button" className={`provider-pill model-config-trigger${readyClass}`} title={title} disabled={running}>
       <span>{active.provider?.label ?? "模型配置"}</span>
       <small>{active.model || "未配置"} · {summary}</small>
       <IconChevronDown width={12} height={12} />
@@ -188,6 +202,7 @@ export function ModelSwitcher({
           if (!open) {
             setView("root");
             setCustomFor(null);
+            setExpandedProvider(null);
           }
         }}
       >
@@ -197,7 +212,7 @@ export function ModelSwitcher({
               <div><strong>{active.provider?.label ?? "模型配置"}</strong><small>{scopeLabel ?? (taskId ? "仅作用于当前会话" : "仅作用于新对话")}</small></div>
               {saveInference.busy && <span>保存中…</span>}
             </div>
-            <ConfigRow label="模型" value={active.model || "未配置"} onSelect={() => setView("models")} />
+            <ConfigRow label="模型" value={active.model || "未配置"} onSelect={openModels} />
             {capabilities.thinking && (
               <ConfigRow
                 label={capabilities.thinking.label}
@@ -234,7 +249,7 @@ export function ModelSwitcher({
             <ConfigBack title="模型" onBack={() => setView("root")} />
             {pending && (
               <div className="model-switch-confirm" role="status">
-                <span>切换到 {pending.provider.label}<small>{pending.model}</small></span>
+                <span>切换到 {pending.provider.label}<small>{pending.model ?? `Provider 默认 · ${pending.provider.model}`}</small></span>
                 <div>
                   <button type="button" className="quiet-link" disabled={applyModel.busy} onClick={() => setPending(null)}>取消</button>
                   <button type="button" className="btn accent sm" disabled={applyModel.busy} onClick={() => void applyModel.run(pending.provider, pending.model)}>
@@ -243,55 +258,84 @@ export function ModelSwitcher({
                 </div>
               </div>
             )}
-            {choices.length === 0 && <MenuEmpty>没有可用模型服务</MenuEmpty>}
-            {choices.map((choice) => (
-              <div className="model-group" key={choice.name}>
-                <div className="model-group-head">
-                  <span>{choice.label}</span>
-                  {!choice.ready && <small>尚未完成配置</small>}
-                </div>
-                {choice.ready && choice.models.map((candidate) => (
-                  <MenuItem
-                    key={candidate}
-                    closeOnSelect={false}
-                    checked={choice.name === active.name && candidate === active.model}
-                    hint={candidate === choice.model ? "服务默认" : undefined}
-                    onSelect={() => chooseModel(choice, candidate)}
+            {configuredChoices.length === 0 && <MenuEmpty>没有已完成配置的模型服务</MenuEmpty>}
+            {configuredChoices.map((choice) => {
+              const expanded = expandedProvider === choice.name;
+              const current = choice.name === active.name;
+              const candidates = current && model && !choice.models.includes(model)
+                ? [model, ...choice.models]
+                : choice.models;
+              return (
+                <section className={`model-group${expanded ? " expanded" : ""}${current ? " current" : ""}`} key={choice.name}>
+                  <button
+                    type="button"
+                    className="model-group-toggle ring-inset"
+                    aria-expanded={expanded}
+                    aria-current={current ? "true" : undefined}
+                    onClick={() => {
+                      setExpandedProvider(expanded ? null : choice.name);
+                      setCustomFor(null);
+                    }}
                   >
-                    <span className="model-name" title={candidate}>{candidate}</span>
-                  </MenuItem>
-                ))}
-                {choice.ready && (customFor === choice.name ? (
-                  <div className="model-custom">
-                    <input
-                      className="input"
-                      autoFocus
-                      value={customValue}
-                      aria-label={`${choice.label} 的自定义模型名`}
-                      placeholder="输入模型名…"
-                      onChange={(event) => setCustomValue(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          submitCustom(choice);
-                        }
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          setCustomFor(null);
-                        }
-                      }}
-                    />
-                  </div>
-                ) : (
-                  <MenuItem closeOnSelect={false} className="model-custom-open" onSelect={() => {
-                    setCustomFor(choice.name);
-                    setCustomValue("");
-                  }}>
-                    <IconPlus width={12} height={12} /> 自定义模型…
-                  </MenuItem>
-                ))}
-              </div>
-            ))}
+                    <span className="model-group-title">{choice.label}</span>
+                    {current && <span className="model-current-provider-badge">当前使用</span>}
+                    <IconChevronDown className="model-group-chevron" width={13} height={13} />
+                  </button>
+                  {expanded && (
+                    <div className="model-group-body">
+                      <MenuItem
+                        closeOnSelect={false}
+                        checked={current && model === null}
+                        hint={`随服务设置变化 · 当前 ${choice.model}`}
+                        onSelect={() => chooseModel(choice, null)}
+                      >
+                        使用服务默认模型
+                      </MenuItem>
+                      {candidates.map((candidate) => (
+                        <MenuItem
+                          key={candidate}
+                          closeOnSelect={false}
+                          checked={current && model === candidate}
+                          hint={candidate === choice.model ? "固定使用，不随服务默认变化" : undefined}
+                          onSelect={() => chooseModel(choice, candidate)}
+                        >
+                          <span className="model-name" title={candidate}>{candidate}</span>
+                        </MenuItem>
+                      ))}
+                      {customFor === choice.name ? (
+                        <div className="model-custom">
+                          <input
+                            className="input"
+                            autoFocus
+                            value={customValue}
+                            aria-label={`${choice.label} 的自定义模型名`}
+                            placeholder="输入模型名…"
+                            onChange={(event) => setCustomValue(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                submitCustom(choice);
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                setCustomFor(null);
+                              }
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <MenuItem closeOnSelect={false} className="model-custom-open" onSelect={() => {
+                          setCustomFor(choice.name);
+                          setCustomValue("");
+                        }}>
+                          <IconPlus width={12} height={12} /> 添加自定义模型…
+                        </MenuItem>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </>
         ) : view === "thinking" ? (
           renderOptionView(capabilities.thinking, "thinking", normalized.thinking)

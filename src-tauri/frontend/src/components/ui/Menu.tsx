@@ -32,6 +32,7 @@ import {
   type SurfaceAlign,
   type SurfacePlacement,
 } from "./AnchoredSurface";
+import { IconCheck } from "../icons";
 
 
 /** 全局互斥：打开新菜单时关掉上一个。 */
@@ -308,6 +309,11 @@ export function MenuItem({
         children
       )}
       {shortcut && <span className="menu-item-key">{shortcut}</span>}
+      {radio && (
+        <span className="menu-item-check" aria-hidden="true">
+          {checked && <IconCheck width={13} height={13} />}
+        </span>
+      )}
     </button>
   );
 }

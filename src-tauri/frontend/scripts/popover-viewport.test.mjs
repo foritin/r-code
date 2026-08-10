@@ -227,8 +227,17 @@ test("sidebar project and conversation actions share one compact side-menu patte
   await page.keyboard.press("Escape");
   await projectTrigger.click();
   await projectMenu.getByRole("menuitem", { name: "新建对话", exact: true }).click();
-  await page.locator("#main-content > .scene-home").waitFor({ state: "visible" });
-  assert.match(await page.locator(".scope-pill").innerText(), /r-code/, "project-scoped new conversation keeps the project attached");
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator(".sidebar-task-row.active").getByText("新对话", { exact: true }).count(),
+    1,
+    "project-scoped creation must persist and select the empty conversation immediately",
+  );
+  assert.match(
+    await page.locator("#main-content > .scene-room").innerText(),
+    /r-code · 会话就绪/,
+    "the durable conversation keeps the selected project attached",
+  );
 
   assert.deepEqual(runtimeErrors, []);
   await page.close();

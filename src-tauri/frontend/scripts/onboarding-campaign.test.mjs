@@ -73,6 +73,179 @@ test.after(async () => {
   server?.kill();
 });
 
+test("provider identity is present in frontend DTO, onboarding, settings, and mock paths", () => {
+  const types = fs.readFileSync(path.join(frontendDir, "src/lib/types.ts"), "utf8");
+  const onboarding = fs.readFileSync(
+    path.join(frontendDir, "src/components/onboarding/OnboardingCampaign.tsx"),
+    "utf8",
+  );
+  const settings = fs.readFileSync(
+    path.join(frontendDir, "src/components/scenes/SettingsScene.tsx"),
+    "utf8",
+  );
+  const mockRuntime = fs.readFileSync(path.join(frontendDir, "src/lib/browser-mock-runtime.ts"), "utf8");
+
+  assert.match(types, /provider_kind\?: string;/, "settings responses must expose persisted identity");
+  assert.match(types, /providerKind\?: string \| null;/, "save DTOs must carry stable identity");
+  assert.match(
+    onboarding,
+    /providerKind:\s*selectedPreset\.id/,
+    "onboarding must save the selected preset identity",
+  );
+  assert.match(
+    settings,
+    /providerKind:\s*activePreset\?\.id \?\? ""/,
+    "settings must save the selected preset identity and explicitly clear custom profiles",
+  );
+  assert.match(
+    mockRuntime,
+    /provider\.providerKind == null\s*\? existing\?\.provider_kind/,
+    "browser mock must preserve identity when legacy callers omit the field",
+  );
+});
+
+test("browser settings mock round-trips and preserves providerKind", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const identities = await page.evaluate(async () => {
+    const ipc = await import("/src/lib/ipc.ts");
+    const mock = await import("/src/lib/mock-data.ts");
+    const name = "renamed-deepseek-browser-test";
+
+    await ipc.settingsSaveProvider({
+      name,
+      providerKind: "deepseek",
+      baseUrl: "https://relay.internal.example/v1",
+      model: "deepseek-v4-flash",
+      protocol: "openai_responses",
+      activate: false,
+    });
+    const first = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+
+    await ipc.settingsSaveProvider({
+      name,
+      baseUrl: "https://second-relay.internal.example/v1",
+      model: "deepseek-v4-flash",
+      protocol: "openai_responses",
+      activate: false,
+    });
+    const omitted = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+
+    await ipc.settingsSaveProvider({
+      name,
+      providerKind: "openai",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-pro",
+      protocol: "openai_chat",
+      activate: false,
+    });
+    const explicitOther = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+    await ipc.settingsDeleteProvider(name);
+    return { first, omitted, explicitOther };
+  });
+
+  assert.deepEqual(identities, {
+    first: "deepseek",
+    omitted: "deepseek",
+    explicitOther: "openai",
+  });
+  await page.close();
+});
+
+test("local configuration hydration never blocks the onboarding tour", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    const blockedCommands = new Set(["cmd_settings_get", "cmd_codex_integration_status"]);
+    let release;
+    const deferred = new Promise((resolve) => {
+      release = resolve;
+    });
+    const control = {
+      started: [],
+      released: false,
+      release: () => {
+        control.released = true;
+        release();
+      },
+    };
+    globalThis.__rCodeOnboardingProbeControl = control;
+    globalThis.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (blockedCommands.has(command)) {
+          control.started.push(command);
+          await deferred;
+        }
+        return browserMockInvoke(command, args);
+      },
+    };
+    window.dispatchEvent(new Event("r-code:onboarding:open"));
+  });
+
+  await page.waitForFunction(() => {
+    const started = globalThis.__rCodeOnboardingProbeControl?.started ?? [];
+    return started.includes("cmd_settings_get") && started.includes("cmd_codex_integration_status");
+  });
+  const tour = page.locator(".onboarding-tour");
+  await tour.waitFor({ state: "visible" });
+
+  assert.equal(await page.locator(".onboarding-loading").count(), 0, "background hydration must not cover the tour");
+  assert.notEqual(await tour.getAttribute("aria-busy"), "true", "background hydration must not mark the tour busy");
+
+  await page.locator(".onboarding-footer > button").last().click();
+  assert.equal(await page.locator(".onboarding-header > span").textContent(), "主 Agent");
+
+  await page.locator(".onboarding-dot").nth(2).click();
+  await page.locator(".onboarding-provider-pick button").first().waitFor({ state: "visible", timeout: 2_000 });
+  assert.equal(
+    await page.evaluate(() => globalThis.__rCodeOnboardingProbeControl?.released),
+    false,
+    "the provider catalog must render while settings and Codex probes are still pending",
+  );
+  await page.evaluate(() => globalThis.__rCodeOnboardingProbeControl?.release());
+  await page.close();
+});
+
+test("configuration probe failures stay local and recover in place", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    globalThis.__rCodeFailOnboardingBootstrap = true;
+    globalThis.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (
+          globalThis.__rCodeFailOnboardingBootstrap
+          && (command === "cmd_settings_get" || command === "cmd_codex_integration_status")
+        ) {
+          throw new Error(`mock failure: ${command}`);
+        }
+        return browserMockInvoke(command, args);
+      },
+    };
+    window.dispatchEvent(new Event("r-code:onboarding:open"));
+  });
+
+  const tour = page.locator(".onboarding-tour");
+  await tour.waitFor({ state: "visible" });
+  await page.locator(".onboarding-footer > button").last().click();
+
+  const engineFeedback = page.locator(".onboarding-engine-pick > small");
+  await engineFeedback.getByText("Codex 状态暂不可用；R-Code 不受影响。").waitFor();
+  assert.notEqual(await tour.getAttribute("aria-busy"), "true");
+
+  await page.evaluate(() => {
+    globalThis.__rCodeFailOnboardingBootstrap = false;
+  });
+  await engineFeedback.getByRole("button", { name: "重试" }).click();
+  await page.locator(".onboarding-engine-option.codex > i").getByText("未连接", { exact: true }).waitFor();
+  await page.locator(".onboarding-dot").nth(2).click();
+  await page.locator(".onboarding-bootstrap-note").waitFor({ state: "hidden" });
+  await page.close();
+});
+
 test("completion never blocks on optional setup and only auto-opens once", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const runtimeErrors = [];
@@ -92,7 +265,6 @@ test("completion never blocks on optional setup and only auto-opens once", async
   });
 
   await page.locator(".onboarding-tour").waitFor();
-  await page.locator(".onboarding-loading").waitFor({ state: "hidden" });
   await page.locator(".onboarding-dot").nth(4).click();
   await page.locator(".onboarding-footer > button").last().click();
   await page.locator(".onboarding-layer").waitFor({ state: "detached" });

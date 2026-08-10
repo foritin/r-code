@@ -6,6 +6,36 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-11
+
+### Added
+
+- 完成双向 MCP 集成：R-Code Agent 会并行发现已启用服务的 `tools/list`，把真实描述与输入 schema 动态暴露为可直接调用的 `mcp__<服务>__<工具>`；R-Code 也可作为 stdio MCP Server 向 Codex 等宿主公开委派、只读委派、状态查询、结果等待和取消任务 5 个工具。
+- 设置页新增 RTK 加速开关：开启时会检测并按当前系统安装 RTK、校验下载并原子写入 R-Code 全局可用目录，再为新对话启用优先命令策略；关闭时仅停用托管配置，保留已安装程序便于再次启用。
+- 项目页新增项目记忆管理入口，手动复盘可真实触发项目记忆提取；未发送的输入按项目与对话自动保存草稿，切换页面、项目或功能后可继续编辑。
+- 模型切换器按已配置 Provider 分组并支持折叠，清楚标出「当前 Provider」和当前模型；Kimi 类 Provider 新增思考开关与思考强度选项。
+
+### Changed
+
+- Codex 子代理改用可复用的 App Server 会话链路，并加入面向完成任务的运行引导：优先批量读取相关文件、减少低价值往返，不再设置固定工具调用次数或总时长上限，仅在约 5 分钟无实质进展时触发软性提醒。
+- 子代理短结果完整回传，长结果先按范围总结并保留关键证据，避免固定长度一刀切截断；运行、命令、文件编辑和工具调用统一使用可折叠活动卡片，主 Agent 与子代理采用明显不同的 R-Code/Codex 图标。
+- Windows 桌面端支持关闭窗口后驻留后台，并可从托盘恢复或显式退出；初始化与本机配置读取移到后台复用，降低首次提问和重复启动等待。
+- 项目内的对话添加按钮会立即预创建空对话并依次命名，单项目最多保留 5 个并行空会话；项目添加按钮恢复为只创建项目，不再误建对话。
+- DeepSeek、Kimi 等兼容 Provider 可分别走 OpenAI Chat、Responses、Anthropic 兼容口或自定义网关，统一保留流式输出、thinking/reasoning 与缓存用量；稳定前缀和协议路由由客户端无感处理。
+
+### Fixed
+
+- 修复 Kimi 类 Provider 请求开始后无内容便直接结束的问题，补齐各兼容协议的流式事件、推理内容、工具调用和 usage 解析。
+- 主 Agent 的完全访问权限现在会作为子代理权限上限与默认值直接继承，不再为同一作用域重复弹出审批；显式只读任务仍保持只读，权限不会反向越级。
+- 修复 `clear` 无法清空当前对话、手动复盘无实际效果、项目记忆触发状态与界面表现不一致，以及页面切换导致未提交输入丢失的问题。
+- 设置、安装和后台操作提示改为短暂反馈后自动消失；RTK 安装或配置失败时开关自动回弹，详细原因只写入诊断日志。
+- 修复子代理工具活动终态不一致、命令/编辑记录难以收起、长任务过早超时，以及首次创建对话仍在首问阶段重复初始化的问题。
+
+### Security
+
+- 第三方 MCP 直连工具统一经过 R2 权限、审批与审计；Plan/严格只读模式不暴露变更型直连工具，工具名称会稳定规范化，离线服务自动退避，`tools/list` 握手限制为 15 秒且不限制实际长任务执行时间。
+- RTK Windows 安装使用固定版本与下载地址、SHA-256 校验、原子替换和失败回滚；Provider 密钥仍只通过凭据引用传递，不写入提示、日志或 MCP 配置。
+
 ## [0.3.2] - 2026-08-07
 
 ### Changed
@@ -180,5 +210,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.2.2]: https://github.com/foritin/r-code/releases/tag/v0.2.2
 [0.3.0]: https://github.com/foritin/r-code/releases/tag/v0.3.0
 [0.3.1]: https://github.com/foritin/r-code/releases/tag/v0.3.1
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.2...HEAD
 [0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3

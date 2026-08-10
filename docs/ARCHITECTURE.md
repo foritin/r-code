@@ -54,8 +54,8 @@ flowchart LR
 1. 初始化结构化日志和内存日志缓冲。
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
-4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库。
-5. 在打开连接池前由 `MigrationManager` 串行执行受保护的 SQLite migration：已有数据库先做完整性校验和 WAL 安全快照，失败会恢复快照并中止启动；目前 schema 版本为 25。
+4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库，并一次性补写可确定的稳定 `provider_kind`；后续改名或改网关地址不会重新推断身份。
+5. 在打开连接池前由 `MigrationManager` 串行执行受保护的 SQLite migration：已有数据库先做完整性校验和 WAL 安全快照，失败会恢复快照并中止启动；目前 schema 版本为 26。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
 7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
 8. 把 Agent 事件出口绑定为 Tauri 的 `agent-event`，供 WebView 增量消费。
@@ -75,6 +75,12 @@ r-code-host mcp-server [--data-dir <path>]
 该顺序是协议不变量：stdout 上任何普通日志都可能破坏 JSON-RPC。这个模式主要由 Codex 配置和拉起，入口位于 `src-tauri/src/mcp_server.rs`。
 
 它与 R-Code 作为 MCP **客户端**连接第三方服务是两个独立方向。通用 MCP 客户端由 `r-code-mcp` 和 `McpManager` 提供，支持内置服务、stdio 与 streamable HTTP；配置、Registry 和安全边界见 [联网工具与 MCP](./mcp.md)。
+
+### 2.3 Windows 后台运行与显式退出
+
+Windows 主窗口遵循“关闭到托盘、退出需显式选择”的生命周期：标题栏关闭按钮和“文件 → 隐藏到系统托盘”会拦截主窗口关闭并隐藏 WebView，Host、Agent、终端和后台任务继续运行。托盘左键会显示、还原并聚焦主窗口；托盘菜单提供打开、隐藏和“退出 R-Code”。再次启动应用时，single-instance 插件会还原现有窗口，而不是再创建一个 SQLite/MCP owner。
+
+“文件 → 退出 R-Code”、托盘“退出 R-Code”和 `cmd_app_quit` 才调用 `app.exit(0)`。真正退出时，Host 会并行关闭 `McpManager` 与 Codex App Server Registry，并给清理流程两秒总窗口。托盘创建失败时不会拦截关闭，以免应用隐藏后无法恢复；非主窗口和非 Windows 平台保留各自的原生关闭语义。
 
 ## 3. Rust workspace 分层
 
@@ -112,6 +118,7 @@ flowchart TD
 - Provider 配置目录和当前项目根；
 - `AgentBridge`，维护任务到 runtime session、活动分支和存储 ID 的映射；
 - 外部 Agent、Codex MCP 连接和启动恢复状态；
+- `CodexAppServerRegistry`，按 Task 隔离并复用已初始化的 Codex App Server 传输；
 - 共享 `McpManager`，负责原生联网、MCP 配置、Registry、凭据引用、状态和有界关闭；
 - `PlanStore`，负责 Plan/HITL 聚合、稳定 AppData Markdown 投影和 continuation；
 - 向 WebView 发送 `agent-event` 的回调。
@@ -194,6 +201,8 @@ Run 与 Task 状态不同：一个 Task 可以包含多个主 Run 和子 Run，�
 - 原生 Provider 按 Task 分配独立 runtime 与事件通道：同一 Task 严格串行，不同 Task 可并行，流事件不会跨会话混合。
 - 忙碌时消息可按 `Auto`、`Steer`、`Queue` 或 `SendNow` 处理。每个 Task 只领取自己的队列，内部再按优先级和创建时间排序；切换到新分支时旧分支待处理消息会取消。
 - 附件只允许在启动新 Run 时进入，数量和总体积均有限制，并执行扩展名、MIME 与 magic bytes 校验。
+- 每个项目最多保留 5 个未归档对话；归档记录不占名额且仍可用于审计。普通创建和项目“+”入口共享同一 `IMMEDIATE` 事务边界，因此并发创建也不会突破上限；项目入口同时原子分配占位标题、初始分支和创建事件，标题按该项目历史最高序号递增，首次五条依次为“新对话”到“新对话 5”。
+- `/clear` 不删除历史，而是创建一条空白活跃分支并让旧分支保持只读。`session_messages_for_branch` 先校验分支归属，再读取对应 JSONL，绝不激活它；Room 的历史选择器只替换 Timeline 数据源并暂时隐藏 Composer，不改变后端活跃分支、当前 Run 或队列，未提交文本仍由 task-scoped Composer 草稿缓存保留。
 
 同一会话的串行约束同时适用于原生主 runtime；外部 Codex 子任务拥有独立进程和生命周期，不会占用其他 Task 的 Native bridge。
 
@@ -215,7 +224,7 @@ sequenceDiagram
     Host->>Session: append user message
     Host->>Audit: create AgentRun / update Task
     Host->>Runtime: start_run_with_message
-    loop Up to 32 tool iterations
+    loop 直到模型完成、用户取消或运行保护终止
         Runtime->>LLM: completion request
         LLM-->>Runtime: streamed text or tool call
         Runtime->>Gateway: execute tool
@@ -232,19 +241,19 @@ sequenceDiagram
 
 Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会话可恢复性，再更新 SQLite 产品投影并通知 WebView。完成时会刷新完整历史、等待外部子智能体、收束流式文本，并根据是否存在变更进入 `ReviewReady` 或 `Idle`。
 
-### 6.1 运行上限
+### 6.1 运行保护
 
-当前防失控上限定义在 `llm_runtime.rs`：
+长任务使用“软进度检查 + 资源边界”，不再按固定工具轮次或总时长一刀切：
 
-| 限制 | 当前值 |
-| --- | ---: |
-| 主 Run 工具迭代 | 32 |
-| 并行子智能体 | 3 |
-| 单个主 Run 的子智能体总数 | 8 |
-| 原生子智能体工具迭代 | 12 |
-| 回传父 Agent 的子智能体摘要 | 3,000 字符 |
+| 保护项 | 当前策略 |
+| --- | --- |
+| 主 Run / 原生子智能体工具迭代 | 无硬上限；每 24 个含工具的模型回合提醒先综合已有证据 |
+| Codex 主 Run / 子智能体 | 无生产硬时长或工具调用上限；连续 5 分钟没有受认可的 JSONL / App Server 协议进度才停止，收到进度即重置 watchdog；反向审批或动态委派 handler 在途时暂停父级空闲判定 |
+| 并行子智能体 | 最多 3 个 |
+| 单个主 Run 的子智能体总数 | 最多 8 个 |
+| 子智能体回传 | ≤6,000 字符逐字透传；更长时追加无工具总结，目标 2,000–5,000 字符 |
 
-达到上限后 runtime 会产生明确事件并停止继续调用，不应在 UI 层静默重试。
+总结服务失败时，≤12,000 字符的原报告仍完整回传；再长才使用带明确说明的首尾保留降级，不能用省略号伪装成完整报告。资源边界、取消、审批和无进度超时都会产生明确事件，UI 不应静默重试。
 
 ### 6.2 模式和质量循环
 
@@ -272,9 +281,13 @@ DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开�
 - **R-Code**：复用当前 Provider，使用独立消息历史和受限工具集，不递归委派。
 - **Codex**：通过 Host bridge 拉起/连接 Codex CLI，可使用 exec JSON 事件或 MCP 协作路径。
 
-原生 R-Code 主 Agent 发起委派时默认访问模式是 `read_only`，只有父 Agent 明确请求且父运行权限上限允许时才会获得写入和命令能力。Codex App Server 的动态委派默认是 `inherit`：只读父运行下发只读，审批类父运行下发“工具可见但变更需审批”，完全访问父运行才可下发完全访问。每个子 Run 有稳定 ID、独立 JSONL 事件和 SQLite `agent_runs` 行；schema 25 的 `require_approval` 与 `access_mode` 共同保存 UI 展示的“只读 / 需审批 / 完全访问”，重启后不靠文案反推权限。父上下文只接收受长度限制的总结，避免整段 transcript 膨胀主会话。
+原生 R-Code 主 Agent 发起委派时默认访问模式是 `read_only`，只有父 Agent 明确请求且父运行权限上限允许时才会获得写入和命令能力。子代理的“可用工具能力”和“是否需要审批”彼此独立：显式 `read_only` 始终不开放写入或命令，但它允许的读取继承父运行冻结的项目审批模式，因此 `full_access` 父运行下的 R1 读取不会再次询问，审批型父运行仍按原矩阵询问。Codex App Server 的动态委派默认是 `inherit`：只读父运行下发只读，审批类父运行下发“工具可见但变更需审批”，完全访问父运行才可下发完全访问。每个子 Run 有稳定 ID、独立 JSONL 事件和 SQLite `agent_runs` 行；schema 25 的 `require_approval` 与 `access_mode` 共同保存 UI 展示的“只读 / 需审批 / 完全访问”，重启后不靠文案反推权限。
+
+父上下文接收的是自适应报告，而不是固定字符切片：短报告连同 Markdown、换行和文件链接原样返回；长报告先由无工具总结回合压缩并保留结论、证据、改动、验证和风险；总结异常时使用显式降级。Codex 委派提示采用同一长度与内容契约，CLI、App Server 和 MCP 的最终正文不再额外套 8,000 字符硬截断。生命周期卡片仍只显示短 detail，但它不改变实际交给父 Agent 的报告。
 
 Codex 集成包含 CLI 探测、安装、登录状态、模型偏好、App Server、MCP 注册和权限映射。动态同树委派要求实际选中的 Codex CLI 不低于 `0.145.0` 且 R-Code Provider 可初始化；不满足时只隐藏动态工具并产生可见降级原因，Codex 主运行与原生 R-Code 路径仍应工作。宿主只消费 App Server 的公开 reasoning summary，raw reasoning content/delta 不进入 UI 或存储。
+
+Codex App Server 不是每次发送都新建 CLI。`CodexAppServerRegistry` 以 `task_id` 为 key 保存已初始化的进程传输，每个 Task 使用独占 lease 串行运行，不同 Task 不共享传输但可以并行。Registry 只拥有进程、stdin/stdout broker 与初始化身份；审批、委派、观察、steer 和取消仍是单次 Run 的状态，不能泄漏到下一次 lease。只有匹配当前 thread/turn 的正常 completion 且 Run-local 回调全部收束后，调用方才会把 lease 标记为可复用；EOF、脏帧、协议错配或未收束回调都会销毁传输。
 
 ## 8. Tool Gateway、安全与权限
 
@@ -342,7 +355,7 @@ flowchart TD
 
 `crates/r-code-store/src/migrations.rs` 维护单调递增 migration。当前主要表包括：
 
-`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作；schema 22 为可执行 Plan 叶子事项增加展示层级路径，支持稳定的 1、1.1、1.2 编号而不让父标题进入执行状态机；schema 23 以 `tasks.goal_active` 区分普通首条任务描述和用户显式启用的 Goal 生命周期，旧会话升级后默认不启用 Goal；schema 24 为 `queued_messages` 增加持久排序位置，确保界面从上到下的顺序就是后端实际出队顺序；schema 25 为 `agent_runs` 增加受约束的 `require_approval` 审计位，和 `access_mode` 一起持久化子代理实际权限三态。
+`tasks`、`agent_runs`、`tool_calls`、`file_changes`、`file_baselines`、`blobs`、`permission_requests`、`workspaces`、`task_events`、`verifications`、`session_branches`、`queued_messages`、`notifications`，schema 18 引入的 `memory_settings`、`memory_entries`、`memory_entry_revisions`、`memory_review_turns`、`memory_review_jobs`、`memory_candidates`、`memory_review_outcomes`、`memory_injections`，以及 schema 19 引入的 `plans`、`plan_items`、`plan_item_dependencies`、`plan_question_sets`、`plan_questions`、`plan_question_options`、`plan_change_events`、`plan_review_decisions`、`plan_reject_operations` 和 `plan_reject_operation_files`。schema 20 为 `plans` 增加可靠实施派发状态、错误、唯一队列消息和完成时间，用于批准后的崩溃恢复与显式重试；schema 21 通过 SQLite 触发器原子约束增强审核的功能组决策、文件决策与进行中拒绝操作；schema 22 为可执行 Plan 叶子事项增加展示层级路径，支持稳定的 1、1.1、1.2 编号而不让父标题进入执行状态机；schema 23 以 `tasks.goal_active` 区分普通首条任务描述和用户显式启用的 Goal 生命周期，旧会话升级后默认不启用 Goal；schema 24 为 `queued_messages` 增加持久排序位置，确保界面从上到下的顺序就是后端实际出队顺序；schema 25 为 `agent_runs` 增加受约束的 `require_approval` 审计位，和 `access_mode` 一起持久化子代理实际权限三态；schema 26 为 `memory_review_turns` 增加受约束的 `explicit_remember` provenance 位，旧记录升级后固定为 `false`，不会被追溯授权为项目记忆证据。
 
 新增 migration 时必须：
 
@@ -361,6 +374,8 @@ flowchart TD
 记忆默认关闭。开启后，Host 在每个顶层 Run 开始前从 `MemoryStore` 加载并冻结全局/项目快照，把同一快照注入主 Agent 与其子代理；成功结束后只把可见用户文本和最终助手文本交给脱敏缓冲。默认累计 10 个有效轮次触发一次复盘，可配置为 5–50；明确的“请记住”前缀可立即触发，管理页也能手动触发。
 
 后台 `memory_runtime` 使用用户选定的轻量 Reviewer Provider 做无工具、非流式结构化总结。模型只能提出 proposal：项目 proposal 经确定性校验后自动写回冻结 workspace，全局 proposal 必须进入待审批列表。Reviewer Provider 不是记忆 owner，更换 Provider 不会分叉记忆。运行中切换设置或项目模式会通过 generation 使旧任务失效；应用重启会把遗留 Reviewer lease 标记为 `interrupted`。
+
+schema 26 把“用户是否显式要求记住”作为捕获时的结构化 provenance 持久化，而不是在复盘时重新解释对话文本。当前只从可见用户输入的 `/remember `、`remember:`、“记住：”和“请记住：”前缀产生 `explicit_remember = true`；助手文本永远不能授予该权限，手动复盘为旧历史补录证据时也固定写入 `false`。Reviewer 生成项目 proposal 时必须使用 `basis=explicit_user`，且只能引用 provenance 为真的轮次；迁移前的旧行默认不受信任。
 
 临时轮次、正文、候选与注入引用都只进入 AppData SQLite，不写项目目录。详细触发条件、清理策略、表结构和安全边界见 [演进记忆](./memory.md)。
 
@@ -412,6 +427,8 @@ Agent 操作终端仍受 Gateway 的风险分类和审批约束；终端本身�
 
 Provider 非敏感配置保存在应用 config 目录，密钥在系统凭据库。配置加载顺序支持全局配置叠加工作区设置，并在保存时校验协议和必填字段。
 
+`ProviderConfig.provider_kind` 是独立于可编辑配置名称和 URL 的稳定目录/厂商身份。新保存由前端提交所选 preset id；兼容调用者省略该字段时沿用已存身份，显式空值才清除。启动时只为旧配置做一次保守推断并落盘，之后修改 profile 名称或网关地址不会改变身份。DeepSeek 专属 Provider、缓存 usage、输出上限和 hosted-tool 路由都以该持久身份为前置条件，不能仅靠一个类似 DeepSeek 的名称或 endpoint 冒充。
+
 `provider_catalog.rs` 定义预设、允许协议、默认 endpoint、reasoning replay 能力等；`provider_models.rs` 负责模型发现。原生请求通过 `hermes-llm` 统一 Provider trait，任务可单独选择 Provider、模型和 inference options。
 
 DeepSeek 线路的字节级前缀缓存设计见 §6.3：`deepseek.rs` 声明 `supports_prompt_caching = true`（DeepSeekProvider 独立覆盖，不影响其他 OpenAI 兼容 provider），流式请求仅对 `api.deepseek.com` 与 `api.openai.com` 启用 `stream_options.include_usage`。
@@ -452,7 +469,9 @@ Codex 主 Agent 通过 App Server 动态工具 `rcode_delegate_subagent` 把有�
 - **路由不变量**：hosted App Server 只覆盖并禁用 legacy `mcp_servers.r-code`，旧全局 `r_code_delegate*` 不进入该运行的工具目录；用户其他 Codex MCP 保持可用。提示词说明链接与委派格式，但不承担这条硬隔离。
 - **能力协商**：动态工具要求实际启动的 Codex CLI ≥ `0.145.0` 且 R-Code Provider 已就绪；否则隐藏该工具并让 Codex 主任务继续，不能把能力缺失误报成整轮失败。
 - **权限模型**：`inherit` 继承父预设——父为完全访问时 child 全权；父为只读时 child 保持只读；审批类父运行的 child 使用 `ToolPolicy::RequestApproval`，写入与命令经 Gateway 审批。显式 `read_only` 永不升级；Plan/严格只读不暴露 generic `mcp_call`，审批模式下 generic MCP 固定为 R2，不信任第三方 `readOnlyHint`。
-- **生命周期**：stdout 读泵与请求处理解耦，审批和动态委派以 `FuturesUnordered` 并发 dispatch；child 任务使用 abort-on-drop 句柄，取消会贯穿 Provider 建连、活跃工具、命令进程树与 MCP request。父收尾只 `drain_children_for_parent`，等待上限为 20 秒；超时后按该父运行的后代集合幂等关闭 AgentRun 和 running ToolCall，不影响同一 Task 的其他父运行。
+- **Registry 与预热**：`task_prepare` 在真实用户消息前只完成进程 spawn 和 App Server `initialize`，不发送用户内容，也不创建 `thread/start`、`turn/start` 或 `AgentRun`。prepare 与首次 acquire 共用同一 Task slot 和 single-flight lease；创建页面可以先显示新对话并在后台预热，首次发送即使抢先也会安全复用或接管初始化。
+- **失效与回收**：`/clear`、归档、删除、工作区切换和主 Agent 切换只失效对应 Task；Codex CLI 偏好、CLI 安装、Codex MCP 配置和 RTK 策略变化失效全部 slot。prepare 完成后会再次核对 Task、活跃分支、工作区和 Agent engine，旧身份即使在 initialize 期间被替换也不能重新发布。应用退出时 Registry 先取消活跃 lease 和等待者，再回收空闲或随后释放的进程树。
+- **子运行生命周期**：stdout 读泵与请求处理解耦，审批和动态委派以 `FuturesUnordered` 并发 dispatch；child 任务使用 abort-on-drop 句柄，取消会贯穿 Provider 建连、活跃工具、命令进程树与 MCP request。父收尾只 `drain_children_for_parent`，等待上限为 20 秒；超时后按该父运行的后代集合幂等关闭 AgentRun 和 running ToolCall，不影响同一 Task 的其他父运行。
 - **协议边界**：JSONL 逐行限长，setup 与读写泵可取消并有界回收；未知 server request 返回 JSON-RPC error；steer 应答仅匹配无 `method` 的响应帧。`permissions/requestApproval` 返回协议规定的 profile，并把文件路径 canonicalize 后与物理工作区求交，拒绝 traversal/符号链接逃逸；standing target 使用完整请求指纹。
 - **可观察推理**：只消费 App Server 公开的 reasoning summary 并本地持久化；raw reasoning content/delta 不进入 UI 或存储。动态 child 的可见消息、工具事件、审计和生命周期仍按普通子代理持久化。
 
@@ -526,9 +545,11 @@ CI 在 Linux 检查前端、锁定依赖审计、已验证 secret 扫描、格�
 | SQLite schema | `crates/r-code-store/src/migrations.rs` |
 | 双存储说明 | `crates/r-code-store/src/lib.rs` |
 | 会话回放 | `src-tauri/src/replay.rs` |
-| Codex 及其 MCP server | `src-tauri/src/commands.rs`、`codex_mcp.rs`、`mcp_server.rs` |
+| Codex App Server Registry 与运行适配 | `src-tauri/src/codex_app_server.rs`、`commands.rs` |
+| Codex legacy MCP server | `src-tauri/src/codex_mcp.rs`、`mcp_server.rs` |
 | 通用联网与 MCP 客户端 | `crates/r-code-mcp/`、`src-tauri/src/mcp_manager.rs`、`mcp_settings.rs` |
 | PTY 与 OSC 133 | `crates/r-code-terminal/src/manager.rs`、`block.rs` |
+| Windows 托盘、关闭与显式退出 | `src-tauri/src/main.rs`、`src-tauri/src/tauri_commands.rs`、`src-tauri/frontend/src/components/shell/MenuBar.tsx` |
 | 前端 IPC | `src-tauri/frontend/src/lib/ipc.ts` |
 | 前端状态 | `src-tauri/frontend/src/store/app.ts`、`tasks.ts` |
 | Room 实现 | `src-tauri/frontend/src/components/scenes/RoomScene.tsx` |

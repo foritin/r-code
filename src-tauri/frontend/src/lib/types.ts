@@ -314,6 +314,7 @@ export type TaskEventType =
   | "queue_dispatched"
   | "run_aborted"
   | "session_branched"
+  | "session_cleared"
   | "subagent_started"
   | "subagent_finished"
   | "tool_call"
@@ -612,6 +613,7 @@ export interface MemoryReviewJobView {
   attempt: number;
   suppressed_turn_count: number;
   error_code: string | null;
+  effect_count: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -940,6 +942,8 @@ export interface ProviderConfig {
   base_url?: string;
   api_key?: string;
   model?: string;
+  /** Stable catalog/vendor identity; unlike the profile name and URL this is not cosmetic. */
+  provider_kind?: string;
   max_tokens?: number;
   temperature?: number;
   /** 用户显式选定的线路协议。缺省 = 升级前保存的旧配置，后端会按目录推断。 */
@@ -1043,6 +1047,8 @@ export interface ProviderStatus {
 
 export interface ProviderSettingsInput {
   name: string;
+  /** Empty string explicitly clears identity; omitted preserves a legacy caller's existing value. */
+  providerKind?: string | null;
   baseUrl: string;
   model: string;
   apiKey?: string | null;
@@ -1108,6 +1114,17 @@ export interface CodexCliPreferences {
   /** 由当前已登录 CLI 的 `codex debug models` 返回。 */
   models: CodexModelOption[];
   config_path: string;
+}
+
+export interface RtkStatus {
+  /** True only when the R-Code policy is enabled and a verified RTK binary is available. */
+  enabled: boolean;
+  available: boolean;
+  /** Managed binaries live under R-Code AppData; system binaries are preserved in place. */
+  managed: boolean;
+  version: string | null;
+  source: "managed" | "system" | string | null;
+  platform: string;
 }
 
 export interface AppConfig {

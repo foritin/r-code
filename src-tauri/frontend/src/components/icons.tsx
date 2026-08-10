@@ -268,9 +268,9 @@ export const IconActivity = (p: P) => (
   </svg>
 );
 
-/** 子智能体：中心任务节点连接四个协作端点，避免用无语义的纯色头像块。 */
+/** R-Code 子智能体：中心任务节点连接四个协作端点。 */
 export const IconSubagent = (p: P) => (
-  <svg {...base(p)}>
+  <svg {...base(p)} data-agent-glyph="rcode">
     <path d="M12 4.2v4.1M19.8 12h-4.1M12 19.8v-4.1M4.2 12h4.1" opacity={0.7} />
     <path d="m12 7.8 4.2 4.2-4.2 4.2L7.8 12Z" />
     <circle cx="12" cy="3.8" r="1.15" fill="currentColor" stroke="none" />
@@ -278,6 +278,15 @@ export const IconSubagent = (p: P) => (
     <circle cx="12" cy="20.2" r="1.15" fill="currentColor" stroke="none" />
     <circle cx="3.8" cy="12" r="1.15" fill="currentColor" stroke="none" />
     <circle cx="12" cy="12" r="1.15" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+/** Codex 子智能体：成对代码括号与中轴，和 R-Code 的协作节点轮廓明显区分。 */
+export const IconCodexSubagent = (p: P) => (
+  <svg {...base(p)} data-agent-glyph="codex">
+    <path d="m9 5.8-5 6.2 5 6.2" />
+    <path d="m15 5.8 5 6.2-5 6.2" />
+    <path d="m13.6 4-3.2 16" opacity={0.7} />
   </svg>
 );
 

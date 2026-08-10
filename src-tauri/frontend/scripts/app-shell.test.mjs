@@ -240,6 +240,34 @@ test("macOS uses native traffic-light chrome and Command-key labels", async () =
   await page.close();
 });
 
+test("Windows close hides to the tray while explicit quit stays discoverable", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      get: () => "Win32",
+    });
+    globalThis.__rCodeQuitInvocations = 0;
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_app_quit") globalThis.__rCodeQuitInvocations += 1;
+    };
+  });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const closeButton = page.getByRole("button", { name: "关闭到系统托盘" });
+  assert.equal(
+    await closeButton.getAttribute("title"),
+    "关闭到系统托盘，后台任务继续运行",
+  );
+
+  await page.locator(".desktop-menu-trigger").filter({ hasText: "文件" }).click();
+  await page.getByRole("menuitem", { name: "隐藏到系统托盘" }).waitFor({ state: "visible" });
+  await page.getByRole("menuitem", { name: "退出 R-Code" }).click();
+  await page.waitForFunction(() => globalThis.__rCodeQuitInvocations === 1);
+
+  await page.close();
+});
+
 test("Codex login watcher is bounded and never schedules beyond its deadline", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -345,6 +373,108 @@ test("Codex subagent switch persists immediately and remains reversible", async 
     .waitFor({ state: "visible" });
   assert.equal(await toggle.isChecked(), true);
   await page.close();
+});
+
+test("RTK setting installs once, configures new Codex runs, and disables without uninstalling", async () => {
+  const page = await browser.newPage({ viewport: { width: 860, height: 760 } });
+  const consoleErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    globalThis.__rCodeBrowserMockDelayMs = { cmd_rtk_set_enabled: 350 };
+    globalThis.__rCodeRtkCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command, args) => {
+      if (command.startsWith("cmd_rtk_")) globalThis.__rCodeRtkCalls.push({ command, args });
+    };
+    useAppStore.getState().setSettingsPane("codex");
+    useAppStore.getState().setScene("settings");
+  });
+
+  try {
+    const card = page.locator(".rtk-control");
+    const toggle = page.getByRole("switch", { name: "为新 Codex 会话启用 RTK" });
+    await card.waitFor({ state: "visible" });
+    assert.equal(await toggle.isChecked(), false);
+
+    await toggle.focus();
+    assert.equal(await toggle.evaluate((element) => document.activeElement === element), true);
+    await page.keyboard.press("Space");
+    await card.getByText("正在安装", { exact: true }).waitFor({ state: "visible" });
+    assert.equal(await toggle.isChecked(), true, "enable is optimistic while installation runs");
+    assert.equal(await toggle.isDisabled(), true);
+    await card.getByText("已启用", { exact: true }).waitFor({ state: "visible" });
+    assert.match(await card.innerText(), /rtk 0\.45\.0 · R-Code 托管/);
+    assert.match(await card.innerText(), /之后启动的 Codex 主 Agent 与子代理/);
+    const bounds = await card.boundingBox();
+    assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 860, "RTK card must fit the compact settings viewport");
+    if (process.env.R_CODE_RTK_SHOT) {
+      await page.screenshot({ path: process.env.R_CODE_RTK_SHOT, fullPage: true });
+    }
+
+    await toggle.click();
+    await card.getByText("已安装", { exact: true }).waitFor({ state: "visible" });
+    assert.equal(await toggle.isChecked(), false);
+    const disabled = await page.evaluate(async () => {
+      const { rtkStatus } = await import("/src/lib/ipc.ts");
+      return { status: await rtkStatus(), calls: [...globalThis.__rCodeRtkCalls] };
+    });
+    assert.equal(disabled.status.enabled, false);
+    assert.equal(disabled.status.available, true, "disable must preserve the installed binary");
+    assert.deepEqual(
+      disabled.calls.filter((call) => call.command === "cmd_rtk_set_enabled").map((call) => call.args.enabled),
+      [true, false],
+    );
+    assert.deepEqual(consoleErrors, []);
+  } finally {
+    await page.evaluate(() => {
+      delete globalThis.__rCodeBrowserMockDelayMs;
+      delete globalThis.__rCodePerformanceIpcProbe;
+      delete globalThis.__rCodeRtkCalls;
+    }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("RTK enable failure rolls the switch back and shows only a short-lived safe message", async () => {
+  const page = await browser.newPage({ viewport: { width: 760, height: 700 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    globalThis.__rCodeBrowserMockDelayMs = { cmd_rtk_set_enabled: 250 };
+    globalThis.__rCodeBrowserMockFailures = {
+      cmd_rtk_set_enabled: "PRIVATE_INSTALL_DIAGNOSTIC should never enter the settings UI",
+    };
+    useAppStore.getState().setSettingsPane("codex");
+    useAppStore.getState().setScene("settings");
+  });
+
+  try {
+    const toggle = page.getByRole("switch", { name: "为新 Codex 会话启用 RTK" });
+    await toggle.waitFor({ state: "visible" });
+    assert.equal(await toggle.isChecked(), false);
+    await toggle.click();
+    assert.equal(await toggle.isChecked(), true);
+
+    const toast = page.locator(".toast--warn").filter({ hasText: "RTK 未能启用" });
+    await toast.waitFor({ state: "visible" });
+    assert.equal(await toggle.isChecked(), false, "failed enable must visibly spring back off");
+    assert.match(await toast.innerText(), /详细原因已写入诊断日志/);
+    assert.ok(!(await page.locator("body").innerText()).includes("PRIVATE_INSTALL_DIAGNOSTIC"));
+    if (process.env.R_CODE_RTK_FAILURE_SHOT) {
+      await page.screenshot({ path: process.env.R_CODE_RTK_FAILURE_SHOT, fullPage: true });
+    }
+    await toast.waitFor({ state: "hidden", timeout: 7000 });
+  } finally {
+    await page.evaluate(() => {
+      delete globalThis.__rCodeBrowserMockDelayMs;
+      delete globalThis.__rCodeBrowserMockFailures;
+    }).catch(() => {});
+    await page.close();
+  }
 });
 
 test("only the current text frontier owns the animated caret", async () => {
@@ -767,7 +897,17 @@ test("standalone Project Files exposes file-only actions and consumes task refer
   await page.locator("#main-content > .scene-knowledge").waitFor({ state: "visible" });
   await page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" }).locator(".sidebar-task").click();
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
-  assert.equal(await composer.inputValue(), "", "an acknowledged reference must not replay after Composer remount");
+  assert.equal(
+    await composer.inputValue(),
+    "@src/main.rs",
+    "the cached draft must return once without replaying the acknowledged reference",
+  );
+
+  await page.evaluate(async () => {
+    const { clearComposerDraft, flushComposerDrafts } = await import("/src/lib/composer-drafts.ts");
+    clearComposerDraft("mock-task-queue");
+    flushComposerDrafts();
+  });
 
   await page.close();
 });
@@ -1476,6 +1616,103 @@ test("clearing a project removes app records without implying disk deletion", as
   await page.close();
 });
 
+test("unsent Composer drafts survive scene and task switches without leaking between conversations", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const storageKey = "r-code.composer.drafts.v1";
+  const firstTaskId = "mock-task-queue";
+  const secondTaskId = "mock-task-complete";
+
+  try {
+    await page.evaluate(async ({ storageKey, firstTaskId, secondTaskId }) => {
+      window.localStorage.removeItem(storageKey);
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      await Promise.all([
+        useTasksStore.getState().refreshDetail(firstTaskId),
+        useTasksStore.getState().refreshDetail(secondTaskId),
+      ]);
+      useAppStore.getState().openRoom(firstTaskId);
+    }, { storageKey, firstTaskId, secondTaskId });
+
+    let composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.waitFor({ state: "visible" });
+    await composer.fill("第一段未发送草稿：切到设置后仍应保留");
+
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().setScene("settings");
+    });
+    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.evaluate(async (taskId) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().openRoom(taskId);
+    }, firstTaskId);
+    composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.waitFor({ state: "visible" });
+    assert.equal(await composer.inputValue(), "第一段未发送草稿：切到设置后仍应保留");
+
+    await page.evaluate(async (taskId) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().openRoom(taskId);
+    }, secondTaskId);
+    await page.waitForFunction((taskId) => import("/src/store/app.ts").then(
+      ({ useAppStore }) => useAppStore.getState().currentTaskId === taskId,
+    ), secondTaskId);
+    composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    assert.equal(await composer.inputValue(), "", "a draft from another conversation must never leak here");
+    await composer.fill("第二段草稿：只属于另一个对话");
+
+    await page.evaluate(async (taskId) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().openRoom(taskId);
+    }, firstTaskId);
+    await page.waitForFunction((taskId) => import("/src/store/app.ts").then(
+      ({ useAppStore }) => useAppStore.getState().currentTaskId === taskId,
+    ), firstTaskId);
+    composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    assert.equal(await composer.inputValue(), "第一段未发送草稿：切到设置后仍应保留");
+
+    await page.evaluate(async (taskId) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().openRoom(taskId);
+    }, secondTaskId);
+    await page.waitForFunction((taskId) => import("/src/store/app.ts").then(
+      ({ useAppStore }) => useAppStore.getState().currentTaskId === taskId,
+    ), secondTaskId);
+    composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    assert.equal(await composer.inputValue(), "第二段草稿：只属于另一个对话");
+
+    await page.evaluate(async () => {
+      const { flushComposerDrafts } = await import("/src/lib/composer-drafts.ts");
+      flushComposerDrafts();
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.evaluate(async (taskId) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      await useTasksStore.getState().refreshDetail(taskId);
+      useAppStore.getState().openRoom(taskId);
+    }, firstTaskId);
+    composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.waitFor({ state: "visible" });
+    assert.equal(
+      await composer.inputValue(),
+      "第一段未发送草稿：切到设置后仍应保留",
+      "the local-only cache should also survive a WebView reload",
+    );
+  } finally {
+    await page.evaluate(async ({ storageKey, firstTaskId, secondTaskId }) => {
+      const { clearComposerDraft, flushComposerDrafts } = await import("/src/lib/composer-drafts.ts");
+      clearComposerDraft(firstTaskId);
+      clearComposerDraft(secondTaskId);
+      flushComposerDrafts();
+      window.localStorage.removeItem(storageKey);
+    }, { storageKey, firstTaskId, secondTaskId }).catch(() => {});
+    await page.close();
+  }
+});
+
 test("Enter uses the selected run send mode and clears the accepted draft before IPC completes", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -1533,6 +1770,14 @@ test("Enter uses the selected run send mode and clears the accepted draft before
     assert.deepEqual(await page.evaluate(() => globalThis.__rCodeSendModes), ["queue"]);
     await page.evaluate(() => globalThis.__rCodeReleaseSend?.());
     await page.waitForFunction(() => !document.querySelector(".run-send-mode-trigger")?.hasAttribute("disabled"));
+    assert.equal(
+      await page.evaluate(async (id) => {
+        const { readComposerDraft } = await import("/src/lib/composer-drafts.ts");
+        return readComposerDraft(id);
+      }, taskId),
+      "",
+      "a successfully accepted message must not return after navigation",
+    );
 
     const snapshot = await page.evaluate(async (id) => {
       const { browserMockDetails } = await import("/src/lib/mock-data.ts");
@@ -1574,6 +1819,26 @@ test("Enter uses the selected run send mode and clears the accepted draft before
     await composer.press("Enter");
     await page.getByText(/mock send rejection/).waitFor({ state: "visible" });
     assert.equal(await composer.inputValue(), "失败后恢复这份草稿");
+    assert.equal(
+      await page.evaluate(async (id) => {
+        const { readComposerDraft } = await import("/src/lib/composer-drafts.ts");
+        return readComposerDraft(id);
+      }, taskId),
+      "失败后恢复这份草稿",
+      "a rejected send must remain in the local draft cache",
+    );
+
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().setScene("settings");
+    });
+    await page.locator("#main-content .settings-layout").waitFor({ state: "visible" });
+    await page.evaluate(async (id) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      useAppStore.getState().openRoom(id);
+    }, taskId);
+    await composer.waitFor({ state: "visible" });
+    assert.equal(await composer.inputValue(), "失败后恢复这份草稿");
   } finally {
     await page.evaluate(() => {
       globalThis.__rCodeReleaseSend?.();
@@ -1583,11 +1848,14 @@ test("Enter uses the selected run send mode and clears the accepted draft before
       delete globalThis.__TAURI_INTERNALS__;
     }).catch(() => {});
     await page.evaluate(async ({ id, original }) => {
+      const { clearComposerDraft, flushComposerDrafts } = await import("/src/lib/composer-drafts.ts");
       const {
         browserMockDetails,
         browserMockSetMessages,
         browserMockTasks,
       } = await import("/src/lib/mock-data.ts");
+      clearComposerDraft(id);
+      flushComposerDrafts();
       const task = browserMockTasks.find((item) => item.id === id);
       if (task && original.task) Object.assign(task, structuredClone(original.task));
       browserMockDetails[id] = structuredClone(original.detail);
@@ -1642,6 +1910,496 @@ test("plain Enter sends from the new-conversation composer while Shift+Enter kee
       delete globalThis.__rCodeReleaseHomeSend;
       delete globalThis.__TAURI_INTERNALS__;
     }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("sidebar plus creates and opens a durable task before background preparation finishes", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    globalThis.__rCodeNewConversationCalls = [];
+    const prepareGate = new Promise((resolve) => {
+      globalThis.__rCodeReleasePrepare = resolve;
+    });
+    globalThis.__TAURI_INTERNALS__ = {
+      invoke: async (command, args = {}) => {
+        if (["cmd_project_conversation_create", "cmd_task_prepare", "cmd_agent_send"].includes(command)) {
+          globalThis.__rCodeNewConversationCalls.push(command);
+        }
+        if (command === "cmd_task_prepare") await prepareGate;
+        return browserMockInvoke(command, args);
+      },
+    };
+  });
+
+  let taskId;
+  try {
+    await page.getByRole("button", { name: "新对话", exact: true }).click();
+    await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+
+    const created = await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const taskId = useAppStore.getState().currentTaskId;
+      return {
+        taskId,
+        task: useTasksStore.getState().tasks.find((task) => task.id === taskId),
+        calls: [...globalThis.__rCodeNewConversationCalls],
+      };
+    });
+    taskId = created.taskId;
+    assert.ok(taskId);
+    assert.equal(created.task?.title, "新对话");
+    assert.equal(created.task?.state, "idle");
+    assert.deepEqual(created.calls, ["cmd_project_conversation_create", "cmd_task_prepare"]);
+    assert.equal(
+      await page.locator(".sidebar-task-row.active").filter({ hasText: "新对话" }).count(),
+      1,
+      "the empty task should be visible and selected before the first prompt",
+    );
+    await page.evaluate(() => globalThis.__rCodeReleasePrepare?.());
+
+    const composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.fill("第一次发送直接复用已创建的任务");
+    await composer.press("Enter");
+    await page.waitForFunction(() => globalThis.__rCodeNewConversationCalls?.includes("cmd_agent_send"));
+    const callsAfterSend = await page.evaluate(() => [...globalThis.__rCodeNewConversationCalls]);
+    assert.equal(callsAfterSend.filter((command) => command === "cmd_project_conversation_create").length, 1);
+  } finally {
+    await page.evaluate(async (id) => {
+      globalThis.__rCodeReleasePrepare?.();
+      delete globalThis.__rCodeReleasePrepare;
+      delete globalThis.__rCodeNewConversationCalls;
+      delete globalThis.__TAURI_INTERNALS__;
+      if (!id) return;
+      const { browserMockDetails, browserMockSetMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const index = browserMockTasks.findIndex((task) => task.id === id);
+      if (index >= 0) browserMockTasks.splice(index, 1);
+      delete browserMockDetails[id];
+      browserMockSetMessages(id, []);
+    }, taskId).catch(() => {});
+    await page.close();
+  }
+});
+
+test("project add opens project management while conversation entries persist numbered tasks", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const workspacePath = "D:/project/rust/r-code";
+  const baseline = await page.evaluate(async (path) => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const original = browserMockTasks
+      .filter((task) => task.workspace_path === path)
+      .map((task) => ({ id: task.id, state: task.state, updated_at: task.updated_at }));
+    for (const task of browserMockTasks) {
+      if (task.workspace_path !== path) continue;
+      task.state = "archived";
+      if (browserMockDetails[task.id]) browserMockDetails[task.id].task.state = "archived";
+    }
+    globalThis.__rCodeProjectCreateCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (["cmd_project_conversation_create", "cmd_task_prepare"].includes(command)) {
+        globalThis.__rCodeProjectCreateCalls.push(command);
+      }
+    };
+    await useTasksStore.getState().refreshTasks();
+    useTasksStore.getState().setCurrentProject(path);
+    await useTasksStore.getState().refreshDashboard(path);
+    useAppStore.getState().openDashboard(path);
+    return original;
+  }, workspacePath);
+
+  const waitForActiveTitle = async (title) => {
+    await page.locator(".sidebar-task-row.active").getByText(title, { exact: true }).waitFor({ state: "visible" });
+  };
+
+  try {
+    await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
+
+    const projectAdd = page.getByRole("button", { name: "添加项目", exact: true });
+    await projectAdd.click();
+    await page.locator("#main-content > .scene-projects").waitFor({ state: "visible" });
+    assert.equal(
+      await page.evaluate(() => globalThis.__rCodeProjectCreateCalls.length),
+      0,
+      "the projects header add button must never create a conversation",
+    );
+    await page.locator(".sidebar-project-head").filter({ hasText: "r-code" }).click();
+    await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
+
+    await page.getByRole("button", { name: "新建任务", exact: true }).click();
+    await waitForActiveTitle("新对话");
+
+    await page.getByRole("button", { name: "新对话", exact: true }).click();
+    await waitForActiveTitle("新对话 2");
+
+    const createFromProjectMenu = async () => {
+      await page.getByRole("button", { name: "r-code 项目操作", exact: true }).click();
+      await page.getByRole("menuitem", { name: "新建对话", exact: true }).click();
+    };
+    await createFromProjectMenu();
+    await waitForActiveTitle("新对话 3");
+
+    await createFromProjectMenu();
+    await waitForActiveTitle("新对话 4");
+    await createFromProjectMenu();
+    await waitForActiveTitle("新对话 5");
+
+    await createFromProjectMenu();
+    const limitToast = page.locator(".toast--warn").filter({ hasText: "已达到 5 个对话上限" });
+    await limitToast.waitFor({ state: "visible" });
+    assert.match(await limitToast.innerText(), /请先归档一个对话/);
+
+    const result = await page.evaluate((original) => {
+      const originalIds = new Set(original.map((task) => task.id));
+      const created = globalThis.__rCodeProjectCreateCalls;
+      return import("/src/lib/mock-data.ts").then(({ browserMockTasks }) => ({
+        titles: browserMockTasks
+          .filter((task) => task.workspace_path === "D:/project/rust/r-code" && !originalIds.has(task.id))
+          .map((task) => task.title)
+          .sort((left, right) => {
+            const sequence = (title) => Number(title.match(/\d+$/)?.[0] ?? "1");
+            return sequence(left) - sequence(right);
+          }),
+        createCalls: created.filter((command) => command === "cmd_project_conversation_create").length,
+        prepareCalls: created.filter((command) => command === "cmd_task_prepare").length,
+      }));
+    }, baseline);
+    assert.deepEqual(result.titles, ["新对话", "新对话 2", "新对话 3", "新对话 4", "新对话 5"]);
+    assert.equal(result.createCalls, 6, "the rejected click still reaches the authoritative backend limit");
+    assert.equal(result.prepareCalls, 5, "a rejected conversation must never start preparation");
+  } finally {
+    await page.evaluate(async ({ path, original }) => {
+      const originalIds = new Set(original.map((task) => task.id));
+      const { browserMockDetails, browserMockSetMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      for (let index = browserMockTasks.length - 1; index >= 0; index -= 1) {
+        const task = browserMockTasks[index];
+        if (task.workspace_path !== path || originalIds.has(task.id)) continue;
+        browserMockTasks.splice(index, 1);
+        delete browserMockDetails[task.id];
+        browserMockSetMessages(task.id, []);
+      }
+      for (const saved of original) {
+        const task = browserMockTasks.find((candidate) => candidate.id === saved.id);
+        if (!task) continue;
+        task.state = saved.state;
+        task.updated_at = saved.updated_at;
+        if (browserMockDetails[task.id]) browserMockDetails[task.id].task = task;
+      }
+      delete globalThis.__rCodeProjectCreateCalls;
+      delete globalThis.__rCodePerformanceIpcProbe;
+    }, { path: workspacePath, original: baseline }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("browser mock generic and project create paths share one structured limit", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const workspacePath = "D:/qa/t11/browser-mock-limit";
+
+  try {
+    const result = await page.evaluate(async (path) => {
+      const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+      const { browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const createdIds = [];
+      for (let index = 1; index <= 5; index += 1) {
+        const task = await browserMockInvoke("cmd_task_create", {
+          workspacePath: path,
+          title: `Generic ${index}`,
+          goal: "",
+          mode: "edit",
+          providerName: null,
+          agentEngine: null,
+        });
+        createdIds.push(task.id);
+      }
+
+      const captureError = async (command, args) => {
+        try {
+          await browserMockInvoke(command, args);
+          return null;
+        } catch (error) {
+          return {
+            code: error?.code,
+            message: error?.message,
+            limit: error?.limit,
+          };
+        }
+      };
+      const genericError = await captureError("cmd_task_create", {
+        workspacePath: path,
+        title: "Generic blocked",
+        goal: "",
+        mode: "edit",
+      });
+      const projectError = await captureError("cmd_project_conversation_create", {
+        workspacePath: path,
+      });
+
+      await browserMockInvoke("cmd_task_archive", { taskId: createdIds[0] });
+      const replacement = await browserMockInvoke("cmd_project_conversation_create", {
+        workspacePath: path,
+      });
+      return {
+        genericError,
+        projectError,
+        replacementTitle: replacement.title,
+        activeCount: browserMockTasks.filter(
+          (task) => task.workspace_path === path && task.state !== "archived",
+        ).length,
+      };
+    }, workspacePath);
+
+    assert.deepEqual(result.genericError, {
+      code: "PROJECT_CONVERSATION_LIMIT_REACHED",
+      message: "该项目最多保留 5 个未归档对话，请先归档一个后再新建",
+      limit: 5,
+    });
+    assert.deepEqual(result.projectError, result.genericError);
+    assert.equal(result.replacementTitle, "新对话");
+    assert.equal(result.activeCount, 5);
+  } finally {
+    await page.evaluate(async (path) => {
+      const { browserMockDetails, browserMockSetMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      for (let index = browserMockTasks.length - 1; index >= 0; index -= 1) {
+        const task = browserMockTasks[index];
+        if (task.workspace_path !== path) continue;
+        browserMockTasks.splice(index, 1);
+        delete browserMockDetails[task.id];
+        browserMockSetMessages(task.id, []);
+      }
+    }, workspacePath).catch(() => {});
+    await page.close();
+  }
+});
+
+test("conversation limit UI branches on the stable code instead of localized text", async () => {
+  const workspacePath = "D:/qa/t11/code-only-limit";
+  const exercise = async (payload) => {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+    await page.goto(baseUrl, { waitUntil: "networkidle" });
+    try {
+      await page.evaluate(async ({ path, rejection }) => {
+        const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+        const { useAppStore } = await import("/src/store/app.ts");
+        const { useTasksStore } = await import("/src/store/tasks.ts");
+        globalThis.__TAURI_INTERNALS__ = {
+          invoke: async (command, args = {}) => {
+            if (command === "cmd_project_conversation_create") throw rejection;
+            return browserMockInvoke(command, args);
+          },
+        };
+        await useTasksStore.getState().refreshTasks();
+        useTasksStore.getState().setCurrentProject(path);
+        useAppStore.getState().openDashboard(path);
+      }, { path: workspacePath, rejection: payload });
+      await page.locator("#main-content > .scene-dashboard").waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "新建任务", exact: true }).click();
+      await page.locator(".toast--warn, .toast--error").first().waitFor({ state: "visible" });
+      return {
+        warning: await page.locator(".toast--warn").allInnerTexts(),
+        error: await page.locator(".toast--error").allInnerTexts(),
+      };
+    } finally {
+      await page.evaluate(() => {
+        delete globalThis.__TAURI_INTERNALS__;
+      }).catch(() => {});
+      await page.close();
+    }
+  };
+
+  const coded = await exercise({
+    code: "PROJECT_CONVERSATION_LIMIT_REACHED",
+    message: "This wording is intentionally unrelated to the localized limit copy.",
+    limit: 7,
+  });
+  assert.equal(coded.error.length, 0);
+  assert.equal(coded.warning.length, 1);
+  assert.match(coded.warning[0], /已达到 7 个对话上限/);
+
+  const matchingTextOnly = await exercise({
+    code: "COMMAND_FAILED",
+    message: "该项目最多保留 5 个未归档对话，请先归档一个后再新建",
+    limit: 5,
+  });
+  assert.equal(matchingTextOnly.warning.length, 0);
+  assert.equal(matchingTextOnly.error.length, 1);
+  assert.match(matchingTextOnly.error[0], /无法创建新对话/);
+});
+
+test("/clear empties the active task context without creating another sidebar task", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const taskId = "mock-task-complete";
+  const baseline = await page.evaluate(async (id) => {
+    const { browserMockDetails, browserMockMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    return {
+      task: structuredClone(browserMockTasks.find((task) => task.id === id)),
+      detail: structuredClone(browserMockDetails[id]),
+      messages: structuredClone(browserMockMessages(id)),
+    };
+  }, taskId);
+
+  try {
+    await page.evaluate(async (id) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      globalThis.__rCodeClearCalls = [];
+      globalThis.__rCodePerformanceIpcProbe = (command) => {
+        if (["cmd_task_clear_context", "cmd_task_create"].includes(command)) {
+          globalThis.__rCodeClearCalls.push(command);
+        }
+      };
+      await Promise.all([
+        useTasksStore.getState().refreshTasks(),
+        useTasksStore.getState().refreshDetail(id),
+      ]);
+      useAppStore.getState().openRoom(id);
+    }, taskId);
+    await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+    const composer = page.getByRole("textbox", { name: "给 Agent 的消息" });
+    await composer.fill("/clear");
+    await composer.press("Enter");
+    await page.getByText(/当前任务已切换到空白上下文/).waitFor({ state: "visible" });
+
+    const cleared = await page.evaluate(async (id) => {
+      const { browserMockDetails, browserMockMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const { useAppStore } = await import("/src/store/app.ts");
+      const detail = browserMockDetails[id];
+      return {
+        currentTaskId: useAppStore.getState().currentTaskId,
+        taskCount: browserMockTasks.filter((task) => task.id === id).length,
+        parentBranchId: detail.active_branch.parent_branch_id,
+        eventTypes: detail.events.map((event) => event.event_type),
+        messages: browserMockMessages(id),
+        calls: [...globalThis.__rCodeClearCalls],
+      };
+    }, taskId);
+    assert.equal(cleared.currentTaskId, taskId);
+    assert.equal(cleared.taskCount, 1);
+    assert.equal(cleared.parentBranchId, baseline.detail.active_branch.id);
+    assert.deepEqual(cleared.eventTypes, ["session_cleared"]);
+    assert.deepEqual(cleared.messages, []);
+    assert.deepEqual(cleared.calls, ["cmd_task_clear_context"]);
+
+    const branchProjection = await page.evaluate(async (id) => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      return {
+        store: useTasksStore.getState().details[id]?.branches.map((branch) => branch.id) ?? [],
+        storeActive: useTasksStore.getState().details[id]?.active_branch.id ?? null,
+        mock: browserMockDetails[id].branches.map((branch) => branch.id),
+        mockActive: browserMockDetails[id].active_branch.id,
+      };
+    }, taskId);
+    assert.equal(branchProjection.store.length, 2, JSON.stringify(branchProjection));
+    assert.equal(
+      await page.locator(".room-history-picker").count(),
+      1,
+      JSON.stringify({ branchProjection, scopebar: await page.locator(".room-scopebar").innerText() }),
+    );
+    const historyPicker = page.getByRole("combobox", { name: "选择对话历史分支" });
+    await historyPicker.waitFor({ state: "visible" });
+    const activeBranchId = await page.evaluate(async (id) => {
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      return browserMockDetails[id].active_branch.id;
+    }, taskId);
+    const crossTaskError = await page.evaluate(async (branchId) => {
+      const { sessionMessagesForBranch } = await import("/src/lib/ipc.ts");
+      try {
+        await sessionMessagesForBranch("mock-task-api", branchId);
+        return null;
+      } catch (cause) {
+        return String(cause);
+      }
+    }, activeBranchId);
+    assert.match(crossTaskError ?? "", /会话分支不属于当前任务/);
+    const historicalTexts = await page.evaluate(async ({ id, branchId }) => {
+      const { sessionMessagesForBranch } = await import("/src/lib/ipc.ts");
+      return (await sessionMessagesForBranch(id, branchId))
+        .filter((message) => message.kind === "message")
+        .map((message) => message.text);
+    }, { id: taskId, branchId: baseline.detail.active_branch.id });
+    assert.deepEqual(historicalTexts, baseline.messages
+      .filter((message) => message.kind === "message")
+      .map((message) => message.text));
+
+    const draft = "切到历史前尚未提交的草稿";
+    await composer.fill(draft);
+    const beforeBrowse = await page.evaluate(async (id) => {
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const detail = browserMockDetails[id];
+      return {
+        activeBranchId: detail.active_branch.id,
+        runIds: detail.runs.map((run) => run.id),
+        queuedMessageIds: detail.queued_messages.map((message) => message.id),
+        taskMode: detail.task.mode,
+        taskState: detail.task.state,
+      };
+    }, taskId);
+
+    await historyPicker.selectOption(baseline.detail.active_branch.id);
+    await page.getByText("历史分支 · 只读", { exact: true }).waitFor({ state: "visible" });
+    await page.waitForTimeout(500);
+    const historicalTimelineText = await page.locator(".timeline").innerText();
+    assert.ok(historicalTimelineText.includes(baseline.task.goal), historicalTimelineText);
+    assert.equal(await page.getByRole("textbox", { name: "给 Agent 的消息" }).count(), 0);
+    assert.equal(await page.locator(".message-edit").count(), 0);
+
+    await page.getByRole("button", { name: "返回当前对话" }).click();
+    await composer.waitFor({ state: "visible" });
+    assert.equal(await composer.inputValue(), draft);
+    await page.waitForFunction(
+      (historicalText) => !document.querySelector(".timeline")?.textContent?.includes(historicalText),
+      baseline.task.goal,
+    );
+
+    // Returning to the live branch must invalidate a slower historical read. Otherwise old
+    // messages can become editable after the composer has already been restored.
+    await page.evaluate(() => {
+      globalThis.__rCodeBrowserMockDelayMs = { cmd_session_messages_for_branch: 400 };
+    });
+    await historyPicker.selectOption(baseline.detail.active_branch.id);
+    await page.getByText("历史分支 · 只读", { exact: true }).waitFor({ state: "visible" });
+    await historyPicker.selectOption("");
+    await composer.waitFor({ state: "visible" });
+    await page.waitForTimeout(550);
+    assert.equal(await composer.inputValue(), draft);
+    assert.ok(!(await page.locator(".timeline").innerText()).includes(baseline.task.goal));
+
+    const afterBrowse = await page.evaluate(async (id) => {
+      delete globalThis.__rCodeBrowserMockDelayMs;
+      const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const detail = browserMockDetails[id];
+      return {
+        activeBranchId: detail.active_branch.id,
+        runIds: detail.runs.map((run) => run.id),
+        queuedMessageIds: detail.queued_messages.map((message) => message.id),
+        taskMode: detail.task.mode,
+        taskState: detail.task.state,
+      };
+    }, taskId);
+    assert.deepEqual(afterBrowse, beforeBrowse);
+    await page.getByText(/当前任务已切换到空白上下文/)
+      .waitFor({ state: "hidden", timeout: 7500 });
+  } finally {
+    await page.evaluate(async ({ id, original }) => {
+      delete globalThis.__rCodeBrowserMockDelayMs;
+      delete globalThis.__rCodePerformanceIpcProbe;
+      delete globalThis.__rCodeClearCalls;
+      const { browserMockDetails, browserMockSetMessages, browserMockTasks } = await import("/src/lib/mock-data.ts");
+      const task = browserMockTasks.find((candidate) => candidate.id === id);
+      if (task && original.task) Object.assign(task, structuredClone(original.task));
+      browserMockDetails[id] = structuredClone(original.detail);
+      browserMockSetMessages(id, structuredClone(original.messages));
+    }, { id: taskId, original: baseline }).catch(() => {});
     await page.close();
   }
 });
@@ -1979,7 +2737,7 @@ test("user workflow Skills are callable immediately and slash completion stays b
     });
   });
 
-  await page.getByRole("button", { name: "新对话", exact: true }).click();
+  await page.getByRole("button", { name: "R-Code，新建对话", exact: true }).click();
   const composer = page.locator(".home-composer textarea");
   await composer.fill("/");
 

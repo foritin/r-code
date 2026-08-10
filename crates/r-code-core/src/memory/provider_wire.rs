@@ -25,6 +25,8 @@ pub struct MemoryReviewWireTurn {
     pub evidence_ordinal: NonZeroU32,
     pub user_text: String,
     pub assistant_text: String,
+    #[serde(default)]
+    pub explicit_remember: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +264,8 @@ pub enum MemoryProposalValidationCode {
     MissingEvidence,
     InvalidEvidenceOrdinal,
     DuplicateEvidenceOrdinal,
+    ProjectExplicitUserAuthorizationMissing,
+    ProjectVerifiedResultUnavailable,
     InvalidTargetOrdinal,
     TargetScopeMismatch,
     TargetVersionMismatch,
@@ -388,6 +392,7 @@ fn validate_evidence(
         return proposal_invalid(index, MemoryProposalValidationCode::MissingEvidence);
     }
     let mut seen = BTreeSet::new();
+    let mut evidence = Vec::with_capacity(proposal.evidence_ordinals.len());
     for ordinal in &proposal.evidence_ordinals {
         if !seen.insert(*ordinal) {
             return proposal_invalid(
@@ -395,12 +400,31 @@ fn validate_evidence(
                 MemoryProposalValidationCode::DuplicateEvidenceOrdinal,
             );
         }
-        if !input
+        let Some(turn) = input
             .turns
             .iter()
-            .any(|turn| turn.evidence_ordinal == *ordinal)
-        {
+            .find(|turn| turn.evidence_ordinal == *ordinal)
+        else {
             return proposal_invalid(index, MemoryProposalValidationCode::InvalidEvidenceOrdinal);
+        };
+        evidence.push(turn);
+    }
+    if proposal.scope == MemoryProposalScope::Project {
+        match proposal.basis {
+            MemoryProposalBasis::ExplicitUser => {
+                if evidence.iter().any(|turn| !turn.explicit_remember) {
+                    return proposal_invalid(
+                        index,
+                        MemoryProposalValidationCode::ProjectExplicitUserAuthorizationMissing,
+                    );
+                }
+            }
+            MemoryProposalBasis::VerifiedResult => {
+                return proposal_invalid(
+                    index,
+                    MemoryProposalValidationCode::ProjectVerifiedResultUnavailable,
+                );
+            }
         }
     }
     Ok(())

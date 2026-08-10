@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { subagentSessionMessages } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { useSharedNow } from "../../lib/shared-clock";
@@ -8,9 +8,11 @@ import {
   IconCheck,
   IconChevronDown,
   IconClose,
+  IconFile,
   IconMaximize,
   IconMinimize,
   IconPlus,
+  IconSearch,
   IconSidebar,
   IconStop,
   IconTerminal,
@@ -19,6 +21,12 @@ import { Markdown } from "./Markdown";
 import { SubagentAvatar } from "./SubagentIdentity";
 import { ToolPayloadDetails } from "./ToolCard";
 import type { ToolState } from "./model";
+import {
+  toolActivityKind,
+  toolActivityProgress,
+  toolActivityTitle,
+  type ToolActivityKind,
+} from "./tool-activity";
 import { handleWorkbenchTabListKeyDown } from "./workbench-tabs";
 import type {
   ActivitySubagent,
@@ -54,6 +62,7 @@ interface SessionMessageEntry {
 interface SessionToolEntry {
   id: string;
   kind: "tool";
+  callId: string | null;
   toolName: string;
   summary: string;
   inputJson: string | null;
@@ -73,6 +82,7 @@ type SessionEntry = SessionMessageEntry | SessionToolEntry | SessionStatusEntry;
 interface SessionToolGroupEntry {
   id: string;
   kind: "tool_group";
+  groupKind: ToolActivityKind;
   tools: SessionToolEntry[];
 }
 
@@ -191,7 +201,12 @@ function SubagentTabsHeader({
                 data-subagent-id={child.id}
                 onClick={() => onSelect(child.id)}
               >
-                <SubagentAvatar index={index} identity={child.id} size="xs" />
+                <SubagentAvatar
+                  index={index}
+                  identity={child.id}
+                  runtimeKind={child.runtimeKind}
+                  size="xs"
+                />
                 <strong title={child.label}>{child.label}</strong>
               </button>
               <button
@@ -304,6 +319,7 @@ function SubagentListSection({
               <SubagentAvatar
                 index={index}
                 identity={child.id}
+                runtimeKind={child.runtimeKind}
                 className={`subagent-list-avatar status-${child.status}`}
               />
               <span className="subagent-list-row-copy">
@@ -386,7 +402,10 @@ function SubagentInspector({
   }, [active, load]);
 
   const persistedEntries = useMemo(() => buildPersistedEntries(messages), [messages]);
-  const liveEntries = useMemo(() => buildLiveEntries(child.events), [child.events]);
+  const liveEntries = useMemo(
+    () => buildLiveEntries(child.events, child.status),
+    [child.events, child.status],
+  );
   const entries = useMemo(
     () => mergeSessionEntries(persistedEntries, liveEntries),
     [liveEntries, persistedEntries],
@@ -443,7 +462,7 @@ function SubagentInspector({
         {expanded && (
           <div className="subagent-session-body" id={`subagent-session-${child.id}`}>
             <div className="subagent-session-meta" aria-label="子智能体编排信息">
-              <span><b>执行器</b>{child.runtimeKind === "codex_exec" ? "Codex CLI" : "R-Code"}</span>
+              <span><b>执行器</b>{runtimeExecutorName(child.runtimeKind)}</span>
               <span><b>权限</b>{permissionModeLabel(permissionMode)}</span>
               {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
             </div>
@@ -452,7 +471,11 @@ function SubagentInspector({
             {loading && transcriptEntries.length === 0 ? (
               <p className="subagent-session-placeholder">正在读取子智能体记录…</p>
             ) : transcriptEntries.length === 0 ? (
-              <p className="subagent-session-placeholder">{active ? "Codex 正在运行；公开回复和工具输出会实时出现在这里。" : "运行已经结束，没有保存可见回复。"}</p>
+              <p className="subagent-session-placeholder">
+                {active
+                  ? `${runtimeName(child.runtimeKind)} 正在运行；公开回复和工具输出会实时出现在这里。`
+                  : "运行已经结束，没有保存可见回复。"}
+              </p>
             ) : (
               <div className="subagent-transcript" aria-label="子智能体公开输出">
                 {transcriptBlocks.map((entry) => entry.kind === "tool_group" ? (
@@ -462,8 +485,13 @@ function SubagentInspector({
                 ) : (
                   <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
                     <div className="subagent-transcript-speaker">
-                      <SubagentAvatar index={index} identity={child.id} size="xs" />
-                      <span>子智能体</span>
+                      <SubagentAvatar
+                        index={index}
+                        identity={child.id}
+                        runtimeKind={child.runtimeKind}
+                        size="xs"
+                      />
+                      <span>{runtimeName(child.runtimeKind)} 子智能体</span>
                     </div>
                     <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
                   </article>
@@ -509,38 +537,39 @@ function SubagentRuntimeLog({ entries }: { entries: readonly SessionStatusEntry[
   );
 }
 
-function SubagentToolGroup({ entry }: { entry: SessionToolGroupEntry }) {
+export function SubagentToolGroup({ entry }: { entry: SessionToolGroupEntry }) {
   const activeCount = entry.tools.filter((tool) => tool.state === "active").length;
   const failedCount = entry.tools.filter((tool) => tool.state === "fail").length;
-  const [open, setOpen] = useState(activeCount > 0);
-
-  useEffect(() => {
-    if (activeCount > 0) setOpen(true);
-  }, [activeCount]);
+  const [open, setOpen] = useState(false);
+  const generatedId = useId().replace(/:/g, "");
+  const detailId = `subagent-tool-group-${generatedId}`;
 
   const state = activeCount > 0 ? "active" : failedCount > 0 ? "fail" : "ok";
-  const stateText = activeCount > 0
-    ? `${activeCount} 项运行中`
-    : failedCount > 0
-      ? `${failedCount} 项失败`
-      : "全部完成";
-  const names = [...new Set(entry.tools.map((tool) => tool.toolName))].join("、");
+  const stateText = toolActivityProgress(entry.tools.map((tool) => tool.state));
+  const title = toolActivityTitle(
+    entry.groupKind,
+    entry.tools.length,
+    state,
+    entry.tools[0]?.summary ?? "",
+  );
+  const summaries = [...new Set(entry.tools.map((tool) => tool.summary))].slice(0, 3).join(" · ");
   return (
-    <section className={`subagent-tool-group state-${state}${open ? " open" : ""}`}>
+    <section className={`subagent-tool-group kind-${entry.groupKind} state-${state}${open ? " open" : ""}`}>
       <button
         type="button"
         className="subagent-tool-group-head ring-inset"
         aria-expanded={open}
+        aria-controls={detailId}
         onClick={() => setOpen((value) => !value)}
       >
-        <span className="subagent-transcript-tool-icon"><IconTerminal width={13} height={13} /></span>
-        <span className="subagent-tool-group-title">运行了 {entry.tools.length} 项操作</span>
-        <code title={names}>{names}</code>
+        <span className="subagent-transcript-tool-icon"><ToolGroupIcon kind={entry.groupKind} /></span>
+        <span className="subagent-tool-group-title">{title}</span>
+        <code title={summaries}>{summaries}</code>
         <span className={`subagent-transcript-tool-state state-${state}`}>{stateText}</span>
         <IconChevronDown width={13} height={13} />
       </button>
       {open && (
-        <div className="subagent-tool-group-list">
+        <div className="subagent-tool-group-list" id={detailId}>
           {entry.tools.map((tool) => <SubagentToolEvent entry={tool} key={tool.id} />)}
         </div>
       )}
@@ -610,8 +639,12 @@ function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly Age
   return [...merged.values()].sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id));
 }
 
-function buildLiveEntries(events: readonly ActivitySubagentEvent[]): SessionEntry[] {
+export function buildLiveEntries(
+  events: readonly ActivitySubagentEvent[],
+  status: SubagentStatus,
+): SessionEntry[] {
   const entries: SessionEntry[] = [];
+  const toolsByCallId = new Map<string, number>();
   for (const event of events) {
     if (event.kind === "tool_call") {
       const toolName = compactText(event.label) ?? "Codex 工具";
@@ -622,12 +655,42 @@ function buildLiveEntries(events: readonly ActivitySubagentEvent[]): SessionEntr
       entries.push({
         id: event.id,
         kind: "tool",
+        callId: event.callId ?? null,
         toolName,
         summary,
         inputJson: JSON.stringify({ command: summary }),
         outputJson: null,
         state: "active",
       });
+      if (event.callId) toolsByCallId.set(event.callId, entries.length - 1);
+      continue;
+    }
+    if (event.kind === "tool_result") {
+      let toolIndex = event.callId ? toolsByCallId.get(event.callId) : undefined;
+      if (toolIndex == null && !event.callId) {
+        for (let index = entries.length - 1; index >= 0; index -= 1) {
+          const candidate = entries[index];
+          if (candidate?.kind === "tool" && candidate.state === "active") {
+            toolIndex = index;
+            break;
+          }
+        }
+      }
+      if (toolIndex != null && entries[toolIndex]?.kind === "tool") {
+        const tool = entries[toolIndex] as SessionToolEntry;
+        entries[toolIndex] = {
+          ...tool,
+          outputJson: normalizeToolOutput(event.outputJson),
+          state: event.isError ? "fail" : "ok",
+        };
+      } else if (event.isError) {
+        pushUniqueStatus(entries, {
+          id: event.id,
+          kind: "status",
+          text: compactText(readToolResultText(event.outputJson)) ?? "工具执行失败",
+          tone: "danger",
+        });
+      }
       continue;
     }
     if (event.kind === "message") {
@@ -648,7 +711,23 @@ function buildLiveEntries(events: readonly ActivitySubagentEvent[]): SessionEntr
       tone: event.isError ? "danger" : "normal",
     });
   }
+  if (status === "completed" || status === "failed" || status === "cancelled") {
+    const terminalState: ToolState = status === "completed" ? "ok" : "fail";
+    for (let index = 0; index < entries.length; index += 1) {
+      const entry = entries[index];
+      if (entry?.kind === "tool" && entry.state === "active") {
+        entries[index] = { ...entry, state: terminalState };
+      }
+    }
+  }
   return entries;
+}
+
+function ToolGroupIcon({ kind }: { kind: ToolActivityKind }) {
+  if (kind === "command") return <IconTerminal width={13} height={13} />;
+  if (kind === "file") return <IconFile width={13} height={13} />;
+  if (kind === "lookup") return <IconSearch width={13} height={13} />;
+  return <IconActivity width={13} height={13} />;
 }
 
 function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntry[] {
@@ -663,6 +742,7 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
       const entry: SessionToolEntry = {
         id,
         kind: "tool",
+        callId: message.call_id ?? null,
         toolName,
         summary,
         inputJson: normalizeToolInput(message.input_json, toolName, summary),
@@ -718,27 +798,57 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
   return entries.slice(-80);
 }
 
-function mergeSessionEntries(
+export function mergeSessionEntries(
   persistedEntries: readonly SessionEntry[],
   liveEntries: readonly SessionEntry[],
 ): SessionEntry[] {
   const entries = [...persistedEntries];
   const matchedPersisted = new Set<number>();
   for (const live of liveEntries) {
-    const existingIndex = entries.findIndex((entry, index) => (
-      !matchedPersisted.has(index) && sessionEntriesEquivalent(entry, live)
-    ));
+    let existingIndex = -1;
+    if (live.kind === "tool" && live.callId) {
+      existingIndex = entries.findIndex((entry, index) => (
+        !matchedPersisted.has(index)
+        && entry.kind === "tool"
+        && entry.callId === live.callId
+      ));
+    }
+    if (existingIndex < 0) {
+      existingIndex = entries.findIndex((entry, index) => (
+        !matchedPersisted.has(index) && sessionEntriesEquivalent(entry, live)
+      ));
+    }
     if (existingIndex >= 0) {
       matchedPersisted.add(existingIndex);
       const existing = entries[existingIndex];
       if (existing.kind === "message" && live.kind === "message" && live.text.length > existing.text.length) {
         entries[existingIndex] = live;
+      } else if (existing.kind === "tool" && live.kind === "tool") {
+        entries[existingIndex] = mergeToolEntries(existing, live);
       }
       continue;
     }
     entries.push(live);
   }
   return entries.slice(-80);
+}
+
+function mergeToolEntries(
+  persisted: SessionToolEntry,
+  live: SessionToolEntry,
+): SessionToolEntry {
+  const state: ToolState = persisted.state === "fail" || live.state === "fail"
+    ? "fail"
+    : persisted.state === "ok" || live.state === "ok"
+      ? "ok"
+      : "active";
+  return {
+    ...persisted,
+    callId: persisted.callId ?? live.callId,
+    inputJson: persisted.inputJson ?? live.inputJson,
+    outputJson: live.outputJson ?? persisted.outputJson,
+    state,
+  };
 }
 
 function appendMessageEntry(entries: SessionEntry[], entry: SessionMessageEntry) {
@@ -767,20 +877,30 @@ function joinVisibleMessageText(left: string, right: string): string {
   return `${left} ${right}`;
 }
 
-function groupTranscriptEntries(
+export function groupTranscriptEntries(
   entries: readonly (SessionMessageEntry | SessionToolEntry)[],
 ): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
   let pendingTools: SessionToolEntry[] = [];
+  let pendingKind: ToolActivityKind | null = null;
   const flushTools = () => {
     if (pendingTools.length === 1) blocks.push(pendingTools[0]);
     else if (pendingTools.length > 1) {
-      blocks.push({ id: `tool-group-${pendingTools[0].id}`, kind: "tool_group", tools: pendingTools });
+      blocks.push({
+        id: `tool-group-${pendingKind}-${pendingTools[0].id}`,
+        kind: "tool_group",
+        groupKind: pendingKind ?? "tool",
+        tools: pendingTools,
+      });
     }
     pendingTools = [];
+    pendingKind = null;
   };
   for (const entry of entries) {
     if (entry.kind === "tool") {
+      const kind = toolActivityKind(entry.toolName);
+      if (pendingTools.length > 0 && pendingKind !== kind) flushTools();
+      pendingKind = kind;
       pendingTools.push(entry);
     } else {
       flushTools();
@@ -791,9 +911,20 @@ function groupTranscriptEntries(
   return blocks;
 }
 
+function runtimeName(runtimeKind: AgentRun["runtime_kind"]): "R-Code" | "Codex" {
+  return runtimeKind === "native" ? "R-Code" : "Codex";
+}
+
+function runtimeExecutorName(runtimeKind: AgentRun["runtime_kind"]): "R-Code" | "Codex CLI" | "Codex MCP" {
+  if (runtimeKind === "codex_exec") return "Codex CLI";
+  if (runtimeKind === "codex_mcp") return "Codex MCP";
+  return "R-Code";
+}
+
 function sessionEntriesEquivalent(left: SessionEntry, right: SessionEntry): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "tool" && right.kind === "tool") {
+    if (left.callId && right.callId) return left.callId === right.callId;
     return left.toolName === right.toolName && left.summary === right.summary;
   }
   if (left.kind === "message" && right.kind === "message") {

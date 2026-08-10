@@ -13,6 +13,8 @@ import { RUNTIME_SETTINGS_CHANGED_EVENT } from "./onboarding";
 
 export interface ProviderChoice {
   name: string;
+  /** Stable catalog/vendor identity; profile names and gateway URLs may be edited independently. */
+  kind?: string;
   /** 展示名，例如 deepseek → DeepSeek */
   label: string;
   /** 设置里配置的默认模型 */
@@ -130,13 +132,14 @@ export function useProviders(deps: unknown[] = []): ProvidersState {
       const custom = readCustom();
       const next = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
         const model = config.model || "";
-        const preset = presetOf(name);
+        const preset = presetOf(config.provider_kind ?? name);
         // 配置里的模型排最前，其后是预设候选，最后是用户手输过的
         const models = Array.from(
           new Set([model, ...(preset?.models ?? []), ...(custom[name] ?? [])].filter(Boolean))
         );
         return {
           name,
+          kind: config.provider_kind,
           label: providerLabel(name),
           model: model || preset?.model || name,
           models,

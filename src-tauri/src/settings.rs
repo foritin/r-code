@@ -315,6 +315,33 @@ impl SettingsService {
         Ok(migrated)
     }
 
+    /// Persist stable provider identities for configurations written before the field existed.
+    /// Inference is deliberately one-shot: later profile renames or gateway edits cannot change it.
+    pub fn migrate_legacy_provider_kinds(&self) -> Result<usize, ProductError> {
+        let path = self.config_path();
+        if !path.exists() {
+            return Ok(0);
+        }
+        let mut config = Self::parse_config_file(&path)?;
+        let mut migrated = 0usize;
+        for (name, provider) in &mut config.providers {
+            if provider.provider_kind.is_some() {
+                continue;
+            }
+            let Some(kind) =
+                crate::provider_catalog::infer_legacy_provider_kind(name, &provider.base_url)
+            else {
+                continue;
+            };
+            provider.provider_kind = Some(kind.to_string());
+            migrated += 1;
+        }
+        if migrated > 0 {
+            self.write_global(&config)?;
+        }
+        Ok(migrated)
+    }
+
     fn write_global(&self, config: &Config) -> Result<(), ProductError> {
         let path = self.config_path();
         if let Some(parent) = path.parent() {
@@ -425,6 +452,7 @@ mod tests {
             max_tokens: None,
             temperature: None,
             protocol: None,
+            provider_kind: None,
         }
     }
 
@@ -550,6 +578,90 @@ memories_dir = "{m}"
         assert_eq!(
             loaded.providers.get("anthropic").unwrap().api_key,
             "sk-roundtrip"
+        );
+    }
+
+    #[test]
+    fn legacy_provider_kind_migration_is_one_shot_and_preserves_explicit_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svc = SettingsService::new(tmp.path().to_path_buf());
+        let mut config = Config {
+            default_provider: "deepseek".into(),
+            ..Config::default()
+        };
+        config.providers.clear();
+
+        let mut by_name = valid_provider("");
+        by_name.base_url = "https://legacy-gateway.example/v1".into();
+        by_name.model = "deepseek-v4-pro".into();
+        config.providers.insert("deepseek".into(), by_name);
+
+        let mut by_official_host = valid_provider("");
+        by_official_host.base_url = "https://api.deepseek.com/v1".into();
+        by_official_host.model = "deepseek-v4-flash".into();
+        config
+            .providers
+            .insert("renamed-legacy-profile".into(), by_official_host);
+
+        let mut explicit_other = valid_provider("");
+        explicit_other.base_url = "https://api.deepseek.com".into();
+        explicit_other.model = "deepseek-v4-pro".into();
+        explicit_other.provider_kind = Some("openai".into());
+        config
+            .providers
+            .insert("deepseek_team".into(), explicit_other);
+
+        let mut unrelated = valid_provider("");
+        unrelated.base_url = "https://gateway.example/v1".into();
+        config.providers.insert("custom".into(), unrelated);
+        svc.write_global(&config).unwrap();
+
+        assert_eq!(svc.migrate_legacy_provider_kinds().unwrap(), 2);
+        let mut migrated = SettingsService::parse_config_file(&svc.config_path()).unwrap();
+        assert_eq!(
+            migrated.providers["deepseek"].provider_kind.as_deref(),
+            Some("deepseek")
+        );
+        assert_eq!(
+            migrated.providers["renamed-legacy-profile"]
+                .provider_kind
+                .as_deref(),
+            Some("deepseek")
+        );
+        assert_eq!(
+            migrated.providers["deepseek_team"].provider_kind.as_deref(),
+            Some("openai"),
+            "an explicit identity must not be replaced by legacy name or host inference"
+        );
+        assert_eq!(migrated.providers["custom"].provider_kind, None);
+        assert!(
+            std::fs::read_to_string(svc.config_path())
+                .unwrap()
+                .contains("provider_kind = \"deepseek\""),
+            "the inferred identity must be persisted, not only returned in memory"
+        );
+
+        let mut renamed = migrated.providers.remove("deepseek").unwrap();
+        renamed.base_url = "https://second-gateway.example/v1".into();
+        migrated
+            .providers
+            .insert("renamed-after-migration".into(), renamed);
+        svc.write_global(&migrated).unwrap();
+
+        assert_eq!(svc.migrate_legacy_provider_kinds().unwrap(), 0);
+        let after_second_run = SettingsService::parse_config_file(&svc.config_path()).unwrap();
+        assert_eq!(
+            after_second_run.providers["renamed-after-migration"]
+                .provider_kind
+                .as_deref(),
+            Some("deepseek"),
+            "later profile renames and gateway edits must not change persisted identity"
+        );
+        assert_eq!(
+            after_second_run.providers["deepseek_team"]
+                .provider_kind
+                .as_deref(),
+            Some("openai")
         );
     }
 

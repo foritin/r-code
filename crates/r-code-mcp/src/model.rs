@@ -10,6 +10,9 @@ pub const RESERVED_TOOL_NAMES: &[&str] = &[
     "mcp_discover",
     "mcp_call",
     "suggest_mcp",
+    "mcp_registry_search",
+    "mcp_prepare_install",
+    "mcp_prepare_enable",
 ];
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

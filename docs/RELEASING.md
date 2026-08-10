@@ -177,7 +177,7 @@ node --test scripts/release.test.mjs scripts/release-quality-gate.test.mjs scrip
 node scripts/release.mjs check vX.Y.Z
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo test --workspace --all-features -- --test-threads=1
 cargo deny check advisories
 
 cd src-tauri/frontend
@@ -192,7 +192,7 @@ cd ../..
 
 # Windows：同时实构建并核验 WiX MSI；PowerShell 中执行
 Push-Location src-tauri
-cargo tauri build --bundles msi --config '{"bundle":{"createUpdaterArtifacts":false}}'
+cargo tauri build --bundles msi --config tauri.local-package.conf.json
 Pop-Location
 
 # macOS：本机 ad-hoc 候选包；正式候选包追加 --signed

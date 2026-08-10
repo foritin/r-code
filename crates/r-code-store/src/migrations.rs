@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 25;
+pub const LATEST_SCHEMA_VERSION: u32 = 26;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -54,6 +54,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(23, MIGRATION_023, false),
     MigrationSpec::new(24, MIGRATION_024, false),
     MigrationSpec::new(25, MIGRATION_025, false),
+    MigrationSpec::new(26, MIGRATION_026, false),
 ];
 
 impl MigrationSpec {
@@ -1403,6 +1404,14 @@ CREATE INDEX idx_queued_messages_task_dispatch
 const MIGRATION_025: &str = r#"
 ALTER TABLE agent_runs ADD COLUMN require_approval INTEGER NOT NULL DEFAULT 0
     CHECK (require_approval IN (0, 1));
+"#;
+
+/// Migration 026: retain whether review evidence came from an explicit user request
+/// so project-memory authorization can be enforced without interpreting assistant text.
+const MIGRATION_026: &str = r#"
+ALTER TABLE memory_review_turns
+ADD COLUMN explicit_remember INTEGER NOT NULL DEFAULT 0
+CHECK (explicit_remember IN (0, 1));
 "#;
 
 #[cfg(test)]

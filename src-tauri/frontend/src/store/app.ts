@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { clearComposerDraft } from "../lib/composer-drafts";
 import { useTasksStore } from "./tasks";
 
 /**
@@ -324,10 +325,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       state.navigationForward.slice(0, -1),
     ));
   },
-  forgetTaskNavigation: (taskId) => set((state) => ({
-    navigationBack: state.navigationBack.filter((entry) => entry.currentTaskId !== taskId),
-    navigationForward: state.navigationForward.filter((entry) => entry.currentTaskId !== taskId),
-  })),
+  forgetTaskNavigation: (taskId) => {
+    clearComposerDraft(taskId);
+    set((state) => ({
+      navigationBack: state.navigationBack.filter((entry) => entry.currentTaskId !== taskId),
+      navigationForward: state.navigationForward.filter((entry) => entry.currentTaskId !== taskId),
+    }));
+  },
   goHome: () => set((state) => navigateTo(state, {
     scene: "home",
     currentTaskId: null,

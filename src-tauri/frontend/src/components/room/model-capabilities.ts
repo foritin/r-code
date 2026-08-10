@@ -69,14 +69,23 @@ function effort(values: string[], defaultLabel = "服务默认"): CapabilityCont
  */
 export function capabilitiesFor(provider: ProviderChoice | undefined, model: string): ModelCapabilities {
   const providerName = provider?.name.toLowerCase() ?? "";
+  const providerKind = provider?.kind?.toLowerCase() ?? "";
   const modelName = model.toLowerCase();
   const protocol = provider?.protocol;
 
-  if (providerName.includes("deepseek") || modelName.includes("deepseek")) {
+  if (providerKind === "deepseek") {
     return {
       thinking: { label: "思考模式", options: THINKING, defaultLabel: "服务默认" },
       reasoning: effort(["high", "max"]),
       note: "DeepSeek 思考模式下温度由服务忽略；高/最大映射到原生 reasoning_effort。",
+    };
+  }
+
+  if (providerKind === "kimi" || providerKind === "kimi_coding") {
+    return {
+      thinking: { label: "思考模式", options: THINKING, defaultLabel: "服务默认" },
+      reasoning: effort(["low", "medium", "high"]),
+      note: "Kimi 的思考开关与推理强度会通过当前 Anthropic 兼容线路发送；留空时沿用服务默认。",
     };
   }
 

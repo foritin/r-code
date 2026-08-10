@@ -56,6 +56,8 @@ interface TasksState {
   refreshDashboard: (workspacePath: string) => Promise<void>;
   refreshProjectActivity: (workspacePath: string) => Promise<void>;
   refreshActivity: () => Promise<void>;
+  /** Insert a just-created task immediately instead of waiting for the next sidebar poll. */
+  upsertTask: (task: Task) => void;
   setCurrentProject: (projectId: string | null) => void;
 }
 
@@ -289,6 +291,18 @@ export const useTasksStore = create<TasksState>((set, get) => ({
     const activityPage = await ipc.activityList();
     set((s) => (activitySignature(s.activityPage) === activitySignature(activityPage) ? s : { activityPage }));
   },
+
+  upsertTask: (task) => set((s) => {
+    const existing = s.tasks.find((candidate) => candidate.id === task.id);
+    const tasks = existing === task
+      ? s.tasks
+      : [task, ...s.tasks.filter((candidate) => candidate.id !== task.id)];
+    const currentDetail = s.details[task.id];
+    const details = currentDetail && currentDetail.task !== task
+      ? { ...s.details, [task.id]: { ...currentDetail, task } }
+      : s.details;
+    return tasks === s.tasks && details === s.details ? s : { tasks, details };
+  }),
 
   setCurrentProject: (currentProjectId) =>
     set((s) => (s.currentProjectId === currentProjectId ? s : { currentProjectId })),

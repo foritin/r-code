@@ -44,6 +44,7 @@ import type {
   ProviderModelsResponse,
   CodexCliPreferences,
   CodexIntegrationStatus,
+  RtkStatus,
   ContextCompactionResult,
   InferenceOptions,
   LegacyMemoryStatus,
@@ -97,15 +98,54 @@ import {
 } from "./mock-data";
 import { browserMockInvoke } from "./browser-mock-runtime";
 
-async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  if (shouldUseBrowserMock()) {
-    return browserMockInvoke(command, args) as Promise<T>;
+export const PROJECT_CONVERSATION_LIMIT_REACHED_CODE =
+  "PROJECT_CONVERSATION_LIMIT_REACHED";
+
+interface CommandErrorPayload {
+  code: string;
+  message: string;
+  limit?: number;
+}
+
+export class IpcCommandError extends Error {
+  readonly code: string;
+  readonly limit?: number;
+
+  constructor(payload: CommandErrorPayload) {
+    super(payload.message);
+    this.name = "IpcCommandError";
+    this.code = payload.code;
+    this.limit = payload.limit;
   }
-  return invoke<T>(command, args);
+}
+
+function commandErrorPayload(cause: unknown): CommandErrorPayload | null {
+  if (typeof cause !== "object" || cause == null) return null;
+  const candidate = cause as Record<string, unknown>;
+  if (typeof candidate.code !== "string" || typeof candidate.message !== "string") return null;
+  return {
+    code: candidate.code,
+    message: candidate.message,
+    ...(typeof candidate.limit === "number" ? { limit: candidate.limit } : {}),
+  };
+}
+
+async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    if (shouldUseBrowserMock()) {
+      return await browserMockInvoke(command, args) as T;
+    }
+    return await invoke<T>(command, args);
+  } catch (cause) {
+    const payload = commandErrorPayload(cause);
+    if (payload) throw new IpcCommandError(payload);
+    throw cause;
+  }
 }
 
 // ---------- 系统 ----------
 export const ping = () => ipc<boolean>("ping");
+export const appQuit = () => ipc<void>("cmd_app_quit");
 
 // ---------- 任务 ----------
 export const taskCreate = (
@@ -116,6 +156,14 @@ export const taskCreate = (
   providerName: string | null = null,
   agentEngine: TaskAgentEngine | null = null
 ) => ipc<Task>("cmd_task_create", { workspacePath, title, goal, mode, providerName, agentEngine });
+
+/** Immediately persist a project-scoped empty conversation with server-assigned title/limit. */
+export const projectConversationCreate = (workspacePath: string) =>
+  ipc<Task>("cmd_project_conversation_create", { workspacePath });
+
+/** Prebuild the selected runtime/session without starting a run or adding conversation content. */
+export const taskPrepare = (taskId: string) =>
+  ipc<void>("cmd_task_prepare", { taskId });
 
 export const taskList = (workspacePath?: string, includeArchived = false) =>
   ipc<Task[]>("cmd_task_list", { workspacePath, includeArchived });
@@ -187,6 +235,9 @@ export const planUpdateItem = (taskId: string, input: UpdatePlanItemInput) =>
 
 export const taskForkContext = (taskId: string) =>
   ipc<SessionBranch>("cmd_task_fork_context", { taskId });
+
+export const taskClearContext = (taskId: string) =>
+  ipc<SessionBranch>("cmd_task_clear_context", { taskId });
 
 export const taskCompactContext = (taskId: string, focus?: string) =>
   ipc<ContextCompactionResult>("cmd_task_compact_context", {
@@ -672,6 +723,10 @@ export const sessionMessages = async (taskId: string) => {
   }
 };
 
+/** Read a validated historical branch without changing the task's active branch. */
+export const sessionMessagesForBranch = (taskId: string, branchId: string) =>
+  ipc<SessionMessage[]>("cmd_session_messages_for_branch", { taskId, branchId });
+
 /** 读取子代理的隔离日志；其中只包含公开生命周期、工具审计和最终可见结果。 */
 export const subagentSessionMessages = async (taskId: string, subagentId: string) => {
   try {
@@ -688,8 +743,16 @@ export const memoryOverview = () => ipc<MemoryOverview>("cmd_memory_overview");
 export const memoryUpdateSettings = (update: MemoryReviewSettingsUpdate) =>
   ipc<MemoryReviewSettingsView>("cmd_memory_update_settings", { update });
 
-export const memoryReviewNow = (taskId: string) =>
-  ipc<string | null>("cmd_memory_review_now", { taskId });
+export interface MemoryReviewScopeRequest {
+  workspaceId: string | null;
+  workspacePath: string | null;
+}
+
+export const memoryReviewNow = (scope: MemoryReviewScopeRequest) =>
+  ipc<string | null>("cmd_memory_review_now", {
+    workspaceId: scope.workspaceId,
+    workspacePath: scope.workspacePath,
+  });
 
 export const memoryRetryJob = (jobId: string) =>
   ipc<void>("cmd_memory_retry_job", { jobId });
@@ -797,6 +860,13 @@ export const settingsSelectProvider = (name: string) =>
 
 export const settingsDeleteProvider = (name: string) =>
   ipc<void>("cmd_settings_delete_provider", { name });
+
+/** RTK is app-scoped: status never mutates system PATH or the user's global Codex files. */
+export const rtkStatus = () => ipc<RtkStatus>("cmd_rtk_status");
+
+/** Enabling may install a verified official release; disabling only renames the policy marker. */
+export const rtkSetEnabled = (enabled: boolean) =>
+  ipc<RtkStatus>("cmd_rtk_set_enabled", { enabled });
 
 let codexIntegrationStatusRequest: Promise<CodexIntegrationStatus> | null = null;
 

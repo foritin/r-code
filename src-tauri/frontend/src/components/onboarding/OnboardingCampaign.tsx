@@ -43,6 +43,8 @@ const ACCESS_OPTIONS: ReadonlyArray<{
 ];
 
 type ScopeMode = "chat" | "workspace";
+type BootstrapResource = "settings" | "catalog" | "codex";
+type BootstrapErrors = Partial<Record<BootstrapResource, string>>;
 
 function providerCode(preset: ProviderPreset | undefined): string {
   if (!preset) return "--";
@@ -66,9 +68,9 @@ export function OnboardingCampaign() {
   const [open, setOpen] = useState(shouldOpenOnboarding);
   const [step, setStep] = useState(0);
   const [confirmClose, setConfirmClose] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bootstrapErrors, setBootstrapErrors] = useState<BootstrapErrors>({});
   const [engineNotice, setEngineNotice] = useState<string | null>(null);
   const [providerNotice, setProviderNotice] = useState<string | null>(null);
   const [workspaceNotice, setWorkspaceNotice] = useState<string | null>(null);
@@ -87,6 +89,10 @@ export function OnboardingCampaign() {
   const viewportRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ id: number; x: number; at: number } | null>(null);
   const dragOffsetRef = useRef(0);
+  const loadRequestRef = useRef(0);
+  const settingsRef = useRef<SettingsResponse | null>(null);
+  const codexStatusRef = useRef<CodexIntegrationStatus | null>(null);
+  const selectionTouchedRef = useRef({ engine: false, provider: false, scope: false });
 
   const setScene = useAppStore((state) => state.setScene);
   const setCurrentWorkspace = useTasksStore((state) => state.setCurrentProject);
@@ -102,49 +108,88 @@ export function OnboardingCampaign() {
   const codexReady = Boolean(codexStatus?.integration_ready);
   const selectedAccess = ACCESS_OPTIONS.find((option) => option.value === accessMode) ?? ACCESS_OPTIONS[1];
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setApiKey("");
-    try {
-      const [nextSettings, catalog, nextCodex] = await Promise.all([
-        settingsGet(),
-        providerCatalog(),
-        codexIntegrationStatus(),
-      ]);
-      const featured = FEATURED_PROVIDER_IDS
-        .map((id) => catalog.presets.find((preset) => preset.id === id))
-        .filter((preset): preset is ProviderPreset => Boolean(preset));
-      const activeFeatured = featured.find((preset) => preset.id === nextSettings.config.default_provider);
-      const nextProvider = activeFeatured?.id ?? featured[0]?.id ?? "";
-      const defaultEngine = nextSettings.config.orchestration?.default_agent_engine ?? "r_code";
+  const applyEngineDefaults = useCallback(() => {
+    if (selectionTouchedRef.current.engine || selectionTouchedRef.current.scope) return;
+    const nextSettings = settingsRef.current;
+    const nextCodex = codexStatusRef.current;
+    if (!nextSettings || !nextCodex) return;
 
-      setSettings(nextSettings);
-      setPresets(featured);
-      setCodexStatus(nextCodex);
-      setEngine(defaultEngine === "codex" && !nextCodex.integration_ready ? "r_code" : defaultEngine);
-      setSelectedProviderId(nextProvider);
+    const defaultEngine = nextSettings.config.orchestration?.default_agent_engine ?? "r_code";
+    const nextEngine = defaultEngine === "codex" && !nextCodex.integration_ready ? "r_code" : defaultEngine;
+    setEngine(nextEngine);
+    setScope(nextEngine === "codex" ? "workspace" : "chat");
+  }, []);
+
+  const load = useCallback((resetChoices = true) => {
+    const requestId = ++loadRequestRef.current;
+    const isCurrent = () => loadRequestRef.current === requestId;
+    const reportFailure = (resource: BootstrapResource, cause: unknown) => {
+      if (!isCurrent()) return;
+      setBootstrapErrors((current) => ({ ...current, [resource]: errText(cause) }));
+    };
+
+    setBootstrapErrors({});
+    if (resetChoices) {
+      selectionTouchedRef.current = { engine: false, provider: false, scope: false };
+      settingsRef.current = null;
+      codexStatusRef.current = null;
+      setSettings(null);
+      setPresets([]);
+      setCodexStatus(null);
+      setEngine("r_code");
+      setSelectedProviderId("deepseek");
+      setScope("chat");
+      setSelectedWorkspace(null);
+      setAccessMode("risk_based");
+      setError(null);
       setApiKey("");
       setEngineNotice(null);
       setProviderNotice(null);
       setWorkspaceNotice(null);
-
-      // New conversations intentionally start as pure chat. Known projects are
-      // never silently attached by onboarding.
-      setSelectedWorkspace(null);
-      setScope(defaultEngine === "codex" && nextCodex.integration_ready ? "workspace" : "chat");
-    } catch (cause) {
-      setError(`首次设置读取失败：${errText(cause)}`);
-    } finally {
-      setLoading(false);
     }
-  }, []);
+
+    // Each resource hydrates its own controls as soon as it is ready. In particular,
+    // a slow Codex CLI probe must never hold the welcome slide or Provider catalog.
+    void settingsGet().then((nextSettings) => {
+      if (!isCurrent()) return;
+      settingsRef.current = nextSettings;
+      setSettings(nextSettings);
+      const defaultProvider = nextSettings.config.default_provider;
+      if (
+        !selectionTouchedRef.current.provider
+        && defaultProvider
+        && FEATURED_PROVIDER_IDS.includes(defaultProvider)
+      ) {
+        setSelectedProviderId(defaultProvider);
+      }
+      applyEngineDefaults();
+    }, (cause) => reportFailure("settings", cause));
+
+    void providerCatalog().then((catalog) => {
+      if (!isCurrent()) return;
+      const featured = FEATURED_PROVIDER_IDS
+        .map((id) => catalog.presets.find((preset) => preset.id === id))
+        .filter((preset): preset is ProviderPreset => Boolean(preset));
+      setPresets(featured);
+      if (!selectionTouchedRef.current.provider) {
+        setSelectedProviderId((current) => (
+          featured.some((preset) => preset.id === current) ? current : featured[0]?.id ?? ""
+        ));
+      }
+    }, (cause) => reportFailure("catalog", cause));
+
+    void codexIntegrationStatus().then((nextCodex) => {
+      if (!isCurrent()) return;
+      codexStatusRef.current = nextCodex;
+      setCodexStatus(nextCodex);
+      applyEngineDefaults();
+    }, (cause) => reportFailure("codex", cause));
+  }, [applyEngineDefaults]);
 
   useEffect(() => {
     const reopen = () => {
       setStep(0);
       setConfirmClose(false);
-      setLoading(true);
       setError(null);
       setApiKey("");
       setOpen(true);
@@ -155,7 +200,10 @@ export function OnboardingCampaign() {
 
   useEffect(() => {
     if (!open) return;
-    void load();
+    load();
+    return () => {
+      loadRequestRef.current += 1;
+    };
   }, [load, open]);
 
   useEffect(() => {
@@ -223,16 +271,22 @@ export function OnboardingCampaign() {
   }, [confirmClose, open]);
 
   const chooseEngine = (next: TaskAgentEngine) => {
+    if (next === "codex" && !codexStatus) {
+      setEngineNotice(null);
+      return;
+    }
     if (next === "codex" && !codexReady) {
       setEngineNotice("Codex CLI 尚未完成安装、登录或协作配置。");
       return;
     }
+    selectionTouchedRef.current.engine = true;
     setEngine(next);
     setEngineNotice(next === "codex" ? "Codex CLI 需要附加工作区。" : "R-Code 支持纯聊天，也可附加工作区。");
     if (next === "codex") setScope("workspace");
   };
 
   const selectProvider = (id: string) => {
+    selectionTouchedRef.current.provider = true;
     setSelectedProviderId(id);
     setApiKey("");
     setError(null);
@@ -251,6 +305,7 @@ export function OnboardingCampaign() {
     try {
       await settingsSaveProvider({
         name: selectedPreset.id,
+        providerKind: selectedPreset.id,
         baseUrl: providerConfig?.base_url ?? selectedPreset.base_url,
         model: providerConfig?.model ?? selectedPreset.model,
         apiKey: apiKey.trim() || null,
@@ -274,6 +329,7 @@ export function OnboardingCampaign() {
 
   const chooseWorkspace = async () => {
     if (busy) return;
+    selectionTouchedRef.current.scope = true;
     setBusy(true);
     setError(null);
     setWorkspaceNotice(null);
@@ -330,7 +386,7 @@ export function OnboardingCampaign() {
     }
     const engineReady = engine === "r_code"
       || Boolean(codexReady && scope === "workspace" && selectedWorkspace);
-    if (engineReady) {
+    if (engineReady && ((settings && codexStatus) || selectionTouchedRef.current.engine)) {
       await persist("默认主 Agent", () => settingsSet("orchestration.default_agent_engine", engine));
     }
     if (scope === "workspace" && selectedWorkspace) {
@@ -360,6 +416,12 @@ export function OnboardingCampaign() {
     setConfirmClose(false);
     setApiKey("");
     setOpen(false);
+  };
+
+  const chooseScope = (next: ScopeMode) => {
+    selectionTouchedRef.current.scope = true;
+    setScope(next);
+    setError(null);
   };
 
   const pointerDown = (event: React.PointerEvent<HTMLElement>) => {
@@ -399,6 +461,7 @@ export function OnboardingCampaign() {
   const summaryLine = `${engine === "codex" ? "Codex CLI" : "R-Code"} × ${engine === "r_code" ? providerLabel : "本机登录"} × ${workspaceLabel}`;
   const providerBaseUrl = providerConfig?.base_url ?? selectedPreset?.base_url ?? "—";
   const providerModel = providerConfig?.model ?? selectedPreset?.model ?? "—";
+  const providerBootstrapError = bootstrapErrors.catalog ?? bootstrapErrors.settings;
 
   return createPortal(
     <div className="onboarding-layer">
@@ -409,7 +472,7 @@ export function OnboardingCampaign() {
         role="dialog"
         aria-modal="true"
         aria-label="R-Code 首次设置"
-        aria-busy={loading || busy}
+        aria-busy={busy}
       >
         <header className="onboarding-header">
           <div className="onboarding-brand"><img src={brandIcon} alt="" /><strong>R-Code</strong></div>
@@ -470,9 +533,12 @@ export function OnboardingCampaign() {
                   aria-disabled={!codexReady}
                   onClick={() => chooseEngine("codex")}
                 >
-                  <b>C</b><strong>Codex CLI</strong><span>本机登录 · 需工作区</span><i>{codexReady ? (engine === "codex" ? "已选" : "可用") : "未连接"}</i>
+                  <b>C</b><strong>Codex CLI</strong><span>本机登录 · 需工作区</span><i>{codexStatus ? (codexReady ? (engine === "codex" ? "已选" : "可用") : "未连接") : bootstrapErrors.codex ? "不可用" : "检测中"}</i>
                 </button>
-                <small role="status">{engineNotice ?? (codexReady ? "两种主 Agent 均已就绪。" : "R-Code 可直接聊天。")}</small>
+                <small role="status" title={bootstrapErrors.codex}>
+                  <span>{engineNotice ?? (bootstrapErrors.codex ? "Codex 状态暂不可用；R-Code 不受影响。" : codexReady ? "两种主 Agent 均已就绪。" : "R-Code 可直接聊天。")}</span>
+                  {bootstrapErrors.codex && <button className="onboarding-retry" type="button" onClick={() => load(false)}>重试</button>}
+                </small>
               </div>
             </article>
 
@@ -514,6 +580,12 @@ export function OnboardingCampaign() {
                   </div>
                   <small>{error?.includes("Provider") || error?.includes("密钥") ? error : providerNotice ?? (providerReady ? "已在系统凭据库中。" : "只进系统凭据库。")}</small>
                 </label>
+                {providerBootstrapError && (
+                  <div className="onboarding-bootstrap-note" role="status" title={providerBootstrapError}>
+                    <span>{bootstrapErrors.catalog ? "模型服务暂未载入；可继续浏览。" : "未读到已有配置；可重新填写。"}</span>
+                    <button className="onboarding-retry" type="button" onClick={() => load(false)}>重试</button>
+                  </div>
+                )}
               </form>
             </article>
 
@@ -525,8 +597,8 @@ export function OnboardingCampaign() {
               </div>
               <div className={`onboarding-scope-controls${scope === "chat" ? " chat-only" : ""}`}>
                 <div className="onboarding-scope-mode" role="radiogroup" aria-label="工作区模式">
-                  <button type="button" role="radio" aria-checked={scope === "chat"} disabled={engine === "codex"} className={scope === "chat" ? "selected" : ""} onClick={() => { setScope("chat"); setError(null); }}>纯聊天</button>
-                  <button type="button" role="radio" aria-checked={scope === "workspace"} className={scope === "workspace" ? "selected" : ""} onClick={() => setScope("workspace")}>附加工作区</button>
+                  <button type="button" role="radio" aria-checked={scope === "chat"} disabled={engine === "codex"} className={scope === "chat" ? "selected" : ""} onClick={() => chooseScope("chat")}>纯聊天</button>
+                  <button type="button" role="radio" aria-checked={scope === "workspace"} className={scope === "workspace" ? "selected" : ""} onClick={() => chooseScope("workspace")}>附加工作区</button>
                 </div>
                 <section className="onboarding-workspace-object">
                   <span>{selectedWorkspace ? "本次工作区" : "本地代码边界"}</span>
@@ -555,7 +627,6 @@ export function OnboardingCampaign() {
               <div className="onboarding-launch-brand"><img src={brandIcon} alt="" /><span>R-CODE</span></div>
             </article>
           </div>
-          {loading && <div className="onboarding-loading" role="status"><span />正在读取本机配置</div>}
         </section>
 
         <footer className="onboarding-footer">

@@ -56,6 +56,93 @@ struct GlobalProposalContext<'a> {
     now: &'a str,
 }
 
+struct ManualReviewSelection {
+    boundary: i64,
+    run_id: String,
+    task_id: String,
+    branch_id: String,
+    workspace_id: Option<String>,
+    workspace_generation: Option<i64>,
+}
+
+enum ManualReviewScope<'a> {
+    Global,
+    Project {
+        workspace_id: &'a str,
+        workspace_path: &'a str,
+        workspace_generation: i64,
+    },
+}
+
+const SELECT_GLOBAL_MANUAL_REVIEW: &str = r#"
+    WITH eligible_turns AS (
+        SELECT turn.sequence, turn.run_id, turn.task_id, turn.branch_id,
+               turn.source_workspace_id, turn.workspace_memory_generation,
+               task.updated_at AS task_updated_at, task.created_at AS task_created_at,
+               ROW_NUMBER() OVER (
+                   PARTITION BY turn.task_id, turn.branch_id ORDER BY turn.sequence DESC
+               ) AS branch_turn_rank
+        FROM memory_review_turns turn
+        JOIN tasks task ON task.id = turn.task_id
+        WHERE turn.source_workspace_id IS NULL
+          AND task.workspace_path IS NULL
+          AND turn.user_text IS NOT NULL AND turn.assistant_text IS NOT NULL
+          AND length(trim(turn.user_text)) > 0
+          AND length(trim(turn.assistant_text)) > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM memory_review_jobs job
+              WHERE job.task_id = turn.task_id AND job.branch_id = turn.branch_id
+                AND job.status IN ('queued', 'running', 'failed', 'interrupted')
+          )
+    )
+    SELECT sequence, run_id, task_id, branch_id,
+           source_workspace_id, workspace_memory_generation
+    FROM eligible_turns
+    WHERE branch_turn_rank = 1
+    ORDER BY task_updated_at DESC, task_created_at DESC, task_id DESC,
+             sequence DESC, branch_id DESC
+    LIMIT 1
+"#;
+
+const SELECT_PROJECT_MANUAL_REVIEW: &str = r#"
+    WITH eligible_turns AS (
+        SELECT turn.sequence, turn.run_id, turn.task_id, turn.branch_id,
+               turn.source_workspace_id, turn.workspace_memory_generation,
+               task.updated_at AS task_updated_at, task.created_at AS task_created_at,
+               ROW_NUMBER() OVER (
+                   PARTITION BY turn.task_id, turn.branch_id ORDER BY turn.sequence DESC
+               ) AS branch_turn_rank
+        FROM memory_review_turns turn
+        JOIN tasks task ON task.id = turn.task_id
+        WHERE turn.source_workspace_id = ?1
+          AND turn.workspace_memory_generation = ?2
+          AND task.workspace_path = ?3
+          AND turn.user_text IS NOT NULL AND turn.assistant_text IS NOT NULL
+          AND length(trim(turn.user_text)) > 0
+          AND length(trim(turn.assistant_text)) > 0
+          AND NOT EXISTS (
+              SELECT 1 FROM memory_review_jobs job
+              WHERE job.task_id = turn.task_id AND job.branch_id = turn.branch_id
+                AND job.status IN ('queued', 'running', 'failed', 'interrupted')
+          )
+    )
+    SELECT sequence, run_id, task_id, branch_id,
+           source_workspace_id, workspace_memory_generation
+    FROM eligible_turns
+    WHERE branch_turn_rank = 1
+    ORDER BY task_updated_at DESC, task_created_at DESC, task_id DESC,
+             sequence DESC, branch_id DESC
+    LIMIT 1
+"#;
+
+#[derive(Default)]
+struct ProjectReviewSummaryCounts {
+    project_outcomes: u32,
+    applied: u32,
+    rejected: u32,
+    pending: u32,
+}
+
 fn db_err(error: rusqlite::Error) -> ProductError {
     ProductError::DatabaseError(error.to_string())
 }
@@ -384,6 +471,7 @@ pub struct MemoryReviewJobView {
     pub attempt: u32,
     pub suppressed_turn_count: u32,
     pub error_code: Option<String>,
+    pub effect_count: Option<u32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -729,8 +817,8 @@ impl<'a> MemoryStore<'a> {
                 "INSERT OR IGNORE INTO memory_review_turns (
                      id, run_id, task_id, branch_id, source_workspace_id,
                      workspace_memory_generation, global_generation, user_text, assistant_text,
-                     captured_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     explicit_remember, captured_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     Uuid::new_v4().to_string(),
                     turn.run_id,
@@ -745,6 +833,7 @@ impl<'a> MemoryStore<'a> {
                         .map_err(|_| memory_err("review generation overflow"))?,
                     user_text,
                     assistant_text,
+                    if turn.explicit_remember { 1_i64 } else { 0_i64 },
                     now,
                 ],
             )
@@ -813,7 +902,9 @@ impl<'a> MemoryStore<'a> {
             .query_row(
                 "SELECT sequence, run_id, source_workspace_id, workspace_memory_generation \
                  FROM memory_review_turns WHERE task_id = ?1 AND branch_id = ?2 \
-                   AND user_text IS NOT NULL ORDER BY sequence DESC LIMIT 1",
+                   AND user_text IS NOT NULL AND assistant_text IS NOT NULL \
+                   AND length(trim(user_text)) > 0 AND length(trim(assistant_text)) > 0 \
+                 ORDER BY sequence DESC LIMIT 1",
                 params![task_id, branch_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
@@ -823,34 +914,46 @@ impl<'a> MemoryStore<'a> {
             tx.commit().map_err(db_err)?;
             return Ok(None);
         };
-        let reviewer = settings
-            .reviewer
-            .as_ref()
-            .ok_or_else(|| memory_err("memory reviewer is not configured"))?;
-        let id = Uuid::new_v4().to_string();
-        let now = now_text();
-        tx.execute(
-            "INSERT INTO memory_review_jobs (
-                 id, task_id, branch_id, source_run_id, source_workspace_id,
-                 workspace_memory_generation, review_generation, provider_name, model,
-                 inclusive_boundary, trigger, status, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'manual', 'queued', ?11, ?11)",
-            params![
-                id,
-                task_id,
-                branch_id,
+        let id = insert_manual_review_job_tx(
+            &tx,
+            &settings,
+            ManualReviewSelection {
+                boundary,
                 run_id,
+                task_id: task_id.to_string(),
+                branch_id: branch_id.to_string(),
                 workspace_id,
                 workspace_generation,
-                i64::try_from(settings.review_generation)
-                    .map_err(|_| memory_err("review generation overflow"))?,
-                reviewer.provider_name,
-                reviewer.model,
-                boundary,
-                now,
-            ],
-        )
-        .map_err(db_err)?;
+            },
+        )?;
+        tx.commit().map_err(db_err)?;
+        Ok(Some(id))
+    }
+
+    /// Atomically chooses and queues the newest reviewable conversation in one explicit scope.
+    /// Project callers provide both the workspace id and canonical path; pure-chat callers provide
+    /// neither. Empty/scrubbed turns and branches with unresolved jobs cannot shadow older history.
+    pub fn enqueue_manual_for_scope(
+        &self,
+        workspace_id: Option<&str>,
+        workspace_path: Option<&str>,
+    ) -> Result<Option<String>, ProductError> {
+        let conn = self.db.conn()?;
+        let tx =
+            Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).map_err(db_err)?;
+        let settings = query_settings(&tx)?;
+        if !settings.enabled {
+            return Err(memory_err("memory review is disabled"));
+        }
+
+        let scope = validate_manual_review_scope(&tx, workspace_id, workspace_path)?;
+        let selection = select_manual_review_candidate(&tx, scope)?;
+
+        let Some(selection) = selection else {
+            tx.commit().map_err(db_err)?;
+            return Ok(None);
+        };
+        let id = insert_manual_review_job_tx(&tx, &settings, selection)?;
         tx.commit().map_err(db_err)?;
         Ok(Some(id))
     }
@@ -1010,7 +1113,6 @@ impl<'a> MemoryStore<'a> {
             }
         }
         let now = now_text();
-        let mut effects = 0u32;
         for (index, proposal) in output.proposals.iter().enumerate() {
             let index = u32::try_from(index).map_err(|_| memory_err("proposal index overflow"))?;
             if let Err(validation) = &validations[index as usize] {
@@ -1018,7 +1120,7 @@ impl<'a> MemoryStore<'a> {
                     &tx,
                     &claim.job_id,
                     index,
-                    "skipped",
+                    route_name(proposal.scope),
                     "rejected",
                     None,
                     None,
@@ -1065,7 +1167,7 @@ impl<'a> MemoryStore<'a> {
             };
             match proposal.scope {
                 MemoryProposalScope::Global => {
-                    effects += apply_global_proposal(
+                    apply_global_proposal(
                         &tx,
                         proposal,
                         index,
@@ -1093,7 +1195,7 @@ impl<'a> MemoryStore<'a> {
                         )?;
                         continue;
                     };
-                    effects += apply_project_proposal(
+                    apply_project_proposal(
                         &tx,
                         claim,
                         proposal,
@@ -1141,39 +1243,14 @@ impl<'a> MemoryStore<'a> {
             ],
         )
         .map_err(db_err)?;
-        if effects > 0 {
-            // Notify through the existing product inbox without copying proposal text into the
-            // notification body.  Candidate/entry detail is loaded from the memory tables.
-            let source_key = format!("memory:job:{}", claim.job_id);
-            tx.execute(
-                "INSERT INTO notifications (
-                     id, source_key, kind, title, body, task_id, workspace_path, created_at,
-                     target_kind, target_id, workspace_id
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, 'job', ?8, ?9)
-                 ON CONFLICT(source_key) DO UPDATE SET title = excluded.title,
-                     body = excluded.body, read_at = NULL",
-                params![
-                    Uuid::new_v4().to_string(),
-                    source_key,
-                    if workspace_id.is_some() {
-                        "memory_project_updated"
-                    } else {
-                        "memory_approval_required"
-                    },
-                    if workspace_id.is_some() {
-                        "项目记忆已更新"
-                    } else {
-                        "有新的全局记忆候选"
-                    },
-                    format!("记忆复盘产生 {effects} 项可查看的变更。"),
-                    task_id,
-                    now,
-                    claim.job_id,
-                    workspace_id,
-                ],
-            )
-            .map_err(db_err)?;
-        }
+        insert_project_review_summary(
+            &tx,
+            settings.project_notification_mode,
+            &claim.job_id,
+            task_id,
+            workspace_id,
+            &now,
+        )?;
         tx.commit().map_err(db_err)
     }
 
@@ -1535,6 +1612,118 @@ fn map_job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRow> {
     })
 }
 
+fn map_manual_review_selection(row: &rusqlite::Row<'_>) -> rusqlite::Result<ManualReviewSelection> {
+    Ok(ManualReviewSelection {
+        boundary: row.get(0)?,
+        run_id: row.get(1)?,
+        task_id: row.get(2)?,
+        branch_id: row.get(3)?,
+        workspace_id: row.get(4)?,
+        workspace_generation: row.get(5)?,
+    })
+}
+
+fn validate_manual_review_scope<'a>(
+    tx: &Transaction<'_>,
+    workspace_id: Option<&'a str>,
+    workspace_path: Option<&'a str>,
+) -> Result<ManualReviewScope<'a>, ProductError> {
+    let (Some(workspace_id), Some(workspace_path)) = (workspace_id, workspace_path) else {
+        return if workspace_id.is_none() && workspace_path.is_none() {
+            Ok(ManualReviewScope::Global)
+        } else {
+            Err(memory_err(
+                "memory review scope requires both workspace id and canonical path",
+            ))
+        };
+    };
+    if workspace_id.trim().is_empty() || workspace_path.trim().is_empty() {
+        return Err(memory_err(
+            "memory review scope requires both workspace id and canonical path",
+        ));
+    }
+    let workspace: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT memory_mode, memory_generation FROM workspaces
+             WHERE id = ?1 AND canonical_path = ?2",
+            params![workspace_id, workspace_path],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(db_err)?;
+    let Some((memory_mode, workspace_generation)) = workspace else {
+        return Err(memory_err("memory review workspace scope is invalid"));
+    };
+    if memory_mode != "inherit" {
+        return Err(memory_err("workspace memory is not writable"));
+    }
+    Ok(ManualReviewScope::Project {
+        workspace_id,
+        workspace_path,
+        workspace_generation,
+    })
+}
+
+fn select_manual_review_candidate(
+    tx: &Transaction<'_>,
+    scope: ManualReviewScope<'_>,
+) -> Result<Option<ManualReviewSelection>, ProductError> {
+    match scope {
+        ManualReviewScope::Global => tx
+            .query_row(SELECT_GLOBAL_MANUAL_REVIEW, [], map_manual_review_selection)
+            .optional()
+            .map_err(db_err),
+        ManualReviewScope::Project {
+            workspace_id,
+            workspace_path,
+            workspace_generation,
+        } => tx
+            .query_row(
+                SELECT_PROJECT_MANUAL_REVIEW,
+                params![workspace_id, workspace_generation, workspace_path],
+                map_manual_review_selection,
+            )
+            .optional()
+            .map_err(db_err),
+    }
+}
+
+fn insert_manual_review_job_tx(
+    tx: &Transaction<'_>,
+    settings: &MemoryReviewSettings,
+    selection: ManualReviewSelection,
+) -> Result<String, ProductError> {
+    let reviewer = settings
+        .reviewer
+        .as_ref()
+        .ok_or_else(|| memory_err("memory reviewer is not configured"))?;
+    let id = Uuid::new_v4().to_string();
+    let now = now_text();
+    tx.execute(
+        "INSERT INTO memory_review_jobs (
+             id, task_id, branch_id, source_run_id, source_workspace_id,
+             workspace_memory_generation, review_generation, provider_name, model,
+             inclusive_boundary, trigger, status, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'manual', 'queued', ?11, ?11)",
+        params![
+            id,
+            selection.task_id,
+            selection.branch_id,
+            selection.run_id,
+            selection.workspace_id,
+            selection.workspace_generation,
+            i64::try_from(settings.review_generation)
+                .map_err(|_| memory_err("review generation overflow"))?,
+            reviewer.provider_name,
+            reviewer.model,
+            selection.boundary,
+            now,
+        ],
+    )
+    .map_err(db_err)?;
+    Ok(id)
+}
+
 fn enqueue_job_tx(
     tx: &Transaction<'_>,
     settings: &MemoryReviewSettings,
@@ -1665,7 +1854,7 @@ fn cancel_job_tx(tx: &Transaction<'_>, job_id: &str, reason: &str) -> Result<(),
 fn assemble_review(tx: &Transaction<'_>, job: &JobRow) -> Result<HostReviewAssembly, ProductError> {
     let mut statement = tx
         .prepare(
-            "SELECT sequence, user_text, assistant_text FROM memory_review_turns
+            "SELECT sequence, user_text, assistant_text, explicit_remember FROM memory_review_turns
              WHERE task_id = ?1 AND branch_id = ?2 AND sequence <= ?3 AND user_text IS NOT NULL
              ORDER BY sequence",
         )
@@ -1676,6 +1865,7 @@ fn assemble_review(tx: &Transaction<'_>, job: &JobRow) -> Result<HostReviewAssem
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)? != 0,
             ))
         })
         .map_err(db_err)?;
@@ -1683,7 +1873,7 @@ fn assemble_review(tx: &Transaction<'_>, job: &JobRow) -> Result<HostReviewAssem
     let mut evidence_map = BTreeMap::new();
     let mut used_chars = 0usize;
     for row in rows {
-        let (sequence, user_text, assistant_text) = row.map_err(db_err)?;
+        let (sequence, user_text, assistant_text, explicit_remember) = row.map_err(db_err)?;
         let pair_chars = user_text.chars().count() + assistant_text.chars().count();
         if used_chars + pair_chars > MEMORY_REVIEW_ENVELOPE_CHAR_CAP && !turns.is_empty() {
             continue;
@@ -1700,6 +1890,7 @@ fn assemble_review(tx: &Transaction<'_>, job: &JobRow) -> Result<HostReviewAssem
             evidence_ordinal: ordinal,
             user_text,
             assistant_text,
+            explicit_remember,
         });
         used_chars += pair_chars;
     }
@@ -1805,6 +1996,104 @@ fn route_name(scope: MemoryProposalScope) -> &'static str {
         MemoryProposalScope::Project => "project_entry",
         MemoryProposalScope::Skip => "skipped",
     }
+}
+
+fn project_review_summary_counts(
+    tx: &Transaction<'_>,
+    job_id: &str,
+) -> Result<ProjectReviewSummaryCounts, ProductError> {
+    let (project_outcomes, applied, rejected, pending): (i64, i64, i64, i64) = tx
+        .query_row(
+            "SELECT
+                 COALESCE(SUM(CASE WHEN route = 'project_entry' THEN 1 ELSE 0 END), 0),
+                 COALESCE(SUM(CASE WHEN route = 'project_entry' AND result = 'applied'
+                                   THEN 1 ELSE 0 END), 0),
+                 COALESCE(SUM(CASE WHEN route = 'project_entry' AND result != 'applied'
+                                   THEN 1 ELSE 0 END), 0),
+                 COALESCE(SUM(CASE WHEN route = 'global_candidate' AND result = 'pending'
+                                   THEN 1 ELSE 0 END), 0)
+             FROM memory_review_outcomes WHERE job_id = ?1",
+            params![job_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .map_err(db_err)?;
+    Ok(ProjectReviewSummaryCounts {
+        project_outcomes: u32::try_from(project_outcomes)
+            .map_err(|_| memory_err("project outcome count overflow"))?,
+        applied: u32::try_from(applied)
+            .map_err(|_| memory_err("applied outcome count overflow"))?,
+        rejected: u32::try_from(rejected)
+            .map_err(|_| memory_err("rejected outcome count overflow"))?,
+        pending: u32::try_from(pending)
+            .map_err(|_| memory_err("pending outcome count overflow"))?,
+    })
+}
+
+fn insert_project_review_summary(
+    tx: &Transaction<'_>,
+    mode: ProjectNotificationMode,
+    job_id: &str,
+    task_id: &str,
+    workspace_id: Option<&str>,
+    now: &str,
+) -> Result<(), ProductError> {
+    let Some(workspace_id) = workspace_id else {
+        return Ok(());
+    };
+    if mode == ProjectNotificationMode::Off {
+        return Ok(());
+    }
+    let counts = project_review_summary_counts(tx, job_id)?;
+    if counts.project_outcomes == 0 {
+        return Ok(());
+    }
+
+    let title = if counts.applied > 0 {
+        "项目记忆已更新"
+    } else {
+        "项目记忆复盘已完成"
+    };
+    let body = match mode {
+        ProjectNotificationMode::Off => unreachable!(),
+        ProjectNotificationMode::On => {
+            "本次项目记忆复盘已完成，可在记忆管理中查看结果。".to_string()
+        }
+        ProjectNotificationMode::Verbose => format!(
+            "已应用 {} 项，已拒绝 {} 项，待审批 {} 项。",
+            counts.applied, counts.rejected, counts.pending
+        ),
+    };
+    let workspace_path: String = tx
+        .query_row(
+            "SELECT canonical_path FROM workspaces WHERE id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
+        )
+        .map_err(db_err)?;
+    tx.execute(
+        "INSERT INTO notifications (
+             id, source_key, kind, title, body, task_id, workspace_path, created_at,
+             target_kind, target_id, workspace_id
+         ) VALUES (?1, ?2, 'memory_project_updated', ?3, ?4, ?5, ?6, ?7,
+                   'job', ?8, ?9)
+         ON CONFLICT(source_key) DO UPDATE SET title = excluded.title,
+             body = excluded.body, task_id = excluded.task_id,
+             workspace_path = excluded.workspace_path, workspace_id = excluded.workspace_id,
+             read_at = NULL",
+        params![
+            Uuid::new_v4().to_string(),
+            format!("memory:job:{job_id}"),
+            title,
+            body,
+            task_id,
+            workspace_path,
+            now,
+            job_id,
+            workspace_id,
+        ],
+    )
+    .map_err(db_err)?;
+    Ok(())
 }
 
 fn apply_global_proposal(
@@ -2481,7 +2770,13 @@ fn list_jobs(conn: &rusqlite::Connection) -> Result<Vec<MemoryReviewJobView>, Pr
     let mut statement = conn
         .prepare(
             "SELECT sequence, id, task_id, source_workspace_id, trigger, status, provider_name,
-                    model, attempt, suppressed_turn_count, error_code, created_at, updated_at
+                    model, attempt, suppressed_turn_count, error_code,
+                    CASE WHEN status = 'succeeded' THEN (
+                        SELECT COUNT(*) FROM memory_review_outcomes outcomes
+                        WHERE outcomes.job_id = memory_review_jobs.id
+                          AND outcomes.result IN ('pending', 'applied')
+                    ) ELSE NULL END,
+                    created_at, updated_at
              FROM memory_review_jobs ORDER BY sequence DESC LIMIT 100",
         )
         .map_err(db_err)?;
@@ -2499,8 +2794,9 @@ fn list_jobs(conn: &rusqlite::Connection) -> Result<Vec<MemoryReviewJobView>, Pr
                 row.get::<_, i64>(8)?,
                 row.get::<_, i64>(9)?,
                 row.get::<_, Option<String>>(10)?,
-                row.get::<_, String>(11)?,
+                row.get::<_, Option<i64>>(11)?,
                 row.get::<_, String>(12)?,
+                row.get::<_, String>(13)?,
             ))
         })
         .map_err(db_err)?;
@@ -2517,6 +2813,7 @@ fn list_jobs(conn: &rusqlite::Connection) -> Result<Vec<MemoryReviewJobView>, Pr
             attempt,
             suppressed,
             error_code,
+            effect_count,
             created_at,
             updated_at,
         ) = row.map_err(db_err)?;
@@ -2532,6 +2829,7 @@ fn list_jobs(conn: &rusqlite::Connection) -> Result<Vec<MemoryReviewJobView>, Pr
             attempt: u32::try_from(attempt).unwrap_or_default(),
             suppressed_turn_count: u32::try_from(suppressed).unwrap_or_default(),
             error_code,
+            effect_count: effect_count.and_then(|count| u32::try_from(count).ok()),
             created_at: parse_time(created_at)?,
             updated_at: parse_time(updated_at)?,
         })
@@ -2585,7 +2883,7 @@ mod tests {
         (db, task, branch, workspace)
     }
 
-    fn enable(db: &Database) {
+    fn enable_with_mode(db: &Database, mode: ProjectNotificationMode) {
         MemoryStore::new(db)
             .update_settings(&MemoryReviewSettingsUpdate {
                 expected_version: 0,
@@ -2596,9 +2894,13 @@ mod tests {
                 }),
                 trigger_every_turns: 5,
                 explicit_remember_immediate: true,
-                project_notification_mode: ProjectNotificationMode::On,
+                project_notification_mode: mode,
             })
             .unwrap();
+    }
+
+    fn enable(db: &Database) {
+        enable_with_mode(db, ProjectNotificationMode::On);
     }
 
     fn capture(
@@ -2625,6 +2927,75 @@ mod tests {
             .unwrap()
     }
 
+    fn notification_rows(db: &Database) -> Vec<(String, String, String)> {
+        let conn = db.conn().unwrap();
+        let mut statement = conn
+            .prepare("SELECT kind, title, body FROM notifications ORDER BY kind")
+            .unwrap();
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    fn notification_output(include_project: bool) -> MemoryReviewOutput {
+        let mut proposals = Vec::new();
+        if include_project {
+            proposals.push(r_code_core::MemoryReviewProposal {
+                scope: MemoryProposalScope::Project,
+                kind: MemoryKind::Constraint,
+                operation: MemoryProposalOperation::Add,
+                target_memory_ordinal: None,
+                target_version: None,
+                content: Some("项目使用严格模式并保持确定性输出。".into()),
+                reason: "用户明确要求记录项目约束".into(),
+                basis: r_code_core::MemoryProposalBasis::ExplicitUser,
+                evidence_ordinals: vec![NonZeroU32::new(1).unwrap()],
+                confidence: 0.95,
+            });
+            proposals.push(r_code_core::MemoryReviewProposal {
+                scope: MemoryProposalScope::Project,
+                kind: MemoryKind::Pitfall,
+                operation: MemoryProposalOperation::Add,
+                target_memory_ordinal: None,
+                target_version: None,
+                content: Some("这条项目候选引用了不存在的证据。".into()),
+                reason: "构造一个确定性拒绝结果".into(),
+                basis: r_code_core::MemoryProposalBasis::ExplicitUser,
+                evidence_ordinals: vec![NonZeroU32::new(2).unwrap()],
+                confidence: 0.8,
+            });
+        }
+        proposals.push(r_code_core::MemoryReviewProposal {
+            scope: MemoryProposalScope::Global,
+            kind: MemoryKind::Preference,
+            operation: MemoryProposalOperation::Add,
+            target_memory_ordinal: None,
+            target_version: None,
+            content: Some("用户偏好结论先行且使用简洁中文回复。".into()),
+            reason: "需要用户审批的全局偏好".into(),
+            basis: r_code_core::MemoryProposalBasis::ExplicitUser,
+            evidence_ordinals: vec![NonZeroU32::new(1).unwrap()],
+            confidence: 0.9,
+        });
+        MemoryReviewOutput { proposals }
+    }
+
+    fn run_notification_case(
+        mode: ProjectNotificationMode,
+        include_project: bool,
+    ) -> Vec<(String, String, String)> {
+        let (db, task, branch, workspace) = setup();
+        enable_with_mode(&db, mode);
+        assert!(capture(&db, &task, &branch, &workspace, true).is_some());
+        let claim = MemoryStore::new(&db).claim_next_job().unwrap().unwrap();
+        MemoryStore::new(&db)
+            .commit_success(&claim, &notification_output(include_project))
+            .unwrap();
+        notification_rows(&db)
+    }
+
     #[test]
     fn disabled_memory_never_captures_or_injects() {
         let (db, task, branch, workspace) = setup();
@@ -2646,6 +3017,8 @@ mod tests {
         enable(&db);
         assert!(capture(&db, &task, &branch, &workspace, true).is_some());
         let claim = MemoryStore::new(&db).claim_next_job().unwrap().unwrap();
+        assert_eq!(claim.assembly.wire.turns.len(), 1);
+        assert!(claim.assembly.wire.turns[0].explicit_remember);
         let output = MemoryReviewOutput {
             proposals: vec![r_code_core::MemoryReviewProposal {
                 scope: MemoryProposalScope::Project,
@@ -2665,6 +3038,7 @@ mod tests {
             .unwrap();
         let overview = MemoryStore::new(&db).overview().unwrap();
         assert_eq!(overview.project_entries.len(), 1);
+        assert_eq!(overview.recent_jobs[0].effect_count, Some(1));
         assert!(overview.pending_candidates.is_empty());
         let prompt = MemoryStore::new(&db)
             .load_snapshot(Some("/workspace"))
@@ -2672,6 +3046,21 @@ mod tests {
             .rendered_prompt()
             .unwrap();
         assert!(prompt.contains("这个项目始终使用严格模式"));
+    }
+
+    #[test]
+    fn successful_review_without_reusable_memory_reports_zero_effects() {
+        let (db, task, branch, workspace) = setup();
+        enable(&db);
+        capture(&db, &task, &branch, &workspace, true);
+        let claim = MemoryStore::new(&db).claim_next_job().unwrap().unwrap();
+        MemoryStore::new(&db)
+            .commit_success(&claim, &MemoryReviewOutput { proposals: vec![] })
+            .unwrap();
+
+        let overview = MemoryStore::new(&db).overview().unwrap();
+        assert_eq!(overview.recent_jobs[0].status, "succeeded");
+        assert_eq!(overview.recent_jobs[0].effect_count, Some(0));
     }
 
     #[test]
@@ -2710,6 +3099,131 @@ mod tests {
     }
 
     #[test]
+    fn project_notification_modes_emit_exact_summaries_without_hiding_global_approval() {
+        let approval = (
+            "memory_approval_required".to_string(),
+            "全局记忆等待审批".to_string(),
+            "Reviewer 提出了一条全局记忆候选，请查看后决定。".to_string(),
+        );
+        let on_summary = (
+            "memory_project_updated".to_string(),
+            "项目记忆已更新".to_string(),
+            "本次项目记忆复盘已完成，可在记忆管理中查看结果。".to_string(),
+        );
+        let verbose_summary = (
+            "memory_project_updated".to_string(),
+            "项目记忆已更新".to_string(),
+            "已应用 1 项，已拒绝 1 项，待审批 1 项。".to_string(),
+        );
+
+        assert_eq!(
+            run_notification_case(ProjectNotificationMode::Off, true),
+            vec![approval.clone()],
+            "off disables only the project summary"
+        );
+        assert_eq!(
+            run_notification_case(ProjectNotificationMode::On, true),
+            vec![approval.clone(), on_summary],
+            "on emits exactly one compact project summary"
+        );
+        assert_eq!(
+            run_notification_case(ProjectNotificationMode::Verbose, true),
+            vec![approval.clone(), verbose_summary],
+            "verbose exposes exact applied, rejected, and pending counts"
+        );
+        assert_eq!(
+            run_notification_case(ProjectNotificationMode::Verbose, false),
+            vec![approval],
+            "a global-only job must never claim that project memory changed"
+        );
+    }
+
+    #[test]
+    fn scoped_manual_review_rejects_partial_or_mismatched_workspace_identity() {
+        let (db, task, branch, workspace) = setup();
+        enable(&db);
+        capture(&db, &task, &branch, &workspace, false);
+        let store = MemoryStore::new(&db);
+
+        for (workspace_id, workspace_path) in [
+            (Some(workspace.id.as_str()), None),
+            (None, Some(workspace.canonical_path.as_str())),
+            (
+                Some("wrong-workspace"),
+                Some(workspace.canonical_path.as_str()),
+            ),
+            (Some(workspace.id.as_str()), Some("/wrong/path")),
+        ] {
+            assert!(
+                store
+                    .enqueue_manual_for_scope(workspace_id, workspace_path)
+                    .is_err(),
+                "partial and mismatched workspace identities must fail closed"
+            );
+        }
+
+        assert!(
+            store
+                .enqueue_manual_for_scope(None, None)
+                .unwrap()
+                .is_none(),
+            "the global scope must not consume project turns"
+        );
+        assert!(store
+            .enqueue_manual_for_scope(
+                Some(workspace.id.as_str()),
+                Some(workspace.canonical_path.as_str()),
+            )
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn scoped_manual_review_skips_a_newer_empty_conversation() {
+        let (db, older_task, older_branch, workspace) = setup();
+        enable(&db);
+        capture(&db, &older_task, &older_branch, &workspace, false);
+        let newer_empty = Task::new(
+            Some(workspace.canonical_path.clone()),
+            "newer empty conversation",
+            "no completed exchange",
+            TaskMode::Ask,
+        );
+        TaskRepository::new(&db).create(&newer_empty).unwrap();
+        SessionBranchRepository::new(&db)
+            .ensure_active(&newer_empty.id)
+            .unwrap();
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = CASE id
+                     WHEN ?1 THEN '2026-01-01T00:00:00Z'
+                     WHEN ?2 THEN '2026-02-01T00:00:00Z'
+                 END WHERE id IN (?1, ?2)",
+                params![older_task.id, newer_empty.id],
+            )
+            .unwrap();
+
+        let job_id = MemoryStore::new(&db)
+            .enqueue_manual_for_scope(
+                Some(workspace.id.as_str()),
+                Some(workspace.canonical_path.as_str()),
+            )
+            .unwrap()
+            .expect("the older completed conversation remains reviewable");
+        let selected_task_id: String = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT task_id FROM memory_review_jobs WHERE id = ?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(selected_task_id, older_task.id);
+    }
+
+    #[test]
     fn cadence_enqueues_after_the_configured_number_of_successful_turns() {
         let (db, task, branch, workspace) = setup();
         enable(&db);
@@ -2724,6 +3238,67 @@ mod tests {
         assert_eq!(overview.recent_jobs.len(), 1);
         assert_eq!(overview.recent_jobs[0].trigger, "cadence");
         assert_eq!(overview.recent_jobs[0].status, "queued");
+        let claim = MemoryStore::new(&db).claim_next_job().unwrap().unwrap();
+        assert_eq!(claim.assembly.wire.turns.len(), 5);
+        assert!(
+            claim
+                .assembly
+                .wire
+                .turns
+                .iter()
+                .all(|turn| !turn.explicit_remember),
+            "ordinary captured turns must stay untrusted after persistence"
+        );
+    }
+
+    #[test]
+    fn scoped_manual_review_prefers_newer_task_over_larger_turn_sequence() {
+        let (db, older_task, older_branch, workspace) = setup();
+        enable(&db);
+        let newer_task = Task::new(
+            Some(workspace.canonical_path.clone()),
+            "newer conversation",
+            "newer goal",
+            TaskMode::Ask,
+        );
+        TaskRepository::new(&db).create(&newer_task).unwrap();
+        let newer_branch = SessionBranchRepository::new(&db)
+            .ensure_active(&newer_task.id)
+            .unwrap();
+
+        capture(&db, &newer_task, &newer_branch, &workspace, false);
+        capture(&db, &older_task, &older_branch, &workspace, false);
+        db.conn()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET updated_at = CASE id
+                     WHEN ?1 THEN '2026-01-01T00:00:00Z'
+                     WHEN ?2 THEN '2026-02-01T00:00:00Z'
+                 END WHERE id IN (?1, ?2)",
+                params![older_task.id, newer_task.id],
+            )
+            .unwrap();
+
+        let job_id = MemoryStore::new(&db)
+            .enqueue_manual_for_scope(
+                Some(workspace.id.as_str()),
+                Some(workspace.canonical_path.as_str()),
+            )
+            .unwrap()
+            .expect("a reviewable project conversation must be selected");
+        let selected_task_id: String = db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT task_id FROM memory_review_jobs WHERE id = ?1",
+                [job_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            selected_task_id, newer_task.id,
+            "task recency, not global turn insertion order, defines the latest conversation"
+        );
     }
 
     #[test]

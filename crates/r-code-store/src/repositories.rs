@@ -14,7 +14,7 @@ use r_code_core::dto::{
     ToolCallStatus, Workspace, WorkspaceMemoryMode,
 };
 use r_code_core::error::ProductError;
-use rusqlite::{params, OptionalExtension, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 
 use crate::Database;
 
@@ -58,6 +58,7 @@ fn parse_task_event_type(s: &str) -> Result<TaskEventType, ProductError> {
         "queue_dispatched" => Ok(TaskEventType::QueueDispatched),
         "run_aborted" => Ok(TaskEventType::RunAborted),
         "session_branched" => Ok(TaskEventType::SessionBranched),
+        "session_cleared" => Ok(TaskEventType::SessionCleared),
         "subagent_started" => Ok(TaskEventType::SubagentStarted),
         "subagent_finished" => Ok(TaskEventType::SubagentFinished),
         "tool_call" => Ok(TaskEventType::ToolCall),
@@ -312,6 +313,81 @@ fn row_to_notification(row: &rusqlite::Row<'_>) -> Result<(i64, Notification), P
 // TaskRepository
 // ============================================================================
 
+/// A project keeps a deliberately small set of active conversations. Archived conversations do
+/// not consume a slot and remain available for audit/history.
+pub const MAX_PROJECT_CONVERSATIONS: usize = 5;
+
+/// Human-readable compatibility message; callers should branch on the typed ProductError variant.
+pub const PROJECT_CONVERSATION_LIMIT_REACHED: &str =
+    "该项目最多保留 5 个未归档对话，请先归档一个后再新建";
+
+const PROJECT_CONVERSATION_TITLE: &str = "新对话";
+
+fn insert_task(conn: &Connection, task: &Task) -> Result<(), ProductError> {
+    conn.execute(
+        "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json, goal_active) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        params![
+            task.id,
+            task.workspace_path,
+            task.provider_name,
+            task.title,
+            task.goal,
+            task.mode.to_string(),
+            task.state.to_string(),
+            task.worktree_path,
+            task.created_at.to_rfc3339(),
+            task.updated_at.to_rfc3339(),
+            task.model,
+            task.agent_engine.to_string(),
+            serde_json::to_string(&task.inference).map_err(|error| {
+                ProductError::DatabaseError(format!("serialize task inference: {error}"))
+            })?,
+            task.goal_active,
+        ],
+    )
+    .map_err(db_err)?;
+    Ok(())
+}
+
+fn ensure_project_conversation_capacity(
+    conn: &Connection,
+    workspace_path: &str,
+) -> Result<(), ProductError> {
+    let active_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM tasks WHERE workspace_path = ?1 AND state != 'archived'",
+            params![workspace_path],
+            |row| row.get(0),
+        )
+        .map_err(db_err)?;
+    if active_count >= MAX_PROJECT_CONVERSATIONS as i64 {
+        return Err(ProductError::ProjectConversationLimitReached {
+            limit: MAX_PROJECT_CONVERSATIONS,
+        });
+    }
+    Ok(())
+}
+
+fn project_conversation_sequence(title: &str) -> Option<u64> {
+    let suffix = title.strip_prefix(PROJECT_CONVERSATION_TITLE)?.trim();
+    if suffix.is_empty() {
+        return Some(1);
+    }
+    if !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse::<u64>().ok().filter(|sequence| *sequence >= 2)
+}
+
+fn project_conversation_title(sequence: u64) -> String {
+    if sequence == 1 {
+        PROJECT_CONVERSATION_TITLE.to_string()
+    } else {
+        format!("{PROJECT_CONVERSATION_TITLE} {sequence}")
+    }
+}
+
 /// 任务仓库 -- `tasks` 表的 CRUD。
 pub struct TaskRepository<'a> {
     db: &'a Database,
@@ -324,31 +400,89 @@ impl<'a> TaskRepository<'a> {
 
     /// 创建任务。
     pub fn create(&self, task: &Task) -> Result<(), ProductError> {
-        let conn = self.db.conn()?;
-        conn.execute(
-            "INSERT INTO tasks (id, workspace_path, provider_name, title, goal, mode, state, worktree_path, created_at, updated_at, model, agent_engine, inference_json, goal_active) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        let Some(workspace_path) = task.workspace_path.as_deref() else {
+            let conn = self.db.conn()?;
+            return insert_task(&conn, task);
+        };
+
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        ensure_project_conversation_capacity(&tx, workspace_path)?;
+        insert_task(&tx, task)?;
+        tx.commit().map_err(db_err)
+    }
+
+    /// Atomically allocate the next project-scoped placeholder title, enforce the active
+    /// conversation limit, and persist the task's initial branch/event. An IMMEDIATE transaction
+    /// serializes concurrent plus-button clicks before either the count or title is observed.
+    pub fn create_project_conversation(
+        &self,
+        task: &mut Task,
+    ) -> Result<SessionBranch, ProductError> {
+        let workspace_path = task.workspace_path.as_deref().ok_or_else(|| {
+            ProductError::DatabaseError(
+                "project conversation requires a workspace path".to_string(),
+            )
+        })?;
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+
+        ensure_project_conversation_capacity(&tx, workspace_path)?;
+
+        let next_sequence = {
+            let mut statement = tx
+                .prepare("SELECT title FROM tasks WHERE workspace_path = ?1")
+                .map_err(db_err)?;
+            let titles = statement
+                .query_map(params![workspace_path], |row| row.get::<_, String>(0))
+                .map_err(db_err)?;
+            let mut highest = 0_u64;
+            for title in titles {
+                if let Some(sequence) = project_conversation_sequence(&title.map_err(db_err)?) {
+                    highest = highest.max(sequence);
+                }
+            }
+            highest.checked_add(1).ok_or_else(|| {
+                ProductError::DatabaseError(
+                    "project conversation title sequence overflowed".to_string(),
+                )
+            })?
+        };
+        task.title = project_conversation_title(next_sequence);
+
+        insert_task(&tx, task)?;
+        let branch = SessionBranch::main(&task.id);
+        tx.execute(
+            "INSERT INTO session_branches \
+             (id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
             params![
-                task.id,
-                task.workspace_path,
-                task.provider_name,
-                task.title,
-                task.goal,
-                task.mode.to_string(),
-                task.state.to_string(),
-                task.worktree_path,
-                task.created_at.to_rfc3339(),
-                task.updated_at.to_rfc3339(),
-                task.model,
-                task.agent_engine.to_string(),
-                serde_json::to_string(&task.inference).map_err(|error| {
-                    ProductError::DatabaseError(format!("serialize task inference: {error}"))
-                })?,
-                task.goal_active,
+                branch.id,
+                branch.task_id,
+                branch.parent_branch_id,
+                branch.forked_from_message_id,
+                branch.storage_id,
+                branch.created_at.to_rfc3339(),
             ],
         )
         .map_err(db_err)?;
-        Ok(())
+        tx.execute(
+            "INSERT INTO task_events (task_id, branch_id, event_type, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                task.id,
+                branch.id,
+                TaskEventType::TaskCreated.to_string(),
+                branch.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        tx.commit().map_err(db_err)?;
+        Ok(branch)
     }
 
     /// 按 ID 获取任务。
@@ -1423,6 +1557,85 @@ impl<'a> SessionBranchRepository<'a> {
         .map_err(db_err)?;
         tx.commit().map_err(db_err)
     }
+
+    /// Atomically activate an empty context branch and retire every pending message from its
+    /// source branch. Ordinary first-turn goals can be cleared with the same transaction, while
+    /// an explicitly managed persistent Goal remains attached to the task.
+    pub fn reset_context(
+        &self,
+        branch: &SessionBranch,
+        source_branch_id: &str,
+        clear_ordinary_goal: bool,
+    ) -> Result<(), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn.transaction().map_err(db_err)?;
+        let deactivated = tx
+            .execute(
+                "UPDATE session_branches SET is_active = 0 \
+                 WHERE task_id = ?1 AND id = ?2 AND is_active = 1",
+                params![branch.task_id, source_branch_id],
+            )
+            .map_err(db_err)?;
+        if deactivated != 1 {
+            return Err(ProductError::DatabaseError(format!(
+                "active branch changed while clearing task: {}",
+                branch.task_id
+            )));
+        }
+        tx.execute(
+            "INSERT INTO session_branches \
+             (id, task_id, parent_branch_id, forked_from_message_id, storage_id, is_active, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                branch.id,
+                branch.task_id,
+                branch.parent_branch_id,
+                branch.forked_from_message_id,
+                branch.storage_id,
+                if branch.is_active { 1_i64 } else { 0_i64 },
+                branch.created_at.to_rfc3339(),
+            ],
+        )
+        .map_err(db_err)?;
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "UPDATE queued_messages SET state = 'cancelled', updated_at = ?1 \
+             WHERE task_id = ?2 AND branch_id = ?3 \
+               AND state IN ('queued', 'dispatching', 'failed')",
+            params![now, branch.task_id, source_branch_id],
+        )
+        .map_err(db_err)?;
+        let task_updated = if clear_ordinary_goal {
+            tx.execute(
+                "UPDATE tasks SET goal = '', goal_active = 0, updated_at = ?1 WHERE id = ?2",
+                params![now, branch.task_id],
+            )
+        } else {
+            tx.execute(
+                "UPDATE tasks SET updated_at = ?1 WHERE id = ?2",
+                params![now, branch.task_id],
+            )
+        }
+        .map_err(db_err)?;
+        if task_updated != 1 {
+            return Err(ProductError::DatabaseError(format!(
+                "task disappeared while clearing context: {}",
+                branch.task_id
+            )));
+        }
+        tx.execute(
+            "INSERT INTO task_events (task_id, branch_id, event_type, created_at) \
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                branch.task_id,
+                branch.id,
+                TaskEventType::SessionCleared.to_string(),
+                now,
+            ],
+        )
+        .map_err(db_err)?;
+        tx.commit().map_err(db_err)
+    }
 }
 
 // ============================================================================
@@ -2145,6 +2358,8 @@ mod tests {
     use r_code_core::dto::{
         ProjectAccessMode, ReviewState, TaskEventType, TaskMode, TaskState, WorkspaceMemoryMode,
     };
+    use std::collections::BTreeSet;
+    use std::sync::{Arc, Barrier};
     use tempfile::TempDir;
 
     /// 创建内存数据库用于测试。
@@ -2163,6 +2378,16 @@ mod tests {
         );
         repo.create(&task).unwrap();
         task
+    }
+
+    fn assert_project_conversation_limit(error: &ProductError) {
+        match error {
+            ProductError::ProjectConversationLimitReached { limit } => {
+                assert_eq!(*limit, MAX_PROJECT_CONVERSATIONS);
+            }
+            other => panic!("expected project conversation limit error, got {other:?}"),
+        }
+        assert_eq!(error.to_string(), PROJECT_CONVERSATION_LIMIT_REACHED);
     }
 
     // --------------------------------------------------------------------------
@@ -2187,6 +2412,268 @@ mod tests {
         assert!(fetched.worktree_path.is_none());
         assert_eq!(fetched.created_at, task.created_at);
         assert_eq!(fetched.updated_at, task.updated_at);
+    }
+
+    #[test]
+    fn project_conversations_are_named_capped_and_reopen_after_archive() {
+        let db = setup_db();
+        let repo = TaskRepository::new(&db);
+        let mut created = Vec::new();
+
+        for expected in ["新对话", "新对话 2", "新对话 3", "新对话 4", "新对话 5"] {
+            let mut task = Task::new(Some("/proj".into()), "ignored", "", TaskMode::Edit);
+            let branch = repo.create_project_conversation(&mut task).unwrap();
+            assert_eq!(task.title, expected);
+            assert_eq!(branch.task_id, task.id);
+            assert_eq!(branch.id, "main");
+            created.push(task);
+        }
+
+        let mut blocked = Task::new(Some("/proj".into()), "ignored", "", TaskMode::Edit);
+        let error = repo.create_project_conversation(&mut blocked).unwrap_err();
+        assert_project_conversation_limit(&error);
+
+        repo.update_state(&created[0].id, TaskState::Archived)
+            .unwrap();
+        let mut replacement = Task::new(Some("/proj".into()), "ignored", "", TaskMode::Edit);
+        repo.create_project_conversation(&mut replacement).unwrap();
+        assert_eq!(replacement.title, "新对话 6");
+        assert_eq!(repo.list(Some("/proj"), None, false).unwrap().len(), 5);
+
+        let events = TaskEventStore::new(&db)
+            .list_by_task(&replacement.id, None, None)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, TaskEventType::TaskCreated);
+    }
+
+    #[test]
+    fn generic_create_caps_each_workspace_without_limiting_standalone_tasks() {
+        let db = setup_db();
+        let repo = TaskRepository::new(&db);
+        let mut project_a = Vec::new();
+
+        for index in 1..=MAX_PROJECT_CONVERSATIONS {
+            let task = Task::new(
+                Some("/proj-a".into()),
+                format!("Project A {index}"),
+                "",
+                TaskMode::Edit,
+            );
+            repo.create(&task).unwrap();
+            project_a.push(task);
+        }
+        let blocked_a = Task::new(
+            Some("/proj-a".into()),
+            "Project A blocked",
+            "",
+            TaskMode::Edit,
+        );
+        assert_project_conversation_limit(&repo.create(&blocked_a).unwrap_err());
+
+        for index in 1..=MAX_PROJECT_CONVERSATIONS {
+            let task = Task::new(
+                Some("/proj-b".into()),
+                format!("Project B {index}"),
+                "",
+                TaskMode::Edit,
+            );
+            repo.create(&task).unwrap();
+        }
+        let blocked_b = Task::new(
+            Some("/proj-b".into()),
+            "Project B blocked",
+            "",
+            TaskMode::Edit,
+        );
+        assert_project_conversation_limit(&repo.create(&blocked_b).unwrap_err());
+
+        for index in 1..=(MAX_PROJECT_CONVERSATIONS + 2) {
+            let task = Task::new(None, format!("Standalone {index}"), "", TaskMode::Ask);
+            repo.create(&task).unwrap();
+        }
+
+        repo.update_state(&project_a[0].id, TaskState::Archived)
+            .unwrap();
+        let replacement = Task::new(
+            Some("/proj-a".into()),
+            "Project A replacement",
+            "",
+            TaskMode::Edit,
+        );
+        repo.create(&replacement).unwrap();
+        assert_eq!(
+            repo.list(Some("/proj-a"), None, false).unwrap().len(),
+            MAX_PROJECT_CONVERSATIONS,
+        );
+        assert_eq!(
+            repo.list(Some("/proj-b"), None, false).unwrap().len(),
+            MAX_PROJECT_CONVERSATIONS,
+        );
+    }
+
+    #[test]
+    fn concurrent_generic_creation_never_exceeds_project_limit() {
+        let directory = TempDir::new().unwrap();
+        let db = Arc::new(Database::open(directory.path().join("generic-create.db")).unwrap());
+        let workers = MAX_PROJECT_CONVERSATIONS * 3;
+        let barrier = Arc::new(Barrier::new(workers));
+        let handles: Vec<_> = (0..workers)
+            .map(|index| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let task = Task::new(
+                        Some("/proj".into()),
+                        format!("Generic {index}"),
+                        "",
+                        TaskMode::Edit,
+                    );
+                    barrier.wait();
+                    TaskRepository::new(db.as_ref()).create(&task).map(|_| task)
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            MAX_PROJECT_CONVERSATIONS,
+        );
+        assert_eq!(
+            results.iter().filter(|result| result.is_err()).count(),
+            workers - MAX_PROJECT_CONVERSATIONS,
+        );
+        for error in results.iter().filter_map(|result| result.as_ref().err()) {
+            assert_project_conversation_limit(error);
+        }
+        assert_eq!(
+            TaskRepository::new(db.as_ref())
+                .list(Some("/proj"), None, false)
+                .unwrap()
+                .len(),
+            MAX_PROJECT_CONVERSATIONS,
+        );
+    }
+
+    #[test]
+    fn generic_and_specialized_creation_share_the_last_atomic_slot() {
+        let directory = TempDir::new().unwrap();
+        let db = Arc::new(Database::open(directory.path().join("mixed-create.db")).unwrap());
+        let repo = TaskRepository::new(db.as_ref());
+        for index in 1..MAX_PROJECT_CONVERSATIONS {
+            let task = Task::new(
+                Some("/proj".into()),
+                format!("Existing {index}"),
+                "",
+                TaskMode::Edit,
+            );
+            repo.create(&task).unwrap();
+        }
+
+        let barrier = Arc::new(Barrier::new(2));
+        let generic = {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let task = Task::new(
+                    Some("/proj".into()),
+                    "Generic contender",
+                    "",
+                    TaskMode::Edit,
+                );
+                barrier.wait();
+                TaskRepository::new(db.as_ref())
+                    .create(&task)
+                    .map(|_| "generic")
+            })
+        };
+        let specialized = {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                let mut task = Task::new(Some("/proj".into()), "ignored", "", TaskMode::Edit);
+                barrier.wait();
+                TaskRepository::new(db.as_ref())
+                    .create_project_conversation(&mut task)
+                    .map(|_| "specialized")
+            })
+        };
+
+        let results = [generic.join().unwrap(), specialized.join().unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        let error = results
+            .iter()
+            .find_map(|result| result.as_ref().err())
+            .expect("one contender must lose the final slot");
+        assert_project_conversation_limit(error);
+        assert_eq!(
+            TaskRepository::new(db.as_ref())
+                .list(Some("/proj"), None, false)
+                .unwrap()
+                .len(),
+            MAX_PROJECT_CONVERSATIONS,
+        );
+    }
+
+    #[test]
+    fn concurrent_project_conversation_creation_never_exceeds_limit_or_reuses_titles() {
+        let directory = TempDir::new().unwrap();
+        let db = Arc::new(Database::open(directory.path().join("conversations.db")).unwrap());
+        let workers = MAX_PROJECT_CONVERSATIONS * 3;
+        let barrier = Arc::new(Barrier::new(workers));
+        let handles: Vec<_> = (0..workers)
+            .map(|_| {
+                let db = db.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let mut task = Task::new(Some("/proj".into()), "ignored", "", TaskMode::Edit);
+                    barrier.wait();
+                    TaskRepository::new(db.as_ref())
+                        .create_project_conversation(&mut task)
+                        .map(|_| task)
+                })
+            })
+            .collect();
+
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect();
+        let titles: BTreeSet<_> = results
+            .iter()
+            .filter_map(|result| result.as_ref().ok().map(|task| task.title.clone()))
+            .collect();
+        assert_eq!(titles.len(), MAX_PROJECT_CONVERSATIONS);
+        assert_eq!(
+            titles,
+            ["新对话", "新对话 2", "新对话 3", "新对话 4", "新对话 5"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+        );
+        for error in results.iter().filter_map(|result| result.as_ref().err()) {
+            assert_project_conversation_limit(error);
+        }
+
+        let visible = TaskRepository::new(db.as_ref())
+            .list(Some("/proj"), None, false)
+            .unwrap();
+        assert_eq!(visible.len(), MAX_PROJECT_CONVERSATIONS);
+        let conn = db.conn().unwrap();
+        let branch_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_branches", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let event_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM task_events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(branch_count, MAX_PROJECT_CONVERSATIONS as i64);
+        assert_eq!(event_count, MAX_PROJECT_CONVERSATIONS as i64);
     }
 
     #[test]
@@ -2714,6 +3201,7 @@ mod tests {
             TaskEventType::QueueDispatched,
             TaskEventType::RunAborted,
             TaskEventType::SessionBranched,
+            TaskEventType::SessionCleared,
             TaskEventType::SubagentStarted,
             TaskEventType::SubagentFinished,
             TaskEventType::ToolCall,

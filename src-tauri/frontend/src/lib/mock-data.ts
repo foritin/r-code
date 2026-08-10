@@ -7,6 +7,7 @@ import type {
   DashboardTaskSummary,
   CodexCliPreferences,
   CodexIntegrationStatus,
+  RtkStatus,
   Notification,
   NotificationPage,
   ProjectActivityItem,
@@ -254,6 +255,7 @@ export const browserMockSettings: SettingsResponse = {
       openai: {
         base_url: "https://api.openai.com/v1",
         model: "gpt-5.6-sol",
+        provider_kind: "openai",
         protocol: "openai_responses",
       },
       // 第二个就绪服务既让完整 Demo 覆盖跨 Provider/模型选择，也防止常见的
@@ -261,6 +263,7 @@ export const browserMockSettings: SettingsResponse = {
       deepseek: {
         base_url: "https://api.deepseek.com",
         model: "deepseek-v4-pro",
+        provider_kind: "deepseek",
         protocol: "openai_chat",
       },
     },
@@ -303,6 +306,8 @@ let browserMockCodexModel = "gpt-5.6-sol";
 let browserMockCodexReasoning = "max";
 let browserMockCodexVerbosity = "medium";
 let browserMockCodexPermissionMode: CodexCliPreferences["permission_mode"] = "read_only";
+let browserMockRtkAvailable = false;
+let browserMockRtkEnabled = false;
 
 const browserMockCodexModels: CodexCliPreferences["models"] = [
   {
@@ -417,6 +422,23 @@ export function browserMockSaveCodexCliPreferences(
   browserMockCodexVerbosity = verbosity ?? "";
   if (permissionMode) browserMockCodexPermissionMode = permissionMode;
   return browserMockCodexCliPreferences();
+}
+
+export function browserMockRtkStatus(): RtkStatus {
+  return {
+    enabled: browserMockRtkEnabled && browserMockRtkAvailable,
+    available: browserMockRtkAvailable,
+    managed: browserMockRtkAvailable,
+    version: browserMockRtkAvailable ? "rtk 0.45.0" : null,
+    source: browserMockRtkAvailable ? "managed" : null,
+    platform: "windows-x86_64",
+  };
+}
+
+export function browserMockSetRtkEnabled(enabled: boolean): RtkStatus {
+  if (enabled) browserMockRtkAvailable = true;
+  browserMockRtkEnabled = enabled;
+  return browserMockRtkStatus();
 }
 
 export const browserMockProviderCatalog: ProviderCatalog = {

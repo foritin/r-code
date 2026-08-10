@@ -72,11 +72,39 @@ export function hueFor(id: string): string {
 /** 工具名 → 动作行 verb（fusion：edit/write/run/touched）。 */
 export function toolVerb(toolName: string): string {
   const n = toolName.toLowerCase();
-  if (n.includes("write") || n.includes("create")) return "write";
-  if (n.includes("edit") || n.includes("patch") || n.includes("replace")) return "edit";
-  if (n.includes("bash") || n.includes("shell") || n.includes("run") || n.includes("exec")) return "run";
-  if (n.includes("read") || n.includes("view")) return "read";
-  if (n.includes("search") || n.includes("grep") || n.includes("glob")) return "search";
+  if (n.includes("write") || n.includes("create") || n.includes("写入") || n.includes("创建")) return "write";
+  if (
+    n.includes("edit")
+    || n.includes("patch")
+    || n.includes("replace")
+    || n.includes("文件修改")
+    || n.includes("编辑")
+  ) return "edit";
+  if (
+    n.includes("bash")
+    || n.includes("shell")
+    || n.includes("run")
+    || n.includes("exec")
+    || n.includes("command")
+    || n.includes("terminal")
+    || n.includes("命令")
+  ) return "run";
+  if (
+    n.includes("read")
+    || n.includes("view")
+    || n.includes("list_file")
+    || n.includes("list_dir")
+    || n.includes("读取")
+    || n.includes("查看")
+  ) return "read";
+  if (
+    n.includes("search")
+    || n.includes("grep")
+    || n.includes("glob")
+    || n.includes("find")
+    || n.includes("搜索")
+    || n.includes("查找")
+  ) return "search";
   return "tool";
 }
 
