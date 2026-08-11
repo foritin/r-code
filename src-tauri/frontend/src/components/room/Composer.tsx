@@ -239,6 +239,7 @@ export function Composer({
   const setScene = useAppStore((s) => s.setScene);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openMcpSettings = useAppStore((s) => s.openMcpSettings);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
   const taskFileReference = useAppStore((s) => s.taskFileReferences[taskId]);
@@ -686,7 +687,7 @@ export function Composer({
         setSettingsPane("providers");
         return;
       case "mcp":
-        setSettingsPane("codex");
+        openMcpSettings();
         return;
       case "skills":
         setNotice("内置工作流：/plan、/doctor、/debug、/fix、/explain、/init、/code-review、/security-review、/simplify、/docs、/research、/qa。输入 / 后可搜索并查看说明。");
@@ -705,6 +706,7 @@ export function Composer({
     onAbort,
     onSendFailed,
     onShowSubagents,
+    openMcpSettings,
     providerName,
     queuedMessages.length,
     refreshDetail,

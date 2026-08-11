@@ -11,6 +11,7 @@ import { usePoll } from "../../lib/poll";
 import { IconChevronDown, IconChevronRight } from "../icons";
 import type {
   EnhancedReviewGroupView,
+  EnhancedReviewFileView,
   EnhancedReviewTarget,
   EnhancedReviewView,
   PlanItemState,
@@ -101,6 +102,19 @@ function patchLineKind(line: string): string {
   return "ctx";
 }
 
+function filePatchStats(file: EnhancedReviewFileView): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  for (const event of file.events) {
+    if (!event.patch) continue;
+    for (const line of event.patch.split("\n")) {
+      if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
+      else if (line.startsWith("-") && !line.startsWith("---")) deletions += 1;
+    }
+  }
+  return { additions, deletions };
+}
+
 function optimisticDecision(
   current: EnhancedReviewView | null,
   itemId: string,
@@ -136,6 +150,7 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [confirmRejects, setConfirmRejects] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const pendingRef = useRef<Set<string>>(new Set());
   const confirmTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const refreshSequenceRef = useRef(0);
@@ -184,13 +199,16 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
     if (!view) {
       expansionPlanRef.current = null;
       setExpandedGroups(new Set());
+      setExpandedFiles(new Set());
       return;
     }
-    const identity = `${view.plan_id}:${view.plan_revision}`;
+    const identity = `${taskId}:${view.plan_id}:${view.plan_revision}`;
     if (expansionPlanRef.current === identity) return;
     expansionPlanRef.current = identity;
     setExpandedGroups(visibleGroups[0] ? new Set([visibleGroups[0].item_id]) : new Set());
-  }, [view, visibleGroups]);
+    // 文件 diff 默认保持收起；轮询刷新同一 Plan 时保留用户已经展开的文件。
+    setExpandedFiles(new Set());
+  }, [taskId, view, visibleGroups]);
 
   useEffect(() => onVisibleCountChange(unresolvedCount), [onVisibleCountChange, unresolvedCount]);
 
@@ -278,6 +296,16 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
       const next = new Set(current);
       if (next.has(itemId)) next.delete(itemId);
       else next.add(itemId);
+      return next;
+    });
+  };
+
+  const toggleFile = (itemId: string, path: string) => {
+    const key = operationKey(itemId, path);
+    setExpandedFiles((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   };
@@ -384,60 +412,94 @@ export function EnhancedReviewPanel({ taskId, running, onVisibleCountChange }: P
                     </div>
                   )}
                   <div className="enhanced-files">
-                  {group.files.map((file) => {
+                  {group.files.map((file, fileIndex) => {
                     const key = operationKey(group.item_id, file.path);
                     const isBusy = fileBusy(group.item_id, file.path);
                     const isBinary = file.events.some((event) => event.binary);
+                    const fileExpanded = expandedFiles.has(key);
+                    const stats = filePatchStats(file);
+                    const fileBodyId = `${bodyId}-file-${fileIndex}`;
+                    const decision = file.decision ? `，${decisionLabel(file.decision)}` : "";
                     return (
-                      <article className="enhanced-file" key={file.path} data-path={file.path}>
+                      <article
+                        className={`enhanced-file ${fileExpanded ? "expanded" : "collapsed"}${file.decision ? ` decision-${file.decision}` : ""}`}
+                        key={file.path}
+                        data-path={file.path}
+                      >
                         <header className="enhanced-file-head">
-                          <i className="feature-diamond small" aria-hidden="true" />
-                          <strong title={file.path}>{file.path}</strong>
-                          <span className="enhanced-file-meta">事件 {file.events.length}</span>
-                          {isBinary && <span className="enhanced-binary">二进制</span>}
-                          {file.decision ? (
-                            <span className={`enhanced-decision ${file.decision}`}>{decisionLabel(file.decision)}</span>
-                          ) : (
-                            <span className="enhanced-actions">
-                              <button
-                                type="button"
-                                disabled={!terminal || isBusy}
-                                title={!terminal
-                                  ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
-                                  : `接受 ${file.path}`}
-                                onClick={() => void perform(group, file.path, "accepted")}
-                              >{pending.has(key) ? "…" : "接受"}</button>
-                              <button
-                                type="button"
-                                className={confirmRejects.has(key) ? "confirm" : ""}
-                                disabled={!terminal || isBusy}
-                                title={!terminal
-                                  ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
-                                  : `拒绝并恢复 ${file.path}`}
-                                onClick={() => void perform(group, file.path, "rejected")}
-                              >{confirmRejects.has(key) ? "确认拒绝" : "拒绝"}</button>
+                          <button
+                            type="button"
+                            className="enhanced-file-toggle"
+                            aria-expanded={fileExpanded}
+                            aria-controls={fileBodyId}
+                            aria-label={`${fileExpanded ? "收起" : "展开"}文件 ${file.path}，新增 ${stats.additions} 行，删除 ${stats.deletions} 行${decision}`}
+                            onClick={() => toggleFile(group.item_id, file.path)}
+                          >
+                            <span className="enhanced-file-chevron" aria-hidden="true">
+                              {fileExpanded ? <IconChevronDown width={12} height={12} /> : <IconChevronRight width={12} height={12} />}
                             </span>
-                          )}
+                            <i className="feature-diamond small" aria-hidden="true" />
+                            <strong title={file.path}>{file.path}</strong>
+                            {isBinary ? (
+                              <span className="enhanced-file-binary-summary">二进制</span>
+                            ) : (
+                              <span className="enhanced-file-stats" aria-hidden="true">
+                                <b className="add">+{stats.additions}</b>
+                                <b className="del">-{stats.deletions}</b>
+                              </span>
+                            )}
+                          </button>
                         </header>
                         {actionError?.key === key && (
                           <div className="enhanced-action-error file" role="alert" title={actionError.detail}>{actionError.message}</div>
                         )}
-                        <div className="enhanced-events">
-                          {file.events.map((event) => event.binary ? (
-                            <div className="enhanced-binary-preview" key={event.event_id}>
-                              <strong>二进制变更</strong>
-                              <span>不提供行级预览 · {event.before_exists ? "已有文件" : "新文件"} → {event.after_exists ? "保留" : "删除"}</span>
+                        {fileExpanded && (
+                          <div className="enhanced-file-body" id={fileBodyId}>
+                            <div className="enhanced-file-toolbar">
+                              <span className="enhanced-file-meta">事件 {file.events.length}</span>
+                              {isBinary && <span className="enhanced-binary">二进制</span>}
+                              {file.decision ? (
+                                <span className={`enhanced-decision ${file.decision}`}>{decisionLabel(file.decision)}</span>
+                              ) : (
+                                <span className="enhanced-actions">
+                                  <button
+                                    type="button"
+                                    disabled={!terminal || isBusy}
+                                    title={!terminal
+                                      ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
+                                      : `接受 ${file.path}`}
+                                    onClick={() => void perform(group, file.path, "accepted")}
+                                  >{pending.has(key) ? "…" : "接受"}</button>
+                                  <button
+                                    type="button"
+                                    className={confirmRejects.has(key) ? "confirm" : ""}
+                                    disabled={!terminal || isBusy}
+                                    title={!terminal
+                                      ? group.state === "blocked" ? "功能暂时受阻，尚可恢复实施" : "功能仍在实施"
+                                      : `拒绝并恢复 ${file.path}`}
+                                    onClick={() => void perform(group, file.path, "rejected")}
+                                  >{confirmRejects.has(key) ? "确认拒绝" : "拒绝"}</button>
+                                </span>
+                              )}
                             </div>
-                          ) : (
-                            <pre className="enhanced-patch" key={event.event_id} aria-label={`${file.path} 的事件补丁 ${event.sequence}`}>
-                              {(event.patch ?? "").split("\n").map((line, index) => (
-                                <code className={`patch-${patchLineKind(line)}`} key={`${event.event_id}:${index}`}>
-                                  <span>{index + 1}</span>{line || " "}
-                                </code>
+                            <div className="enhanced-events">
+                              {file.events.map((event) => event.binary ? (
+                                <div className="enhanced-binary-preview" key={event.event_id}>
+                                  <strong>二进制变更</strong>
+                                  <span>不提供行级预览 · {event.before_exists ? "已有文件" : "新文件"} → {event.after_exists ? "保留" : "删除"}</span>
+                                </div>
+                              ) : (
+                                <pre className="enhanced-patch" key={event.event_id} aria-label={`${file.path} 的事件补丁 ${event.sequence}`}>
+                                  {(event.patch ?? "").split("\n").map((line, index) => (
+                                    <code className={`patch-${patchLineKind(line)}`} key={`${event.event_id}:${index}`}>
+                                      <span>{index + 1}</span>{line || " "}
+                                    </code>
+                                  ))}
+                                </pre>
                               ))}
-                            </pre>
-                          ))}
-                        </div>
+                            </div>
+                          </div>
+                        )}
                       </article>
                     );
                   })}

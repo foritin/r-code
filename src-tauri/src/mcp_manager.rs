@@ -11,6 +11,8 @@ use std::{
 use async_trait::async_trait;
 use futures::future::join_all;
 use hermes_core::{ToolCallOutcome, ToolHost, ToolSource, ToolSpec};
+use r_code_core::{dto::RiskLevel, error::ProductError};
+use r_code_gateway::{PathBinding, Tool};
 use r_code_mcp::{
     external_tool_specs, launch_fingerprint, ExternalToolError, ExternalToolHost, ExternalToolRisk,
     LaunchApprovalService, LaunchPreview, MarketInstallOption, MarketPage, MarketServer,
@@ -130,6 +132,17 @@ pub struct McpUpsertRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct McpGeneratedDraftRequest {
+    pub server_id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    pub source_path: String,
+    pub transport: McpEditableTransport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpToggleResult {
     pub server: McpServerView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +171,113 @@ const SHORT_MODEL_SERVER_TOKEN_BYTES: usize = 20;
 const SHORT_MODEL_TOOL_TOKEN_BYTES: usize = 24;
 const AUTO_DISCOVERY_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MCP_TOOL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
+const MCP_DRAFT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("source_path")];
+
+#[derive(Clone)]
+pub struct CreateMcpDraftTool {
+    manager: Arc<McpManager>,
+}
+
+impl CreateMcpDraftTool {
+    pub fn new(manager: Arc<McpManager>) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl Tool for CreateMcpDraftTool {
+    fn name(&self) -> &str {
+        "mcp_create_draft"
+    }
+
+    fn description(&self) -> &str {
+        "Save a newly implemented MCP server as a disabled R-Code draft after its source builds and its non-launching tests pass. The source_path must already exist inside the current workspace. This tool never starts, tests, registers, approves, or enables the server; the user must review it in Settings > Tools & Connections and enable it manually."
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R2
+    }
+
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        MCP_DRAFT_PATH_BINDINGS
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "server_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9_-]*$"
+                },
+                "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+                "description": { "type": "string", "maxLength": 1000 },
+                "source_path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Existing MCP source directory or entry file inside the attached workspace."
+                },
+                "transport": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "stdio" },
+                                "executable": { "type": "string", "minLength": 1 },
+                                "args": { "type": "array", "items": { "type": "string" }, "maxItems": 128 },
+                                "environment_names": {
+                                    "type": "array",
+                                    "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                                    "maxItems": 64,
+                                    "uniqueItems": true
+                                }
+                            },
+                            "required": ["type", "executable"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "streamable_http" },
+                                "url": { "type": "string", "minLength": 1 },
+                                "header_names": {
+                                    "type": "array",
+                                    "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                                    "maxItems": 64,
+                                    "uniqueItems": true
+                                }
+                            },
+                            "required": ["type", "url"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }
+            },
+            "required": ["server_id", "display_name", "source_path", "transport"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(&self, input: Value) -> Result<String, ProductError> {
+        let request: McpGeneratedDraftRequest = serde_json::from_value(input)
+            .map_err(|error| ProductError::ConfigError(format!("invalid MCP draft: {error}")))?;
+        let server = self
+            .manager
+            .create_generated_draft(request)
+            .await
+            .map_err(ProductError::ConfigError)?;
+        serde_json::to_string(&json!({
+            "status": "draft_created",
+            "action": "open_mcp_settings",
+            "server_id": server.id,
+            "source_path": generated_source_path(&server.source),
+            "message": "MCP 草稿已保存并保持关闭。请前往“设置 → 工具与连接”审核启动方案、配置凭据并亲自打开滑钮。"
+        }))
+        .map_err(|error| ProductError::Other(format!("serialize MCP draft result: {error}")))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DirectMcpToolRoute {
@@ -493,6 +613,50 @@ impl McpManager {
         Ok(self.view_for(config).await)
     }
 
+    pub async fn create_generated_draft(
+        &self,
+        request: McpGeneratedDraftRequest,
+    ) -> Result<McpServerView, String> {
+        let _mutation = self.mutation.lock().await;
+        validate_generated_text("display_name", &request.display_name, 120, false)?;
+        validate_generated_text("description", &request.description, 1_000, true)?;
+
+        let source_path = PathBuf::from(request.source_path.trim());
+        if !source_path.is_absolute() {
+            return Err("MCP 草稿源码路径必须是当前项目内的绝对路径".to_string());
+        }
+        let source_path = std::fs::canonicalize(&source_path)
+            .map_err(|_| "MCP 草稿源码路径不存在或无法读取".to_string())?;
+        let source_path = source_path.to_string_lossy().into_owned();
+        validate_generated_text("source_path", &source_path, 4_096, false)?;
+
+        let configs = self.supervisor.config_snapshot().await;
+        if configs.iter().any(|config| config.id == request.server_id) {
+            return Err(format!(
+                "MCP 服务 ID 已存在：{}；为更新生成新的草稿 ID，不能覆盖现有配置",
+                request.server_id
+            ));
+        }
+
+        let transport = self.editable_transport(&request.server_id, request.transport)?;
+        let config = McpServerConfig {
+            id: request.server_id,
+            display_name: request.display_name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            enabled: false,
+            source: McpServerSource::Generated {
+                source_path,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            },
+            transport,
+            approved_launch_fingerprint: None,
+        };
+        config.validate().map_err(|error| error.to_string())?;
+        self.persist_upsert(config.clone(), configs).await?;
+        self.evict_server_tools(&config.id).await;
+        Ok(self.view_for(config).await)
+    }
+
     pub async fn remove(&self, server_id: &str) -> Result<(), String> {
         let _mutation = self.mutation.lock().await;
         let configs = self.supervisor.config_snapshot().await;
@@ -703,6 +867,14 @@ impl McpManager {
                 "status": "already_enabled",
                 "server_id": server_id,
                 "message": "该 MCP 服务已经启用；没有修改任何配置。",
+            }));
+        }
+        if config.is_generated() {
+            return Ok(json!({
+                "status": "manual_enable_required",
+                "action": "open_mcp_settings",
+                "server_id": server_id,
+                "message": "模型生成的 MCP 草稿只能在“设置 → 工具与连接”中由用户审核并亲自打开滑钮。",
             }));
         }
         let preview = if config.is_builtin() || LaunchApprovalService::is_approved(&config) {
@@ -1180,6 +1352,31 @@ fn bounded_mcp_tool_description(value: &str) -> String {
     output
 }
 
+fn validate_generated_text(
+    label: &str,
+    value: &str,
+    max_chars: usize,
+    allow_empty: bool,
+) -> Result<(), String> {
+    let trimmed = value.trim();
+    if (!allow_empty && trimmed.is_empty())
+        || value.contains('\0')
+        || value.chars().count() > max_chars
+    {
+        return Err(format!(
+            "MCP 草稿 {label} 无效：必须在 {max_chars} 个字符以内且不能包含 NUL"
+        ));
+    }
+    Ok(())
+}
+
+fn generated_source_path(source: &McpServerSource) -> Option<&str> {
+    match source {
+        McpServerSource::Generated { source_path, .. } => Some(source_path),
+        _ => None,
+    }
+}
+
 fn transport_references(transport: &McpTransportConfig) -> Vec<(String, &SecretRef)> {
     match transport {
         McpTransportConfig::Builtin { .. } => Vec::new(),
@@ -1470,6 +1667,157 @@ mod tests {
             .unwrap();
         assert!(outcome.is_error);
         assert_eq!(outcome.metadata.unwrap()["reason"], "disabled");
+    }
+
+    #[tokio::test]
+    async fn generated_draft_is_saved_disabled_and_requires_settings_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("generated-mcp");
+        std::fs::create_dir(&source).unwrap();
+        let canonical_source = source
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let manager = McpManager::new(temp.path().to_path_buf());
+
+        let server = manager
+            .create_generated_draft(McpGeneratedDraftRequest {
+                server_id: "generated-example".to_string(),
+                display_name: "Generated Example".to_string(),
+                description: "Created by the built-in workflow".to_string(),
+                source_path: source.to_string_lossy().into_owned(),
+                transport: McpEditableTransport::Stdio {
+                    executable: source
+                        .join("generated-mcp.exe")
+                        .to_string_lossy()
+                        .into_owned(),
+                    args: Vec::new(),
+                    environment_names: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+
+        assert!(!server.enabled);
+        assert_eq!(server.state, McpServerState::Disabled);
+        assert!(!server.launch_approved);
+        assert!(matches!(
+            &server.source,
+            McpServerSource::Generated { source_path, .. }
+                if source_path == &canonical_source
+        ));
+
+        let action = manager
+            .prepare_enable_action("generated-example")
+            .await
+            .unwrap();
+        assert_eq!(action["status"], "manual_enable_required");
+        assert_eq!(action["action"], "open_mcp_settings");
+        assert!(action.get("preview").is_none());
+
+        let persisted = manager
+            .snapshot()
+            .await
+            .servers
+            .into_iter()
+            .find(|item| item.id == "generated-example")
+            .unwrap();
+        assert!(!persisted.enabled);
+        assert!(!persisted.launch_approved);
+        let persisted_config = manager
+            .supervisor
+            .config_snapshot()
+            .await
+            .into_iter()
+            .find(|item| item.id == "generated-example")
+            .unwrap();
+        assert!(persisted_config.approved_launch_fingerprint.is_none());
+    }
+
+    #[tokio::test]
+    async fn generated_draft_never_overwrites_an_existing_server_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("generated-mcp");
+        std::fs::create_dir(&source).unwrap();
+        let manager = McpManager::new(temp.path().to_path_buf());
+        let request = McpGeneratedDraftRequest {
+            server_id: "generated-example".to_string(),
+            display_name: "Generated Example".to_string(),
+            description: String::new(),
+            source_path: source.to_string_lossy().into_owned(),
+            transport: McpEditableTransport::Stdio {
+                executable: source
+                    .join("generated-mcp.exe")
+                    .to_string_lossy()
+                    .into_owned(),
+                args: Vec::new(),
+                environment_names: Vec::new(),
+            },
+        };
+
+        manager
+            .create_generated_draft(request.clone())
+            .await
+            .unwrap();
+        let error = manager.create_generated_draft(request).await.unwrap_err();
+
+        assert!(error.contains("MCP 服务 ID 已存在"));
+        assert_eq!(
+            manager
+                .snapshot()
+                .await
+                .servers
+                .iter()
+                .filter(|server| server.id == "generated-example")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_draft_tool_returns_only_a_disabled_settings_deep_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("tool-generated-mcp");
+        std::fs::create_dir(&source).unwrap();
+        let manager = Arc::new(McpManager::new(temp.path().to_path_buf()));
+        let tool = CreateMcpDraftTool::new(manager.clone());
+
+        assert_eq!(tool.name(), "mcp_create_draft");
+        assert_eq!(tool.risk_level(), RiskLevel::R2);
+        assert!(tool.requires_workspace_scope());
+        assert_eq!(tool.path_bindings().len(), 1);
+        assert_eq!(tool.path_bindings()[0].key, "source_path");
+
+        let output = tool
+            .execute(json!({
+                "server_id": "tool-generated-example",
+                "display_name": "Tool Generated Example",
+                "source_path": source.to_string_lossy(),
+                "transport": {
+                    "type": "stdio",
+                    "executable": source.join("server.exe").to_string_lossy(),
+                    "args": [],
+                    "environment_names": []
+                }
+            }))
+            .await
+            .unwrap();
+        let payload: Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(payload["status"], "draft_created");
+        assert_eq!(payload["action"], "open_mcp_settings");
+        assert_eq!(payload["server_id"], "tool-generated-example");
+        assert!(payload.get("confirmation").is_none());
+        let server = manager
+            .snapshot()
+            .await
+            .servers
+            .into_iter()
+            .find(|server| server.id == "tool-generated-example")
+            .unwrap();
+        assert!(!server.enabled);
+        assert!(!server.launch_approved);
     }
 
     #[tokio::test]

@@ -7,7 +7,12 @@ import {
   IconSearch,
   IconTerminal,
 } from "../icons";
-import { hasMcpConfirmationPayload, ToolCard, ToolPayloadDetails } from "./ToolCard";
+import {
+  hasMcpConfirmationPayload,
+  hasMcpSettingsActionPayload,
+  ToolCard,
+  ToolPayloadDetails,
+} from "./ToolCard";
 import { SubagentAvatar } from "./SubagentIdentity";
 import type {
   TimelineSubagentEntry,
@@ -24,10 +29,11 @@ interface ActivityGroupProps {
 }
 
 export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "" }: ActivityGroupProps) {
-  const hasMcpConfirmation = item.tools.some((tool) => (
+  const hasMcpAction = item.tools.some((tool) => (
     hasMcpConfirmationPayload(tool.name, tool.outputJson)
+      || hasMcpSettingsActionPayload(tool.name, tool.outputJson)
   ));
-  const [open, setOpen] = useState(hasMcpConfirmation);
+  const [open, setOpen] = useState(hasMcpAction);
   const generatedId = useId().replace(/:/g, "");
   const detailId = `timeline-activity-${generatedId}`;
   const hasDetails = item.tools.some((tool) => Boolean(tool.inputJson?.trim() || tool.outputJson?.trim()));
@@ -41,8 +47,8 @@ export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "
   const single = item.tools.length === 1 ? item.tools[0] : null;
 
   useEffect(() => {
-    if (hasMcpConfirmation) setOpen(true);
-  }, [hasMcpConfirmation]);
+    if (hasMcpAction) setOpen(true);
+  }, [hasMcpAction]);
 
   return (
     <div
@@ -109,13 +115,53 @@ export function TimelineContextEvent({
   t,
   label,
   detail,
+  collapsible = false,
   dim = "",
 }: {
   t: number;
   label: string;
   detail: string | null;
+  collapsible?: boolean;
   dim?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const generatedId = useId().replace(/:/g, "");
+  const detailId = `timeline-context-${generatedId}`;
+  const hasDetails = Boolean(detail?.trim());
+
+  if (collapsible && hasDetails) {
+    const preview = detail?.replace(/\s+/g, " ").trim() ?? "";
+    return (
+      <div
+        className={`timeline-context-event is-collapsible${open ? " open" : ""}${dim}`}
+        data-t={t}
+      >
+        <button
+          type="button"
+          className="timeline-context-toggle ring-inset"
+          aria-expanded={open}
+          aria-controls={detailId}
+          title={open ? "收起思考内容" : "展开思考内容"}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span className="timeline-activity-icon" aria-hidden="true">
+            <IconActivity width={14} height={14} />
+          </span>
+          <span className="timeline-context-label">{label}</span>
+          <small>{preview}</small>
+          <span className="timeline-activity-chevron" aria-hidden="true">
+            {open ? <IconChevronDown width={13} height={13} /> : <IconChevronRight width={13} height={13} />}
+          </span>
+        </button>
+        {open && (
+          <div className="timeline-context-detail" id={detailId}>
+            {detail}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className={`timeline-context-event${dim}`} data-t={t} title={detail ?? undefined}>
       <span className="timeline-activity-icon" aria-hidden="true"><IconActivity width={14} height={14} /></span>

@@ -358,6 +358,11 @@ fn builtins() -> Vec<WorkflowSkill> {
             "当用户希望把一套工作方式固化为 Skill 时使用。先确认触发场景、边界、输入、输出与安全约束；编写完整且可独立理解的 instructions。不得在项目目录创建 Skill 文件。完成草案后必须调用 save_skill(name, description, instructions, enabled=true)，由 R-Code 写入用户 AppData 的自定义 Skill 目录；只有工具返回 saved=true 才能宣告创建成功。",
         ),
         builtin(
+            "mcp-creator",
+            "创建或封装一个 MCP Server，完成源码与离线验证后保存为待用户审核的禁用草稿。",
+            "当用户要求创建 MCP Server、把 API/CLI/数据库封装成 MCP，或修改既有 MCP 实现时使用。先根据当前项目和用户目标确定最小工具集、输入输出 Schema、只读/写入边界、传输方式与凭据环境变量；优先使用官方 MCP SDK，默认只读和最小权限，不把任何密钥写入源码、参数、日志或草稿。把实现放在当前项目内，补充错误处理、超时、输出限额与单元测试。可以编译、静态检查和运行不启动服务的单元测试；不得启动服务、执行 MCP 握手、tools/list、注册、启用或持久运行进程。验证成功后调用 mcp_create_draft，传入当前项目内已存在的 source_path、唯一 server_id、显示信息和精确启动配置；该工具只会创建关闭状态的草稿。不得调用 mcp_prepare_enable，也不得声称服务已经运行。只有工具返回 status=draft_created 才能宣告草稿创建成功；最后明确告知用户服务尚未启用，并引导用户前往“设置 → 工具与连接”审核启动方案、配置凭据并亲自打开滑钮。更新已有服务时不得覆盖现有 ID，改用新的草稿 ID 交由用户审核。",
+        ),
+        builtin(
             "review-changes",
             "审核本任务产生的文件差异，并安全地接受单行、单文件或全部任务变更。",
             "只审核 R-Code 为当前任务归集、且未被 .gitignore 或生成物规则排除的路径。先检查冲突、任务开始前已有脏改动和验证结果；逐项解释关键差异。按用户选择在应用审核账本中接受单行、单个文件或全部任务路径；接受不等于 Git 暂存，不得在审核阶段执行 git add。拒绝文件时只在当前内容仍匹配任务产物时恢复任务前快照。遇到 preexisting_dirty 或 conflict 必须停下并说明。",
@@ -493,6 +498,7 @@ mod tests {
         let catalog = WorkflowSkillCatalog::new(root.clone());
         let defaults = catalog.list().unwrap();
         assert!(defaults.iter().any(|skill| skill.name == "skill-creator"));
+        assert!(defaults.iter().any(|skill| skill.name == "mcp-creator"));
         assert!(defaults.iter().any(|skill| skill.name == "review-changes"));
         assert!(defaults.iter().any(|skill| skill.name == "git-commit-push"));
 

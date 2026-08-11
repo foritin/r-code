@@ -599,6 +599,56 @@ test("Codex exposes only public reasoning summaries in the timeline", async () =
   await page.close();
 });
 
+test("provider reasoning is coalesced, separated from answers, and replayable", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const contract = await page.evaluate(async () => {
+    const { applyAgentEvent, buildTimeline } = await import("/src/components/room/model.ts");
+    const { buildLiveEntries } = await import("/src/components/room/SubagentWorkbench.tsx");
+    const history = buildTimeline([
+      {
+        kind: "system",
+        id: "provider-reasoning-history",
+        role: null,
+        text: "r_code_reasoning",
+        output_json: JSON.stringify({ text: "先检查历史上下文" }),
+      },
+    ], [], [], new Date().toISOString());
+
+    let nextId = 0;
+    const nid = () => `reasoning-${nextId += 1}`;
+    let live = applyAgentEvent([], { type: "reasoning", text: "先检查", delta: true }, 1, nid);
+    live = applyAgentEvent(live, { type: "reasoning", text: "依赖关系", delta: true }, 1, nid);
+    live = applyAgentEvent(live, { type: "message", text: "最终回答", delta: true }, 2, nid);
+    live = applyAgentEvent(live, { type: "reasoning", text: "下一段思考", delta: true }, 3, nid);
+
+    const child = buildLiveEntries([
+      { id: "child-r1", kind: "reasoning", label: "模型思考", detail: "检查", at: 1 },
+      { id: "child-r2", kind: "reasoning", label: "模型思考", detail: "边界", at: 2 },
+    ], "running");
+    return { history, live, child };
+  });
+
+  assert.deepEqual(
+    contract.history.map((item) => [item.kind, item.label, item.detail, item.collapsible]),
+    [["context", "模型思考", "先检查历史上下文", true]],
+  );
+  assert.deepEqual(
+    contract.live.map((item) => [item.kind, item.label ?? null, item.detail ?? item.text, item.streaming ?? null]),
+    [
+      ["context", "模型思考", "先检查依赖关系", null],
+      ["agent", null, "最终回答", false],
+      ["context", "模型思考", "下一段思考", null],
+    ],
+  );
+  assert.deepEqual(
+    contract.child.filter((entry) => entry.kind === "reasoning").map((entry) => entry.text),
+    ["检查边界"],
+  );
+  await page.close();
+});
+
 test("active run duration refreshes on the shared second tick and isolates renders", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -2548,6 +2598,17 @@ test("subagents open in deduplicated tabs while the overview stays available", a
 
   await summaryTab.click();
   await page.getByTestId("subagent-list").waitFor({ state: "visible" });
+  const activeSectionToggle = page.getByRole("button", { name: /进行中子代理/ });
+  const completedSectionToggle = page.getByRole("button", { name: /已完成子代理/ });
+  assert.equal(await activeSectionToggle.getAttribute("aria-expanded"), "true", "active subagents are expanded by default");
+  assert.equal(await completedSectionToggle.getAttribute("aria-expanded"), "false", "completed subagents are collapsed by default");
+  assert.equal(await activeSubagent.isVisible(), true);
+  assert.equal(await completedSubagent.isVisible(), false);
+
+  await completedSectionToggle.click();
+  assert.equal(await completedSectionToggle.getAttribute("aria-expanded"), "true");
+  await completedSubagent.waitFor({ state: "visible" });
+
   await activeSubagent.click();
   assert.equal(await tabs.count(), 4, "opening the same subagent must activate its existing tab");
   assert.equal(
@@ -2556,6 +2617,11 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   );
 
   await summaryTab.click();
+  assert.equal(
+    await completedSectionToggle.getAttribute("aria-expanded"),
+    "true",
+    "section expansion survives a detail-to-overview round trip",
+  );
   await completedSubagent.click();
   assert.equal(await tabs.count(), 5, "a different subagent gets its own tab without replacing task tools");
   assert.equal(
@@ -2592,6 +2658,56 @@ test("subagents open in deduplicated tabs while the overview stays available", a
     await tablist.getByRole("tab", { name: "Codex CLI · 核对锁顺序", exact: true }).getAttribute("aria-selected"),
     "true",
     "dismissing the launcher must restore the selected subagent tab",
+  );
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    useAppStore.getState().openWorkbenchFile(taskId, "src/main.rs", 2, 3);
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="workbench-panel"]')?.getAttribute("data-workbench-kind") === "files"
+  ));
+  assert.deepEqual(
+    await tabs.evaluateAll((items) => items.map((item) => item.querySelector("strong")?.textContent)),
+    ["运行与子代理", "计划", "审核", "Codex CLI · 检查并发边界", "Codex CLI · 核对锁顺序", "文件"],
+    "a file opened from a subagent must be appended without removing any session tab",
+  );
+  assert.equal(
+    await tablist.getByRole("tab", { name: "文件", exact: true }).getAttribute("aria-selected"),
+    "true",
+  );
+
+  await completedTab.click();
+  await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
+  assert.equal(
+    await tablist.getByRole("tab", { name: "文件", exact: true }).count(),
+    1,
+    "returning to the subagent must keep the file tab available",
+  );
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    useAppStore.getState().openWorkbenchFile(taskId, "src/main.rs", 2, 3);
+  });
+  await page.waitForFunction(() => (
+    document.querySelector('[data-testid="workbench-panel"]')?.getAttribute("data-workbench-kind") === "files"
+  ));
+  assert.equal(
+    await tablist.getByRole("tab", { name: "文件", exact: true }).count(),
+    1,
+    "opening the same file again must activate the existing Files tab",
+  );
+
+  await workbench.getByRole("button", { name: "关闭文件标签页", exact: true }).click();
+  await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
+  assert.equal(
+    await completedTab.getAttribute("aria-selected"),
+    "true",
+    "closing the appended file tab must return to its subagent session",
   );
 
   await page.close();
@@ -2667,6 +2783,7 @@ test("subagent permissions stay three-state across live events and persisted rel
 
   const summaryTab = workbench.getByRole("tab", { name: /^运行与子代理/ });
   await summaryTab.click();
+  await workbench.getByRole("button", { name: /已完成子代理/ }).click();
   await workbench.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 核对锁顺序" }).click();
   await permission.waitFor({ state: "visible" });
   assert.equal(await permission.innerText(), "完全访问");
@@ -2722,6 +2839,46 @@ test("interrupted task toast counts down for five seconds and then releases the 
   await page.close();
 });
 
+test("startup recovery opens the interrupted conversation directly without a redundant toast", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const target = await page.evaluate(async () => {
+    const { browserMockRecovery } = await import("/src/lib/mock-data.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const task = useTasksStore.getState().tasks.find((item) => item.state === "in_progress");
+    if (!task) throw new Error("browser mock must expose a running recovery target");
+    browserMockRecovery.interrupted_tasks.splice(0, browserMockRecovery.interrupted_tasks.length, task.id);
+    browserMockRecovery.orphaned_permissions = 0;
+    useAppStore.getState().openConversations();
+    return { id: task.id, title: task.title };
+  });
+
+  await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "R-Code，新建对话", exact: true }).click();
+  const recoveryAction = page.getByRole("button", { name: "现在处理", exact: true });
+  await recoveryAction.waitFor({ state: "visible" });
+  await recoveryAction.click();
+
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  const currentTaskId = await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    return useAppStore.getState().currentTaskId;
+  });
+  assert.equal(currentTaskId, target.id, "one recovery click must open the interrupted conversation");
+  await page.waitForFunction(async (taskId) => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    return useTasksStore.getState().tasks.find((task) => task.id === taskId)?.state === "interrupted";
+  }, target.id);
+  assert.equal(
+    await page.locator(".toast").filter({ hasText: `已中止：${target.title}` }).count(),
+    0,
+    "direct recovery navigation must not add another open-conversation card",
+  );
+  await page.close();
+});
+
 test("user workflow Skills are callable immediately and slash completion stays bounded", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -2747,7 +2904,7 @@ test("user workflow Skills are callable immediately and slash completion stays b
     options.slice(0, 4).map((option) => option.textContent ?? ""),
   );
   assert.ok(
-    firstFour.every((label) => /skill-creator|review-changes|git-commit-push|release-check/.test(label)),
+    firstFour.every((label) => /mcp-creator|skill-creator|review-changes|git-commit-push|release-check/.test(label)),
     `a bare slash should expose enabled Skills before static commands: ${JSON.stringify(firstFour)}`,
   );
   await option.hover();

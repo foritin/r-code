@@ -56,6 +56,7 @@ import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
 import { IconCheck, IconRefresh, IconSearch } from "../icons";
 import { pushToast } from "../../store/toast";
+import { McpPanel } from "./McpPanel";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -71,6 +72,7 @@ const SETTINGS_PANES: Array<{
 }> = [
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
   { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
+  { key: "tools", label: "工具与连接", description: "管理内置联网、MCP 服务、凭据和扩展市场。" },
   { key: "preferences", label: "应用偏好", description: "调整外观、缩放和辅助阅读方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
   { key: "codex", label: "Codex CLI", description: "连接本机 Codex，并管理它的运行偏好。" },
@@ -560,6 +562,12 @@ export function SettingsScene() {
               </div>
             )}
 
+            {activePane === "tools" && (
+              <div className="settings-sheet settings-tools-sheet">
+                <McpPanel />
+              </div>
+            )}
+
             {activePane === "agents" && (
               <div className="settings-sheet">
                 {config ? (
@@ -615,6 +623,7 @@ function ProviderSection({
     max_tokens: OUTPUT_DEFAULT,
     temperature: "0.2",
     protocol: "openai_chat" as ProviderProtocol,
+    show_reasoning: true,
   });
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -665,6 +674,7 @@ function ProviderSection({
       // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
       // 就自己去选一下，这条规矩对新建和编辑一视同仁。
       protocol: fallbackProtocol(preset),
+      show_reasoning: true,
     });
   }, []);
 
@@ -699,6 +709,7 @@ function ProviderSection({
         profile?.protocol ??
         providerStatus[selectedProvider]?.effective_protocol ??
         fallbackProtocol(preset),
+      show_reasoning: profile?.show_reasoning ?? true,
     });
     setKeyInput("");
     setSaved(null);
@@ -782,6 +793,7 @@ function ProviderSection({
         maxTokens: optionalInteger(fields.max_tokens),
         temperature: optionalDecimal(fields.temperature),
         protocol: fields.protocol,
+        showReasoning: fields.show_reasoning,
         activate,
       });
       setSelectedProvider(name);
@@ -988,6 +1000,24 @@ function ProviderSection({
                 {modelsMessage && <span className="provider-field-success" role="status">{modelsMessage}</span>}
                 {modelsError && <span className="provider-field-warning" role="alert">{modelsError}</span>}
               </div>
+
+              <label className="provider-preference-row provider-form-field-wide" htmlFor="set-show-reasoning">
+                <span>
+                  <strong>显示思考过程</strong>
+                  <small>展示模型服务明确返回的思考内容或摘要；关闭只隐藏展示，不会改变模型自身推理。</small>
+                </span>
+                <input
+                  id="set-show-reasoning"
+                  className="switch"
+                  type="checkbox"
+                  role="switch"
+                  checked={fields.show_reasoning}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setFields((value) => ({ ...value, show_reasoning: event.target.checked }))
+                  }
+                />
+              </label>
             </div>
 
             <aside

@@ -175,6 +175,15 @@ test("enhanced review keeps rejection conflicts visible, collapses groups, and r
   await expand.click();
   await completed.locator(".enhanced-files").waitFor({ state: "visible" });
 
+  const firstFile = completed.locator(".enhanced-file").first();
+  const expandFile = firstFile.getByRole("button", { name: /展开文件/ });
+  assert.equal(await expandFile.getAttribute("aria-expanded"), "false");
+  assert.equal(await firstFile.locator(".enhanced-events").count(), 0, "file patches must default to collapsed");
+  assert.match(await firstFile.innerText(), /\+\d+\s+-\d+/, "collapsed files must summarize added and deleted lines");
+  await expandFile.click();
+  assert.equal(await firstFile.getByRole("button", { name: /收起文件/ }).getAttribute("aria-expanded"), "true");
+  await firstFile.locator(".enhanced-events").waitFor({ state: "visible" });
+
   await page.evaluate(() => {
     globalThis.__rCodeBrowserMockFailures = {
       cmd_plan_review_reject_feature: "rollback error: feature rejection conflicts at event demo-event",

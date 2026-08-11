@@ -506,6 +506,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
             t={it.t}
             label={it.label}
             detail={it.detail}
+            collapsible={it.collapsible}
             dim={dim(it.t)}
           />
         );

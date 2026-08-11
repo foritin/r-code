@@ -896,7 +896,7 @@
 }
 
 #app.r-code-signature .subagent-page-header > strong,
-#app.r-code-signature .subagent-list-section > h3 {
+#app.r-code-signature .subagent-list-section-title {
   font-family: var(--font-display);
   letter-spacing: 0.04em;
 }

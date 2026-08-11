@@ -247,9 +247,10 @@ export function RoomScene() {
 
   useEffect(() => {
     const workbenchVisible = workbenchMode === "docked" || workbenchMode === "focus";
-    if (!subagentPanelOpen || (canvasTab === "summary" && workbenchVisible)) return;
+    // 工具切换只改变激活 Tab；仅在整个工作台离开可见区域时结束子代理视图态。
+    if (!subagentPanelOpen || workbenchVisible) return;
     closeSubagentView();
-  }, [canvasTab, closeSubagentView, subagentPanelOpen, workbenchMode]);
+  }, [closeSubagentView, subagentPanelOpen, workbenchMode]);
 
   useEffect(() => {
     if (workbenchMode === "focus") convoRef.current?.setAttribute("inert", "");

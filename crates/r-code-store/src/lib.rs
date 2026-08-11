@@ -58,7 +58,8 @@ pub use plan_review::{
     RecordPlanWriteOutcome, PLAN_REVIEW_FEATURE_NOT_TERMINAL, PLAN_REVIEW_SCOPE_CONFLICT,
 };
 pub use plan_store::{
-    PlanStore, PLAN_CONTINUATION_INTERRUPTED, PLAN_IMPLEMENTATION_DISPATCH_INTERRUPTED,
+    PlanItemUpdateOutcome, PlanStore, PLAN_CONTINUATION_INTERRUPTED,
+    PLAN_IMPLEMENTATION_DISPATCH_INTERRUPTED,
 };
 pub use repositories::{
     AgentRunRepository, BlobStore, NotificationRepository, QueuedMessageRepository,

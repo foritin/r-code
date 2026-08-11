@@ -93,9 +93,20 @@ test("MCP management is redacted, independently busy, and confirmation-bound", a
   });
 
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await page.getByRole("button", { name: "知识与指令", exact: true }).click();
-  await page.getByRole("tab", { name: "联网与 MCP", exact: true }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "工具与连接", exact: true }).click();
   await page.getByText("内置联网工具", { exact: true }).waitFor();
+
+  const generated = page.locator(".mcp-server-row").filter({ hasText: "generated-demo" });
+  assert.equal(await generated.count(), 1);
+  assert.match(await generated.innerText(), /由 R-Code 生成/);
+  assert.match(await generated.innerText(), /待用户审核/);
+  assert.match(await generated.innerText(), /已关闭/);
+  assert.equal(await page.getByRole("alertdialog", { name: "确认 MCP 启动方案" }).count(), 0);
+  await generated.getByRole("switch").click();
+  const generatedApproval = page.getByRole("alertdialog", { name: "确认 MCP 启动方案" });
+  await generatedApproval.waitFor({ state: "visible" });
+  await generatedApproval.getByRole("button", { name: "取消", exact: true }).click();
 
   const builtIn = page.locator(".mcp-server-row").filter({ hasText: "r-code-research" });
   assert.equal(await builtIn.count(), 1);

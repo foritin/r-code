@@ -23,6 +23,7 @@ const PLAN_TABLES: &[&str] = &[
     "plan_questions",
     "plan_question_options",
     "plan_change_events",
+    "plan_tool_receipts",
     "plan_review_decisions",
     "plan_reject_operations",
     "plan_reject_operation_files",
@@ -38,6 +39,7 @@ const PLAN_INDEXES: &[&str] = &[
     "idx_plan_change_events_feature",
     "idx_plan_change_events_path",
     "idx_plan_change_events_pending",
+    "idx_plan_tool_receipts_task_plan",
     "idx_plan_review_decisions_feature",
     "idx_plan_review_decisions_file",
     "idx_plan_review_decisions_read",
@@ -136,7 +138,7 @@ fn seed_plan_revision(conn: &Connection, task_id: &str) {
 }
 
 #[test]
-fn clean_database_and_schema_18_upgrade_reach_complete_schema_26() {
+fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
     let clean = Database::open_in_memory().unwrap();
     let clean_conn = clean.conn().unwrap();
     assert_eq!(
@@ -277,7 +279,7 @@ fn clean_database_and_schema_18_upgrade_reach_complete_schema_26() {
 }
 
 #[test]
-fn schema_26_declares_every_check_and_foreign_key_contract() {
+fn latest_schema_declares_every_check_and_foreign_key_contract() {
     let db = Database::open_in_memory().unwrap();
     let conn = db.conn().unwrap();
 
@@ -392,6 +394,11 @@ fn schema_26_declares_every_check_and_foreign_key_contract() {
             "unexpected CHECK set for {table}: {sql}"
         );
     }
+    let receipts_sql = normalized_table_sql(&conn, "plan_tool_receipts");
+    assert!(
+        receipts_sql.contains("primary key (task_id, run_id, tool_call_id)"),
+        "Plan tool receipt idempotency scope drifted: {receipts_sql}"
+    );
 
     let expected_fk_counts = [
         ("plans", 1),
@@ -401,6 +408,7 @@ fn schema_26_declares_every_check_and_foreign_key_contract() {
         ("plan_questions", 1),
         ("plan_question_options", 2),
         ("plan_change_events", 8),
+        ("plan_tool_receipts", 2),
         ("plan_review_decisions", 4),
         ("plan_reject_operations", 4),
         ("plan_reject_operation_files", 4),
@@ -432,6 +440,18 @@ fn schema_26_declares_every_check_and_foreign_key_contract() {
     assert!(foreign_keys(&conn, "plan_question_options").contains(&(
         "question_id".into(),
         "plan_questions".into(),
+        "id".into(),
+        "CASCADE".into(),
+    )));
+    assert!(foreign_keys(&conn, "plan_tool_receipts").contains(&(
+        "task_id".into(),
+        "tasks".into(),
+        "id".into(),
+        "CASCADE".into(),
+    )));
+    assert!(foreign_keys(&conn, "plan_tool_receipts").contains(&(
+        "plan_id".into(),
+        "plans".into(),
         "id".into(),
         "CASCADE".into(),
     )));

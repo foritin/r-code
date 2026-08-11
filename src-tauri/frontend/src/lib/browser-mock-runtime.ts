@@ -70,6 +70,7 @@ import {
   browserMockNotifications,
   browserMockNotificationList,
   browserMockProviderCatalog,
+  browserMockRecovery,
   browserMockSaveCodexCliPreferences as browserMockSaveCliPreferences,
   browserMockSetMessages,
   browserMockSettings,
@@ -103,6 +104,27 @@ let mockMemoryOverview: MemoryOverview = {
   recent_jobs: [],
 };
 let mockMcpServers: McpServerView[] = [
+  {
+    id: "generated-demo",
+    display_name: "项目搜索 MCP",
+    description: "由 mcp-creator 生成，等待用户审核启动方案。",
+    enabled: false,
+    builtin: false,
+    source: {
+      kind: "generated",
+      source_path: "D:/project/rust/r-code/examples/generated-demo",
+      created_at: new Date().toISOString(),
+    },
+    transport: {
+      type: "stdio",
+      executable: "D:/project/rust/r-code/examples/generated-demo/generated-demo.exe",
+      args: [],
+      environment_names: [],
+    },
+    state: "disabled",
+    tool_count: 0,
+    launch_approved: false,
+  },
   {
     id: "r-code-research",
     display_name: "R-Code 深度调研",
@@ -145,6 +167,15 @@ const mockMcpMarket: McpMarketPage = {
   registry_unreviewed: true,
 };
 const defaultWorkflowSkills: WorkflowSkill[] = [
+  {
+    id: "builtin:mcp-creator",
+    name: "mcp-creator",
+    description: "创建 MCP 服务源码并保存为待用户审核的禁用草稿。",
+    instructions: "不得启动或启用服务；验证后调用 mcp_create_draft。",
+    source: "builtin",
+    enabled: true,
+    overridden: false,
+  },
   {
     id: "builtin:skill-creator",
     name: "skill-creator",
@@ -1355,6 +1386,7 @@ function saveProvider(provider: ProviderSettingsInput): void {
     max_tokens: provider.maxTokens ?? undefined,
     temperature: provider.temperature ?? undefined,
     protocol: provider.protocol ?? undefined,
+    show_reasoning: provider.showReasoning ?? existing?.show_reasoning ?? true,
   };
   browserMockSettings.provider_status[provider.name] = {
     configured: true,
@@ -1439,17 +1471,21 @@ function mockMcpPreview(server: McpServerView): McpLaunchPreview {
 }
 
 function mockMcpViewFromRequest(request: McpUpsertRequest): McpServerView {
+  const previous = mockMcpServers.find((server) => server.id === request.id);
+  const launchUnchanged = Boolean(previous
+    && JSON.stringify(previous.transport) === JSON.stringify(request.transport));
+  const enabled = launchUnchanged ? Boolean(previous?.enabled) : false;
   return {
     id: request.id,
     display_name: request.display_name,
     description: request.description,
-    enabled: false,
+    enabled,
     builtin: false,
-    source: { kind: "user" },
+    source: previous?.source ?? { kind: "user" },
     transport: request.transport,
-    state: "disabled",
-    tool_count: 0,
-    launch_approved: false,
+    state: enabled ? "stopped" : "disabled",
+    tool_count: launchUnchanged ? previous?.tool_count ?? 0 : 0,
+    launch_approved: launchUnchanged ? Boolean(previous?.launch_approved) : false,
   };
 }
 
@@ -1976,8 +2012,39 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_terminal_resize": return undefined;
 
-    case "cmd_recovery_data": return { interrupted_tasks: [], orphaned_permissions: 0 };
-    case "cmd_recovery_cleanup": return { runs_closed: 0, tasks_interrupted: 0, permissions_denied: 0, tool_calls_closed: 0 };
+    case "cmd_recovery_data": return copy(browserMockRecovery);
+    case "cmd_recovery_cleanup": {
+      const interruptedTaskIds = new Set(browserMockRecovery.interrupted_tasks);
+      const recoveredAt = nowIso();
+      let tasksInterrupted = 0;
+      let runsClosed = 0;
+      for (const task of browserMockTasks) {
+        if (!interruptedTaskIds.has(task.id)) continue;
+        if (task.state === "in_progress" || task.state === "exploring") {
+          task.state = "interrupted";
+          task.updated_at = recoveredAt;
+          tasksInterrupted += 1;
+        }
+        const detail = browserMockDetails[task.id];
+        if (!detail) continue;
+        for (const run of detail.runs) {
+          if (run.ended_at != null) continue;
+          run.ended_at = recoveredAt;
+          run.review_state = "aborted";
+          run.summary ??= "应用退出前的遗留运行已安全收束。";
+          runsClosed += 1;
+        }
+      }
+      const permissionsDenied = browserMockRecovery.orphaned_permissions;
+      browserMockRecovery.interrupted_tasks.splice(0);
+      browserMockRecovery.orphaned_permissions = 0;
+      return {
+        runs_closed: runsClosed,
+        tasks_interrupted: tasksInterrupted,
+        permissions_denied: permissionsDenied,
+        tool_calls_closed: 0,
+      };
+    }
     case "cmd_support_bundle": {
       const outputDir = stringArg(args, "outputDir").replace(/[\\/]+$/, "");
       return `${outputDir || "Downloads"}/r-code-support-demo.json`;

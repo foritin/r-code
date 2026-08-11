@@ -119,9 +119,11 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
       baseUrl: "https://relay.internal.example/v1",
       model: "deepseek-v4-flash",
       protocol: "openai_responses",
+      showReasoning: false,
       activate: false,
     });
     const first = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+    const firstReasoning = mock.browserMockSettings.config.providers?.[name]?.show_reasoning;
 
     await ipc.settingsSaveProvider({
       name,
@@ -131,6 +133,7 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
       activate: false,
     });
     const omitted = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+    const omittedReasoning = mock.browserMockSettings.config.providers?.[name]?.show_reasoning;
 
     await ipc.settingsSaveProvider({
       name,
@@ -138,17 +141,22 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-v4-pro",
       protocol: "openai_chat",
+      showReasoning: true,
       activate: false,
     });
     const explicitOther = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
+    const explicitReasoning = mock.browserMockSettings.config.providers?.[name]?.show_reasoning;
     await ipc.settingsDeleteProvider(name);
-    return { first, omitted, explicitOther };
+    return { first, omitted, explicitOther, firstReasoning, omittedReasoning, explicitReasoning };
   });
 
   assert.deepEqual(identities, {
     first: "deepseek",
     omitted: "deepseek",
     explicitOther: "openai",
+    firstReasoning: false,
+    omittedReasoning: false,
+    explicitReasoning: true,
   });
   await page.close();
 });
@@ -319,6 +327,10 @@ test("an empty provider form applies the complete first preset and keeps the pri
     protocol: "openai_chat",
     model: "gpt-5.6-sol",
   });
+  const reasoningToggle = page.getByRole("switch", { name: "显示思考过程" });
+  assert.equal(await reasoningToggle.isChecked(), true, "new providers should show reasoning by default");
+  await reasoningToggle.click();
+  assert.equal(await reasoningToggle.isChecked(), false, "the provider preference should remain user-controlled");
 
   const webCapability = page.getByLabel("当前模型服务的联网能力");
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");

@@ -5,7 +5,6 @@ import { useAppStore, type KnowledgeTab } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { IconProjects, IconShield, IconText } from "../icons";
 import { AgentPromptsSection, WorkflowSkillsSection } from "./SettingsScene";
-import { McpPanel } from "./McpPanel";
 import { MemoryPanel } from "./MemoryPanel";
 
 type KnowledgeScope = "global" | string;
@@ -14,7 +13,6 @@ const TABS: Array<{ id: KnowledgeTab; label: string; description: string }> = [
   { id: "memory", label: "记忆", description: "全局与项目作用域" },
   { id: "prompts", label: "协作 Prompt", description: "主 Agent 与子代理" },
   { id: "skills", label: "Skills", description: "内置与自定义能力" },
-  { id: "mcp", label: "联网与 MCP", description: "工具连接与市场" },
 ];
 
 /** 用户级知识控制面：真实配置都保存在 AppData，不把任何正文写进项目或 Git。 */
@@ -64,40 +62,29 @@ export function KnowledgeScene() {
 
         <div className="knowledge-layout">
           <aside className="knowledge-scope" aria-label="知识作用域">
-            {tab === "mcp" ? (
-              <div className="knowledge-scope-group">
-                <span>设备</span>
-                <div className="knowledge-scope-static active" aria-label="本机工具">
-                  <IconShield width={15} height={15} />
-                  <strong>本机工具</strong>
-                </div>
-                <p className="knowledge-scope-note">连接配置对本机用户生效，不随项目进入 Git。</p>
-              </div>
-            ) : <>
-              <div className="knowledge-scope-group">
-                <span>用户</span>
-                <button className={scope === "global" ? "active" : ""} aria-pressed={scope === "global"} aria-label="全局" onClick={() => setScope("global")}>
-                  <IconText width={15} height={15} />
-                  <strong>全局</strong>
+            <div className="knowledge-scope-group">
+              <span>用户</span>
+              <button className={scope === "global" ? "active" : ""} aria-pressed={scope === "global"} aria-label="全局" onClick={() => setScope("global")}>
+                <IconText width={15} height={15} />
+                <strong>全局</strong>
+              </button>
+            </div>
+            <div className="knowledge-scope-group project-scopes">
+              <span>项目</span>
+              {workspaces.length === 0 ? <p>还没有添加项目。</p> : workspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  className={scope === workspace.canonical_path ? "active" : ""}
+                  aria-pressed={scope === workspace.canonical_path}
+                  aria-label={workspace.display_name}
+                  title={workspace.display_name}
+                  onClick={() => setScope(workspace.canonical_path)}
+                >
+                  <IconProjects width={15} height={15} />
+                  <strong>{workspace.display_name}</strong>
                 </button>
-              </div>
-              <div className="knowledge-scope-group project-scopes">
-                <span>项目</span>
-                {workspaces.length === 0 ? <p>还没有添加项目。</p> : workspaces.map((workspace) => (
-                  <button
-                    key={workspace.id}
-                    className={scope === workspace.canonical_path ? "active" : ""}
-                    aria-pressed={scope === workspace.canonical_path}
-                    aria-label={workspace.display_name}
-                    title={workspace.display_name}
-                    onClick={() => setScope(workspace.canonical_path)}
-                  >
-                    <IconProjects width={15} height={15} />
-                    <strong>{workspace.display_name}</strong>
-                  </button>
-                ))}
-              </div>
-            </>}
+              ))}
+            </div>
           </aside>
 
           <div className="knowledge-content">
@@ -117,7 +104,6 @@ export function KnowledgeScene() {
                   : <KnowledgeLoading error={configError} onRetry={loadConfig} label="协作 Prompt" />
               )}
               {tab === "skills" && <WorkflowSkillsSection />}
-              {tab === "mcp" && <McpPanel />}
             </div>
           </div>
         </div>

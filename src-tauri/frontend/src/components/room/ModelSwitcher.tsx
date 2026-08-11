@@ -6,7 +6,7 @@ import { rememberModel, resolveActive, type ProviderChoice } from "../../lib/pro
 import type { InferenceOptions } from "../../lib/types";
 import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
-import { IconChevronDown, IconPlus } from "../icons";
+import { IconChevronDown } from "../icons";
 import {
   capabilitiesFor,
   inferenceSummary,
@@ -64,8 +64,6 @@ export function ModelSwitcher({
 }: Props) {
   const [view, setView] = useState<View>("root");
   const [pending, setPending] = useState<PendingSwitch | null>(null);
-  const [customFor, setCustomFor] = useState<string | null>(null);
-  const [customValue, setCustomValue] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
   const active = resolveActive(choices, fallback, providerName, model);
   const capabilities = useMemo(
@@ -82,7 +80,6 @@ export function ModelSwitcher({
 
   const openModels = () => {
     setExpandedProvider(active.name || configuredChoices[0]?.name || null);
-    setCustomFor(null);
     setView("models");
   };
 
@@ -116,14 +113,6 @@ export function ModelSwitcher({
       return;
     }
     setPending({ provider, model: nextModel });
-  };
-
-  const submitCustom = (provider: ProviderChoice) => {
-    const value = customValue.trim();
-    if (!value) return;
-    setCustomFor(null);
-    setCustomValue("");
-    chooseModel(provider, value);
   };
 
   const chooseOption = (
@@ -201,7 +190,6 @@ export function ModelSwitcher({
         onOpenChange={(open) => {
           if (!open) {
             setView("root");
-            setCustomFor(null);
             setExpandedProvider(null);
           }
         }}
@@ -274,7 +262,6 @@ export function ModelSwitcher({
                     aria-current={current ? "true" : undefined}
                     onClick={() => {
                       setExpandedProvider(expanded ? null : choice.name);
-                      setCustomFor(null);
                     }}
                   >
                     <span className="model-group-title">{choice.label}</span>
@@ -302,35 +289,6 @@ export function ModelSwitcher({
                           <span className="model-name" title={candidate}>{candidate}</span>
                         </MenuItem>
                       ))}
-                      {customFor === choice.name ? (
-                        <div className="model-custom">
-                          <input
-                            className="input"
-                            autoFocus
-                            value={customValue}
-                            aria-label={`${choice.label} 的自定义模型名`}
-                            placeholder="输入模型名…"
-                            onChange={(event) => setCustomValue(event.target.value)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                submitCustom(choice);
-                              }
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                setCustomFor(null);
-                              }
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <MenuItem closeOnSelect={false} className="model-custom-open" onSelect={() => {
-                          setCustomFor(choice.name);
-                          setCustomValue("");
-                        }}>
-                          <IconPlus width={12} height={12} /> 添加自定义模型…
-                        </MenuItem>
-                      )}
                     </div>
                   )}
                 </section>

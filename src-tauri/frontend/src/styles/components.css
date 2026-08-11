@@ -84,24 +84,29 @@
 
 .model-group {
   overflow: hidden;
-  margin: var(--sp-2) var(--sp-1) 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-chip));
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  margin: var(--sp-3) var(--sp-1) 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+  box-shadow: inset 3px 0 0 transparent;
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
 }
-.model-group + .model-group { margin-top: var(--sp-2); }
-.model-group.current { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
-.model-group.expanded { border-color: var(--border-strong); background: var(--bg-card); }
+.model-group + .model-group { margin-top: var(--sp-4); }
+.model-group.current {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border-strong));
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.model-group.expanded { background: var(--bg-card); }
 .model-group.current.expanded { border-color: var(--edge-accent); }
 .model-group-toggle {
   display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center; gap: var(--sp-3);
-  width: 100%; min-height: var(--control-h-lg); padding: 0 var(--sp-4);
-  border: 0; background: transparent; color: var(--fg-muted);
+  width: 100%; min-height: calc(var(--control-h-lg) + var(--sp-2)); padding: 0 var(--sp-5);
+  border: 0; background: color-mix(in srgb, var(--bg-chip) 42%, transparent); color: var(--fg-muted);
   font: inherit; text-align: left; cursor: pointer;
 }
 .model-group-toggle:hover { background: var(--bg-chip); color: var(--fg); }
+.model-group.expanded .model-group-toggle { background: color-mix(in srgb, var(--bg-chip) 68%, transparent); }
 .model-group-title {
   min-width: 0; overflow: hidden; color: inherit; font-size: var(--text-sm);
   font-weight: var(--weight-strong); text-overflow: ellipsis; white-space: nowrap;
@@ -116,15 +121,12 @@
 }
 .model-group.expanded .model-group-chevron { transform: rotate(180deg); }
 .model-group-body {
-  padding: var(--sp-1) var(--sp-1) var(--sp-2);
-  border-top: 1px solid var(--border);
+  padding: var(--sp-2);
+  border-top: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-panel));
   animation: modelGroupReveal var(--dur-2) var(--ease-out);
 }
 .model-group-body .menu-item { min-height: var(--control-h-lg); }
-.model-custom { padding: var(--sp-2) var(--sp-1) var(--sp-1); }
-.model-custom .input { min-height: var(--control-h); font-size: var(--text-sm); }
-/* 二级菜单比普通菜单长，给足高度免得自定义输入被裁掉 */
-.menu-item.model-custom-open { color: var(--fg-muted); }
 
 @keyframes modelGroupReveal {
   from { opacity: 0; transform: translateY(-3px); }

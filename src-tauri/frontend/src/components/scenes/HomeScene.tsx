@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "../../store/app";
 import { useTasksStore, selectNeedsYou } from "../../store/tasks";
+import { pushToast } from "../../store/toast";
 import {
   agentSend,
   codexIntegrationStatus,
@@ -90,6 +91,7 @@ export function HomeScene() {
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const openRoom = useAppStore((s) => s.openRoom);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openMcpSettings = useAppStore((s) => s.openMcpSettings);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
   const workspaces = useTasksStore((s) => s.workspaces);
@@ -113,7 +115,7 @@ export function HomeScene() {
   const [selectingFolder, setSelectingFolder] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recovery, setRecovery] = useState<RecoveryPageData | null>(null);
-  const [cleaning, setCleaning] = useState(false);
+  const [openingRecovery, setOpeningRecovery] = useState(false);
   const [recoveryNotice, setRecoveryNotice] = useState<string | null>(null);
   const [commandNotice, setCommandNotice] = useState<string | null>(null);
   const [slashActive, setSlashActive] = useState(0);
@@ -466,6 +468,9 @@ export function HomeScene() {
         setSettingsPane("providers");
         return;
       case "mcp":
+        setGoal("");
+        openMcpSettings();
+        return;
       case "plugins":
         setGoal("");
         setSettingsPane("codex");
@@ -496,21 +501,42 @@ export function HomeScene() {
     });
   };
 
-  const cleanRecovery = async () => {
-    if (cleaning) return;
-    setCleaning(true);
+  const handleRecovery = async () => {
+    if (openingRecovery) return;
+    const destinationTaskId = recovery?.interrupted_tasks[0] ?? null;
+    setOpeningRecovery(true);
     setRecoveryNotice(null);
+    setError(null);
+    // Navigation is immediate; cleanup continues against the captured startup snapshot.
+    // This also closes the timing window in which task polling could surface a redundant
+    // "open conversation" toast before the destination room becomes current.
+    if (destinationTaskId) openRoom(destinationTaskId);
     try {
       const result = await recoveryCleanup();
+      if (destinationTaskId) {
+        // The room refreshes its own detail immediately; a transient list refresh failure must
+        // not turn a successful cleanup into a false failure message.
+        await refreshTasks().catch(() => undefined);
+        return;
+      }
       await loadRecovery();
       await refreshTasks();
       setRecoveryNotice(
         `已收束 ${result.runs_closed} 个遗留运行、结束 ${result.tool_calls_closed} 个工具调用，并取消 ${result.permissions_denied} 项未完成授权。`,
       );
     } catch (cause) {
-      setError(`清理恢复项失败：${errText(cause)}`);
+      if (destinationTaskId) {
+        pushToast({
+          kind: "error",
+          title: "遗留任务处理失败",
+          body: "会话已打开，但遗留运行尚未完成收束；请稍后重试。",
+          timeout: 6000,
+        });
+      } else {
+        setError(`处理恢复项失败：${errText(cause)}`);
+      }
     } finally {
-      setCleaning(false);
+      setOpeningRecovery(false);
     }
   };
 
@@ -565,7 +591,7 @@ export function HomeScene() {
         {hasRecovery && recovery && (
           <StatusBar
             kind="warn"
-            action={{ label: cleaning ? "清理中…" : "现在处理", onClick: () => void cleanRecovery(), disabled: cleaning }}
+            action={{ label: openingRecovery ? "正在打开…" : "现在处理", onClick: () => void handleRecovery(), disabled: openingRecovery }}
           >
             上次退出留下 {recovery.interrupted_tasks.length} 个中断任务、{recovery.orphaned_permissions} 项待处理；不会影响本次新运行。
           </StatusBar>

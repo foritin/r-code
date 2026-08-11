@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   planAnswer,
   planApprove,
@@ -8,6 +8,7 @@ import {
   planRetryContinuation,
   planRetryImplementation,
 } from "../../lib/ipc";
+import { useSharedNow } from "../../lib/shared-clock";
 import type {
   PlanItem,
   PlanQuestionAnswerInput,
@@ -22,7 +23,11 @@ import {
   IconHelp,
   IconRefresh,
 } from "../icons";
+import type { ActivitySubagent, SubagentStatus } from "../room/activity";
+import { Markdown } from "../room/Markdown";
+import { SubagentAvatar } from "../room/SubagentIdentity";
 import { StatusBar } from "../ui/StatusBar";
+import { formatPlanDescriptionMarkdown } from "./plan-description";
 import type { TaskPlanController } from "./useTaskPlan";
 
 type AnswerDraft =
@@ -33,8 +38,17 @@ interface Props {
   task: Task;
   running: boolean;
   controller: TaskPlanController;
+  subagents: readonly ActivitySubagent[];
+  onInspectSubagent: (subagentId: string) => void;
   onTaskChanged?: () => Promise<void> | void;
 }
+
+const MAX_PARALLEL_SUBAGENTS = 3;
+const ACTIVE_SUBAGENT_STATES = new Set<SubagentStatus>([
+  "queued",
+  "running",
+  "waiting_permission",
+]);
 
 const PLAN_STATE_LABEL: Record<PlanState, string> = {
   draft: "草拟中",
@@ -72,6 +86,202 @@ interface PlanProgress {
   pending: number;
   blocked: number;
   failed: number;
+}
+
+const PlanDescription = memo(function PlanDescription({
+  description,
+  taskId,
+  workspacePath,
+}: {
+  description: string;
+  taskId: string;
+  workspacePath: string | null;
+}) {
+  const markdown = useMemo(
+    () => formatPlanDescriptionMarkdown(description),
+    [description],
+  );
+  return (
+    <div className="plan-feature-description">
+      <Markdown text={markdown} taskId={taskId} workspacePath={workspacePath} />
+    </div>
+  );
+});
+
+/**
+ * Agent runs do not yet persist a Plan item id. The active feature's start time is therefore the
+ * only honest association boundary: children delegated before it belong to earlier work and are
+ * deliberately excluded. Active children remain visible if an older database lacks started_at.
+ */
+export function planSubagentsForItem(
+  item: PlanItem,
+  subagents: readonly ActivitySubagent[],
+): ActivitySubagent[] {
+  if (item.state !== "in_progress") return [];
+  const itemStartedAt = item.started_at ? Date.parse(item.started_at) : Number.NaN;
+  return subagents
+    .filter((child) => (
+      Number.isFinite(itemStartedAt)
+        ? child.startedAt >= itemStartedAt
+        : ACTIVE_SUBAGENT_STATES.has(child.status)
+    ))
+    .sort((left, right) => (
+      planSubagentStatusOrder(left.status) - planSubagentStatusOrder(right.status)
+      || right.startedAt - left.startedAt
+      || left.id.localeCompare(right.id)
+    ));
+}
+
+function PlanSubagentCluster({
+  item,
+  subagents,
+  allSubagents,
+  onInspect,
+}: {
+  item: PlanItem;
+  subagents: readonly ActivitySubagent[];
+  allSubagents: readonly ActivitySubagent[];
+  onInspect: (subagentId: string) => void;
+}) {
+  const statusSignature = subagents.map((child) => `${child.id}:${child.status}`).join("|");
+  const shouldAutoExpand = subagents.some((child) => child.status !== "completed");
+  const [expanded, setExpanded] = useState(shouldAutoExpand);
+  const previousAutoExpand = useRef(shouldAutoExpand);
+  const liveCount = subagents.filter((child) => ACTIVE_SUBAGENT_STATES.has(child.status)).length;
+  const completedCount = subagents.filter((child) => child.status === "completed").length;
+  const hasLiveChildren = liveCount > 0;
+  const now = useSharedNow(hasLiveChildren ? 1_000 : 60_000);
+  const rowsId = `plan-item-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-subagents`;
+
+  useEffect(() => {
+    if (shouldAutoExpand && !previousAutoExpand.current) setExpanded(true);
+    if (!shouldAutoExpand && previousAutoExpand.current) setExpanded(false);
+    previousAutoExpand.current = shouldAutoExpand;
+  }, [shouldAutoExpand, statusSignature]);
+
+  if (subagents.length === 0) return null;
+
+  const summary = liveCount > 0
+    ? `并行执行 ${liveCount}/${MAX_PARALLEL_SUBAGENTS}`
+    : completedCount === subagents.length
+      ? `并行执行已完成 · ${completedCount}`
+      : `并行执行需处理 · ${subagents.length - completedCount}`;
+
+  return (
+    <section
+      className={`plan-subagent-cluster${expanded ? " is-expanded" : " is-collapsed"}`}
+      aria-label={`功能「${item.title}」的并行子代理`}
+      data-testid="plan-subagent-cluster"
+    >
+      <button
+        type="button"
+        className="plan-subagent-toggle"
+        aria-expanded={expanded}
+        aria-controls={rowsId}
+        aria-label={`${expanded ? "收起" : "展开"}${summary}`}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className={`plan-subagent-pulse${hasLiveChildren ? " is-live" : ""}`} aria-hidden="true" />
+        <span className="plan-subagent-summary">
+          <strong>{summary}</strong>
+          <small>点击任务可打开对应的子代理会话</small>
+        </span>
+        <IconChevronDown width={13} height={13} aria-hidden="true" />
+      </button>
+      <div className="plan-subagent-rows" id={rowsId} hidden={!expanded}>
+        {subagents.map((child) => {
+          const childIndex = Math.max(0, allSubagents.findIndex((candidate) => candidate.id === child.id));
+          return (
+            <button
+              type="button"
+              className={`plan-subagent-row status-${child.status}`}
+              key={child.id}
+              data-subagent-id={child.id}
+              aria-label={`${child.label}，${planSubagentStatusLabel(child.status)}，打开会话`}
+              onClick={() => onInspect(child.id)}
+            >
+              <SubagentAvatar
+                index={childIndex}
+                identity={child.id}
+                runtimeKind={child.runtimeKind}
+                size="sm"
+                className={`plan-subagent-avatar status-${child.status}`}
+              />
+              <span className="plan-subagent-copy">
+                <span>
+                  <strong title={child.label}>{child.label}</strong>
+                  <em>{planSubagentStatusLabel(child.status)}</em>
+                </span>
+                <small title={planSubagentObservation(child)}>{planSubagentObservation(child)}</small>
+              </span>
+              <time title={planSubagentTimeTitle(child, now)}>
+                {planSubagentTime(child, now)}
+              </time>
+              <IconChevronRight className="plan-subagent-open" width={13} height={13} aria-hidden="true" />
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function planSubagentStatusOrder(status: SubagentStatus): number {
+  switch (status) {
+    case "waiting_permission": return 0;
+    case "running": return 1;
+    case "queued": return 2;
+    case "failed": return 3;
+    case "cancelled": return 4;
+    case "completed": return 5;
+  }
+}
+
+function planSubagentStatusLabel(status: SubagentStatus): string {
+  switch (status) {
+    case "queued": return "等待中";
+    case "running": return "进行中";
+    case "waiting_permission": return "等待权限";
+    case "completed": return "已完成";
+    case "failed": return "失败";
+    case "cancelled": return "已停止";
+  }
+}
+
+function planSubagentObservation(child: ActivitySubagent): string {
+  const event = child.events[child.events.length - 1];
+  const fallback = event?.detail?.trim()
+    ? `${event.label} · ${event.detail.trim()}`
+    : event?.label;
+  const value = (child.detail?.trim() || fallback || planSubagentStatusLabel(child.status))
+    .replace(/\s+/g, " ");
+  if (value.startsWith("{") || value.startsWith("[")) {
+    return `${planSubagentStatusLabel(child.status)}，打开会话查看结构化结果`;
+  }
+  return value.length > 140 ? `${value.slice(0, 139).trimEnd()}…` : value;
+}
+
+function planSubagentTime(child: ActivitySubagent, now: number): string {
+  const end = ACTIVE_SUBAGENT_STATES.has(child.status)
+    ? now
+    : (child.endedAt ?? child.lastEventAt);
+  return elapsedCompact(child.startedAt, end);
+}
+
+function planSubagentTimeTitle(child: ActivitySubagent, now: number): string {
+  const end = ACTIVE_SUBAGENT_STATES.has(child.status)
+    ? now
+    : (child.endedAt ?? child.lastEventAt);
+  const duration = elapsedCompact(child.startedAt, end);
+  return ACTIVE_SUBAGENT_STATES.has(child.status)
+    ? `已运行 ${duration}`
+    : `${planSubagentStatusLabel(child.status)} · 总耗时 ${duration}`;
+}
+
+function elapsedCompact(startedAt: number, endedAt: number): string {
+  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}m ${String(seconds % 60).padStart(2, "0")}s` : `${seconds}s`;
 }
 
 function featureProgress(items: readonly PlanItem[]): PlanProgress {
@@ -144,7 +354,14 @@ export function planOutline(items: readonly PlanItem[]): OutlineEntry[] {
   return flattened;
 }
 
-export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
+export function PlanPanel({
+  task,
+  running,
+  controller,
+  subagents,
+  onInspectSubagent,
+  onTaskChanged,
+}: Props) {
   const {
     view,
     loaded,
@@ -640,6 +857,7 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
                   }
 
                   const expanded = expandedItems.has(entry.item.id);
+                  const itemSubagents = planSubagentsForItem(entry.item, subagents);
                   const detailsId = `plan-item-${entry.item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-details`;
                   return (
                     <li
@@ -664,13 +882,27 @@ export function PlanPanel({ task, running, controller, onTaskChanged }: Props) {
                         </span>
                         {entry.item.state === "completed" && <IconCheck width={14} height={14} aria-label="已完成" />}
                       </button>
+                      {itemSubagents.length > 0 && (
+                        <PlanSubagentCluster
+                          item={entry.item}
+                          subagents={itemSubagents}
+                          allSubagents={subagents}
+                          onInspect={onInspectSubagent}
+                        />
+                      )}
                       <div className="plan-feature-details" id={detailsId} hidden={!expanded}>
                         {entry.item.depends_on.length > 0 && (
                           <small className="plan-feature-dependencies">
                             依赖：{entry.item.depends_on.map((id) => itemTitles.get(id) ?? id).join("、")}
                           </small>
                         )}
-                        {entry.item.description && <p>{entry.item.description}</p>}
+                        {entry.item.description && (
+                          <PlanDescription
+                            description={entry.item.description}
+                            taskId={task.id}
+                            workspacePath={task.workspace_path}
+                          />
+                        )}
                       </div>
                     </li>
                   );

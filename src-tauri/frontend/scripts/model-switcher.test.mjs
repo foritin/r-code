@@ -26,12 +26,12 @@ test("model picker only groups configured providers and prioritizes the current 
   assert.doesNotMatch(switcher, /默认 Provider/);
 });
 
-test("provider groups are single-expand sections with one custom-model entry", () => {
+test("provider groups are single-expand sections without inline custom-model entry", () => {
   assert.match(switcher, /expandedProvider === choice\.name/);
   assert.match(switcher, /aria-expanded=\{expanded\}/);
   assert.match(switcher, /setExpandedProvider\(expanded \? null : choice\.name\)/);
   assert.match(switcher, /\{expanded && \([^]*className="model-group-body"/);
-  assert.equal(switcher.match(/添加自定义模型…/g)?.length, 1);
+  assert.doesNotMatch(switcher, /添加自定义模型|model-custom|customFor|customValue/);
 });
 
 test("provider default remains a null model binding", () => {

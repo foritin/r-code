@@ -1,5 +1,6 @@
 /**
- * 运行活动轨迹 —— 仅聚合用户可观察的协议事件，不存储或推断模型私有推理。
+ * 运行活动轨迹 —— 仅聚合用户可观察的协议事件，不推断模型私有推理。
+ * Provider 明确标记为可展示的 reasoning 文本属于公开事件，可与最终回答分开保留。
  * 该 reducer 不读取时间、不访问 React，调用方须把时间戳随 action 传入。
  */
 import type {
@@ -34,6 +35,7 @@ export type ActivitySubagentEventKind =
   | "tool_call"
   | "tool_result"
   | "message"
+  | "reasoning"
   | "plan";
 
 /** 子代理的公开动作记录；只保存后端已分类的信息和最终可见文本摘要。 */
@@ -50,7 +52,7 @@ export interface ActivitySubagentEvent {
   isError?: boolean;
 }
 
-/** 一个子代理的可观察状态；不保存子模型的私有推理文本。 */
+/** 一个子代理的可观察状态；只保存 Provider 明确公开给客户端的 reasoning 文本。 */
 export interface ActivitySubagent {
   id: string;
   label: string;
@@ -116,7 +118,7 @@ export function createActivityTraceState(): ActivityTraceState {
 
 /**
  * 根据流式事件和后端快照维护可观察活动。
- * 注意：此处不接收、保存或生成任何“思考”内容；等待模型时固定文案为“等待模型响应”。
+ * 注意：此处不会生成或猜测“思考”内容；仅接收后端已分类的公开 reasoning 事件。
  */
 export function activityTraceReducer(
   state: ActivityTraceState,
@@ -181,6 +183,8 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
       return applyActivityEvent(base, event.phase, event.detail);
     case "message":
       return { ...base, phase: "streaming", label: "正在生成回复" };
+    case "reasoning":
+      return { ...base, phase: "streaming", label: "模型正在思考" };
     case "tool_call": {
       const tool = observableToolName(event.name);
       return { ...base, phase: "tool", label: `正在使用工具：${tool}` };
@@ -285,6 +289,12 @@ function applyScopedEvent(
       child.status = "running";
       child.detail = event.delta ? "正在生成可见结果" : "已生成一条可见结果";
       appendChildMessage(child, event.text, event.delta, at);
+      break;
+    case "reasoning":
+      child.phase = "streaming";
+      child.status = "running";
+      child.detail = event.delta ? "正在生成思考内容" : "已生成思考内容";
+      appendChildReasoning(child, event.text, event.delta, at);
       break;
     case "plan":
       child.phase = "finalizing";
@@ -448,6 +458,39 @@ function appendChildMessage(
     ...(isError ? { isError: true } : {}),
   };
   child.events = [...child.events, messageEvent].slice(-60);
+}
+
+function appendChildReasoning(
+  child: ActivitySubagent,
+  text: string,
+  delta: boolean,
+  at: number,
+) {
+  if (!text) return;
+  const previous = child.events[child.events.length - 1];
+  if (previous?.kind === "reasoning") {
+    const current = previous.detail ?? "";
+    const combined = delta
+      ? current + text
+      : !current || text.startsWith(current)
+        ? text
+        : current.startsWith(text)
+          ? current
+          : `${current}${text}`;
+    child.events = [
+      ...child.events.slice(0, -1),
+      { ...previous, detail: combined.slice(0, 12_000), at },
+    ];
+    return;
+  }
+  const reasoningEvent: ActivitySubagentEvent = {
+    id: `${child.id}:${at}:${child.events.length}`,
+    kind: "reasoning",
+    label: "模型思考",
+    detail: text.slice(0, 12_000),
+    at,
+  };
+  child.events = [...child.events, reasoningEvent].slice(-60);
 }
 
 function childStatusEventLabel(status: SubagentStatus): string {
