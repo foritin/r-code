@@ -13,6 +13,7 @@ pub const RESERVED_TOOL_NAMES: &[&str] = &[
     "mcp_registry_search",
     "mcp_prepare_install",
     "mcp_prepare_enable",
+    "mcp_create_draft",
 ];
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -136,6 +137,10 @@ impl McpTransportConfig {
 pub enum McpServerSource {
     Builtin,
     User,
+    Generated {
+        source_path: String,
+        created_at: String,
+    },
     Registry {
         registry_url: String,
         name: String,
@@ -168,6 +173,10 @@ impl McpServerConfig {
 
     pub fn is_builtin(&self) -> bool {
         matches!(self.source, McpServerSource::Builtin)
+    }
+
+    pub fn is_generated(&self) -> bool {
+        matches!(self.source, McpServerSource::Generated { .. })
     }
 }
 
@@ -335,5 +344,26 @@ impl Default for WebLimits {
             max_redirects: 5,
             max_results: 10,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_server_source_serializes_and_round_trips() {
+        let source = McpServerSource::Generated {
+            source_path: r"D:\projects\demo-mcp".to_string(),
+            created_at: "2026-08-11T10:30:00Z".to_string(),
+        };
+
+        let encoded = serde_json::to_value(&source).unwrap();
+        assert_eq!(encoded["kind"], "generated");
+        assert_eq!(encoded["source_path"], r"D:\projects\demo-mcp");
+        assert_eq!(
+            serde_json::from_value::<McpServerSource>(encoded).unwrap(),
+            source
+        );
     }
 }

@@ -19,6 +19,9 @@ const runtime = fs.readFileSync(
   path.join(repoDir, "crates/r-code-agent-worker/src/llm_runtime.rs"),
   "utf8",
 );
+const commands = fs.readFileSync(path.join(repoDir, "src-tauri/src/commands.rs"), "utf8");
+const manager = fs.readFileSync(path.join(repoDir, "src-tauri/src/mcp_manager.rs"), "utf8");
+const workflowSkills = fs.readFileSync(path.join(repoDir, "src-tauri/src/workflow_skills.rs"), "utf8");
 
 test("Agent exposes fixed MCP search and confirmation-preparation tools", () => {
   for (const name of ["mcp_registry_search", "mcp_prepare_install", "mcp_prepare_enable"]) {
@@ -27,6 +30,11 @@ test("Agent exposes fixed MCP search and confirmation-preparation tools", () => 
   assert.match(runtime, /`mcp_registry_search` searches the official preview Registry/);
   assert.match(runtime, /They never install, write configuration, enable a service/);
   assert.doesNotMatch(runtime, /You cannot install or enable an MCP service/);
+  assert.match(manager, /fn name\(&self\) -> &str \{\s*"mcp_create_draft"/);
+  assert.match(commands, /CreateMcpDraftTool::new\(mcp_manager\.clone\(\)\)/);
+  assert.match(runtime, /"mcp_create_draft"/);
+  assert.match(workflowSkills, /"mcp-creator"/);
+  assert.match(workflowSkills, /不得启动服务、执行 MCP 握手、tools\/list、注册、启用/);
 });
 
 test("conversation confirmation cards are bound to exact MCP tools and host-issued tokens", () => {
@@ -39,9 +47,16 @@ test("conversation confirmation cards are bound to exact MCP tools and host-issu
 });
 
 test("MCP confirmations open automatically and replace noisy raw payloads", () => {
-  assert.match(toolCard, /if \(hasMcpConfirmation\) setOpen\(true\)/);
-  assert.match(toolCard, /!mcpConfirmation && output/);
+  assert.match(toolCard, /if \(hasMcpConfirmation \|\| hasMcpSettingsAction\) setOpen\(true\)/);
+  assert.match(toolCard, /!mcpConfirmation && !mcpSettingsAction && output/);
   assert.match(toolCard, /transport\.args\.map\(\(arg, index\)/);
-  assert.match(timeline, /item\.tools\.some\(\(tool\)[^]*hasMcpConfirmationPayload/);
-  assert.match(timeline, /if \(hasMcpConfirmation\) setOpen\(true\)/);
+  assert.match(timeline, /item\.tools\.some\(\(tool\)[^]*hasMcpConfirmationPayload[^]*hasMcpSettingsActionPayload/);
+  assert.match(timeline, /if \(hasMcpAction\) setOpen\(true\)/);
+});
+
+test("generated MCP drafts only deep-link to manual settings review", () => {
+  assert.match(toolCard, /toolName !== "mcp_create_draft" && toolName !== "mcp_prepare_enable"/);
+  assert.match(toolCard, /value\.action !== "open_mcp_settings"/);
+  assert.match(toolCard, /草稿已创建，尚未启用/);
+  assert.match(toolCard, /openMcpSettings\(null, action\.serverId\)/);
 });

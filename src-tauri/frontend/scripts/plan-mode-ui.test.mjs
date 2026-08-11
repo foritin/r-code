@@ -236,6 +236,112 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   assert.match(await features.first().innerText(), /进行中/);
   assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 1.*待处理 1/s);
 
+  // Parallel children belong to the current feature by its durable started_at boundary. The Plan
+  // shows every live task at once and opens the existing child session directly, without an extra
+  // intermediary card.
+  const planSubagentIds = await page.evaluate(async () => {
+    const [{ planGet }, { browserMockDetails }, { useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/lib/ipc.ts"),
+      import("/src/lib/mock-data.ts"),
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    const plan = await planGet(taskId);
+    const active = plan?.items.find((item) => item.state === "in_progress");
+    const detail = browserMockDetails[taskId];
+    if (!active?.started_at || !detail) throw new Error("Active Plan feature is missing");
+    const parentRunId = detail.runs.find((run) => run.agent_kind === "main")?.id ?? null;
+    const startedAt = active.started_at;
+    const completedAt = new Date(Date.parse(startedAt) + 1_000).toISOString();
+    const makeRun = (
+      id,
+      label,
+      runtimeKind,
+      summary,
+      endedAt = null,
+      reviewState = "pending",
+      runStartedAt = startedAt,
+    ) => ({
+      id,
+      task_id: taskId,
+      branch_id: detail.active_branch.id,
+      parent_run_id: parentRunId,
+      agent_kind: "subagent",
+      agent_label: label,
+      summary,
+      delegated_by_tool_call_id: `delegate-${id}`,
+      model: runtimeKind === "native" ? "gpt-5.6-terra" : "gpt-5.6-sol",
+      runtime_kind: runtimeKind,
+      access_mode: "read_only",
+      require_approval: false,
+      routing_reason: "Plan 并行验证",
+      external_session_id: null,
+      review_state: reviewState,
+      started_at: runStartedAt,
+      ended_at: endedAt,
+      usage_json: null,
+    });
+    const ids = {
+      native: `${taskId}-plan-native`,
+      codex: `${taskId}-plan-codex`,
+      completed: `${taskId}-plan-completed`,
+      historical: `${taskId}-before-plan-feature`,
+    };
+    const historicalStartedAt = new Date(Date.parse(startedAt) - 60_000).toISOString();
+    const historicalEndedAt = new Date(Date.parse(startedAt) - 30_000).toISOString();
+    detail.runs.push(
+      makeRun(ids.historical, "Codex CLI · 上一阶段检查", "codex_exec", "早于当前功能", historicalEndedAt, "answered", historicalStartedAt),
+      makeRun(ids.native, "R-Code · 核对状态机", "native", "正在核对 revision 交接"),
+      makeRun(ids.codex, "Codex CLI · 验证并发调用", "codex_exec", "正在验证并行工具调用"),
+      makeRun(ids.completed, "R-Code · 检查迁移", "native", "迁移结构检查完成", completedAt, "answered"),
+    );
+    await useTasksStore.getState().refreshDetail(taskId);
+    return ids;
+  });
+  const cluster = panel.getByTestId("plan-subagent-cluster");
+  await cluster.waitFor({ state: "visible" });
+  assert.match(await cluster.innerText(), /并行执行 2\/3/);
+  assert.equal(await cluster.locator(".plan-subagent-row").count(), 3);
+  assert.equal(await cluster.locator(".plan-subagent-row.status-running").count(), 2);
+  assert.equal(await cluster.locator(".plan-subagent-row.status-completed").count(), 1);
+  assert.equal(await cluster.locator(".subagent-avatar.runtime-rcode").count(), 2);
+  assert.equal(await cluster.locator(".subagent-avatar.runtime-codex").count(), 1);
+  await cluster.locator(`[data-subagent-id="${planSubagentIds.codex}"]`).click();
+  await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
+  assert.equal(await page.getByTestId("subagent-detail").getAttribute("data-subagent-view"), "detail");
+  assert.equal(
+    await page.locator(`.subagent-session-tab [data-subagent-id="${planSubagentIds.codex}"]`).count(),
+    1,
+    "Plan row must open one stable existing child Tab",
+  );
+  await page.getByRole("tab", { name: "计划", exact: true }).click();
+  await panel.waitFor({ state: "visible" });
+  await page.evaluate(async ({ ids }) => {
+    const [{ browserMockDetails }, { useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/lib/mock-data.ts"),
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    const detail = browserMockDetails[taskId];
+    const endedAt = new Date().toISOString();
+    for (const run of detail.runs) {
+      if (![ids.native, ids.codex].includes(run.id)) continue;
+      run.ended_at = endedAt;
+      run.review_state = "answered";
+      run.summary = `${run.summary}，检查完成`;
+    }
+    await useTasksStore.getState().refreshDetail(taskId);
+  }, { ids: planSubagentIds });
+  await page.waitForFunction(() => document.querySelector("[data-testid='plan-subagent-cluster']")?.textContent?.includes("并行执行已完成 · 3"));
+  assert.equal(await cluster.locator(".plan-subagent-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(await cluster.locator(".plan-subagent-rows").isVisible(), false, "all-completed children default to a compact summary");
+  await cluster.locator(".plan-subagent-toggle").click();
+  assert.equal(await cluster.locator(".plan-subagent-rows").isVisible(), true);
+
   // Approval switches the task back to auto mode. Leaving and reopening the
   // room must still discover the durable Plan instead of hiding the panel.
   const approvedTaskId = await page.evaluate(async () => {
@@ -314,6 +420,8 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
     window.__rCodeBrowserMockDelayMs = { cmd_plan_review_accept_file: 320 };
   });
   const completedFiles = reviewFeatures.nth(0).locator(".enhanced-file");
+  await completedFiles.nth(0).getByRole("button", { name: /展开文件/ }).click();
+  await completedFiles.nth(1).getByRole("button", { name: /展开文件/ }).click();
   const changedLine = completedFiles.nth(0).locator(".patch-add").first();
   assert.equal(await changedLine.evaluate((element) => getComputedStyle(element, "::before").width), "5px");
   assert.equal(await changedLine.evaluate((element) => getComputedStyle(element, "::before").opacity), "1");

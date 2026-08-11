@@ -526,6 +526,14 @@ impl ToolGateway {
         self.tools.insert(tool.name().to_string(), tool);
     }
 
+    /// Whether this name is owned by a registered host tool.
+    ///
+    /// Runtime tool multiplexers use this to keep external/MCP descriptors from shadowing a
+    /// trusted built-in with the same model-facing name.
+    pub fn owns_tool(&self, tool_name: &str) -> bool {
+        self.tools.contains_key(tool_name)
+    }
+
     /// 查询某工具声明的路径绑定；工具未注册时返回 `None`。
     ///
     /// 供 Agent 运行时在调用前把路径参数重绑定到会话工作区。

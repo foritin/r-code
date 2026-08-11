@@ -1577,6 +1577,101 @@ fn approved_items_progress_deterministically_in_ordinal_and_dependency_order() {
 }
 
 #[test]
+fn plan_item_tool_receipt_replays_current_authoritative_view_without_transitioning_twice() {
+    let fixture = Fixture::in_memory("Replay-safe feature progression");
+    let created = fixture.create_plan();
+    let ready = publish(
+        &fixture.store,
+        &fixture.task.id,
+        &created.plan.id,
+        created.plan.revision,
+        vec![
+            item("first", "First", &[]),
+            item("second", "Second", &["first"]),
+        ],
+    );
+    let approved = fixture
+        .store
+        .approve_plan(
+            &fixture.task.id,
+            &ApprovePlanInput {
+                plan_id: ready.plan.id.clone(),
+                expected_revision: ready.plan.revision,
+            },
+        )
+        .unwrap();
+    let first_request = UpdatePlanItemInput {
+        plan_id: ready.plan.id.clone(),
+        item_id: "first".to_string(),
+        expected_revision: approved.plan.revision,
+        state: PlanItemState::Completed,
+    };
+    let first_json = serde_json::to_string(&first_request).unwrap();
+    let first = fixture
+        .store
+        .update_plan_item_idempotent(
+            &fixture.task.id,
+            &first_request,
+            "agent-run-one",
+            "provider-call-first",
+            &first_json,
+        )
+        .unwrap();
+    assert!(!first.replayed);
+    assert_eq!(first.view.items[1].state, PlanItemState::InProgress);
+
+    let second_request = UpdatePlanItemInput {
+        plan_id: ready.plan.id.clone(),
+        item_id: "second".to_string(),
+        expected_revision: first.view.plan.revision,
+        state: PlanItemState::Completed,
+    };
+    let second_json = serde_json::to_string(&second_request).unwrap();
+    let second = fixture
+        .store
+        .update_plan_item_idempotent(
+            &fixture.task.id,
+            &second_request,
+            "agent-run-two",
+            "provider-call-first",
+            &second_json,
+        )
+        .unwrap();
+    assert_eq!(second.view.plan.state, PlanState::Completed);
+    assert!(!second.replayed, "a new Agent run owns a fresh idempotency scope");
+
+    // Recreate the store to prove the receipt is SQLite-backed rather than an in-memory cache.
+    let reopened_store = PlanStore::new(
+        Arc::clone(&fixture.db),
+        fixture._directory.path().join("plans"),
+    );
+    let replayed = reopened_store
+        .update_plan_item_idempotent(
+            &fixture.task.id,
+            &first_request,
+            "agent-run-one",
+            "provider-call-first",
+            &first_json,
+        )
+        .unwrap();
+    assert!(replayed.replayed);
+    assert_eq!(replayed.view.plan.revision, second.view.plan.revision);
+    assert_eq!(replayed.view.plan.state, PlanState::Completed);
+
+    let reused_with_other_input = reopened_store.update_plan_item_idempotent(
+        &fixture.task.id,
+        &second_request,
+        "agent-run-one",
+        "provider-call-first",
+        &second_json,
+    );
+    assert!(reused_with_other_input
+        .unwrap_err()
+        .to_string()
+        .contains("reused with different"));
+}
+
+#[test]
 fn blocked_feature_resumes_then_completes_and_activates_its_dependent() {
     let fixture = Fixture::in_memory("Resume a blocked feature");
     let created = fixture.create_plan();

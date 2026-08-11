@@ -31,18 +31,17 @@ import { handleWorkbenchTabListKeyDown } from "./workbench-tabs";
 import type {
   ActivitySubagent,
   ActivitySubagentEvent,
-  ActivityTraceState,
   SubagentStatus,
 } from "./activity";
 
 interface Props {
   taskId: string;
   workspacePath: string | null;
-  activity: ActivityTraceState;
-  runs: readonly AgentRun[];
+  subagents: readonly ActivitySubagent[];
   selectedSubagentId: string | null;
   openSubagentIds: readonly string[];
-  toolTabs: ReactNode;
+  toolTabsBefore: ReactNode;
+  toolTabsAfter: ReactNode;
   onSelect: (subagentId: string) => void;
   onCloseTab: (subagentId: string) => void;
   onOpenLauncher: () => void;
@@ -57,6 +56,12 @@ interface SessionMessageEntry {
   kind: "message";
   text: string;
   tone: "normal" | "danger";
+}
+
+interface SessionReasoningEntry {
+  id: string;
+  kind: "reasoning";
+  text: string;
 }
 
 interface SessionToolEntry {
@@ -77,7 +82,7 @@ interface SessionStatusEntry {
   tone: "normal" | "danger";
 }
 
-type SessionEntry = SessionMessageEntry | SessionToolEntry | SessionStatusEntry;
+type SessionEntry = SessionMessageEntry | SessionReasoningEntry | SessionToolEntry | SessionStatusEntry;
 
 interface SessionToolGroupEntry {
   id: string;
@@ -86,7 +91,7 @@ interface SessionToolGroupEntry {
   tools: SessionToolEntry[];
 }
 
-type TranscriptBlock = SessionMessageEntry | SessionToolEntry | SessionToolGroupEntry;
+type TranscriptBlock = SessionMessageEntry | SessionReasoningEntry | SessionToolEntry | SessionToolGroupEntry;
 
 interface SubagentPermission {
   accessMode: SubagentAccessMode;
@@ -95,6 +100,17 @@ interface SubagentPermission {
 
 type SubagentPermissionMode = SubagentAccessMode | "request_approval";
 
+type SubagentSectionKind = "attention" | "active" | "completed" | "incomplete";
+
+type SubagentSectionExpansion = Record<SubagentSectionKind, boolean>;
+
+const DEFAULT_SUBAGENT_SECTION_EXPANSION: SubagentSectionExpansion = {
+  attention: true,
+  active: true,
+  completed: false,
+  incomplete: true,
+};
+
 /**
  * 子智能体总览和每个子智能体会话都是独立标签页。
  * 标签以稳定的运行 ID 去重；重新打开已有会话时只切换激活项。
@@ -102,11 +118,11 @@ type SubagentPermissionMode = SubagentAccessMode | "request_approval";
 export function SubagentWorkbench({
   taskId,
   workspacePath,
-  activity,
-  runs,
+  subagents,
   selectedSubagentId,
   openSubagentIds,
-  toolTabs,
+  toolTabsBefore,
+  toolTabsAfter,
   onSelect,
   onCloseTab,
   onOpenLauncher,
@@ -115,25 +131,27 @@ export function SubagentWorkbench({
   focused,
   onAbort,
 }: Props) {
-  const children = useMemo(
-    () => mergeSubagents(activity.subagents, runs),
-    [activity.subagents, runs],
+  const [expandedSections, setExpandedSections] = useState<SubagentSectionExpansion>(
+    () => ({ ...DEFAULT_SUBAGENT_SECTION_EXPANSION }),
   );
   const childIndexById = useMemo(
-    () => new Map(children.map((child, index) => [child.id, index])),
-    [children],
+    () => new Map(subagents.map((child, index) => [child.id, index])),
+    [subagents],
   );
   const selectedIndex = selectedSubagentId == null
     ? -1
     : (childIndexById.get(selectedSubagentId) ?? -1);
-  const selected = selectedIndex >= 0 ? children[selectedIndex] : undefined;
-  const openedChildren = useMemo(
-    () => openSubagentIds.flatMap((id) => {
-      const index = childIndexById.get(id) ?? -1;
-      return index >= 0 ? [{ child: children[index], index }] : [];
-    }),
-    [childIndexById, children, openSubagentIds],
-  );
+  const selected = selectedIndex >= 0 ? subagents[selectedIndex] : undefined;
+  const toggleSection = useCallback((kind: SubagentSectionKind) => {
+    setExpandedSections((current) => ({
+      ...current,
+      [kind]: !current[kind],
+    }));
+  }, []);
+
+  useEffect(() => {
+    setExpandedSections({ ...DEFAULT_SUBAGENT_SECTION_EXPANSION });
+  }, [taskId]);
 
   return (
     <div
@@ -142,8 +160,10 @@ export function SubagentWorkbench({
       data-subagent-view={selected ? "detail" : "list"}
     >
       <SubagentTabsHeader
-        toolTabs={toolTabs}
-        openedChildren={openedChildren}
+        toolTabsBefore={toolTabsBefore}
+        toolTabsAfter={toolTabsAfter}
+        subagents={subagents}
+        openSubagentIds={openSubagentIds}
         selectedSubagentId={selected?.id ?? null}
         onSelect={onSelect}
         onCloseTab={onCloseTab}
@@ -154,14 +174,23 @@ export function SubagentWorkbench({
       />
       {selected
         ? <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
-        : <SubagentList children={children} onSelect={onSelect} />}
+        : (
+          <SubagentList
+            children={subagents}
+            expandedSections={expandedSections}
+            onSelect={onSelect}
+            onToggleSection={toggleSection}
+          />
+        )}
     </div>
   );
 }
 
 function SubagentTabsHeader({
-  toolTabs,
-  openedChildren,
+  toolTabsBefore,
+  toolTabsAfter,
+  subagents,
+  openSubagentIds,
   selectedSubagentId,
   onSelect,
   onCloseTab,
@@ -170,8 +199,10 @@ function SubagentTabsHeader({
   onToggleFocus,
   focused,
 }: {
-  toolTabs: ReactNode;
-  openedChildren: readonly { child: ActivitySubagent; index: number }[];
+  toolTabsBefore: ReactNode;
+  toolTabsAfter: ReactNode;
+  subagents: readonly ActivitySubagent[];
+  openSubagentIds: readonly string[];
   selectedSubagentId: string | null;
   onSelect: (subagentId: string) => void;
   onCloseTab: (subagentId: string) => void;
@@ -183,47 +214,15 @@ function SubagentTabsHeader({
   return (
     <header className="subagent-page-header workbench-head subagent-tabs-header">
       <div className="workbench-tabs" role="tablist" aria-label="任务工作台标签" onKeyDown={handleWorkbenchTabListKeyDown}>
-        {toolTabs}
-        {openedChildren.map(({ child, index }) => {
-          const selected = selectedSubagentId === child.id;
-          return (
-            <div
-              key={child.id}
-              className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
-            >
-              <button
-                type="button"
-                className="workbench-tab-select"
-                role="tab"
-                tabIndex={selected ? 0 : -1}
-                aria-selected={selected}
-                aria-label={child.label}
-                data-subagent-id={child.id}
-                onClick={() => onSelect(child.id)}
-              >
-                <SubagentAvatar
-                  index={index}
-                  identity={child.id}
-                  runtimeKind={child.runtimeKind}
-                  size="xs"
-                />
-                <strong title={child.label}>{child.label}</strong>
-              </button>
-              <button
-                type="button"
-                className="workbench-tab-close"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onCloseTab(child.id);
-                }}
-                aria-label={`关闭${child.label}标签页`}
-                title={`关闭${child.label}`}
-              >
-                <IconClose width={13} height={13} />
-              </button>
-            </div>
-          );
-        })}
+        {toolTabsBefore}
+        <SubagentSessionTabs
+          subagents={subagents}
+          openSubagentIds={openSubagentIds}
+          selectedSubagentId={selectedSubagentId}
+          onSelect={onSelect}
+          onCloseTab={onCloseTab}
+        />
+        {toolTabsAfter}
       </div>
       <button type="button" className="workbench-head-action workbench-add-button" onClick={onOpenLauncher} aria-label="打开工具启动器" title="新增扩展">
         <IconPlus width={16} height={16} />
@@ -241,10 +240,14 @@ function SubagentTabsHeader({
 
 function SubagentList({
   children,
+  expandedSections,
   onSelect,
+  onToggleSection,
 }: {
   children: readonly ActivitySubagent[];
+  expandedSections: Readonly<SubagentSectionExpansion>;
   onSelect: (subagentId: string) => void;
+  onToggleSection: (kind: SubagentSectionKind) => void;
 }) {
   const { attention, active, completed, incomplete, indexById } = useMemo(() => ({
     attention: children.filter((child) => child.status === "waiting_permission"),
@@ -274,38 +277,176 @@ function SubagentList({
   return (
     <div className="subagent-workbench-list" aria-label="子智能体列表">
       {attention.length > 0 && (
-        <SubagentListSection title="需要处理" children={attention} indexById={indexById} now={now} onSelect={onSelect} />
+        <SubagentListSection
+          key="attention"
+          kind="attention"
+          title="需要处理"
+          children={attention}
+          indexById={indexById}
+          now={now}
+          expanded={expandedSections.attention}
+          onSelect={onSelect}
+          onToggle={() => onToggleSection("attention")}
+        />
       )}
       {active.length > 0 && (
-        <SubagentListSection title="进行中" children={active} indexById={indexById} now={now} onSelect={onSelect} />
+        <SubagentListSection
+          key="active"
+          kind="active"
+          title="进行中"
+          children={active}
+          indexById={indexById}
+          now={now}
+          expanded={expandedSections.active}
+          onSelect={onSelect}
+          onToggle={() => onToggleSection("active")}
+        />
       )}
       {completed.length > 0 && (
-        <SubagentListSection title="已完成" children={completed} indexById={indexById} now={now} onSelect={onSelect} />
+        <SubagentListSection
+          key="completed"
+          kind="completed"
+          title="已完成"
+          children={completed}
+          indexById={indexById}
+          now={now}
+          expanded={expandedSections.completed}
+          onSelect={onSelect}
+          onToggle={() => onToggleSection("completed")}
+        />
       )}
       {incomplete.length > 0 && (
-        <SubagentListSection title="未完成" children={incomplete} indexById={indexById} now={now} onSelect={onSelect} />
+        <SubagentListSection
+          key="incomplete"
+          kind="incomplete"
+          title="未完成"
+          children={incomplete}
+          indexById={indexById}
+          now={now}
+          expanded={expandedSections.incomplete}
+          onSelect={onSelect}
+          onToggle={() => onToggleSection("incomplete")}
+        />
       )}
     </div>
   );
 }
 
+/**
+ * 子代理会话 Tab 独立于当前工作台工具渲染，这样切到文件等工具时仍可一键返回。
+ */
+export function SubagentSessionTabs({
+  subagents,
+  openSubagentIds,
+  selectedSubagentId,
+  onSelect,
+  onCloseTab,
+}: {
+  subagents: readonly ActivitySubagent[];
+  openSubagentIds: readonly string[];
+  selectedSubagentId: string | null;
+  onSelect: (subagentId: string) => void;
+  onCloseTab: (subagentId: string) => void;
+}) {
+  const indexById = useMemo(
+    () => new Map(subagents.map((child, index) => [child.id, index])),
+    [subagents],
+  );
+
+  return (
+    <>
+      {openSubagentIds.map((id) => {
+        const index = indexById.get(id) ?? -1;
+        if (index < 0) return null;
+        const child = subagents[index];
+        const selected = selectedSubagentId === child.id;
+        return (
+          <div
+            key={child.id}
+            className={`workbench-tab subagent-session-tab${selected ? " workbench-active-tab" : ""}`}
+          >
+            <button
+              type="button"
+              className="workbench-tab-select"
+              role="tab"
+              tabIndex={selected ? 0 : -1}
+              aria-selected={selected}
+              aria-label={child.label}
+              data-subagent-id={child.id}
+              onClick={() => onSelect(child.id)}
+            >
+              <SubagentAvatar
+                index={index}
+                identity={child.id}
+                runtimeKind={child.runtimeKind}
+                size="xs"
+              />
+              <strong title={child.label}>{child.label}</strong>
+            </button>
+            <button
+              type="button"
+              className="workbench-tab-close"
+              onClick={(event) => {
+                event.stopPropagation();
+                onCloseTab(child.id);
+              }}
+              aria-label={`关闭${child.label}标签页`}
+              title={`关闭${child.label}`}
+            >
+              <IconClose width={13} height={13} />
+            </button>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function SubagentListSection({
+  kind,
   title,
   children,
   indexById,
   now,
+  expanded,
   onSelect,
+  onToggle,
 }: {
+  kind: SubagentSectionKind;
   title: string;
   children: readonly ActivitySubagent[];
   indexById: ReadonlyMap<string, number>;
   now: number;
+  expanded: boolean;
   onSelect: (subagentId: string) => void;
+  onToggle: () => void;
 }) {
+  const sectionId = useId();
+  const titleId = `${sectionId}-title`;
+  const rowsId = `${sectionId}-rows`;
+
   return (
-    <section className="subagent-list-section" aria-label={title}>
-      <h3><span>{title}<b> · {String(children.length).padStart(2, "0")}</b></span></h3>
-      <div className="subagent-list-rows">
+    <section
+      className={`subagent-list-section kind-${kind} ${expanded ? "is-expanded" : "is-collapsed"}`}
+      aria-labelledby={titleId}
+    >
+      <button
+        type="button"
+        className="subagent-list-section-toggle"
+        aria-expanded={expanded}
+        aria-controls={rowsId}
+        aria-label={`${expanded ? "收起" : "展开"}${title}子代理，当前 ${children.length} 个`}
+        title={expanded ? `收起${title}` : `展开${title}`}
+        onClick={onToggle}
+      >
+        <span className="subagent-list-section-indicator" aria-hidden="true" />
+        <span className="subagent-list-section-title" id={titleId}>{title}</span>
+        <span className="subagent-list-section-count" aria-hidden="true">
+          {String(children.length).padStart(2, "0")}
+        </span>
+        <IconChevronDown className="subagent-list-section-chevron" width={14} height={14} aria-hidden="true" />
+      </button>
+      <div className="subagent-list-rows" id={rowsId} hidden={!expanded}>
         {children.map((child) => {
           const index = indexById.get(child.id) ?? 0;
           return (
@@ -413,7 +554,7 @@ function SubagentInspector({
   const { runtimeEntries, transcriptEntries, transcriptBlocks, failedToolCount } = useMemo(() => {
     const runtime = entries.filter((entry): entry is SessionStatusEntry => entry.kind === "status");
     const transcript = entries.filter(
-      (entry): entry is SessionMessageEntry | SessionToolEntry => entry.kind !== "status",
+      (entry): entry is SessionMessageEntry | SessionReasoningEntry | SessionToolEntry => entry.kind !== "status",
     );
     return {
       runtimeEntries: runtime,
@@ -482,6 +623,13 @@ function SubagentInspector({
                   <SubagentToolGroup entry={entry} key={entry.id} />
                 ) : entry.kind === "tool" ? (
                   <SubagentToolEvent entry={entry} key={entry.id} />
+                ) : entry.kind === "reasoning" ? (
+                  <SubagentReasoningEvent
+                    entry={entry}
+                    key={entry.id}
+                    taskId={taskId}
+                    workspacePath={workspacePath}
+                  />
                 ) : (
                   <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
                     <div className="subagent-transcript-speaker">
@@ -533,6 +681,31 @@ function SubagentRuntimeLog({ entries }: { entries: readonly SessionStatusEntry[
           </li>
         ))}
       </ol>
+    </details>
+  );
+}
+
+function SubagentReasoningEvent({
+  entry,
+  taskId,
+  workspacePath,
+}: {
+  entry: SessionReasoningEntry;
+  taskId: string;
+  workspacePath: string | null;
+}) {
+  const preview = entry.text.replace(/\s+/g, " ").trim();
+  return (
+    <details className="subagent-reasoning-event">
+      <summary>
+        <span className="subagent-runtime-log-icon"><IconActivity width={13} height={13} /></span>
+        <span>模型思考</span>
+        <small title={preview}>{preview}</small>
+        <IconChevronDown width={13} height={13} />
+      </summary>
+      <div className="subagent-reasoning-detail">
+        <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
+      </div>
     </details>
   );
 }
@@ -612,7 +785,7 @@ function SubagentStateMark({ status }: { status: SubagentStatus }) {
   return <span className={`subagent-incomplete-mark status-${status}`} aria-hidden="true" />;
 }
 
-function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly AgentRun[]): ActivitySubagent[] {
+export function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly AgentRun[]): ActivitySubagent[] {
   const merged = new Map(current.map((child) => [child.id, child]));
   for (const run of runs) {
     if (run.agent_kind !== "subagent" || merged.has(run.id)) continue;
@@ -703,6 +876,11 @@ export function buildLiveEntries(
       });
       continue;
     }
+    if (event.kind === "reasoning") {
+      const text = visibleText(event.detail);
+      if (text) appendReasoningEntry(entries, { id: event.id, kind: "reasoning", text });
+      continue;
+    }
     const text = compactText(event.detail) ?? compactText(event.label);
     if (text) pushUniqueStatus(entries, {
       id: event.id,
@@ -782,6 +960,12 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
       });
       continue;
     }
+    if (message.kind === "system" && message.text === "r_code_reasoning") {
+      const data = parseObject(message.output_json);
+      const text = visibleText(firstString(data, ["text"]));
+      if (text) appendReasoningEntry(entries, { id, kind: "reasoning", text });
+      continue;
+    }
     if (message.kind !== "system" || (message.text !== "subagent_activity" && message.text !== "subagent_lifecycle")) continue;
     const data = parseObject(message.output_json);
     const detail = compactText(firstString(data, ["detail", "summary", "message"]));
@@ -823,6 +1007,8 @@ export function mergeSessionEntries(
       const existing = entries[existingIndex];
       if (existing.kind === "message" && live.kind === "message" && live.text.length > existing.text.length) {
         entries[existingIndex] = live;
+      } else if (existing.kind === "reasoning" && live.kind === "reasoning" && live.text.length > existing.text.length) {
+        entries[existingIndex] = live;
       } else if (existing.kind === "tool" && live.kind === "tool") {
         entries[existingIndex] = mergeToolEntries(existing, live);
       }
@@ -863,6 +1049,18 @@ function appendMessageEntry(entries: SessionEntry[], entry: SessionMessageEntry)
   entries.push(entry);
 }
 
+function appendReasoningEntry(entries: SessionEntry[], entry: SessionReasoningEntry) {
+  const previous = entries[entries.length - 1];
+  if (previous?.kind === "reasoning") {
+    entries[entries.length - 1] = {
+      ...previous,
+      text: joinVisibleMessageText(previous.text, entry.text),
+    };
+    return;
+  }
+  entries.push(entry);
+}
+
 function joinVisibleMessageText(left: string, right: string): string {
   if (!left) return right;
   if (!right) return left;
@@ -878,7 +1076,7 @@ function joinVisibleMessageText(left: string, right: string): string {
 }
 
 export function groupTranscriptEntries(
-  entries: readonly (SessionMessageEntry | SessionToolEntry)[],
+  entries: readonly (SessionMessageEntry | SessionReasoningEntry | SessionToolEntry)[],
 ): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
   let pendingTools: SessionToolEntry[] = [];
@@ -928,6 +1126,9 @@ function sessionEntriesEquivalent(left: SessionEntry, right: SessionEntry): bool
     return left.toolName === right.toolName && left.summary === right.summary;
   }
   if (left.kind === "message" && right.kind === "message") {
+    return left.text === right.text || left.text.startsWith(right.text) || right.text.startsWith(left.text);
+  }
+  if (left.kind === "reasoning" && right.kind === "reasoning") {
     return left.text === right.text || left.text.startsWith(right.text) || right.text.startsWith(left.text);
   }
   return left.kind === "status" && right.kind === "status" && left.text === right.text;

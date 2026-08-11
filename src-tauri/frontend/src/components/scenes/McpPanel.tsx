@@ -46,6 +46,8 @@ const EMPTY_DRAFT = {
 /** 本机联网与 MCP 控制面。所有密钥输入都只写入系统凭据库，从不回填到页面。 */
 export function McpPanel() {
   const suggestedQuery = useAppStore((state) => state.mcpMarketQuery);
+  const focusServerId = useAppStore((state) => state.mcpFocusServerId);
+  const clearMcpFocus = useAppStore((state) => state.clearMcpFocus);
   const [snapshot, setSnapshot] = useState<McpManagerSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -57,6 +59,9 @@ export function McpPanel() {
   const [marketOpen, setMarketOpen] = useState(Boolean(suggestedQuery));
   const [marketQuery, setMarketQuery] = useState(suggestedQuery ?? "");
   const [market, setMarket] = useState<McpMarketPage | null>(null);
+  const servers = useMemo(() => [...(snapshot?.servers ?? [])].sort((left, right) =>
+    Number(right.source.kind === "generated") - Number(left.source.kind === "generated")
+  ), [snapshot?.servers]);
 
   const reload = useCallback(async () => {
     try {
@@ -90,6 +95,17 @@ export function McpPanel() {
       unlisten?.();
     };
   }, [reload]);
+
+  useEffect(() => {
+    if (!focusServerId || !servers.some((server) => server.id === focusServerId)) return;
+    const frame = window.requestAnimationFrame(() => {
+      const row = document.getElementById(`mcp-server-${focusServerId}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      row?.focus({ preventScroll: true });
+      clearMcpFocus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [clearMcpFocus, focusServerId, servers]);
 
   const searchMarket = useCallback(async (cursor: string | null = null) => {
     setBusyKeys((current) => new Set(current).add("market"));
@@ -204,9 +220,9 @@ export function McpPanel() {
           <button className="btn" onClick={() => setEditing("new")}><IconPlus width={13} height={13} />自定义</button>
         </div>
         {!snapshot && !error && <div className="knowledge-state">正在读取本机 MCP 配置…</div>}
-        {snapshot && snapshot.servers.length === 0 && <div className="mcp-empty">暂无 MCP 服务。内置联网工具仍然可用。</div>}
+        {snapshot && servers.length === 0 && <div className="mcp-empty">暂无 MCP 服务。内置联网工具仍然可用。</div>}
         <div className="mcp-server-list">
-          {snapshot?.servers.map((server) => (
+          {servers.map((server) => (
             <ServerRow
               key={server.id}
               server={server}
@@ -298,15 +314,28 @@ function ServerRow({ server, busyKeys, removeArmed, onToggle, onTest, onEdit, on
   const credentialNames = server.transport.type === "stdio"
     ? server.transport.environment_names
     : server.transport.type === "streamable_http" ? server.transport.header_names : [];
+  const generatedSource = server.source.kind === "generated" ? server.source : null;
+  const generated = Boolean(generatedSource);
   return (
-    <article className="mcp-server-row">
+    <article
+      id={`mcp-server-${server.id}`}
+      className={`mcp-server-row${generated ? " is-generated" : ""}`}
+      tabIndex={-1}
+    >
       <div className="mcp-server-main">
-        <div className="mcp-server-title"><strong>{server.display_name}</strong><code>{server.id}</code>{server.builtin && <span>内置</span>}</div>
+        <div className="mcp-server-title">
+          <strong>{server.display_name}</strong>
+          <code>{server.id}</code>
+          {server.builtin && <span>内置</span>}
+          {generated && <span className="generated">由 R-Code 生成</span>}
+          {generated && !server.enabled && <span className="review">待用户审核</span>}
+        </div>
         <p>{server.description || transportSummary(server)}</p>
         <div className="mcp-server-meta">
           <span>{transportSummary(server)}</span>
+          {generatedSource && <span className="mcp-source-path" title={generatedSource.source_path}>源码：{generatedSource.source_path}</span>}
           {server.tool_count > 0 && <span>{server.tool_count} 个工具</span>}
-          {!server.launch_approved && !server.builtin && <span className="warn">启动方案待确认</span>}
+          {!server.launch_approved && !server.builtin && !generated && <span className="warn">启动方案待确认</span>}
           {server.error_code && <span className="danger">{server.error_code}</span>}
         </div>
       </div>

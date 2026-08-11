@@ -740,6 +740,7 @@ export interface AgentEventScope {
 
 export type AgentEvent =
   | { type: "message"; text: string; delta: boolean }
+  | { type: "reasoning"; text: string; delta: boolean }
   | { type: "tool_call"; name: string; input: unknown; call_id: string }
   | { type: "tool_result"; call_id: string; output: unknown; is_error: boolean }
   | { type: "plan"; steps: { description: string; completed: boolean }[] }
@@ -760,6 +761,7 @@ export type McpServerState = "disabled" | "stopped" | "starting" | "running" | "
 export type McpServerSource =
   | { kind: "builtin" }
   | { kind: "user" }
+  | { kind: "generated"; source_path: string; created_at: string }
   | {
       kind: "registry";
       registry_url: string;
@@ -948,6 +950,8 @@ export interface ProviderConfig {
   temperature?: number;
   /** 用户显式选定的线路协议。缺省 = 升级前保存的旧配置，后端会按目录推断。 */
   protocol?: ProviderProtocol;
+  /** 是否在对话中展示 Provider 明确返回的思考内容/摘要；旧配置缺省为开启。 */
+  show_reasoning?: boolean;
 }
 
 /** 线路协议。同一厂商的不同 base_url 往往是不同协议，不能按名字推断。 */
@@ -1056,6 +1060,8 @@ export interface ProviderSettingsInput {
   temperature?: number | null;
   /** 省略 = 沿用已存的选择；从未存过则落到预设默认值。 */
   protocol?: ProviderProtocol | null;
+  /** 省略 = 沿用已存的选择；从未存过则默认展示。 */
+  showReasoning?: boolean | null;
   activate?: boolean | null;
 }
 

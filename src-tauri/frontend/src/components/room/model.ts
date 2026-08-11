@@ -17,6 +17,8 @@ import type {
 import { toolTarget } from "../../lib/format";
 
 const CODEX_REASONING_SUMMARY_EVENT = "codex_reasoning_summary";
+const R_CODE_REASONING_EVENT = "r_code_reasoning";
+const R_CODE_REASONING_LABEL = "模型思考";
 // 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。
 const CODEX_REASONING_SUMMARY_PREFIX = "Codex 思考摘要：";
 
@@ -81,7 +83,14 @@ export function runPresentation(run: AgentRun): RunPresentation {
 
 export type TimelineItem =
   | { kind: "ms"; id: string; t: number; ok: boolean | null; label: string }
-  | { kind: "context"; id: string; t: number; label: string; detail: string | null }
+  | {
+      kind: "context";
+      id: string;
+      t: number;
+      label: string;
+      detail: string | null;
+      collapsible?: boolean;
+    }
   | {
       kind: "you";
       id: string;
@@ -393,6 +402,18 @@ export function buildTimeline(
             label: "上下文已自动压缩",
             detail: contextCompactionDetail(m.output_json),
           });
+        } else if (m.text === R_CODE_REASONING_EVENT) {
+          const detail = reasoningEventDetail(m.output_json);
+          if (detail) {
+            items.push({
+              kind: "context",
+              id: m.id ? `reasoning-${m.id}` : nid("reasoning"),
+              t: lastT,
+              label: R_CODE_REASONING_LABEL,
+              detail,
+              collapsible: true,
+            });
+          }
         } else if (m.text === CODEX_REASONING_SUMMARY_EVENT) {
           const detail = codexReasoningSummaryDetail(m.output_json);
           if (detail) {
@@ -402,6 +423,7 @@ export function buildTimeline(
               t: lastT,
               label: "Codex 思考摘要",
               detail,
+              collapsible: true,
             });
           }
         } else if (m.text && isInternalTimelineProtocol(m.text)) {
@@ -662,6 +684,10 @@ function contextCompactionDetail(value: string | null | undefined): string | nul
 }
 
 function codexReasoningSummaryDetail(value: string | null | undefined): string | null {
+  return reasoningEventDetail(value);
+}
+
+function reasoningEventDetail(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
     const payload = JSON.parse(value) as Record<string, unknown>;
@@ -707,6 +733,28 @@ export function applyAgentEvent(
   const items = [...prev];
   const last = items[items.length - 1];
   switch (ev.type) {
+    case "reasoning": {
+      const text = ev.text;
+      if (!text) return items;
+      finishStreamingAgents(items);
+      if (last?.kind === "context" && last.label === R_CODE_REASONING_LABEL) {
+        items[items.length - 1] = {
+          ...last,
+          detail: `${last.detail ?? ""}${text}`,
+          collapsible: true,
+        };
+      } else {
+        items.push({
+          kind: "context",
+          id: nid(),
+          t: nowSec,
+          label: R_CODE_REASONING_LABEL,
+          detail: text,
+          collapsible: true,
+        });
+      }
+      return items;
+    }
     case "message": {
       if (last?.kind === "agent" && last.streaming) {
         finishStreamingAgents(items, items.length - 1);
@@ -795,6 +843,7 @@ export function applyAgentEvent(
             t: nowSec,
             label: "Codex 思考摘要",
             detail: summary,
+            collapsible: true,
           });
         }
       }

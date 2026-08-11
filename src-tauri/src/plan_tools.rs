@@ -11,7 +11,7 @@ use r_code_core::dto::{RiskLevel, TaskMode};
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
     PlanItemDraft, PlanItemState, PlanQuestionDraft, PublishPlanInput, RequestPlanQuestionsInput,
-    UpdatePlanItemInput,
+    PlanView, UpdatePlanItemInput,
 };
 use r_code_gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 use r_code_store::{Database, PlanStore, SessionBranchRepository, TaskRepository};
@@ -47,6 +47,35 @@ fn require_task_mode(
 
 fn context_required() -> ProductError {
     invalid("this host Plan tool requires gateway-owned execution context")
+}
+
+fn authoritative_plan_metadata(view: &PlanView) -> serde_json::Value {
+    serde_json::json!({ "r_code_authoritative_plan_view": view })
+}
+
+fn plan_item_execution_result(content: String, view: &PlanView) -> ToolExecutionResult {
+    let active = view
+        .items
+        .iter()
+        .any(|item| item.state == PlanItemState::InProgress);
+    let result = if active {
+        ToolExecutionResult::require_agent_continuation(content)
+    } else {
+        ToolExecutionResult::allow_agent_completion(content)
+    };
+    result.with_metadata(authoritative_plan_metadata(view))
+}
+
+fn recoverable_plan_update_conflict(error: &ProductError) -> bool {
+    matches!(
+        error,
+        ProductError::StateMachineError(message)
+            if message.starts_with("stale Plan revision:")
+                || message.starts_with("invalid Plan feature transition:")
+                || message == "another Plan feature is already in progress"
+                || message == "Plan changed while its feature was being updated"
+                || message.starts_with("cannot update a feature while Plan is ")
+    )
 }
 
 const ENTER_PLAN_CONTINUATION: &str = "[system] R-Code safely changed this task from Agent mode to Plan mode. Continue the user's existing request as a structured Plan. Investigate read-only as needed, ask only blocking questions with request_user_input, then publish the complete functional Plan with plan_publish. Do not edit files or execute implementation before the user approves the Plan.";
@@ -95,10 +124,6 @@ impl Tool for EnterPlanModeTool {
         false
     }
 
-    fn allows_transient_retry(&self) -> bool {
-        true
-    }
-
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -143,11 +168,12 @@ impl Tool for EnterPlanModeTool {
         let content = serde_json::to_string(&serde_json::json!({
             "entered_plan_mode": true,
             "reason": args.reason.trim(),
-            "plan": view,
+            "plan": &view,
             "instruction": "Stop this Agent run. The host has queued a fresh Plan-mode continuation for the same request.",
         }))
         .map_err(|error| invalid(format!("serialize enter_plan_mode result: {error}")))?;
-        Ok(ToolExecutionResult::suspend_for_user(content))
+        Ok(ToolExecutionResult::suspend_for_user(content)
+            .with_metadata(authoritative_plan_metadata(&view)))
     }
 }
 
@@ -197,10 +223,6 @@ impl Tool for PlanPublishTool {
         false
     }
 
-    fn allows_transient_retry(&self) -> bool {
-        true
-    }
-
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -218,7 +240,11 @@ impl Tool for PlanPublishTool {
                         "properties": {
                             "id": { "type": "string", "minLength": 1, "maxLength": 256 },
                             "title": { "type": "string", "minLength": 1, "maxLength": 200 },
-                            "description": { "type": "string", "maxLength": 20000 },
+                            "description": {
+                                "type": "string",
+                                "maxLength": 20000,
+                                "description": "Markdown-supported implementation and acceptance details. Keep simple items concise. For multi-part items, use short sections and lists with paths or commands in inline code instead of one semicolon-packed paragraph."
+                            },
                             "section_path": {
                                 "type": "array",
                                 "maxItems": 4,
@@ -265,10 +291,11 @@ impl Tool for PlanPublishTool {
         )?;
         let content = serde_json::to_string(&serde_json::json!({
             "published": true,
-            "plan": view,
+            "plan": &view,
         }))
         .map_err(|error| invalid(format!("serialize plan_publish result: {error}")))?;
-        Ok(ToolExecutionResult::success(content))
+        Ok(ToolExecutionResult::success(content)
+            .with_metadata(authoritative_plan_metadata(&view)))
     }
 }
 
@@ -316,10 +343,6 @@ impl Tool for RequestUserInputTool {
 
     fn requires_workspace_scope(&self) -> bool {
         false
-    }
-
-    fn allows_transient_retry(&self) -> bool {
-        true
     }
 
     fn input_schema(&self) -> serde_json::Value {
@@ -394,14 +417,15 @@ impl Tool for RequestUserInputTool {
             .ok_or_else(|| invalid("Plan store did not return the pending question set"))?;
         let content = serde_json::to_string(&serde_json::json!({
             "status": "awaiting_user_input",
-            "question_set": question_set,
-            "plan": view,
+            "question_set": &question_set,
+            "plan": &view,
         }))
         .map_err(|error| invalid(format!("serialize request_user_input result: {error}")))?;
         Ok(
             ToolExecutionResult::suspend_for_user(content).with_metadata(serde_json::json!({
-                "question_set": question_set,
-                "plan": view,
+                "question_set": &question_set,
+                "plan": &view,
+                "r_code_authoritative_plan_view": &view,
             })),
         )
     }
@@ -454,10 +478,6 @@ impl Tool for PlanItemUpdateTool {
         false
     }
 
-    fn allows_transient_retry(&self) -> bool {
-        true
-    }
-
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
@@ -492,31 +512,71 @@ impl Tool for PlanItemUpdateTool {
             "plan_item_update",
         )?;
         let args: UpdateItemArgs = decode(input)?;
-        let view = self.plans.update_plan_item(
+        let update = UpdatePlanItemInput {
+            plan_id: args.plan_id,
+            item_id: args.item_id,
+            expected_revision: args.expected_revision,
+            state: args.state,
+        };
+        let request_json = serde_json::to_string(&update)
+            .map_err(|error| invalid(format!("serialize plan_item_update request: {error}")))?;
+        let outcome = match self.plans.update_plan_item_idempotent(
             &context.task_id,
-            &UpdatePlanItemInput {
-                plan_id: args.plan_id,
-                item_id: args.item_id,
-                expected_revision: args.expected_revision,
-                state: args.state,
-            },
-        )?;
+            &update,
+            &context.run_id,
+            &context.tool_call_id,
+            &request_json,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) if recoverable_plan_update_conflict(&error) => {
+                tracing::warn!(
+                    task_id = %context.task_id,
+                    run_id = %context.run_id,
+                    tool_call_id = %context.tool_call_id,
+                    plan_id = %update.plan_id,
+                    item_id = %update.item_id,
+                    error = %error,
+                    "Plan update conflict recovered from authoritative store state"
+                );
+                let Some(view) = self.plans.current_for_task(&context.task_id)? else {
+                    return Err(error);
+                };
+                if view.plan.id != update.plan_id {
+                    return Err(error);
+                }
+                let active_feature = view
+                    .items
+                    .iter()
+                    .find(|item| item.state == PlanItemState::InProgress);
+                let content = serde_json::to_string(&serde_json::json!({
+                    "updated": false,
+                    "status": "plan_state_synchronized",
+                    "plan": &view,
+                    "active_feature": active_feature,
+                    "instruction": "The requested transition was not applied because the Plan had already advanced. This complete Plan is authoritative; continue only with active_feature, or stop if it is null.",
+                }))
+                .map_err(|serialize_error| invalid(format!(
+                    "serialize synchronized plan_item_update result: {serialize_error}"
+                )))?;
+                return Ok(plan_item_execution_result(content, &view));
+            }
+            Err(error) => return Err(error),
+        };
+        let replayed = outcome.replayed;
+        let view = outcome.view;
         let active_feature = view
             .items
             .iter()
             .find(|item| item.state == PlanItemState::InProgress);
         let content = serde_json::to_string(&serde_json::json!({
-            "updated": true,
+            "updated": !replayed,
+            "replayed": replayed,
             "plan": &view,
             "active_feature": active_feature,
             "instruction": "This complete Plan is now authoritative. Continue only with active_feature; if it is null, stop implementation.",
         }))
         .map_err(|error| invalid(format!("serialize plan_item_update result: {error}")))?;
-        if active_feature.is_some() {
-            Ok(ToolExecutionResult::require_agent_continuation(content))
-        } else {
-            Ok(ToolExecutionResult::allow_agent_completion(content))
-        }
+        Ok(plan_item_execution_result(content, &view))
     }
 }
 
@@ -528,10 +588,14 @@ mod tests {
     use r_code_store::QueuedMessageRepository;
 
     fn context(task_id: &str) -> ToolExecutionContext {
+        context_with_call(task_id, "call-host-owned")
+    }
+
+    fn context_with_call(task_id: &str, tool_call_id: &str) -> ToolExecutionContext {
         ToolExecutionContext {
             task_id: task_id.to_string(),
             run_id: "run-host-owned".to_string(),
-            tool_call_id: "call-host-owned".to_string(),
+            tool_call_id: tool_call_id.to_string(),
             caller: Some("agent".to_string()),
             access_mode: ProjectAccessMode::RiskBased,
         }
@@ -704,7 +768,7 @@ mod tests {
                     "expected_revision": approved.plan.revision,
                     "state": "blocked"
                 }),
-                &context(&task.id),
+                &context_with_call(&task.id, "call-block-first"),
             )
             .await
             .unwrap();
@@ -723,7 +787,7 @@ mod tests {
                     "expected_revision": blocked["plan"]["plan"]["revision"],
                     "state": "in_progress"
                 }),
-                &context(&task.id),
+                &context_with_call(&task.id, "call-resume-first"),
             )
             .await
             .unwrap();
@@ -734,15 +798,16 @@ mod tests {
         let resumed: serde_json::Value = serde_json::from_str(&resumed.content).unwrap();
         assert_eq!(resumed["active_feature"]["id"], "first");
 
+        let advance_input = serde_json::json!({
+            "plan_id": created.plan.id,
+            "item_id": "first",
+            "expected_revision": resumed["plan"]["plan"]["revision"],
+            "state": "completed"
+        });
         let advanced = tool
             .execute_with_context(
-                serde_json::json!({
-                    "plan_id": created.plan.id,
-                    "item_id": "first",
-                    "expected_revision": resumed["plan"]["plan"]["revision"],
-                    "state": "completed"
-                }),
-                &context(&task.id),
+                advance_input.clone(),
+                &context_with_call(&task.id, "call-complete-first"),
             )
             .await
             .unwrap();
@@ -752,6 +817,59 @@ mod tests {
         );
         let advanced: serde_json::Value = serde_json::from_str(&advanced.content).unwrap();
         assert_eq!(advanced["active_feature"]["id"], "second");
+
+        // Exact provider replay is idempotent and returns the current authoritative view.
+        let replayed = tool
+            .execute_with_context(
+                advance_input.clone(),
+                &context_with_call(&task.id, "call-complete-first"),
+            )
+            .await
+            .unwrap();
+        let replayed: serde_json::Value = serde_json::from_str(&replayed.content).unwrap();
+        assert_eq!(replayed["replayed"], true);
+        assert_eq!(
+            replayed["plan"]["plan"]["revision"],
+            advanced["plan"]["plan"]["revision"]
+        );
+        assert_eq!(replayed["active_feature"]["id"], "second");
+
+        // A different call id carrying the old revision is stale intent, not an idempotent replay.
+        // The tool does not mutate again; it returns a typed synchronization result instead of a
+        // raw state-machine error.
+        let stale = tool
+            .execute_with_context(
+                advance_input,
+                &context_with_call(&task.id, "call-stale-complete-first"),
+            )
+            .await
+            .unwrap();
+        let stale_metadata = stale.metadata.clone().unwrap();
+        let stale: serde_json::Value = serde_json::from_str(&stale.content).unwrap();
+        assert_eq!(stale["updated"], false);
+        assert_eq!(stale["status"], "plan_state_synchronized");
+        assert_eq!(stale["active_feature"]["id"], "second");
+        assert_eq!(
+            stale_metadata["r_code_authoritative_plan_view"]["plan"]["revision"],
+            advanced["plan"]["plan"]["revision"]
+        );
+
+        let duplicate_completed = tool
+            .execute_with_context(
+                serde_json::json!({
+                    "plan_id": created.plan.id,
+                    "item_id": "first",
+                    "expected_revision": advanced["plan"]["plan"]["revision"],
+                    "state": "completed"
+                }),
+                &context_with_call(&task.id, "call-duplicate-completed-first"),
+            )
+            .await
+            .unwrap();
+        let duplicate_completed: serde_json::Value =
+            serde_json::from_str(&duplicate_completed.content).unwrap();
+        assert_eq!(duplicate_completed["status"], "plan_state_synchronized");
+        assert_eq!(duplicate_completed["active_feature"]["id"], "second");
         assert!(tool.description().contains("state=in_progress"));
         assert!(tool.input_schema()["properties"]["state"]["description"]
             .as_str()

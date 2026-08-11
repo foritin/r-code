@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 26;
+pub const LATEST_SCHEMA_VERSION: u32 = 27;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -55,6 +55,7 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(24, MIGRATION_024, false),
     MigrationSpec::new(25, MIGRATION_025, false),
     MigrationSpec::new(26, MIGRATION_026, false),
+    MigrationSpec::new(27, MIGRATION_027, false),
 ];
 
 impl MigrationSpec {
@@ -1414,6 +1415,29 @@ ADD COLUMN explicit_remember INTEGER NOT NULL DEFAULT 0
 CHECK (explicit_remember IN (0, 1));
 "#;
 
+/// Migration 027: make state-changing Plan tool calls durable and replay-safe.
+/// The task/run/provider-call tuple is the stable idempotency key. Provider ids are not assumed to
+/// be globally unique across unrelated runs. The request payload is retained so a reused id with
+/// different arguments inside one run can be rejected instead of silently applying another
+/// transition. Receipts deliberately do not reference `tool_calls`: the Plan mutation commits
+/// before the asynchronous audit drain persists that row.
+const MIGRATION_027: &str = r#"
+CREATE TABLE plan_tool_receipts (
+    tool_call_id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+    tool_name TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    committed_revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (task_id, run_id, tool_call_id)
+);
+
+CREATE INDEX idx_plan_tool_receipts_task_plan
+    ON plan_tool_receipts(task_id, plan_id, created_at DESC);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1942,6 +1966,35 @@ mod tests {
             )
             .unwrap();
         assert_eq!(require_approval, 0);
+    }
+
+    #[test]
+    fn migration_v27_adds_durable_plan_tool_receipts() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations_with_specs(&conn, &MIGRATIONS[..26], None).unwrap();
+
+        run_migrations(&conn).unwrap();
+
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(plan_tool_receipts)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            columns,
+            vec![
+                "tool_call_id",
+                "task_id",
+                "run_id",
+                "plan_id",
+                "tool_name",
+                "request_json",
+                "committed_revision",
+                "created_at",
+            ]
+        );
     }
 
     #[test]

@@ -542,6 +542,7 @@ memories_dir = "{base}/m"
             temperature: Some(0.7),
             protocol: None,
             provider_kind: None,
+            show_reasoning: true,
         };
         let debug = format!("{pc:?}");
         assert!(debug.contains("***"), "api_key masked as ***");

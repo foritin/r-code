@@ -74,6 +74,15 @@ pub struct PlanStore {
     projection_root: Arc<PathBuf>,
 }
 
+/// Result of a durable Plan feature transition. `replayed` means the same task/run/provider-call
+/// tuple and request were already committed; `view` is still loaded from the current authoritative
+/// aggregate so replay can never re-introduce an older revision into the running Agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanItemUpdateOutcome {
+    pub view: PlanView,
+    pub replayed: bool,
+}
+
 impl PlanStore {
     pub fn new(db: Arc<Database>, projection_root: impl Into<PathBuf>) -> Self {
         Self {
@@ -1161,16 +1170,75 @@ impl PlanStore {
         task_id: &str,
         input: &UpdatePlanItemInput,
     ) -> Result<PlanView, ProductError> {
+        self.update_plan_item_inner(task_id, input, None)
+            .map(|outcome| outcome.view)
+    }
+
+    /// Advances a feature exactly once for a stable provider tool-call id within one Agent run.
+    ///
+    /// The receipt is inserted in the same SQLite transaction as the Plan revision. Replaying the
+    /// same task/run/id and request returns the newest Plan view without executing another
+    /// transition; reusing that tuple with different arguments is rejected.
+    pub fn update_plan_item_idempotent(
+        &self,
+        task_id: &str,
+        input: &UpdatePlanItemInput,
+        run_id: &str,
+        tool_call_id: &str,
+        request_json: &str,
+    ) -> Result<PlanItemUpdateOutcome, ProductError> {
+        validate_identifier(run_id, "Plan Agent run id")?;
+        validate_identifier(tool_call_id, "Plan tool call id")?;
+        self.update_plan_item_inner(
+            task_id,
+            input,
+            Some((run_id, tool_call_id, request_json)),
+        )
+    }
+
+    fn update_plan_item_inner(
+        &self,
+        task_id: &str,
+        input: &UpdatePlanItemInput,
+        receipt: Option<(&str, &str, &str)>,
+    ) -> Result<PlanItemUpdateOutcome, ProductError> {
         let lock = plan_lock(&input.plan_id)?;
         let _guard = lock
             .lock()
             .map_err(|_| ProductError::Other("Plan lock is poisoned".to_string()))?;
         let now = Utc::now().to_rfc3339();
 
-        {
+        let mut view = {
             let mut conn = self.db.conn()?;
             let tx = conn.transaction().map_err(db_err)?;
             let plan = require_owned_plan(&tx, task_id, &input.plan_id)?;
+            if let Some((run_id, tool_call_id, request_json)) = receipt {
+                let existing: Option<(String, String, String)> = tx
+                    .query_row(
+                        "SELECT plan_id, tool_name, request_json FROM plan_tool_receipts \
+                         WHERE task_id = ?1 AND run_id = ?2 AND tool_call_id = ?3",
+                        params![task_id, run_id, tool_call_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()
+                    .map_err(db_err)?;
+                if let Some((stored_plan, stored_tool, stored_request)) = existing {
+                    if stored_plan != input.plan_id
+                        || stored_tool != "plan_item_update"
+                        || stored_request != request_json
+                    {
+                        return Err(invalid(
+                            "Plan tool call id was reused with different ownership or input",
+                        ));
+                    }
+                    let view = self.load_view(&tx, task_id, &input.plan_id)?;
+                    tx.commit().map_err(db_err)?;
+                    return Ok(PlanItemUpdateOutcome {
+                        view,
+                        replayed: true,
+                    });
+                }
+            }
             if plan.revision != input.expected_revision {
                 return Err(stale_revision(input.expected_revision, plan.revision));
             }
@@ -1325,11 +1393,56 @@ impl PlanStore {
             if updated != 1 {
                 return Err(invalid("Plan changed while its feature was being updated"));
             }
+            let view = self.load_view(&tx, task_id, &input.plan_id)?;
+            if let Some((run_id, tool_call_id, request_json)) = receipt {
+                tx.execute(
+                    "INSERT INTO plan_tool_receipts \
+                     (tool_call_id, task_id, run_id, plan_id, tool_name, request_json, committed_revision, created_at) \
+                     VALUES (?1, ?2, ?3, ?4, 'plan_item_update', ?5, ?6, ?7)",
+                    params![
+                        tool_call_id,
+                        task_id,
+                        run_id,
+                        input.plan_id,
+                        request_json,
+                        sql_revision(next_revision)?,
+                        now,
+                    ],
+                )
+                .map_err(db_err)?;
+            }
             tx.commit().map_err(db_err)?;
-        }
+            view
+        };
 
-        self.sync_projection_locked(&input.plan_id)?;
-        self.require_view(task_id, &input.plan_id)
+        // SQLite is authoritative and the mutation plus receipt are already committed. Projection
+        // maintenance is derived work: a post-commit database/filesystem failure must never make
+        // the gateway replay the state transition. The projection keeps its own error marker and
+        // can be repaired independently from the UI.
+        if let Err(error) = self.sync_projection_locked(&input.plan_id) {
+            tracing::warn!(
+                task_id,
+                plan_id = %input.plan_id,
+                error = %error,
+                "Plan feature committed; deferred projection repair after post-commit failure"
+            );
+        }
+        // Projection sync updates projection_revision/projection_error in SQLite. Return that
+        // freshest aggregate when available, but never turn an already committed transition into
+        // a retryable failure merely because this post-commit reload encountered contention.
+        match self.require_view(task_id, &input.plan_id) {
+            Ok(refreshed) => view = refreshed,
+            Err(error) => tracing::warn!(
+                task_id,
+                plan_id = %input.plan_id,
+                error = %error,
+                "Plan feature committed; returning the transaction snapshot after reload failure"
+            ),
+        }
+        Ok(PlanItemUpdateOutcome {
+            view,
+            replayed: false,
+        })
     }
 
     /// Atomically claims a continuation. `None` means another caller already claimed/dispatched it.

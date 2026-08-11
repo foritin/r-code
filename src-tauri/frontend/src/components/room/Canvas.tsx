@@ -76,7 +76,11 @@ import {
 import { buildAuditFeed } from "./audit";
 import type { ActivityTraceState } from "./activity";
 import { SubagentAvatar } from "./SubagentIdentity";
-import { SubagentWorkbench } from "./SubagentWorkbench";
+import {
+  mergeSubagents,
+  SubagentSessionTabs,
+  SubagentWorkbench,
+} from "./SubagentWorkbench";
 import { handleWorkbenchTabListKeyDown } from "./workbench-tabs";
 import { isLocalRasterReference, LocalImageArtifact } from "./LocalResource";
 import {
@@ -256,6 +260,15 @@ export function Canvas({
   const launcherButtonsRef = useRef<Array<HTMLButtonElement | null>>([]);
   const workbenchBodyRef = useRef<HTMLDivElement>(null);
   const [launcherIndex, setLauncherIndex] = useState(0);
+  const subagents = useMemo(
+    () => mergeSubagents(activity.subagents, detail?.runs ?? []),
+    [activity.subagents, detail?.runs],
+  );
+  const subagentIds = useMemo(
+    () => new Set(subagents.map((child) => child.id)),
+    [subagents],
+  );
+  const hasOpenSubagentTabs = openSubagentIds.some((id) => subagentIds.has(id));
 
   const activateTool = (tool: CanvasTab) => {
     onCloseSubagents();
@@ -315,6 +328,15 @@ export function Canvas({
   const closeTool = (tool: WorkbenchToolTab) => {
     if (tool === "summary") onCloseSubagents();
     closeTab(tool);
+    if (
+      tool === "files"
+      && activeToolId === "files"
+      && subagentPanelOpen
+      && selectedSubagentId
+    ) {
+      // 文件深链位于子代理会话之后；关闭文件时回到它的左侧相邻会话。
+      onInspectSubagent(selectedSubagentId);
+    }
   };
   const openLauncher = () => {
     showLauncher();
@@ -342,7 +364,7 @@ export function Canvas({
     setLauncherIndex(next);
     launcherButtonsRef.current[next]?.focus();
   };
-  const toolTabs = openTabs.map((toolId) => {
+  const renderToolTab = (toolId: WorkbenchToolTab) => {
     const tool = TABS.find((item) => item.id === toolId);
     if (!tool) return null;
     const selected = !launcherOpen
@@ -387,7 +409,14 @@ export function Canvas({
         </button>
       </div>
     );
-  });
+  };
+  // 文件深链属于当前子代理会话的上下文，因此放在所有已打开会话之后。
+  // Files 工具仍按唯一 ID 去重；重复点击同一或其他文件只激活现有 Tab。
+  const fileTabAfterSubagents = hasOpenSubagentTabs && openTabs.includes("files");
+  const toolTabsBeforeSubagents = openTabs
+    .filter((toolId) => !fileTabAfterSubagents || toolId !== "files")
+    .map(renderToolTab);
+  const toolTabsAfterSubagents = fileTabAfterSubagents ? [renderToolTab("files")] : [];
 
   return (
     <aside
@@ -402,11 +431,11 @@ export function Canvas({
         <SubagentWorkbench
           taskId={taskId}
           workspacePath={workspacePath}
-          activity={activity}
-          runs={detail?.runs ?? []}
+          subagents={subagents}
           selectedSubagentId={selectedSubagentId}
           openSubagentIds={openSubagentIds}
-          toolTabs={toolTabs}
+          toolTabsBefore={toolTabsBeforeSubagents}
+          toolTabsAfter={toolTabsAfterSubagents}
           onSelect={onInspectSubagent}
           onCloseTab={onCloseSubagentTab}
           onOpenLauncher={openLauncher}
@@ -417,9 +446,17 @@ export function Canvas({
         />
       ) : (
         <>
-        <header className="workbench-head">
-        <div className="workbench-tabs" role="tablist" aria-label="已打开的工作台工具" onKeyDown={handleWorkbenchTabListKeyDown}>
-          {toolTabs}
+        <header className={`workbench-head${hasOpenSubagentTabs ? " subagent-tabs-header" : ""}`}>
+        <div className="workbench-tabs" role="tablist" aria-label="任务工作台标签" onKeyDown={handleWorkbenchTabListKeyDown}>
+          {toolTabsBeforeSubagents}
+          <SubagentSessionTabs
+            subagents={subagents}
+            openSubagentIds={openSubagentIds}
+            selectedSubagentId={subagentPageOpen ? selectedSubagentId : null}
+            onSelect={onInspectSubagent}
+            onCloseTab={onCloseSubagentTab}
+          />
+          {toolTabsAfterSubagents}
         </div>
         <button ref={launcherTriggerRef} type="button" className="workbench-head-action workbench-add-button" onClick={openLauncher} aria-label="打开工具启动器" title="新增扩展" aria-pressed={launcherOpen}>
           <IconPlus width={16} height={16} />
@@ -490,6 +527,8 @@ export function Canvas({
             task={task}
             running={running}
             controller={planController}
+            subagents={subagents}
+            onInspectSubagent={onInspectSubagent}
             onTaskChanged={onTaskChanged}
           />
         ) : (

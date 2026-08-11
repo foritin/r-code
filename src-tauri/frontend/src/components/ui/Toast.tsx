@@ -260,6 +260,11 @@ export function useTaskCompletionToasts(): void {
           if (!ACTIVE_STATES.has(before) || !TERMINAL_STATES.has(task.state)) continue;
           const spec = completionToast(task);
           if (!spec) continue;
+          const app = useAppStore.getState();
+          // The destination already presents the result and next actions. Showing a second
+          // card that only opens the same room adds an unnecessary click (notably after
+          // startup recovery navigates directly to an interrupted conversation).
+          if (app.scene === "room" && app.currentTaskId === task.id) continue;
           pushToast({
             ...spec,
             action: { label: "打开会话", run: () => openRoom(task.id) },

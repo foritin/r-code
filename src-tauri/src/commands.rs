@@ -95,8 +95,8 @@ use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
 use crate::legacy_memory::{legacy_memory_status as inspect_legacy_memory, LegacyMemoryStatus};
 use crate::mcp_manager::{
-    McpCredentialStatus, McpManager, McpManagerSnapshot, McpMarketInstallRequest, McpServerView,
-    McpToggleResult, McpTransportView, McpUpsertRequest,
+    CreateMcpDraftTool, McpCredentialStatus, McpManager, McpManagerSnapshot,
+    McpMarketInstallRequest, McpServerView, McpToggleResult, McpTransportView, McpUpsertRequest,
 };
 use crate::plan_review_tools::{
     plan_review_accept_feature as accept_plan_review_feature,
@@ -559,6 +559,15 @@ struct PendingAssistantText {
     storage_id: String,
 }
 
+/// Streaming text is buffered independently per run scope and content channel. Keeping reasoning
+/// out of `assistant` preserves the provider conversation history while still allowing the UI to
+/// replay a compact, human-readable reasoning entry after restart.
+#[derive(Default)]
+struct PendingRuntimeText {
+    assistant: HashMap<String, PendingAssistantText>,
+    reasoning: HashMap<String, PendingAssistantText>,
+}
+
 async fn flush_pending_assistant_text(
     session_store: &SessionStore,
     pending_text: &mut HashMap<String, PendingAssistantText>,
@@ -582,6 +591,56 @@ async fn flush_pending_assistant_text(
             SessionEvent::Message(Message::assistant_text(&pending.text)),
         )
         .await;
+}
+
+async fn flush_pending_reasoning_text(
+    session_store: &SessionStore,
+    pending_text: &mut HashMap<String, PendingAssistantText>,
+    scope_key: &str,
+    fallback_storage_id: &str,
+) {
+    let Some(pending) = pending_text.remove(scope_key) else {
+        return;
+    };
+    if !pending.saw_delta || pending.text.trim().is_empty() {
+        return;
+    }
+    let storage_id = if pending.storage_id.is_empty() {
+        fallback_storage_id
+    } else {
+        &pending.storage_id
+    };
+    let _ = session_store
+        .append(
+            storage_id,
+            SessionEvent::System {
+                event: R_CODE_REASONING_EVENT.into(),
+                data: serde_json::json!({ "text": pending.text }),
+            },
+        )
+        .await;
+}
+
+async fn flush_pending_runtime_text(
+    session_store: &SessionStore,
+    pending_text: &mut PendingRuntimeText,
+    scope_key: &str,
+    fallback_storage_id: &str,
+) {
+    flush_pending_assistant_text(
+        session_store,
+        &mut pending_text.assistant,
+        scope_key,
+        fallback_storage_id,
+    )
+    .await;
+    flush_pending_reasoning_text(
+        session_store,
+        &mut pending_text.reasoning,
+        scope_key,
+        fallback_storage_id,
+    )
+    .await;
 }
 
 /// Agent 桥接层 -- 持有单个任务的 runtime（真实 provider / Mock）与会话映射。
@@ -893,9 +952,12 @@ impl CommandState {
         gateway.register(Box::new(r_code_gateway::GlobTool));
         gateway.register(Box::new(r_code_gateway::GitStatusTool));
         gateway.register(Box::new(r_code_gateway::LoadSkillTool));
+        // 受控配置写入（R2）
         gateway.register(Box::new(SaveWorkflowSkillTool::new(
             WorkflowSkillCatalog::new(config_dir.join("workflow-skills")),
         )));
+        gateway.register(Box::new(CreateMcpDraftTool::new(mcp_manager.clone())));
+        // 主任务生命周期控制
         gateway.register(Box::new(EnterPlanModeTool::new(
             db.clone(),
             plan_store.clone(),
@@ -3876,7 +3938,7 @@ fn provider_runtime_config_fingerprint(
     provider: &hermes_config::ProviderConfig,
 ) -> String {
     format!(
-        "{provider_name}|{}|{}|{}|{}|{:?}|{:?}|{}",
+        "{provider_name}|{}|{}|{}|{}|{:?}|{:?}|{}|{}",
         provider.provider_kind.as_deref().unwrap_or_default(),
         provider.base_url,
         provider.model,
@@ -3884,6 +3946,7 @@ fn provider_runtime_config_fingerprint(
         provider.max_tokens,
         provider.temperature,
         resolve_effective_protocol(provider_name, provider).as_str(),
+        provider.show_reasoning,
     )
 }
 
@@ -3991,6 +4054,7 @@ async fn ensure_real_runtime(
         pcfg.temperature,
     )
     .with_hosted_tools(hosted_tools)
+    .with_reasoning_visibility(pcfg.show_reasoning)
     .with_orchestration_policy(orchestration)
     .with_agent_prompts(agent_prompts.clone())
     .with_external_tools(mcp_manager.clone())
@@ -4271,7 +4335,7 @@ async fn persist_runtime_event(
     parent_run_id: &str,
     parent_storage_id: &str,
     event: &AgentEvent,
-    pending_text: &mut HashMap<String, PendingAssistantText>,
+    pending_text: &mut PendingRuntimeText,
 ) {
     let (scope, event) = split_scoped_event(event);
     let scope_key = scope
@@ -4290,16 +4354,68 @@ async fn persist_runtime_event(
     }
 
     match event {
-        AgentEvent::Message { text, delta } => {
+        AgentEvent::Reasoning { text, delta } => {
+            // A reasoning segment and an assistant answer are distinct timeline entries. Flush any
+            // answer fragment before accepting reasoning so interleaved provider streams retain
+            // their original ordering.
+            flush_pending_assistant_text(
+                session_store,
+                &mut pending_text.assistant,
+                &scope_key,
+                &event_storage_id,
+            )
+            .await;
             if *delta {
-                let entry = pending_text.entry(scope_key).or_default();
+                let entry = pending_text.reasoning.entry(scope_key).or_default();
                 if entry.storage_id.is_empty() {
                     entry.storage_id = event_storage_id;
                 }
                 entry.text.push_str(text);
                 entry.saw_delta = true;
             } else {
-                let pending = pending_text.remove(&scope_key).unwrap_or_default();
+                let pending = pending_text
+                    .reasoning
+                    .remove(&scope_key)
+                    .unwrap_or_default();
+                let storage_id = if pending.storage_id.is_empty() {
+                    event_storage_id
+                } else {
+                    pending.storage_id
+                };
+                let full = pending.text + text;
+                if !full.trim().is_empty() {
+                    let _ = session_store
+                        .append(
+                            &storage_id,
+                            SessionEvent::System {
+                                event: R_CODE_REASONING_EVENT.into(),
+                                data: serde_json::json!({ "text": full }),
+                            },
+                        )
+                        .await;
+                }
+            }
+        }
+        AgentEvent::Message { text, delta } => {
+            flush_pending_reasoning_text(
+                session_store,
+                &mut pending_text.reasoning,
+                &scope_key,
+                &event_storage_id,
+            )
+            .await;
+            if *delta {
+                let entry = pending_text.assistant.entry(scope_key).or_default();
+                if entry.storage_id.is_empty() {
+                    entry.storage_id = event_storage_id;
+                }
+                entry.text.push_str(text);
+                entry.saw_delta = true;
+            } else {
+                let pending = pending_text
+                    .assistant
+                    .remove(&scope_key)
+                    .unwrap_or_default();
                 let storage_id = if pending.storage_id.is_empty() {
                     event_storage_id
                 } else {
@@ -4323,7 +4439,14 @@ async fn persist_runtime_event(
             // 子智能体详情里被重排，或只在父运行彻底退出时才出现。
             flush_pending_assistant_text(
                 session_store,
-                pending_text,
+                &mut pending_text.assistant,
+                &scope_key,
+                &event_storage_id,
+            )
+            .await;
+            flush_pending_reasoning_text(
+                session_store,
+                &mut pending_text.reasoning,
                 &scope_key,
                 &event_storage_id,
             )
@@ -4382,6 +4505,8 @@ async fn persist_runtime_event(
             output,
             is_error,
         } => {
+            flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
+                .await;
             let run_id = scope
                 .map(|value| value.run_id.as_str())
                 .unwrap_or(parent_run_id);
@@ -4436,13 +4561,8 @@ async fn persist_runtime_event(
             }
         }
         AgentEvent::Plan { steps } => {
-            flush_pending_assistant_text(
-                session_store,
-                pending_text,
-                &scope_key,
-                &event_storage_id,
-            )
-            .await;
+            flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
+                .await;
             let _ = session_store
                 .append(
                     &event_storage_id,
@@ -4454,13 +4574,8 @@ async fn persist_runtime_event(
                 .await;
         }
         AgentEvent::State { state } => {
-            flush_pending_assistant_text(
-                session_store,
-                pending_text,
-                &scope_key,
-                &event_storage_id,
-            )
-            .await;
+            flush_pending_runtime_text(session_store, pending_text, &scope_key, &event_storage_id)
+                .await;
             // 子运行自己的终态不能直接推动整个 Task 状态机。
             if scope.is_none() {
                 let _ = TaskRepository::new(db).update_state(task_id, *state);
@@ -4483,7 +4598,7 @@ async fn persist_runtime_event(
                 state,
                 SubagentState::Completed | SubagentState::Failed | SubagentState::Cancelled
             ) {
-                flush_pending_assistant_text(
+                flush_pending_runtime_text(
                     session_store,
                     pending_text,
                     &scope_key,
@@ -5439,7 +5554,7 @@ fn spawn_drain_loop_with_resources(
         };
         let session_store = SessionStore::new(sessions_dir.clone());
         let mut empty_streak = 0u32;
-        let mut pending_text: HashMap<String, PendingAssistantText> = HashMap::new();
+        let mut pending_text = PendingRuntimeText::default();
         let mut runtime_failed = false;
         let mut externally_interrupted = false;
         let mut next_interrupt_poll = Instant::now();
@@ -5552,7 +5667,11 @@ fn spawn_drain_loop_with_resources(
         }
 
         // 收尾：冲刷被中止前已经接收的文本 delta，审计日志不会丢失已显示内容。
-        for pending in pending_text.into_values() {
+        let PendingRuntimeText {
+            assistant,
+            reasoning,
+        } = pending_text;
+        for pending in assistant.into_values() {
             if pending.saw_delta && !pending.text.is_empty() {
                 let storage_id = if pending.storage_id.is_empty() {
                     storage_id.clone()
@@ -5563,6 +5682,24 @@ fn spawn_drain_loop_with_resources(
                     .append(
                         &storage_id,
                         SessionEvent::Message(Message::assistant_text(&pending.text)),
+                    )
+                    .await;
+            }
+        }
+        for pending in reasoning.into_values() {
+            if pending.saw_delta && !pending.text.trim().is_empty() {
+                let pending_storage_id = if pending.storage_id.is_empty() {
+                    storage_id.clone()
+                } else {
+                    pending.storage_id
+                };
+                let _ = session_store
+                    .append(
+                        &pending_storage_id,
+                        SessionEvent::System {
+                            event: R_CODE_REASONING_EVENT.into(),
+                            data: serde_json::json!({ "text": pending.text }),
+                        },
                     )
                     .await;
             }
@@ -8382,6 +8519,51 @@ pub async fn replay(
         .map_err(err_str)
 }
 
+fn task_provider_shows_reasoning(state: &CommandState, task_id: &str) -> bool {
+    let Some(task) = TaskRepository::new(&state.db).get(task_id).ok().flatten() else {
+        return true;
+    };
+    if task.agent_engine != AgentEngine::RCode {
+        return true;
+    }
+    // Timeline polling must not hydrate Provider secrets: on Windows, touching the credential
+    // manager every refresh is both unnecessary and visibly slow. The presentation preference is
+    // stored in plain config.toml, so read only that public JSON view.
+    let Ok(config) = load_config_json_for_editing(state) else {
+        return true;
+    };
+    let provider_name = task
+        .provider_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| config.get("default_provider").and_then(serde_json::Value::as_str));
+    let Some(provider_name) = provider_name else {
+        return true;
+    };
+    config
+        .get("providers")
+        .and_then(|providers| providers.get(provider_name))
+        .and_then(|provider| provider.get("show_reasoning"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true)
+}
+
+fn session_messages_for_task(
+    state: &CommandState,
+    task_id: &str,
+    content: &str,
+    branch_id: &str,
+    storage_id: &str,
+) -> Vec<SessionMessage> {
+    let mut messages = parse_session_messages(content, branch_id, storage_id);
+    if !task_provider_shows_reasoning(state, task_id) {
+        messages.retain(|message| {
+            message.kind != "system" || message.text.as_deref() != Some(R_CODE_REASONING_EVENT)
+        });
+    }
+    messages
+}
+
 pub async fn session_messages(
     state: &CommandState,
     task_id: &str,
@@ -8395,7 +8577,9 @@ pub async fn session_messages(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(err_str(e)),
     };
-    Ok(parse_session_messages(
+    Ok(session_messages_for_task(
+        state,
+        task_id,
         &content,
         &branch.id,
         &branch.storage_id,
@@ -8421,7 +8605,9 @@ pub async fn session_messages_for_branch(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(err_str(error)),
     };
-    Ok(parse_session_messages(
+    Ok(session_messages_for_task(
+        state,
+        task_id,
         &content,
         &branch.id,
         &branch.storage_id,
@@ -8712,7 +8898,13 @@ pub async fn subagent_session_messages(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(err_str(error)),
     };
-    Ok(parse_session_messages(&content, &branch.id, &storage_id))
+    Ok(session_messages_for_task(
+        state,
+        task_id,
+        &content,
+        &branch.id,
+        &storage_id,
+    ))
 }
 
 // ============================================================================
@@ -9555,6 +9747,9 @@ pub struct ProviderSettingsInput {
     /// [`infer_protocol_never_responses`]。旧版前端不发这个字段，此时不会有任何
     /// 配置被切到 Responses。
     pub protocol: Option<String>,
+    /// 是否展示 Provider 明确返回的思考内容/摘要。省略时保留已有选择；
+    /// 新配置与升级前未声明该字段的配置默认展示。
+    pub show_reasoning: Option<bool>,
     /// 保存后是否立即设为新会话默认服务。省略时沿用旧 IPC 的行为（启用）。
     pub activate: Option<bool>,
 }
@@ -10179,6 +10374,7 @@ pub async fn settings_save_provider(
         max_tokens: input.max_tokens,
         temperature: input.temperature,
         protocol: None,
+        show_reasoning: true,
     };
     if let (Some(requested), Some(limit)) = (
         input.max_tokens,
@@ -10230,6 +10426,15 @@ pub async fn settings_save_provider(
         .and_then(ProviderProtocol::parse);
     let protocol =
         protocol_to_persist(&name, &base_url, input.protocol.as_deref(), stored_protocol)?;
+    let stored_show_reasoning = config_json
+        .get("providers")
+        .and_then(|providers| providers.get(&name))
+        .and_then(|provider| provider.get("show_reasoning"))
+        .and_then(serde_json::Value::as_bool);
+    let show_reasoning = input
+        .show_reasoning
+        .or(stored_show_reasoning)
+        .unwrap_or(true);
 
     let root = config_json
         .as_object_mut()
@@ -10249,6 +10454,7 @@ pub async fn settings_save_provider(
             "max_tokens": input.max_tokens,
             "temperature": input.temperature,
             "protocol": protocol.as_str(),
+            "show_reasoning": show_reasoning,
         }),
     );
     if input.activate.unwrap_or(true) {
@@ -11923,6 +12129,7 @@ const CODEX_SUBAGENT_REPORT_SUMMARY_TARGET_MAX_CHARS: usize = 5_000;
 const CODEX_REASONING_SUMMARY_CHARS: usize = 800;
 const CODEX_REASONING_SUMMARY_PREFIX: &str = "Codex 思考摘要：";
 const CODEX_REASONING_SUMMARY_EVENT: &str = "codex_reasoning_summary";
+const R_CODE_REASONING_EVENT: &str = "r_code_reasoning";
 const CODEX_RCODE_DELEGATE_TOOL: &str = "rcode_delegate_subagent";
 const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Windows 上首次加载大型工作区、杀毒扫描和 Rust/Node 工具启动都可能超过 90 秒。
@@ -13288,7 +13495,7 @@ async fn persist_and_emit_external_event(
     event: AgentEvent,
     sink: &Option<AgentEventSink>,
 ) {
-    let mut pending_text = HashMap::new();
+    let mut pending_text = PendingRuntimeText::default();
     let parent_run_id = run.parent_run_id.as_deref().unwrap_or(&run.id);
     persist_runtime_event(
         db,
@@ -13489,7 +13696,7 @@ async fn emit_codex_rcode_child_event(
     observer: Option<&CodexExecObserver<'_>>,
     event_sink: Option<&CodexSubagentEventSink>,
     event: AgentEvent,
-    pending_text: &mut HashMap<String, PendingAssistantText>,
+    pending_text: &mut PendingRuntimeText,
 ) {
     if let Some(event_sink) = event_sink {
         event_sink(event.clone());
@@ -15072,7 +15279,7 @@ async fn handle_codex_rcode_dynamic_tool(
     let mut parent_cancelled = false;
     let mut child_cancelled = false;
     let mut events_open = true;
-    let mut child_pending_text = HashMap::new();
+    let mut child_pending_text = PendingRuntimeText::default();
     let outcome = loop {
         tokio::select! {
             outcome = &mut child_run => break outcome,
@@ -18637,7 +18844,7 @@ input.on('line', (line) => {
             input: serde_json::json!({ "goal": "只读检查" }),
             call_id: "delegate-call".to_string(),
         };
-        let mut pending_text = HashMap::new();
+        let mut pending_text = PendingRuntimeText::default();
         persist_runtime_event(
             &state.db,
             &state.session_store,
@@ -18700,6 +18907,27 @@ input.on('line', (line) => {
             &mut pending_text,
         )
         .await;
+        for chunk in ["先分析 ", "README.md 的结构。"] {
+            let child_reasoning = AgentEvent::Scoped {
+                scope: scope.clone(),
+                event: Box::new(AgentEvent::Reasoning {
+                    text: chunk.to_string(),
+                    delta: true,
+                }),
+            };
+            persist_runtime_event(
+                &state.db,
+                &state.session_store,
+                &state.sessions_dir,
+                &task.id,
+                &branch.id,
+                &parent.id,
+                &branch.storage_id,
+                &child_reasoning,
+                &mut pending_text,
+            )
+            .await;
+        }
         for chunk in ["先读取 ", "README.md，", "再核对边界。"] {
             let child_text = AgentEvent::Scoped {
                 scope: scope.clone(),
@@ -18838,6 +19066,33 @@ input.on('line', (line) => {
             assistant_messages[0].text.as_deref(),
             Some("先读取 README.md，再核对边界。")
         );
+        let reasoning_messages = child_messages
+            .iter()
+            .filter(|message| {
+                message.kind == "system" && message.text.as_deref() == Some(R_CODE_REASONING_EVENT)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            reasoning_messages.len(),
+            1,
+            "reasoning deltas should be coalesced"
+        );
+        assert_eq!(
+            reasoning_messages[0]
+                .output_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                .and_then(|value| value
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string))
+                .as_deref(),
+            Some("先分析 README.md 的结构。")
+        );
+        let reasoning_index = child_messages
+            .iter()
+            .position(|message| message.id.as_deref() == reasoning_messages[0].id.as_deref())
+            .unwrap();
         let assistant_index = child_messages
             .iter()
             .position(|message| message.id.as_deref() == assistant_messages[0].id.as_deref())
@@ -18849,7 +19104,7 @@ input.on('line', (line) => {
             })
             .unwrap();
         assert!(
-            assistant_index < tool_index,
+            reasoning_index < assistant_index && assistant_index < tool_index,
             "流式回答应在后续工具调用前落盘"
         );
         assert!(
@@ -19052,7 +19307,7 @@ input.on('line', (line) => {
             require_approval: false,
             routing_reason: Some("生命周期回归测试".to_string()),
         };
-        let mut pending_text = HashMap::new();
+        let mut pending_text = PendingRuntimeText::default();
 
         for event in [
             AgentEvent::Scoped {
@@ -19143,7 +19398,7 @@ input.on('line', (line) => {
             &parent.id,
             &branch.storage_id,
             &event,
-            &mut HashMap::new(),
+            &mut PendingRuntimeText::default(),
         )
         .await;
 
@@ -20526,6 +20781,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: None,
             },
         )
@@ -20567,6 +20823,7 @@ input.on('line', (line) => {
                 max_tokens: None,
                 temperature: None,
                 protocol: None,
+                show_reasoning: None,
                 activate: None,
             },
         )
@@ -20644,6 +20901,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(true),
             },
         )
@@ -20720,6 +20978,7 @@ input.on('line', (line) => {
                     max_tokens: Some(2048),
                     temperature: Some(0.2),
                     protocol: None,
+                    show_reasoning: None,
                     activate: Some(activate),
                 },
             )
@@ -20866,6 +21125,7 @@ input.on('line', (line) => {
             temperature: None,
             protocol: None,
             provider_kind: None,
+            show_reasoning: true,
         }
     }
 
@@ -21467,6 +21727,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(false),
             },
         )
@@ -21492,6 +21753,89 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
+    async fn provider_reasoning_visibility_is_independent_and_defaults_on() {
+        let (_dir, state) = setup_state();
+        let hidden_name = format!("reasoning-hidden-{}", uuid::Uuid::new_v4());
+        let default_name = format!("reasoning-default-{}", uuid::Uuid::new_v4());
+
+        for (name, show_reasoning) in [(&hidden_name, Some(false)), (&default_name, None)] {
+            settings_save_provider(
+                &state,
+                ProviderSettingsInput {
+                    name: name.clone(),
+                    provider_kind: None,
+                    base_url: "https://api.example.com/v1".into(),
+                    model: "test-model".into(),
+                    api_key: Some(format!("sk-{name}")),
+                    max_tokens: Some(2048),
+                    temperature: Some(0.2),
+                    protocol: Some(ProviderProtocol::OpenAiChat.as_str().into()),
+                    show_reasoning,
+                    activate: Some(false),
+                },
+            )
+            .await
+            .unwrap();
+        }
+
+        let service = SettingsService::new(state.config_dir.clone());
+        let stored = service.load_global_unvalidated().unwrap();
+        assert!(!stored.providers[&hidden_name].show_reasoning);
+        assert!(stored.providers[&default_name].show_reasoning);
+
+        let hidden_task = task_create_with_agent(
+            &state,
+            None,
+            "隐藏思考",
+            "验证历史过滤",
+            "ask",
+            Some(&hidden_name),
+            Some("r_code"),
+        )
+        .await
+        .unwrap();
+        let default_task = task_create_with_agent(
+            &state,
+            None,
+            "显示思考",
+            "验证历史展示",
+            "ask",
+            Some(&default_name),
+            Some("r_code"),
+        )
+        .await
+        .unwrap();
+        let reasoning_line = serde_json::to_string(&SessionEvent::System {
+            event: R_CODE_REASONING_EVENT.into(),
+            data: serde_json::json!({ "text": "公开思考" }),
+        })
+        .unwrap();
+        assert!(session_messages_for_task(
+            &state,
+            &hidden_task.id,
+            &reasoning_line,
+            "branch-hidden",
+            "storage-hidden",
+        )
+        .is_empty());
+        assert_eq!(
+            session_messages_for_task(
+                &state,
+                &default_task.id,
+                &reasoning_line,
+                "branch-default",
+                "storage-default",
+            )
+            .len(),
+            1
+        );
+
+        for name in [&hidden_name, &default_name] {
+            service.set_provider_secret(name, "").unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn settings_save_roundtrips_and_preserves_stable_provider_identity() {
         let (_dir, state) = setup_state();
         let provider_name = format!("renamed-provider-{}", uuid::Uuid::new_v4());
@@ -21507,6 +21851,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: Some(ProviderProtocol::OpenAiResponses.as_str().into()),
+                show_reasoning: Some(false),
                 activate: Some(false),
             },
         )
@@ -21531,6 +21876,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(false),
             },
         )
@@ -21541,6 +21887,10 @@ input.on('line', (line) => {
             preserved.providers[&provider_name].provider_kind.as_deref(),
             Some("deepseek"),
             "legacy callers that omit provider_kind must preserve the stored identity"
+        );
+        assert!(
+            !preserved.providers[&provider_name].show_reasoning,
+            "omitting show_reasoning must preserve the provider's disabled preference"
         );
 
         settings_save_provider(
@@ -21554,6 +21904,7 @@ input.on('line', (line) => {
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: Some(ProviderProtocol::OpenAiChat.as_str().into()),
+                show_reasoning: Some(true),
                 activate: Some(false),
             },
         )
@@ -21567,6 +21918,7 @@ input.on('line', (line) => {
             Some("openai"),
             "an explicit identity must win even when the model and host look like DeepSeek"
         );
+        assert!(explicit_other.providers[&provider_name].show_reasoning);
 
         service.set_provider_secret(&provider_name, "").unwrap();
     }
@@ -21585,6 +21937,7 @@ input.on('line', (line) => {
                 max_tokens: Some(1_000_000),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(false),
             },
         )
@@ -22766,6 +23119,7 @@ command = "r-code-host"
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(true),
             },
         )
@@ -23060,6 +23414,7 @@ command = "r-code-host"
                 max_tokens: Some(2048),
                 temperature: Some(0.2),
                 protocol: None,
+                show_reasoning: None,
                 activate: Some(true),
             },
         )

@@ -48,7 +48,8 @@ export const ToolCard = memo(function ToolCard({
   t,
 }: ToolCardProps) {
   const hasMcpConfirmation = hasMcpConfirmationPayload(name, outputJson);
-  const [open, setOpen] = useState(hasMcpConfirmation);
+  const hasMcpSettingsAction = hasMcpSettingsActionPayload(name, outputJson);
+  const [open, setOpen] = useState(hasMcpConfirmation || hasMcpSettingsAction);
   // 判据必须与 formatToolPayload 一致（它对纯空白返回 null），
   // 否则会出现「按钮可展开、展开后写着没有载荷」。
   const hasPayload = Boolean(inputJson?.trim() || outputJson?.trim());
@@ -56,8 +57,8 @@ export const ToolCard = memo(function ToolCard({
   // Agent 只负责准备精确方案，真正安装/启用必须由用户点击确认。结果通常在工具
   // 从 active 变为 ok 时才到达，因此不能只依赖 useState 的首次初始化。
   useEffect(() => {
-    if (hasMcpConfirmation) setOpen(true);
-  }, [hasMcpConfirmation]);
+    if (hasMcpConfirmation || hasMcpSettingsAction) setOpen(true);
+  }, [hasMcpConfirmation, hasMcpSettingsAction]);
 
   return (
     <div
@@ -117,7 +118,7 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
   outputJson,
   state,
 }: Pick<ToolCardProps, "inputJson" | "outputJson" | "state"> & { toolName?: string }) {
-  const openKnowledge = useAppStore((store) => store.openKnowledge);
+  const openMcpSettings = useAppStore((store) => store.openMcpSettings);
   const input = useMemo(() => formatToolPayload(inputJson, "input"), [inputJson]);
   const output = useMemo(() => formatToolPayload(outputJson, "output"), [outputJson]);
   const mcpSuggestion = useMemo(() => readMcpSuggestion(toolName, outputJson), [toolName, outputJson]);
@@ -125,10 +126,15 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
     () => readMcpConfirmation(toolName, outputJson),
     [toolName, outputJson],
   );
+  const mcpSettingsAction = useMemo(
+    () => readMcpSettingsAction(toolName, outputJson),
+    [toolName, outputJson],
+  );
 
   return (
     <>
       {mcpConfirmation && <McpConfirmationCard action={mcpConfirmation} />}
+      {mcpSettingsAction && <McpSettingsCard action={mcpSettingsAction} />}
       {mcpSuggestion && (
         <div className="tcard-mcp-suggestion">
           <div>
@@ -138,17 +144,17 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
           <button
             type="button"
             className="btn"
-            onClick={() => openKnowledge("mcp", mcpSuggestion.marketQuery)}
+            onClick={() => openMcpSettings(mcpSuggestion.marketQuery)}
           >
             打开 MCP 配置
           </button>
         </div>
       )}
-      {!mcpConfirmation && input && <Payload label="输入" view={input} />}
-      {!mcpConfirmation && output && (
+      {!mcpConfirmation && !mcpSettingsAction && input && <Payload label="输入" view={input} />}
+      {!mcpConfirmation && !mcpSettingsAction && output && (
         <Payload label={state === "fail" ? "错误输出" : "输出"} view={output} tone={state} />
       )}
-      {!mcpConfirmation && !input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
+      {!mcpConfirmation && !mcpSettingsAction && !input && !output && <div className="tcard-empty">没有记录到载荷。</div>}
     </>
   );
 });
@@ -168,7 +174,7 @@ type McpConfirmationAction =
     };
 
 function McpConfirmationCard({ action }: { action: McpConfirmationAction }) {
-  const openKnowledge = useAppStore((store) => store.openKnowledge);
+  const openMcpSettings = useAppStore((store) => store.openMcpSettings);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -222,12 +228,12 @@ function McpConfirmationCard({ action }: { action: McpConfirmationAction }) {
       {done && <div className="tcard-mcp-result" role="status">{done}</div>}
       <div className="tcard-mcp-actions">
         {done ? (
-          <button type="button" className="btn" onClick={() => openKnowledge("mcp", null)}>
+          <button type="button" className="btn" onClick={() => openMcpSettings(null, serverId)}>
             打开 MCP 管理
           </button>
         ) : (
           <>
-            <button type="button" className="btn" onClick={() => openKnowledge("mcp", null)}>
+            <button type="button" className="btn" onClick={() => openMcpSettings(null, serverId)}>
               稍后处理
             </button>
             <button type="button" className="btn accent" disabled={busy || expired} onClick={() => void confirm()}>
@@ -236,6 +242,32 @@ function McpConfirmationCard({ action }: { action: McpConfirmationAction }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+type McpSettingsAction = {
+  kind: "draft_created" | "manual_enable_required";
+  message: string;
+  serverId: string;
+  sourcePath: string | null;
+};
+
+function McpSettingsCard({ action }: { action: McpSettingsAction }) {
+  const openMcpSettings = useAppStore((store) => store.openMcpSettings);
+  const draftCreated = action.kind === "draft_created";
+  return (
+    <div className="tcard-mcp-draft" role="group" aria-label="MCP 草稿待审核">
+      <div className="tcard-mcp-draft-mark" aria-hidden="true">MCP</div>
+      <div className="tcard-mcp-draft-copy">
+        <span>{draftCreated ? "已保存为禁用草稿" : "必须由你手动启用"}</span>
+        <strong>{draftCreated ? "草稿已创建，尚未启用" : "前往设置审核 MCP 草稿"}</strong>
+        <p>{action.message}</p>
+        {action.sourcePath && <code title={action.sourcePath}>{action.sourcePath}</code>}
+      </div>
+      <button type="button" className="btn accent" onClick={() => openMcpSettings(null, action.serverId)}>
+        前往设置审核
+      </button>
     </div>
   );
 }
@@ -271,6 +303,45 @@ export function hasMcpConfirmationPayload(
 ): boolean {
   if (toolName !== "mcp_prepare_install" && toolName !== "mcp_prepare_enable") return false;
   return Boolean(raw && raw.length <= 128_000 && /"action"\s*:\s*"confirm_mcp_(?:install|enable)"/.test(raw));
+}
+
+export function hasMcpSettingsActionPayload(
+  toolName: string | null | undefined,
+  raw: string | null | undefined,
+): boolean {
+  if (toolName !== "mcp_create_draft" && toolName !== "mcp_prepare_enable") return false;
+  return Boolean(raw
+    && raw.length <= 128_000
+    && /"status"\s*:\s*"(?:draft_created|manual_enable_required)"/.test(raw)
+    && /"action"\s*:\s*"open_mcp_settings"/.test(raw));
+}
+
+function readMcpSettingsAction(
+  toolName: string | null | undefined,
+  raw: string | null | undefined,
+): McpSettingsAction | null {
+  if (!hasMcpSettingsActionPayload(toolName, raw)) return null;
+  try {
+    const value: unknown = JSON.parse(raw as string);
+    if (!isRecord(value) || value.action !== "open_mcp_settings") return null;
+    const expectedStatus = toolName === "mcp_create_draft" ? "draft_created" : "manual_enable_required";
+    if (value.status !== expectedStatus) return null;
+    const serverId = typeof value.server_id === "string" ? value.server_id.trim() : "";
+    if (!serverId) return null;
+    const message = typeof value.message === "string" && value.message.trim()
+      ? value.message.trim()
+      : "请在“设置 → 工具与连接”中核对启动方案、配置凭据并亲自打开滑钮。";
+    return {
+      kind: expectedStatus,
+      message,
+      serverId,
+      sourcePath: typeof value.source_path === "string" && value.source_path.trim()
+        ? value.source_path.trim()
+        : null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function readMcpConfirmation(

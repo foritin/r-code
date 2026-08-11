@@ -38,9 +38,19 @@ const LLM_PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 ///
 /// 注意：不含 `Copy`——`usage` 字段（hermes_core::Usage）不实现 Copy。
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolMetadataObservation {
+    pub tool_name: String,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
+    /// Successful metadata envelopes emitted by tools in this iteration. The run coordinator
+    /// applies only explicitly allowlisted host-owned state updates before constructing the next
+    /// model request; metadata is never added to model-visible ToolResult content.
+    pub tool_metadata: Vec<ToolMetadataObservation>,
     /// P2-G：本轮累计真实 usage（provider 未报告时为全零）。调用方（run_loop）
     /// 用它反推 tokPerChar 校准分层压缩的 token 估算（docs/deepseek-prefix-cache.md §5 P2-G）。
     pub usage: Usage,
@@ -429,6 +439,7 @@ where
         let mut pending_tools: HashMap<String, (String, String)> = HashMap::new();
         let mut tool_calls: Vec<PendingToolCall> = Vec::new();
         let mut tool_results: Vec<ContentBlock> = Vec::new();
+        let mut tool_metadata: Vec<ToolMetadataObservation> = Vec::new();
         let mut total_usage = Usage::default();
         let mut streaming_started = false;
         let mut received_stream_event = false;
@@ -442,6 +453,7 @@ where
             if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Ok(AgentLoopOutcome {
                     had_tool_call: false,
+                    tool_metadata: Vec::new(),
                     usage: total_usage.clone(),
                 });
             }
@@ -493,6 +505,21 @@ where
             };
             received_stream_event = true;
             match ev {
+                StreamEvent::ReasoningDelta { text } => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if !streaming_started {
+                        if emit_activity {
+                            emit(AgentEvent::Activity {
+                                phase: r_code_core::dto::AgentActivityPhase::Streaming,
+                                detail: None,
+                            });
+                        }
+                        streaming_started = true;
+                    }
+                    emit(AgentEvent::Reasoning { text, delta: true });
+                }
                 StreamEvent::TextDelta { text } => {
                     current_text.push_str(&text);
                     if !streaming_started {
@@ -642,6 +669,7 @@ where
                         if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                             break 'attempt Ok(AgentLoopOutcome {
                                 had_tool_call: false,
+                                tool_metadata: Vec::new(),
                                 usage: total_usage.clone(),
                             });
                         }
@@ -707,6 +735,14 @@ where
                     output: output_val,
                     is_error: outcome.is_error,
                 });
+                if !outcome.is_error {
+                    if let Some(metadata) = outcome.metadata.clone() {
+                        tool_metadata.push(ToolMetadataObservation {
+                            tool_name: call.name.clone(),
+                            metadata,
+                        });
+                    }
+                }
                 tool_results.push(ContentBlock::ToolResult {
                     tool_use_id: call.id,
                     content: outcome.content,
@@ -757,6 +793,7 @@ where
 
         break 'attempt Ok(AgentLoopOutcome {
             had_tool_call,
+            tool_metadata,
             usage: total_usage.clone(),
         });
     };
@@ -880,6 +917,7 @@ mod tests {
     /// 简单的回放 ToolHost：注册一个工具，调用时返回 `{ "echo": args }`。
     struct EchoToolHost {
         tools: Vec<ToolSpec>,
+        metadata: Option<serde_json::Value>,
     }
 
     struct PendingToolHost {
@@ -899,7 +937,14 @@ mod tests {
                     source: ToolSource::Builtin,
                     requires_confirmation: false,
                 }],
+                metadata: None,
             }
+        }
+
+        fn with_metadata(tool_name: &str, metadata: serde_json::Value) -> Self {
+            let mut host = Self::new(tool_name);
+            host.metadata = Some(metadata);
+            host
         }
     }
 
@@ -914,7 +959,7 @@ mod tests {
                 Ok(ToolCallOutcome {
                     content: serde_json::json!({ "echo": args }).to_string(),
                     is_error: false,
-                    metadata: None,
+                    metadata: self.metadata.clone(),
                 })
             } else {
                 Err(Error::ToolNotFound(name.to_string()))
@@ -1247,6 +1292,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_reasoning_is_emitted_separately_from_answer_text() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: "checking".into(),
+            },
+            StreamEvent::TextDelta {
+                text: "answer".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &[],
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AgentEvent::Activity { .. },
+                AgentEvent::Reasoning { text: reasoning, delta: true },
+                AgentEvent::Message { text: answer, delta: true },
+                ..
+            ] if reasoning == "checking" && answer == "answer"
+        ));
+        assert_eq!(
+            messages.last().map(Message::text_content).as_deref(),
+            Some("answer")
+        );
+    }
+
+    #[tokio::test]
     async fn provider_hosted_tool_is_observed_but_never_executed_locally() {
         let provider = MockProvider::new("mock");
         provider.push_turn(RecordedTurn::ok(vec![
@@ -1436,6 +1527,49 @@ mod tests {
         assert!(messages[1].content.iter().any(|b| b.is_tool_use()));
         assert_eq!(messages[2].role, Role::User);
         assert!(messages[2].content.iter().any(|b| b.is_tool_result()));
+    }
+
+    #[tokio::test]
+    async fn successful_tool_metadata_reaches_the_run_coordinator_out_of_band() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "plan-call".to_string(),
+                name: "plan_item_update".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "plan-call".to_string(),
+                input: serde_json::json!({"state": "completed"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let metadata = serde_json::json!({
+            "directive": {"type": "require_agent_continuation"},
+            "data": {"r_code_authoritative_plan_view": {"plan": {"revision": 7}}}
+        });
+        let tool_host = EchoToolHost::with_metadata("plan_item_update", metadata.clone());
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("finish the feature")];
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            false,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.tool_metadata.len(), 1);
+        assert_eq!(outcome.tool_metadata[0].tool_name, "plan_item_update");
+        assert_eq!(outcome.tool_metadata[0].metadata, metadata);
+        assert!(messages[2].content.iter().any(|block| block.is_tool_result()));
     }
 
     #[tokio::test]

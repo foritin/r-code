@@ -13,6 +13,7 @@ import type {
   ProjectActivityItem,
   ProjectActivityPage,
   ProviderCatalog,
+  RecoveryPageData,
   SessionMessage,
   SettingsResponse,
   Task,
@@ -23,6 +24,12 @@ import type {
 
 const now = Date.now();
 const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+
+/** Mutable only inside browser QA pages so startup-recovery navigation can be exercised. */
+export const browserMockRecovery: RecoveryPageData = {
+  interrupted_tasks: [],
+  orphaned_permissions: 0,
+};
 
 export const browserMockWorkspaces: Workspace[] = [
   {

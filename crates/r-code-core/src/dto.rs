@@ -1403,6 +1403,15 @@ pub enum AgentEvent {
         /// 是否为增量
         delta: bool,
     },
+    /// Provider 明确返回的可展示思考内容或推理摘要。
+    ///
+    /// 该事件与最终回答分开，以便 UI 折叠展示；不得承载加密块、签名或其它
+    /// provider-private 数据。
+    Reasoning {
+        text: String,
+        /// 是否为流式增量；当前原生 Provider 路径按增量发送。
+        delta: bool,
+    },
     /// 工具调用
     ToolCall {
         /// 工具名称

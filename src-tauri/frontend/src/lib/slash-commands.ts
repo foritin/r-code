@@ -434,8 +434,8 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   },
   {
     name: "mcp",
-    title: "MCP 与 Codex 协作",
-    description: "打开 Codex CLI、协作 Skill 与 MCP 的一键配置。",
+    title: "联网与 MCP",
+    description: "打开“设置 → 工具与连接”，管理联网工具、MCP 服务与市场。",
     category: "integration",
     kind: "local",
     locations: ["home", "room"],
