@@ -13,7 +13,7 @@
 //! 内容搜索（`search`）与文件名匹配（`glob`）在 [`crate::tools_search`]；
 //! shell 命令执行（`bash`）在 [`crate::tools_command`]。
 
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::{Component, Path};
 
 use async_trait::async_trait;
@@ -29,8 +29,167 @@ use crate::gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResul
 /// 没有这个上限，模型读一个几万行的生成文件就能把整个上下文撑爆，
 /// 之后的对话全部失效。宁可截断并告诉它怎么翻页。
 const DEFAULT_READ_LINE_LIMIT: usize = 2_000;
-/// `read_file` 单次返回的字符上限（约 100 KiB）。
-const MAX_READ_CHARS: usize = 100_000;
+/// `read_file` 单次返回的正文 UTF-8 字节上限（约 100 KiB）。
+const MAX_READ_BYTES: usize = 100_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadStopReason {
+    LineLimit,
+    ByteLimitAfterLine,
+    ByteLimitWithinLine {
+        line: usize,
+        next_byte_offset: usize,
+    },
+}
+
+struct ReadFilePager {
+    offset: usize,
+    limit: usize,
+    first_line_byte_offset: usize,
+    current_line: usize,
+    current_line_bytes: usize,
+    current_line_has_content: bool,
+    pending_char: Option<char>,
+    total_lines: usize,
+    body: String,
+    returned_last_line: Option<usize>,
+    stop_reason: Option<ReadStopReason>,
+}
+
+impl ReadFilePager {
+    fn new(offset: usize, limit: usize, first_line_byte_offset: usize) -> Self {
+        Self {
+            offset,
+            limit,
+            first_line_byte_offset,
+            current_line: 1,
+            current_line_bytes: 0,
+            current_line_has_content: false,
+            pending_char: None,
+            total_lines: 0,
+            body: String::new(),
+            returned_last_line: None,
+            stop_reason: None,
+        }
+    }
+
+    fn process_text(&mut self, text: &str) -> Result<(), ProductError> {
+        for ch in text.chars() {
+            if ch == '\n' {
+                if self.pending_char == Some('\r') {
+                    // `str::lines()` treats CRLF as one terminator and does not expose CR.
+                    self.pending_char = None;
+                } else {
+                    self.flush_pending_char()?;
+                }
+                self.finish_current_line()?;
+            } else {
+                self.flush_pending_char()?;
+                self.pending_char = Some(ch);
+                self.current_line_has_content = true;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_eof(&mut self) -> Result<(), ProductError> {
+        self.flush_pending_char()?;
+        if self.current_line_has_content {
+            self.finish_current_line()?;
+        }
+        Ok(())
+    }
+
+    fn flush_pending_char(&mut self) -> Result<(), ProductError> {
+        let Some(ch) = self.pending_char.take() else {
+            return Ok(());
+        };
+        let char_start = self.current_line_bytes;
+        let char_end = char_start + ch.len_utf8();
+
+        if self.current_line == self.offset
+            && self.first_line_byte_offset > char_start
+            && self.first_line_byte_offset < char_end
+        {
+            return Err(ProductError::Other(format!(
+                "line_byte_offset {} is not on a UTF-8 character boundary in line {}",
+                self.first_line_byte_offset, self.offset
+            )));
+        }
+
+        if self.line_is_selected()
+            && self.stop_reason.is_none()
+            && char_start >= self.byte_offset_for_current_line()
+        {
+            if self.body.len() + ch.len_utf8() > MAX_READ_BYTES {
+                self.stop_reason = Some(ReadStopReason::ByteLimitWithinLine {
+                    line: self.current_line,
+                    next_byte_offset: char_start,
+                });
+            } else {
+                self.body.push(ch);
+            }
+        }
+        self.current_line_bytes = char_end;
+        Ok(())
+    }
+
+    fn finish_current_line(&mut self) -> Result<(), ProductError> {
+        self.total_lines += 1;
+
+        if self.current_line == self.offset && self.first_line_byte_offset > self.current_line_bytes
+        {
+            return Err(ProductError::Other(format!(
+                "line_byte_offset {} is past the end of line {} ({} UTF-8 bytes)",
+                self.first_line_byte_offset, self.offset, self.current_line_bytes
+            )));
+        }
+
+        if self.line_is_selected() && self.stop_reason.is_none() {
+            self.returned_last_line = Some(self.current_line);
+            if self.body.len() < MAX_READ_BYTES {
+                self.body.push('\n');
+            } else {
+                self.stop_reason = Some(ReadStopReason::ByteLimitAfterLine);
+            }
+
+            if self.current_line - self.offset + 1 >= self.limit && self.stop_reason.is_none() {
+                self.stop_reason = Some(ReadStopReason::LineLimit);
+            }
+        }
+
+        self.current_line += 1;
+        self.current_line_bytes = 0;
+        self.current_line_has_content = false;
+        self.pending_char = None;
+        Ok(())
+    }
+
+    fn line_is_selected(&self) -> bool {
+        self.current_line >= self.offset && self.current_line - self.offset < self.limit
+    }
+
+    fn byte_offset_for_current_line(&self) -> usize {
+        if self.current_line == self.offset {
+            self.first_line_byte_offset
+        } else {
+            0
+        }
+    }
+}
+
+fn open_text_file(
+    path: &str,
+    workspace_guard: Option<&PathGuard>,
+) -> Result<std::fs::File, ProductError> {
+    match workspace_guard {
+        Some(guard) => guard
+            .open_existing_file(Path::new(path), WorkspaceFileAccess::Read)
+            .map(|(_, file)| file),
+        None => std::fs::File::open(path)
+            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}"))),
+    }
+}
 
 /// Read text through the host-owned workspace capability when one is available.
 ///
@@ -38,18 +197,11 @@ const MAX_READ_CHARS: usize = 100_000;
 /// runs always provide a guard, so their actual file handle is opened under the fixed workspace
 /// directory rather than by a model-supplied ambient path.
 fn read_text_file(path: &str, workspace_guard: Option<&PathGuard>) -> Result<String, ProductError> {
-    match workspace_guard {
-        Some(guard) => {
-            let (_, mut file) =
-                guard.open_existing_file(Path::new(path), WorkspaceFileAccess::Read)?;
-            let mut content = String::new();
-            file.read_to_string(&mut content)
-                .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
-            Ok(content)
-        }
-        None => std::fs::read_to_string(path)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}"))),
-    }
+    let mut file = open_text_file(path, workspace_guard)?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+    Ok(content)
 }
 
 fn list_directory_names(
@@ -162,7 +314,8 @@ impl Tool for ReadFileTool {
     fn description(&self) -> &str {
         "Read the contents of a text file. \
 For large files, page through with offset (1-based line number) and limit. \
-Output is truncated with a note if it would be too large; read the note and page instead."
+Output is truncated with a note if it would be too large; follow its next offset, \
+or its line_byte_offset when one individual line is exceptionally long."
     }
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R1
@@ -182,6 +335,10 @@ Output is truncated with a note if it would be too large; read the note and page
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of lines to return. Defaults to 2000."
+                },
+                "line_byte_offset": {
+                    "type": "integer",
+                    "description": "UTF-8 byte offset within the first requested line. Defaults to 0. Use only with offset when a previous response asks you to continue a very long line."
                 }
             },
             "required": ["path"]
@@ -211,7 +368,6 @@ fn execute_read_file(
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
-    let content = read_text_file(path, workspace_guard)?;
 
     let offset = input
         .get("offset")
@@ -223,59 +379,155 @@ fn execute_read_file(
         .and_then(|v| v.as_u64())
         .map(|n| n.max(1) as usize)
         .unwrap_or(DEFAULT_READ_LINE_LIMIT);
-    let paging_requested = input.get("offset").is_some() || input.get("limit").is_some();
+    let line_byte_offset = input
+        .get("line_byte_offset")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    let paging_requested = input.get("offset").is_some()
+        || input.get("limit").is_some()
+        || input.get("line_byte_offset").is_some();
 
-    // 未分页且文件不大：原样返回，与历史行为完全一致。
-    if !paging_requested
-        && content.len() <= MAX_READ_CHARS
-        && content.lines().count() <= DEFAULT_READ_LINE_LIMIT
-    {
-        return Ok(content);
+    let file = open_text_file(path, workspace_guard)?;
+    let mut reader = BufReader::new(file);
+    let mut pager = ReadFilePager::new(offset, limit, line_byte_offset);
+    let mut original = (!paging_requested).then(String::new);
+    let mut bytes = [0_u8; 8 * 1024];
+    let mut utf8_pending = Vec::with_capacity(bytes.len() + 4);
+
+    loop {
+        let count = reader
+            .read(&mut bytes)
+            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+        if count == 0 {
+            break;
+        }
+        utf8_pending.extend_from_slice(&bytes[..count]);
+
+        loop {
+            match std::str::from_utf8(&utf8_pending) {
+                Ok(text) => {
+                    if let Some(content) = original.as_mut() {
+                        content.push_str(text);
+                    }
+                    if original
+                        .as_ref()
+                        .is_some_and(|content| content.len() > MAX_READ_BYTES)
+                    {
+                        original = None;
+                    }
+                    pager.process_text(text)?;
+                    utf8_pending.clear();
+                    break;
+                }
+                Err(error) => {
+                    let valid = error.valid_up_to();
+                    if valid > 0 {
+                        let text = std::str::from_utf8(&utf8_pending[..valid])
+                            .expect("valid_up_to must identify valid UTF-8");
+                        if let Some(content) = original.as_mut() {
+                            content.push_str(text);
+                        }
+                        if original
+                            .as_ref()
+                            .is_some_and(|content| content.len() > MAX_READ_BYTES)
+                        {
+                            original = None;
+                        }
+                        pager.process_text(text)?;
+                        utf8_pending.drain(..valid);
+                        continue;
+                    }
+                    if error.error_len().is_some() {
+                        return Err(ProductError::Other(format!(
+                            "failed to read {path}: file is not valid UTF-8"
+                        )));
+                    }
+                    // A multi-byte scalar was split across read buffers. Keep at most
+                    // three trailing bytes and complete it with the next read.
+                    break;
+                }
+            }
+        }
     }
 
-    let all_lines: Vec<&str> = content.lines().collect();
-    let total = all_lines.len();
-    let start = offset.saturating_sub(1);
-    if start >= total && total > 0 {
+    if !utf8_pending.is_empty() {
+        return Err(ProductError::Other(format!(
+            "failed to read {path}: file ends with incomplete UTF-8"
+        )));
+    }
+    pager.finish_eof()?;
+
+    // 未分页且文件不大：原样返回，与历史行为完全一致（包括换行符风格）。
+    if let Some(content) = original {
+        if pager.total_lines <= DEFAULT_READ_LINE_LIMIT {
+            return Ok(content);
+        }
+    }
+
+    let total = pager.total_lines;
+    if total == 0 && line_byte_offset > 0 {
+        return Err(ProductError::Other(format!(
+            "line_byte_offset {line_byte_offset} is invalid because {path} is empty"
+        )));
+    }
+    if total == 0 && offset > 1 {
+        return Err(ProductError::Other(format!(
+            "offset {offset} is past the end of {path} (0 lines)"
+        )));
+    }
+    if offset.saturating_sub(1) >= total && total > 0 {
         return Err(ProductError::Other(format!(
             "offset {offset} is past the end of {path} ({total} lines)"
         )));
     }
 
-    let mut body = String::new();
-    let mut emitted = 0usize;
-    let mut char_capped = false;
-    for line in all_lines.iter().skip(start).take(limit) {
-        if body.len() + line.len() + 1 > MAX_READ_CHARS {
-            char_capped = true;
-            break;
-        }
-        body.push_str(line);
-        body.push('\n');
-        emitted += 1;
-    }
-
-    let last = start + emitted;
-    let has_more = last < total;
-    if has_more || start > 0 {
-        let mut note = format!(
-            "\n[{path} 共 {total} 行；本次返回第 {}–{last} 行",
-            start + 1
-        );
-        if has_more {
-            let reason = if char_capped {
-                format!("已达单次 {MAX_READ_CHARS} 字符上限")
+    let mut body = pager.body;
+    match pager.stop_reason {
+        Some(ReadStopReason::ByteLimitWithinLine {
+            line,
+            next_byte_offset,
+        }) => {
+            let returned_line_byte_offset = if line == offset { line_byte_offset } else { 0 };
+            body.push_str(&format!("\n[{path} 共 {total} 行；"));
+            if let Some(last_complete) = pager.returned_last_line {
+                body.push_str(&format!(
+                    "本次完整返回第 {offset}–{last_complete} 行，并返回"
+                ));
             } else {
-                format!("已达单次上限 {limit} 行")
-            };
-            note.push_str(&format!(
-                "（{reason}）。继续读取请调用 read_file 并设 offset={}]\n",
-                last + 1
+                body.push_str("本次返回");
+            }
+            body.push_str(&format!(
+                "第 {line} 行的 UTF-8 字节 {returned_line_byte_offset}..{next_byte_offset}（已达单次 {MAX_READ_BYTES} UTF-8 字节正文上限）。继续读取请调用 read_file 并设 offset={line}、line_byte_offset={next_byte_offset}]\n"
             ));
-        } else {
-            note.push_str("，已到文件末尾]\n");
         }
-        body.push_str(&note);
+        _ => {
+            let last = pager.returned_last_line.unwrap_or(offset.saturating_sub(1));
+            let has_more = last < total;
+            if has_more || offset > 1 || line_byte_offset > 0 {
+                let mut note = format!("\n[{path} 共 {total} 行；本次返回第 {offset}–{last} 行");
+                if line_byte_offset > 0 {
+                    note.push_str(&format!(
+                        "（第 {offset} 行从 UTF-8 字节 {line_byte_offset} 开始）"
+                    ));
+                }
+                if has_more {
+                    let reason = match pager.stop_reason {
+                        Some(ReadStopReason::ByteLimitAfterLine) => {
+                            format!("已达单次 {MAX_READ_BYTES} UTF-8 字节正文上限")
+                        }
+                        _ => format!("已达单次上限 {limit} 行"),
+                    };
+                    note.push_str(&format!(
+                        "（{reason}）。继续读取请调用 read_file 并设 offset={}]\n",
+                        last + 1
+                    ));
+                } else {
+                    note.push_str("，已到文件末尾]\n");
+                }
+                body.push_str(&note);
+            }
+        }
     }
     Ok(body)
 }
@@ -1100,6 +1352,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_file_small_utf8_file_preserves_original_bytes() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("mixed-newlines.txt");
+        let content = "第一行\r\nsecond\rthird\n最后一行";
+        fs::write(&file, content.as_bytes()).unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert_eq!(out.as_bytes(), content.as_bytes());
+    }
+
+    #[tokio::test]
     async fn read_file_offset_and_limit() {
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("m.txt");
@@ -1163,6 +1429,224 @@ mod tests {
             .unwrap();
         assert!(out.contains("已达单次上限"));
         assert!(out.contains(&format!("offset={}", DEFAULT_READ_LINE_LIMIT + 1)));
+    }
+
+    #[tokio::test]
+    async fn read_file_long_single_line_advances_with_line_byte_offset() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("long-line.txt");
+        let body = "x".repeat(MAX_READ_BYTES * 2 + 37);
+        fs::write(&file, &body).unwrap();
+
+        let first = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(first.starts_with(&"x".repeat(MAX_READ_BYTES)));
+        assert!(first.contains("UTF-8 字节"));
+        assert!(first.contains(&format!("line_byte_offset={MAX_READ_BYTES}")));
+
+        let second = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "offset": 1,
+                "line_byte_offset": MAX_READ_BYTES
+            }))
+            .await
+            .unwrap();
+        assert!(second.starts_with(&"x".repeat(MAX_READ_BYTES)));
+        assert!(second.contains(&format!("line_byte_offset={}", MAX_READ_BYTES * 2)));
+
+        let third = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "offset": 1,
+                "line_byte_offset": MAX_READ_BYTES * 2
+            }))
+            .await
+            .unwrap();
+        assert!(third.starts_with(&"x".repeat(37)));
+        assert!(third.contains("已到文件末尾"));
+        assert!(!third.contains("line_byte_offset="));
+    }
+
+    #[tokio::test]
+    async fn read_file_long_cjk_line_uses_utf8_byte_boundaries() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("long-cjk-line.txt");
+        let body = "界".repeat(MAX_READ_BYTES / "界".len() + 5);
+        fs::write(&file, &body).unwrap();
+        let expected_next_byte = MAX_READ_BYTES - (MAX_READ_BYTES % "界".len());
+
+        let first = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(first.starts_with(&body[..expected_next_byte]));
+        assert!(first.contains(&format!("line_byte_offset={expected_next_byte}")));
+
+        let second = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "offset": 1,
+                "line_byte_offset": expected_next_byte
+            }))
+            .await
+            .unwrap();
+        assert!(second.starts_with(&body[expected_next_byte..]));
+        assert!(second.contains("已到文件末尾"));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_line_byte_offset_inside_utf8_scalar() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("cjk.txt");
+        fs::write(&file, "界tail").unwrap();
+
+        let result = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 1, "line_byte_offset": 1
+            }))
+            .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("UTF-8 character boundary"));
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_line_byte_offset_past_line_end() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("short.txt");
+        fs::write(&file, "short\nnext\n").unwrap();
+
+        let result = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 1, "line_byte_offset": 6
+            }))
+            .await;
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("past the end of line 1"),
+            "message was: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_file_crlf_paging_matches_existing_line_semantics() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("crlf.txt");
+        fs::write(&file, "first\r\nsecond\r\nthird\r\n").unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 2, "limit": 1
+            }))
+            .await
+            .unwrap();
+        assert!(out.starts_with("second\n"));
+        assert!(!out.starts_with("second\r\n"));
+        assert!(out.contains("共 3 行"));
+        assert!(out.contains("offset=3"));
+    }
+
+    #[tokio::test]
+    async fn read_file_cjk_normal_page_reports_utf8_bytes_consistently() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("cjk-lines.txt");
+        let first_line = "界".repeat(MAX_READ_BYTES / "界".len());
+        fs::write(&file, format!("{first_line}\n下一行\n")).unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(out.starts_with(&first_line));
+        assert!(out.contains("UTF-8 字节正文上限"));
+        assert!(out.contains("offset=2"));
+        assert!(!out.contains("字符上限"));
+    }
+
+    #[tokio::test]
+    async fn read_file_byte_cap_on_later_line_reports_that_line_from_byte_zero() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("later-long-line.txt");
+        let long_line = "x".repeat(MAX_READ_BYTES);
+        fs::write(&file, format!("a\n{long_line}\nlast\n")).unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({ "path": file.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert!(out.starts_with("a\n"));
+        assert!(out.contains(&format!("第 2 行的 UTF-8 字节 0..{}", MAX_READ_BYTES - 2)));
+        assert!(out.contains(&format!(
+            "offset=2、line_byte_offset={}",
+            MAX_READ_BYTES - 2
+        )));
+    }
+
+    #[tokio::test]
+    async fn read_file_paged_last_line_without_trailing_newline_reaches_eof() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("no-trailing-newline.txt");
+        fs::write(&file, "first\nlast").unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 2, "limit": 1
+            }))
+            .await
+            .unwrap();
+        assert!(out.starts_with("last\n"));
+        assert!(out.contains("已到文件末尾"));
+        assert!(!out.contains("offset="));
+    }
+
+    #[tokio::test]
+    async fn read_file_empty_file_remains_empty_when_paged() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("empty.txt");
+        fs::write(&file, "").unwrap();
+
+        let out = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 1, "limit": 10
+            }))
+            .await
+            .unwrap();
+        assert_eq!(out, "");
+    }
+
+    #[tokio::test]
+    async fn read_file_empty_file_rejects_nonzero_line_byte_offset() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("empty.txt");
+        fs::write(&file, "").unwrap();
+
+        let result = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 1, "line_byte_offset": 1
+            }))
+            .await;
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("is empty"), "message was: {error}");
+    }
+
+    #[tokio::test]
+    async fn read_file_empty_file_rejects_offset_past_first_line() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("empty.txt");
+        fs::write(&file, "").unwrap();
+
+        let result = ReadFileTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(), "offset": 2
+            }))
+            .await;
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("0 lines"), "message was: {error}");
     }
 
     // ── edit ──────────────────────────────────────────────────

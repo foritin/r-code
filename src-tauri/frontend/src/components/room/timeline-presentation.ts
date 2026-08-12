@@ -69,6 +69,20 @@ interface RawTurn {
   body: TimelineItem[];
 }
 
+interface IndexedTurn {
+  id: string;
+  user: TimelineUserItem | null;
+  start: number;
+  end: number;
+  visible: boolean;
+  presented?: TimelineTurn | null;
+}
+
+export interface TimelineWindow {
+  turns: TimelineTurn[];
+  totalTurns: number;
+}
+
 export function buildTimelineTurns(items: readonly TimelineItem[]): TimelineTurn[] {
   const turns: RawTurn[] = [];
   let current: RawTurn = { id: "timeline-preamble", user: null, body: [] };
@@ -84,9 +98,163 @@ export function buildTimelineTurns(items: readonly TimelineItem[]): TimelineTurn
   if (current.user || current.body.length > 0) turns.push(current);
 
   return turns
-    .map(presentTurn)
-    .map((turn) => composerOwnsQueuedMessage(turn.user) ? { ...turn, user: null } : turn)
-    .filter((turn) => turn.user || turn.runs.length || turn.items.length);
+    .map(presentRawTurn)
+    .filter((turn): turn is TimelineTurn => turn != null);
+}
+
+/**
+ * 主对话的增量呈现索引。完整历史只在 reload 时做一次轻量边界扫描；昂贵的工具
+ * 归组、子代理解析与展示对象分配仅发生在当前挂载窗口。流式 token 通常只让最后
+ * 一轮的缓存失效，已完成的历史轮次保持引用稳定。
+ */
+export class TimelinePresentationCache {
+  private items: readonly TimelineItem[] = [];
+  private itemCount = 0;
+  private turns: IndexedTurn[] = [];
+  private visibleCount = 0;
+
+  reset(items: readonly TimelineItem[]): void {
+    this.items = items;
+    this.itemCount = items.length;
+    this.turns = indexTurns(items);
+    this.visibleCount = this.turns.reduce((count, turn) => count + Number(turn.visible), 0);
+  }
+
+  /** 更新由流式 reducer 报告的最早变化点；不重新扫描无关历史。 */
+  update(items: readonly TimelineItem[], startIndex: number): void {
+    if (items !== this.items || items.length < this.itemCount || startIndex < 0) {
+      if (items !== this.items || items.length < this.itemCount) this.reset(items);
+      return;
+    }
+
+    const previousCount = this.itemCount;
+    this.itemCount = items.length;
+    if (this.turns.length === 0) {
+      this.turns = indexTurns(items);
+      this.visibleCount = this.turns.reduce((count, turn) => count + Number(turn.visible), 0);
+      return;
+    }
+
+    if (items.length >= previousCount) this.rebuildSuffix(startIndex);
+  }
+
+  window(limit: number): TimelineWindow {
+    const take = Math.max(0, Math.floor(limit));
+    const visible: TimelineTurn[] = [];
+    for (let index = this.turns.length - 1; index >= 0 && visible.length < take; index -= 1) {
+      const source = this.turns[index];
+      if (!source.visible) continue;
+      if (source.presented === undefined) source.presented = presentIndexedTurn(source, this.items);
+      if (source.presented) visible.push(source.presented);
+    }
+    visible.reverse();
+    return { turns: visible, totalTurns: this.visibleCount };
+  }
+
+  private turnIndexAt(itemIndex: number): number {
+    let low = 0;
+    let high = this.turns.length - 1;
+    while (low <= high) {
+      const middle = (low + high) >>> 1;
+      const turn = this.turns[middle];
+      if (itemIndex < turn.start) high = middle - 1;
+      else if (itemIndex >= turn.end) low = middle + 1;
+      else return middle;
+    }
+    return Math.max(0, Math.min(this.turns.length - 1, low));
+  }
+
+  private rebuildSuffix(startIndex: number): void {
+    // startIndex 可能同时覆盖旧流式光标和新追加条目（例如 steer 后开始新答复）。
+    // 保留它之前的完整轮次，只重建受影响的短后缀，既避免历史全扫也不会留下旧 caret。
+    const firstTurn = this.turnIndexAt(startIndex);
+    const suffixStart = this.turns[firstTurn]?.start ?? 0;
+    const removed = this.turns.splice(firstTurn);
+    for (const turn of removed) this.visibleCount -= Number(turn.visible);
+    const appended = indexTurns(this.items, suffixStart);
+    this.turns.push(...appended);
+    for (const turn of appended) this.visibleCount += Number(turn.visible);
+  }
+
+}
+
+function indexTurns(items: readonly TimelineItem[], start = 0): IndexedTurn[] {
+  if (start >= items.length) return [];
+  const turns: IndexedTurn[] = [];
+  let turnStart = start;
+  let user: TimelineUserItem | null = items[start]?.kind === "you" ? items[start] : null;
+  let cursor = user ? start + 1 : start;
+
+  for (; cursor < items.length; cursor += 1) {
+    const item = items[cursor];
+    if (item.kind !== "you") continue;
+    const turn = indexedTurn(items, turnStart, cursor, user);
+    if (turn) turns.push(turn);
+    turnStart = cursor;
+    user = item;
+  }
+  const tail = indexedTurn(items, turnStart, items.length, user);
+  if (tail) turns.push(tail);
+  return turns;
+}
+
+function indexedTurn(
+  items: readonly TimelineItem[],
+  start: number,
+  end: number,
+  user: TimelineUserItem | null,
+): IndexedTurn | null {
+  if (!user && end <= start) return null;
+  const turn: IndexedTurn = {
+    id: user ? `turn-${user.id}` : "timeline-preamble",
+    user,
+    start,
+    end,
+    visible: false,
+  };
+  turn.visible = rawTurnWillRender(items, turn);
+  return turn;
+}
+
+function rawTurnWillRender(items: readonly TimelineItem[], turn: IndexedTurn): boolean {
+  if (turn.user && !composerOwnsQueuedMessage(turn.user)) return true;
+  const bodyStart = turn.user ? turn.start + 1 : turn.start;
+  let hasChildRun = false;
+  let hasDelegateTool = false;
+  for (let index = bodyStart; index < turn.end; index += 1) {
+    const item = items[index];
+    if (item.kind === "run") {
+      if (item.agentKind === "main") return true;
+      hasChildRun = true;
+      continue;
+    }
+    if (item.kind === "tool") {
+      const protocol = protocolToolKind(item.name);
+      if (!protocol) return true;
+      if (protocol === "delegate") hasDelegateTool = true;
+      continue;
+    }
+    if (item.kind === "ms" && isInternalProtocolLabel(item.label)) continue;
+    return true;
+  }
+  return hasChildRun || hasDelegateTool;
+}
+
+function presentIndexedTurn(turn: IndexedTurn, items: readonly TimelineItem[]): TimelineTurn | null {
+  const bodyStart = turn.user ? turn.start + 1 : turn.start;
+  return presentRawTurn({
+    id: turn.id,
+    user: turn.user,
+    body: items.slice(bodyStart, turn.end),
+  });
+}
+
+function presentRawTurn(turn: RawTurn): TimelineTurn | null {
+  const presented = presentTurn(turn);
+  const normalized = composerOwnsQueuedMessage(presented.user)
+    ? { ...presented, user: null }
+    : presented;
+  return normalized.user || normalized.runs.length || normalized.items.length ? normalized : null;
 }
 
 /**

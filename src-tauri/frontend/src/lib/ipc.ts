@@ -4,6 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { announceRuntimeSettingsChanged } from "./onboarding";
 import type {
   AgentEvent,
   AgentEventEnvelope,
@@ -26,6 +27,8 @@ import type {
   SearchMatch,
   SessionBranch,
   SessionMessage,
+  SubagentSessionMessagePage,
+  SubagentSessionMessagePageRequest,
   AttachmentInput,
   SettingsResponse,
   SupportBundlePreview,
@@ -233,17 +236,26 @@ export const planRepairProjection = (taskId: string, planId: string) =>
 export const planUpdateItem = (taskId: string, input: UpdatePlanItemInput) =>
   ipc<PlanView>("cmd_plan_update_item", { taskId, input });
 
-export const taskForkContext = (taskId: string) =>
-  ipc<SessionBranch>("cmd_task_fork_context", { taskId });
+export const taskForkContext = async (taskId: string) => {
+  const branch = await ipc<SessionBranch>("cmd_task_fork_context", { taskId });
+  invalidateSessionMessages(taskId);
+  return branch;
+};
 
-export const taskClearContext = (taskId: string) =>
-  ipc<SessionBranch>("cmd_task_clear_context", { taskId });
+export const taskClearContext = async (taskId: string) => {
+  const branch = await ipc<SessionBranch>("cmd_task_clear_context", { taskId });
+  invalidateSessionMessages(taskId);
+  return branch;
+};
 
-export const taskCompactContext = (taskId: string, focus?: string) =>
-  ipc<ContextCompactionResult>("cmd_task_compact_context", {
+export const taskCompactContext = async (taskId: string, focus?: string) => {
+  const result = await ipc<ContextCompactionResult>("cmd_task_compact_context", {
     taskId,
     focus: focus?.trim() || null,
   });
+  if (result.compacted) invalidateSessionMessages(taskId);
+  return result;
+};
 
 export const taskDetail = (taskId: string) =>
   ipc<TaskDetail>("cmd_task_detail", { taskId });
@@ -263,7 +275,10 @@ export const agentSend = (
   message: string,
   mode: AgentSendMode = "auto",
   attachments: AttachmentInput[] = [],
-) => ipc<void>("cmd_agent_send", { taskId, message, mode, attachments });
+) => ipc<void>("cmd_agent_send", { taskId, message, mode, attachments }).then((result) => {
+  invalidateSessionMessages(taskId);
+  return result;
+});
 
 export const agentAbort = (taskId: string) => ipc<void>("cmd_agent_abort", { taskId });
 
@@ -299,15 +314,28 @@ export const agentQueueUpdate = (taskId: string, queueId: string, message: strin
 export type AgentQueueSteerResult = "steered" | "queued_next" | "started";
 
 export const agentQueueSteer = (taskId: string, queueId: string) =>
-  ipc<AgentQueueSteerResult>("cmd_agent_queue_steer", { taskId, queueId });
+  ipc<AgentQueueSteerResult>("cmd_agent_queue_steer", { taskId, queueId }).then((result) => {
+    // `steered` and `started` durably append a user event; invalidating all successful outcomes
+    // keeps the wrapper correct if the backend promotes `queued_next` in the same transaction.
+    invalidateSessionMessages(taskId);
+    return result;
+  });
 
 export const agentResend = (taskId: string, messageId: string, message: string) =>
-  ipc<void>("cmd_agent_resend", { taskId, messageId, message });
+  ipc<void>("cmd_agent_resend", { taskId, messageId, message }).then((result) => {
+    invalidateSessionMessages(taskId);
+    return result;
+  });
 
 /** 订阅 agent 流式事件（后端 drain 循环 emit 的 "agent-event"）。 */
 export const onAgentEvent = (handler: (taskId: string, event: AgentEvent) => void): Promise<UnlistenFn> => {
   if (shouldUseBrowserMock()) return Promise.resolve(() => {});
-  return listen<AgentEventEnvelope>("agent-event", (e) => handler(e.payload.task_id, e.payload.event));
+  return listen<AgentEventEnvelope>("agent-event", (e) => {
+    // Agent events are persisted to the session log before they reach the UI.
+    // Do not let the short coalescing window hide a just-written message/tool event.
+    invalidateSessionMessages(e.payload.task_id);
+    handler(e.payload.task_id, e.payload.event);
+  });
 };
 
 // ---------- 权限 ----------
@@ -632,26 +660,29 @@ export const globalSearch = (workspacePath: string, query: string, limit = 50) =
   ipc<SearchMatch[]>("cmd_global_search", { workspacePath, query, limit });
 
 // ---------- 终端 ----------
-export const terminalList = () => ipc<TerminalInfo[]>("cmd_terminal_list");
+export const terminalList = (taskId: string) =>
+  ipc<TerminalInfo[]>("cmd_terminal_list", { taskId });
 
-export const terminalCreate = (shell: string, workspacePath: string) =>
-  ipc<string>("cmd_terminal_create", { shell, workspacePath });
+export const terminalCreate = (taskId: string, shell: string) =>
+  ipc<string>("cmd_terminal_create", { taskId, shell });
 
-export const terminalCreateCodex = (workspacePath: string) =>
-  ipc<string>("cmd_terminal_create_codex", { workspacePath });
+export const terminalCreateCodex = (taskId: string) =>
+  ipc<string>("cmd_terminal_create_codex", { taskId });
 
-export const terminalSend = (id: string, text: string, pressEnter = true) =>
-  ipc<void>("cmd_terminal_send", { id, text, pressEnter });
+export const terminalSend = (taskId: string, id: string, text: string, pressEnter = true) =>
+  ipc<void>("cmd_terminal_send", { taskId, id, text, pressEnter });
 
-export const terminalRead = (id: string) => ipc<string>("cmd_terminal_read", { id });
+export const terminalRead = (taskId: string, id: string) =>
+  ipc<string>("cmd_terminal_read", { taskId, id });
 
-export const terminalSnapshot = (id: string) => ipc<string>("cmd_terminal_snapshot", { id });
+export const terminalSnapshot = (taskId: string, id: string) =>
+  ipc<string>("cmd_terminal_snapshot", { taskId, id });
 
-export const terminalRawSnapshot = (id: string) =>
-  ipc<TerminalRawSnapshot>("cmd_terminal_raw_snapshot", { id });
+export const terminalRawSnapshot = (taskId: string, id: string) =>
+  ipc<TerminalRawSnapshot>("cmd_terminal_raw_snapshot", { taskId, id });
 
-export const terminalRawSince = (id: string, cursor: number) =>
-  ipc<TerminalRawBatch>("cmd_terminal_raw_since", { id, cursor });
+export const terminalRawSince = (taskId: string, id: string, cursor: number) =>
+  ipc<TerminalRawBatch>("cmd_terminal_raw_since", { taskId, id, cursor });
 
 /** PTY reader 的轻量输出就绪信号；字节内容仍由 terminalRawSince 增量读取。 */
 export const onTerminalOutput = (handler: (terminalId: string) => void): Promise<UnlistenFn> => {
@@ -659,10 +690,11 @@ export const onTerminalOutput = (handler: (terminalId: string) => void): Promise
   return listen<string>("terminal-output", (event) => handler(event.payload));
 };
 
-export const terminalKill = (id: string) => ipc<void>("cmd_terminal_kill", { id });
+export const terminalKill = (taskId: string, id: string) =>
+  ipc<void>("cmd_terminal_kill", { taskId, id });
 
-export const terminalResize = (id: string, cols: number, rows: number) =>
-  ipc<void>("cmd_terminal_resize", { id, cols, rows });
+export const terminalResize = (taskId: string, id: string, cols: number, rows: number) =>
+  ipc<void>("cmd_terminal_resize", { taskId, id, cols, rows });
 
 // ---------- 恢复 / 支持包 ----------
 export const recoveryData = async () => {
@@ -714,13 +746,67 @@ export const supportPreview = async () => {
 export const replay = (sessionId: string, depth: ReplayDepth) =>
   ipc<ReplayEntry[]>("cmd_replay", { sessionId, depth });
 
+interface SessionMessagesRequest {
+  generation: number;
+  promise: Promise<SessionMessage[]>;
+  settled: boolean;
+  stale: boolean;
+}
+
+/**
+ * Room 的 Timeline、Composer 输入历史和 Summary 审计都消费同一份会话投影。
+ * 会话切换时它们会在同一个 React 提交中挂载；共享这一趟 IPC，避免把同一个
+ * JSONL 文件在 Rust 端读取 / 解析三次、再跨 WebView 序列化三次。
+ *
+ * 仅复用当前正在进行的请求；完成后若没有失效，就保留一个很短的热窗口，让
+ * 相邻 effect 仍可命中，同时不会把运行中新落盘的消息长期藏在缓存后面。
+ */
+const SESSION_MESSAGES_HOT_MS = 250;
+const sessionMessageRequests = new Map<string, SessionMessagesRequest>();
+const sessionMessageGenerations = new Map<string, number>();
+
+function requestSessionMessages(taskId: string): Promise<SessionMessage[]> {
+  const generation = sessionMessageGenerations.get(taskId) ?? 0;
+  const cached = sessionMessageRequests.get(taskId);
+  if (cached && cached.generation === generation && !cached.stale) return cached.promise;
+
+  const request: SessionMessagesRequest = {
+    generation,
+    promise: Promise.resolve([]),
+    settled: false,
+    stale: false,
+  };
+  const promise = ipc<SessionMessage[]>("cmd_session_messages", { taskId })
+    .catch((error) => {
+      if (!shouldUseBrowserMock()) throw error;
+      return browserMockMessages(taskId);
+    })
+    .finally(() => {
+      request.settled = true;
+      if (request.stale) {
+        if (sessionMessageRequests.get(taskId) === request) sessionMessageRequests.delete(taskId);
+        return;
+      }
+      window.setTimeout(() => {
+        if (sessionMessageRequests.get(taskId) === request) sessionMessageRequests.delete(taskId);
+      }, SESSION_MESSAGES_HOT_MS);
+    });
+  request.promise = promise;
+  sessionMessageRequests.set(taskId, request);
+  return promise;
+}
+
+/** Mark the current projection stale after a command that can append or replace session JSONL. */
+export function invalidateSessionMessages(taskId: string): void {
+  sessionMessageGenerations.set(taskId, (sessionMessageGenerations.get(taskId) ?? 0) + 1);
+  const request = sessionMessageRequests.get(taskId);
+  if (!request) return;
+  request.stale = true;
+  if (sessionMessageRequests.get(taskId) === request) sessionMessageRequests.delete(taskId);
+}
+
 export const sessionMessages = async (taskId: string) => {
-  try {
-    return await ipc<SessionMessage[]>("cmd_session_messages", { taskId });
-  } catch (error) {
-    if (!shouldUseBrowserMock()) throw error;
-    return browserMockMessages(taskId);
-  }
+  return await requestSessionMessages(taskId);
 };
 
 /** Read a validated historical branch without changing the task's active branch. */
@@ -736,6 +822,20 @@ export const subagentSessionMessages = async (taskId: string, subagentId: string
     return browserMockSubagentMessages(taskId, subagentId);
   }
 };
+
+/**
+ * Read only the latest/added/preceding window of a subagent log. Pollers pass `next_cursor` back as
+ * `after_cursor`, so an idle poll avoids rereading, parsing and serializing the complete JSONL file.
+ */
+export const subagentSessionMessagePage = (
+  taskId: string,
+  subagentId: string,
+  request: SubagentSessionMessagePageRequest = {},
+) => ipc<SubagentSessionMessagePage>("cmd_subagent_session_message_page", {
+  taskId,
+  subagentId,
+  request,
+});
 
 // ---------- 旧版项目记忆文件风险状态 ----------
 export const memoryOverview = () => ipc<MemoryOverview>("cmd_memory_overview");
@@ -783,13 +883,75 @@ export const legacyMemoryStatus = (workspacePath: string) =>
   ipc<LegacyMemoryStatus>("cmd_legacy_memory_status", { workspacePath });
 
 // ---------- 设置 ----------
-export const settingsGet = async () => {
-  try {
-    return await ipc<SettingsResponse>("cmd_settings_get");
-  } catch (error) {
-    if (!shouldUseBrowserMock()) throw error;
-    return browserMockSettings;
-  }
+interface SettingsRequest {
+  generation: number;
+  promise: Promise<SettingsResponse>;
+  forced: boolean;
+  settled: boolean;
+  stale: boolean;
+}
+
+const SETTINGS_HOT_MS = 250;
+let settingsGeneration = 0;
+let settingsRequest: SettingsRequest | null = null;
+
+function invalidateSettingsRequest(): void {
+  settingsGeneration += 1;
+  const request = settingsRequest;
+  if (!request) return;
+  request.stale = true;
+  if (settingsRequest === request) settingsRequest = null;
+}
+
+export const settingsGet = (force = false) => {
+  if (
+    force
+    && settingsRequest?.forced
+    && !settingsRequest.settled
+    && !settingsRequest.stale
+  ) return settingsRequest.promise;
+  if (force) invalidateSettingsRequest();
+  if (
+    settingsRequest
+    && settingsRequest.generation === settingsGeneration
+    && !settingsRequest.stale
+  ) return settingsRequest.promise;
+  const request: SettingsRequest = {
+    generation: settingsGeneration,
+    promise: Promise.resolve(browserMockSettings),
+    forced: force,
+    settled: false,
+    stale: false,
+  };
+  const promise = ipc<SettingsResponse>("cmd_settings_get")
+    .catch((error) => {
+      if (!shouldUseBrowserMock()) throw error;
+      return browserMockSettings;
+    })
+    .finally(() => {
+      request.settled = true;
+      if (request.stale) {
+        if (settingsRequest === request) settingsRequest = null;
+        return;
+      }
+      window.setTimeout(() => {
+        if (settingsRequest === request) settingsRequest = null;
+      }, SETTINGS_HOT_MS);
+    });
+  request.promise = promise;
+  settingsRequest = request;
+  return promise;
+};
+
+const afterSettingsMutation = <T>(result: T): T => {
+  invalidateSettingsRequest();
+  return result;
+};
+
+const afterProviderMutation = <T>(result: T): T => {
+  afterSettingsMutation(result);
+  announceRuntimeSettingsChanged();
+  return result;
 };
 
 // ---------- MCP / native web ----------
@@ -850,16 +1012,16 @@ export const providerModels = (request: ProviderModelsInput) =>
   ipc<ProviderModelsResponse>("cmd_provider_models", { request });
 
 export const settingsSet = (key: string, value: unknown) =>
-  ipc<void>("cmd_settings_set", { key, value });
+  ipc<void>("cmd_settings_set", { key, value }).then(afterSettingsMutation);
 
 export const settingsSaveProvider = (provider: ProviderSettingsInput) =>
-  ipc<void>("cmd_settings_save_provider", { provider });
+  ipc<void>("cmd_settings_save_provider", { provider }).then(afterProviderMutation);
 
 export const settingsSelectProvider = (name: string) =>
-  ipc<void>("cmd_settings_select_provider", { name });
+  ipc<void>("cmd_settings_select_provider", { name }).then(afterProviderMutation);
 
 export const settingsDeleteProvider = (name: string) =>
-  ipc<void>("cmd_settings_delete_provider", { name });
+  ipc<void>("cmd_settings_delete_provider", { name }).then(afterProviderMutation);
 
 /** RTK is app-scoped: status never mutates system PATH or the user's global Codex files. */
 export const rtkStatus = () => ipc<RtkStatus>("cmd_rtk_status");
@@ -869,6 +1031,17 @@ export const rtkSetEnabled = (enabled: boolean) =>
   ipc<RtkStatus>("cmd_rtk_set_enabled", { enabled });
 
 let codexIntegrationStatusRequest: Promise<CodexIntegrationStatus> | null = null;
+let codexIntegrationStatusRequestForced = false;
+let codexIntegrationStatusSnapshot: CodexIntegrationStatus | null = null;
+let codexIntegrationStatusGeneration = 0;
+
+function invalidateCodexIntegrationStatus(): number {
+  codexIntegrationStatusGeneration += 1;
+  codexIntegrationStatusSnapshot = null;
+  codexIntegrationStatusRequest = null;
+  codexIntegrationStatusRequestForced = false;
+  return codexIntegrationStatusGeneration;
+}
 
 const loadCodexIntegrationStatus = async () => {
   try {
@@ -879,14 +1052,35 @@ const loadCodexIntegrationStatus = async () => {
   }
 };
 
-/** Coalesce startup consumers so Home and the Codex gate do not launch the same CLI probes twice. */
-export const codexIntegrationStatus = () => {
+/**
+ * Codex 安装 / 登录 / MCP 状态属于应用级状态，而非会话状态。成功探测后复用快照，
+ * 避免每次 Room 挂载都在 Windows 上重新启动 CLI/version/login 子进程。
+ * 所有会改变该状态的操作都会更新或清除此快照。
+ */
+export const codexIntegrationStatus = (force = false) => {
+  if (force && codexIntegrationStatusRequest && codexIntegrationStatusRequestForced) {
+    return codexIntegrationStatusRequest;
+  }
+  if (force) invalidateCodexIntegrationStatus();
+  if (!force && codexIntegrationStatusSnapshot) {
+    return Promise.resolve(codexIntegrationStatusSnapshot);
+  }
   if (codexIntegrationStatusRequest) return codexIntegrationStatusRequest;
 
-  const request = loadCodexIntegrationStatus();
+  const generation = codexIntegrationStatusGeneration;
+  const request = loadCodexIntegrationStatus().then((status) => {
+    if (generation === codexIntegrationStatusGeneration) {
+      codexIntegrationStatusSnapshot = status;
+    }
+    return status;
+  });
   codexIntegrationStatusRequest = request;
+  codexIntegrationStatusRequestForced = force;
   const clear = () => {
-    if (codexIntegrationStatusRequest === request) codexIntegrationStatusRequest = null;
+    if (codexIntegrationStatusRequest === request) {
+      codexIntegrationStatusRequest = null;
+      codexIntegrationStatusRequestForced = false;
+    }
   };
   void request.then(clear, clear);
   return request;
@@ -894,65 +1088,98 @@ export const codexIntegrationStatus = () => {
 
 /** 用户在确认弹窗授权后，通过 npm 安装官方 Codex CLI，并返回最新状态。 */
 export const codexInstallCli = async () => {
+  invalidateCodexIntegrationStatus();
   try {
-    return await ipc<CodexIntegrationStatus>("cmd_codex_install_cli");
+    const status = await ipc<CodexIntegrationStatus>("cmd_codex_install_cli");
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = status;
+    return status;
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     await new Promise((resolve) => window.setTimeout(resolve, 900));
-    return browserMockInstallCodexCli();
+    const status = browserMockInstallCodexCli();
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = status;
+    return status;
   }
 };
 
 export const codexStartLogin = async () => {
+  invalidateCodexIntegrationStatus();
   try {
     await ipc<void>("cmd_codex_start_login");
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     browserMockAuthenticateCodex();
   }
+  invalidateCodexIntegrationStatus();
 };
 
 export const codexStartDeviceLogin = async () => {
+  invalidateCodexIntegrationStatus();
   try {
     await ipc<void>("cmd_codex_start_device_login");
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     browserMockAuthenticateCodex();
   }
+  invalidateCodexIntegrationStatus();
 };
 
 export const codexInstallSkill = async () => {
+  invalidateCodexIntegrationStatus();
   try {
     await ipc<void>("cmd_codex_install_skill");
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     browserMockInstallCodexSkill();
   }
+  invalidateCodexIntegrationStatus();
 };
 
 /** 用户确认后将本机 R-Code stdio MCP server 注册到 Codex 配置。 */
 export const codexInstallMcpServer = async () => {
+  invalidateCodexIntegrationStatus();
   try {
     await ipc<void>("cmd_codex_install_mcp_server");
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     browserMockEnableCodexMcp();
   }
+  invalidateCodexIntegrationStatus();
 };
 
 /** 一次更新协作 Skill 并补齐 R-Code 的 Codex MCP 配置。 */
 export const codexSetupCollaboration = async () => {
+  invalidateCodexIntegrationStatus();
   try {
-    return await ipc<CodexIntegrationStatus>("cmd_codex_setup_collaboration");
+    const status = await ipc<CodexIntegrationStatus>("cmd_codex_setup_collaboration");
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = status;
+    return status;
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     await new Promise((resolve) => window.setTimeout(resolve, 500));
-    return browserMockSetupCodexCollaboration();
+    const status = browserMockSetupCodexCollaboration();
+    invalidateCodexIntegrationStatus();
+    codexIntegrationStatusSnapshot = status;
+    return status;
   }
 };
 
 /** 读取当前 Codex CLI 实际可用模型与运行偏好。 */
-export const codexCliPreferences = async () => {
+let codexCliPreferencesSnapshot: CodexCliPreferences | null = null;
+let codexCliPreferencesRequest: Promise<CodexCliPreferences> | null = null;
+let codexCliPreferencesGeneration = 0;
+
+function invalidateCodexCliPreferences(): number {
+  codexCliPreferencesGeneration += 1;
+  codexCliPreferencesSnapshot = null;
+  codexCliPreferencesRequest = null;
+  return codexCliPreferencesGeneration;
+}
+
+const loadCodexCliPreferences = async () => {
   try {
     return await ipc<CodexCliPreferences>("cmd_codex_cli_preferences");
   } catch (error) {
@@ -960,6 +1187,24 @@ export const codexCliPreferences = async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 450));
     return browserMockCodexCliPreferences();
   }
+};
+
+export const codexCliPreferences = () => {
+  if (codexCliPreferencesSnapshot) return Promise.resolve(codexCliPreferencesSnapshot);
+  if (codexCliPreferencesRequest) return codexCliPreferencesRequest;
+  const generation = codexCliPreferencesGeneration;
+  const request = loadCodexCliPreferences().then((preferences) => {
+    if (generation === codexCliPreferencesGeneration) {
+      codexCliPreferencesSnapshot = preferences;
+    }
+    return preferences;
+  });
+  codexCliPreferencesRequest = request;
+  const clear = () => {
+    if (codexCliPreferencesRequest === request) codexCliPreferencesRequest = null;
+  };
+  void request.then(clear, clear);
+  return request;
 };
 
 /** 空模型字段会从 config.toml 移除覆盖；权限预设由 Codex 子代理启动时读取。 */
@@ -975,17 +1220,24 @@ export const codexSaveCliPreferences = async (
     verbosity: verbosity || null,
     permissionMode: permissionMode || null,
   };
+  invalidateCodexCliPreferences();
   try {
-    return await ipc<CodexCliPreferences>("cmd_codex_save_cli_preferences", args);
+    const preferences = await ipc<CodexCliPreferences>("cmd_codex_save_cli_preferences", args);
+    invalidateCodexCliPreferences();
+    codexCliPreferencesSnapshot = preferences;
+    return preferences;
   } catch (error) {
     if (!shouldUseBrowserMock()) throw error;
     await new Promise((resolve) => window.setTimeout(resolve, 500));
-    return browserMockSaveCodexCliPreferences(
+    const preferences = browserMockSaveCodexCliPreferences(
       args.model,
       args.reasoningEffort,
       args.verbosity,
       args.permissionMode,
     );
+    invalidateCodexCliPreferences();
+    codexCliPreferencesSnapshot = preferences;
+    return preferences;
   }
 };
 

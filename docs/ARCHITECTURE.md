@@ -265,7 +265,7 @@ Host 的 drain loop 大约每 40 ms 拉取 runtime 事件，先保持 JSONL 会�
 
 ### 6.3 DeepSeek 前缀缓存与请求字节稳定
 
-DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开关）：相邻请求公共前缀逐字节一致即命中，命中部分免 prefill、按低价计费。运行时围绕这一性质设计（PRD 与验收：`docs/deepseek-prefix-cache.md`，基线：`docs/deepseek-cache-baseline.md`）：
+DeepSeek `/chat/completions` 的前缀缓存是字节级自动的（无 API 开关）：相邻请求公共前缀逐字节一致即命中，命中部分免 prefill、按低价计费。运行时围绕这一性质设计（历史 PRD 与验收：`docs/archive/deepseek-prefix-cache.md`，基线：`docs/archive/deepseek-cache-baseline.md`）：
 
 - **system 冻结**：system prompt 为常量拼接，run 开始构建一次、全程复用；时间（分钟级）、task_context、plan mode、委派提示等动态内容一律作为尾部 user 消息注入发送副本、迭代后摘除，不落历史（历史严格 append-only）；memory_context 以独立头部消息承载，不拼进主 system。
 - **请求字节确定性**：tools 按名称排序（gateway 与 SessionToolHost 两级）；`codex_available()` 在 run 内冻结；thinking 模式恒发 `reasoning_content` 键、tool 消息恒发 `name` 键；悬空工具调用对在发送前一次性修复并固化。

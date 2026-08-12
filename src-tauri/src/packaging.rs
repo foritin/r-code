@@ -87,7 +87,7 @@ impl PackagingConfig {
         Self {
             product_name: "R-Code".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            identifier: "com.r-code.app".to_string(),
+            identifier: crate::app_paths::bundle_identifier().to_string(),
             targets: vec![
                 BundleTarget::Msi,
                 BundleTarget::Nsis,
@@ -352,7 +352,7 @@ mod tests {
     fn production_config_has_all_targets() {
         let cfg = PackagingConfig::production();
         assert_eq!(cfg.product_name, "R-Code");
-        assert_eq!(cfg.identifier, "com.r-code.app");
+        assert_eq!(cfg.identifier, crate::app_paths::bundle_identifier());
         assert!(!cfg.version.is_empty());
         assert_eq!(cfg.targets.len(), 4);
         assert!(cfg.macos.is_some());

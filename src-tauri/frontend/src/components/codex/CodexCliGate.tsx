@@ -91,7 +91,7 @@ export function CodexCliGateProvider({ children }: { children: ReactNode }) {
     }
     // 手动检测与自动轮询共享同一个在途请求，避免重复启动 `codex login status`。
     if (statusPromiseRef.current) return statusPromiseRef.current;
-    const request = codexIntegrationStatus()
+    const request = codexIntegrationStatus(force)
       .then(rememberStatus)
       .finally(() => {
         statusPromiseRef.current = null;

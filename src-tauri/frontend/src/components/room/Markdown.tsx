@@ -60,7 +60,13 @@ export const Markdown = memo(function Markdown({
   return (
     <div className="md">
       {nodes.map((node, i) => (
-        <Block key={i} node={node} caret={inlineCaret && i === last} context={context} />
+        <Block
+          key={i}
+          node={node}
+          caret={inlineCaret && i === last}
+          className={`md-block${streaming && i === last ? " is-live" : ""}`}
+          context={context}
+        />
       ))}
       {streaming && !inlineCaret && <span className="caret md-caret" />}
     </div>
@@ -72,16 +78,18 @@ export const Markdown = memo(function Markdown({
 function Block({
   node,
   caret = false,
+  className,
   context,
 }: {
   node: MdNode;
   caret?: boolean;
+  className?: string;
   context: RenderContext;
 }): ReactNode {
   switch (node.type) {
     case "paragraph":
       return (
-        <p>
+        <p className={className}>
           {renderInline(node.children, context)}
           {caret && <span className="caret" />}
         </p>
@@ -93,33 +101,41 @@ function Block({
           {caret && <span className="caret" />}
         </>
       );
-      if (node.depth === 1) return <h1>{content}</h1>;
-      if (node.depth === 2) return <h2>{content}</h2>;
-      if (node.depth === 3) return <h3>{content}</h3>;
-      if (node.depth === 4) return <h4>{content}</h4>;
-      if (node.depth === 5) return <h5>{content}</h5>;
-      return <h6>{content}</h6>;
+      if (node.depth === 1) return <h1 className={className}>{content}</h1>;
+      if (node.depth === 2) return <h2 className={className}>{content}</h2>;
+      if (node.depth === 3) return <h3 className={className}>{content}</h3>;
+      if (node.depth === 4) return <h4 className={className}>{content}</h4>;
+      if (node.depth === 5) return <h5 className={className}>{content}</h5>;
+      return <h6 className={className}>{content}</h6>;
     }
     case "code":
-      return <CodeBlock node={node} />;
+      return <CodeBlock node={node} className={className} />;
     case "hr":
-      return <hr />;
+      return <hr className={className} />;
     case "blockquote":
       return (
-        <blockquote>
+        <blockquote className={className}>
           {node.children.map((child, i) => (
             <Block key={i} node={child} context={context} />
           ))}
         </blockquote>
       );
     case "list":
-      return <List node={node} context={context} />;
+      return <List node={node} className={className} context={context} />;
     case "table":
-      return <Table node={node} context={context} />;
+      return <Table node={node} className={className} context={context} />;
   }
 }
 
-function List({ node, context }: { node: MdList; context: RenderContext }) {
+function List({
+  node,
+  className,
+  context,
+}: {
+  node: MdList;
+  className?: string;
+  context: RenderContext;
+}) {
   const items = node.items.map((item, i) => {
     const body = item.children.map((child, j) =>
       // 紧凑列表里的段落不套 <p>，避免每项都多出一段外边距
@@ -140,23 +156,31 @@ function List({ node, context }: { node: MdList; context: RenderContext }) {
     );
   });
 
-  const className = node.tight ? "md-tight" : undefined;
+  const listClassName = [className, node.tight ? "md-tight" : null].filter(Boolean).join(" ") || undefined;
   return node.ordered ? (
-    <ol className={className} start={node.start === 1 ? undefined : node.start}>
+    <ol className={listClassName} start={node.start === 1 ? undefined : node.start}>
       {items}
     </ol>
   ) : (
-    <ul className={className}>{items}</ul>
+    <ul className={listClassName}>{items}</ul>
   );
 }
 
-function Table({ node, context }: { node: MdTable; context: RenderContext }) {
+function Table({
+  node,
+  className,
+  context,
+}: {
+  node: MdTable;
+  className?: string;
+  context: RenderContext;
+}) {
   const style = (i: number): CSSProperties | undefined => {
     const align = node.align[i];
     return align ? { textAlign: align } : undefined;
   };
   return (
-    <div className="md-table-wrap">
+    <div className={["md-table-wrap", className].filter(Boolean).join(" ")}>
       <table>
         <thead>
           <tr>
@@ -185,7 +209,27 @@ function Table({ node, context }: { node: MdTable; context: RenderContext }) {
 
 /* -------------------------------------------------------------- 代码块 */
 
-function CodeBlock({ node }: { node: MdCode }) {
+function inspectCode(value: string): { lineCount: number; preview: string } {
+  if (value.length === 0) return { lineCount: 0, preview: "" };
+
+  let lineCount = 1;
+  let previewEnd = -1;
+  let cursor = 0;
+  while (cursor < value.length) {
+    const newline = value.indexOf("\n", cursor);
+    if (newline === -1) break;
+    if (lineCount === COLLAPSE_LINES && previewEnd === -1) previewEnd = newline;
+    lineCount += 1;
+    cursor = newline + 1;
+  }
+
+  return {
+    lineCount,
+    preview: previewEnd === -1 ? value : value.slice(0, previewEnd),
+  };
+}
+
+function CodeBlock({ node, className }: { node: MdCode; className?: string }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const resetTimer = useRef<number | null>(null);
@@ -197,14 +241,21 @@ function CodeBlock({ node }: { node: MdCode }) {
     []
   );
 
-  const tokens = useMemo(() => highlight(node.value, node.lang), [node.value, node.lang]);
-  const lineCount = useMemo(
-    () => (node.value.length === 0 ? 0 : node.value.split("\n").length),
-    [node.value]
-  );
+  const { lineCount, preview } = useMemo(() => inspectCode(node.value), [node.value]);
 
   const collapsible = lineCount > COLLAPSE_LINES;
   const clipped = collapsible && !expanded;
+  // Collapsed code used to syntax-highlight and mount every line before CSS hid the tail. A long
+  // tool result could therefore create thousands of spans even though only 16 lines were visible.
+  // Keep the complete source for copy/expand, but do parsing and DOM work only for the preview.
+  const renderedValue = clipped ? preview : node.value;
+  const tokens = useMemo(() => highlight(renderedValue, node.lang), [renderedValue, node.lang]);
+
+  useEffect(() => {
+    // Streaming can replace a block in place. Never keep an expanded state from an older, longer
+    // code payload after the source itself changes.
+    setExpanded(false);
+  }, [node.value]);
 
   const onCopy = useCallback(() => {
     void copyText(node.value).then((ok) => {
@@ -216,7 +267,7 @@ function CodeBlock({ node }: { node: MdCode }) {
   }, [node.value]);
 
   return (
-    <div className="md-code">
+    <div className={["md-code", className].filter(Boolean).join(" ")}>
       <div className="md-code-head">
         <span className="md-code-lang">{node.lang ?? "text"}</span>
         <button

@@ -294,11 +294,19 @@ test("Codex login watcher is bounded and never schedules beyond its deadline", a
   await page.close();
 });
 
-test("sidebar uses green for active main agents and orange for finished tasks", async () => {
+test("task status colors use orange while running and green when idle", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   const colors = await page.evaluate(() => {
+    const tokenColor = (token) => {
+      const probe = document.createElement("i");
+      probe.style.backgroundColor = `var(${token})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
     const dotFor = (title) => {
       const rows = [...document.querySelectorAll(".sidebar-task-row")];
       const row = rows.find((candidate) => candidate.textContent?.includes(title));
@@ -307,6 +315,8 @@ test("sidebar uses green for active main agents and orange for finished tasks", 
       return getComputedStyle(dot).backgroundColor;
     };
     return {
+      warning: tokenColor("--warning"),
+      success: tokenColor("--success"),
       running: dotFor("修复任务队列并发问题"),
       waitingWhileRunning: dotFor("优化 Rust 编译性能"),
       reviewReady: dotFor("统一错误处理规范"),
@@ -314,9 +324,30 @@ test("sidebar uses green for active main agents and orange for finished tasks", 
     };
   });
 
+  assert.equal(colors.running, colors.warning);
   assert.equal(colors.waitingWhileRunning, colors.running);
-  assert.equal(colors.finished, colors.reviewReady);
+  assert.equal(colors.reviewReady, colors.warning);
+  assert.equal(colors.finished, colors.success);
   assert.notEqual(colors.running, colors.finished);
+
+  await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
+  await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
+  await page.locator(".conversation-row").filter({ hasText: "修复任务队列并发问题" }).waitFor({ state: "visible" });
+  const conversationColors = await page.evaluate(() => {
+    const statusFor = (title) => {
+      const rows = [...document.querySelectorAll(".conversation-row")];
+      const row = rows.find((candidate) => candidate.textContent?.includes(title));
+      const status = row?.querySelector(".conversation-status i");
+      if (!(status instanceof HTMLElement)) throw new Error(`missing conversation status: ${title}`);
+      return getComputedStyle(status).backgroundColor;
+    };
+    return {
+      running: statusFor("修复任务队列并发问题"),
+      finished: statusFor("更新依赖并修复告警"),
+    };
+  });
+  assert.equal(conversationColors.running, colors.warning);
+  assert.equal(conversationColors.finished, colors.success);
   await page.close();
 });
 
@@ -347,11 +378,11 @@ test("Codex subagent switch persists immediately and remains reversible", async 
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.evaluate(async () => {
-    const { browserMockInvoke } = await import("/src/lib/browser-mock-runtime.ts");
+    const { codexInstallCli, codexSetupCollaboration, codexStartLogin } = await import("/src/lib/ipc.ts");
     const { useAppStore } = await import("/src/store/app.ts");
-    await browserMockInvoke("cmd_codex_install_cli");
-    await browserMockInvoke("cmd_codex_start_login");
-    await browserMockInvoke("cmd_codex_setup_collaboration");
+    await codexInstallCli();
+    await codexStartLogin();
+    await codexSetupCollaboration();
     useAppStore.getState().setSettingsPane("codex");
     useAppStore.getState().setScene("settings");
   });
@@ -3225,6 +3256,276 @@ test("poll stores preserve references and coalesce concurrent list and detail re
   await page.close();
 });
 
+test("opening a conversation coalesces shared history reads and reuses provider settings", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    globalThis.__rCodeSessionSwitchCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command, args) => {
+      if ([
+        "cmd_session_messages",
+        "cmd_settings_get",
+        "cmd_codex_integration_status",
+        "cmd_codex_cli_preferences",
+      ].includes(command)) {
+        globalThis.__rCodeSessionSwitchCalls.push({ command, taskId: args?.taskId ?? null });
+      }
+    };
+    globalThis.__rCodeBrowserMockDelayMs = {
+      cmd_session_messages: 120,
+      cmd_settings_get: 120,
+      cmd_codex_integration_status: 120,
+      cmd_codex_cli_preferences: 120,
+    };
+
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshDetail("mock-task-review"),
+      useTasksStore.getState().refreshDetail("mock-task-queue"),
+    ]);
+    useAppStore.getState().openRoom("mock-task-review", "summary");
+  });
+
+  await page.locator('#main-content > .scene-room[data-owner-key="task:mock-task-review"]').waitFor({ state: "visible" });
+  await page.waitForTimeout(250);
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openRoom("mock-task-queue", "summary");
+  });
+  await page.locator('#main-content > .scene-room[data-owner-key="task:mock-task-queue"]').waitFor({ state: "visible" });
+  await page.waitForTimeout(250);
+
+  const result = await page.evaluate(() => {
+    const recorded = [...globalThis.__rCodeSessionSwitchCalls];
+    const visibleText = document.querySelector('#main-content > .scene-room[data-owner-key="task:mock-task-queue"]')?.textContent ?? "";
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeBrowserMockDelayMs;
+    delete globalThis.__rCodeSessionSwitchCalls;
+    return { recorded, visibleText };
+  });
+  const calls = result.recorded;
+  assert.equal(
+    calls.filter((call) => call.command === "cmd_session_messages" && call.taskId === "mock-task-review").length,
+    1,
+    "Timeline, Composer and Summary must share one JSONL projection read",
+  );
+  assert.equal(
+    calls.filter((call) => call.command === "cmd_session_messages" && call.taskId === "mock-task-queue").length,
+    1,
+    "the next conversation must also read its projection only once",
+  );
+  assert.equal(
+    calls.filter((call) => call.command === "cmd_settings_get").length,
+    0,
+    "switching conversations must reuse the global provider snapshot instead of rechecking credentials",
+  );
+  assert.equal(
+    calls.filter((call) => call.command === "cmd_codex_integration_status").length,
+    0,
+    "switching conversations must reuse the application-level Codex readiness snapshot",
+  );
+  assert.equal(
+    calls.filter((call) => call.command === "cmd_codex_cli_preferences").length,
+    0,
+    "switching conversations must reuse Codex CLI preferences instead of restarting model/login probes",
+  );
+  assert.doesNotMatch(
+    result.visibleText,
+    /正在读取模型服务|读取模型服务中|模型服务加载中/,
+    "a cached provider snapshot must not put the switched conversation back into loading state",
+  );
+  await page.close();
+});
+
+test("provider mutations invalidate the shared provider snapshot once", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const calls = await page.evaluate(async () => {
+    const { settingsSelectProvider } = await import("/src/lib/ipc.ts");
+    const { useProviders } = await import("/src/lib/provider.ts");
+    // The application has already hydrated the module-level snapshot during startup.
+    globalThis.__rCodeProviderMutationCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_settings_get") globalThis.__rCodeProviderMutationCalls.push(command);
+    };
+    // Keep a hook consumer mounted through the real Room/Home shell; the IPC wrapper
+    // announces the mutation and every subscriber must share the same forced reload.
+    await settingsSelectProvider("deepseek");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Import is deliberately retained so tree-shaking cannot turn this into an IPC-only test.
+    void useProviders;
+    const recorded = [...globalThis.__rCodeProviderMutationCalls];
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeProviderMutationCalls;
+    return recorded;
+  });
+  assert.equal(calls.length, 1, "a provider mutation must trigger one coalesced settings refresh");
+  await page.close();
+});
+
+test("a provider mutation supersedes an in-flight stale settings snapshot", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const { settingsGet, settingsSelectProvider } = await import("/src/lib/ipc.ts");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    globalThis.__rCodeProviderRaceCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_settings_get") globalThis.__rCodeProviderRaceCalls.push(command);
+    };
+    globalThis.__rCodeBrowserMockDelayMs = { cmd_settings_get: 160 };
+
+    const stale = settingsGet();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await settingsSelectProvider("deepseek");
+    const fresh = settingsGet();
+    await Promise.all([stale.catch(() => null), fresh]);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const recorded = [...globalThis.__rCodeProviderRaceCalls];
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeBrowserMockDelayMs;
+    delete globalThis.__rCodeProviderRaceCalls;
+    return recorded;
+  });
+  assert.equal(
+    result.length,
+    2,
+    "a mutation during an in-flight settings read must start exactly one fresh generation",
+  );
+  await page.close();
+});
+
+test("explicit configuration refreshes supersede in-flight application snapshots", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const calls = await page.evaluate(async () => {
+    const { codexIntegrationStatus, codexStartLogin, settingsGet } = await import("/src/lib/ipc.ts");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await codexStartLogin();
+    globalThis.__rCodeExplicitRefreshCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_settings_get" || command === "cmd_codex_integration_status") {
+        globalThis.__rCodeExplicitRefreshCalls.push(command);
+      }
+    };
+    globalThis.__rCodeBrowserMockDelayMs = {
+      cmd_settings_get: 160,
+      cmd_codex_integration_status: 160,
+    };
+
+    const staleSettings = settingsGet();
+    const staleCodex = codexIntegrationStatus();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const freshSettings = settingsGet(true);
+    const freshCodex = codexIntegrationStatus(true);
+    const coalescedSettings = settingsGet(true);
+    const coalescedCodex = codexIntegrationStatus(true);
+    await Promise.all([
+      staleSettings,
+      staleCodex,
+      freshSettings,
+      freshCodex,
+      coalescedSettings,
+      coalescedCodex,
+    ]);
+
+    const recorded = [...globalThis.__rCodeExplicitRefreshCalls];
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeBrowserMockDelayMs;
+    delete globalThis.__rCodeExplicitRefreshCalls;
+    return recorded;
+  });
+
+  assert.equal(
+    calls.filter((command) => command === "cmd_settings_get").length,
+    2,
+    "an explicit settings refresh must not reuse a request that started before the refresh boundary",
+  );
+  assert.equal(
+    calls.filter((command) => command === "cmd_codex_integration_status").length,
+    2,
+    "an explicit Codex refresh must not reuse a probe that started before the refresh boundary",
+  );
+  await page.close();
+});
+
+test("Codex mutations supersede in-flight status and preference probes", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const {
+      codexCliPreferences,
+      codexInstallCli,
+      codexIntegrationStatus,
+      codexSaveCliPreferences,
+    } = await import("/src/lib/ipc.ts");
+
+    globalThis.__rCodeBrowserMockDelayMs = {
+      cmd_codex_integration_status: 160,
+      cmd_codex_cli_preferences: 160,
+    };
+    const staleStatus = codexIntegrationStatus(true);
+    const stalePreferences = codexCliPreferences();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const install = codexInstallCli();
+    const save = codexSaveCliPreferences("gpt-5.3-codex-spark", "high", "low", "full_access");
+    const overlappingStatus = codexIntegrationStatus(true);
+    const overlappingPreferences = codexCliPreferences();
+    const [installed, saved] = await Promise.all([install, save]);
+    await Promise.all([staleStatus, stalePreferences, overlappingStatus, overlappingPreferences]);
+
+    const cachedStatus = await codexIntegrationStatus();
+    const cachedPreferences = await codexCliPreferences();
+    delete globalThis.__rCodeBrowserMockDelayMs;
+    return { installed, saved, cachedStatus, cachedPreferences };
+  });
+
+  assert.equal(result.installed.cli_available, true);
+  assert.equal(result.cachedStatus.cli_available, true, "an old CLI probe must not replace install state");
+  assert.equal(result.saved.model, "gpt-5.3-codex-spark");
+  assert.equal(
+    result.cachedPreferences.model,
+    "gpt-5.3-codex-spark",
+    "an old preference probe must not replace a saved model",
+  );
+  await page.close();
+});
+
+test("all mounted provider consumers refresh from one settings request", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await useTasksStore.getState().refreshDetail("mock-task-review");
+    useAppStore.getState().openRoom("mock-task-review", "summary");
+  });
+  await page.locator('#main-content > .scene-room[data-owner-key="task:mock-task-review"]').waitFor({ state: "visible" });
+  const result = await page.evaluate(async () => {
+    const { settingsSelectProvider } = await import("/src/lib/ipc.ts");
+    globalThis.__rCodeMultiProviderCalls = [];
+    globalThis.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_settings_get") globalThis.__rCodeMultiProviderCalls.push(command);
+    };
+    await settingsSelectProvider("deepseek");
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const recorded = [...globalThis.__rCodeMultiProviderCalls];
+    delete globalThis.__rCodePerformanceIpcProbe;
+    delete globalThis.__rCodeMultiProviderCalls;
+    return recorded;
+  });
+  assert.equal(
+    result.length,
+    1,
+    "Home and Room provider hooks must each update local state while sharing one settings IPC",
+  );
+  await page.close();
+});
+
 test("poll hooks share one live refresh listener across the WebView", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.addInitScript(() => {
@@ -3296,5 +3597,113 @@ test("terminal input coalesces queued keystrokes without reordering them", async
   });
 
   assert.deepEqual(chunks, ["a", "bcd"]);
+  await page.close();
+});
+
+test("terminal IPC isolates terminals between conversations", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const {
+      terminalCreate,
+      terminalKill,
+      terminalList,
+      terminalRawSnapshot,
+      terminalSend,
+    } = await import("/src/lib/ipc.ts");
+    const firstTaskId = "mock-task-review";
+    const secondTaskId = "mock-task-complete";
+    const firstTerminalId = await terminalCreate(firstTaskId, "PowerShell");
+    const secondTerminalId = await terminalCreate(secondTaskId, "PowerShell");
+    const firstIds = (await terminalList(firstTaskId)).map((terminal) => terminal.id);
+    const secondIds = (await terminalList(secondTaskId)).map((terminal) => terminal.id);
+    let crossReadRejected = false;
+    let crossSendRejected = false;
+    let crossKillRejected = false;
+    try {
+      await terminalRawSnapshot(secondTaskId, firstTerminalId);
+    } catch {
+      crossReadRejected = true;
+    }
+    try {
+      await terminalSend(secondTaskId, firstTerminalId, "echo crossed", true);
+    } catch {
+      crossSendRejected = true;
+    }
+    try {
+      await terminalKill(secondTaskId, firstTerminalId);
+    } catch {
+      crossKillRejected = true;
+    }
+    await terminalKill(firstTaskId, firstTerminalId);
+    const firstIdsAfterKill = (await terminalList(firstTaskId)).map((terminal) => terminal.id);
+    const secondIdsAfterFirstKill = (await terminalList(secondTaskId)).map((terminal) => terminal.id);
+    await terminalKill(secondTaskId, secondTerminalId);
+    return {
+      firstIds,
+      secondIds,
+      firstIdsAfterKill,
+      secondIdsAfterFirstKill,
+      firstTerminalId,
+      secondTerminalId,
+      crossReadRejected,
+      crossSendRejected,
+      crossKillRejected,
+    };
+  });
+
+  assert.deepEqual(result.firstIds, [result.firstTerminalId]);
+  assert.deepEqual(result.secondIds, [result.secondTerminalId]);
+  assert.deepEqual(result.firstIdsAfterKill, []);
+  assert.deepEqual(result.secondIdsAfterFirstKill, [result.secondTerminalId]);
+  assert.equal(result.crossReadRejected, true);
+  assert.equal(result.crossSendRejected, true);
+  assert.equal(result.crossKillRejected, true);
+  await page.close();
+});
+
+test("terminal panel switches with its conversation and restores each terminal", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const firstTaskId = "mock-task-review";
+  const secondTaskId = "mock-task-complete";
+
+  const ids = await page.evaluate(async ({ firstTaskId, secondTaskId }) => {
+    const { terminalCreate } = await import("/src/lib/ipc.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const [firstTerminalId, secondTerminalId] = await Promise.all([
+      terminalCreate(firstTaskId, "First Session Shell"),
+      terminalCreate(secondTaskId, "Second Session Shell"),
+    ]);
+    await Promise.all([
+      useTasksStore.getState().refreshDetail(firstTaskId),
+      useTasksStore.getState().refreshDetail(secondTaskId),
+    ]);
+    useAppStore.getState().openRoom(firstTaskId, "terminal");
+    return { firstTerminalId, secondTerminalId };
+  }, { firstTaskId, secondTaskId });
+
+  const terminalList = page.getByRole("grid", { name: "终端列表" });
+  await terminalList.getByText("First Session Shell", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await terminalList.getByText("Second Session Shell", { exact: true }).count(), 0);
+
+  await page.evaluate((taskId) => import("/src/store/app.ts").then(
+    ({ useAppStore }) => useAppStore.getState().openRoom(taskId, "terminal"),
+  ), secondTaskId);
+  await terminalList.getByText("Second Session Shell", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await terminalList.getByText("First Session Shell", { exact: true }).count(), 0);
+
+  await page.evaluate((taskId) => import("/src/store/app.ts").then(
+    ({ useAppStore }) => useAppStore.getState().openRoom(taskId, "terminal"),
+  ), firstTaskId);
+  await terminalList.getByText("First Session Shell", { exact: true }).waitFor({ state: "visible" });
+  assert.equal(await terminalList.getByText("Second Session Shell", { exact: true }).count(), 0);
+
+  await page.evaluate(async ({ firstTaskId, secondTaskId, ids }) => {
+    const { terminalKill } = await import("/src/lib/ipc.ts");
+    await terminalKill(firstTaskId, ids.firstTerminalId);
+    await terminalKill(secondTaskId, ids.secondTerminalId);
+  }, { firstTaskId, secondTaskId, ids });
   await page.close();
 });

@@ -150,7 +150,10 @@ export function OnboardingCampaign() {
 
     // Each resource hydrates its own controls as soon as it is ready. In particular,
     // a slow Codex CLI probe must never hold the welcome slide or Provider catalog.
-    void settingsGet().then((nextSettings) => {
+    // Opening or retrying onboarding is an explicit user refresh boundary. Bypass
+    // application-level hot caches so the tour reflects configuration changed by
+    // another settings surface while it was closed.
+    void settingsGet(true).then((nextSettings) => {
       if (!isCurrent()) return;
       settingsRef.current = nextSettings;
       setSettings(nextSettings);
@@ -178,7 +181,7 @@ export function OnboardingCampaign() {
       }
     }, (cause) => reportFailure("catalog", cause));
 
-    void codexIntegrationStatus().then((nextCodex) => {
+    void codexIntegrationStatus(true).then((nextCodex) => {
       if (!isCurrent()) return;
       codexStatusRef.current = nextCodex;
       setCodexStatus(nextCodex);
@@ -319,7 +322,6 @@ export function OnboardingCampaign() {
       setSettings(nextSettings);
       setApiKey("");
       setProviderNotice(`${selectedPreset.label} 已用于新对话。`);
-      announceRuntimeSettingsChanged();
     } catch (cause) {
       setError(`保存 Provider 失败：${errText(cause)}`);
     } finally {

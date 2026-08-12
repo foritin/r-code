@@ -1638,7 +1638,10 @@ fn plan_item_tool_receipt_replays_current_authoritative_view_without_transitioni
         )
         .unwrap();
     assert_eq!(second.view.plan.state, PlanState::Completed);
-    assert!(!second.replayed, "a new Agent run owns a fresh idempotency scope");
+    assert!(
+        !second.replayed,
+        "a new Agent run owns a fresh idempotency scope"
+    );
 
     // Recreate the store to prove the receipt is SQLite-backed rather than an in-memory cache.
     let reopened_store = PlanStore::new(

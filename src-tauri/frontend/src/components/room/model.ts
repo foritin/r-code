@@ -714,35 +714,86 @@ function orderedUniqueRuns(runs: AgentRun[]): AgentRun[] {
  * 流式光标只属于当前仍在生成的文本段。工具、计划或运行状态成为新的
  * 时间线边界时，之前的文本已经完成，必须立即静态化。
  */
-function finishStreamingAgents(items: TimelineItem[], exceptIndex = -1): void {
-  for (let index = 0; index < items.length; index += 1) {
+const streamingAgentsByItems = new WeakMap<readonly TimelineItem[], readonly number[]>();
+
+/**
+ * `applyAgentEvent` 的绝大多数调用是同一个文本段的 token。旧实现每个 token 都从头
+ * 扫描整段历史来寻找流式光标；记录当前数组的唯一流式前沿后，稳态只触碰一个条目。
+ * WeakMap 不延长历史快照的生命周期，也不把内部索引暴露到持久化模型。
+ */
+function streamingAgentIndexes(items: readonly TimelineItem[]): readonly number[] {
+  const known = streamingAgentsByItems.get(items);
+  if (known != null) return known;
+  const indexes: number[] = [];
+  for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (index !== exceptIndex && item.kind === "agent" && item.streaming) {
-      items[index] = { ...item, streaming: false };
+    if (item.kind === "agent" && item.streaming) {
+      indexes.push(index);
     }
   }
+  streamingAgentsByItems.set(items, indexes);
+  return indexes;
 }
 
-/** 将一条流式 AgentEvent 应用到时间线（返回新数组）。nowSec 由调用方提供。 */
-export function applyAgentEvent(
-  prev: TimelineItem[],
+function finishStreamingAgents(items: TimelineItem[], exceptIndex = -1): number {
+  const indexes = streamingAgentIndexes(items);
+  if (indexes.length === 0) return -1;
+  const remaining: number[] = [];
+  let changedAt = -1;
+  for (const index of indexes) {
+    if (index === exceptIndex) {
+      remaining.push(index);
+      continue;
+    }
+    const item = items[index];
+    if (item.kind === "agent" && item.streaming) {
+      items[index] = { ...item, streaming: false };
+      changedAt = earliest(changedAt, index);
+    }
+  }
+  streamingAgentsByItems.set(items, remaining);
+  return changedAt;
+}
+
+export interface TimelineEventMutation {
+  changed: boolean;
+  /** 受影响的最早原始条目；增量呈现只需从其所属轮次向后重建。 */
+  startIndex: number;
+}
+
+function mutation(startIndex: number): TimelineEventMutation {
+  return { changed: startIndex >= 0, startIndex };
+}
+
+function earliest(left: number, right: number): number {
+  if (left < 0) return right;
+  if (right < 0) return left;
+  return Math.min(left, right);
+}
+
+/**
+ * 就地应用流式事件。调用方必须独占 `items` 容器；既有条目始终以新对象替换，
+ * 因而由旧 TimelineTurn 持有的历史对象不会被悄悄改写。
+ */
+export function applyAgentEventInPlace(
+  items: TimelineItem[],
   ev: AgentEvent,
   nowSec: number,
   nid: () => string
-): TimelineItem[] {
-  const items = [...prev];
+): TimelineEventMutation {
   const last = items[items.length - 1];
   switch (ev.type) {
     case "reasoning": {
       const text = ev.text;
-      if (!text) return items;
-      finishStreamingAgents(items);
+      if (!text) return mutation(-1);
+      let changedAt = finishStreamingAgents(items);
       if (last?.kind === "context" && last.label === R_CODE_REASONING_LABEL) {
         items[items.length - 1] = {
           ...last,
           detail: `${last.detail ?? ""}${text}`,
           collapsible: true,
         };
+        changedAt = earliest(changedAt, items.length - 1);
       } else {
         items.push({
           kind: "context",
@@ -752,21 +803,26 @@ export function applyAgentEvent(
           detail: text,
           collapsible: true,
         });
+        changedAt = earliest(changedAt, items.length - 1);
       }
-      return items;
+      return mutation(changedAt);
     }
     case "message": {
       if (last?.kind === "agent" && last.streaming) {
-        finishStreamingAgents(items, items.length - 1);
+        let changedAt = finishStreamingAgents(items, items.length - 1);
         items[items.length - 1] = { ...last, text: last.text + ev.text, streaming: ev.delta };
-      } else {
-        finishStreamingAgents(items);
-        items.push({ kind: "agent", id: nid(), t: nowSec, text: ev.text, streaming: ev.delta });
+        streamingAgentsByItems.set(items, ev.delta ? [items.length - 1] : []);
+        changedAt = earliest(changedAt, items.length - 1);
+        return mutation(changedAt);
       }
-      return items;
+      let changedAt = finishStreamingAgents(items);
+      items.push({ kind: "agent", id: nid(), t: nowSec, text: ev.text, streaming: ev.delta });
+      streamingAgentsByItems.set(items, ev.delta ? [items.length - 1] : []);
+      changedAt = earliest(changedAt, items.length - 1);
+      return mutation(changedAt);
     }
     case "tool_call": {
-      finishStreamingAgents(items);
+      let changedAt = finishStreamingAgents(items);
       let inputJson: string | undefined;
       try {
         inputJson = JSON.stringify(ev.input);
@@ -786,10 +842,11 @@ export function applyAgentEvent(
         inputJson: inputJson ?? null,
         outputJson: null,
       });
-      return items;
+      changedAt = earliest(changedAt, items.length - 1);
+      return mutation(changedAt);
     }
     case "tool_result": {
-      finishStreamingAgents(items);
+      let changedAt = finishStreamingAgents(items);
       // 后端存的是 `Value::to_string()`（commands.rs），即**永远是 JSON 编码文本**。
       // 这里若对字符串走裸串分支，流式与历史重建两条路径的编码就不一致：
       // 输出本身是合法 JSON 文本时（cat package.json、MCP 返回 JSON blob），
@@ -800,7 +857,7 @@ export function applyAgentEvent(
         const it = items[i];
         if (it.kind === "tool" && it.callId === ev.call_id && it.state === "active") {
           items[i] = { ...it, state: ev.is_error ? "fail" : "ok", summary, outputJson };
-          return items;
+          return mutation(earliest(changedAt, i));
         }
       }
       items.push({
@@ -815,24 +872,27 @@ export function applyAgentEvent(
         inputJson: null,
         outputJson,
       });
-      return items;
+      changedAt = earliest(changedAt, items.length - 1);
+      return mutation(changedAt);
     }
     case "plan": {
-      finishStreamingAgents(items);
+      let changedAt = finishStreamingAgents(items);
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
         if (it.kind === "plan") {
           items[i] = { ...it, steps: ev.steps };
-          return items;
+          return mutation(earliest(changedAt, i));
         }
       }
       items.push({ kind: "plan", id: nid(), t: nowSec, steps: ev.steps });
-      return items;
+      changedAt = earliest(changedAt, items.length - 1);
+      return mutation(changedAt);
     }
     case "activity": {
       // streaming/steer_accepted 仍属于当前输出；其余活动阶段已离开文本生成前沿。
+      let changedAt = -1;
       if (ev.phase !== "streaming" && ev.phase !== "steer_accepted") {
-        finishStreamingAgents(items);
+        changedAt = finishStreamingAgents(items);
       }
       if (ev.phase === "requesting" && ev.detail) {
         const summary = codexReasoningSummary(ev.detail);
@@ -845,19 +905,37 @@ export function applyAgentEvent(
             detail: summary,
             collapsible: true,
           });
+          changedAt = earliest(changedAt, items.length - 1);
         }
       }
       // 其余活动由顶部活动条消费，不进入时间线。
-      return items;
+      return mutation(changedAt);
     }
     case "scoped":
     case "subagent_lifecycle":
       // 子代理详情由 Working 列表和持久化运行树呈现；主时间线默认保持折叠。
-      return items;
+      return mutation(-1);
     case "state":
-      finishStreamingAgents(items);
-      return items; // state 事件由订阅方触发 refresh + 历史重建
+      return mutation(finishStreamingAgents(items));
   }
+}
+
+/** 将一条流式 AgentEvent 应用到时间线（返回新数组）。nowSec 由调用方提供。 */
+export function applyAgentEvent(
+  prev: TimelineItem[],
+  ev: AgentEvent,
+  nowSec: number,
+  nid: () => string
+): TimelineItem[] {
+  // 不进入时间线的高频 scoped 事件直接复用旧快照，避免无意义复制和 React 渲染。
+  if (ev.type === "scoped" || ev.type === "subagent_lifecycle") return prev;
+  if (ev.type === "reasoning" && !ev.text) return prev;
+
+  const items = [...prev];
+  const knownStreaming = streamingAgentsByItems.get(prev);
+  if (knownStreaming != null) streamingAgentsByItems.set(items, knownStreaming);
+  const result = applyAgentEventInPlace(items, ev, nowSec, nid);
+  return result.changed ? items : prev;
 }
 
 // ---------- 终端输出 ----------

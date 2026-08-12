@@ -32,15 +32,14 @@ const MAX_WAIT_SECONDS: u64 = 55;
 
 /// 启动独立 MCP server 时使用的 R-Code 应用数据根目录。
 ///
-/// `R_CODE_DATA_DIR` 允许部署器显式指定目录；默认路径与 Tauri identifier
-/// `com.r-code.app` 一致。参数值代表 `<app-data>/r-code`，其中包含 db/config/
+/// `R_CODE_DATA_DIR` 允许部署器显式指定目录；默认路径按当前平台与 Tauri
+/// identifier 对齐。参数值代表 `<app-data>/r-code`，其中包含 db/config/
 /// sessions/blobs 四个子目录。
 pub fn default_data_dir() -> Result<PathBuf, String> {
     if let Some(path) = std::env::var_os("R_CODE_DATA_DIR").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    let root = dirs::data_dir().ok_or_else(|| "无法确定 R-Code 应用数据目录".to_string())?;
-    Ok(root.join("com.r-code.app").join("r-code"))
+    crate::app_paths::default_data_dir().ok_or_else(|| "无法确定 R-Code 应用数据目录".to_string())
 }
 
 /// 运行 stdio MCP server。stdout 完全保留给 MCP JSON-RPC，诊断仅走 stderr。

@@ -1,4 +1,4 @@
-//! P2-H（docs/deepseek-prefix-cache.md §5 P2-H）：缓存命中守卫测试（release 门禁）。
+//! P2-H（docs/archive/deepseek-prefix-cache.md §5 P2-H）：缓存命中守卫测试（release 门禁）。
 //!
 //! 多轮工具循环场景 tail_avg（末 3 轮）命中率 ≥90%，对齐 Reasonix
 //! `TestReleaseCacheHitGuard`（`cachehit_e2e_test.go:378-477`）：

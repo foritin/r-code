@@ -86,7 +86,7 @@ Windows Authenticode 已接入 Release workflow。要生成平台信任的 Windo
 > [!WARNING]
 > 稳定标签 `vX.Y.Z` 在缺少平台证书时仍可发布并成为 Latest，但 Release 会标记为 `unsigned build` 或 `partially unsigned`，正文顶部也会列出未签名平台。Windows 可能显示 SmartScreen 警告，macOS 可能触发 Gatekeeper。`PAT_TOKEN` 和 `TAURI_SIGNING_PRIVATE_KEY` 仍是硬门禁，确保私有子模块可读取且 updater 产物具备完整性签名。
 >
-> `vX.Y.Z-unsigned.N` 仍保留为显式测试预发布：它强制关闭 Windows/macOS 平台签名，始终是 prerelease、非 Latest，也不会进入正式自动更新入口。
+> `vX.Y.Z-unsigned.N` 仍保留为显式未签名测试预发布：它强制关闭 Windows/macOS 平台签名。标准 `vX.Y.Z` 若对应的 dated CHANGELOG section 含 `预上线版本（Pre-release）` 标记，也会发布为 prerelease、非 Latest，但仍按可用凭据进行平台签名。两类预发布都不会进入稳定版自动更新入口。
 
 ### 3.4 供应链清单
 
@@ -141,7 +141,7 @@ node scripts/release.mjs prepare X.Y.Z
 # 只做预检，不创建 tag
 node scripts/publish-release.mjs vX.Y.Z --dry-run
 
-# 稳定版本：证书齐全时签名；缺失时降级并在 Latest 页面警告
+# 稳定版本；若 CHANGELOG 对应版本标记为预上线，则发布为非 Latest 的 prerelease
 node scripts/publish-release.mjs vX.Y.Z
 
 # 尚未配置平台证书时的测试预发布
@@ -248,7 +248,7 @@ Tag push 后工作流按以下顺序运行：
 2. `release-prerequisites` 只检查后续特权 job 所需的基础 Secret 是否存在；metadata 校验阶段不读取 PAT 或 updater 私钥。
 3. `supply-chain` 生成并严格校验 SBOM/许可证清单。
 4. Windows x64、macOS arm64、macOS x64、Linux x64 并行构建；已配置证书的平台执行签名和验签，未配置的平台执行明确的未签名回退，所有二进制产物写入同一个 Draft Release。
-5. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，若有平台降级则同时写入公开警告。
+5. `finalize` 在 Draft 发布前核对四个平台及各安装器 updater 项、当前 tag/repository 的资产 URL、非空签名与对应 `.sig` 文件内容，再上传供应链清单；稳定版随后发布并标为 Latest，CHANGELOG 标记的预上线版本发布为 prerelease 且不进入稳定更新通道，若有平台降级则同时写入公开警告。
 
 任何平台失败时，`finalize` 不运行，用户不会看到一个缺平台的最新正式 Release。若失败来自临时 runner/网络问题且无需改变 tag 内代码，可对失败的 Actions run 使用 Re-run failed jobs，或从 `main` 完整重跑已有 tag：
 

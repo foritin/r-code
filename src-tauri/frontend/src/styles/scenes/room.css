@@ -1382,7 +1382,7 @@
 .subagent-list-empty strong { display:block; margin-bottom:var(--sp-3); color:var(--fg-muted); font-size:var(--text-sm); }
 .subagent-list-empty p { max-width:280px; font-size:var(--text-meta); line-height:1.6; }
 
-.subagent-detail-body { min-height:0; flex:1; overflow-y:auto; padding:0 20px 30px; }
+.subagent-detail-body { min-height:0; flex:1; overflow-y:auto; padding:0 20px 30px; overflow-anchor:auto; }
 .subagent-session { padding:18px 0 28px; }
 .subagent-session-summary {
   display:flex; align-items:center; width:100%; gap:7px; padding:0 0 11px; border:0; border-bottom:1px solid var(--border);
@@ -1399,6 +1399,13 @@
 .subagent-session-meta b { color:var(--fg-muted); font-weight:var(--weight-strong); }
 .subagent-session-meta .subagent-routing-reason { flex:1 1 100%; }
 .subagent-session-placeholder { color:var(--fg-faint); font-size:var(--text-sm); }
+.subagent-load-earlier {
+  display:flex; min-width:126px; min-height:30px; align-items:center; justify-content:center; gap:7px; margin:0 auto 18px; padding:5px 13px;
+  border:1px solid var(--border); border-radius:var(--radius-pill); background:var(--bg-panel); color:var(--fg-muted);
+  font:500 var(--text-meta) var(--font-ui); cursor:pointer;
+}
+.subagent-load-earlier:hover:not(:disabled),.subagent-load-earlier:focus-visible { border-color:var(--border-strong); background:var(--bg-hover); color:var(--fg); }
+.subagent-load-earlier:disabled { opacity:.58; cursor:default; }
 .subagent-session-error { margin-bottom:var(--sp-5); padding:var(--sp-3) 0; border-bottom:1px solid var(--edge-danger); color:var(--danger); font-size:var(--text-meta); }
 .subagent-runtime-log { margin:0 0 22px; border-bottom:1px solid color-mix(in srgb,var(--border) 78%,transparent); }
 .subagent-runtime-log > summary {
@@ -1417,6 +1424,14 @@
 .subagent-runtime-log li.is-error { color:var(--danger); }
 .subagent-runtime-log li.is-error > span:first-child { border-color:currentColor; background:currentColor; }
 .subagent-transcript { display:flex; flex-direction:column; gap:20px; }
+.subagent-transcript.is-long > * {
+  content-visibility:auto;
+  contain-intrinsic-size:auto 160px;
+}
+.subagent-transcript.is-long > :last-child {
+  content-visibility:visible;
+  contain-intrinsic-size:none;
+}
 .subagent-reasoning-event { margin:0; color:var(--fg-muted); }
 .subagent-reasoning-event > summary {
   display:grid; grid-template-columns:18px auto minmax(0,1fr) 14px; align-items:center; gap:8px;

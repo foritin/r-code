@@ -32,7 +32,10 @@ use std::sync::{Arc, Mutex};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use hermes_core::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
     InferenceOptions, Message, Role, SessionEvent, SessionMeta,
@@ -82,7 +85,7 @@ use r_code_store::{
 use r_code_terminal::{SendOptions, TerminalControlService, TerminalManager};
 pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
 use serde::{Deserialize, Serialize};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
 use tokio::time::{timeout, Duration, Instant};
 use tokio_util::sync::CancellationToken;
@@ -800,6 +803,9 @@ pub struct CommandState {
     pub permission_engine: Arc<PermissionEngine>,
     /// 终端管理器
     pub terminal_manager: Arc<TerminalManager>,
+    /// 桌面终端所属会话。终端进程仍由全局 manager 托管，但任何 WebView 操作都必须
+    /// 先通过此映射校验 task 边界，避免同一项目下的对话互相看到或控制终端。
+    terminal_owners: Arc<Mutex<HashMap<String, String>>>,
     /// 配置目录
     pub config_dir: PathBuf,
     /// 项目根目录
@@ -998,6 +1004,7 @@ impl CommandState {
             sessions_dir,
             permission_engine,
             terminal_manager: Arc::new(TerminalManager::new()),
+            terminal_owners: Arc::new(Mutex::new(HashMap::new())),
             config_dir,
             project_root,
             db_path,
@@ -1363,6 +1370,39 @@ pub struct SessionMessage {
     /// 时间戳（RFC3339；仅 Meta 有）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+}
+
+/// 游标式读取子代理 JSONL 的请求。`after_cursor` 与 `before_cursor` 互斥：前者用于
+/// 轮询追加内容，后者用于向上加载历史；均为空时返回最近一页。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubagentSessionMessagePageRequest {
+    #[serde(default)]
+    pub after_cursor: Option<String>,
+    #[serde(default)]
+    pub before_cursor: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// 后续 ToolResult 揭示真实 provider call id 时，对已在前一页展示的 ToolCall 做回填。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentSessionCallIdUpdate {
+    pub id: String,
+    pub call_id: String,
+}
+
+/// 子代理隔离日志的一页。游标是不透明值，调用方只能原样回传。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentSessionMessagePage {
+    pub messages: Vec<SessionMessage>,
+    pub call_id_updates: Vec<SubagentSessionCallIdUpdate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_cursor: Option<String>,
+    pub has_more_before: bool,
+    pub reset: bool,
+    pub unchanged: bool,
 }
 
 /// Diff 行类型。
@@ -2651,66 +2691,251 @@ pub async fn task_fork_context(
 const COMPACTION_KEEP_FIRST: usize = 1;
 const COMPACTION_KEEP_RECENT: usize = 10;
 const COMPACTION_MIN_MESSAGES: usize = COMPACTION_KEEP_FIRST + COMPACTION_KEEP_RECENT + 3;
-const COMPACTION_SOURCE_CHARS: usize = 120_000;
+/// 单次摘要请求的完整 user prompt 字符上限。为固定说明和可选 focus 留出空间后，
+/// 每个来源块使用更小的 [`COMPACTION_SOURCE_CHARS`] 上限。
+const COMPACTION_REQUEST_CHARS: usize = 120_000;
+const COMPACTION_SOURCE_CHARS: usize = 110_000;
+/// 单个 map/reduce 摘要的最大字符数。除防止异常 Provider 返回无限正文外，这也
+/// 保证 reduce 每轮至少能把两个摘要合并为一个，不会出现不收敛循环。
+const COMPACTION_SUMMARY_CHARS: usize = 20_000;
+const COMPACTION_SUMMARY_MAX_TOKENS: u32 = 4_096;
+const COMPACTION_SUMMARY_CONCURRENCY: usize = 3;
 
 fn trim_chars(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn compaction_source(messages: &[Message]) -> String {
-    let mut source = String::new();
-    for message in messages {
-        let role = match message.role {
-            Role::User => "USER",
-            Role::Assistant => "ASSISTANT",
-        };
-        source.push_str(role);
-        source.push_str(":\n");
-        source.push_str(&message.text_content());
-        if message
-            .content
-            .iter()
-            .any(|block| block.is_tool_use() || block.is_tool_result())
-        {
-            source.push_str("\nSTRUCTURED_CONTENT: ");
-            source.push_str(
-                &serde_json::to_string(&message.content)
-                    .unwrap_or_else(|_| "[无法序列化的工具内容]".to_string()),
-            );
-        }
-        source.push_str("\n\n");
-    }
-    if source.chars().count() <= COMPACTION_SOURCE_CHARS {
-        return source;
-    }
+fn compaction_message_source(index: usize, message: &Message) -> Result<String, String> {
+    let role = match message.role {
+        Role::User => "USER",
+        Role::Assistant => "ASSISTANT",
+    };
+    let content = serde_json::to_string(&message.content)
+        .map_err(|error| format!("会话第 {} 条消息无法序列化：{error}", index + 1))?;
+    Ok(format!(
+        "MESSAGE {} {role}:\nCONTENT_BLOCKS_JSON:\n{content}\n\n",
+        index + 1
+    ))
+}
 
-    // 极长会话同时保留开头约定与靠近切分点的最新事实；按 char 截取避免切断 UTF-8。
-    let head_chars = COMPACTION_SOURCE_CHARS / 3;
-    let tail_chars = COMPACTION_SOURCE_CHARS - head_chars;
-    let head = trim_chars(&source, head_chars);
-    let tail = source
-        .chars()
-        .rev()
-        .take(tail_chars)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
-    format!("{head}\n\n[中间内容因长度受限已省略]\n\n{tail}")
+/// 把会话变成不可拆分的摘要单元。相邻的 assistant ToolUse 与 user ToolResult
+/// 必须进入同一单元，避免 map 边界让摘要模型只看到调用或只看到证据。
+fn compaction_units(messages: &[Message]) -> Result<Vec<String>, String> {
+    let mut units = Vec::new();
+    let mut index = 0usize;
+    while index < messages.len() {
+        let mut unit = compaction_message_source(index, &messages[index])?;
+        let pairs_with_next = messages
+            .get(index + 1)
+            .is_some_and(|next| manual_messages_form_tool_pair(&messages[index], next));
+        if pairs_with_next {
+            unit.push_str(&compaction_message_source(index + 1, &messages[index + 1])?);
+            index += 1;
+        }
+        units.push(unit);
+        index += 1;
+    }
+    Ok(units)
+}
+
+fn pack_compaction_sources(units: Vec<String>) -> Result<Vec<String>, String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for unit in units {
+        let unit_chars = unit.chars().count();
+        if unit_chars > COMPACTION_SOURCE_CHARS {
+            return Err(format!(
+                "单条消息或工具调用/结果对超过手动压缩单块上限（{COMPACTION_SOURCE_CHARS} 字符），本次未应用压缩"
+            ));
+        }
+        if current_chars > 0 && current_chars + unit_chars > COMPACTION_SOURCE_CHARS {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current.push_str(&unit);
+        current_chars += unit_chars;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Ok(chunks)
+}
+
+fn compaction_source_chunks(messages: &[Message]) -> Result<Vec<String>, String> {
+    pack_compaction_sources(compaction_units(messages)?)
+}
+
+async fn request_compaction_summary(
+    provider: &dyn hermes_core::LlmProvider,
+    model: &str,
+    inference: &InferenceOptions,
+    prompt: String,
+) -> Result<String, String> {
+    let prompt_chars = prompt.chars().count();
+    if prompt_chars > COMPACTION_REQUEST_CHARS {
+        return Err(format!(
+            "手动压缩请求超过单次上限（{prompt_chars}/{COMPACTION_REQUEST_CHARS} 字符），本次未应用压缩"
+        ));
+    }
+    let response = provider
+        .complete(CompletionRequest {
+            model: model.to_string(),
+            system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
+            messages: vec![Message::user_text(prompt)],
+            tools: vec![],
+            hosted_tools: vec![],
+            max_tokens: COMPACTION_SUMMARY_MAX_TOKENS,
+            temperature: Some(0.1),
+            enable_caching: false,
+            inference: inference.clone(),
+        })
+        .await
+        .map_err(|error| format!("生成上下文摘要失败：{}", err_str(error)))?;
+    if response.stop_reason == hermes_core::StopReason::MaxTokens {
+        return Err("上下文摘要未完整生成，请稍后重试".to_string());
+    }
+    if !matches!(
+        response.stop_reason,
+        hermes_core::StopReason::EndTurn | hermes_core::StopReason::StopSequence
+    ) {
+        return Err(format!(
+            "上下文摘要异常结束（{:?}），本次未应用压缩",
+            response.stop_reason
+        ));
+    }
+    let summary = response.text();
+    let summary = summary.trim();
+    if summary.is_empty() {
+        return Err("模型没有返回可用的上下文摘要".to_string());
+    }
+    let summary_chars = summary.chars().count();
+    if summary_chars > COMPACTION_SUMMARY_CHARS {
+        return Err(format!(
+            "上下文摘要超过单块上限（{summary_chars}/{COMPACTION_SUMMARY_CHARS} 字符），本次未应用压缩"
+        ));
+    }
+    Ok(summary.to_string())
+}
+
+async fn summarize_compaction_groups(
+    provider: &dyn hermes_core::LlmProvider,
+    model: &str,
+    inference: &InferenceOptions,
+    groups: Vec<String>,
+    prompt_prefix: &str,
+) -> Result<Vec<String>, String> {
+    use futures::stream::{self, StreamExt};
+
+    let mut indexed = stream::iter(groups.into_iter().enumerate().map(|(index, group)| {
+        let prompt = format!("{prompt_prefix}\n\n{group}");
+        async move {
+            request_compaction_summary(provider, model, inference, prompt)
+                .await
+                .map(|summary| (index, summary))
+        }
+    }))
+    .buffer_unordered(COMPACTION_SUMMARY_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    let mut ordered = Vec::with_capacity(indexed.len());
+    for result in indexed.drain(..) {
+        ordered.push(result?);
+    }
+    ordered.sort_by_key(|(index, _)| *index);
+    Ok(ordered.into_iter().map(|(_, summary)| summary).collect())
+}
+
+async fn summarize_compaction_history(
+    provider: &dyn hermes_core::LlmProvider,
+    model: &str,
+    inference: &InferenceOptions,
+    messages: &[Message],
+    focus: Option<&str>,
+) -> Result<String, String> {
+    let chunks = compaction_source_chunks(messages)?;
+    if chunks.is_empty() {
+        return Err("没有可供压缩的会话内容".to_string());
+    }
+    let focus_line = focus
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\n用户特别要求保留：{}", trim_chars(value, 2_000)))
+        .unwrap_or_default();
+    let chunk_count = chunks.len();
+    let map_prompt = format!(
+        "把下面较早会话的一个完整分块压缩成一份能让另一个编码 Agent 无缝继续工作的中文局部摘要（本次共 {chunk_count} 块）。\
+必须保留这一块中的：用户目标与约束、已经确认的决定、重要文件/符号、已做修改、命令与验证结果、错误及根因、未完成事项，以及完整的工具证据。\
+删除寒暄、重复过程和无结论的尝试。不要编造，不要写开场白。{focus_line}"
+    );
+    let mut summaries =
+        summarize_compaction_groups(provider, model, inference, chunks, &map_prompt).await?;
+
+    let mut round = 1usize;
+    while summaries.len() > 1 {
+        let before = summaries.len();
+        let units = summaries
+            .into_iter()
+            .enumerate()
+            .map(|(index, summary)| format!("PART {}:\n{}\n\n", index + 1, summary))
+            .collect::<Vec<_>>();
+        let groups = pack_compaction_sources(units)?;
+        let group_count = groups.len();
+        let reduce_prompt = format!(
+            "合并下面第 {round} 轮的一组局部摘要（本轮共 {group_count} 组）。每个 PART 都来自不同的原始会话块，必须全部纳入。\
+去重但不要丢失用户约束、决定、工具证据、文件/符号、修改、验证、错误根因和未完成事项。不要编造，只返回结构化中文摘要。{focus_line}"
+        );
+        let reduced =
+            summarize_compaction_groups(provider, model, inference, groups, &reduce_prompt).await?;
+        if reduced.len() >= before {
+            return Err("上下文摘要无法在输入上限内收敛，本次未应用压缩".to_string());
+        }
+        summaries = reduced;
+        round += 1;
+    }
+    summaries
+        .pop()
+        .ok_or_else(|| "模型没有返回可用的上下文摘要".to_string())
 }
 
 fn compacted_working_set(history: &[Message], summary: &str) -> Vec<Message> {
     if history.len() < COMPACTION_MIN_MESSAGES {
         return history.to_vec();
     }
-    let recent_start = history.len().saturating_sub(COMPACTION_KEEP_RECENT);
+    let recent_start = manual_compaction_recent_start(history);
     let mut result = history[..COMPACTION_KEEP_FIRST].to_vec();
-    result.push(Message::system_text(format!(
+    // 摘要是宿主注入的 continuation checkpoint，不是模型刚输出的 Assistant。
+    // 用 User 角色承载，避免与 recent tail 的首条 Assistant 相邻而破坏严格协议。
+    result.push(Message::user_text(format!(
         "[R-Code 上下文摘要]\n{}",
         summary.trim()
     )));
     result.extend_from_slice(&history[recent_start..]);
     result
+}
+
+fn manual_messages_form_tool_pair(call: &Message, result: &Message) -> bool {
+    let call_ids = call
+        .content
+        .iter()
+        .filter_map(ContentBlock::tool_id)
+        .collect::<HashSet<_>>();
+    !call_ids.is_empty()
+        && result
+            .content
+            .iter()
+            .filter_map(ContentBlock::tool_use_id)
+            .any(|result_id| call_ids.contains(result_id))
+}
+
+fn manual_compaction_recent_start(history: &[Message]) -> usize {
+    let mut recent_start = history.len().saturating_sub(COMPACTION_KEEP_RECENT);
+    if recent_start > 0
+        && manual_messages_form_tool_pair(&history[recent_start - 1], &history[recent_start])
+    {
+        recent_start -= 1;
+    }
+    recent_start
 }
 
 /// 压缩当前分支的模型工作集，同时保留完整可见聊天与审计记录。
@@ -2777,46 +3002,26 @@ pub async fn task_compact_context(
         hermes_llm::create_provider(build_provider_config(provider_name, provider_config))
             .map_err(err_str)?;
 
-    let recent_start = before_messages.saturating_sub(COMPACTION_KEEP_RECENT);
+    let recent_start = manual_compaction_recent_start(&history.messages);
     let to_summarize = &history.messages[COMPACTION_KEEP_FIRST..recent_start];
     let focus = focus
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| trim_chars(value, 2_000));
-    let focus_line = focus
-        .as_deref()
-        .map(|value| format!("\n用户特别要求保留：{value}"))
-        .unwrap_or_default();
-    let prompt = format!(
-        "把下面较早的会话压缩成一份能让另一个编码 Agent 无缝继续工作的中文摘要。\
-必须保留：用户目标与约束、已经确认的决定、重要文件/符号、已做修改、命令与验证结果、错误及根因、未完成事项。\
-删除寒暄、重复过程和无结论的尝试。不要编造，不要写开场白。{focus_line}\n\n{}",
-        compaction_source(to_summarize)
-    );
     let model = task
         .model
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(provider_config.model.as_str())
         .to_string();
-    let response = provider
-        .complete(CompletionRequest {
-            model,
-            system: Some("你是精确的会话上下文压缩器。只返回结构化摘要。".to_string()),
-            messages: vec![Message::user_text(prompt)],
-            tools: vec![],
-            hosted_tools: vec![],
-            max_tokens: 4_096,
-            temperature: Some(0.1),
-            enable_caching: false,
-            inference: task.inference.clone(),
-        })
-        .await
-        .map_err(|error| format!("生成上下文摘要失败：{}", err_str(error)))?;
-    let summary = response.text();
-    if summary.trim().is_empty() {
-        return Err("模型没有返回可用的上下文摘要".to_string());
-    }
+    let summary = summarize_compaction_history(
+        provider.as_ref(),
+        &model,
+        &task.inference,
+        to_summarize,
+        focus.as_deref(),
+    )
+    .await?;
     let compacted = compacted_working_set(&history.messages, &summary);
 
     // 摘要生成期间可能有另一入口启动了运行；写快照前再次检查并持锁，避免新消息
@@ -2835,8 +3040,8 @@ pub async fn task_compact_context(
         .session_store
         .append(
             &branch.storage_id,
-            SessionEvent::HistorySnapshot {
-                messages: compacted.clone(),
+            SessionEvent::ModelProjection {
+                messages: Some(compacted.clone()),
             },
         )
         .await
@@ -2993,6 +3198,21 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
     bridge.sessions.remove(task_id);
     drop(bridge);
     state.agent.remove(task_id).await;
+    let terminal_ids = {
+        let mut terminal_owners = state
+            .terminal_owners
+            .lock()
+            .map_err(|_| "terminal ownership state is unavailable".to_string())?;
+        let terminal_ids = terminal_owners
+            .iter()
+            .filter_map(|(terminal_id, owner_task_id)| {
+                (owner_task_id == task_id).then(|| terminal_id.clone())
+            })
+            .collect::<Vec<_>>();
+        terminal_owners.retain(|_, owner_task_id| owner_task_id != task_id);
+        terminal_ids
+    };
+    terminate_terminals(state, terminal_ids).await;
 
     // JSONL 不在 SQLite 事务中；数据库删除成功后做幂等的最佳努力清理。
     // 同时按 task 前缀覆盖旧主分支和外部子代理日志，绝不触碰工作区目录。
@@ -3856,6 +4076,23 @@ impl AgentRuntime for AgentRuntimeKind {
             Self::Mock(r) => r.replace_history(session_id, messages).await,
         }
     }
+    async fn replace_context(
+        &mut self,
+        session_id: &str,
+        messages: Vec<Message>,
+        model_projection: Option<Vec<Message>>,
+    ) -> Result<(), ProductError> {
+        match self {
+            Self::Real(r) => {
+                r.replace_context(session_id, messages, model_projection)
+                    .await
+            }
+            Self::Mock(r) => {
+                r.replace_context(session_id, messages, model_projection)
+                    .await
+            }
+        }
+    }
     async fn history_snapshot(
         &mut self,
         session_id: &str,
@@ -3863,6 +4100,15 @@ impl AgentRuntime for AgentRuntimeKind {
         match self {
             Self::Real(r) => r.history_snapshot(session_id).await,
             Self::Mock(r) => r.history_snapshot(session_id).await,
+        }
+    }
+    async fn model_projection_snapshot(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<Vec<Message>>, ProductError> {
+        match self {
+            Self::Real(r) => r.model_projection_snapshot(session_id).await,
+            Self::Mock(r) => r.model_projection_snapshot(session_id).await,
         }
     }
     async fn update_workspace_scope(
@@ -4786,7 +5032,7 @@ async fn ensure_runtime_session(
         .map_err(err_str)?;
     bridge
         .kind
-        .replace_history(&session.meta.id, history.messages)
+        .replace_context(&session.meta.id, history.messages, history.model_projection)
         .await
         .map_err(err_str)?;
     let runtime_session_id = session.meta.id;
@@ -5705,9 +5951,9 @@ fn spawn_drain_loop_with_resources(
             }
         }
 
-        let history_snapshot = {
+        let (history_snapshot, model_projection_snapshot) = {
             let mut bridge = agent.lock().await;
-            match bridge
+            let history = match bridge
                 .kind
                 .history_snapshot(&active.runtime_session_id)
                 .await
@@ -5721,7 +5967,23 @@ fn spawn_drain_loop_with_resources(
                     );
                     None
                 }
-            }
+            };
+            let projection = match bridge
+                .kind
+                .model_projection_snapshot(&active.runtime_session_id)
+                .await
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    tracing::warn!(
+                        task_id,
+                        run_id = %active.run_id,
+                        "failed to capture runtime model projection: {error}"
+                    );
+                    None
+                }
+            };
+            (history, projection)
         };
 
         let assistant_for_memory = history_snapshot.as_ref().and_then(|messages| {
@@ -5733,11 +5995,21 @@ fn spawn_drain_loop_with_resources(
                 .filter(|text| !text.trim().is_empty())
         });
 
+        // 只持久化 canonical transcript；自动/手动压缩投影通过独立
+        // ModelProjection 事件保存，不能覆盖可恢复证据历史。
         if let Some(messages) = history_snapshot {
             let _ = session_store
                 .append(&storage_id, SessionEvent::HistorySnapshot { messages })
                 .await;
         }
+        let _ = session_store
+            .append(
+                &storage_id,
+                SessionEvent::ModelProjection {
+                    messages: model_projection_snapshot,
+                },
+            )
+            .await;
 
         if let Err(error) = finalize_workspace_snapshot(&db, &blobs_dir, &active.run_id).await {
             tracing::warn!(run_id = %active.run_id, "failed to finalize workspace snapshot: {error}");
@@ -7898,6 +8170,23 @@ pub async fn workspace_forget(
         )
         .map_err(err_str)?;
     state.agent.remove_all(&task_ids).await;
+    let terminal_ids = {
+        let mut terminal_owners = state
+            .terminal_owners
+            .lock()
+            .map_err(|_| "terminal ownership state is unavailable".to_string())?;
+        let terminal_ids = terminal_owners
+            .iter()
+            .filter_map(|(terminal_id, owner_task_id)| {
+                task_ids
+                    .contains(owner_task_id)
+                    .then(|| terminal_id.clone())
+            })
+            .collect::<Vec<_>>();
+        terminal_owners.retain(|_, owner_task_id| !task_ids.contains(owner_task_id));
+        terminal_ids
+    };
+    terminate_terminals(state, terminal_ids).await;
 
     for (task_id, storage_ids) in session_logs {
         remove_task_session_logs(&state.sessions_dir, &task_id, &storage_ids);
@@ -7986,11 +8275,86 @@ pub async fn global_search(
 // 终端命令
 // ============================================================================
 
-pub async fn terminal_list(state: &CommandState) -> Result<Vec<TerminalInfo>, String> {
+fn terminal_scope_error(id: &str) -> String {
+    format!("terminal not found for this conversation: {id}")
+}
+
+fn owned_terminal_ids(state: &CommandState, task_id: &str) -> Result<HashSet<String>, String> {
+    require_task(state, task_id)?;
+    let owners = state
+        .terminal_owners
+        .lock()
+        .map_err(|_| "terminal ownership state is unavailable".to_string())?;
+    Ok(owners
+        .iter()
+        .filter_map(|(terminal_id, owner_task_id)| {
+            (owner_task_id == task_id).then(|| terminal_id.clone())
+        })
+        .collect())
+}
+
+fn require_owned_terminal(
+    state: &CommandState,
+    task_id: &str,
+    terminal_id: &str,
+) -> Result<(), String> {
+    require_task(state, task_id)?;
+    let owners = state
+        .terminal_owners
+        .lock()
+        .map_err(|_| "terminal ownership state is unavailable".to_string())?;
+    match owners.get(terminal_id) {
+        Some(owner_task_id) if owner_task_id == task_id => Ok(()),
+        _ => Err(terminal_scope_error(terminal_id)),
+    }
+}
+
+fn register_terminal_owner(
+    state: &CommandState,
+    task_id: &str,
+    terminal_id: &str,
+) -> Result<(), String> {
+    let mut owners = state
+        .terminal_owners
+        .lock()
+        .map_err(|_| "terminal ownership state is unavailable".to_string())?;
+    // Recheck while holding the same lifecycle lock used by task deletion. A create racing with
+    // permanent deletion must never publish an orphaned terminal after the task is gone.
+    if TaskRepository::new(&state.db)
+        .get(task_id)
+        .map_err(err_str)?
+        .is_none()
+    {
+        return Err(format!("task not found: {task_id}"));
+    }
+    owners.insert(terminal_id.to_string(), task_id.to_string());
+    Ok(())
+}
+
+async fn discard_unowned_terminal(state: &CommandState, terminal_id: &str) {
+    if let Err(error) = state.terminal_manager.kill(terminal_id).await {
+        tracing::warn!(terminal_id, %error, "failed to discard terminal without a task owner");
+    }
+}
+
+async fn terminate_terminals(state: &CommandState, terminal_ids: Vec<String>) {
+    for terminal_id in terminal_ids {
+        if let Err(error) = state.terminal_manager.kill(&terminal_id).await {
+            tracing::warn!(terminal_id, %error, "failed to terminate deleted conversation terminal");
+        }
+    }
+}
+
+pub async fn terminal_list(
+    state: &CommandState,
+    task_id: &str,
+) -> Result<Vec<TerminalInfo>, String> {
+    let owned = owned_terminal_ids(state, task_id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     let terminals = svc.list().await.map_err(err_str)?;
     Ok(terminals
         .into_iter()
+        .filter(|terminal| owned.contains(&terminal.id))
         .map(|t| TerminalInfo {
             id: t.id,
             state: format!("{:?}", t.state).to_lowercase(),
@@ -8002,21 +8366,26 @@ pub async fn terminal_list(state: &CommandState) -> Result<Vec<TerminalInfo>, St
 
 pub async fn terminal_create(
     state: &CommandState,
+    task_id: &str,
     shell: &str,
-    workspace_path: &str,
 ) -> Result<String, String> {
     let svc = TerminalControlService::new(state.terminal_manager.clone());
-    let root = attached_workspace_root(state, workspace_path)?;
-    svc.create(shell, &root, Vec::new()).await.map_err(err_str)
+    let root = attached_task_workspace_root(state, task_id)?;
+    let terminal_id = svc
+        .create(shell, &root, Vec::new())
+        .await
+        .map_err(err_str)?;
+    if let Err(error) = register_terminal_owner(state, task_id, &terminal_id) {
+        discard_unowned_terminal(state, &terminal_id).await;
+        return Err(error);
+    }
+    Ok(terminal_id)
 }
 
 /// 在真实 PTY 中打开交互式 Codex CLI。CLI 路径由后端探测并作为进程参数传递，
 /// 避免 Windows Store 同名别名抢占 npm CLI，也不让 WebView 拼接 shell 命令。
-pub async fn terminal_create_codex(
-    state: &CommandState,
-    workspace_path: &str,
-) -> Result<String, String> {
-    let root = attached_workspace_root(state, workspace_path)?;
+pub async fn terminal_create_codex(state: &CommandState, task_id: &str) -> Result<String, String> {
+    let root = attached_task_workspace_root(state, task_id)?;
     let cli = probe_codex_cli().await;
     if !cli.available {
         return Err(cli
@@ -8033,7 +8402,7 @@ pub async fn terminal_create_codex(
         let executable = executable
             .to_str()
             .ok_or_else(|| "Codex CLI 路径不是有效的 Unicode 文本。".to_string())?;
-        state
+        let terminal_id = state
             .terminal_manager
             .create_with_args(
                 "cmd.exe",
@@ -8047,11 +8416,16 @@ pub async fn terminal_create_codex(
                 ],
             )
             .await
-            .map_err(err_str)
+            .map_err(err_str)?;
+        if let Err(error) = register_terminal_owner(state, task_id, &terminal_id) {
+            discard_unowned_terminal(state, &terminal_id).await;
+            return Err(error);
+        }
+        Ok(terminal_id)
     }
     #[cfg(not(windows))]
     {
-        state
+        let terminal_id = state
             .terminal_manager
             .create(
                 executable
@@ -8061,16 +8435,23 @@ pub async fn terminal_create_codex(
                 Vec::new(),
             )
             .await
-            .map_err(err_str)
+            .map_err(err_str)?;
+        if let Err(error) = register_terminal_owner(state, task_id, &terminal_id) {
+            discard_unowned_terminal(state, &terminal_id).await;
+            return Err(error);
+        }
+        Ok(terminal_id)
     }
 }
 
 pub async fn terminal_send(
     state: &CommandState,
+    task_id: &str,
     id: &str,
     text: &str,
     press_enter: bool,
 ) -> Result<(), String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.send(
         id,
@@ -8084,13 +8465,23 @@ pub async fn terminal_send(
     .map_err(err_str)
 }
 
-pub async fn terminal_read(state: &CommandState, id: &str) -> Result<String, String> {
+pub async fn terminal_read(
+    state: &CommandState,
+    task_id: &str,
+    id: &str,
+) -> Result<String, String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.read(id).await.map_err(err_str)
 }
 
 /// 读取终端完整 scrollback，供 UI 在挂载或切换终端时恢复输出。
-pub async fn terminal_snapshot(state: &CommandState, id: &str) -> Result<String, String> {
+pub async fn terminal_snapshot(
+    state: &CommandState,
+    task_id: &str,
+    id: &str,
+) -> Result<String, String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.snapshot(id).await.map_err(err_str)
 }
@@ -8099,8 +8490,10 @@ pub async fn terminal_snapshot(state: &CommandState, id: &str) -> Result<String,
 /// Agent 工具必须继续使用 `terminal_read` 的 ANSI-free 文本结果。
 pub async fn terminal_raw_snapshot(
     state: &CommandState,
+    task_id: &str,
     id: &str,
 ) -> Result<TerminalRawSnapshot, String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.raw_snapshot(id).await.map_err(err_str)
 }
@@ -8108,24 +8501,33 @@ pub async fn terminal_raw_snapshot(
 /// 读取自前端游标以来的原始终端输出。
 pub async fn terminal_raw_since(
     state: &CommandState,
+    task_id: &str,
     id: &str,
     cursor: u64,
 ) -> Result<TerminalRawBatch, String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
     svc.raw_since(id, cursor).await.map_err(err_str)
 }
 
-pub async fn terminal_kill(state: &CommandState, id: &str) -> Result<(), String> {
+pub async fn terminal_kill(state: &CommandState, task_id: &str, id: &str) -> Result<(), String> {
+    require_owned_terminal(state, task_id, id)?;
     let svc = TerminalControlService::new(state.terminal_manager.clone());
-    svc.kill(id, false).await.map_err(err_str)
+    let result = svc.kill(id, false).await.map_err(err_str);
+    if let Ok(mut owners) = state.terminal_owners.lock() {
+        owners.remove(id);
+    }
+    result
 }
 
 pub async fn terminal_resize(
     state: &CommandState,
+    task_id: &str,
     id: &str,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
+    require_owned_terminal(state, task_id, id)?;
     state
         .terminal_manager
         .resize(id, cols, rows)
@@ -8536,7 +8938,11 @@ fn task_provider_shows_reasoning(state: &CommandState, task_id: &str) -> bool {
         .provider_name
         .as_deref()
         .filter(|name| !name.trim().is_empty())
-        .or_else(|| config.get("default_provider").and_then(serde_json::Value::as_str));
+        .or_else(|| {
+            config
+                .get("default_provider")
+                .and_then(serde_json::Value::as_str)
+        });
     let Some(provider_name) = provider_name else {
         return true;
     };
@@ -8766,7 +9172,7 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
                 let pending_index = pending_calls
                     .iter()
                     .rposition(|(placeholder, _)| placeholder == &call_id)
-                    .or_else(|| (!pending_calls.is_empty()).then_some(pending_calls.len() - 1));
+                    .or_else(|| pending_calls.len().checked_sub(1));
                 let pending = pending_index.map(|index| pending_calls.remove(index));
                 let resolved = if call_id.trim().is_empty() {
                     pending
@@ -8800,6 +9206,7 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
             }
             // 运行时恢复专用的快照不应成为 UI 时间线里的第二份消息记录。
             SessionEvent::HistorySnapshot { .. } => {}
+            SessionEvent::ModelProjection { .. } => {}
             SessionEvent::System { event, data } => {
                 if event == DURABLE_USER_MESSAGE_EVENT {
                     let operation_id = data.get("operation_id").and_then(serde_json::Value::as_str);
@@ -8867,6 +9274,695 @@ fn parse_session_messages(content: &str, branch_id: &str, storage_id: &str) -> V
         }
     }
     out
+}
+
+const SUBAGENT_MESSAGE_PAGE_DEFAULT_LIMIT: usize = 80;
+const SUBAGENT_MESSAGE_PAGE_MAX_LIMIT: usize = 250;
+const SUBAGENT_CURSOR_VERSION: u8 = 2;
+const SUBAGENT_CURSOR_CHECKPOINT_BYTES: usize = 96;
+const SUBAGENT_REVERSE_READ_CHUNK: usize = 16 * 1024;
+const SUBAGENT_MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SubagentSessionCursor {
+    version: u8,
+    storage_key: String,
+    /// Inclusive start of the represented page, in raw file bytes.
+    start: u64,
+    /// Exclusive end at a complete JSONL record boundary, in raw file bytes.
+    end: u64,
+    /// Physical line number at `start`.
+    start_line: u64,
+    /// Physical line number of `end`; lets append parsing create stable message ids without a scan.
+    end_line: u64,
+    /// BLAKE3 checkpoints make cursor use fail closed when a file is replaced/truncated in place.
+    head_len: u16,
+    head_checkpoint: String,
+    start_checkpoint: String,
+    end_checkpoint: String,
+    /// Unmatched ToolCall ids at `end`, in provider result matching order.
+    pending_tool_ids: Vec<String>,
+    /// ToolResults at the beginning of the loaded window whose ToolCall is in an older page.
+    leading_tool_result_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SubagentJsonlRange {
+    start: u64,
+    end: u64,
+    start_line: u64,
+    content: String,
+    complete_records: usize,
+}
+
+impl SubagentJsonlRange {
+    fn end_line(&self) -> u64 {
+        self.start_line + self.complete_records as u64
+    }
+}
+
+#[derive(Debug)]
+struct SubagentJsonlFile {
+    file: tokio::fs::File,
+    len: u64,
+    head_bytes: Vec<u8>,
+}
+
+enum SubagentJsonlOpen {
+    Missing,
+    Present(SubagentJsonlFile),
+}
+
+fn subagent_cursor_storage_key(storage_id: &str) -> String {
+    blake3::hash(storage_id.as_bytes()).to_hex()[..24].to_string()
+}
+
+fn checkpoint_bytes(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex()[..24].to_string()
+}
+
+fn encode_subagent_cursor(
+    storage_key: &str,
+    range: &SubagentJsonlRange,
+    head_checkpoint: &str,
+    start_checkpoint: String,
+    end_checkpoint: String,
+    pending_tool_ids: Vec<String>,
+    leading_tool_result_ids: Vec<String>,
+) -> Result<String, String> {
+    let cursor = SubagentSessionCursor {
+        version: SUBAGENT_CURSOR_VERSION,
+        storage_key: storage_key.to_string(),
+        start: range.start,
+        end: range.end,
+        start_line: range.start_line,
+        end_line: range.end_line(),
+        head_len: SUBAGENT_CURSOR_CHECKPOINT_BYTES.min(range.end as usize) as u16,
+        head_checkpoint: head_checkpoint.to_string(),
+        start_checkpoint,
+        end_checkpoint,
+        pending_tool_ids,
+        leading_tool_result_ids,
+    };
+    let payload = serde_json::to_vec(&cursor).map_err(err_str)?;
+    Ok(URL_SAFE_NO_PAD.encode(payload))
+}
+
+fn decode_subagent_cursor(value: &str) -> Option<SubagentSessionCursor> {
+    let payload = URL_SAFE_NO_PAD.decode(value).ok()?;
+    let cursor = serde_json::from_slice::<SubagentSessionCursor>(&payload).ok()?;
+    (cursor.version == SUBAGENT_CURSOR_VERSION).then_some(cursor)
+}
+
+async fn valid_subagent_cursor(
+    cursor: &SubagentSessionCursor,
+    file: &mut SubagentJsonlFile,
+    storage_key: &str,
+) -> Result<bool, String> {
+    let head_len = cursor.head_len as usize;
+    Ok(cursor.storage_key == storage_key
+        && cursor.start <= cursor.end
+        && cursor.end <= file.len
+        && head_len <= file.head_bytes.len()
+        && file.is_boundary(cursor.start).await?
+        && file.is_boundary(cursor.end).await?
+        && cursor.head_checkpoint == checkpoint_bytes(&file.head_bytes[..head_len])
+        && cursor.start_checkpoint == file.checkpoint_at(cursor.start).await?
+        && cursor.end_checkpoint == file.checkpoint_at(cursor.end).await?)
+}
+
+fn subagent_page_limit(request: &SubagentSessionMessagePageRequest) -> usize {
+    request
+        .limit
+        .unwrap_or(SUBAGENT_MESSAGE_PAGE_DEFAULT_LIMIT)
+        .clamp(1, SUBAGENT_MESSAGE_PAGE_MAX_LIMIT)
+}
+
+fn subagent_log_location(
+    state: &CommandState,
+    task_id: &str,
+    subagent_id: &str,
+) -> Result<(String, String, PathBuf), String> {
+    let run = AgentRunRepository::new(&state.db)
+        .get(subagent_id)
+        .map_err(err_str)?
+        .ok_or_else(|| "子代理运行不存在".to_string())?;
+    if run.task_id != task_id || run.agent_kind != AgentKind::Subagent {
+        return Err("子代理运行不属于当前任务".to_string());
+    }
+    let branch = SessionBranchRepository::new(&state.db)
+        .list_by_task(task_id)
+        .map_err(err_str)?
+        .into_iter()
+        .find(|branch| branch.id == run.branch_id)
+        .ok_or_else(|| "子代理所属会话分支不存在".to_string())?;
+    if branch.task_id != task_id {
+        return Err("子代理所属会话分支不属于当前任务".to_string());
+    }
+    let storage_id = subagent_storage_id(&branch.storage_id, subagent_id);
+    let path = session_file_path(&state.sessions_dir, &storage_id);
+    Ok((branch.id, storage_id, path))
+}
+
+impl SubagentJsonlFile {
+    async fn open(path: &Path) -> Result<SubagentJsonlOpen, String> {
+        let mut file = match tokio::fs::File::open(path).await {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(SubagentJsonlOpen::Missing);
+            }
+            Err(error) => return Err(err_str(error)),
+        };
+        let len = file.metadata().await.map_err(err_str)?.len();
+        let head_len = len.min(SUBAGENT_CURSOR_CHECKPOINT_BYTES as u64) as usize;
+        let mut head = vec![0; head_len];
+        if head_len > 0 {
+            file.seek(SeekFrom::Start(0)).await.map_err(err_str)?;
+            file.read_exact(&mut head).await.map_err(err_str)?;
+        }
+        Ok(SubagentJsonlOpen::Present(Self {
+            file,
+            len,
+            head_bytes: head,
+        }))
+    }
+
+    async fn checkpoint_at(&mut self, offset: u64) -> Result<String, String> {
+        let start = offset.saturating_sub(SUBAGENT_CURSOR_CHECKPOINT_BYTES as u64);
+        let mut bytes = vec![0; (offset - start) as usize];
+        if !bytes.is_empty() {
+            self.file
+                .seek(SeekFrom::Start(start))
+                .await
+                .map_err(err_str)?;
+            self.file.read_exact(&mut bytes).await.map_err(err_str)?;
+        }
+        Ok(checkpoint_bytes(&bytes))
+    }
+
+    fn head_checkpoint_at(&self, offset: u64) -> String {
+        let len = (offset as usize)
+            .min(SUBAGENT_CURSOR_CHECKPOINT_BYTES)
+            .min(self.head_bytes.len());
+        checkpoint_bytes(&self.head_bytes[..len])
+    }
+
+    async fn read_forward(
+        &mut self,
+        start: u64,
+        start_line: u64,
+        limit: usize,
+    ) -> Result<SubagentJsonlRange, String> {
+        self.file
+            .seek(SeekFrom::Start(start))
+            .await
+            .map_err(err_str)?;
+        let mut bytes = Vec::new();
+        let mut chunk = vec![0; 16 * 1024];
+        let mut complete_records = 0usize;
+        let mut committed_len = 0usize;
+        while start + (bytes.len() as u64) < self.len && complete_records < limit {
+            let remaining = (self.len - start - bytes.len() as u64) as usize;
+            let read_len = remaining.min(chunk.len());
+            let read = self
+                .file
+                .read(&mut chunk[..read_len])
+                .await
+                .map_err(err_str)?;
+            if read == 0 {
+                break;
+            }
+            for byte in &chunk[..read] {
+                bytes.push(*byte);
+                if *byte == b'\n' {
+                    complete_records += 1;
+                    committed_len = bytes.len();
+                    if complete_records == limit {
+                        break;
+                    }
+                }
+            }
+            if bytes.len() > SUBAGENT_MAX_RECORD_BYTES && committed_len == 0 {
+                return Err("子代理日志存在过大的未完成记录".to_string());
+            }
+        }
+        bytes.truncate(committed_len);
+        Ok(SubagentJsonlRange {
+            start,
+            end: start + committed_len as u64,
+            start_line,
+            content: String::from_utf8_lossy(&bytes).into_owned(),
+            complete_records,
+        })
+    }
+
+    /// Locate at most `limit` complete records immediately before `end`. Only reverse chunks that
+    /// are needed to find the requested newlines are read; a huge old transcript stays untouched.
+    async fn read_backward(
+        &mut self,
+        end: u64,
+        end_line: Option<u64>,
+        limit: usize,
+    ) -> Result<(SubagentJsonlRange, bool), String> {
+        if end == 0 {
+            return Ok((
+                SubagentJsonlRange {
+                    start: 0,
+                    end: 0,
+                    start_line: end_line.unwrap_or(0),
+                    content: String::new(),
+                    complete_records: 0,
+                },
+                false,
+            ));
+        }
+        let mut position = end;
+        let mut suffix = Vec::new();
+        let mut newlines = 0usize;
+        while position > 0 && newlines <= limit {
+            let read_len = (position as usize).min(SUBAGENT_REVERSE_READ_CHUNK);
+            let read_start = position - read_len as u64;
+            let mut chunk = vec![0; read_len];
+            self.file
+                .seek(SeekFrom::Start(read_start))
+                .await
+                .map_err(err_str)?;
+            self.file.read_exact(&mut chunk).await.map_err(err_str)?;
+            newlines += chunk.iter().filter(|byte| **byte == b'\n').count();
+            chunk.extend_from_slice(&suffix);
+            suffix = chunk;
+            position = read_start;
+            if suffix.len() > SUBAGENT_MAX_RECORD_BYTES.saturating_mul(limit.max(1)) {
+                return Err("子代理日志历史页过大".to_string());
+            }
+        }
+        let newline_positions = suffix
+            .iter()
+            .enumerate()
+            .filter_map(|(index, byte)| (*byte == b'\n').then_some(index))
+            .collect::<Vec<_>>();
+        let records_available = newline_positions.len();
+        let take = records_available.min(limit);
+        let local_start = if records_available > take {
+            newline_positions[records_available - take - 1] + 1
+        } else {
+            0
+        };
+        let start = position + local_start as u64;
+        let content = String::from_utf8_lossy(&suffix[local_start..]).into_owned();
+        let start_line = match end_line {
+            Some(end_line) => end_line.saturating_sub(take as u64),
+            None => self.count_newlines_before(start).await?,
+        };
+        Ok((
+            SubagentJsonlRange {
+                start,
+                end,
+                start_line,
+                content,
+                complete_records: take,
+            },
+            start > 0,
+        ))
+    }
+
+    async fn last_complete_end(&mut self) -> Result<u64, String> {
+        if self.len == 0 {
+            return Ok(0);
+        }
+        let mut position = self.len;
+        while position > 0 {
+            let read_len = (position as usize).min(SUBAGENT_REVERSE_READ_CHUNK);
+            let read_start = position - read_len as u64;
+            let mut chunk = vec![0; read_len];
+            self.file
+                .seek(SeekFrom::Start(read_start))
+                .await
+                .map_err(err_str)?;
+            self.file.read_exact(&mut chunk).await.map_err(err_str)?;
+            if let Some(index) = chunk.iter().rposition(|byte| *byte == b'\n') {
+                return Ok(read_start + index as u64 + 1);
+            }
+            position = read_start;
+            if self.len - position > SUBAGENT_MAX_RECORD_BYTES as u64 {
+                return Err("子代理日志存在过大的未完成记录".to_string());
+            }
+        }
+        Ok(0)
+    }
+
+    async fn count_newlines_before(&mut self, end: u64) -> Result<u64, String> {
+        self.file.seek(SeekFrom::Start(0)).await.map_err(err_str)?;
+        let mut remaining = end;
+        let mut count = 0u64;
+        let mut chunk = vec![0; 64 * 1024];
+        while remaining > 0 {
+            let read_len = (remaining as usize).min(chunk.len());
+            let read = self
+                .file
+                .read(&mut chunk[..read_len])
+                .await
+                .map_err(err_str)?;
+            if read == 0 {
+                break;
+            }
+            count += chunk[..read].iter().filter(|byte| **byte == b'\n').count() as u64;
+            remaining -= read as u64;
+        }
+        Ok(count)
+    }
+
+    async fn is_boundary(&mut self, offset: u64) -> Result<bool, String> {
+        if offset == 0 {
+            return Ok(true);
+        }
+        if offset > self.len {
+            return Ok(false);
+        }
+        self.file
+            .seek(SeekFrom::Start(offset - 1))
+            .await
+            .map_err(err_str)?;
+        let mut byte = [0u8; 1];
+        self.file.read_exact(&mut byte).await.map_err(err_str)?;
+        Ok(byte[0] == b'\n')
+    }
+}
+
+fn parse_page_messages(
+    state: &CommandState,
+    task_id: &str,
+    range: &SubagentJsonlRange,
+    branch_id: &str,
+    storage_id: &str,
+) -> Vec<SessionMessage> {
+    if range.start == range.end {
+        return Vec::new();
+    }
+    let mut messages =
+        session_messages_for_task(state, task_id, &range.content, branch_id, storage_id);
+    for message in &mut messages {
+        let Some(id) = message.id.as_deref() else {
+            continue;
+        };
+        let Some(relative_line) = id
+            .rsplit_once(':')
+            .and_then(|(_, line)| line.parse::<usize>().ok())
+        else {
+            continue;
+        };
+        message.id = Some(format!(
+            "{}:{}",
+            storage_id,
+            range.start_line + relative_line as u64
+        ));
+        if message.kind == "tool_call"
+            && message
+                .call_id
+                .as_deref()
+                .is_some_and(|call_id| call_id.starts_with("call-"))
+        {
+            message.call_id = message.id.clone();
+        }
+    }
+    messages
+}
+
+fn process_tool_state_for_range(
+    range: &SubagentJsonlRange,
+    storage_id: &str,
+    mut pending: Vec<String>,
+) -> (Vec<String>, Vec<SubagentSessionCallIdUpdate>, Vec<String>) {
+    let mut updates = Vec::new();
+    let mut leading_results = Vec::new();
+    for (line_index, line) in range.content.lines().enumerate() {
+        let Ok(event) = serde_json::from_str::<SessionEvent>(line.trim_end_matches('\r')) else {
+            continue;
+        };
+        match event {
+            SessionEvent::ToolCall { .. } => pending.push(format!(
+                "{}:{}",
+                storage_id,
+                range.start_line + line_index as u64 + 1
+            )),
+            SessionEvent::ToolResult { call_id, .. } => {
+                let index = pending
+                    .iter()
+                    .rposition(|placeholder| placeholder == &call_id)
+                    .or_else(|| pending.len().checked_sub(1));
+                if let Some(index) = index {
+                    let id = pending.remove(index);
+                    if !call_id.trim().is_empty() {
+                        updates.push(SubagentSessionCallIdUpdate { id, call_id });
+                    }
+                } else if !call_id.trim().is_empty() {
+                    leading_results.push(call_id);
+                }
+            }
+            _ => {}
+        }
+    }
+    (pending, updates, leading_results)
+}
+
+fn consume_leading_tool_results(
+    pending_tool_ids: &mut Vec<String>,
+    leading_tool_result_ids: &mut Vec<String>,
+) -> Vec<SubagentSessionCallIdUpdate> {
+    let pair_count = pending_tool_ids.len().min(leading_tool_result_ids.len());
+    if pair_count == 0 {
+        return Vec::new();
+    }
+
+    // ToolCall records do not persist their provider call id. The existing transcript parser
+    // therefore matches a result to the most recent still-pending call. Historical paging walks
+    // the same sequence in reverse: the earliest leading result belongs to the latest pending
+    // call in the newly loaded older page. Consume only when both sides exist so a result is not
+    // lost merely because one intermediate page contains no ToolCall.
+    let result_ids = leading_tool_result_ids.drain(..pair_count);
+    let call_ids = pending_tool_ids.split_off(pending_tool_ids.len() - pair_count);
+    call_ids
+        .into_iter()
+        .rev()
+        .zip(result_ids)
+        .map(|(id, call_id)| SubagentSessionCallIdUpdate { id, call_id })
+        .collect()
+}
+
+async fn latest_subagent_message_page(
+    state: &CommandState,
+    task_id: &str,
+    file: &mut SubagentJsonlFile,
+    branch_id: &str,
+    storage_id: &str,
+    limit: usize,
+    reset: bool,
+) -> Result<SubagentSessionMessagePage, String> {
+    let end = file.last_complete_end().await?;
+    let (range, has_more_before) = file.read_backward(end, None, limit).await?;
+    let storage_key = subagent_cursor_storage_key(storage_id);
+    let (pending_tool_ids, call_id_updates, leading_tool_result_ids) =
+        process_tool_state_for_range(&range, storage_id, Vec::new());
+    let start_checkpoint = file.checkpoint_at(range.start).await?;
+    let end_checkpoint = file.checkpoint_at(range.end).await?;
+    let cursor = encode_subagent_cursor(
+        &storage_key,
+        &range,
+        &file.head_checkpoint_at(range.end),
+        start_checkpoint,
+        end_checkpoint,
+        pending_tool_ids,
+        leading_tool_result_ids,
+    )?;
+    Ok(SubagentSessionMessagePage {
+        messages: parse_page_messages(state, task_id, &range, branch_id, storage_id),
+        call_id_updates,
+        next_cursor: Some(cursor.clone()),
+        previous_cursor: Some(cursor),
+        has_more_before,
+        reset,
+        unchanged: range.start == range.end,
+    })
+}
+
+/// Cursor-based isolated subagent transcript reader. Incremental polls return only complete records
+/// appended after `after_cursor`; historical reads use `before_cursor` and preserve full access.
+pub async fn subagent_session_message_page(
+    state: &CommandState,
+    task_id: &str,
+    subagent_id: &str,
+    request: SubagentSessionMessagePageRequest,
+) -> Result<SubagentSessionMessagePage, String> {
+    if request.after_cursor.is_some() && request.before_cursor.is_some() {
+        return Err("after_cursor 与 before_cursor 不能同时使用".to_string());
+    }
+    let limit = subagent_page_limit(&request);
+    let (branch_id, storage_id, path) = subagent_log_location(state, task_id, subagent_id)?;
+    let mut file = match SubagentJsonlFile::open(&path).await? {
+        SubagentJsonlOpen::Present(file) => file,
+        SubagentJsonlOpen::Missing => {
+            return Ok(SubagentSessionMessagePage {
+                messages: Vec::new(),
+                call_id_updates: Vec::new(),
+                next_cursor: None,
+                previous_cursor: None,
+                has_more_before: false,
+                reset: false,
+                unchanged: true,
+            });
+        }
+    };
+    let storage_key = subagent_cursor_storage_key(&storage_id);
+
+    let Some(cursor_value) = request
+        .after_cursor
+        .as_deref()
+        .or(request.before_cursor.as_deref())
+    else {
+        return latest_subagent_message_page(
+            state,
+            task_id,
+            &mut file,
+            &branch_id,
+            &storage_id,
+            limit,
+            false,
+        )
+        .await;
+    };
+    let Some(cursor) = decode_subagent_cursor(cursor_value) else {
+        return latest_subagent_message_page(
+            state,
+            task_id,
+            &mut file,
+            &branch_id,
+            &storage_id,
+            limit,
+            true,
+        )
+        .await;
+    };
+    if !valid_subagent_cursor(&cursor, &mut file, &storage_key).await? {
+        return latest_subagent_message_page(
+            state,
+            task_id,
+            &mut file,
+            &branch_id,
+            &storage_id,
+            limit,
+            true,
+        )
+        .await;
+    }
+
+    let after_mode = request.after_cursor.is_some();
+    let (range, has_more_before, seed_pending) = if after_mode {
+        (
+            file.read_forward(cursor.end, cursor.end_line, limit)
+                .await?,
+            cursor.start > 0,
+            cursor.pending_tool_ids.clone(),
+        )
+    } else {
+        let (range, more) = file
+            .read_backward(cursor.start, Some(cursor.start_line), limit)
+            .await?;
+        (range, more, Vec::new())
+    };
+    let (mut pending_tool_ids, mut call_id_updates, leading_tool_result_ids) =
+        process_tool_state_for_range(&range, &storage_id, seed_pending);
+    let mut remaining_leading_results = if after_mode {
+        cursor.leading_tool_result_ids.clone()
+    } else {
+        let mut values = cursor.leading_tool_result_ids.clone();
+        values.extend(leading_tool_result_ids.iter().cloned());
+        values
+    };
+    if !after_mode {
+        call_id_updates.extend(consume_leading_tool_results(
+            &mut pending_tool_ids,
+            &mut remaining_leading_results,
+        ));
+    }
+    let messages = parse_page_messages(state, task_id, &range, &branch_id, &storage_id);
+    let (next_range, next_pending) = if after_mode {
+        (
+            SubagentJsonlRange {
+                start: cursor.start,
+                end: range.end,
+                start_line: cursor
+                    .end_line
+                    .saturating_sub(cursor.end_line.saturating_sub(range.start_line)),
+                content: String::new(),
+                complete_records: cursor
+                    .end_line
+                    .saturating_sub(range.start_line)
+                    .saturating_add(range.complete_records as u64)
+                    as usize,
+            },
+            pending_tool_ids,
+        )
+    } else {
+        (
+            SubagentJsonlRange {
+                start: range.start,
+                end: cursor.end,
+                start_line: range.start_line,
+                content: String::new(),
+                complete_records: cursor.end_line.saturating_sub(range.start_line) as usize,
+            },
+            cursor.pending_tool_ids.clone(),
+        )
+    };
+    let next_checkpoint = file.checkpoint_at(next_range.end).await?;
+    let next_start_checkpoint = file.checkpoint_at(next_range.start).await?;
+    let head_checkpoint = file.head_checkpoint_at(next_range.end);
+    let next_cursor = encode_subagent_cursor(
+        &storage_key,
+        &next_range,
+        &head_checkpoint,
+        next_start_checkpoint,
+        next_checkpoint,
+        next_pending.clone(),
+        remaining_leading_results.clone(),
+    )?;
+    let previous_range = if after_mode {
+        SubagentJsonlRange {
+            start: cursor.start,
+            end: next_range.end,
+            start_line: cursor.start_line,
+            content: String::new(),
+            complete_records: next_range.end_line().saturating_sub(cursor.start_line) as usize,
+        }
+    } else {
+        SubagentJsonlRange {
+            start: range.start,
+            end: cursor.end,
+            start_line: range.start_line,
+            content: String::new(),
+            complete_records: cursor.end_line.saturating_sub(range.start_line) as usize,
+        }
+    };
+    let previous_checkpoint = file.checkpoint_at(previous_range.end).await?;
+    let previous_start_checkpoint = file.checkpoint_at(previous_range.start).await?;
+    let previous_cursor = encode_subagent_cursor(
+        &storage_key,
+        &previous_range,
+        &file.head_checkpoint_at(previous_range.end),
+        previous_start_checkpoint,
+        previous_checkpoint,
+        next_pending.clone(),
+        remaining_leading_results,
+    )?;
+    Ok(SubagentSessionMessagePage {
+        messages,
+        call_id_updates,
+        next_cursor: Some(next_cursor),
+        previous_cursor: Some(previous_cursor),
+        has_more_before,
+        reset: false,
+        unchanged: range.start == range.end,
+    })
 }
 
 /// 读取某个子代理的独立日志。先校验运行归属，避免使用任意 ID 探测其他任务文件。
@@ -18656,8 +19752,276 @@ input.on('line', (line) => {
         assert!(compacted[1]
             .text_content()
             .contains("decisions and pending work"));
+        assert_eq!(compacted[1].role, Role::User);
         assert_eq!(compacted[2].text_content(), "message-8");
         assert_eq!(compacted.last().unwrap().text_content(), "message-17");
+    }
+
+    #[test]
+    fn compacted_working_set_is_a_projection_not_a_history_replacement() {
+        let history = (0..18)
+            .map(|index| Message::user_text(format!("evidence-{index}")))
+            .collect::<Vec<_>>();
+        let compacted = compacted_working_set(&history, "summary");
+        assert!(compacted.len() < history.len());
+        assert_eq!(history.len(), 18, "canonical input remains untouched");
+        assert!(history
+            .iter()
+            .any(|message| message.text_content() == "evidence-7"));
+    }
+
+    #[test]
+    fn compacted_working_set_keeps_tool_use_and_result_atomic_at_recent_boundary() {
+        let mut history = (0..18)
+            .map(|index| Message::user_text(format!("message-{index}")))
+            .collect::<Vec<_>>();
+        // 默认 recent_start=8；把 ToolUse/ToolResult 放在 7/8，必须向左扩一条。
+        history[7] = Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "boundary-call".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "src/main.rs"}),
+            }],
+        };
+        history[8] = Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "boundary-call".into(),
+                content: "boundary-evidence".into(),
+                is_error: false,
+            }],
+        };
+
+        let compacted = compacted_working_set(&history, "summary");
+        let call_index = compacted
+            .iter()
+            .position(|message| {
+                message.content.iter().any(
+                    |block| matches!(block, ContentBlock::ToolUse { id, .. } if id == "boundary-call"),
+                )
+            })
+            .expect("tool call must be retained");
+        let result_index = compacted
+            .iter()
+            .position(|message| {
+                message.content.iter().any(|block| {
+                    matches!(block, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "boundary-call")
+                })
+            })
+            .expect("tool result must be retained");
+
+        assert_eq!(result_index, call_index + 1);
+        assert!(matches!(
+            &compacted[result_index].content[..],
+            [ContentBlock::ToolResult { content, .. }] if content == "boundary-evidence"
+        ));
+    }
+
+    #[test]
+    fn compacted_working_set_summary_role_is_valid_before_an_assistant_tail() {
+        let mut history = (0..18)
+            .map(|index| Message::user_text(format!("message-{index}")))
+            .collect::<Vec<_>>();
+        history[8] = Message::assistant_text("assistant tail starts here");
+
+        let compacted = compacted_working_set(&history, "summary");
+
+        assert_eq!(compacted[1].role, Role::User);
+        assert_eq!(compacted[2].role, Role::Assistant);
+    }
+
+    struct CompactionTestProvider {
+        requests: Arc<Mutex<Vec<CompletionRequest>>>,
+        responses: Mutex<Vec<(String, hermes_core::StopReason)>>,
+    }
+
+    impl CompactionTestProvider {
+        fn new(responses: Vec<(String, hermes_core::StopReason)>) -> Self {
+            Self {
+                requests: Arc::new(Mutex::new(Vec::new())),
+                responses: Mutex::new(responses),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl hermes_core::LlmProvider for CompactionTestProvider {
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> hermes_error::Result<hermes_core::CompletionResponse> {
+            self.requests.lock().unwrap().push(request);
+            let (text, stop_reason) = self.responses.lock().unwrap().remove(0);
+            Ok(hermes_core::CompletionResponse {
+                content: vec![ContentBlock::Text { text }],
+                stop_reason,
+                usage: hermes_core::Usage::default(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> hermes_error::Result<futures::stream::BoxStream<'static, hermes_core::StreamEvent>>
+        {
+            unreachable!("manual compaction uses complete")
+        }
+
+        fn capabilities(&self) -> hermes_core::Capabilities {
+            hermes_core::Capabilities {
+                supports_streaming: false,
+                supports_tool_use: false,
+                supports_vision: false,
+                supports_prompt_caching: false,
+                max_context_tokens: 200_000,
+            }
+        }
+
+        fn name(&self) -> &str {
+            "compaction-test"
+        }
+    }
+
+    #[test]
+    fn compaction_chunks_include_middle_evidence_without_head_tail_clipping() {
+        let messages = (0..7)
+            .map(|index| {
+                let marker = if index == 3 {
+                    "MIDDLE-EVIDENCE-MUST-REACH-MAP"
+                } else {
+                    "ordinary"
+                };
+                Message::user_text(format!("message-{index}-{marker}-{}", "x".repeat(30_000)))
+            })
+            .collect::<Vec<_>>();
+
+        let chunks = compaction_source_chunks(&messages).unwrap();
+
+        assert!(chunks.len() > 1);
+        assert!(chunks
+            .iter()
+            .any(|chunk| chunk.contains("MIDDLE-EVIDENCE-MUST-REACH-MAP")));
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS));
+        assert!(chunks
+            .iter()
+            .all(|chunk| !chunk.contains("中间内容因长度受限已省略")));
+    }
+
+    #[test]
+    fn compaction_chunks_keep_tool_use_and_result_atomic() {
+        let messages = vec![
+            Message::user_text("prefix"),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "atomic-call".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "atomic-call".into(),
+                    content: "atomic-result-evidence".into(),
+                    is_error: false,
+                }],
+            },
+            Message::assistant_text("suffix"),
+        ];
+
+        let chunks = compaction_source_chunks(&messages).unwrap();
+        let call_chunk = chunks
+            .iter()
+            .find(|chunk| chunk.contains("atomic-call"))
+            .expect("tool pair must reach one chunk");
+
+        assert!(call_chunk.contains("read_file"));
+        assert!(call_chunk.contains("atomic-result-evidence"));
+        assert_eq!(
+            chunks
+                .iter()
+                .filter(|chunk| chunk.contains("atomic-call"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_maps_every_chunk_then_reduces_every_summary() {
+        let messages = (0..5)
+            .map(|index| {
+                Message::user_text(format!(
+                    "ORIGINAL-BLOCK-{index}-{}",
+                    char::from(b'a' + index as u8).to_string().repeat(50_000)
+                ))
+            })
+            .collect::<Vec<_>>();
+        let map_count = compaction_source_chunks(&messages).unwrap().len();
+        assert!(map_count > 1);
+        let responses = (0..map_count)
+            .map(|index| {
+                (
+                    format!("MAP-SUMMARY-{index}"),
+                    hermes_core::StopReason::EndTurn,
+                )
+            })
+            .chain(std::iter::once((
+                "FINAL-REDUCED-SUMMARY".to_string(),
+                hermes_core::StopReason::EndTurn,
+            )))
+            .collect();
+        let provider = CompactionTestProvider::new(responses);
+
+        let summary = summarize_compaction_history(
+            &provider,
+            "model",
+            &InferenceOptions::default(),
+            &messages,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(summary, "FINAL-REDUCED-SUMMARY");
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), map_count + 1);
+        let reduce_prompt = requests.last().unwrap().messages[0].text_content();
+        for index in 0..map_count {
+            assert!(
+                reduce_prompt.contains(&format!("MAP-SUMMARY-{index}")),
+                "reduce must receive map summary {index}"
+            );
+        }
+        assert!(requests.iter().all(|request| {
+            request.messages[0].text_content().chars().count() <= COMPACTION_REQUEST_CHARS
+        }));
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_rejects_incomplete_or_empty_map_output() {
+        for (text, reason) in [
+            ("partial", hermes_core::StopReason::MaxTokens),
+            ("   ", hermes_core::StopReason::EndTurn),
+        ] {
+            let provider = CompactionTestProvider::new(vec![(text.to_string(), reason)]);
+            let error = summarize_compaction_history(
+                &provider,
+                "model",
+                &InferenceOptions::default(),
+                &[Message::user_text("evidence")],
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.contains("未完整生成") || error.contains("没有返回可用"),
+                "unexpected error: {error}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -19756,6 +21120,514 @@ input.on('line', (line) => {
         assert_eq!(result.call_id.as_deref(), Some("provider-delegate-42"));
     }
 
+    fn setup_subagent_page_fixture() -> (TempDir, CommandState, Task, SessionBranch, AgentRun) {
+        let (directory, state) = setup_state();
+        let task = Task::new(None, "paged child", "inspect", TaskMode::Ask);
+        TaskRepository::new(&state.db).create(&task).unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let mut run = AgentRun::new_for_branch(&task.id, &branch.id, "test-model");
+        run.agent_kind = AgentKind::Subagent;
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        (directory, state, task, branch, run)
+    }
+
+    fn subagent_page_path(state: &CommandState, branch: &SessionBranch, run: &AgentRun) -> PathBuf {
+        session_file_path(
+            &state.sessions_dir,
+            &subagent_storage_id(&branch.storage_id, &run.id),
+        )
+    }
+
+    fn numbered_message_line(number: usize, crlf: bool) -> String {
+        let ending = if crlf { "\r\n" } else { "\n" };
+        format!(
+            "{}{}",
+            serde_json::to_string(&SessionEvent::Message(Message::assistant_text(format!(
+                "message-{number}"
+            ))))
+            .unwrap(),
+            ending
+        )
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_reads_tail_after_and_history_with_stable_ids() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        let storage_id = subagent_storage_id(&branch.storage_id, &run.id);
+        let mut content = String::new();
+        for number in 1..=160 {
+            content.push_str(&numbered_message_line(number, number % 2 == 0));
+        }
+        std::fs::write(&path, content).unwrap();
+
+        let latest = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                limit: Some(80),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest.messages.len(), 80);
+        assert_eq!(
+            latest.messages[0].id.as_deref(),
+            Some(format!("{storage_id}:81").as_str())
+        );
+        assert_eq!(
+            latest.messages[79].id.as_deref(),
+            Some(format!("{storage_id}:160").as_str())
+        );
+        assert!(latest.has_more_before);
+
+        let history = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: latest.previous_cursor.clone(),
+                limit: Some(80),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(history.messages.len(), 80);
+        assert_eq!(
+            history.messages[0].id.as_deref(),
+            Some(format!("{storage_id}:1").as_str())
+        );
+        assert_eq!(
+            history.messages[79].id.as_deref(),
+            Some(format!("{storage_id}:80").as_str())
+        );
+        assert!(!history.has_more_before);
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(numbered_message_line(161, false).as_bytes())
+            .unwrap();
+        let appended = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: latest.next_cursor,
+                limit: Some(80),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(appended.messages.len(), 1);
+        assert_eq!(
+            appended.messages[0].id.as_deref(),
+            Some(format!("{storage_id}:161").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_waits_for_a_complete_line_and_then_advances_once() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        let complete = numbered_message_line(1, false);
+        let partial =
+            serde_json::to_string(&SessionEvent::Message(Message::assistant_text("message-2")))
+                .unwrap();
+        std::fs::write(&path, format!("{complete}{partial}")).unwrap();
+        let latest = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest.messages.len(), 1);
+        let idle = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: latest.next_cursor.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(idle.unchanged);
+        assert!(idle.messages.is_empty());
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"\r\n")
+            .unwrap();
+        let completed = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: latest.next_cursor,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(completed.messages.len(), 1);
+        assert_eq!(completed.messages[0].text.as_deref(), Some("message-2"));
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_backfills_tool_call_across_append_boundary() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        let storage_id = subagent_storage_id(&branch.storage_id, &run.id);
+        let call = serde_json::to_string(&SessionEvent::ToolCall {
+            name: "read_file".into(),
+            input: serde_json::json!({ "path": "README.md" }),
+        })
+        .unwrap();
+        std::fs::write(&path, format!("{call}\n")).unwrap();
+        let first = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            first.messages[0].call_id.as_deref(),
+            Some(format!("{storage_id}:1").as_str())
+        );
+
+        let result = serde_json::to_string(&SessionEvent::ToolResult {
+            call_id: "provider-call-7".into(),
+            output: serde_json::json!({ "ok": true }),
+            is_error: false,
+        })
+        .unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(format!("{result}\n").as_bytes())
+            .unwrap();
+        let appended = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: first.next_cursor,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            appended.call_id_updates,
+            vec![SubagentSessionCallIdUpdate {
+                id: format!("{storage_id}:1"),
+                call_id: "provider-call-7".into(),
+            }]
+        );
+        assert_eq!(
+            appended.messages[0].call_id.as_deref(),
+            Some("provider-call-7")
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_backfills_tool_pair_across_before_cursor_boundary() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        let storage_id = subagent_storage_id(&branch.storage_id, &run.id);
+        let call = serde_json::to_string(&SessionEvent::ToolCall {
+            name: "read_file".into(),
+            input: serde_json::json!({ "path": "README.md" }),
+        })
+        .unwrap();
+        let result = serde_json::to_string(&SessionEvent::ToolResult {
+            call_id: "provider-history-call".into(),
+            output: serde_json::json!({ "ok": true }),
+            is_error: false,
+        })
+        .unwrap();
+        let mut content = String::new();
+        content.push_str(&numbered_message_line(1, false));
+        content.push_str(&format!("{call}\n"));
+        content.push_str(&format!("{result}\n"));
+        for number in 4..=8 {
+            content.push_str(&numbered_message_line(number, false));
+        }
+        std::fs::write(&path, content).unwrap();
+
+        let latest = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                limit: Some(3),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let middle = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: latest.previous_cursor,
+                limit: Some(3),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(middle.messages.iter().any(|message| {
+            message.kind == "tool_result"
+                && message.call_id.as_deref() == Some("provider-history-call")
+        }));
+
+        let older = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: middle.previous_cursor,
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(older.messages.iter().any(|message| {
+            message.kind == "tool_call"
+                && message.id.as_deref() == Some(format!("{storage_id}:2").as_str())
+        }));
+        assert_eq!(
+            older.call_id_updates,
+            vec![SubagentSessionCallIdUpdate {
+                id: format!("{storage_id}:2"),
+                call_id: "provider-history-call".into(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_keeps_multiple_leading_results_across_empty_history_page() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        let storage_id = subagent_storage_id(&branch.storage_id, &run.id);
+        let call = |name: &str| {
+            serde_json::to_string(&SessionEvent::ToolCall {
+                name: name.into(),
+                input: serde_json::json!({}),
+            })
+            .unwrap()
+        };
+        let result = |call_id: &str| {
+            serde_json::to_string(&SessionEvent::ToolResult {
+                call_id: call_id.into(),
+                output: serde_json::json!({ "ok": true }),
+                is_error: false,
+            })
+            .unwrap()
+        };
+        let content = format!(
+            "{}\n{}\n{}{}{}\n{}\n{}{}",
+            call("first"),
+            call("second"),
+            numbered_message_line(3, false),
+            numbered_message_line(4, false),
+            result("provider-second"),
+            result("provider-first"),
+            numbered_message_line(7, false),
+            numbered_message_line(8, false),
+        );
+        std::fs::write(&path, content).unwrap();
+
+        let latest = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let results = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: latest.previous_cursor,
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let gap = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: results.previous_cursor,
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(gap.call_id_updates.is_empty());
+        let calls = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                before_cursor: gap.previous_cursor,
+                limit: Some(2),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            calls.call_id_updates,
+            vec![
+                SubagentSessionCallIdUpdate {
+                    id: format!("{storage_id}:2"),
+                    call_id: "provider-second".into(),
+                },
+                SubagentSessionCallIdUpdate {
+                    id: format!("{storage_id}:1"),
+                    call_id: "provider-first".into(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_empty_log_can_receive_its_first_line() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        std::fs::write(&path, []).unwrap();
+        let empty = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest::default(),
+        )
+        .await
+        .unwrap();
+        std::fs::write(&path, numbered_message_line(1, false)).unwrap();
+        let first = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: empty.next_cursor,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!first.reset);
+        assert_eq!(first.messages.len(), 1);
+        assert_eq!(first.messages[0].text.as_deref(), Some("message-1"));
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_resets_when_the_file_is_replaced_or_truncated() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                numbered_message_line(1, false),
+                numbered_message_line(2, false)
+            ),
+        )
+        .unwrap();
+        let first = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest::default(),
+        )
+        .await
+        .unwrap();
+        std::fs::write(&path, numbered_message_line(9, false)).unwrap();
+        let reset = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: first.next_cursor,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(reset.reset);
+        assert_eq!(reset.messages.len(), 1);
+        assert_eq!(reset.messages[0].text.as_deref(), Some("message-9"));
+    }
+
+    #[tokio::test]
+    async fn subagent_message_page_clamps_each_append_page_to_the_requested_limit() {
+        let (_directory, state, task, branch, run) = setup_subagent_page_fixture();
+        let path = subagent_page_path(&state, &branch, &run);
+        std::fs::write(&path, numbered_message_line(1, false)).unwrap();
+        let first = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest::default(),
+        )
+        .await
+        .unwrap();
+        let mut appended = String::new();
+        for number in 2..=10 {
+            appended.push_str(&numbered_message_line(number, false));
+        }
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(appended.as_bytes())
+            .unwrap();
+        let page = subagent_session_message_page(
+            &state,
+            &task.id,
+            &run.id,
+            SubagentSessionMessagePageRequest {
+                after_cursor: first.next_cursor,
+                limit: Some(3),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.messages.len(), 3);
+        assert_eq!(page.messages[0].text.as_deref(), Some("message-2"));
+        assert_eq!(page.messages[2].text.as_deref(), Some("message-4"));
+    }
+
     #[test]
     fn session_message_parser_exposes_image_metadata_without_base64() {
         let content = r#"{"message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"secret-base64"}}]}}"#;
@@ -20459,6 +22331,7 @@ input.on('line', (line) => {
             .sessions_dir
             .join(format!("{}.jsonl", branch.storage_id));
         std::fs::write(&session_log, "app-owned session history").unwrap();
+        let terminal_id = terminal_create(&state, &task.id, "auto").await.unwrap();
         let conn = state.db.conn().unwrap();
         conn.execute(
             "INSERT INTO notifications \
@@ -20508,6 +22381,12 @@ input.on('line', (line) => {
             .unwrap();
         assert_eq!(remaining_notifications, 0);
         assert!(!session_log.exists());
+        assert!(!state
+            .terminal_manager
+            .list()
+            .await
+            .into_iter()
+            .any(|(id, _)| id == terminal_id));
         assert_eq!(
             std::fs::read_to_string(&sentinel).unwrap(),
             "real project content"
@@ -22388,6 +24267,90 @@ input.on('line', (line) => {
             .unwrap()
             .is_none());
         assert!(!session_path.exists());
+    }
+
+    #[tokio::test]
+    async fn terminal_operations_are_isolated_by_conversation() {
+        let (_dir, state) = setup_state();
+        let workspace_path = scoped_test_workspace(&state).await;
+        let first = task_create(&state, Some(&workspace_path), "first", "first", "ask")
+            .await
+            .unwrap();
+        let second = task_create(&state, Some(&workspace_path), "second", "second", "ask")
+            .await
+            .unwrap();
+
+        let first_terminal = terminal_create(&state, &first.id, "auto").await.unwrap();
+        let second_terminal = terminal_create(&state, &second.id, "auto").await.unwrap();
+
+        let first_ids = terminal_list(&state, &first.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|terminal| terminal.id)
+            .collect::<Vec<_>>();
+        let second_ids = terminal_list(&state, &second.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|terminal| terminal.id)
+            .collect::<Vec<_>>();
+        assert_eq!(first_ids, vec![first_terminal.clone()]);
+        assert_eq!(second_ids, vec![second_terminal.clone()]);
+
+        assert!(terminal_raw_snapshot(&state, &second.id, &first_terminal)
+            .await
+            .is_err());
+        assert!(
+            terminal_send(&state, &second.id, &first_terminal, "echo crossed", true)
+                .await
+                .is_err()
+        );
+        assert!(terminal_kill(&state, &second.id, &first_terminal)
+            .await
+            .is_err());
+
+        terminal_kill(&state, &first.id, &first_terminal)
+            .await
+            .unwrap();
+        terminal_kill(&state, &second.id, &second_terminal)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn deleting_a_conversation_reclaims_only_its_terminals() {
+        let (_dir, state) = setup_state();
+        let workspace_path = scoped_test_workspace(&state).await;
+        let deleted = task_create(&state, Some(&workspace_path), "deleted", "deleted", "ask")
+            .await
+            .unwrap();
+        let retained = task_create(&state, Some(&workspace_path), "retained", "retained", "ask")
+            .await
+            .unwrap();
+        let deleted_terminal = terminal_create(&state, &deleted.id, "auto").await.unwrap();
+        let retained_terminal = terminal_create(&state, &retained.id, "auto").await.unwrap();
+
+        task_delete(&state, &deleted.id).await.unwrap();
+
+        assert!(!state
+            .terminal_manager
+            .list()
+            .await
+            .into_iter()
+            .any(|(terminal_id, _)| terminal_id == deleted_terminal));
+        assert_eq!(
+            terminal_list(&state, &retained.id)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|terminal| terminal.id)
+                .collect::<Vec<_>>(),
+            vec![retained_terminal.clone()]
+        );
+        terminal_kill(&state, &retained.id, &retained_terminal)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

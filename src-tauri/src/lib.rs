@@ -7,6 +7,7 @@
 //!
 //! [doc-08] [agent-core/12 §6] [agent-core/10]
 
+pub mod app_paths;
 pub mod codex_app_server;
 pub mod codex_mcp;
 pub mod codex_permissions;

@@ -116,39 +116,105 @@ export interface ProvidersState {
   reload: () => Promise<void>;
 }
 
+interface ProviderSnapshot {
+  choices: ProviderChoice[];
+  fallback: string;
+}
+
+let providerSnapshot: ProviderSnapshot | null = null;
+interface ProviderSnapshotRequest {
+  generation: number;
+  promise: Promise<ProviderSnapshot>;
+}
+let providerSnapshotGeneration = 0;
+let providerSnapshotRequest: ProviderSnapshotRequest | null = null;
+
+async function loadProviderSnapshot(): Promise<ProviderSnapshot> {
+  // 先等目录，否则首帧的展示名和候选模型会退化成裸 provider 名。
+  await loadCatalog();
+  const response = await settingsGet();
+  const custom = readCustom();
+  const choices = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
+    const model = config.model || "";
+    const preset = presetOf(config.provider_kind ?? name);
+    // 配置里的模型排最前，其后是预设候选，最后是用户手输过的。
+    const models = Array.from(
+      new Set([model, ...(preset?.models ?? []), ...(custom[name] ?? [])].filter(Boolean))
+    );
+    return {
+      name,
+      kind: config.provider_kind,
+      label: providerLabel(name),
+      model: model || preset?.model || name,
+      models,
+      ready: Boolean(response.provider_status?.[name]?.ready),
+      protocol: response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol,
+    };
+  });
+  return {
+    choices,
+    fallback: response.config.default_provider ?? "",
+  };
+}
+
+function requestProviderSnapshot(force = false): Promise<ProviderSnapshot> {
+  if (!force && providerSnapshot) return Promise.resolve(providerSnapshot);
+  if (providerSnapshotRequest?.generation === providerSnapshotGeneration) {
+    return providerSnapshotRequest.promise;
+  }
+  const generation = providerSnapshotGeneration;
+  const promise = loadProviderSnapshot()
+    .then((snapshot) => {
+      // A provider mutation may finish while this keychain read is in flight.
+      // That response belongs to the old generation and must never replace the new snapshot.
+      if (generation === providerSnapshotGeneration) providerSnapshot = snapshot;
+      return snapshot;
+    })
+    .finally(() => {
+      if (providerSnapshotRequest?.promise === promise) providerSnapshotRequest = null;
+    });
+  providerSnapshotRequest = { generation, promise };
+  return promise;
+}
+
+/** Begin one settings generation before notifying every mounted hook consumer. */
+function invalidateProviderSnapshot(): void {
+  providerSnapshotGeneration += 1;
+  providerSnapshot = null;
+  providerSnapshotRequest = null;
+}
+
+// Provider IPC wrappers live in `ipc.ts`, so importing this module there would create a cycle.
+// A single application-level listener advances the generation before component listeners reload.
+if (typeof window !== "undefined") {
+  window.addEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, invalidateProviderSnapshot);
+}
+
 /** 读取 provider 列表；`deps` 变化时重新拉取。 */
 export function useProviders(deps: unknown[] = []): ProvidersState {
-  const [choices, setChoices] = useState<ProviderChoice[]>([]);
-  const [fallback, setFallback] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [choices, setChoices] = useState<ProviderChoice[]>(() => providerSnapshot?.choices ?? []);
+  const [fallback, setFallback] = useState(() => providerSnapshot?.fallback ?? "");
+  const [loading, setLoading] = useState(() => providerSnapshot == null);
   const [error, setError] = useState<string | null>(null);
 
-  const reload = useCallback(async () => {
+  const load = useCallback(async (force: boolean) => {
+    // taskId 等依赖变化时会重新进入 effect，但全局快照仍然有效。缓存命中不切换
+    // loading，避免会话切换时模型胶囊短暂闪成“读取中”。
+    const cached = !force ? providerSnapshot : null;
+    if (cached) {
+      setChoices(cached.choices);
+      setFallback(cached.fallback);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    const generation = providerSnapshotGeneration;
     try {
-      // 先等目录，否则首帧的展示名和候选模型会退化成裸 provider 名
-      await loadCatalog();
-      const response = await settingsGet();
-      const custom = readCustom();
-      const next = Object.entries(response.config.providers ?? {}).map(([name, config]) => {
-        const model = config.model || "";
-        const preset = presetOf(config.provider_kind ?? name);
-        // 配置里的模型排最前，其后是预设候选，最后是用户手输过的
-        const models = Array.from(
-          new Set([model, ...(preset?.models ?? []), ...(custom[name] ?? [])].filter(Boolean))
-        );
-        return {
-          name,
-          kind: config.provider_kind,
-          label: providerLabel(name),
-          model: model || preset?.model || name,
-          models,
-          ready: Boolean(response.provider_status?.[name]?.ready),
-          protocol: response.provider_status?.[name]?.effective_protocol ?? config.protocol ?? preset?.protocol,
-        };
-      });
-      setChoices(next);
-      setFallback(response.config.default_provider ?? "");
+      const snapshot = await requestProviderSnapshot(force);
+      if (generation !== providerSnapshotGeneration) return;
+      setChoices(snapshot.choices);
+      setFallback(snapshot.fallback);
       setError(null);
     } catch (cause) {
       setError(`读取模型服务失败：${errText(cause)}`);
@@ -157,9 +223,31 @@ export function useProviders(deps: unknown[] = []): ProvidersState {
     }
   }, []);
 
+  const reload = useCallback(async () => {
+    setLoading(true);
+    const generation = providerSnapshotGeneration;
+    try {
+      const snapshot = await requestProviderSnapshot(true);
+      if (generation !== providerSnapshotGeneration) return;
+      setChoices(snapshot.choices);
+      setFallback(snapshot.fallback);
+      setError(null);
+    } catch (cause) {
+      setError(`读取模型服务失败：${errText(cause)}`);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const invalidateAndReload = useCallback(async () => {
+    invalidateProviderSnapshot();
+    await reload();
+  }, [reload]);
+
   useEffect(() => {
-    void reload();
-    // deps 由调用方给出（如 taskId / providerName），用于触发重新拉取
+    // 会话切换只需要复用同一份全局 Provider 快照；显式 reload 和设置变更事件
+    // 才触发 OS 凭据状态重查。deps 仍用于让调用方在首个空快照时重试。
+    void load(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps);
 
@@ -169,7 +257,7 @@ export function useProviders(deps: unknown[] = []): ProvidersState {
     return () => window.removeEventListener(RUNTIME_SETTINGS_CHANGED_EVENT, refresh);
   }, [reload]);
 
-  return { choices, fallback, loading, error, reload };
+  return { choices, fallback, loading, error, reload: invalidateAndReload };
 }
 
 /** 会话当前生效的服务与模型（会话绑定优先，否则回退全局默认）。 */

@@ -18,9 +18,9 @@ use r_code_core::plan::{
 };
 use r_code_host::commands::{
     ChangeDiff, CodexCliPreferences, CommandState, NotificationPage, ProjectActivityPage,
-    RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage, TaskDetail,
-    TaskDetailBatch, TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard,
-    WorkspaceForgetResult,
+    RecoveryCleanupResult, RecoveryPageData, SearchMatch, SessionMessage,
+    SubagentSessionMessagePage, SubagentSessionMessagePageRequest, TaskDetail, TaskDetailBatch,
+    TerminalInfo, TerminalRawBatch, TerminalRawSnapshot, WorkspaceDashboard, WorkspaceForgetResult,
 };
 use r_code_host::log_buffer::LogEntry;
 use r_code_host::replay::ReplayEntry;
@@ -903,92 +903,103 @@ pub async fn cmd_global_search(
 #[tauri::command]
 pub async fn cmd_terminal_list(
     state: State<'_, CommandState>,
+    task_id: String,
 ) -> Result<Vec<TerminalInfo>, String> {
-    r_code_host::commands::terminal_list(&state).await
+    r_code_host::commands::terminal_list(&state, &task_id).await
 }
 
 /// 创建终端。返回终端 ID。
 #[tauri::command]
 pub async fn cmd_terminal_create(
     state: State<'_, CommandState>,
+    task_id: String,
     shell: String,
-    workspace_path: String,
 ) -> Result<String, String> {
-    r_code_host::commands::terminal_create(&state, &shell, &workspace_path).await
+    r_code_host::commands::terminal_create(&state, &task_id, &shell).await
 }
 
 /// 使用已探测到的真实 CLI 路径创建交互式 Codex 终端。
 #[tauri::command]
 pub async fn cmd_terminal_create_codex(
     state: State<'_, CommandState>,
-    workspace_path: String,
+    task_id: String,
 ) -> Result<String, String> {
-    r_code_host::commands::terminal_create_codex(&state, &workspace_path).await
+    r_code_host::commands::terminal_create_codex(&state, &task_id).await
 }
 
 /// 发送文本到终端。
 #[tauri::command]
 pub async fn cmd_terminal_send(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
     text: String,
     press_enter: bool,
 ) -> Result<(), String> {
-    r_code_host::commands::terminal_send(&state, &id, &text, press_enter).await
+    r_code_host::commands::terminal_send(&state, &task_id, &id, &text, press_enter).await
 }
 
 /// 读取终端输出。
 #[tauri::command]
 pub async fn cmd_terminal_read(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
 ) -> Result<String, String> {
-    r_code_host::commands::terminal_read(&state, &id).await
+    r_code_host::commands::terminal_read(&state, &task_id, &id).await
 }
 
 /// 读取终端完整保留输出。
 #[tauri::command]
 pub async fn cmd_terminal_snapshot(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
 ) -> Result<String, String> {
-    r_code_host::commands::terminal_snapshot(&state, &id).await
+    r_code_host::commands::terminal_snapshot(&state, &task_id, &id).await
 }
 
 /// 读取终端原始快照，仅交由桌面终端模拟器渲染。
 #[tauri::command]
 pub async fn cmd_terminal_raw_snapshot(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
 ) -> Result<TerminalRawSnapshot, String> {
-    r_code_host::commands::terminal_raw_snapshot(&state, &id).await
+    r_code_host::commands::terminal_raw_snapshot(&state, &task_id, &id).await
 }
 
 /// 读取自指定游标以来的原始终端输出。
 #[tauri::command]
 pub async fn cmd_terminal_raw_since(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
     cursor: u64,
 ) -> Result<TerminalRawBatch, String> {
-    r_code_host::commands::terminal_raw_since(&state, &id, cursor).await
+    r_code_host::commands::terminal_raw_since(&state, &task_id, &id, cursor).await
 }
 
 /// 终止终端。
 #[tauri::command]
-pub async fn cmd_terminal_kill(state: State<'_, CommandState>, id: String) -> Result<(), String> {
-    r_code_host::commands::terminal_kill(&state, &id).await
+pub async fn cmd_terminal_kill(
+    state: State<'_, CommandState>,
+    task_id: String,
+    id: String,
+) -> Result<(), String> {
+    r_code_host::commands::terminal_kill(&state, &task_id, &id).await
 }
 
 /// 调整终端 PTY 大小。
 #[tauri::command]
 pub async fn cmd_terminal_resize(
     state: State<'_, CommandState>,
+    task_id: String,
     id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    r_code_host::commands::terminal_resize(&state, &id, cols, rows).await
+    r_code_host::commands::terminal_resize(&state, &task_id, &id, cols, rows).await
 }
 
 /// 获取恢复页面数据。 [doc-18 M10]
@@ -1087,6 +1098,18 @@ pub async fn cmd_subagent_session_messages(
     subagent_id: String,
 ) -> Result<Vec<SessionMessage>, String> {
     r_code_host::commands::subagent_session_messages(&state, &task_id, &subagent_id).await
+}
+
+/// 增量读取子代理独立会话日志；支持最新窗口、追加轮询和向前加载历史。
+#[tauri::command]
+pub async fn cmd_subagent_session_message_page(
+    state: State<'_, CommandState>,
+    task_id: String,
+    subagent_id: String,
+    request: SubagentSessionMessagePageRequest,
+) -> Result<SubagentSessionMessagePage, String> {
+    r_code_host::commands::subagent_session_message_page(&state, &task_id, &subagent_id, request)
+        .await
 }
 
 /// 检查旧版项目记忆文件是否存在以及是否被 Git 跟踪。

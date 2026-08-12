@@ -1189,11 +1189,7 @@ impl PlanStore {
     ) -> Result<PlanItemUpdateOutcome, ProductError> {
         validate_identifier(run_id, "Plan Agent run id")?;
         validate_identifier(tool_call_id, "Plan tool call id")?;
-        self.update_plan_item_inner(
-            task_id,
-            input,
-            Some((run_id, tool_call_id, request_json)),
-        )
+        self.update_plan_item_inner(task_id, input, Some((run_id, tool_call_id, request_json)))
     }
 
     fn update_plan_item_inner(

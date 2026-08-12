@@ -35,6 +35,7 @@ jobs:
     outputs:
       windows_signed: ${{ steps.release-mode.outputs.windows_signed }}
       apple_signed: ${{ steps.release-mode.outputs.apple_signed }}
+      prerelease: ${{ steps.release-type.outputs.prerelease }}
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
@@ -62,6 +63,22 @@ jobs:
 
       - name: Verify tag, versions and changelog
         run: node scripts/release.mjs check "$RELEASE_TAG"
+
+      - name: Detect pre-release marker
+        id: release-type
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          version="${version%%-unsigned.*}"
+          if [[ "$RELEASE_TAG" == *-unsigned.* ]] || node --input-type=module -e '
+            import fs from "node:fs";
+            import { isPreReleaseVersion } from "./scripts/release.mjs";
+            process.exit(isPreReleaseVersion(fs.readFileSync("CHANGELOG.md", "utf8"), process.argv[1]) ? 0 : 1);
+          ' "$version"; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Verify immutable tag provenance and CI quality gate
         shell: bash
@@ -375,7 +392,7 @@ jobs:
           # All matrix jobs upload into one draft. The finalize job publishes only
           # after every platform has succeeded, so a partial release is never latest.
           releaseDraft: true
-          prerelease: false
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           # Each matrix job uploads only its updater payload and signature. The single finalize
           # job builds latest.json after all platforms finish, avoiding concurrent read/overwrite.
           uploadUpdaterJson: false
@@ -403,7 +420,7 @@ jobs:
           releaseName: ${{ contains(env.RELEASE_TAG, '-unsigned.') && format('R-Code {0} (unsigned prerelease)', env.RELEASE_TAG) || format('R-Code {0}', env.RELEASE_TAG) }}
           generateReleaseNotes: true
           releaseDraft: true
-          prerelease: ${{ contains(env.RELEASE_TAG, '-unsigned.') }}
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           uploadUpdaterJson: false
           uploadUpdaterSignatures: true
           uploadWorkflowArtifacts: ${{ matrix.upload_workflow_artifacts }}
@@ -503,6 +520,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
       WINDOWS_SIGNED: ${{ needs.validate.outputs.windows_signed }}
       APPLE_SIGNED: ${{ needs.validate.outputs.apple_signed }}
     steps:
@@ -620,6 +638,36 @@ jobs:
               --draft=false \
               --prerelease \
               --title "R-Code $RELEASE_TAG (unsigned prerelease)" \
+              --notes-file "$notes_file" \
+              --verify-tag
+          elif [[ "$PRERELEASE" == "true" ]]; then
+            notes_file="$RUNNER_TEMP/release-manifest/prerelease-notes.md"
+            existing_body="$(gh release view "$RELEASE_TAG" --json body --jq .body)"
+            {
+              printf '%s\n' '> [!IMPORTANT]'
+              printf '%s\n' '> **这是 1.0 正式上线前的预上线版本。** 请先备份应用数据，并重点验证升级迁移、长会话、子代理与终端隔离。'
+              printf '%s\n' '> 此版本不会标记为 Latest，也不会进入稳定版自动更新通道。'
+              if [[ "$WINDOWS_SIGNED" != "true" || "$APPLE_SIGNED" != "true" ]]; then
+                if [[ "$WINDOWS_SIGNED" != "true" && "$APPLE_SIGNED" != "true" ]]; then
+                  platform_list="Windows、macOS"
+                elif [[ "$WINDOWS_SIGNED" != "true" ]]; then
+                  platform_list="Windows"
+                else
+                  platform_list="macOS"
+                fi
+                printf '%s\n' '<!-- RCODE_UNSIGNED_STABLE_WARNING -->'
+                printf '%s\n' '> [!WARNING]'
+                printf '%s\n' "> **此预上线版本包含未完成平台代码签名的安装包：$platform_list。** Windows 可能显示 SmartScreen 警告，macOS 可能触发 Gatekeeper。"
+              fi
+              if [[ -n "$changelog_section" ]]; then
+                printf '\n%s\n' "$changelog_section"
+              fi
+              printf '\n%s\n' "$existing_body"
+            } > "$notes_file"
+            gh release edit "$RELEASE_TAG" \
+              --draft=false \
+              --prerelease \
+              --title "R-Code $RELEASE_TAG (pre-release)" \
               --notes-file "$notes_file" \
               --verify-tag
           else

@@ -215,8 +215,8 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .sidebar-task-row:focus-within .sidebar-task time,
 .sidebar-task-row.active .sidebar-task time { opacity: 0; }
 .task-state-dot { display: inline-block; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
-.task-state-dot.running, .task-state-dot.attention { background: var(--success); }
-.task-state-dot.review, .task-state-dot.done { background: var(--warning); }
+.task-state-dot.running, .task-state-dot.attention, .task-state-dot.review { background: var(--warning); }
+.task-state-dot.done { background: var(--success); }
 .task-state-dot.stopped { background: var(--danger); }
 .task-state-dot.done { opacity: .82; }
 .sidebar-more-tasks { padding: 5px 8px 5px 16px; color: var(--fg-faint); font-size: 11px; text-align: left; }
@@ -352,8 +352,8 @@ button, input, textarea, select { font-family: var(--font-ui); }
 .conversation-row:hover { background: var(--bg-hover); }
 .conversation-status { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--bg-chip); }
 .conversation-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-faint); }
-.conversation-status.running i, .conversation-status.done i { background: var(--success); }
-.conversation-status.attention i, .conversation-status.review i { background: var(--warning); }
+.conversation-status.running i, .conversation-status.attention i, .conversation-status.review i { background: var(--warning); }
+.conversation-status.done i { background: var(--success); }
 .conversation-status.stopped i { background: var(--danger); }
 .conversation-main { display: grid; min-width: 0; gap: 4px; padding: 8px 4px; color: var(--fg); text-align: left; }
 .conversation-main strong, .conversation-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -76,7 +76,21 @@ impl SecretStore {
 
     /// 将 `value` 以 `key` 存入 OS keychain。
     pub fn store(&self, key: &str, value: &str) -> Result<(), ProductError> {
-        Self::store_entry(&self.entry(key)?, value)
+        Self::store_entry(&self.entry(key)?, value)?;
+
+        // 必须用全新的 Entry 回读。keyring 在未启用平台原生后端时会回落到
+        // entry-scoped mock：set_password 返回成功，但下一次业务调用创建新 Entry 后
+        // 立即得到 NoEntry。保存阶段 fail closed，确保设置页不会虚报成功，也确保
+        // 旧明文迁移不会在凭据实际不可读时清空 TOML。
+        match Self::get_entry(&self.entry(key)?)? {
+            Some(stored) if stored == value => Ok(()),
+            Some(_) => Err(ProductError::SecretError(
+                "keychain verification failed: stored credential does not match".to_string(),
+            )),
+            None => Err(ProductError::SecretError(
+                "keychain verification failed: stored credential is not readable".to_string(),
+            )),
+        }
     }
 
     /// 从 OS keychain 读取 `key`。
@@ -357,5 +371,26 @@ mod tests {
 
         // 删除不存在的 key 应返回 Ok(()) 而非错误（幂等删除）。
         SecretStore::delete_entry(&entry).expect("delete of missing key should be Ok");
+    }
+
+    /// macOS CI 必须覆盖真实 Keychain 的跨 Entry 往返；普通单元测试使用的
+    /// entry-scoped mock 无法证明应用下一次调用或重启后仍能读取凭据。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn secret_store_round_trip_across_entries_on_macos() {
+        let nonce = uuid::Uuid::new_v4();
+        let service = format!("r-code-keychain-test-{nonce}");
+        let key = "round-trip";
+        let value = format!("temporary-test-secret-{nonce}");
+
+        let store_result = SecretStore::new(&service).store(key, &value);
+        let read_result = SecretStore::new(&service).get(key);
+        let delete_result = SecretStore::new(&service).delete(key);
+
+        store_result.expect("macOS Keychain should persist across Entry instances");
+        let stored = read_result.expect("macOS Keychain read should succeed");
+        assert_eq!(stored.as_deref(), Some(value.as_str()));
+        delete_result.expect("temporary macOS Keychain credential should be removed");
+        assert_eq!(SecretStore::new(&service).get(key).unwrap(), None);
     }
 }

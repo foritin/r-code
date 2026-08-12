@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 
-import { parseReleaseTag } from "./release.mjs";
+import { isPreReleaseVersion, parseReleaseTag } from "./release.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASE_RELEASE_SECRETS = ["PAT_TOKEN", "TAURI_SIGNING_PRIVATE_KEY"];
@@ -25,6 +25,7 @@ const APPLE_SIGNING_SECRETS = [
   "APPLE_TEAM_ID",
 ];
 const UNSIGNED_STABLE_WARNING_MARKER = "RCODE_UNSIGNED_STABLE_WARNING";
+const CHANGELOG_PATH = join(ROOT, "CHANGELOG.md");
 
 class ReleaseError extends Error {}
 
@@ -42,8 +43,9 @@ Options:
 Prepare a new base version before publishing:
   node scripts/release.mjs prepare X.Y.Z
 
-Stable tags become Latest. Missing Windows/macOS certificate groups fall back per platform
-with a public warning; PAT_TOKEN and TAURI_SIGNING_PRIVATE_KEY remain required.`);
+Stable tags become Latest unless their dated CHANGELOG section contains the pre-release
+marker. Missing Windows/macOS certificate groups fall back per platform with a public
+warning; PAT_TOKEN and TAURI_SIGNING_PRIVATE_KEY remain required.`);
 }
 
 function parseArguments(argv) {
@@ -170,12 +172,12 @@ function requiredReleaseAssets(version) {
   ];
 }
 
-function validateReleaseRecord(record, tag, tagInfo, signingPlan = null) {
+function validateReleaseRecord(record, tag, tagInfo, signingPlan = null, preRelease = tagInfo.unsignedPrerelease) {
   const problems = [];
   if (record.tagName !== tag) problems.push(`release tag is ${record.tagName ?? "<missing>"}`);
   if (record.isDraft) problems.push("release is still a draft");
-  if (Boolean(record.isPrerelease) !== tagInfo.unsignedPrerelease) {
-    problems.push(tagInfo.unsignedPrerelease ? "release is not marked as a prerelease" : "stable release is marked as a prerelease");
+  if (Boolean(record.isPrerelease) !== preRelease) {
+    problems.push(preRelease ? "release is not marked as a prerelease" : "stable release is marked as a prerelease");
   }
   if (
     !tagInfo.unsignedPrerelease
@@ -599,9 +601,9 @@ async function waitForReleaseRecord(gh, repository, tag) {
   throw new ReleaseError(`Release workflow succeeded, but GitHub Release ${tag} is unavailable`);
 }
 
-function verifyPublishedRelease(gh, repository, tag, tagInfo, record, signingPlan) {
-  const problems = validateReleaseRecord(record, tag, tagInfo, signingPlan);
-  if (!tagInfo.unsignedPrerelease) {
+function verifyPublishedRelease(gh, repository, tag, tagInfo, record, signingPlan, preRelease) {
+  const problems = validateReleaseRecord(record, tag, tagInfo, signingPlan, preRelease);
+  if (!preRelease) {
     const latest = parseJson(
       github(gh, ["release", "view", "--repo", repository, "--json", "tagName"]).stdout,
       "latest release",
@@ -631,7 +633,7 @@ function verifyPublishedRelease(gh, repository, tag, tagInfo, record, signingPla
   }
 }
 
-async function confirmPublish(tag, tagInfo, signingPlan, assumeYes) {
+async function confirmPublish(tag, tagInfo, signingPlan, preRelease, assumeYes) {
   if (assumeYes) return;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throw new ReleaseError("interactive confirmation is unavailable; pass --yes only after reviewing the preflight output");
@@ -640,6 +642,8 @@ async function confirmPublish(tag, tagInfo, signingPlan, assumeYes) {
   const unsignedPlatforms = unsignedPlatformNames(signingPlan);
   const kind = tagInfo.unsignedPrerelease
     ? "unsigned prerelease"
+    : preRelease
+      ? "pre-release"
     : unsignedPlatforms.length > 0
       ? `stable release with unsigned ${unsignedPlatforms.join(" and ")} artifacts`
       : "fully signed stable release";
@@ -673,6 +677,8 @@ function requireNewTag(tag) {
 
 async function publish(options) {
   const tagInfo = parseReleaseTag(options.tag);
+  const preRelease = tagInfo.unsignedPrerelease
+    || isPreReleaseVersion(readFileSync(CHANGELOG_PATH, "utf8"), tagInfo.version);
   requireCleanMain();
 
   const gh = resolveGitHubCli();
@@ -720,6 +726,8 @@ async function publish(options) {
   const unsignedPlatforms = unsignedPlatformNames(signingPlan);
   const releaseKind = tagInfo.unsignedPrerelease
     ? "unsigned prerelease (not Latest; platform signing disabled)"
+    : preRelease
+      ? `${unsignedPlatforms.length > 0 ? `pre-release with unsigned ${unsignedPlatforms.join(" and ")} artifacts` : "fully signed pre-release"} (not Latest)`
     : unsignedPlatforms.length > 0
       ? `stable release with unsigned ${unsignedPlatforms.join(" and ")} artifacts (becomes Latest with a public warning)`
       : "fully signed stable release (becomes Latest after all platforms pass)";
@@ -729,9 +737,11 @@ async function publish(options) {
     return;
   }
 
-  await confirmPublish(options.tag, tagInfo, signingPlan, options.yes);
+  await confirmPublish(options.tag, tagInfo, signingPlan, preRelease, options.yes);
   const message = tagInfo.unsignedPrerelease
     ? `R-Code ${options.tag} unsigned prerelease`
+    : preRelease
+      ? `R-Code ${options.tag} pre-release`
     : `R-Code ${options.tag}`;
   git(["tag", "-a", options.tag, "-m", message]);
   git(["push", "origin", `refs/tags/${options.tag}`], { stdio: "inherit" });
@@ -746,7 +756,7 @@ async function publish(options) {
 
   github(gh, ["run", "watch", String(releaseRun.databaseId), "--repo", repository, "--exit-status"], { stdio: "inherit" });
   const record = await waitForReleaseRecord(gh, repository, options.tag);
-  verifyPublishedRelease(gh, repository, options.tag, tagInfo, record, signingPlan);
+  verifyPublishedRelease(gh, repository, options.tag, tagInfo, record, signingPlan, preRelease);
   console.log(`publish-release: published and verified ${record.url}`);
 }
 

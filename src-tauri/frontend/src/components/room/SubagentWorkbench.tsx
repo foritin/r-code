@@ -1,14 +1,20 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { subagentSessionMessages } from "../../lib/ipc";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { subagentSessionMessagePage } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { useSharedNow } from "../../lib/shared-clock";
-import type { AgentRun, SessionMessage, SubagentAccessMode } from "../../lib/types";
+import type {
+  AgentRun,
+  SessionMessage,
+  SubagentAccessMode,
+  SubagentSessionCallIdUpdate,
+} from "../../lib/types";
 import {
   IconActivity,
   IconCheck,
   IconChevronDown,
   IconClose,
   IconFile,
+  IconHistory,
   IconMaximize,
   IconMinimize,
   IconPlus,
@@ -173,7 +179,7 @@ export function SubagentWorkbench({
         focused={focused}
       />
       {selected
-        ? <SubagentInspector taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
+        ? <SubagentInspector key={`${taskId}:${selected.id}`} taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
         : (
           <SubagentList
             children={subagents}
@@ -496,49 +502,153 @@ function SubagentInspector({
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(true);
   const [stopping, setStopping] = useState(false);
+  const [hasMoreBefore, setHasMoreBefore] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const sessionGenerationRef = useRef(0);
-  const requestSequenceRef = useRef(0);
+  const nextCursorRef = useRef<string | null>(null);
+  const previousCursorRef = useRef<string | null>(null);
+  const requestTailRef = useRef<Promise<void>>(Promise.resolve());
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const active = isActive(child.status);
-  const now = useSharedNow(active ? 1000 : null);
+
+  const enqueuePageRequest = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
+    const result = requestTailRef.current.then(operation, operation);
+    requestTailRef.current = result.then(() => undefined, () => undefined);
+    return result;
+  }, []);
 
   const load = useCallback(async () => {
     const generation = sessionGenerationRef.current;
-    const requestSequence = ++requestSequenceRef.current;
     try {
-      const items = await subagentSessionMessages(taskId, child.id);
-      if (
-        generation === sessionGenerationRef.current
-        && requestSequence === requestSequenceRef.current
-      ) {
-        setMessages(items);
+      await enqueuePageRequest(async () => {
+        if (generation !== sessionGenerationRef.current) return;
+        const afterCursor = nextCursorRef.current;
+        const page = await subagentSessionMessagePage(
+          taskId,
+          child.id,
+          afterCursor ? { after_cursor: afterCursor, limit: 80 } : { limit: 80 },
+        );
+        if (generation !== sessionGenerationRef.current) return;
+
+        const initial = afterCursor == null;
+        if (page.reset || initial) {
+          setMessages((current) => mergeSessionMessagePage(
+            current,
+            page.messages,
+            "replace",
+            page.call_id_updates,
+          ));
+          previousCursorRef.current = page.previous_cursor ?? null;
+          setHasMoreBefore(page.has_more_before);
+        } else {
+          if (!page.unchanged || page.call_id_updates.length > 0 || page.messages.length > 0) {
+            setMessages((current) => mergeSessionMessagePage(
+              current,
+              page.messages,
+              "append",
+              page.call_id_updates,
+            ));
+          }
+          // An append cursor can retain a wider loaded history window than the original page.
+          // Refresh the historical cursor too, otherwise “load earlier” would keep requesting the
+          // same boundary after new records arrive.
+          if (page.previous_cursor !== undefined) {
+            previousCursorRef.current = page.previous_cursor;
+            setHasMoreBefore(page.has_more_before);
+          }
+        }
+        nextCursorRef.current = page.next_cursor ?? (page.reset ? null : afterCursor);
         setError(null);
         setLoading(false);
-      }
+      });
     } catch (cause) {
-      if (
-        generation === sessionGenerationRef.current
-        && requestSequence === requestSequenceRef.current
-      ) {
+      if (generation === sessionGenerationRef.current) {
         setError(String(cause));
         setLoading(false);
       }
     }
-  }, [child.id, taskId]);
+  }, [child.id, enqueuePageRequest, taskId]);
+
+  const loadEarlier = useCallback(async () => {
+    const generation = sessionGenerationRef.current;
+    const beforeCursor = previousCursorRef.current;
+    if (!beforeCursor || loadingEarlier) return;
+    setLoadingEarlier(true);
+    setError(null);
+    try {
+      await enqueuePageRequest(async () => {
+        if (generation !== sessionGenerationRef.current) return;
+        const page = await subagentSessionMessagePage(taskId, child.id, {
+          before_cursor: beforeCursor,
+          limit: 80,
+        });
+        if (generation !== sessionGenerationRef.current) return;
+
+        if (page.reset) {
+          prependAnchorRef.current = null;
+          setMessages((current) => mergeSessionMessagePage(
+            current,
+            page.messages,
+            "replace",
+            page.call_id_updates,
+          ));
+          nextCursorRef.current = page.next_cursor ?? null;
+        } else if (!page.unchanged || page.call_id_updates.length > 0 || page.messages.length > 0) {
+          const element = scrollRef.current;
+          prependAnchorRef.current = element
+            ? { height: element.scrollHeight, top: element.scrollTop }
+            : null;
+          setMessages((current) => mergeSessionMessagePage(
+            current,
+            page.messages,
+            "prepend",
+            page.call_id_updates,
+          ));
+        }
+        previousCursorRef.current = page.previous_cursor ?? null;
+        setHasMoreBefore(page.has_more_before);
+        setError(null);
+      });
+    } catch (cause) {
+      if (generation === sessionGenerationRef.current) setError(String(cause));
+    } finally {
+      if (generation === sessionGenerationRef.current) setLoadingEarlier(false);
+    }
+  }, [child.id, enqueuePageRequest, loadingEarlier, taskId]);
 
   useEffect(() => {
     sessionGenerationRef.current += 1;
+    requestTailRef.current = Promise.resolve();
+    nextCursorRef.current = null;
+    previousCursorRef.current = null;
+    prependAnchorRef.current = null;
     setMessages([]);
     setLoading(true);
+    setLoadingEarlier(false);
+    setHasMoreBefore(false);
     setError(null);
     setExpanded(true);
     return () => {
       sessionGenerationRef.current += 1;
     };
-  }, [load]);
+  }, [child.id, taskId]);
+
+  useLayoutEffect(() => {
+    const anchor = prependAnchorRef.current;
+    const element = scrollRef.current;
+    if (!anchor || !element) return;
+    // Assign an absolute target. This is correct whether Chromium's native scroll anchoring has
+    // already fired or not, and keeps the first visible record stationary while history prepends.
+    element.scrollTop = anchor.top + (element.scrollHeight - anchor.height);
+    prependAnchorRef.current = null;
+  }, [messages]);
 
   usePoll(load, 1600, active, "子代理会话");
 
   useEffect(() => {
+    // usePoll performs the initial active read. A completed run is read once here, and the active →
+    // terminal transition gets one final incremental read so the durable tail cannot be missed.
     if (!active) void load();
   }, [active, load]);
 
@@ -586,7 +696,7 @@ function SubagentInspector({
   };
 
   return (
-    <div className="subagent-detail-body">
+    <div className="subagent-detail-body" ref={scrollRef}>
       <article className="subagent-session">
         <button
           type="button"
@@ -595,7 +705,11 @@ function SubagentInspector({
           aria-controls={`subagent-session-${child.id}`}
           onClick={() => setExpanded((value) => !value)}
         >
-          <span>已处理 {elapsedCompact(child.startedAt, child.endedAt ?? now)}</span>
+          <SubagentElapsedTime
+            active={active}
+            endedAt={child.endedAt}
+            startedAt={child.startedAt}
+          />
           <span className={`subagent-session-permission mode-${permissionMode}`}>{permissionModeLabel(permissionMode)}</span>
           <IconChevronDown width={13} height={13} />
         </button>
@@ -608,6 +722,17 @@ function SubagentInspector({
               {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
             </div>
             {error && <div className="subagent-session-error">读取子智能体记录失败：{error}</div>}
+            {hasMoreBefore && (
+              <button
+                type="button"
+                className="subagent-load-earlier"
+                disabled={loadingEarlier}
+                onClick={() => void loadEarlier()}
+              >
+                <IconHistory width={13} height={13} aria-hidden="true" />
+                {loadingEarlier ? "正在加载…" : "加载更早记录"}
+              </button>
+            )}
             {runtimeEntries.length > 0 && <SubagentRuntimeLog entries={runtimeEntries} />}
             {loading && transcriptEntries.length === 0 ? (
               <p className="subagent-session-placeholder">正在读取子智能体记录…</p>
@@ -618,33 +743,14 @@ function SubagentInspector({
                   : "运行已经结束，没有保存可见回复。"}
               </p>
             ) : (
-              <div className="subagent-transcript" aria-label="子智能体公开输出">
-                {transcriptBlocks.map((entry) => entry.kind === "tool_group" ? (
-                  <SubagentToolGroup entry={entry} key={entry.id} />
-                ) : entry.kind === "tool" ? (
-                  <SubagentToolEvent entry={entry} key={entry.id} />
-                ) : entry.kind === "reasoning" ? (
-                  <SubagentReasoningEvent
-                    entry={entry}
-                    key={entry.id}
-                    taskId={taskId}
-                    workspacePath={workspacePath}
-                  />
-                ) : (
-                  <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
-                    <div className="subagent-transcript-speaker">
-                      <SubagentAvatar
-                        index={index}
-                        identity={child.id}
-                        runtimeKind={child.runtimeKind}
-                        size="xs"
-                      />
-                      <span>{runtimeName(child.runtimeKind)} 子智能体</span>
-                    </div>
-                    <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
-                  </article>
-                ))}
-              </div>
+              <SubagentTranscript
+                blocks={transcriptBlocks}
+                childId={child.id}
+                index={index}
+                runtimeKind={child.runtimeKind}
+                taskId={taskId}
+                workspacePath={workspacePath}
+              />
             )}
             <div className={`subagent-session-state status-${child.status}${failedToolCount > 0 ? " has-tool-failures" : ""}`} role="status" aria-live="polite">
               <SubagentStateMark status={child.status} />
@@ -661,6 +767,65 @@ function SubagentInspector({
     </div>
   );
 }
+
+const SubagentElapsedTime = memo(function SubagentElapsedTime({
+  active,
+  endedAt,
+  startedAt,
+}: {
+  active: boolean;
+  endedAt: number | null;
+  startedAt: number;
+}) {
+  const now = useSharedNow(active ? 1000 : null);
+  return <span>已处理 {elapsedCompact(startedAt, endedAt ?? now)}</span>;
+});
+
+const SubagentTranscript = memo(function SubagentTranscript({
+  blocks,
+  childId,
+  index,
+  runtimeKind,
+  taskId,
+  workspacePath,
+}: {
+  blocks: readonly TranscriptBlock[];
+  childId: string;
+  index: number;
+  runtimeKind: AgentRun["runtime_kind"];
+  taskId: string;
+  workspacePath: string | null;
+}) {
+  return (
+    <div className={`subagent-transcript${blocks.length >= 24 ? " is-long" : ""}`} aria-label="子智能体公开输出">
+      {blocks.map((entry) => entry.kind === "tool_group" ? (
+        <SubagentToolGroup entry={entry} key={entry.id} />
+      ) : entry.kind === "tool" ? (
+        <SubagentToolEvent entry={entry} key={entry.id} />
+      ) : entry.kind === "reasoning" ? (
+        <SubagentReasoningEvent
+          entry={entry}
+          key={entry.id}
+          taskId={taskId}
+          workspacePath={workspacePath}
+        />
+      ) : (
+        <article className={`subagent-transcript-message${entry.tone === "danger" ? " is-error" : ""}`} key={entry.id}>
+          <div className="subagent-transcript-speaker">
+            <SubagentAvatar
+              index={index}
+              identity={childId}
+              runtimeKind={runtimeKind}
+              size="xs"
+            />
+            <span>{runtimeName(runtimeKind)} 子智能体</span>
+          </div>
+          <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
+        </article>
+      ))}
+    </div>
+  );
+});
 
 function SubagentRuntimeLog({ entries }: { entries: readonly SessionStatusEntry[] }) {
   const latest = entries[entries.length - 1];
@@ -694,20 +859,38 @@ function SubagentReasoningEvent({
   taskId: string;
   workspacePath: string | null;
 }) {
-  const preview = entry.text.replace(/\s+/g, " ").trim();
+  const [open, setOpen] = useState(false);
+  const preview = reasoningPreview(entry.text);
   return (
-    <details className="subagent-reasoning-event">
+    <details
+      className="subagent-reasoning-event"
+      open={open}
+      onToggle={(event) => {
+        const nextOpen = event.currentTarget.open;
+        if (nextOpen !== open) setOpen(nextOpen);
+      }}
+    >
       <summary>
         <span className="subagent-runtime-log-icon"><IconActivity width={13} height={13} /></span>
         <span>模型思考</span>
         <small title={preview}>{preview}</small>
         <IconChevronDown width={13} height={13} />
       </summary>
-      <div className="subagent-reasoning-detail">
-        <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
-      </div>
+      {open && (
+        <div className="subagent-reasoning-detail">
+          <Markdown text={entry.text} taskId={taskId} workspacePath={workspacePath} />
+        </div>
+      )}
     </details>
   );
+}
+
+function reasoningPreview(value: string, sourceLimit = 320): string {
+  // A summary is only a navigation hint. Bound the source before normalizing whitespace so a
+  // collapsed multi-megabyte reasoning record does not get scanned and copied on every render.
+  const source = value.slice(0, sourceLimit);
+  const preview = source.replace(/\s+/g, " ").trim();
+  return value.length > sourceLimit ? `${preview || "思考内容"}…` : preview;
 }
 
 export function SubagentToolGroup({ entry }: { entry: SessionToolGroupEntry }) {
@@ -770,7 +953,12 @@ function SubagentToolEvent({ entry }: { entry: SessionToolEntry }) {
       </button>
       {open && (
         <div className="subagent-transcript-tool-body">
-          <ToolPayloadDetails inputJson={entry.inputJson} outputJson={entry.outputJson} state={entry.state} />
+          <ToolPayloadDetails
+            toolName={entry.toolName}
+            inputJson={entry.inputJson}
+            outputJson={entry.outputJson}
+            state={entry.state}
+          />
         </div>
       )}
     </section>
@@ -979,7 +1167,7 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
       });
     }
   }
-  return entries.slice(-80);
+  return entries;
 }
 
 export function mergeSessionEntries(
@@ -1016,7 +1204,7 @@ export function mergeSessionEntries(
     }
     entries.push(live);
   }
-  return entries.slice(-80);
+  return entries;
 }
 
 function mergeToolEntries(
@@ -1073,6 +1261,95 @@ function joinVisibleMessageText(left: string, right: string): string {
     return `${left}${right}`;
   }
   return `${left} ${right}`;
+}
+
+function sessionMessageEqual(a: SessionMessage, b: SessionMessage): boolean {
+  return a.id === b.id
+    && a.branch_id === b.branch_id
+    && a.kind === b.kind
+    && a.role === b.role
+    && a.text === b.text
+    && a.image_count === b.image_count
+    && stringListsEqual(a.image_media_types, b.image_media_types)
+    && sessionAttachmentsEqual(a.attachments, b.attachments)
+    && a.call_id === b.call_id
+    && a.tool_name === b.tool_name
+    && a.input_json === b.input_json
+    && a.output_json === b.output_json
+    && a.is_error === b.is_error
+    && a.timestamp === b.timestamp;
+}
+
+function stringListsEqual(left?: readonly string[], right?: readonly string[]): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((value, index) => value === right[index]);
+}
+
+function sessionAttachmentsEqual(
+  left: SessionMessage["attachments"],
+  right: SessionMessage["attachments"],
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((value, index) => {
+    const other = right[index];
+    return value.name === other?.name
+      && value.media_type === other.media_type
+      && value.kind === other.kind;
+  });
+}
+
+function sessionMessageListsEqual(
+  left: readonly SessionMessage[],
+  right: readonly SessionMessage[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (!sessionMessageEqual(left[index], right[index])) return false;
+  }
+  return true;
+}
+
+/** Merge one cursor page without replacing an unchanged array or duplicating boundary records. */
+export function mergeSessionMessagePage(
+  current: readonly SessionMessage[],
+  incoming: readonly SessionMessage[],
+  direction: "replace" | "prepend" | "append",
+  callIdUpdates: readonly SubagentSessionCallIdUpdate[] = [],
+): SessionMessage[] {
+  const source = direction === "replace"
+    ? incoming
+    : direction === "prepend"
+      ? [...incoming, ...current]
+      : [...current, ...incoming];
+  const merged: SessionMessage[] = [];
+  const positions = new Map<string, number>();
+
+  for (const message of source) {
+    // Host projections always have physical-line ids. Preserve anonymous records independently so
+    // two identical legacy messages are never collapsed merely because their payloads match.
+    if (!message.id) {
+      merged.push(message);
+      continue;
+    }
+    const existing = positions.get(message.id);
+    if (existing == null) {
+      positions.set(message.id, merged.length);
+      merged.push(message);
+    } else if (!sessionMessageEqual(merged[existing], message)) {
+      merged[existing] = message;
+    }
+  }
+
+  for (const update of callIdUpdates) {
+    const position = positions.get(update.id);
+    if (position == null || merged[position].call_id === update.call_id) continue;
+    merged[position] = { ...merged[position], call_id: update.call_id };
+  }
+
+  return sessionMessageListsEqual(current, merged) ? current as SessionMessage[] : merged;
 }
 
 export function groupTranscriptEntries(
@@ -1166,10 +1443,9 @@ function readToolResultText(raw: string | null | undefined): string | null {
     ?? (raw?.trim() || null);
 }
 
-function visibleText(value: string | null | undefined, limit = 20_000): string | null {
+function visibleText(value: string | null | undefined): string | null {
   const normalized = value?.trim();
-  if (!normalized) return null;
-  return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+  return normalized || null;
 }
 
 function resolveSessionPermission(

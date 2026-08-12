@@ -583,6 +583,7 @@ fn main() {
             tauri_commands::cmd_replay,
             tauri_commands::cmd_session_messages,
             tauri_commands::cmd_session_messages_for_branch,
+            tauri_commands::cmd_subagent_session_message_page,
             tauri_commands::cmd_subagent_session_messages,
             tauri_commands::cmd_memory_overview,
             tauri_commands::cmd_memory_update_settings,

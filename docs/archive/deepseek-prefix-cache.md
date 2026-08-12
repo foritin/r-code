@@ -1,5 +1,6 @@
 # DeepSeek Provider 前缀缓存与响应速度优化 PRD
 
+> 归档状态：方案已实施，本文件只保留历史设计、验收与已知例外，不是当前待办。
 > 状态：**已实施（2026-08-07，分支 `feat/deepseek-prefix-cache`；两处已记录例外：P1-F 的 missing-reasoning 回放因 hermes 无 reasoning 事件流未实施、P2-G 命中率恢复场景测试未建，见 §5 对应注释。Review 收尾已补齐：§8 两项缓解（双套 usage 字段解析、重试计数展示）与 P2-H 运行时归因接线）**
 > 范围：DeepSeek Provider 的请求字节稳定性、缓存观测与响应路径优化；主路径为 Chat Completions，并覆盖用户手动切换到 Responses、Anthropic Messages 兼容口及 DeepSeek 自定义网关时的协议适配。
 > 目标读者：维护者、评审者、实施者。
@@ -273,7 +274,7 @@ DeepSeek 线路架构：`llm_runtime.rs`（请求构建/轮次编排）→ `herm
 
 **发布门槛**（两个时点，缺一不可）：① **P0-A 落地前**采集 10 轮以上工具会话的缓存命中率基线并**存档**（预期 ≈0%，作为"优化前"对照）；② **P0-A 完成后**复测同场景，基线应 ≥85%（作为"优化后"对照）。基线采集细节见 P0-B 验收；若未达 85%，回退路径见 §8。
 
-**实测记录（2026-08-07）**：① 未单独采集（P0-A 先行实施），以冷启动全 miss 数据替代，存档于 `docs/deepseek-cache-baseline.md`。② **达成**：真实 API 14 轮探针 tail_avg(3)=93.0% ≥85%（第 12-13 轮单轮 95.4%/97.0%；字节前缀 mock 守卫 tail_avg=96.5%，commit `69c49e9`）。10 轮内 tail_avg（82.2%）偏低属短会话结构性稀释——每轮追加占比高，轮次增加后趋近 95%+，完整曲线与分析见基线文档。命中按 ~128 token 块量化；探针跨运行仍命中（round 0 hit=128）证明服务端缓存持久。
+**实测记录（2026-08-07）**：① 未单独采集（P0-A 先行实施），以冷启动全 miss 数据替代，存档于 `docs/archive/deepseek-cache-baseline.md`。② **达成**：真实 API 14 轮探针 tail_avg(3)=93.0% ≥85%（第 12-13 轮单轮 95.4%/97.0%；字节前缀 mock 守卫 tail_avg=96.5%，commit `69c49e9`）。10 轮内 tail_avg（82.2%）偏低属短会话结构性稀释——每轮追加占比高，轮次增加后趋近 95%+，完整曲线与分析见基线文档。命中按 ~128 token 块量化；探针跨运行仍命中（round 0 hit=128）证明服务端缓存持久。
 
 **协议切换实测（2026-08-09）**：使用同一段稳定长 system、每条线路连续 3 次低输出请求，官方 Responses（`deepseek-v4-flash`，`/v1/responses`）3/3 返回非空且每轮解析为 input=248、cache hit=128、miss=120；官方 Anthropic Messages（`deepseek-v4-pro`，`/anthropic/v1/messages`）3/3 返回非空，归一后每轮 input=169、cache hit=128、miss=41。实测同时发现并修复 Anthropic `message_delta` 将 `usage` 与 `stop_reason` 放在同一帧时丢失 output usage 的问题。忽略型实网探针位于 `deepseek_cache_probe.rs`；自定义网关使用 loopback HTTP/SSE 覆盖 endpoint 拼接、usage 解析及不支持 `stream_options` 时的兼容回退，未对未知第三方服务作可用性承诺。
 

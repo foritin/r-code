@@ -18,6 +18,7 @@ const PATHS = {
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const RELEASE_TAG = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))(?:-unsigned\.([1-9]\d*))?$/;
+const PRERELEASE_MARKER = "预上线版本（Pre-release）";
 
 class ReleaseError extends Error {}
 
@@ -68,6 +69,20 @@ function parseReleaseTag(tag) {
   };
 }
 
+function changelogSection(changelog, version) {
+  const lines = changelog.split(/\r?\n/);
+  const heading = `## [${version}]`;
+  const start = lines.findIndex((line) => line.startsWith(heading));
+  if (start < 0) return "";
+  let end = lines.findIndex((line, index) => index > start && line.startsWith("## ["));
+  if (end < 0) end = lines.length;
+  return lines.slice(start + 1, end).join("\n").trim();
+}
+
+function isPreReleaseVersion(changelog, version) {
+  return changelogSection(changelog, version).includes(PRERELEASE_MARKER);
+}
+
 function jsonText(value, newline) {
   return `${JSON.stringify(value, null, 2)}${newline}`;
 }
@@ -79,10 +94,10 @@ function versionSnapshot(paths = PATHS) {
   const installerTauri = JSON.parse(read(paths.installerTauri));
   const packageJson = JSON.parse(read(paths.packageJson));
   const packageLock = JSON.parse(read(paths.packageLock));
-  const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "(r-code-[^"]+)"\r?\nversion = "([^"]+)"/g)]
+  const lockPackages = [...cargoLock.matchAll(/\[\[package\]\]\r?\nname = "((?:r-code|hermes)-[^"]+)"\r?\nversion = "([^"]+)"/g)]
     .map((match) => ({ name: match[1], version: match[2] }));
 
-  if (lockPackages.length === 0) fail("Cargo.lock contains no r-code-* workspace packages");
+  if (lockPackages.length === 0) fail("Cargo.lock contains no R-Code workspace packages");
 
   return {
     workspace: workspaceVersion(cargoToml),
@@ -346,6 +361,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
 
 export {
   applyFileTransaction,
+  changelogSection,
+  isPreReleaseVersion,
   parseReleaseTag,
   prepare,
   refreshCargoLock,

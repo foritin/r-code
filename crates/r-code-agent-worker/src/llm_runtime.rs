@@ -17,11 +17,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset, Local};
-use hermes_compaction::{LlmSummaryCompaction, SlidingWindowCompaction};
 use hermes_core::{
-    CompactionStrategy, CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions,
-    LlmProvider, Message, Role, Session, SessionMeta, ToolCallOutcome, ToolHost, ToolSource,
-    ToolSpec,
+    CompletionRequest, ContentBlock, HostedToolSpec, InferenceOptions, LlmProvider, Message, Role,
+    Session, SessionMeta, ToolCallOutcome, ToolHost, ToolSource, ToolSpec,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEvent, AgentEventScope, AgentKind, AgentRunRuntimeKind,
@@ -29,9 +27,7 @@ use r_code_core::dto::{
     TaskState,
 };
 use r_code_core::error::ProductError;
-use r_code_core::plan::{
-    PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanView,
-};
+use r_code_core::plan::{PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanView};
 use r_code_core::security::PathGuard;
 use r_code_gateway::{
     classify_shell_command, subagent_read_only_tool_allowed, tool_outcome_directive, PathArity,
@@ -42,8 +38,8 @@ use tokio::sync::{watch, Mutex, Semaphore};
 use uuid::Uuid;
 
 use crate::agent_loop::{
-    run_agent_loop_iteration_streaming_with_abort, run_agent_loop_iteration_with_abort_and_emit,
-    ToolMetadataObservation,
+    repair_dangling_tool_uses, run_agent_loop_iteration_streaming_with_abort,
+    run_agent_loop_iteration_with_abort_and_emit, ToolMetadataObservation,
 };
 use crate::cache_shape::{capture, compare, PrefixShape};
 use crate::runtime::{AgentRuntime, SteerResult};
@@ -257,7 +253,7 @@ fn parse_live_guidance(text: &str) -> Option<&str> {
 
 /// 构建主/聊天 system 提示。
 ///
-/// P0-A（docs/deepseek-prefix-cache.md §5）：system 是**稳定常量**——本地时间等
+/// P0-A（docs/archive/deepseek-prefix-cache.md §5）：system 是**稳定常量**——本地时间等
 /// 动态内容一律作为每轮尾部 user 消息注入（见 [`build_local_clock_user_message`]），
 /// 保证 DeepSeek 前缀缓存的 system 字节在同 run 内及跨 run 稳定。
 fn build_system_prompt(has_workspace_tools: bool) -> String {
@@ -356,7 +352,7 @@ fn build_plan_mode_message(plan_mode: bool) -> Message {
 host-provided Plan tools to clarify or publish the plan. Do not edit files, run shell commands, \
 invoke mutating external tools, or delegate work. If a Plan tool requests user input, stop after \
 that call and wait for the runtime to resume you. Publish todos as independently verifiable \
-functional outcomes. The UI renders item descriptions as Markdown. Keep a simple item to one concise \
+functional outcomes with explicit acceptance criteria and dependencies. The UI renders item descriptions as Markdown. Keep a simple item to one concise \
 sentence; when an item has multiple implementation or acceptance points, use short Markdown sections \
 and lists, wrap paths and commands in inline code, and never flatten a checklist into semicolon-separated \
 prose. Each description must state its acceptance criteria; record only real item dependencies. \
@@ -717,6 +713,8 @@ struct SessionState {
     task_context: Option<String>,
     /// 消息历史（多轮 loop 的工作集）
     messages: Vec<Message>,
+    /// 模型可见的压缩投影；canonical `messages` 始终完整保留。
+    model_projection: Option<Vec<Message>>,
     /// 运行中注入的用户消息（下一轮迭代前并入）
     steer_queue: VecDeque<String>,
     /// 当前运行是否仍可接纳引导；和队列共用 session 锁以消除结束边界竞态。
@@ -734,7 +732,7 @@ struct SessionState {
     next_memory_context: Option<String>,
     /// 监督器所属的主运行 ID，防止旧运行收尾时误清理新运行状态。
     active_run_id: Option<String>,
-    /// P2-G：历史改写版本号。压缩（折叠/剪枝）改写 provider 可见历史时递增。
+    /// P2-G：模型投影版本号。压缩安装新的 provider-visible projection 时递增。
     /// P2-H 归因（cache_shape.rs）通过此计数区分“压缩改写”与“纯本地元数据
     /// 编辑”：run 循环每轮请求发送前经 `capture_run_prefix_shape` 把它作为
     /// `provider_visible_version` 捕获（PRD §5 P2-G 第 5 点）。
@@ -895,6 +893,7 @@ impl AgentRuntime for LlmAgentRuntime {
                 mode: input.mode,
                 task_context: None,
                 messages: Vec::new(),
+                model_projection: None,
                 steer_queue: VecDeque::new(),
                 accepting_steer: false,
                 abort: Arc::new(AtomicBool::new(false)),
@@ -937,7 +936,10 @@ impl AgentRuntime for LlmAgentRuntime {
                 .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
             let disable_delegation = delegation_directive_for_text(&message.text_content())
                 == DelegationDirective::Disabled;
-            session.messages.push(message);
+            session.messages.push(message.clone());
+            if let Some(projection) = session.model_projection.as_mut() {
+                projection.push(message);
+            }
             session.abort.store(false, Ordering::Relaxed);
             session.delegation_disabled = Arc::new(AtomicBool::new(disable_delegation));
             session.accepting_steer = true;
@@ -1111,6 +1113,25 @@ impl AgentRuntime for LlmAgentRuntime {
             .get_mut(session_id)
             .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
         session.messages = messages;
+        session.model_projection = None;
+        session.steer_queue.clear();
+        session.accepting_steer = false;
+        session.abort.store(false, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn replace_context(
+        &mut self,
+        session_id: &str,
+        messages: Vec<Message>,
+        model_projection: Option<Vec<Message>>,
+    ) -> Result<(), ProductError> {
+        let mut sessions = self.sessions.lock().await;
+        let session = sessions
+            .get_mut(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        session.messages = messages;
+        session.model_projection = model_projection;
         session.steer_queue.clear();
         session.accepting_steer = false;
         session.abort.store(false, Ordering::Relaxed);
@@ -1126,6 +1147,17 @@ impl AgentRuntime for LlmAgentRuntime {
             .get(session_id)
             .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
         Ok(Some(session.messages.clone()))
+    }
+
+    async fn model_projection_snapshot(
+        &mut self,
+        session_id: &str,
+    ) -> Result<Option<Vec<Message>>, ProductError> {
+        let sessions = self.sessions.lock().await;
+        let session = sessions
+            .get(session_id)
+            .ok_or_else(|| ProductError::Other(format!("session not found: {session_id}")))?;
+        Ok(session.model_projection.clone())
     }
 
     async fn update_workspace_scope(
@@ -1199,10 +1231,8 @@ fn authoritative_plan_view_from_tool_metadata(
         ) {
             return None;
         }
-        let envelope = serde_json::from_value::<ToolOutcomeMetadata>(
-            observation.metadata.clone(),
-        )
-        .ok()?;
+        let envelope =
+            serde_json::from_value::<ToolOutcomeMetadata>(observation.metadata.clone()).ok()?;
         serde_json::from_value(
             envelope
                 .data?
@@ -1320,20 +1350,15 @@ struct RunLoopCtx {
 }
 
 // ---------------------------------------------------------------------------
-// P2-G：分层压缩（长会话）。对齐 Reasonix `internal/agent/compact.go`：
-// 50% 仅提示一次、60% 剪旧工具结果、80% 摘要折叠；折叠保留 system /
-// 小 user 轮次 verbatim（≤1500 token / 窗口 15%）/ 旧摘要 / 尾部 16K 预算；
-// 连续 2 次压缩即暂停（防抖）；token 估算用上一轮真实 usage 反推 tokPerChar
-// （0.05~2 过滤，reasoning 不计）。压缩是可选优化：任何异常降级为不压缩，
-// 绝不 panic/Err 终止 run（PRD docs/deepseek-prefix-cache.md §5 P2-G）。
+// P2-G：长会话投影。75% 仅提示一次，85% 生成摘要检查点；canonical transcript
+// 永不改写。连续 2 次投影仍超窗时暂停（防抖）；token 估算用上一轮真实 usage
+// 反推 tokPerChar。只有完整覆盖来源的分层摘要成功后才安装新投影。
 // ---------------------------------------------------------------------------
 
-/// 50% 档：仅提示一次（不改写历史）。
-const COMPACT_HINT_RATIO: f32 = 0.50;
-/// 60% 档：剪中间旧工具结果（保留头尾）。
-const COMPACT_PRUNE_RATIO: f32 = 0.60;
-/// 80% 档：摘要折叠（LLM 摘要，失败时机械折叠兜底）。
-const COMPACT_FOLD_RATIO: f32 = 0.80;
+/// 75% 档：仅提示一次（不改写历史）。
+const COMPACT_HINT_RATIO: f32 = 0.75;
+/// 85% 档：生成单一摘要检查点投影。canonical transcript 永不改写。
+const COMPACT_FOLD_RATIO: f32 = 0.85;
 /// 防抖上限：同 run 连续 2 次压缩后暂停自动压缩（提示窗口太小）。
 const COMPACT_DEBOUNCE_LIMIT: u32 = 2;
 /// context window 低于该值时显示非阻断警告。
@@ -1343,16 +1368,17 @@ const COMPACT_DEFAULT_TOK_PER_CHAR: f32 = 0.25;
 /// tokPerChar 校准过滤范围（tokens/字符）。
 const COMPACT_TOK_PER_CHAR_MIN: f32 = 0.05;
 const COMPACT_TOK_PER_CHAR_MAX: f32 = 2.0;
-/// 机械折叠的尾部预算（默认 16K token；64k 模型约占 25%，按窗口再取 1/4）。
-const COMPACT_TAIL_TOKENS: u32 = 16_384;
-/// 小 user 轮次 verbatim 保留上限（token）。
-const COMPACT_MAX_PINNED_FIRST_USER_TOKENS: u32 = 1_500;
-/// 小 user 轮次不超过窗口的比例。
-const COMPACT_PINNED_RATIO: f32 = 0.15;
-/// 60% 档滑动窗口参数（保留头部 N 条 + 尾部 N 条）。
-const COMPACT_PRUNE_KEEP_FIRST: usize = 2;
-const COMPACT_PRUNE_KEEP_RECENT: usize = 10;
-/// 50% 档提示文本（经 steer 通道注入，同 run 只注入一次）。
+/// 摘要输入正文最多占模型窗口的 40%；剩余空间留给固定提示和摘要输出。
+const COMPACT_SUMMARY_SOURCE_WINDOW_RATIO: f32 = 0.40;
+const COMPACT_SUMMARY_PROMPT_RESERVE_CHARS: usize = 4_000;
+const COMPACT_SUMMARY_ABSOLUTE_SOURCE_CHARS: usize = 100_000;
+const COMPACT_SUMMARY_ABSOLUTE_RESULT_CHARS: usize = 20_000;
+const COMPACT_SUMMARY_MIN_SOURCE_CHARS: usize = 4_000;
+const COMPACT_SUMMARY_MAX_OUTPUT_TOKENS: u32 = 4_096;
+const COMPACT_EXACT_TAIL_TOKENS: u32 = 16_384;
+const COMPACT_SUMMARY_CONCURRENCY: usize = 3;
+const COMPACT_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+/// 高水位提示文本（经 steer 通道注入，同 run 只注入一次）。
 const COMPACT_HINT_TEXT: &str =
     "上下文已接近模型窗口上限。请在后续回复中精简内容：优先引用已执行工具的结果与既有计划，避免重复输出历史信息。";
 
@@ -1363,11 +1389,9 @@ enum CompactAction {
     None,
     /// 连续压缩已达防抖上限，暂停自动压缩（窗口太小）。
     Debounced,
-    /// 50% 档：仅注入一次压缩提示（不改写历史）。
+    /// 75% 档：仅注入一次压缩提示（不改写历史）。
     Hint,
-    /// 60% 档：剪中间旧工具结果（保留头尾）。
-    Prune,
-    /// 80% 档：摘要折叠（LLM 摘要，失败时机械折叠兜底）。
+    /// 85% 档：安装覆盖完整来源的分层摘要投影。
     Fold,
 }
 
@@ -1378,12 +1402,10 @@ struct CompactionState {
     window_tokens: u32,
     /// 当前 tokPerChar（tokens/字符），由上一轮真实 usage 反推，0.05~2 过滤。
     tok_per_char: f32,
-    /// 同 run 连续压缩次数（折叠/剪枝各计一次；估算回落阈值以下时复位）。
+    /// 同 run 连续投影次数（估算回落阈值以下时复位）。
     consecutive_compactions: u32,
-    /// 同 run 是否已注入过 50% 档提示（只提示一次）。
+    /// 同 run 是否已注入过高水位提示（只提示一次）。
     hint_injected: bool,
-    /// 最近一次压缩前的原始消息（归档，用于可追溯）。
-    archive: Option<Vec<Message>>,
     /// run 内压缩总次数。
     total_compactions: u32,
 }
@@ -1395,13 +1417,12 @@ impl CompactionState {
             tok_per_char: COMPACT_DEFAULT_TOK_PER_CHAR,
             consecutive_compactions: 0,
             hint_injected: false,
-            archive: None,
             total_compactions: 0,
         }
     }
 
     /// 用上一轮真实 usage（input_tokens）反推 tokPerChar；0.05~2 范围过滤，
-    /// reasoning 不计（message_chars 已排除 Thinking 块）。
+    /// 估算口径覆盖所有 provider-visible 内容块。
     fn calibrate(&mut self, input_tokens: u32, chars: usize) {
         if input_tokens == 0 || chars == 0 {
             return;
@@ -1434,8 +1455,6 @@ impl CompactionState {
         }
         if ratio >= COMPACT_FOLD_RATIO {
             CompactAction::Fold
-        } else if ratio >= COMPACT_PRUNE_RATIO {
-            CompactAction::Prune
         } else if !self.hint_injected {
             CompactAction::Hint
         } else {
@@ -1443,28 +1462,47 @@ impl CompactionState {
         }
     }
 
-    /// 压缩动作前归档原始消息（可追溯，保留最近一次）。
-    fn archive_messages(&mut self, messages: &[Message]) {
-        self.archive = Some(messages.to_vec());
-    }
-
-    /// 压缩（折叠/剪枝）成功后登记：防抖计数 + 总次数。
+    /// 投影成功后登记：防抖计数 + 总次数。
     fn record_compaction(&mut self) {
         self.consecutive_compactions += 1;
         self.total_compactions += 1;
     }
 }
 
-/// P2-G：消息文本字符数（Text 块 + ToolResult 正文；Thinking/reasoning 不计）。
+/// P2-G：Provider 可见内容字符数。包含工具参数、附件与扩展块，避免压缩触发过晚。
 fn message_chars(message: &Message) -> usize {
     message
         .content
         .iter()
         .map(|block| match block {
-            ContentBlock::Text { text } | ContentBlock::ToolResult { content: text, .. } => {
-                text.chars().count()
+            ContentBlock::Text { text }
+            | ContentBlock::Thinking { thinking: text, .. }
+            | ContentBlock::ToolResult { content: text, .. } => text.chars().count(),
+            ContentBlock::ToolUse { id, name, input } => {
+                id.chars().count() + name.chars().count() + input.to_string().chars().count()
             }
-            _ => 0,
+            ContentBlock::File { source } => {
+                source.name.chars().count()
+                    + source.media_type.chars().count()
+                    + source
+                        .text
+                        .as_deref()
+                        .map(str::chars)
+                        .map(Iterator::count)
+                        .unwrap_or(0)
+                    + source
+                        .data
+                        .as_deref()
+                        .map(str::chars)
+                        .map(Iterator::count)
+                        .unwrap_or(0)
+            }
+            ContentBlock::Image { source } => {
+                source.media_type.chars().count() + source.data.chars().count()
+            }
+            ContentBlock::Custom { type_name, data } => {
+                type_name.chars().count() + data.to_string().chars().count()
+            }
         })
         .sum()
 }
@@ -1475,99 +1513,268 @@ fn request_chars(system: &str, messages: &[Message], tools_json_len: usize) -> u
     system.chars().count() + messages.iter().map(message_chars).sum::<usize>() + tools_json_len
 }
 
-/// 构造 hermes-compaction 策略所需的临时 Session（只读用途，不落库）。
-/// `model` 供 LlmSummaryCompaction 构造摘要请求时使用（需与当前运行模型一致，
-/// 否则摘要请求会被 provider 拒绝）。
-fn temp_compaction_session(messages: Vec<Message>, model: &str) -> Session {
-    let mut meta = SessionMeta::new(model, "compaction");
-    meta.id = "compaction-internal".into();
-    let mut session = Session::new(meta);
-    session.messages = messages;
-    session
+fn automatic_compaction_message_source(index: usize, message: &Message) -> Option<String> {
+    let role = match message.role {
+        Role::User => "USER",
+        Role::Assistant => "ASSISTANT",
+    };
+    let content = serde_json::to_string(&message.content).ok()?;
+    Some(format!(
+        "MESSAGE {} {role}:\nCONTENT_BLOCKS_JSON:\n{content}\n\n",
+        index + 1
+    ))
 }
 
-/// P2-G 60% 档：剪中间旧工具结果，保留头尾（vendor `SlidingWindowCompaction`）。
-/// 压缩产物若未实际变小（消息过少等），返回 None 降级为不压缩。
-async fn prune_messages(messages: &[Message], model: &str) -> Option<Vec<Message>> {
-    if messages.len() <= COMPACT_PRUNE_KEEP_FIRST + COMPACT_PRUNE_KEEP_RECENT {
+fn messages_form_tool_pair(call: &Message, result: &Message) -> bool {
+    let call_ids = call
+        .content
+        .iter()
+        .filter_map(ContentBlock::tool_id)
+        .collect::<std::collections::HashSet<_>>();
+    !call_ids.is_empty()
+        && result
+            .content
+            .iter()
+            .filter_map(ContentBlock::tool_use_id)
+            .any(|result_id| call_ids.contains(result_id))
+}
+
+fn automatic_compaction_units(messages: &[Message]) -> Option<Vec<String>> {
+    let mut units = Vec::new();
+    let mut index = 0usize;
+    while index < messages.len() {
+        let mut unit = automatic_compaction_message_source(index, &messages[index])?;
+        let pairs_with_next = messages
+            .get(index + 1)
+            .is_some_and(|next| messages_form_tool_pair(&messages[index], next));
+        if pairs_with_next {
+            unit.push_str(&automatic_compaction_message_source(
+                index + 1,
+                &messages[index + 1],
+            )?);
+            index += 1;
+        }
+        units.push(unit);
+        index += 1;
+    }
+    Some(units)
+}
+
+fn pack_automatic_compaction_units(units: Vec<String>, max_chars: usize) -> Option<Vec<String>> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_chars = 0usize;
+    for unit in units {
+        let unit_chars = unit.chars().count();
+        if unit_chars > max_chars {
+            return None;
+        }
+        if current_chars > 0 && current_chars + unit_chars > max_chars {
+            chunks.push(std::mem::take(&mut current));
+            current_chars = 0;
+        }
+        current.push_str(&unit);
+        current_chars += unit_chars;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    Some(chunks)
+}
+
+fn automatic_compaction_source_chars(window_tokens: u32, tok_per_char: f32) -> usize {
+    let estimated_window_chars = (window_tokens as f32 / tok_per_char.max(0.05)) as usize;
+    ((estimated_window_chars as f32 * COMPACT_SUMMARY_SOURCE_WINDOW_RATIO) as usize)
+        .saturating_sub(COMPACT_SUMMARY_PROMPT_RESERVE_CHARS)
+        .clamp(
+            COMPACT_SUMMARY_MIN_SOURCE_CHARS,
+            COMPACT_SUMMARY_ABSOLUTE_SOURCE_CHARS,
+        )
+}
+
+async fn request_automatic_compaction_summary(
+    provider: &dyn LlmProvider,
+    model: &str,
+    source: String,
+    reduce: bool,
+    max_result_chars: usize,
+    inference: &InferenceOptions,
+) -> Option<String> {
+    let instruction = if reduce {
+        "Merge every PART below into one precise continuation checkpoint. Each PART covers a different portion of the canonical transcript and all must contribute. Preserve user goals and constraints, decisions, tool evidence, file paths and symbols, commands and exit status, edits, verification results, errors and root causes, and unfinished work. Deduplicate without dropping facts. Do not invent facts. Return only the checkpoint."
+    } else {
+        "Create a precise continuation checkpoint from the transcript block below. Preserve user goals and constraints, decisions, tool names and important inputs, complete tool-result evidence, file paths and symbols, commands and exit status, edits, verification results, errors and root causes, and unfinished work. Do not invent facts. Return only the checkpoint."
+    };
+    let response = provider
+        .complete(CompletionRequest {
+            model: model.to_string(),
+            system: Some("You produce loss-aware coding-agent continuation checkpoints.".into()),
+            messages: vec![Message::user_text(format!("{instruction}\n\n{source}"))],
+            tools: vec![],
+            hosted_tools: vec![],
+            max_tokens: COMPACT_SUMMARY_MAX_OUTPUT_TOKENS,
+            temperature: Some(0.1),
+            enable_caching: false,
+            inference: inference.clone(),
+        })
+        .await
+        .ok()?;
+    if !matches!(
+        response.stop_reason,
+        hermes_core::StopReason::EndTurn | hermes_core::StopReason::StopSequence
+    ) {
         return None;
     }
-    let session = temp_compaction_session(messages.to_vec(), model);
-    let strategy =
-        SlidingWindowCompaction::new(COMPACT_PRUNE_KEEP_FIRST, COMPACT_PRUNE_KEEP_RECENT);
-    match strategy.compact(&session).await {
-        Ok(compacted) if compacted.len() < messages.len() => Some(compacted),
-        _ => None,
+    let summary = response.text();
+    let summary = summary.trim();
+    if summary.is_empty() || summary.chars().count() > max_result_chars {
+        return None;
     }
+    Some(summary.to_string())
 }
 
-/// P2-G 80% 档：LLM 摘要折叠（`LlmSummaryCompaction`）；摘要失败或产物无效时
-/// 降级为确定性机械折叠兜底（不循环、不丢 verbatim 小轮次）。
+async fn summarize_automatic_compaction_groups(
+    provider: Arc<dyn LlmProvider>,
+    model: &str,
+    groups: Vec<String>,
+    reduce: bool,
+    max_result_chars: usize,
+    inference: &InferenceOptions,
+) -> Option<Vec<String>> {
+    use futures::stream::{self, StreamExt};
+
+    let mut indexed = stream::iter(groups.into_iter().enumerate().map(|(index, group)| {
+        let provider = provider.clone();
+        let model = model.to_string();
+        let inference = inference.clone();
+        async move {
+            request_automatic_compaction_summary(
+                provider.as_ref(),
+                &model,
+                group,
+                reduce,
+                max_result_chars,
+                &inference,
+            )
+            .await
+            .map(|summary| (index, summary))
+        }
+    }))
+    .buffer_unordered(COMPACT_SUMMARY_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    if indexed.iter().any(Option::is_none) {
+        return None;
+    }
+    let mut indexed = indexed.drain(..).flatten().collect::<Vec<_>>();
+    indexed.sort_by_key(|(index, _)| *index);
+    Some(indexed.into_iter().map(|(_, summary)| summary).collect())
+}
+
+fn automatic_compaction_tail_start(
+    messages: &[Message],
+    window_tokens: u32,
+    tok_per_char: f32,
+) -> usize {
+    let tail_budget = COMPACT_EXACT_TAIL_TOKENS.min(window_tokens / 4).max(1);
+    let mut tail_tokens = 0u32;
+    let mut tail_start = messages.len();
+    for (index, message) in messages.iter().enumerate().rev() {
+        tail_tokens = tail_tokens
+            .saturating_add((message_chars(message) as f32 * tok_per_char.max(0.05)) as u32);
+        tail_start = index;
+        if tail_tokens >= tail_budget {
+            break;
+        }
+    }
+    if tail_start > 0
+        && messages[tail_start - 1]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_use)
+        && messages[tail_start]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_result)
+    {
+        tail_start -= 1;
+    }
+    tail_start
+}
+
+fn automatic_compaction_input<'a>(
+    canonical_messages: &'a [Message],
+    _current_projection: Option<&[Message]>,
+) -> &'a [Message] {
+    // Recompress from evidence, never from a prior summary projection. Repeatedly summarizing
+    // summaries compounds omissions even when the canonical transcript remains durable.
+    canonical_messages
+}
+
+/// P2-G 高水位：把全部 provider-visible 历史按工具对原子分块，再分层合并摘要。
+/// 任何 map/reduce 请求失败或未完整结束都返回 None；调用方保持旧视图，不安装
+/// 机械首尾投影，因此不会静默让中段证据从后续推理中消失。
 async fn fold_messages(
     provider: Arc<dyn LlmProvider>,
     model: &str,
     messages: &[Message],
     window_tokens: u32,
     tok_per_char: f32,
+    inference: &InferenceOptions,
 ) -> Option<Vec<Message>> {
-    let session = temp_compaction_session(messages.to_vec(), model);
-    let strategy = LlmSummaryCompaction::new(provider);
-    match strategy.compact(&session).await {
-        Ok(folded) if folded.len() < messages.len() => Some(folded),
-        _ => {
-            let folded = mechanical_fold(messages, window_tokens, tok_per_char);
-            (folded.len() < messages.len()).then_some(folded)
+    if messages.len() < 2 {
+        return None;
+    }
+    let tail_start = automatic_compaction_tail_start(messages, window_tokens, tok_per_char);
+    if tail_start == 0 {
+        return None;
+    }
+    let (messages_to_summarize, exact_tail) = messages.split_at(tail_start);
+    let max_source_chars = automatic_compaction_source_chars(window_tokens, tok_per_char);
+    let max_result_chars = COMPACT_SUMMARY_ABSOLUTE_RESULT_CHARS.min(max_source_chars / 3);
+    let chunks = pack_automatic_compaction_units(
+        automatic_compaction_units(messages_to_summarize)?,
+        max_source_chars,
+    )?;
+    let mut summaries = summarize_automatic_compaction_groups(
+        provider.clone(),
+        model,
+        chunks,
+        false,
+        max_result_chars,
+        inference,
+    )
+    .await?;
+    while summaries.len() > 1 {
+        let before = summaries.len();
+        let units = summaries
+            .into_iter()
+            .enumerate()
+            .map(|(index, summary)| format!("PART {}:\n{}\n\n", index + 1, summary))
+            .collect::<Vec<_>>();
+        let groups = pack_automatic_compaction_units(units, max_source_chars)?;
+        let reduced = summarize_automatic_compaction_groups(
+            provider.clone(),
+            model,
+            groups,
+            true,
+            max_result_chars,
+            inference,
+        )
+        .await?;
+        if reduced.len() >= before {
+            return None;
         }
+        summaries = reduced;
     }
-}
-
-/// P2-G 机械折叠兜底（对齐 Reasonix `compact.go:293-315`）：
-/// 保留 (a) system——历史消息无 system 角色（Role 契约只有 User/Assistant，
-/// 请求 system 字段不受影响）；(b) 全部小 user 轮次 verbatim（估算
-/// ≤ min(1500, 窗口 15%)）；(c) 旧摘要（含 "[compaction:" 标记，不重复折叠）；
-/// (d) 尾部预算（默认 16K token，64k 模型约占 25%）。其余折叠为占位消息。
-fn mechanical_fold(messages: &[Message], window_tokens: u32, tok_per_char: f32) -> Vec<Message> {
-    let pinned_cap_tokens = ((window_tokens as f32 * COMPACT_PINNED_RATIO) as u32)
-        .min(COMPACT_MAX_PINNED_FIRST_USER_TOKENS);
-    let tail_budget = COMPACT_TAIL_TOKENS.min(window_tokens / 4);
-
-    let mut keep: Vec<usize> = Vec::new();
-    for (i, message) in messages.iter().enumerate() {
-        let is_small_user_turn = message.role == Role::User
-            && !message
-                .content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
-            && (message_chars(message) as f32 * tok_per_char) as u32 <= pinned_cap_tokens;
-        let is_old_summary = message.text_content().contains("[compaction:");
-        if is_small_user_turn || is_old_summary {
-            keep.push(i);
-        }
-    }
-
-    // 尾部预算：从后往前累计（含工具结果等未完成上下文）。
-    let mut tail_tokens = 0u32;
-    let mut tail_start = messages.len();
-    for (i, message) in messages.iter().enumerate().rev() {
-        tail_tokens += (message_chars(message) as f32 * tok_per_char) as u32;
-        tail_start = i;
-        if tail_tokens >= tail_budget {
-            break;
-        }
-    }
-    keep.extend(tail_start..messages.len());
-    keep.sort_unstable();
-    keep.dedup();
-
-    let folded_count = messages.len() - keep.len();
-    if folded_count == 0 {
-        return messages.to_vec();
-    }
-    let mut result: Vec<Message> = keep.into_iter().map(|i| messages[i].clone()).collect();
-    result.push(Message::user_text(format!(
-        "[compaction: mechanical_fold folded {folded_count} messages; kept small user turns verbatim + prior summaries + trailing {tail_tokens} tokens; window {window_tokens}]"
-    )));
-    result
+    let summary = summaries.pop()?;
+    let mut projection = vec![Message::user_text(format!(
+        "[compaction: loss_aware_summary of {} canonical messages]\n{}",
+        messages_to_summarize.len(),
+        summary
+    ))];
+    projection.extend_from_slice(exact_tail);
+    Some(projection)
 }
 
 /// P2-G：压缩产物角色归一化。hermes-compaction 的占位/摘要消息以 Assistant 角色
@@ -1585,10 +1792,10 @@ fn normalize_compacted_roles(messages: &[Message]) -> Vec<Message> {
     out
 }
 
-/// P2-G：压缩改写历史后递增会话级 rewrite_version。
+/// P2-G：安装新的模型投影后递增会话级 rewrite_version。
 ///
 /// P2-H 归因联动点：run 循环每轮请求发送前经 `capture_run_prefix_shape` 读取
-/// 此计数（docs/deepseek-prefix-cache.md §5 P2-H），把“压缩改写 provider
+/// 此计数（docs/archive/deepseek-prefix-cache.md §5 P2-H），把“压缩改写 provider
 /// 可见字节”与“纯本地元数据编辑”区分开。
 async fn bump_rewrite_version(ctx: &RunLoopCtx) {
     let mut sessions = ctx.sessions.lock().await;
@@ -1685,7 +1892,7 @@ async fn run_loop(ctx: RunLoopCtx) {
 
         // 在 session 锁内同时取走 steer 与工作集。后续的结束判断也在同一把锁内
         // 检查队列，确保 steer 不会落在“检查为空”和“标记完成”之间而丢失。
-        let (mut messages, applied_steers, mode, task_context) = {
+        let (mut canonical_messages, mut model_projection, applied_steers, mode, task_context) = {
             let mut sessions = ctx.sessions.lock().await;
             let Some(session) = sessions.get_mut(&ctx.session_id) else {
                 terminal_err = Some(format!("session lost: {}", ctx.session_id));
@@ -1693,18 +1900,45 @@ async fn run_loop(ctx: RunLoopCtx) {
             };
             let mut applied_steers = 0usize;
             while let Some(text) = session.steer_queue.pop_front() {
-                session
-                    .messages
-                    .push(Message::user_text(format_live_guidance(&text)));
+                let guidance = Message::user_text(format_live_guidance(&text));
+                session.messages.push(guidance.clone());
+                if let Some(projection) = session.model_projection.as_mut() {
+                    projection.push(guidance);
+                }
                 applied_steers += 1;
             }
             (
                 session.messages.clone(),
+                session.model_projection.clone(),
                 applied_steers,
                 session.mode,
                 session.task_context.clone(),
             )
         };
+        let mut messages = model_projection
+            .clone()
+            .unwrap_or_else(|| canonical_messages.clone());
+        let repaired = repair_dangling_tool_uses(&mut canonical_messages);
+        if repaired > 0 {
+            if model_projection.is_some() {
+                // 旧投影可能已经基于损坏历史构造，丢弃并从修复后的 canonical
+                // transcript 重建本轮请求，避免合成结果插入位置发生漂移。
+                model_projection = None;
+                messages = canonical_messages.clone();
+            } else {
+                messages = canonical_messages.clone();
+            }
+            tracing::warn!(
+                session_id = %ctx.session_id,
+                repaired_tool_results = repaired,
+                "repaired canonical tool protocol before model projection"
+            );
+            let mut sessions = ctx.sessions.lock().await;
+            if let Some(session) = sessions.get_mut(&ctx.session_id) {
+                session.messages = canonical_messages.clone();
+                session.model_projection = None;
+            }
+        }
         if applied_steers > 0 {
             emit_activity(
                 &ctx.event_tx,
@@ -1758,7 +1992,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                     );
                 }
                 CompactAction::Hint => {
-                    // 50% 档：仅提示一次（经 steer 通道注入，同 run 只一次）。
+                    // 75% 档：仅提示一次（经 steer 通道注入，同 run 只一次）。
                     {
                         let mut sessions = ctx.sessions.lock().await;
                         if let Some(session) = sessions.get_mut(&ctx.session_id) {
@@ -1773,34 +2007,38 @@ async fn run_loop(ctx: RunLoopCtx) {
                         "context near {COMPACT_HINT_RATIO} of window; injected one-time compaction hint"
                     );
                 }
-                CompactAction::Prune => {
-                    // 60% 档：剪中间旧工具结果（保留头尾）。
-                    compactor.archive_messages(&messages);
-                    if let Some(compacted) = prune_messages(&messages, &ctx.model).await {
-                        let compacted = normalize_compacted_roles(&compacted);
-                        tracing::info!(
-                            session_id = %ctx.session_id,
-                            before = messages.len(),
-                            after = compacted.len(),
-                            "P2-G prune compaction applied"
-                        );
-                        messages = compacted;
-                        compactor.record_compaction();
-                        bump_rewrite_version(&ctx).await;
-                    }
-                }
                 CompactAction::Fold => {
-                    // 80% 档：摘要折叠（LLM 摘要；失败时机械折叠兜底）。
-                    compactor.archive_messages(&messages);
-                    if let Some(compacted) = fold_messages(
+                    // 85% 档：仅在完整分层摘要成功时安装投影。失败时保持当前
+                    // provider-visible 历史，避免静默丢掉中段工具证据。
+                    emit_activity(
+                        &ctx.event_tx,
+                        AgentActivityPhase::Requesting,
+                        Some("正在整理完整上下文证据…".to_string()),
+                    );
+                    let compaction_input = automatic_compaction_input(
+                        &canonical_messages,
+                        model_projection.as_deref(),
+                    );
+                    let compaction = fold_messages(
                         ctx.provider.clone(),
                         &ctx.model,
-                        &messages,
+                        compaction_input,
                         window_tokens,
                         compactor.tok_per_char,
-                    )
-                    .await
-                    {
+                        &ctx.inference,
+                    );
+                    tokio::pin!(compaction);
+                    let compacted = loop {
+                        tokio::select! {
+                            result = &mut compaction => break result,
+                            _ = tokio::time::sleep(COMPACT_ABORT_POLL_INTERVAL) => {
+                                if ctx.abort.load(Ordering::Relaxed) {
+                                    break None;
+                                }
+                            }
+                        }
+                    };
+                    if let Some(compacted) = compacted {
                         let compacted = normalize_compacted_roles(&compacted);
                         tracing::info!(
                             session_id = %ctx.session_id,
@@ -1809,8 +2047,18 @@ async fn run_loop(ctx: RunLoopCtx) {
                             "P2-G fold compaction applied"
                         );
                         messages = compacted;
+                        model_projection = Some(messages.clone());
                         compactor.record_compaction();
                         bump_rewrite_version(&ctx).await;
+                    } else if !ctx.abort.load(Ordering::Relaxed) {
+                        compactor.consecutive_compactions = COMPACT_DEBOUNCE_LIMIT;
+                        tracing::warn!(
+                            session_id = %ctx.session_id,
+                            "loss-aware auto-compaction failed; kept existing model history unchanged"
+                        );
+                    }
+                    if ctx.abort.load(Ordering::Relaxed) {
+                        break;
                     }
                 }
             }
@@ -1823,7 +2071,6 @@ async fn run_loop(ctx: RunLoopCtx) {
         // 一律作为**尾部 user 消息**注入；memory 作为头部独立消息。注入消息只进入
         // 发送副本（本次迭代的 messages），迭代结束后立即移除、不写入会话历史——
         // 因此逐轮变化只影响请求尾部追加，不伤已发送前缀（PRD §4 原则 1）。
-        let base_len = messages.len();
         let mut tail_injections: Vec<Message> = Vec::new();
         tail_injections.push(Message::user_text(build_local_clock_user_message(
             Local::now().fixed_offset(),
@@ -1844,11 +2091,14 @@ async fn run_loop(ctx: RunLoopCtx) {
         ) {
             tail_injections.push(hint);
         }
-        let tail_injection_count = tail_injections.len();
+        let mut request_messages = Vec::with_capacity(
+            messages.len() + tail_injections.len() + usize::from(memory_message.is_some()),
+        );
         if let Some(memory) = &memory_message {
-            messages.insert(0, memory.clone());
+            request_messages.push(memory.clone());
         }
-        messages.extend(tail_injections);
+        request_messages.extend(messages.iter().cloned());
+        request_messages.extend(tail_injections);
 
         let request = CompletionRequest {
             model: ctx.model.clone(),
@@ -1866,7 +2116,7 @@ async fn run_loop(ctx: RunLoopCtx) {
 
         // P2-G：本轮实际发送的文本字符数（system + 注入后的 messages + tools），
         // 供迭代结束后用真实 usage 反推 tokPerChar 校准。
-        let sent_chars = request_chars(&system_prompt, &messages, tools_json_len);
+        let sent_chars = request_chars(&system_prompt, &request_messages, tools_json_len);
 
         // P2-H：请求发送前捕获本轮前缀形状并与上一轮比对，命中缓存重置点时
         // 记录归因日志。rewrite_version 须在压缩块之后重新读取——本轮压缩刚
@@ -1893,26 +2143,20 @@ async fn run_loop(ctx: RunLoopCtx) {
             ctx.provider.as_ref(),
             &tool_host,
             request,
-            &mut messages,
+            &mut request_messages,
             &tools,
             Some(ctx.abort.as_ref()),
             ctx.event_tx.clone(),
         )
         .await;
 
-        // 移除本轮注入消息（头部 memory + 尾部动态内容），把 messages 恢复为
-        // “历史 + 本轮迭代产物”，再交由下方结束判断同步回会话。
-        {
-            let memory_offset = usize::from(memory_message.is_some());
-            let mut synced = Vec::with_capacity(messages.len());
-            synced.extend(messages.drain(memory_offset..memory_offset + base_len));
-            let _ = messages.drain(..tail_injection_count);
-            synced.append(&mut messages);
-            messages = synced;
-        }
-
         match result {
             Ok(outcome) => {
+                canonical_messages.extend(outcome.appended_messages.iter().cloned());
+                messages.extend(outcome.appended_messages.iter().cloned());
+                if model_projection.is_some() {
+                    model_projection = Some(messages.clone());
+                }
                 // P2-G：用上一轮真实 usage 校准 tokPerChar（失败轮不校准，
                 // 保持旧值继续保守估算）。
                 compactor.calibrate(outcome.usage.input_tokens, sent_chars);
@@ -1930,7 +2174,8 @@ async fn run_loop(ctx: RunLoopCtx) {
                     // Keep the local snapshot available for the host-managed quality review
                     // below. The session owns the authoritative copy; the local clone is only
                     // used to derive the visible draft after this iteration has settled.
-                    session.messages = messages.clone();
+                    session.messages = canonical_messages.clone();
+                    session.model_projection = model_projection.clone();
                     if let Some(view) = authoritative_plan_view.as_ref() {
                         match refresh_task_context_from_plan_view(
                             session.task_context.as_deref(),
@@ -1960,9 +2205,13 @@ async fn run_loop(ctx: RunLoopCtx) {
                     } else if continuation_required
                         && continuation_reprompts < MAX_REQUIRED_CONTINUATION_REPROMPTS
                     {
-                        session.messages.push(Message::user_text(
+                        let continuation = Message::user_text(
                             "[system] The current Plan still has an active feature. This run may not finish yet. Continue implementing only the active feature, verify its acceptance criteria, and call plan_item_update with completed or blocked before giving a final answer.",
-                        ));
+                        );
+                        session.messages.push(continuation.clone());
+                        if let Some(projection) = session.model_projection.as_mut() {
+                            projection.push(continuation);
+                        }
                         forced_continuation = true;
                         true
                     } else {
@@ -2003,12 +2252,16 @@ async fn run_loop(ctx: RunLoopCtx) {
                         if let Ok(collected) = ctx.supervisor.collect(None).await {
                             let mut sessions = ctx.sessions.lock().await;
                             if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                                session.messages.push(Message::user_text(format!(
+                                let collected_message = Message::user_text(format!(
                                     "[system] Delegated subagents have completed. \
 Their findings are provided below; you do not need to call collect_subagents. \
 Please summarize and present these results.\n\n{}",
                                     collected.content
-                                )));
+                                ));
+                                session.messages.push(collected_message.clone());
+                                if let Some(projection) = session.model_projection.as_mut() {
+                                    projection.push(collected_message);
+                                }
                                 session.accepting_steer = true;
                             }
                             continue;
@@ -2056,7 +2309,7 @@ Please summarize and present these results.\n\n{}",
                                 Ok(QualityReviewResult::Revise(findings)) => {
                                     let mut sessions = ctx.sessions.lock().await;
                                     if let Some(session) = sessions.get_mut(&ctx.session_id) {
-                                        session.messages.push(Message::user_text(format!(
+                                        let review_message = Message::user_text(format!(
                                             "[system] Quality review round {quality_rounds} found issues in the visible draft. \
 Address the concrete findings below, re-check any relevant workspace evidence, and then provide a corrected final answer. \
 Do not mention private reasoning.\n\n{}",
@@ -2064,7 +2317,12 @@ Do not mention private reasoning.\n\n{}",
                                                 &findings,
                                                 MAX_QUALITY_REVIEW_FINDINGS_CHARS,
                                             )
-                                        )));
+                                        ));
+                                        session.messages.push(review_message.clone());
+                                        if let Some(projection) = session.model_projection.as_mut()
+                                        {
+                                            projection.push(review_message);
+                                        }
                                         session.accepting_steer = true;
                                     }
                                     continue;
@@ -2159,15 +2417,13 @@ Do not mention private reasoning.\n\n{}",
         });
     }
 
-    // P2-G 收尾可追溯：归档的压缩前原始消息保留在 compactor.archive（内存），
-    // 连同压缩次数一起落到日志，便于事后核对压缩动作。
+    // P2-G 收尾可追溯：canonical transcript 始终保存在 SessionState；这里只记录
+    // 本次 run 安装模型投影的次数，便于诊断压缩频率。
     if compactor.total_compactions > 0 {
-        let archived_len = compactor.archive.as_ref().map_or(0, Vec::len);
         tracing::info!(
             session_id = %ctx.session_id,
             total_compactions = compactor.total_compactions,
-            archived_messages = archived_len,
-            "run finished with P2-G compactions"
+            "run finished with P2-G model projections"
         );
     }
 
@@ -2443,15 +2699,9 @@ impl SessionToolHost {
             })
             .collect::<Vec<_>>();
         if let Some(external) = &self.external_tools {
-            tools.extend(
-                external
-                    .tool_specs()
-                    .into_iter()
-                    .filter(|tool| {
-                        !self.host_owned_tool_name(&tool.name)
-                            && self.external_tool_allowed(&tool.name)
-                    }),
-            );
+            tools.extend(external.tool_specs().into_iter().filter(|tool| {
+                !self.host_owned_tool_name(&tool.name) && self.external_tool_allowed(&tool.name)
+            }));
         }
         if !self.delegation_disabled.load(Ordering::SeqCst) {
             if let Some(supervisor) = &self.delegation {
@@ -5061,15 +5311,16 @@ mod tests {
             metadata,
         }];
 
-        let authoritative =
-            authoritative_plan_view_from_tool_metadata(&observations).unwrap();
+        let authoritative = authoritative_plan_view_from_tool_metadata(&observations).unwrap();
         let refreshed = refresh_task_context_from_plan_view(
-            Some(r#"{
+            Some(
+                r#"{
                 "task":{"id":"task-1","goal":"old","mode":"auto"},
                 "plan":{"id":"plan-1","revision":6},
                 "active_feature":{"id":"sec-login","state":"in_progress"},
                 "execution_status":"active_feature"
-            }"#),
+            }"#,
+            ),
             "task-1",
             TaskMode::Auto,
             &authoritative,
@@ -5232,7 +5483,11 @@ mod tests {
         assert!(!specs.iter().any(|tool| tool.name == "delegate_task"));
 
         let delegated = host
-            .call_inner(Some("call-delegate"), "delegate_task", serde_json::json!({}))
+            .call_inner(
+                Some("call-delegate"),
+                "delegate_task",
+                serde_json::json!({}),
+            )
             .await;
         assert!(matches!(
             delegated,
@@ -7243,6 +7498,43 @@ mod tests {
         assert_eq!(restored.messages[0].text_content(), "before fork");
     }
 
+    #[tokio::test]
+    async fn replace_context_restores_projection_without_replacing_history() {
+        let provider = MockProvider::new("mock");
+        let mut rt = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        );
+        let session = rt.create_session(input()).await.unwrap();
+        rt.replace_context(
+            &session.meta.id,
+            vec![Message::user_text("canonical evidence")],
+            Some(vec![Message::user_text("projection summary")]),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            rt.history_snapshot(&session.meta.id)
+                .await
+                .unwrap()
+                .unwrap()[0]
+                .text_content(),
+            "canonical evidence"
+        );
+        assert_eq!(
+            rt.model_projection_snapshot(&session.meta.id)
+                .await
+                .unwrap()
+                .unwrap()[0]
+                .text_content(),
+            "projection summary"
+        );
+    }
+
     #[test]
     fn summarize_picks_path() {
         let s = summarize_input("read_file", &serde_json::json!({"path": "src/a.rs"}));
@@ -8130,15 +8422,16 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// P2-G 分层压缩单测（docs/deepseek-prefix-cache.md §5 P2-G 验收）。
+// P2-G 分层压缩单测（docs/archive/deepseek-prefix-cache.md §5 P2-G 验收）。
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
     use hermes_core::{Capabilities, CompletionRequest, CompletionResponse, StreamEvent, Usage};
     use hermes_error::Error as HermesError;
+    use std::sync::Mutex as StdMutex;
 
-    /// 摘要 provider：complete/stream 一律失败，用于验证 fold 的机械折叠兜底。
+    /// 摘要 provider：complete/stream 一律失败，用于验证失败时不安装丢证据投影。
     struct FailingSummaryProvider;
 
     #[async_trait]
@@ -8166,6 +8459,57 @@ mod compaction_tests {
         }
         fn name(&self) -> &str {
             "failing-summary"
+        }
+    }
+
+    struct RecordingSummaryProvider {
+        requests: StdMutex<Vec<CompletionRequest>>,
+        responses: StdMutex<Vec<(String, hermes_core::StopReason)>>,
+    }
+
+    impl RecordingSummaryProvider {
+        fn new(responses: Vec<(String, hermes_core::StopReason)>) -> Self {
+            Self {
+                requests: StdMutex::new(Vec::new()),
+                responses: StdMutex::new(responses),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingSummaryProvider {
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> hermes_error::Result<CompletionResponse> {
+            self.requests.lock().unwrap().push(request);
+            let (text, stop_reason) = self.responses.lock().unwrap().remove(0);
+            Ok(CompletionResponse {
+                content: vec![ContentBlock::Text { text }],
+                stop_reason,
+                usage: Usage::default(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> hermes_error::Result<futures::stream::BoxStream<'static, StreamEvent>> {
+            unreachable!("automatic compaction uses complete")
+        }
+
+        fn capabilities(&self) -> Capabilities {
+            Capabilities {
+                supports_streaming: false,
+                supports_tool_use: false,
+                supports_vision: false,
+                supports_prompt_caching: false,
+                max_context_tokens: 100_000,
+            }
+        }
+
+        fn name(&self) -> &str {
+            "recording-summary"
         }
     }
 
@@ -8214,10 +8558,9 @@ mod compaction_tests {
     fn layered_thresholds_pick_heaviest_action_and_hint_once() {
         let mut state = CompactionState::new(100_000);
         assert_eq!(state.check(40_000), CompactAction::None); // 40%：无动作
-        assert_eq!(state.check(55_000), CompactAction::Hint); // 55%：仅提示
+        assert_eq!(state.check(78_000), CompactAction::Hint); // 78%：仅提示
         state.hint_injected = true; // 调用方注入 steer 后标记（run loop Hint 分支语义）
-        assert_eq!(state.check(55_000), CompactAction::None); // 同 run 只提示一次
-        assert_eq!(state.check(65_000), CompactAction::Prune); // 65%：剪旧工具结果
+        assert_eq!(state.check(78_000), CompactAction::None); // 同 run 只提示一次
         assert_eq!(state.check(90_000), CompactAction::Fold); // 90%：摘要折叠
     }
 
@@ -8233,7 +8576,7 @@ mod compaction_tests {
         assert_eq!(state.check(85_000), CompactAction::Debounced);
         // 估算回落阈值以下后防抖复位，可再次压缩。
         assert_eq!(state.check(40_000), CompactAction::None);
-        assert_eq!(state.check(65_000), CompactAction::Prune);
+        assert_eq!(state.check(90_000), CompactAction::Fold);
     }
 
     #[test]
@@ -8243,7 +8586,7 @@ mod compaction_tests {
     }
 
     #[test]
-    fn message_chars_excludes_thinking_blocks() {
+    fn message_chars_includes_all_provider_visible_blocks() {
         let message = Message {
             role: Role::Assistant,
             content: vec![
@@ -8261,7 +8604,23 @@ mod compaction_tests {
                 },
             ],
         };
-        assert_eq!(message_chars(&message), "answer".len() + "result".len());
+        assert_eq!(
+            message_chars(&message),
+            "secret reasoning".len() + "answer".len() + "result".len()
+        );
+    }
+
+    #[test]
+    fn message_chars_counts_tool_inputs_and_attachments() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "t1".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "证据.rs"}),
+            }],
+        };
+        assert!(message_chars(&message) >= "t1read_file证据.rs".chars().count());
     }
 
     #[test]
@@ -8278,71 +8637,219 @@ mod compaction_tests {
     }
 
     #[test]
-    fn archive_keeps_pre_compaction_messages() {
-        let mut state = CompactionState::new(100_000);
-        let messages = vec![Message::user_text("goal")];
-        state.archive_messages(&messages);
-        assert_eq!(state.archive.as_ref().map(Vec::len), Some(1));
-        assert_eq!(state.archive.as_ref().unwrap()[0].text_content(), "goal");
+    fn automatic_compaction_chunks_keep_tool_turns_atomic() {
+        let messages = vec![
+            Message::user_text(format!("prefix {}", "x".repeat(3_000))),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "atomic-call".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "atomic-call".into(),
+                    content: "atomic-result".into(),
+                    is_error: false,
+                }],
+            },
+            Message::assistant_text(format!("suffix {}", "y".repeat(3_000))),
+        ];
+        let chunks =
+            pack_automatic_compaction_units(automatic_compaction_units(&messages).unwrap(), 4_000)
+                .unwrap();
+        let tool_chunk = chunks
+            .iter()
+            .find(|chunk| chunk.contains("atomic-call"))
+            .unwrap();
+        assert!(tool_chunk.contains("read_file"));
+        assert!(tool_chunk.contains("atomic-result"));
+        assert_eq!(
+            chunks
+                .iter()
+                .filter(|chunk| chunk.contains("atomic-call"))
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
-    async fn over_window_session_triggers_prune_keeping_head_and_tail() {
-        let mut messages = vec![Message::user_text("goal")];
-        for i in 0..100 {
-            messages.push(Message::assistant_text(format!(
-                "turn {i} with tool planning"
-            )));
-            messages.push(Message::user_text(format!("result of tool {i}")));
-        }
-        let pruned = prune_messages(&messages, "test-model")
+    async fn failed_summary_keeps_existing_history_instead_of_mechanical_projection() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(FailingSummaryProvider);
+        let messages = long_session(40);
+        assert!(
+            fold_messages(
+                provider,
+                "test-model",
+                &messages,
+                100_000,
+                0.25,
+                &InferenceOptions::default(),
+            )
             .await
-            .expect("prune shrinks");
-        assert!(pruned.len() < messages.len());
-        // 头部（首条用户目标）与尾部（最近工具结果）保留。
-        assert!(pruned[0].text_content().contains("goal"));
-        assert!(pruned
-            .last()
-            .unwrap()
-            .text_content()
-            .contains("result of tool 99"));
-        // 压缩占位符存在。
-        assert!(pruned
-            .iter()
-            .any(|m| m.text_content().contains("[compaction:")));
+            .is_none(),
+            "failed summary must not install a lossy fallback projection"
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_fold_maps_all_chunks_and_reduces_all_summaries() {
+        let mut messages = (0..5)
+            .map(|index| {
+                Message::user_text(format!(
+                    "ORIGINAL-MIDDLE-{index}-{}",
+                    char::from(b'a' + index as u8).to_string().repeat(3_000)
+                ))
+            })
+            .collect::<Vec<_>>();
+        messages.push(Message::assistant_text(format!(
+            "EXACT-TAIL-ASSISTANT-{}",
+            "z".repeat(3_000)
+        )));
+        messages.push(Message::user_text(format!(
+            "EXACT-TAIL-USER-{}",
+            "q".repeat(3_000)
+        )));
+        let tail_start = automatic_compaction_tail_start(&messages, 4_000, 2.0);
+        let max_source_chars = automatic_compaction_source_chars(16_384, 2.0);
+        let map_count = pack_automatic_compaction_units(
+            automatic_compaction_units(&messages[..tail_start]).unwrap(),
+            max_source_chars,
+        )
+        .unwrap()
+        .len();
+        assert!(map_count > 1);
+        let responses = (0..map_count)
+            .map(|index| {
+                (
+                    format!("MAP-CHECKPOINT-{index}"),
+                    hermes_core::StopReason::EndTurn,
+                )
+            })
+            .chain(std::iter::once((
+                "FINAL-CHECKPOINT".into(),
+                hermes_core::StopReason::EndTurn,
+            )))
+            .collect();
+        let provider = Arc::new(RecordingSummaryProvider::new(responses));
+
+        let folded = fold_messages(
+            provider.clone(),
+            "test-model",
+            &messages,
+            16_384,
+            2.0,
+            &InferenceOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(folded.len(), 1 + messages.len() - tail_start);
+        assert!(folded[0].text_content().contains("FINAL-CHECKPOINT"));
+        assert_eq!(folded.len() - 1, messages.len() - tail_start);
+        for (actual, expected) in folded[1..].iter().zip(&messages[tail_start..]) {
+            assert_eq!(
+                serde_json::to_value(actual).unwrap(),
+                serde_json::to_value(expected).unwrap(),
+                "recent tail must remain exact rather than be summarized"
+            );
+        }
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), map_count + 1);
+        let reduce_prompt = requests.last().unwrap().messages[0].text_content();
+        for index in 0..map_count {
+            assert!(reduce_prompt.contains(&format!("MAP-CHECKPOINT-{index}")));
+        }
+        for index in 0..5 {
+            assert!(requests[..map_count]
+                .iter()
+                .any(|request| request.messages[0]
+                    .text_content()
+                    .contains(&format!("ORIGINAL-MIDDLE-{index}"))));
+        }
     }
 
     #[test]
-    fn mechanical_fold_preserves_small_user_turns_verbatim() {
-        let messages = long_session(40);
-        let folded = mechanical_fold(&messages, 100_000, 0.25);
-        assert!(folded.len() < messages.len(), "fold must shrink");
-        // 全部小 user 轮次 verbatim 保留。
-        for i in 0..40 {
-            assert!(
-                folded
-                    .iter()
-                    .any(|m| m.text_content().contains(&format!("small turn {i}"))),
-                "small user turn {i} must be kept verbatim"
-            );
-        }
-        // 折叠占位符存在。
-        assert!(folded
+    fn repeated_automatic_compaction_still_selects_canonical_evidence() {
+        let canonical = vec![
+            Message::user_text("goal"),
+            Message::assistant_text("CANONICAL-MIDDLE-SENTINEL"),
+            Message::user_text("recent"),
+        ];
+        let projection = vec![Message::user_text("old summary without sentinel")];
+
+        let input = automatic_compaction_input(&canonical, Some(&projection));
+        let serialized = automatic_compaction_units(input).unwrap().join("");
+
+        assert!(serialized.contains("CANONICAL-MIDDLE-SENTINEL"));
+        assert!(!serialized.contains("old summary without sentinel"));
+    }
+
+    #[test]
+    fn exact_tail_keeps_tool_call_and_result_pair() {
+        let messages = vec![
+            Message::assistant_text(format!("old {}", "x".repeat(3_000))),
+            Message::assistant_text(format!("older {}", "y".repeat(3_000))),
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "tail-call".into(),
+                    name: "read_file".into(),
+                    input: serde_json::json!({"path": "src/lib.rs"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "tail-call".into(),
+                    content: "tail-result-exact".into(),
+                    is_error: false,
+                }],
+            },
+        ];
+
+        let tail_start = automatic_compaction_tail_start(&messages, 4_000, 2.0);
+
+        assert!(tail_start <= 2);
+        let call_index = messages
             .iter()
-            .any(|m| m.text_content().contains("[compaction: mechanical_fold")));
+            .position(|message| message.content.iter().any(ContentBlock::is_tool_use))
+            .unwrap();
+        assert!(tail_start <= call_index);
+        assert!(messages[call_index]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_use));
+        assert!(messages[call_index + 1]
+            .content
+            .iter()
+            .any(ContentBlock::is_tool_result));
     }
 
     #[tokio::test]
-    async fn fold_falls_back_to_mechanical_fold_when_summary_fails() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(FailingSummaryProvider);
-        let messages = long_session(40);
-        let folded = fold_messages(provider, "test-model", &messages, 100_000, 0.25)
-            .await
-            .expect("mechanical fallback never fails");
-        assert!(folded.len() < messages.len());
-        assert!(folded
-            .iter()
-            .any(|m| m.text_content().contains("small turn 5")));
+    async fn max_tokens_map_response_does_not_create_a_projection() {
+        let provider: Arc<dyn LlmProvider> = Arc::new(RecordingSummaryProvider::new(vec![(
+            "partial checkpoint".into(),
+            hermes_core::StopReason::MaxTokens,
+        )]));
+        let messages = vec![
+            Message::user_text("goal"),
+            Message::assistant_text("large evidence"),
+        ];
+
+        assert!(fold_messages(
+            provider,
+            "test-model",
+            &messages,
+            100_000,
+            0.25,
+            &InferenceOptions::default(),
+        )
+        .await
+        .is_none());
     }
 
     #[tokio::test]
@@ -8352,9 +8859,17 @@ mod compaction_tests {
             Message::assistant_text("hello"),
             Message::user_text("thanks"),
         ];
-        assert!(prune_messages(&messages, "test-model").await.is_none());
-        let folded = mechanical_fold(&messages, 100_000, 0.25);
-        assert_eq!(folded.len(), messages.len());
+        let provider: Arc<dyn LlmProvider> = Arc::new(FailingSummaryProvider);
+        assert!(fold_messages(
+            provider,
+            "test-model",
+            &messages[..1],
+            100_000,
+            0.25,
+            &InferenceOptions::default(),
+        )
+        .await
+        .is_none());
     }
 
     #[test]
@@ -8364,6 +8879,7 @@ mod compaction_tests {
             had_tool_call: true,
             tool_metadata: Vec::new(),
             usage: Usage::new(1_234, 56),
+            appended_messages: Vec::new(),
         };
         assert!(outcome.had_tool_call);
         assert_eq!(outcome.usage.input_tokens, 1_234);

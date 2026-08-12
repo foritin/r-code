@@ -212,7 +212,10 @@ impl MigrationManager {
             .into_iter()
             .filter(|step| step.to_version > current_version)
             .collect::<Vec<_>>();
-        if pending.is_empty() {
+        // Whether the database needs work is determined by the authoritative schema version,
+        // not by the human-readable step metadata below. If a future migration forgets to add
+        // its description, the store runner must still get a chance to upgrade the database.
+        if current_version == TARGET_VERSION {
             return Ok(MigrationResult {
                 steps_applied: vec![],
                 backup_path: None,
@@ -552,6 +555,14 @@ fn known_steps() -> Vec<MigrationStep> {
             is_reversible: false,
             dry_run_available: true,
         },
+        MigrationStep {
+            from_version: 26,
+            to_version: 27,
+            description: "Durable replay-safe receipts for state-changing Plan tool calls"
+                .to_string(),
+            is_reversible: false,
+            dry_run_available: true,
+        },
     ]
 }
 
@@ -724,7 +735,7 @@ mod tests {
         // The failing runner writes a marker, letting us prove the whole database is replaced by
         // the pre-migration snapshot rather than merely reporting an error.
         let conn = Connection::open(&db_path).unwrap();
-        conn.execute_batch("ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;")
+        conn.execute_batch("DROP TABLE plan_tool_receipts;")
             .unwrap();
         conn.execute(
             "DELETE FROM schema_version WHERE version = ?",
@@ -758,17 +769,59 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        let provenance_column_exists: i64 = restored
+        let receipt_table_exists: i64 = restored
             .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('memory_review_turns')
-                 WHERE name = 'explicit_remember'",
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'plan_tool_receipts'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
         assert_eq!(marker_exists, 0);
         assert_eq!(restored_version, i64::from(TARGET_VERSION - 1));
-        assert_eq!(provenance_column_exists, 0);
+        assert_eq!(receipt_table_exists, 0);
+    }
+
+    #[tokio::test]
+    async fn migrate_upgrades_the_previous_schema_version() {
+        let (_dir, db_path) = setup_fresh_db();
+        let mgr = MigrationManager::new(db_path.clone());
+        mgr.migrate().await.unwrap();
+
+        // Recreate the exact v26 boundary that exposed the startup regression: the store has
+        // a v27 migration, while the desktop migration metadata used to stop at v26.
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch("DROP TABLE plan_tool_receipts;")
+            .unwrap();
+        conn.execute(
+            "DELETE FROM schema_version WHERE version = ?",
+            [TARGET_VERSION],
+        )
+        .unwrap();
+        drop(conn);
+
+        assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION - 1);
+        let result = mgr.migrate().await.unwrap();
+        assert_eq!(
+            result
+                .steps_applied
+                .iter()
+                .map(|step| (step.from_version, step.to_version))
+                .collect::<Vec<_>>(),
+            vec![(TARGET_VERSION - 1, TARGET_VERSION)]
+        );
+        assert_eq!(mgr.current_version().unwrap(), TARGET_VERSION);
+
+        let conn = Connection::open(&db_path).unwrap();
+        let receipt_table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'plan_tool_receipts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(receipt_table_exists, 1);
     }
 
     #[tokio::test]

@@ -30,6 +30,19 @@
   line-height: inherit;
 }
 
+/* Chromium can retain the measured block height while skipping layout and paint for distant
+   Markdown history. This also handles one enormous assistant message, where list virtualization
+   cannot help because the message itself contains hundreds of block nodes. The live tail stays
+   fully visible so streaming text and its caret are never deferred. */
+.md > .md-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 42px;
+}
+.md > .md-block.is-live {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
 /* 气泡里不留多余上下空隙 */
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }

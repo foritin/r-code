@@ -2353,10 +2353,10 @@ function CodexIntegrationSection({
   const loginStartedAtRef = useRef(0);
   const setupState: CodexSetupState | "loading" = status ? resolveCodexSetupState(status) : "loading";
 
-  const refresh = useCallback(async (quiet = false) => {
+  const refresh = useCallback(async (quiet = false, force = true) => {
     if (!quiet) setChecking(true);
     try {
-      const next = await codexIntegrationStatus();
+      const next = await codexIntegrationStatus(force);
       setStatus(next);
       if (!quiet) setErr(null);
       return next;
@@ -2369,7 +2369,8 @@ function CodexIntegrationSection({
   }, []);
 
   useEffect(() => {
-    void refresh();
+    // 初次进入设置复用 Home/Room 已完成的应用级探测；手动刷新和登录轮询会强制重查。
+    void refresh(false, false);
   }, [refresh]);
 
   useEffect(() => {

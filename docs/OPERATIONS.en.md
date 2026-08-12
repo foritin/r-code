@@ -23,12 +23,12 @@ If an operating system reports that an installer is unsigned or untrusted, stop 
 
 ## Application-data location
 
-The normal desktop profile is `<app-data>/com.r-code.app/r-code`:
+The normal desktop profile is derived from the platform bundle identifier:
 
 | Platform | Default profile path |
 | --- | --- |
 | Windows | `%APPDATA%\\com.r-code.app\\r-code` |
-| macOS | `~/Library/Application Support/com.r-code.app/r-code` |
+| macOS | `~/Library/Application Support/com.rcode.desktop/r-code` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/com.r-code.app/r-code` |
 
 The profile normally contains:

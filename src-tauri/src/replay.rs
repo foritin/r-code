@@ -262,6 +262,7 @@ impl ReplayService {
                 // 快照服务于 provider 上下文恢复，正文已经由原始 Message /
                 // ToolCall / ToolResult 事件表达，不能在回放中重复展示。
                 SessionEvent::HistorySnapshot { .. } => None,
+                SessionEvent::ModelProjection { .. } => None,
 
                 SessionEvent::System { event, data } => {
                     // Recap: 包含系统事件（状态变更）

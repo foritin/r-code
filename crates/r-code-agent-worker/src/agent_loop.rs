@@ -43,7 +43,7 @@ pub struct ToolMetadataObservation {
     pub metadata: serde_json::Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct AgentLoopOutcome {
     /// 本轮是否发起了工具调用；为真时模型需要收到工具结果后继续下一轮。
     pub had_tool_call: bool,
@@ -52,8 +52,11 @@ pub struct AgentLoopOutcome {
     /// model request; metadata is never added to model-visible ToolResult content.
     pub tool_metadata: Vec<ToolMetadataObservation>,
     /// P2-G：本轮累计真实 usage（provider 未报告时为全零）。调用方（run_loop）
-    /// 用它反推 tokPerChar 校准分层压缩的 token 估算（docs/deepseek-prefix-cache.md §5 P2-G）。
+    /// 用它反推 tokPerChar 校准分层压缩的 token 估算（docs/archive/deepseek-prefix-cache.md §5 P2-G）。
     pub usage: Usage,
+    /// 本轮追加到请求工作集末尾的持久化协议消息。调用方用它更新 canonical
+    /// transcript，而不需要把压缩投影或动态注入反向猜测/切片出来。
+    pub appended_messages: Vec<Message>,
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
@@ -239,7 +242,7 @@ fn cancelled_tool_outcome(call: &PendingToolCall) -> hermes_core::ToolCallOutcom
 /// 3. **已知缺口**：`llm_runtime.rs` 迭代 Err 路径（如 provider 连接失败）不同步
 ///    session，此时本函数的修复结果随工作集丢弃，下次 run 会重新修复（幂等、不
 ///    膨胀，但“修复一次固化”的保证降级为“成功收尾时固化”）。
-fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
+pub(crate) fn repair_dangling_tool_uses(messages: &mut Vec<Message>) -> usize {
     let mut index = 0usize;
     let mut repaired = 0usize;
 
@@ -455,6 +458,7 @@ where
                     had_tool_call: false,
                     tool_metadata: Vec::new(),
                     usage: total_usage.clone(),
+                    appended_messages: Vec::new(),
                 });
             }
             break tokio::select! {
@@ -671,6 +675,7 @@ where
                                 had_tool_call: false,
                                 tool_metadata: Vec::new(),
                                 usage: total_usage.clone(),
+                                appended_messages: Vec::new(),
                             });
                         }
                         // P1-E §8：重试计数对用户可见——每次实际重放前发出事件，
@@ -751,22 +756,28 @@ where
             }
         }
 
+        let mut appended_messages = Vec::with_capacity(2);
+
         // 追加 assistant 消息（含 Text + ToolUse 块）
         if !assistant_blocks.is_empty() {
-            messages.push(Message {
+            let message = Message {
                 role: Role::Assistant,
                 content: assistant_blocks,
-            });
+            };
+            messages.push(message.clone());
+            appended_messages.push(message);
         }
 
         // 只要工具实际完成，就必须回填 ToolResult 供下一轮迭代使用。部分 OpenAI
         // 兼容流会在 ToolUseComplete 后直接关闭，不再额外发送 Stop(ToolUse)；
         // 不能因此丢掉工具结果并构造出不合法的 assistant.tool_calls 历史。
         if !tool_results.is_empty() {
-            messages.push(Message {
+            let message = Message {
                 role: Role::User,
                 content: tool_results,
-            });
+            };
+            messages.push(message.clone());
+            appended_messages.push(message);
         }
 
         // P0-B：把本轮累计 usage 经事件链暴露给宿主。Codex 线路在 run 完成时写库
@@ -795,6 +806,7 @@ where
             had_tool_call,
             tool_metadata,
             usage: total_usage.clone(),
+            appended_messages,
         });
     };
     outcome
@@ -1569,7 +1581,10 @@ mod tests {
         assert_eq!(outcome.tool_metadata.len(), 1);
         assert_eq!(outcome.tool_metadata[0].tool_name, "plan_item_update");
         assert_eq!(outcome.tool_metadata[0].metadata, metadata);
-        assert!(messages[2].content.iter().any(|block| block.is_tool_result()));
+        assert!(messages[2]
+            .content
+            .iter()
+            .any(|block| block.is_tool_result()));
     }
 
     #[tokio::test]

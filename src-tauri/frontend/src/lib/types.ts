@@ -919,6 +919,35 @@ export interface SessionMessage {
   timestamp?: string;
 }
 
+/** Cursor-based window request for an isolated subagent JSONL transcript. */
+export interface SubagentSessionMessagePageRequest {
+  /** Read complete records appended after the last returned cursor. */
+  after_cursor?: string;
+  /** Read the page immediately preceding the current oldest record. */
+  before_cursor?: string;
+  /** Page size hint; the host clamps this to its safe range. */
+  limit?: number;
+}
+
+/** A later ToolResult can reveal the provider call id for a ToolCall from an older page. */
+export interface SubagentSessionCallIdUpdate {
+  id: string;
+  call_id: string;
+}
+
+/** Incremental subagent transcript page returned by the host. */
+export interface SubagentSessionMessagePage {
+  messages: SessionMessage[];
+  call_id_updates: SubagentSessionCallIdUpdate[];
+  next_cursor?: string;
+  previous_cursor?: string;
+  has_more_before: boolean;
+  /** The backing file changed/truncated; replace the local window atomically. */
+  reset: boolean;
+  /** The cursor is current and no visible records or call-id updates changed. */
+  unchanged: boolean;
+}
+
 // ---------- 变更 diff（cmd_change_diff 返回） ----------
 export interface ChangeDiffLine {
   line_id?: string;

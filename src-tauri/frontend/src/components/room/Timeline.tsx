@@ -25,7 +25,7 @@ import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { useSharedNow } from "../../lib/shared-clock";
-import { applyAgentEvent, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
+import { applyAgentEventInPlace, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
 import { Markdown } from "./Markdown";
 import {
   TimelineContextEvent,
@@ -33,7 +33,7 @@ import {
   TimelineToolGroup,
 } from "./TimelineActivity";
 import {
-  buildTimelineTurns,
+  TimelinePresentationCache,
   type TimelineDisplayItem,
   type TimelineRunItem,
   type TimelineUserItem,
@@ -207,7 +207,9 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   },
   ref
 ) {
-  const [items, setItems] = useState<TimelineItem[]>([]);
+  const itemsRef = useRef<TimelineItem[]>([]);
+  const presentationRef = useRef(new TimelinePresentationCache());
+  const [timelineRevision, setTimelineRevision] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
@@ -241,6 +243,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const previousTurnCountRef = useRef(0);
   const reloadGenerationRef = useRef(0);
 
+  const replaceItems = useCallback((items: TimelineItem[]) => {
+    itemsRef.current = items;
+    presentationRef.current.reset(items);
+    setTimelineRevision((current) => current + 1);
+  }, []);
+
   useEffect(() => {
     setVisibleTurnLimit(80);
     previousTurnCountRef.current = 0;
@@ -265,7 +273,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         new Date().toISOString();
       const parsed = Date.parse(startIso);
       startRef.current = Number.isNaN(parsed) ? Date.now() : parsed;
-      setItems(
+      replaceItems(
         buildTimeline(
           msgs,
           d?.events ?? [],
@@ -279,13 +287,13 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       if (generation !== reloadGenerationRef.current) return;
       setError(String(e));
     }
-  }, [taskId, branchId]);
+  }, [taskId, branchId, replaceItems]);
 
   // 任务切换：重置并加载历史
   useEffect(() => {
     liveRef.current = false;
     idRef.current = 0;
-    setItems([]);
+    replaceItems([]);
     setError(null);
     setEditingMessageId(null);
     setEditingText("");
@@ -299,7 +307,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       // A delayed historical read must never replace the live timeline after the user returns.
       reloadGenerationRef.current += 1;
     };
-  }, [reload]);
+  }, [reload, replaceItems]);
 
   useEffect(() => {
     if (editingMessageId) {
@@ -322,7 +330,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     const detail = useTasksStore.getState().details[taskId];
     if (liveRef.current) {
       if (detail) {
-        setItems((prev) => mergeRunItems(prev, detail.runs, startRef.current));
+        replaceItems(mergeRunItems(itemsRef.current, detail.runs, startRef.current));
       }
       return;
     }
@@ -363,7 +371,12 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         return;
       }
       liveRef.current = true;
-      setItems((prev) => applyAgentEvent(prev, ev, nowSec(), nid));
+      const items = itemsRef.current;
+      const result = applyAgentEventInPlace(items, ev, nowSec(), nid);
+      if (result.changed) {
+        presentationRef.current.update(items, result.startIndex);
+        setTimelineRevision((current) => current + 1);
+      }
     })
       .then((u) => {
         if (dead) u();
@@ -383,20 +396,21 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       reload: () => void reload(),
       onSent: (text, mode, attachments = []) => {
         if (branchId) return;
-        setItems((prev) => [
-          ...prev,
-          {
-            kind: "you",
-            id: nid(),
-            t: nowSec(),
-            text,
-            imageCount: 0,
-            imageMediaTypes: [],
-            attachments,
-            sendMode: mode,
-            queuedState: mode === "queue" || mode === "send_now" ? "queued" : undefined,
-          },
-        ]);
+        const items = itemsRef.current;
+        const startIndex = items.length;
+        items.push({
+          kind: "you",
+          id: nid(),
+          t: nowSec(),
+          text,
+          imageCount: 0,
+          imageMediaTypes: [],
+          attachments,
+          sendMode: mode,
+          queuedState: mode === "queue" || mode === "send_now" ? "queued" : undefined,
+        });
+        presentationRef.current.update(items, startIndex);
+        setTimelineRevision((current) => current + 1);
       },
     }),
     [reload, nid, nowSec, branchId]
@@ -406,7 +420,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   useEffect(() => {
     const el = scrollRef.current;
     if (el && pinnedRef.current && cur == null) el.scrollTop = el.scrollHeight;
-  }, [items, cur]);
+  }, [timelineRevision, cur]);
 
   const dim = (t: number) => (cur != null && t > cur ? " dimmed" : "");
   const cancelEdit = useCallback(() => {
@@ -447,21 +461,22 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       setResending(false);
     }
   }, [branchId, editingMessageId, editingText, running, resending, taskId, refreshDetail, reload]);
-  const turns = useMemo(() => buildTimelineTurns(items), [items]);
-  const visibleTurns = useMemo(
-    () => turns.length > visibleTurnLimit ? turns.slice(turns.length - visibleTurnLimit) : turns,
-    [turns, visibleTurnLimit]
+  const timelineWindow = useMemo(
+    () => presentationRef.current.window(visibleTurnLimit),
+    [timelineRevision, visibleTurnLimit],
   );
-  const hiddenTurnCount = turns.length - visibleTurns.length;
+  const visibleTurns = timelineWindow.turns;
+  const turnCount = timelineWindow.totalTurns;
+  const hiddenTurnCount = turnCount - visibleTurns.length;
 
   // When the user is reading above the live edge, retain the currently mounted window as new
   // turns arrive. At the live edge the fixed tail window can advance without growing the DOM.
   useEffect(() => {
     const previous = previousTurnCountRef.current;
-    const added = Math.max(0, turns.length - previous);
-    previousTurnCountRef.current = turns.length;
+    const added = Math.max(0, turnCount - previous);
+    previousTurnCountRef.current = turnCount;
     if (added > 0 && !pinnedRef.current) setVisibleTurnLimit((current) => current + added);
-  }, [turns.length]);
+  }, [turnCount]);
 
   useLayoutEffect(() => {
     const previousHeight = prependScrollHeightRef.current;
@@ -475,18 +490,18 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     const element = scrollRef.current;
     if (element) prependScrollHeightRef.current = element.scrollHeight;
     pinnedRef.current = false;
-    setVisibleTurnLimit((current) => Math.min(turns.length, current + 80));
-  }, [turns.length]);
+    setVisibleTurnLimit((current) => Math.min(turnCount, current + 80));
+  }, [turnCount]);
   const provisionalAgentId = useMemo(() => {
     if (branchId || !reviewing) return null;
-    for (let turnIndex = turns.length - 1; turnIndex >= 0; turnIndex--) {
-      const turnItems = turns[turnIndex].items;
+    for (let turnIndex = visibleTurns.length - 1; turnIndex >= 0; turnIndex--) {
+      const turnItems = visibleTurns[turnIndex].items;
       for (let itemIndex = turnItems.length - 1; itemIndex >= 0; itemIndex--) {
         if (turnItems[itemIndex].kind === "agent") return turnItems[itemIndex].id;
       }
     }
     return null;
-  }, [branchId, reviewing, turns]);
+  }, [branchId, reviewing, visibleTurns]);
   type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
 
   const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
@@ -723,7 +738,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       }}
     >
       {error && <div className="tl-error">时间线加载失败:{error}</div>}
-      {!error && items.length === 0 && (
+      {!error && itemsRef.current.length === 0 && (
         <div className="empty">
           还没有对话。
           <br />

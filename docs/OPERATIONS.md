@@ -23,12 +23,12 @@
 
 ## 应用数据位置
 
-正常桌面应用的数据根目录为 `<app-data>/com.r-code.app/r-code`：
+正常桌面应用的数据根目录按平台 Bundle ID 派生：
 
 | 平台 | 默认路径 |
 | --- | --- |
 | Windows | `%APPDATA%\\com.r-code.app\\r-code` |
-| macOS | `~/Library/Application Support/com.r-code.app/r-code` |
+| macOS | `~/Library/Application Support/com.rcode.desktop/r-code` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/com.r-code.app/r-code` |
 
 目录通常包含：

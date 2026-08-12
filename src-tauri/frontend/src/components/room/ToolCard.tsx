@@ -457,9 +457,21 @@ function Payload({
     []
   );
 
-  const tokens = useMemo(() => highlight(view.text, view.lang), [view.text, view.lang]);
   const collapsible = view.lines > CLIP_LINES;
   const clipped = collapsible && !expanded;
+  // CSS used to hide the tail only after every token had already been highlighted and mounted.
+  // Keep the full (already safety-clamped) payload for copy/expand, but render sixteen lines while
+  // collapsed so large command output cannot stall scroll or the first expand interaction.
+  const preview = useMemo(
+    () => collapsible ? firstLines(view.text, CLIP_LINES) : view.text,
+    [collapsible, view.text],
+  );
+  const renderedText = clipped ? preview : view.text;
+  const tokens = useMemo(() => highlight(renderedText, view.lang), [renderedText, view.lang]);
+
+  useEffect(() => {
+    setExpanded(false);
+  }, [view.text]);
 
   const onCopy = useCallback(() => {
     void copyText(view.text).then((ok) => {
@@ -523,4 +535,16 @@ function Payload({
       )}
     </div>
   );
+}
+
+function firstLines(value: string, count: number): string {
+  if (count <= 0 || value.length === 0) return "";
+  let cursor = 0;
+  for (let line = 0; line < count; line += 1) {
+    const newline = value.indexOf("\n", cursor);
+    if (newline === -1) return value;
+    if (line === count - 1) return value.slice(0, newline);
+    cursor = newline + 1;
+  }
+  return value;
 }

@@ -1,8 +1,10 @@
 # DeepSeek 前缀缓存真实 API 基线验证
 
+> 归档状态：验证已完成，本文件只保留历史测量证据，不是当前待办。
+
 > 验证时间：2026-08-07（分支 `feat/deepseek-prefix-cache`，P0-A + P0-B vendor 层已实施后）
 > 方式：非流式 `/chat/completions`，模型 `deepseek-chat`，相同 system+user 前缀连续两轮，追加 assistant+新 user 消息
-> 对应 PRD：`docs/deepseek-prefix-cache.md` §6 发布门槛②
+> 对应 PRD：`docs/archive/deepseek-prefix-cache.md` §6 发布门槛②
 
 ## 结果
 

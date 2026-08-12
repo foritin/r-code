@@ -6,6 +6,41 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-12
+
+> **预上线版本（Pre-release）**
+>
+> 0.9.0 是 R-Code 1.0 正式上线前的候选版本，用于验证跨平台凭据与数据目录、数据库升级、长会话、子代理日志和终端隔离。它不会标记为 GitHub Latest，也不会进入稳定版自动更新通道；升级前建议备份应用数据。
+
+### Added
+
+- 新增内置 MCP Creator：Agent 可引导用户把 MCP 服务生成到 R-Code 全局应用数据目录中的草案区，不污染当前项目，也不会擅自启动；用户检查后可在设置中显式启用。
+- Plan 工作台支持结构化 Markdown 描述，任务目标、步骤、依赖和执行结果不再挤成单段文字。
+
+### Changed
+
+- 长上下文改为保留不可丢失的 canonical 完整历史，并把给模型使用的压缩投影单独持久化；高水位压缩会汇总全部旧证据、保留精确尾部，摘要为空或被 `max_tokens` 截断时拒绝替换，避免多轮后因永久丢失工具结果而降智。
+- `read_file` 对大文件采用约 100 KiB 的可靠分页和行内字节游标，明确返回续读位置；主 Agent 可批量读取相关文件，减少重复工具往返，同时不会把超长单行或文件尾部静默截断。
+- 主时间线只挂载最近 80 轮并按流式增量重建尾轮；子代理日志首次加载最近 80 条，之后按游标增量轮询并可向前加载。屏外 Markdown 延迟布局，折叠的长代码和工具输出只挂载前 16 行，降低长窗口滚动、展开和流式输出卡顿。
+- Provider 配置请求在前端跨组件合并并复用缓存，切换会话不再重复读取 Keychain/Credential Manager；DeepSeek、Kimi、自定义 OpenAI Chat、Responses 与 Anthropic 兼容链路完整保留长工具证据和 thinking/reasoning 输出。
+- 子代理任务页按运行状态分组并可整体收起；命令、文件编辑、工具调用及审核文件默认使用可折叠卡片，文件链接在工作台追加标签而不替换子代理页面。
+
+### Fixed
+
+- 修复数据库 schema 26 已存在但迁移元数据缺失时，启动直接报“expected 27”的问题；迁移现在会识别实际结构并安全补齐 schema 27。
+- 修复 Plan 并发完成时的 `stale Plan revision` 与重复 `completed -> completed` 状态机错误；持久化 receipt 让完成、重试和重复回执幂等收敛。
+- 终端进程、输出、尺寸和停止操作按 task/session 隔离，切换会话后不会再读取、输入或结束其他会话的终端。
+- 修复子代理日志分页时跨页 `ToolCall`/`ToolResult` 无法配对、结果穿过空页后丢失、半写 JSONL 或日志替换后游标失效，以及 message/reasoning 正文被 20,000 字符静默截断的问题。
+- 修复长时间线每个流式 token 都扫描和复制完整历史、长 reasoning 即使收起仍挂载正文、单窗口信息过多时上滑明显卡顿的问题。
+- 修复 Provider 设置与会话切换期间重复凭据查询造成的卡顿，并确保配置更新后缓存会正确失效而不会继续使用旧模型或旧凭据引用。
+- 修复 macOS 未启用原生 Keychain 后端导致 Provider API Key 与 MCP 凭据“保存成功但立即不可读”的问题；保存后会使用新的凭据入口回读确认，失败时不会清空旧版 TOML 中唯一的明文密钥副本。
+- 统一 macOS 桌面、启动期日志、托管 RTK 与独立 MCP Server 的应用数据目录，避免 Bundle ID 差异产生第二套空数据库、RTK 无法被 Codex 子进程发现或支持包缺少日志。
+
+### Security
+
+- 凭据保存改为面向系统原生凭据库的回读验证与安全迁移；诊断日志、Provider 错误正文和 MCP 配置继续经过脱敏，不回显 API Key、令牌或私钥材料。
+- 模型压缩只改变可重建的投影视图，不覆盖审计所需的完整会话与工具证据；第三方 MCP 与子代理仍继承主 Agent 的权限边界、审批和审计策略。
+
 ## [0.3.3] - 2026-08-11
 
 ### Added
@@ -40,7 +75,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 
 ### Changed
 
-- DeepSeek 线路长会话显著提速降价：请求前缀改为逐字节稳定以命中 DeepSeek 字节级自动前缀缓存——system prompt 移除秒级时间戳并在 run 内冻结复用；时间（分钟级）、任务上下文、Plan 模式与委派提示统一改为尾部消息注入且不落历史；工具列表按名称排序，Codex 可用性判定在 run 内冻结；历史严格只追加，悬挂工具调用的修复结果落盘固化。真实 API 14 轮实测尾部命中率 93%（基线存档 `docs/deepseek-cache-baseline.md`）。
+- DeepSeek 线路长会话显著提速降价：请求前缀改为逐字节稳定以命中 DeepSeek 字节级自动前缀缓存——system prompt 移除秒级时间戳并在 run 内冻结复用；时间（分钟级）、任务上下文、Plan 模式与委派提示统一改为尾部消息注入且不落历史；工具列表按名称排序，Codex 可用性判定在 run 内冻结；历史严格只追加，悬挂工具调用的修复结果落盘固化。真实 API 14 轮实测尾部命中率 93%（基线存档 `docs/archive/deepseek-cache-baseline.md`）。
 - 网络抖动下运行不再直接失败：连接层指数退避重试（≤10 次，仅 408/429/5xx/连接类，4xx 与鉴权失败不重试）；流式响应在产出任何内容前停滞超过 120s（空闲 watchdog）时，用与首试逐字节一致的冻结请求静默重放（≤5 次），失败尝试不写会话；发生重放时运行条目显示「重试 N 次」。
 - 用量统计可观测缓存收益：DeepSeek 流式请求启用 `stream_options.include_usage`，解析 `prompt_cache_hit/miss_tokens`（兼容 OpenAI `prompt_tokens_details.cached_tokens`），原生 Agent 线路 usage 持久化，时间线运行条目显示缓存命中率；前缀形状（system/tools 哈希 + 改写版本）逐轮归因记录缓存变化原因。
 - 长会话接入分层压缩：相对上下文窗口 50% 提示一次、60% 剪除旧工具结果、80% 摘要折叠（保留首个小 user 轮次与尾部原文），连续 2 次压缩即防抖暂停，token 估算用真实 usage 逐轮校准。
@@ -211,5 +246,6 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 [0.3.0]: https://github.com/foritin/r-code/releases/tag/v0.3.0
 [0.3.1]: https://github.com/foritin/r-code/releases/tag/v0.3.1
 [0.3.2]: https://github.com/foritin/r-code/releases/tag/v0.3.2
-[Unreleased]: https://github.com/foritin/r-code/compare/v0.3.3...HEAD
 [0.3.3]: https://github.com/foritin/r-code/releases/tag/v0.3.3
+[Unreleased]: https://github.com/foritin/r-code/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/foritin/r-code/releases/tag/v0.9.0

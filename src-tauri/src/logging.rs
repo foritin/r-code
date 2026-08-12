@@ -13,10 +13,8 @@ static LOG_WRITER_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
 /// 与 Tauri `app_data_dir()/r-code/logs` 对齐的启动期日志目录。
 pub fn default_log_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("com.r-code.app")
-        .join("r-code")
+    crate::app_paths::default_data_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("r-code"))
         .join("logs")
 }
 
@@ -128,6 +126,9 @@ mod tests {
     fn default_log_dir_uses_the_tauri_bundle_identifier() {
         let path = default_log_dir();
         let rendered = path.to_string_lossy().replace('\\', "/");
-        assert!(rendered.ends_with("com.r-code.app/r-code/logs"));
+        assert!(rendered.ends_with(&format!(
+            "{}/r-code/logs",
+            crate::app_paths::bundle_identifier()
+        )));
     }
 }

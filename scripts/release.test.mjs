@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  isPreReleaseVersion,
   parseReleaseTag,
   prepare,
   refreshCargoLock,
@@ -74,6 +75,13 @@ test("stampChangelog preserves CRLF without creating mixed line endings", () => 
   assert.doesNotMatch(actual, /\r\r\n/);
 });
 
+test("dated changelog pre-release marker controls release channel", () => {
+  const changelog = `# Changelog\n\n## [Unreleased]\n\n## [0.9.0] - 2026-08-12\n\n> **预上线版本（Pre-release）**\n\n- Candidate.\n\n## [0.3.3] - 2026-08-11\n\n- Stable.\n`;
+  assert.equal(isPreReleaseVersion(changelog, "0.9.0"), true);
+  assert.equal(isPreReleaseVersion(changelog, "0.3.3"), false);
+  assert.equal(isPreReleaseVersion(changelog, "1.0.0"), false);
+});
+
 function prepareFixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "r-code-release-test-"));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -91,7 +99,7 @@ function prepareFixture(t) {
   const crlf = "\r\n";
   const contents = new Map([
     [paths.cargoToml, `[workspace]${crlf}${crlf}[workspace.package]${crlf}version = "0.1.0"${crlf}repository = "https://github.com/foritin/r-code"${crlf}`],
-    [paths.cargoLock, `[[package]]${crlf}name = "r-code-core"${crlf}version = "0.1.0"${crlf}`],
+    [paths.cargoLock, `[[package]]${crlf}name = "hermes-core"${crlf}version = "0.1.0"${crlf}${crlf}[[package]]${crlf}name = "r-code-core"${crlf}version = "0.1.0"${crlf}`],
     [paths.tauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
     [paths.installerTauri, `{${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
     [paths.packageJson, `{${crlf}  "name": "r-code",${crlf}  "version": "0.1.0"${crlf}}${crlf}`],
@@ -223,6 +231,10 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(workflow, /required=\(PAT_TOKEN TAURI_SIGNING_PRIVATE_KEY\)/);
   assert.match(workflow, /windows_signed: \$\{\{ steps\.release-mode\.outputs\.windows_signed \}\}/);
   assert.match(workflow, /apple_signed: \$\{\{ steps\.release-mode\.outputs\.apple_signed \}\}/);
+  assert.match(workflow, /prerelease: \$\{\{ steps\.release-type\.outputs\.prerelease \}\}/);
+  assert.match(workflow, /name: Detect pre-release marker/);
+  assert.match(workflow, /isPreReleaseVersion/);
+  assert.match(workflow, /这是 1\.0 正式上线前的预上线版本/);
   assert.match(workflow, /Unsigned Windows artifacts/);
   assert.match(workflow, /Ad-hoc macOS artifacts/);
   const fallbackStep = workflow.match(
@@ -233,7 +245,7 @@ test("release workflow falls back per platform while preserving explicit unsigne
   assert.match(fallbackStep, /needs\.validate\.outputs\.apple_signed != 'true'/);
   assert.match(fallbackStep, /APPLE_SIGNING_IDENTITY: .*&& '-' \|\| ''/);
   assert.match(fallbackStep, /args: \$\{\{ matrix\.args \}\} --target \$\{\{ matrix\.rust-target \}\}/);
-  assert.match(fallbackStep, /prerelease: \$\{\{ contains\(env\.RELEASE_TAG, '-unsigned\.'\) \}\}/);
+  assert.match(fallbackStep, /prerelease: \$\{\{ needs\.validate\.outputs\.prerelease == 'true' \}\}/);
   assert.doesNotMatch(fallbackStep, /APPLE_ID|APPLE_PASSWORD|APPLE_TEAM_ID/);
   assert.doesNotMatch(fallbackStep, /tauri\.release-windows\.conf\.json|matrix\.signed_config/);
   assert.match(workflow, /signed_config: "--config tauri\.release-windows\.conf\.json"/);
@@ -437,6 +449,19 @@ test("publish-release requires a public warning for unsigned stable releases", (
   );
   record.body = "<!-- RCODE_UNSIGNED_STABLE_WARNING -->\n> [!WARNING]";
   assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, signingPlan), []);
+});
+
+test("publish-release accepts a standard tag as a changelog-declared pre-release", () => {
+  const tag = "v0.9.0";
+  const tagInfo = parseReleaseTag(tag);
+  const record = {
+    tagName: tag,
+    isDraft: false,
+    isPrerelease: true,
+    body: "Pre-release notes",
+    assets: requiredReleaseAssets(tagInfo.version).map((name) => ({ name, size: 1 })),
+  };
+  assert.deepEqual(validateReleaseRecord(record, tag, tagInfo, null, true), []);
 });
 
 function updaterFixture(tag) {

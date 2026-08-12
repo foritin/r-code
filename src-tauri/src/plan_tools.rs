@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use r_code_core::dto::{RiskLevel, TaskMode};
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
-    PlanItemDraft, PlanItemState, PlanQuestionDraft, PublishPlanInput, RequestPlanQuestionsInput,
-    PlanView, UpdatePlanItemInput,
+    PlanItemDraft, PlanItemState, PlanQuestionDraft, PlanView, PublishPlanInput,
+    RequestPlanQuestionsInput, UpdatePlanItemInput,
 };
 use r_code_gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 use r_code_store::{Database, PlanStore, SessionBranchRepository, TaskRepository};
@@ -294,8 +294,7 @@ impl Tool for PlanPublishTool {
             "plan": &view,
         }))
         .map_err(|error| invalid(format!("serialize plan_publish result: {error}")))?;
-        Ok(ToolExecutionResult::success(content)
-            .with_metadata(authoritative_plan_metadata(&view)))
+        Ok(ToolExecutionResult::success(content).with_metadata(authoritative_plan_metadata(&view)))
     }
 }
 

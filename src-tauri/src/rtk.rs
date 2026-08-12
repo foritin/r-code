@@ -455,13 +455,9 @@ impl RtkManager {
 
 /// Apply the managed RTK directory only to Codex children spawned by R-Code.
 pub fn configure_codex_child(command: &mut Command) {
-    if let Some(data_dir) = default_data_dir() {
+    if let Some(data_dir) = crate::app_paths::default_data_dir() {
         RtkManager::from_data_dir(data_dir).prepend_managed_bin(command);
     }
-}
-
-fn default_data_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|root| root.join("com.r-code.app").join("r-code"))
 }
 
 fn rtk_executable_name() -> &'static str {

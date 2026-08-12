@@ -39,6 +39,8 @@ import type {
   SearchMatch,
   SessionBranch,
   SessionMessage,
+  SubagentSessionMessagePage,
+  SubagentSessionMessagePageRequest,
   Task,
   TaskDetail,
   TaskAgentEngine,
@@ -230,6 +232,9 @@ let mockPlanSequence = 0;
 const terminals: TerminalInfo[] = [
   { id: "demo-terminal-main", state: "idle", shell: "PowerShell", is_busy: false },
 ];
+const terminalOwners = new Map<string, string>([
+  ["demo-terminal-main", "mock-task-queue"],
+]);
 
 terminalOutputs.set(
   "demo-terminal-main",
@@ -1318,17 +1323,95 @@ function searchFiles(query: string, limit: number): SearchMatch[] {
   return matches;
 }
 
-function createTerminal(shell: string): string {
+function requireOwnedTerminal(taskId: string, id: string): TerminalInfo {
+  const terminal = terminals.find((item) => item.id === id);
+  if (!terminal || terminalOwners.get(id) !== taskId) {
+    throw new Error(`terminal not found for this conversation: ${id}`);
+  }
+  return terminal;
+}
+
+function subagentPageRequestArg(args: MockArgs): SubagentSessionMessagePageRequest {
+  const value = args.request;
+  if (value == null) return {};
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("Demo 子代理分页参数无效");
+  const request = value as Record<string, unknown>;
+  return {
+    ...(typeof request.after_cursor === "string" ? { after_cursor: request.after_cursor } : {}),
+    ...(typeof request.before_cursor === "string" ? { before_cursor: request.before_cursor } : {}),
+    ...(typeof request.limit === "number" ? { limit: request.limit } : {}),
+  };
+}
+
+function mockSubagentMessagePage(
+  taskId: string,
+  subagentId: string,
+  request: SubagentSessionMessagePageRequest,
+): SubagentSessionMessagePage {
+  if (request.after_cursor && request.before_cursor) throw new Error("Demo 子代理游标不能同时向前和向后读取");
+  const messages = browserMockSubagentMessages(taskId, subagentId);
+  const limit = Math.max(1, Math.min(250, Math.floor(request.limit ?? 80)));
+  const parseCursor = (value: string | undefined): { start: number; end: number } | null => {
+    if (!value) return null;
+    const match = /^mock:window:(\d+):(\d+)$/.exec(value);
+    if (!match) return null;
+    const start = Number.parseInt(match[1], 10);
+    const end = Number.parseInt(match[2], 10);
+    return start <= end && end <= messages.length ? { start, end } : null;
+  };
+  const requestedCursor = request.after_cursor ?? request.before_cursor;
+  const cursor = parseCursor(requestedCursor);
+  const reset = Boolean(requestedCursor && cursor == null);
+
+  let pageStart: number;
+  let pageEnd: number;
+  let windowStart: number;
+  let windowEnd: number;
+  if (!requestedCursor || reset) {
+    pageEnd = messages.length;
+    pageStart = Math.max(0, pageEnd - limit);
+    windowStart = pageStart;
+    windowEnd = pageEnd;
+  } else if (request.after_cursor) {
+    pageStart = cursor!.end;
+    pageEnd = Math.min(messages.length, pageStart + limit);
+    windowStart = cursor!.start;
+    windowEnd = pageEnd;
+  } else {
+    pageEnd = cursor!.start;
+    pageStart = Math.max(0, pageEnd - limit);
+    windowStart = pageStart;
+    windowEnd = cursor!.end;
+  }
+
+  const pageMessages = messages.slice(pageStart, pageEnd);
+  const windowCursor = `mock:window:${windowStart}:${windowEnd}`;
+  return {
+    messages: copy(pageMessages),
+    call_id_updates: [],
+    // Like the host cursor, both directions carry the complete locally loaded [start, end]
+    // window. An idle append poll therefore cannot forget history loaded via before_cursor.
+    next_cursor: windowCursor,
+    previous_cursor: windowCursor,
+    has_more_before: windowStart > 0,
+    reset,
+    unchanged: Boolean(request.after_cursor && !reset && pageMessages.length === 0),
+  };
+}
+
+function createTerminal(taskId: string, shell: string): string {
+  taskById(taskId);
   const id = nextId("terminal");
   terminals.unshift({ id, state: shell === "Codex CLI" ? "agent" : "idle", shell, is_busy: false });
+  terminalOwners.set(id, taskId);
   terminalOutputs.set(id, `${shell}\r\nR-Code browser demo session\r\n\r\nPS D:\\project\\rust\\r-code> `);
   terminalInputs.set(id, "");
   return id;
 }
 
-function sendTerminalInput(id: string, text: string): void {
-  const terminal = terminals.find((item) => item.id === id);
-  if (!terminal || terminal.state === "exited") throw new Error("终端已经结束");
+function sendTerminalInput(taskId: string, id: string, text: string): void {
+  const terminal = requireOwnedTerminal(taskId, id);
+  if (terminal.state === "exited") throw new Error("终端已经结束");
   let output = terminalOutputs.get(id) ?? "";
   let input = terminalInputs.get(id) ?? "";
   for (const character of text) {
@@ -1543,6 +1626,14 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const index = browserMockTasks.findIndex((candidate) => candidate.id === taskId);
       if (index >= 0) browserMockTasks.splice(index, 1);
       delete browserMockDetails[taskId];
+      for (let terminalIndex = terminals.length - 1; terminalIndex >= 0; terminalIndex -= 1) {
+        const terminalId = terminals[terminalIndex].id;
+        if (terminalOwners.get(terminalId) !== taskId) continue;
+        terminals.splice(terminalIndex, 1);
+        terminalOwners.delete(terminalId);
+        terminalOutputs.delete(terminalId);
+        terminalInputs.delete(terminalId);
+      }
       return undefined;
     }
     case "cmd_task_set_workspace": return copy(setTaskField(args, "workspace_path"));
@@ -1945,6 +2036,14 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         if (taskIndex >= 0) browserMockTasks.splice(taskIndex, 1);
         delete browserMockDetails[taskId];
       }
+      for (let terminalIndex = terminals.length - 1; terminalIndex >= 0; terminalIndex -= 1) {
+        const terminalId = terminals[terminalIndex].id;
+        if (!removedTaskIds.includes(terminalOwners.get(terminalId) ?? "")) continue;
+        terminals.splice(terminalIndex, 1);
+        terminalOwners.delete(terminalId);
+        terminalOutputs.delete(terminalId);
+        terminalInputs.delete(terminalId);
+      }
       for (let notificationIndex = browserMockNotifications.length - 1; notificationIndex >= 0; notificationIndex -= 1) {
         const notification = browserMockNotifications[notificationIndex];
         if (notification.workspace_path === workspacePath || (notification.task_id && removedTaskIds.includes(notification.task_id))) {
@@ -1986,31 +2085,51 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_global_search": return copy(searchFiles(stringArg(args, "query"), typeof args.limit === "number" ? args.limit : 50));
 
-    case "cmd_terminal_list": return copy(terminals);
-    case "cmd_terminal_create": return createTerminal(stringArg(args, "shell"));
-    case "cmd_terminal_create_codex": return createTerminal("Codex CLI");
-    case "cmd_terminal_send": sendTerminalInput(stringArg(args, "id"), stringArg(args, "text")); return undefined;
+    case "cmd_terminal_list": {
+      const taskId = stringArg(args, "taskId");
+      taskById(taskId);
+      return copy(terminals.filter((terminal) => terminalOwners.get(terminal.id) === taskId));
+    }
+    case "cmd_terminal_create": return createTerminal(stringArg(args, "taskId"), stringArg(args, "shell"));
+    case "cmd_terminal_create_codex": return createTerminal(stringArg(args, "taskId"), "Codex CLI");
+    case "cmd_terminal_send": {
+      sendTerminalInput(stringArg(args, "taskId"), stringArg(args, "id"), stringArg(args, "text"));
+      return undefined;
+    }
     case "cmd_terminal_read":
-    case "cmd_terminal_snapshot": return terminalOutputs.get(stringArg(args, "id")) ?? "";
+    case "cmd_terminal_snapshot": {
+      const id = stringArg(args, "id");
+      requireOwnedTerminal(stringArg(args, "taskId"), id);
+      return terminalOutputs.get(id) ?? "";
+    }
     case "cmd_terminal_raw_snapshot": {
-      const output = terminalOutputs.get(stringArg(args, "id")) ?? "";
+      const id = stringArg(args, "id");
+      requireOwnedTerminal(stringArg(args, "taskId"), id);
+      const output = terminalOutputs.get(id) ?? "";
       return { output, cursor: output.length };
     }
     case "cmd_terminal_raw_since": {
-      const output = terminalOutputs.get(stringArg(args, "id")) ?? "";
+      const id = stringArg(args, "id");
+      requireOwnedTerminal(stringArg(args, "taskId"), id);
+      const output = terminalOutputs.get(id) ?? "";
       const cursor = typeof args.cursor === "number" ? args.cursor : 0;
       const reset = cursor > output.length;
       return { output: reset ? output : output.slice(cursor), cursor: output.length, reset };
     }
     case "cmd_terminal_kill": {
-      const terminal = terminals.find((item) => item.id === stringArg(args, "id"));
-      if (terminal) {
-        terminal.state = "exited";
-        terminal.is_busy = false;
-      }
+      const id = stringArg(args, "id");
+      const terminal = requireOwnedTerminal(stringArg(args, "taskId"), id);
+      const index = terminals.indexOf(terminal);
+      if (index >= 0) terminals.splice(index, 1);
+      terminalOwners.delete(id);
+      terminalOutputs.delete(id);
+      terminalInputs.delete(id);
       return undefined;
     }
-    case "cmd_terminal_resize": return undefined;
+    case "cmd_terminal_resize": {
+      requireOwnedTerminal(stringArg(args, "taskId"), stringArg(args, "id"));
+      return undefined;
+    }
 
     case "cmd_recovery_data": return copy(browserMockRecovery);
     case "cmd_recovery_cleanup": {
@@ -2067,6 +2186,11 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       stringArg(args, "branchId"),
     ));
     case "cmd_subagent_session_messages": return copy(browserMockSubagentMessages(stringArg(args, "taskId"), stringArg(args, "subagentId")));
+    case "cmd_subagent_session_message_page": return mockSubagentMessagePage(
+      stringArg(args, "taskId"),
+      stringArg(args, "subagentId"),
+      subagentPageRequestArg(args),
+    );
 
     case "cmd_memory_overview": return copy(mockMemoryOverview);
     case "cmd_memory_update_settings": {

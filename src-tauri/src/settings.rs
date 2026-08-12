@@ -48,10 +48,10 @@ impl ProviderCredentialBackend for OsProviderCredentialBackend {
     }
 }
 
-// Unit tests must not depend on an interactive OS keychain. GitHub's headless macOS
-// runner can accept a Keychain write and still return NoEntry on the next lookup.
-// Namespace the process-local backend by config directory so parallel test states do
-// not see each other's provider credentials.
+// Settings unit tests must not mutate a developer or runner's real credential store.
+// SecretStore owns the target-gated native-backend round-trip test; these tests use a
+// process-local backend namespaced by config directory so parallel states do not see
+// each other's provider credentials.
 #[cfg(test)]
 static TEST_PROVIDER_CREDENTIALS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<(PathBuf, String), String>>,

@@ -2276,9 +2276,11 @@ export function createTerminalInputBuffer(
  * 降级成“命令输入框 + 日志”。
  */
 function TerminalViewport({
+  taskId,
   terminalId,
   onError,
 }: {
+  taskId: string;
   terminalId: string;
   onError: (message: string | null) => void;
 }) {
@@ -2341,7 +2343,7 @@ function TerminalViewport({
       if (disposed || !terminal || !fit || terminalRef.current !== terminal) return;
       try {
         fit.fit();
-        void terminalResize(terminalId, terminal.cols, terminal.rows).catch(report);
+        void terminalResize(taskId, terminalId, terminal.cols, terminal.rows).catch(report);
       } catch {
         // 面板刚挂载或被隐藏时 xterm 可能尚无可测尺寸；下一帧会重试。
       }
@@ -2379,14 +2381,14 @@ function TerminalViewport({
         terminal.open(host);
         terminalRef.current = terminal;
         inputBuffer = createTerminalInputBuffer(
-          (data) => terminalSend(terminalId, data, false),
+          (data) => terminalSend(taskId, terminalId, data, false),
           report,
         );
         inputDisposable = terminal.onData((data) => {
           inputBuffer?.push(data);
         });
 
-        const snapshot = await terminalRawSnapshot(terminalId);
+        const snapshot = await terminalRawSnapshot(taskId, terminalId);
         if (disposed) return;
         cursorRef.current = snapshot.cursor;
         await enqueueWrite(terminalId, snapshot.output, true);
@@ -2408,7 +2410,7 @@ function TerminalViewport({
       if (activeIdRef.current === terminalId) activeIdRef.current = null;
       terminal?.dispose();
     };
-  }, [enqueueWrite, onError, terminalId]);
+  }, [enqueueWrite, onError, taskId, terminalId]);
 
   const pullOutput = useCallback(async () => {
     const state = pullStateRef.current;
@@ -2422,7 +2424,7 @@ function TerminalViewport({
     try {
       do {
         state.requested = false;
-        const batch = await terminalRawSince(terminalId, cursorRef.current);
+        const batch = await terminalRawSince(taskId, terminalId, cursorRef.current);
         if (pullStateRef.current !== state || activeIdRef.current !== terminalId) return;
         cursorRef.current = batch.cursor;
         if (batch.reset || batch.output) {
@@ -2434,7 +2436,7 @@ function TerminalViewport({
     } finally {
       if (pullStateRef.current === state) state.running = false;
     }
-  }, [enqueueWrite, onError, ready, terminalId]);
+  }, [enqueueWrite, onError, ready, taskId, terminalId]);
 
   useEffect(() => {
     if (!ready) return;
@@ -2495,7 +2497,7 @@ function TerminalPanel({
 
   const list = useCallback(async () => {
     try {
-      const ts = await terminalList();
+      const ts = await terminalList(taskId);
       setTerms(ts);
       setSelId((current) =>
         current != null && ts.some((terminal) => terminal.id === current)
@@ -2506,7 +2508,7 @@ function TerminalPanel({
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [taskId]);
 
   useEffect(() => {
     void list();
@@ -2528,7 +2530,7 @@ function TerminalPanel({
     setCreating(true);
     setError(null);
     try {
-      const id = await terminalCreate(shell, workspacePath);
+      const id = await terminalCreate(taskId, shell);
       await list();
       setSelId(id);
     } catch (e) {
@@ -2547,7 +2549,7 @@ function TerminalPanel({
     setError(null);
     try {
       await runWithCodexCli({ feature: "Codex CLI 终端" }, async () => {
-        const id = await terminalCreateCodex(workspacePath);
+        const id = await terminalCreateCodex(taskId);
         await list();
         setSelId(id);
       });
@@ -2561,7 +2563,7 @@ function TerminalPanel({
   const kill = async (id: string) => {
     setError(null);
     try {
-      await terminalKill(id);
+      await terminalKill(taskId, id);
       await list();
     } catch (e) {
       setError(String(e));
@@ -2652,7 +2654,7 @@ function TerminalPanel({
       <div className="term-main">
         {error && <div className="panel-error" role="alert">{error}</div>}
         {sel ? (
-          <TerminalViewport terminalId={sel} onError={reportViewportError} />
+          <TerminalViewport taskId={taskId} terminalId={sel} onError={reportViewportError} />
         ) : (
           <div className="empty">
             {workspacePath && workspaceAttached

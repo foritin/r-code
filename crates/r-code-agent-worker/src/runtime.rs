@@ -78,11 +78,30 @@ pub trait AgentRuntime: Send + Sync {
         Ok(())
     }
 
-    /// 返回当前会话的完整协议工作集，用于持久化恢复。
+    /// 恢复完整历史及其可选的模型投影。默认实现只恢复完整历史，保持第三方 runtime
+    /// 源兼容；原生 runtime 覆盖此方法以恢复压缩投影。
+    async fn replace_context(
+        &mut self,
+        session_id: &str,
+        messages: Vec<Message>,
+        _model_projection: Option<Vec<Message>>,
+    ) -> Result<(), ProductError> {
+        self.replace_history(session_id, messages).await
+    }
+
+    /// 返回当前会话的完整 canonical 协议历史，用于持久化恢复。
     ///
     /// 实现必须包含 Text、ToolUse 与 ToolResult 的原始顺序。默认实现服务于不保存
     /// 本地历史的测试 runtime，返回 `None` 表示调用方继续使用普通事件日志。
     async fn history_snapshot(
+        &mut self,
+        _session_id: &str,
+    ) -> Result<Option<Vec<Message>>, ProductError> {
+        Ok(None)
+    }
+
+    /// 返回当前模型投影。`None` 表示没有投影，Provider 使用完整 canonical 历史。
+    async fn model_projection_snapshot(
         &mut self,
         _session_id: &str,
     ) -> Result<Option<Vec<Message>>, ProductError> {
