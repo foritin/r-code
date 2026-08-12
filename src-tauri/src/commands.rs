@@ -3205,9 +3205,8 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
             .map_err(|_| "terminal ownership state is unavailable".to_string())?;
         let terminal_ids = terminal_owners
             .iter()
-            .filter_map(|(terminal_id, owner_task_id)| {
-                (owner_task_id == task_id).then(|| terminal_id.clone())
-            })
+            .filter(|(_, owner_task_id)| *owner_task_id == task_id)
+            .map(|(terminal_id, _)| terminal_id.clone())
             .collect::<Vec<_>>();
         terminal_owners.retain(|_, owner_task_id| owner_task_id != task_id);
         terminal_ids
@@ -8177,11 +8176,8 @@ pub async fn workspace_forget(
             .map_err(|_| "terminal ownership state is unavailable".to_string())?;
         let terminal_ids = terminal_owners
             .iter()
-            .filter_map(|(terminal_id, owner_task_id)| {
-                task_ids
-                    .contains(owner_task_id)
-                    .then(|| terminal_id.clone())
-            })
+            .filter(|(_, owner_task_id)| task_ids.contains(*owner_task_id))
+            .map(|(terminal_id, _)| terminal_id.clone())
             .collect::<Vec<_>>();
         terminal_owners.retain(|_, owner_task_id| !task_ids.contains(owner_task_id));
         terminal_ids
@@ -8287,9 +8283,8 @@ fn owned_terminal_ids(state: &CommandState, task_id: &str) -> Result<HashSet<Str
         .map_err(|_| "terminal ownership state is unavailable".to_string())?;
     Ok(owners
         .iter()
-        .filter_map(|(terminal_id, owner_task_id)| {
-            (owner_task_id == task_id).then(|| terminal_id.clone())
-        })
+        .filter(|(_, owner_task_id)| *owner_task_id == task_id)
+        .map(|(terminal_id, _)| terminal_id.clone())
         .collect())
 }
 

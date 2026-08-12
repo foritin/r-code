@@ -194,7 +194,8 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
     {
         let conn = v18.conn().unwrap();
         conn.execute_batch(
-            "DROP TABLE plan_reject_operation_files;
+            "DROP TABLE plan_tool_receipts;
+             DROP TABLE plan_reject_operation_files;
              DROP TABLE plan_reject_operations;
              DROP TABLE plan_review_decisions;
              DROP TABLE plan_change_events;
@@ -212,7 +213,7 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
              ALTER TABLE tasks DROP COLUMN goal_active;
              ALTER TABLE agent_runs DROP COLUMN require_approval;
              ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27);",
         )
         .unwrap();
         conn.execute(

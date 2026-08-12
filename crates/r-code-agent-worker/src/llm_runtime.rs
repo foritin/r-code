@@ -8854,7 +8854,7 @@ mod compaction_tests {
 
     #[tokio::test]
     async fn small_session_is_not_compacted() {
-        let messages = vec![
+        let messages = [
             Message::user_text("goal"),
             Message::assistant_text("hello"),
             Message::user_text("thanks"),

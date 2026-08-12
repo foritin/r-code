@@ -32,6 +32,10 @@ keyring = { workspace = true }
 regex = "1"
 cap-std = "4.0.2"
 
+# 可选：跨 crate 复用的测试 fixture。在启用 `testing` feature 时必须属于
+# 通用依赖，不能落入任一平台专属 dependency table。
+tempfile = { version = "3", optional = true }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 # Windows Credential Manager。缺失时 keyring 会回落到无法跨 Entry 持久化的 mock。
 keyring = { workspace = true, features = ["windows-native"] }
@@ -39,9 +43,6 @@ keyring = { workspace = true, features = ["windows-native"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS Keychain。Provider 与 MCP 凭据必须在不同 Entry 实例及应用重启后可读取。
 keyring = { workspace = true, features = ["apple-native"] }
-
-# 可选：测试工具
-tempfile = { version = "3", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
