@@ -13,18 +13,29 @@ const frontendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const viteBin = path.join(frontendDir, "node_modules", "vite", "bin", "vite.js");
 
 function browserExecutable() {
-  const cache = path.join(process.env.LOCALAPPDATA ?? "", "ms-playwright");
-  const cached = fs.existsSync(cache)
-    ? fs.readdirSync(cache)
+  const localAppData = process.env.LOCALAPPDATA ?? "";
+  const playwrightCache = path.join(localAppData, "ms-playwright");
+  const cached = fs.existsSync(playwrightCache)
+    ? fs.readdirSync(playwrightCache)
       .filter((entry) => /^chromium-\d+$/.test(entry))
       .sort((left, right) => Number(right.split("-")[1]) - Number(left.split("-")[1]))
-      .map((entry) => path.join(cache, entry, "chrome-win64", "chrome.exe"))
+      .flatMap((entry) => [
+        path.join(playwrightCache, entry, "chrome-win64", "chrome.exe"),
+        path.join(playwrightCache, entry, "chrome-linux", "chrome"),
+        path.join(playwrightCache, entry, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"),
+      ])
       .find((candidate) => fs.existsSync(candidate))
     : undefined;
+
   return [
     cached,
     path.join(process.env.PROGRAMFILES ?? "", "Google", "Chrome", "Application", "chrome.exe"),
     path.join(process.env.PROGRAMFILES ?? "", "Microsoft", "Edge", "Application", "msedge.exe"),
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
   ].find((candidate) => candidate && fs.existsSync(candidate));
 }
 

@@ -34,6 +34,9 @@ jobs:
       - name: Install frontend dependencies
         working-directory: src-tauri/frontend
         run: npm ci
+      - name: Install Playwright Chromium
+        working-directory: src-tauri/frontend
+        run: npx playwright-core install --with-deps chromium
       - name: Verify flaky-test reporter
         run: node --test scripts/flaky-test-report.test.mjs
       - name: Repeat frontend test suite five times
