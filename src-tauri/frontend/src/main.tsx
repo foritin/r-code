@@ -4,6 +4,10 @@ import App from "./App";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { CodexCliGateProvider } from "./components/codex/CodexCliGate";
 import { CompanionWindow } from "./components/companion/CompanionWindow";
+import {
+  NativeCompanionWindowController,
+  prepareNativeCompanionWindow,
+} from "./components/companion/CompanionWindowController";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/components.css";
@@ -19,12 +23,16 @@ import "./styles/onboarding.css";
 import "./styles/companion.css";
 
 const isCompanionWindow = new URLSearchParams(window.location.search).get("window") === "companion";
+if (isCompanionWindow) prepareNativeCompanionWindow();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
       {isCompanionWindow ? (
-        <CompanionWindow />
+        <>
+          <NativeCompanionWindowController />
+          <CompanionWindow />
+        </>
       ) : (
         /* 全局门禁只属于主窗口；独立 companion 不启动完整 App 副作用。 */
         <CodexCliGateProvider>

@@ -33,6 +33,13 @@ fn ping() -> bool {
     true
 }
 
+/// An independent companion keeps the event loop alive, so closing main must exit the full app
+/// whenever the platform has no remaining restore surface (Dock reopen or a working tray icon).
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn main_close_requires_full_exit(is_main_window: bool, restore_available: bool) -> bool {
+    is_main_window && !restore_available
+}
+
 #[cfg(target_os = "windows")]
 const MAIN_TRAY_ID: &str = "r-code-main-tray";
 #[cfg(target_os = "windows")]
@@ -53,10 +60,16 @@ enum WindowsLifecycleAction {
 
 #[cfg(target_os = "windows")]
 fn windows_close_action(is_main_window: bool, tray_available: bool) -> WindowsLifecycleAction {
-    if is_main_window && tray_available {
-        WindowsLifecycleAction::HideToTray
+    if !is_main_window {
+        return WindowsLifecycleAction::None;
+    }
+    if main_close_requires_full_exit(is_main_window, tray_available) {
+        // The independent companion keeps Tauri's event loop alive after the main window closes.
+        // Without a tray restore affordance, exit both windows explicitly instead of leaving an
+        // unreachable background process.
+        WindowsLifecycleAction::Quit
     } else {
-        WindowsLifecycleAction::None
+        WindowsLifecycleAction::HideToTray
     }
 }
 
@@ -172,6 +185,9 @@ fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
 }
 
 const COMPANION_WINDOW_LABEL: &str = "companion";
+const COMPANION_MIN_INNER_SIZE: (f64, f64) = (108.0, 116.0);
+const COMPANION_INITIAL_INNER_SIZE: (f64, f64) = (168.0, 196.0);
+const COMPANION_MAX_INNER_SIZE: (f64, f64) = (420.0, 360.0);
 
 /// Create the process-wide companion window once, but keep it hidden until the persisted frontend
 /// preference has loaded. The window intentionally has no parent so it can remain available when
@@ -187,12 +203,17 @@ fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         tauri::WebviewUrl::App(PathBuf::from("index.html?window=companion")),
     )
     .title("R-Code Companion")
-    .inner_size(168.0, 196.0)
-    .max_inner_size(420.0, 360.0)
+    .inner_size(
+        COMPANION_INITIAL_INNER_SIZE.0,
+        COMPANION_INITIAL_INNER_SIZE.1,
+    )
+    .min_inner_size(COMPANION_MIN_INNER_SIZE.0, COMPANION_MIN_INNER_SIZE.1)
+    .max_inner_size(COMPANION_MAX_INNER_SIZE.0, COMPANION_MAX_INNER_SIZE.1)
     .resizable(false)
     .decorations(false)
     .shadow(false)
     .transparent(true)
+    .background_color(tauri::webview::Color(0, 0, 0, 0))
     .always_on_top(true)
     .focusable(true)
     .focused(false)
@@ -267,13 +288,13 @@ fn main() {
         .on_window_event(|_window, _event| {
             #[cfg(target_os = "windows")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
-                // Only intercept close when the restore affordance really exists. If Windows
-                // refused tray creation, fall through to Tauri's normal close/exit behavior.
+                // Hide only when a restore tray exists. Without one, explicitly exit both native
+                // windows so the independent companion cannot strand a background process.
                 let action = windows_close_action(
                     _window.label() == "main",
                     _window.app_handle().tray_by_id(MAIN_TRAY_ID).is_some(),
                 );
-                if action == WindowsLifecycleAction::HideToTray {
+                if action != WindowsLifecycleAction::None {
                     api.prevent_close();
                     apply_windows_lifecycle_action(_window.app_handle(), action);
                 }
@@ -293,19 +314,13 @@ fn main() {
             }
 
             #[cfg(target_os = "linux")]
-            if let tauri::WindowEvent::CloseRequested { .. } = _event {
-                if _window.label() == "main" {
-                    // Linux has no tray/reopen controller in this build. Closing the hidden
-                    // companion as well prevents an unreachable background process whose session
-                    // navigation controller disappeared with the main WebView.
-                    if let Some(companion) = _window
-                        .app_handle()
-                        .get_webview_window(COMPANION_WINDOW_LABEL)
-                    {
-                        if let Err(error) = companion.close() {
-                            tracing::warn!(%error, "failed to close companion with the main window");
-                        }
-                    }
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                if main_close_requires_full_exit(_window.label() == "main", false) {
+                    // Linux has no tray/reopen controller in this build. The companion is an
+                    // independent top-level window, so merely closing main would keep the process
+                    // alive. Exit the application atomically and let Tauri close both WebViews.
+                    api.prevent_close();
+                    _window.app_handle().exit(0);
                 }
             }
         })
@@ -781,8 +796,31 @@ async fn run_ipc_server() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod companion_window_tests {
+    use super::*;
+
+    #[test]
+    fn companion_dynamic_sizes_stay_inside_the_native_contract() {
+        assert_eq!(COMPANION_MIN_INNER_SIZE, (108.0, 116.0));
+        assert_eq!(COMPANION_INITIAL_INNER_SIZE, (168.0, 196.0));
+        assert_eq!(COMPANION_MAX_INNER_SIZE, (420.0, 360.0));
+        assert!(COMPANION_MIN_INNER_SIZE.0 <= COMPANION_INITIAL_INNER_SIZE.0);
+        assert!(COMPANION_MIN_INNER_SIZE.1 <= COMPANION_INITIAL_INNER_SIZE.1);
+        assert!(COMPANION_INITIAL_INNER_SIZE.0 <= COMPANION_MAX_INNER_SIZE.0);
+        assert!(COMPANION_INITIAL_INNER_SIZE.1 <= COMPANION_MAX_INNER_SIZE.1);
+    }
+
+    #[test]
+    fn independent_companion_never_strands_mainless_processes() {
+        assert!(main_close_requires_full_exit(true, false));
+        assert!(!main_close_requires_full_exit(true, true));
+        assert!(!main_close_requires_full_exit(false, false));
+    }
+}
+
 #[cfg(all(test, target_os = "windows"))]
-mod tests {
+mod windows_tests {
     use super::*;
 
     #[test]
@@ -793,8 +831,8 @@ mod tests {
         );
         assert_eq!(
             windows_close_action(true, false),
-            WindowsLifecycleAction::None,
-            "without a tray affordance the native close must exit normally"
+            WindowsLifecycleAction::Quit,
+            "without a tray affordance both native windows must exit"
         );
         assert_eq!(
             windows_close_action(false, true),

@@ -6662,16 +6662,32 @@ pub async fn resume_queued_dispatches(state: &CommandState) -> Result<usize, Str
 }
 
 pub async fn agent_abort(state: &CommandState, task_id: &str) -> Result<(), String> {
-    let task = TaskRepository::new(&state.db)
+    // Resolve existence before allocating a task-local bridge for malformed/stale callers. The
+    // task is intentionally re-read after taking the bridge lock below; that second read is the
+    // authoritative stop boundary shared with run finalization and explicit delegation.
+    TaskRepository::new(&state.db)
         .get(task_id)
         .map_err(err_str)?
         .ok_or_else(|| format!("task not found: {task_id}"))?;
-    if task.state == TaskState::Archived {
-        return Err("会话已归档，不能中止运行".to_string());
-    }
     let task_agent = state.agent.bridge_for(task_id).await;
     let abort_result = {
         let mut bridge = task_agent.lock().await;
+        let task = TaskRepository::new(&state.db)
+            .get(task_id)
+            .map_err(err_str)?
+            .ok_or_else(|| format!("task not found: {task_id}"))?;
+        if task.state == TaskState::Archived {
+            return Err("会话已归档，不能中止运行".to_string());
+        }
+        let has_active_main_run = task_has_active_main_run(&state.db, task_id, &bridge)?;
+        if !matches!(task.state, TaskState::Exploring | TaskState::InProgress)
+            && !has_active_main_run
+        {
+            // A card or menu can outlive the run it represented. Once finalization has won this
+            // same lock, Stop is an idempotent no-op: never demote review-ready/idle work merely
+            // because a stale click arrived after the terminal state was persisted.
+            return Ok(());
+        }
         // Publish the stop boundary under the same task-local lock used by explicit delegation.
         // A racing delegate either reserved before this transition (and is cancelled below) or
         // observes Interrupted and cannot create a ghost child after Stop.
@@ -22332,7 +22348,7 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
-    async fn agent_abort_updates_state() {
+    async fn agent_abort_interrupts_an_active_task_state() {
         let (_dir, state) = setup_state();
         let task = task_create(&state, None, "T", "g", "edit").await.unwrap();
 
@@ -22351,6 +22367,40 @@ input.on('line', (line) => {
                 .any(|event| event.event_type == TaskEventType::RunEnded),
             "没有活跃运行时中止不得制造孤儿 run_ended 事件"
         );
+    }
+
+    #[tokio::test]
+    async fn agent_abort_preserves_review_ready_when_a_stale_click_loses_finalization() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Review", "g", "edit")
+            .await
+            .unwrap();
+        let repo = TaskRepository::new(&state.db);
+        repo.update_state(&task.id, TaskState::InProgress).unwrap();
+        // Run finalization wins the same task-local boundary before the delayed UI click arrives.
+        repo.update_state(&task.id, TaskState::ReviewReady).unwrap();
+
+        agent_abort(&state, &task.id).await.unwrap();
+
+        let current = repo.get(&task.id).unwrap().unwrap();
+        assert_eq!(current.state, TaskState::ReviewReady);
+    }
+
+    #[tokio::test]
+    async fn agent_abort_preserves_idle_when_there_is_no_live_run() {
+        let (_dir, state) = setup_state();
+        let task = task_create(&state, None, "Idle", "g", "edit")
+            .await
+            .unwrap();
+        let repo = TaskRepository::new(&state.db);
+        // A zero-change run can reach Idle before a delayed Stop handler is dispatched.
+        repo.update_state(&task.id, TaskState::InProgress).unwrap();
+        repo.update_state(&task.id, TaskState::Idle).unwrap();
+
+        agent_abort(&state, &task.id).await.unwrap();
+
+        let current = repo.get(&task.id).unwrap().unwrap();
+        assert_eq!(current.state, TaskState::Idle);
     }
 
     #[test]

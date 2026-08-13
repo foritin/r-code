@@ -1761,7 +1761,7 @@ function CompanionSection() {
   return (
     <section className="settings-block">
       <h3>R-Code 初音小助手</h3>
-      <p className="desc">独立悬浮在其他应用之上，反馈 session 进度。拖动助手移动；左键查看最近任务并跳转到对应会话，右键关闭。空闲时会偶尔唱歌或跳舞，鼠标移入也会立即回应。所有状态均来自本机任务数据，不会额外调用模型。</p>
+      <p className="desc">独立悬浮在其他应用之上，反馈 session 进度。拖动助手移动；左键查看最近任务并跳转到对应会话，右键关闭。空闲时将鼠标停在助手上会触发挥手或轻快跃动；短暂意图延迟可避免经过窗口边缘时误触。所有状态均来自本机任务数据，不会额外调用模型。</p>
       <div className="field">
         <label htmlFor="set-companion-enabled">显示小助手</label>
         <input
@@ -1823,7 +1823,7 @@ function CompanionSection() {
           <option value="full">完整动效</option>
           <option value="reduced">静态形态</option>
         </select>
-        <span className="hint">唱跳与移入反馈只使用低频计时和合成动画，不持续追踪鼠标；“跟随系统”会遵循减少动态效果设置。</span>
+        <span className="hint">移入反馈只使用低频计时和合成动画，不持续追踪鼠标；“跟随系统”会遵循减少动态效果设置。</span>
       </div>
       <div className="field">
         <label htmlFor="set-companion-sound">状态提示音</label>

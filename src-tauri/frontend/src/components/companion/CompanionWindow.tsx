@@ -1,10 +1,10 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
@@ -16,8 +16,8 @@ import {
   primaryMonitor,
   type Monitor,
 } from "@tauri-apps/api/window";
-import companionSprite from "../../assets/companion/r-code-session-assistant-v2.png";
-import { onAgentEvent } from "../../lib/ipc";
+import { agentAbort, onAgentEvent } from "../../lib/ipc";
+import { isTaskLive } from "../../lib/presentation";
 import type { Task, TaskDetail } from "../../lib/types";
 import {
   companionPreferenceSnapshot,
@@ -27,6 +27,7 @@ import {
 } from "../../store/companion";
 import { useTasksStore } from "../../store/tasks";
 import { shouldPlayCompanionCue, type CompanionMood } from "./policy";
+import { CompanionSprite, type CompanionSpriteState } from "./CompanionSprite";
 import {
   COMPANION_NAVIGATED_EVENT,
   COMPANION_NAVIGATE_EVENT,
@@ -44,6 +45,7 @@ import {
 const COLLAPSED_FULL = { width: 168, height: 196 };
 const COLLAPSED_MINI = { width: 108, height: 116 };
 const EXPANDED = { width: 420, height: 360 };
+const PULSE = { width: 420, height: 360 };
 const WINDOW_INSET = 18;
 const POSITION_KEY = "r-code.companion.native-position.v1";
 const UNREAD_KEY = "r-code.companion.unread-sessions.v1";
@@ -82,8 +84,20 @@ interface SessionProgress {
   unread: boolean;
 }
 
+interface RenderedSessionProgress extends SessionProgress {
+  exiting: boolean;
+}
+
 type CompanionPerformance = "sing" | "dance";
-type CompanionVisualState = CompanionMood | CompanionPerformance;
+type CompanionVisualState = CompanionSpriteState;
+type CompanionPanelSide = "left" | "right";
+type CompanionAvatarVertical = "top" | "bottom";
+
+interface CompanionWindowPlacement {
+  avatarVertical: CompanionAvatarVertical;
+  panelSide: CompanionPanelSide;
+  position: PersistedPosition;
+}
 
 function shouldReduceMotion(motion: CompanionMotion): boolean {
   if (motion === "reduced") return true;
@@ -95,25 +109,122 @@ function collapsedSize(minimized: boolean) {
   return minimized ? COLLAPSED_MINI : COLLAPSED_FULL;
 }
 
+/** Tauri serializes PhysicalPosition as i32; monitor/DPI math may leave IEEE-754 fractions. */
+export function integerPhysicalPosition(position: { x: number; y: number }): { x: number; y: number } {
+  return {
+    x: Math.round(position.x),
+    y: Math.round(position.y),
+  };
+}
+
+function nativePhysicalPosition(position: { x: number; y: number }): PhysicalPosition {
+  const normalized = integerPhysicalPosition(position);
+  return new PhysicalPosition(normalized.x, normalized.y);
+}
+
+function positionForMonitor(position: PersistedPosition, width: number, height: number, monitor: Monitor) {
+  const area = monitor.workArea;
+  const maxX = Math.max(area.position.x, area.position.x + area.size.width - width);
+  const maxY = Math.max(area.position.y, area.position.y + area.size.height - height);
+  return {
+    x: Math.min(Math.max(position.x, area.position.x), maxX),
+    y: Math.min(Math.max(position.y, area.position.y), maxY),
+  };
+}
+
+/**
+ * Expand around the pet's compact top-left anchor, choosing the screen quadrant with room first.
+ * `panelSide` names the content side, so a left panel keeps the pet on the window's right edge.
+ */
+function placementAroundAvatar(
+  avatar: PersistedPosition,
+  compact: { width: number; height: number },
+  target: { width: number; height: number },
+  scale: number,
+  monitor: Monitor | null,
+): CompanionWindowPlacement {
+  const compactWidth = compact.width * scale;
+  const compactHeight = compact.height * scale;
+  const targetWidth = target.width * scale;
+  const targetHeight = target.height * scale;
+  const deltaX = Math.max(0, targetWidth - compactWidth);
+  const deltaY = Math.max(0, targetHeight - compactHeight);
+
+  let panelSide: CompanionPanelSide = "left";
+  let avatarVertical: CompanionAvatarVertical = "bottom";
+  if (monitor) {
+    const area = monitor.workArea;
+    const roomLeft = avatar.x - area.position.x;
+    const roomRight = area.position.x + area.size.width - (avatar.x + compactWidth);
+    const roomAbove = avatar.y - area.position.y;
+    const roomBelow = area.position.y + area.size.height - (avatar.y + compactHeight);
+    panelSide = roomLeft >= deltaX || roomLeft >= roomRight ? "left" : "right";
+    avatarVertical = roomAbove >= deltaY || roomAbove >= roomBelow ? "bottom" : "top";
+  }
+
+  const raw = {
+    x: panelSide === "left" ? avatar.x - deltaX : avatar.x,
+    y: avatarVertical === "bottom" ? avatar.y - deltaY : avatar.y,
+  };
+  return {
+    avatarVertical,
+    panelSide,
+    position: monitor ? positionForMonitor(raw, targetWidth, targetHeight, monitor) : raw,
+  };
+}
+
+function avatarAnchorFromWindow(
+  position: PersistedPosition,
+  size: { width: number; height: number },
+  compact: { width: number; height: number },
+  scale: number,
+  panelSide: CompanionPanelSide,
+  avatarVertical: CompanionAvatarVertical,
+): PersistedPosition {
+  return {
+    x: position.x + (panelSide === "left" ? Math.max(0, size.width - compact.width * scale) : 0),
+    y: position.y + (avatarVertical === "bottom" ? Math.max(0, size.height - compact.height * scale) : 0),
+  };
+}
+
+function persistedPosition(
+  position: PersistedPosition,
+  width: number,
+  height: number,
+  monitor: Monitor,
+): PersistedPosition {
+  const area = monitor.workArea;
+  return {
+    ...position,
+    monitorName: monitor.name,
+    relativeX: (position.x - area.position.x) / Math.max(1, area.size.width - width),
+    relativeY: (position.y - area.position.y) / Math.max(1, area.size.height - height),
+    scaleFactor: monitor.scaleFactor,
+  };
+}
+
 function pendingPermissionCount(detail: TaskDetail | undefined): number {
   return detail?.permissions.filter((permission) => permission.decision === "pending").length ?? 0;
 }
 
 function taskMood(task: Task, detail: TaskDetail | undefined): CompanionMood {
   if (pendingPermissionCount(detail) > 0) return "attention";
+  if (isTaskLive(task, detail)) return "working";
   if (task.state === "interrupted") return "error";
   if (task.state === "review_ready") return "review";
-  if (task.state === "exploring" || task.state === "in_progress") return "working";
   return "idle";
 }
 
 function taskSignature(task: Task, detail: TaskDetail | undefined): string {
-  return `${task.state}:${pendingPermissionCount(detail)}`;
+  return `${task.state}:${Number(isTaskLive(task, detail))}:${pendingPermissionCount(detail)}`;
 }
 
 function taskProgressLabel(task: Task, detail: TaskDetail | undefined): string {
   const pending = pendingPermissionCount(detail);
   if (pending > 0) return `${pending} 项授权等待确认`;
+  if (isTaskLive(task, detail)) {
+    return task.state === "exploring" ? "正在分析项目" : "正在实施";
+  }
   if (task.state === "interrupted") return "运行已中断";
   if (task.state === "review_ready") {
     const changes = detail?.changes.length ?? 0;
@@ -251,9 +362,13 @@ export function CompanionWindow() {
   const refreshDetail = useTasksStore((state) => state.refreshDetail);
   const refreshDetails = useTasksStore((state) => state.refreshDetails);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [panelSide, setPanelSide] = useState<"left" | "right">("left");
+  const [panelSide, setPanelSide] = useState<CompanionPanelSide>("left");
+  const [avatarVertical, setAvatarVertical] = useState<CompanionAvatarVertical>("bottom");
   const [browserMenuOpen, setBrowserMenuOpen] = useState(false);
   const [navigationError, setNavigationError] = useState<string | null>(null);
+  const [stoppingTaskIds, setStoppingTaskIds] = useState<Set<string>>(() => new Set());
+  const [stopErrors, setStopErrors] = useState<Record<string, string>>({});
+  const [navigatingTaskId, setNavigatingTaskId] = useState<string | null>(null);
   const [unread, setUnread] = useState<Set<string>>(readUnread);
   const [successUntil, setSuccessUntil] = useState(0);
   const [performance, setPerformance] = useState<CompanionPerformance | null>(null);
@@ -262,6 +377,13 @@ export function CompanionWindow() {
   const taskSignatures = useRef(new Map<string, string>());
   const anchorPosition = useRef<PersistedPosition | null>(null);
   const panelOpenRef = useRef(panelOpen);
+  const panelSideRef = useRef<CompanionPanelSide>(panelSide);
+  const avatarVerticalRef = useRef<CompanionAvatarVertical>(avatarVertical);
+  const nativeScaleFactorRef = useRef(1);
+  const nativeLayoutGeneration = useRef(0);
+  const nativeLayoutInFlight = useRef(false);
+  const suppressNativeMovesUntil = useRef(0);
+  const pulseOpenRef = useRef(false);
   const movedDuringPointer = useRef(false);
   const pointerDragCandidate = useRef(false);
   const suppressNextClick = useRef(false);
@@ -272,20 +394,61 @@ export function CompanionWindow() {
   const avatarRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const performanceEndTimer = useRef<number | null>(null);
+  const hoverIntentTimer = useRef<number | null>(null);
   const performanceCooldownUntil = useRef(0);
   const interactionTurn = useRef(0);
   const reconciliationInFlight = useRef<Promise<void> | null>(null);
   const pendingNavigation = useRef(new Map<string, (result: CompanionNavigationResult) => void>());
+  const navigatingTaskIdRef = useRef<string | null>(null);
+  const stoppingTaskIdsRef = useRef(new Set<string>());
+  const sessionNodes = useRef(new Map<string, HTMLElement>());
+  const previousSessionRects = useRef(new Map<string, DOMRect>());
+  const previousVisibleSessions = useRef<SessionProgress[]>([]);
+  const sessionExitTimers = useRef(new Map<string, number>());
 
-  panelOpenRef.current = panelOpen;
   const native = isTauriRuntime();
 
+  useEffect(() => {
+    panelOpenRef.current = panelOpen;
+  }, [panelOpen]);
+
+  const applyWindowPlacement = useCallback((placement: CompanionWindowPlacement) => {
+    panelSideRef.current = placement.panelSide;
+    avatarVerticalRef.current = placement.avatarVertical;
+    setPanelSide(placement.panelSide);
+    setAvatarVertical(placement.avatarVertical);
+  }, []);
+
+  const beginNativeLayout = useCallback(() => {
+    const generation = nativeLayoutGeneration.current + 1;
+    nativeLayoutGeneration.current = generation;
+    nativeLayoutInFlight.current = true;
+    return generation;
+  }, []);
+
+  const nativeLayoutIsCurrent = useCallback(
+    (generation: number) => nativeLayoutGeneration.current === generation,
+    [],
+  );
+
+  const finishNativeLayout = useCallback((generation: number) => {
+    if (nativeLayoutGeneration.current !== generation) return;
+    nativeLayoutInFlight.current = false;
+    // Tao/WebKit can deliver the move event just after setPosition resolves. Do not reinterpret
+    // that trailing programmatic event as a user drag and persist a panel-window coordinate.
+    suppressNativeMovesUntil.current = Date.now() + 260;
+  }, []);
+
   const stopPerformance = useCallback(() => {
+    if (hoverIntentTimer.current !== null) {
+      window.clearTimeout(hoverIntentTimer.current);
+      hoverIntentTimer.current = null;
+    }
     if (performanceEndTimer.current !== null) {
       window.clearTimeout(performanceEndTimer.current);
       performanceEndTimer.current = null;
     }
-    performanceCooldownUntil.current = Date.now() + 450;
+    performanceCooldownUntil.current = Date.now() + 650;
     setPerformance(null);
   }, []);
 
@@ -296,81 +459,106 @@ export function CompanionWindow() {
     window.setTimeout(() => avatarRef.current?.focus(), 0);
     if (!native) return;
     const appWindow = getCurrentWindow();
-    await appWindow.setSize(new LogicalSize(
-      collapsedSize(minimized).width,
-      collapsedSize(minimized).height,
-    ));
-    if (anchorPosition.current) {
-      await appWindow.setPosition(new PhysicalPosition(anchorPosition.current.x, anchorPosition.current.y));
+    const compact = collapsedSize(minimized);
+    const nextSize = pulseOpenRef.current ? PULSE : collapsedSize(minimized);
+    const generation = beginNativeLayout();
+    try {
+      await appWindow.setSize(new LogicalSize(nextSize.width, nextSize.height));
+      if (!nativeLayoutIsCurrent(generation)) return;
+      if (anchorPosition.current) {
+        const [scale, monitor] = await Promise.all([appWindow.scaleFactor(), currentMonitor()]);
+        nativeScaleFactorRef.current = scale;
+        if (!nativeLayoutIsCurrent(generation)) return;
+        const placement = pulseOpenRef.current
+          ? placementAroundAvatar(anchorPosition.current, compact, nextSize, scale, monitor)
+          : {
+            avatarVertical: "bottom" as const,
+            panelSide: "left" as const,
+            position: anchorPosition.current,
+          };
+        applyWindowPlacement(placement);
+        await appWindow.setPosition(nativePhysicalPosition(placement.position));
+      }
+    } finally {
+      finishNativeLayout(generation);
     }
-  }, [minimized, native]);
-
-  const positionForMonitor = useCallback((position: PersistedPosition, width: number, height: number, monitor: Monitor) => {
-    const area = monitor.workArea;
-    const maxX = Math.max(area.position.x, area.position.x + area.size.width - width);
-    const maxY = Math.max(area.position.y, area.position.y + area.size.height - height);
-    return {
-      x: Math.min(Math.max(position.x, area.position.x), maxX),
-      y: Math.min(Math.max(position.y, area.position.y), maxY),
-    };
-  }, []);
-
-  const persistedPosition = useCallback((position: PersistedPosition, width: number, height: number, monitor: Monitor): PersistedPosition => {
-    const area = monitor.workArea;
-    return {
-      ...position,
-      monitorName: monitor.name,
-      relativeX: (position.x - area.position.x) / Math.max(1, area.size.width - width),
-      relativeY: (position.y - area.position.y) / Math.max(1, area.size.height - height),
-      scaleFactor: monitor.scaleFactor,
-    };
-  }, []);
+  }, [applyWindowPlacement, beginNativeLayout, finishNativeLayout, minimized, native, nativeLayoutIsCurrent]);
 
   const resetNativePosition = useCallback(async () => {
     if (!native) return;
     const appWindow = getCurrentWindow();
     const monitor = await primaryMonitor();
     if (!monitor) return;
-    const size = await appWindow.outerSize();
-    const rawPosition = {
-      x: monitor.workArea.position.x + monitor.workArea.size.width - size.width - WINDOW_INSET,
-      y: monitor.workArea.position.y + monitor.workArea.size.height - size.height - WINDOW_INSET,
+    const [size, scale] = await Promise.all([appWindow.outerSize(), appWindow.scaleFactor()]);
+    nativeScaleFactorRef.current = scale;
+    const compact = collapsedSize(minimized);
+    const compactWidth = compact.width * scale;
+    const compactHeight = compact.height * scale;
+    const avatarAnchor = {
+      x: monitor.workArea.position.x + monitor.workArea.size.width - compactWidth - WINDOW_INSET * scale,
+      y: monitor.workArea.position.y + monitor.workArea.size.height - compactHeight - WINDOW_INSET * scale,
     };
-    const position = positionForMonitor(rawPosition, size.width, size.height, monitor);
-    await appWindow.setPosition(new PhysicalPosition(position.x, position.y));
-    anchorPosition.current = position;
-    persistPosition(persistedPosition(position, size.width, size.height, monitor));
-  }, [native, persistedPosition, positionForMonitor]);
+    const compactAnchor = positionForMonitor(avatarAnchor, compactWidth, compactHeight, monitor);
+    const target = { width: size.width / scale, height: size.height / scale };
+    const placement = size.width > compactWidth + 1 || size.height > compactHeight + 1
+      ? placementAroundAvatar(compactAnchor, compact, target, scale, monitor)
+      : {
+        avatarVertical: "bottom" as const,
+        panelSide: "left" as const,
+        position: compactAnchor,
+      };
+    applyWindowPlacement(placement);
+    await appWindow.setPosition(nativePhysicalPosition(placement.position));
+    anchorPosition.current = compactAnchor;
+    persistPosition(persistedPosition(compactAnchor, compactWidth, compactHeight, monitor));
+  }, [applyWindowPlacement, minimized, native]);
 
   const restoreNativePosition = useCallback(async () => {
     if (!native) return;
     const appWindow = getCurrentWindow();
     const saved = readPosition();
-    const [monitors, size] = await Promise.all([availableMonitors(), appWindow.outerSize()]);
+    const [monitors, size, scale] = await Promise.all([
+      availableMonitors(),
+      appWindow.outerSize(),
+      appWindow.scaleFactor(),
+    ]);
+    nativeScaleFactorRef.current = scale;
+    const compact = collapsedSize(minimized);
+    const compactWidth = compact.width * scale;
+    const compactHeight = compact.height * scale;
     if (saved) {
       const named = monitors.find((monitor) => monitor.name && monitor.name === saved.monitorName);
       const intersecting = monitors
-        .filter((monitor) => intersectsWorkArea(saved, size.width, size.height, monitor))
-        .sort((a, b) => workAreaIntersection(saved, size.width, size.height, b)
-          - workAreaIntersection(saved, size.width, size.height, a))[0];
+        .filter((monitor) => intersectsWorkArea(saved, compactWidth, compactHeight, monitor))
+        .sort((a, b) => workAreaIntersection(saved, compactWidth, compactHeight, b)
+          - workAreaIntersection(saved, compactWidth, compactHeight, a))[0];
       const monitor = named ?? intersecting;
       if (monitor) {
         const area = monitor.workArea;
-        const restored = named && Number.isFinite(saved.relativeX) && Number.isFinite(saved.relativeY)
+        const restoredAnchor = named && Number.isFinite(saved.relativeX) && Number.isFinite(saved.relativeY)
           ? {
-            x: area.position.x + Math.max(0, Math.min(1, saved.relativeX!)) * Math.max(0, area.size.width - size.width),
-            y: area.position.y + Math.max(0, Math.min(1, saved.relativeY!)) * Math.max(0, area.size.height - size.height),
+            x: area.position.x + Math.max(0, Math.min(1, saved.relativeX!)) * Math.max(0, area.size.width - compactWidth),
+            y: area.position.y + Math.max(0, Math.min(1, saved.relativeY!)) * Math.max(0, area.size.height - compactHeight),
           }
           : saved;
-        const position = positionForMonitor(restored, size.width, size.height, monitor);
-        anchorPosition.current = position;
-        persistPosition(persistedPosition(position, size.width, size.height, monitor));
-        await appWindow.setPosition(new PhysicalPosition(position.x, position.y));
+        const compactAnchor = positionForMonitor(restoredAnchor, compactWidth, compactHeight, monitor);
+        const target = { width: size.width / scale, height: size.height / scale };
+        const placement = size.width > compactWidth + 1 || size.height > compactHeight + 1
+          ? placementAroundAvatar(compactAnchor, compact, target, scale, monitor)
+          : {
+            avatarVertical: "bottom" as const,
+            panelSide: "left" as const,
+            position: compactAnchor,
+          };
+        applyWindowPlacement(placement);
+        anchorPosition.current = compactAnchor;
+        persistPosition(persistedPosition(compactAnchor, compactWidth, compactHeight, monitor));
+        await appWindow.setPosition(nativePhysicalPosition(placement.position));
         return;
       }
     }
     await resetNativePosition();
-  }, [native, persistedPosition, positionForMonitor, resetNativePosition]);
+  }, [applyWindowPlacement, minimized, native, resetNativePosition]);
 
   const openPanel = useCallback(async () => {
     setNavigationError(null);
@@ -380,38 +568,37 @@ export function CompanionWindow() {
     }
     const appWindow = getCurrentWindow();
     panelOpenRef.current = true;
-    const [position, scale, monitor] = await Promise.all([
+    const [position, currentSize, scale, monitor] = await Promise.all([
       appWindow.outerPosition(),
+      appWindow.outerSize(),
       appWindow.scaleFactor(),
       currentMonitor(),
     ]);
-    anchorPosition.current = { x: position.x, y: position.y };
+    nativeScaleFactorRef.current = scale;
     const compact = collapsedSize(minimized);
-    const center = monitor
-      ? monitor.workArea.position.x + monitor.workArea.size.width / 2
-      : position.x + compact.width * scale / 2;
-    const side = position.x + compact.width * scale / 2 >= center ? "left" : "right";
-    setPanelSide(side);
-    await appWindow.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
-    const deltaX = (EXPANDED.width - compact.width) * scale;
-    const deltaY = (EXPANDED.height - compact.height) * scale;
-    const next = {
-      x: side === "left" ? position.x - deltaX : position.x,
-      y: position.y - deltaY,
-    };
-    if (monitor) {
-      next.x = Math.min(
-        Math.max(next.x, monitor.workArea.position.x),
-        monitor.workArea.position.x + monitor.workArea.size.width - EXPANDED.width * scale,
-      );
-      next.y = Math.min(
-        Math.max(next.y, monitor.workArea.position.y),
-        monitor.workArea.position.y + monitor.workArea.size.height - EXPANDED.height * scale,
-      );
-    }
-    await appWindow.setPosition(new PhysicalPosition(next.x, next.y));
+    // The actual window position is authoritative. A drag can be followed by a click before the
+    // debounced persistence timer fires; using a cached anchor there would make close jump back.
+    const avatarPosition = avatarAnchorFromWindow(
+      position,
+      currentSize,
+      compact,
+      scale,
+      panelSideRef.current,
+      avatarVerticalRef.current,
+    );
+    anchorPosition.current = avatarPosition;
+    const placement = placementAroundAvatar(avatarPosition, compact, EXPANDED, scale, monitor);
+    applyWindowPlacement(placement);
     setPanelOpen(true);
-  }, [minimized, native]);
+    const generation = beginNativeLayout();
+    try {
+      await appWindow.setSize(new LogicalSize(EXPANDED.width, EXPANDED.height));
+      if (!nativeLayoutIsCurrent(generation)) return;
+      await appWindow.setPosition(nativePhysicalPosition(placement.position));
+    } finally {
+      finishNativeLayout(generation);
+    }
+  }, [applyWindowPlacement, beginNativeLayout, finishNativeLayout, minimized, native, nativeLayoutIsCurrent]);
 
   const disableCompanion = useCallback(async () => {
     setBrowserMenuOpen(false);
@@ -472,13 +659,32 @@ export function CompanionWindow() {
     let unlisten: (() => void) | undefined;
     let persistTimer: number | null = null;
     let moveGeneration = 0;
-    let latestPosition: PersistedPosition | null = null;
+    let latestAnchor: PersistedPosition | null = null;
     void appWindow.onMoved(({ payload }) => {
       if (pointerDragCandidate.current) movedDuringPointer.current = true;
-      if (panelOpenRef.current) return;
-      const position = { x: payload.x, y: payload.y };
-      anchorPosition.current = position;
-      latestPosition = position;
+      if (
+        panelOpenRef.current
+        || nativeLayoutInFlight.current
+        || Date.now() < suppressNativeMovesUntil.current
+      ) return;
+      const compact = collapsedSize(useCompanionStore.getState().minimized);
+      const scale = nativeScaleFactorRef.current;
+      // Snapshot the layout at the move event. A pulse can finish before the persistence debounce;
+      // deriving the anchor later from mutable refs would reinterpret this coordinate system.
+      latestAnchor = pulseOpenRef.current
+        ? avatarAnchorFromWindow(
+          { x: payload.x, y: payload.y },
+          {
+            width: PULSE.width * scale,
+            height: PULSE.height * scale,
+          },
+          compact,
+          scale,
+          panelSideRef.current,
+          avatarVerticalRef.current,
+        )
+        : { x: payload.x, y: payload.y };
+      anchorPosition.current = latestAnchor;
       moveGeneration += 1;
       const generation = moveGeneration;
       if (persistTimer !== null) window.clearTimeout(persistTimer);
@@ -486,13 +692,15 @@ export function CompanionWindow() {
       // after movement settles, so dragging never creates an IPC/localStorage write storm.
       persistTimer = window.setTimeout(() => {
         persistTimer = null;
-        const settled = latestPosition;
-        if (!settled) return;
-        void Promise.all([appWindow.outerSize(), currentMonitor()]).then(([size, monitor]) => {
+        const settledAnchor = latestAnchor;
+        if (!settledAnchor) return;
+        void Promise.all([appWindow.scaleFactor(), currentMonitor()]).then(([scale, monitor]) => {
           if (disposed || generation !== moveGeneration) return;
+          const compact = collapsedSize(useCompanionStore.getState().minimized);
+          nativeScaleFactorRef.current = scale;
           persistPosition(monitor
-            ? persistedPosition(settled, size.width, size.height, monitor)
-            : settled);
+            ? persistedPosition(settledAnchor, compact.width * scale, compact.height * scale, monitor)
+            : settledAnchor);
         });
       }, 160);
     }).then((cleanup) => {
@@ -504,7 +712,7 @@ export function CompanionWindow() {
       if (persistTimer !== null) window.clearTimeout(persistTimer);
       unlisten?.();
     };
-  }, [native, persistedPosition]);
+  }, [native]);
 
   useEffect(() => {
     if (!native) return;
@@ -526,13 +734,25 @@ export function CompanionWindow() {
         // Windows does not expose all-workspace placement; always-on-top still applies.
       }
       if (disposed) return;
-      await closePanel();
+      try {
+        await closePanel();
+      } catch (error) {
+        console.warn("Companion compact layout could not be restored; showing at its current size.", error);
+      }
       if (disposed) return;
-      await restoreNativePosition();
+      try {
+        await restoreNativePosition();
+      } catch (error) {
+        // Position persistence is convenience state. A stale/corrupt coordinate must never leave
+        // an enabled companion permanently hidden.
+        console.warn("Companion position could not be restored; showing at its current position.", error);
+      }
       if (disposed) return;
       await appWindow.show();
     };
-    void update();
+    void update().catch((error) => {
+      console.error("Companion window could not be shown.", error);
+    });
     return () => {
       disposed = true;
     };
@@ -552,8 +772,7 @@ export function CompanionWindow() {
         .slice(0, 12)
         .filter((task) => {
           const detail = snapshot.details[task.id];
-          return task.state === "exploring"
-            || task.state === "in_progress"
+          return isTaskLive(task, detail)
             || !detail
             || detail.task.updated_at !== task.updated_at
             || detail.task.state !== task.state;
@@ -581,8 +800,7 @@ export function CompanionWindow() {
       }
       if (!disposed) {
         const snapshot = useTasksStore.getState();
-        const active = snapshot.tasks.some((task) => task.state === "exploring"
-          || task.state === "in_progress"
+        const active = snapshot.tasks.some((task) => isTaskLive(task, snapshot.details[task.id])
           || pendingPermissionCount(snapshot.details[task.id]) > 0);
         // Agent events remain immediate. The fallback only stays brisk while work is active; an
         // idle always-on-top window must not repeatedly hydrate large task histories all day.
@@ -644,8 +862,8 @@ export function CompanionWindow() {
       const previous = taskSignatures.current.get(task.id);
       if (!previous || previous === signature) continue;
       const mood = taskMood(task, detail);
-      const previousWasActive = previous.startsWith("exploring:") || previous.startsWith("in_progress:");
-      if (previousWasActive && task.state === "idle") {
+      const previousWasActive = previous.split(":")[1] === "1";
+      if (previousWasActive && !isTaskLive(task, detail) && task.state === "idle") {
         meaningful.push({ taskId: task.id, mood: "success" });
         completed = true;
       } else if (mood === "attention" || mood === "error" || mood === "review") {
@@ -718,6 +936,137 @@ export function CompanionWindow() {
     })
     .slice(0, 4), [allSessions]);
 
+  const pulseSessions = useMemo<SessionProgress[]>(() => [...allSessions]
+    .filter((session) => isTaskLive(session.task, details[session.task.id]) || session.unread)
+    .sort((a, b) => {
+      const priorityDelta = MOOD_PRIORITY[b.mood] - MOOD_PRIORITY[a.mood];
+      if (priorityDelta) return priorityDelta;
+      return Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
+    })
+    .slice(0, 2), [allSessions, details]);
+
+  const pulseVisible = !panelOpen && pulseSessions.length > 0;
+  pulseOpenRef.current = pulseSessions.length > 0;
+
+  useEffect(() => {
+    if (!native || panelOpen) return;
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    const resize = async () => {
+      while (nativeLayoutInFlight.current && !disposed) {
+        await new Promise((resolve) => window.setTimeout(resolve, 32));
+      }
+      if (disposed || panelOpenRef.current) return;
+      const currentSize = await appWindow.outerSize();
+      const scale = await appWindow.scaleFactor();
+      nativeScaleFactorRef.current = scale;
+      const target = pulseVisible ? PULSE : collapsedSize(minimized);
+      const targetWidth = target.width * scale;
+      const targetHeight = target.height * scale;
+      if (
+        Math.abs(currentSize.width - targetWidth) < 1
+        && Math.abs(currentSize.height - targetHeight) < 1
+      ) return;
+      const [position, monitor] = await Promise.all([appWindow.outerPosition(), currentMonitor()]);
+      const compact = collapsedSize(minimized);
+      const avatarAnchor = anchorPosition.current ?? avatarAnchorFromWindow(
+        position,
+        currentSize,
+        compact,
+        scale,
+        panelSideRef.current,
+        avatarVerticalRef.current,
+      );
+      const generation = beginNativeLayout();
+      try {
+        const placement = pulseVisible
+          ? placementAroundAvatar(avatarAnchor, compact, target, scale, monitor)
+          : {
+            avatarVertical: "bottom" as const,
+            panelSide: "left" as const,
+            position: avatarAnchor,
+          };
+        applyWindowPlacement(placement);
+        await appWindow.setSize(new LogicalSize(target.width, target.height));
+        if (disposed || !nativeLayoutIsCurrent(generation)) return;
+        await appWindow.setPosition(nativePhysicalPosition(placement.position));
+      } finally {
+        finishNativeLayout(generation);
+      }
+    };
+    void resize().catch(() => {});
+    return () => { disposed = true; };
+  }, [
+    applyWindowPlacement,
+    beginNativeLayout,
+    finishNativeLayout,
+    minimized,
+    native,
+    nativeLayoutIsCurrent,
+    panelOpen,
+    pulseVisible,
+  ]);
+
+  const [renderedSessions, setRenderedSessions] = useState<RenderedSessionProgress[]>(() =>
+    sessions.map((session) => ({ ...session, exiting: false })),
+  );
+
+  useEffect(() => {
+    const nextIds = new Set(sessions.map((session) => session.task.id));
+    for (const session of sessions) {
+      const timer = sessionExitTimers.current.get(session.task.id);
+      if (timer !== undefined) window.clearTimeout(timer);
+      sessionExitTimers.current.delete(session.task.id);
+    }
+    const removed = previousVisibleSessions.current.filter((session) => !nextIds.has(session.task.id));
+    setRenderedSessions((current) => {
+      const currentById = new Map(current.map((session) => [session.task.id, session]));
+      const exiting = current
+        .filter((session) => !nextIds.has(session.task.id))
+        .map((session) => ({ ...session, exiting: true }));
+      for (const session of removed) {
+        if (!currentById.has(session.task.id)) exiting.push({ ...session, exiting: true });
+      }
+      return [
+        ...sessions.map((session) => ({ ...session, exiting: false })),
+        ...exiting,
+      ];
+    });
+    for (const session of removed) {
+      if (sessionExitTimers.current.has(session.task.id)) continue;
+      const timer = window.setTimeout(() => {
+        sessionExitTimers.current.delete(session.task.id);
+        setRenderedSessions((current) => current.filter((item) => item.task.id !== session.task.id));
+      }, 190);
+      sessionExitTimers.current.set(session.task.id, timer);
+    }
+    previousVisibleSessions.current = sessions;
+  }, [sessions]);
+
+  useEffect(() => () => {
+    for (const timer of sessionExitTimers.current.values()) window.clearTimeout(timer);
+    sessionExitTimers.current.clear();
+  }, []);
+
+  useLayoutEffect(() => {
+    const nextRects = new Map<string, DOMRect>();
+    for (const [taskId, node] of sessionNodes.current) nextRects.set(taskId, node.getBoundingClientRect());
+    if (!shouldReduceMotion(motion)) {
+      for (const [taskId, nextRect] of nextRects) {
+        const previousRect = previousSessionRects.current.get(taskId);
+        const node = sessionNodes.current.get(taskId);
+        if (!previousRect || !node || typeof node.animate !== "function") continue;
+        const deltaY = previousRect.top - nextRect.top;
+        if (Math.abs(deltaY) < 1) continue;
+        node.animate(
+          [{ transform: `translateY(${deltaY}px)` }, { transform: "translateY(0)" }],
+          { duration: 220, easing: "cubic-bezier(.2,.8,.2,1)" },
+        );
+      }
+    }
+    previousSessionRects.current = nextRects;
+  }, [motion, renderedSessions]);
+
   const mood = useMemo<CompanionMood>(() => {
     // The avatar summarizes every live session, not only the four rows that fit in the panel.
     const moods = allSessions.map((session) => session.mood);
@@ -730,18 +1079,6 @@ export function CompanionWindow() {
   }, [allSessions, successUntil]);
 
   const visualState: CompanionVisualState = mood === "idle" && performance ? performance : mood;
-  const visualMoodRef = useRef<CompanionVisualState>(visualState);
-  const [visualMood, setVisualMood] = useState<CompanionVisualState>(visualState);
-  const [previousVisualMood, setPreviousVisualMood] = useState<CompanionVisualState | null>(null);
-  useEffect(() => {
-    const previous = visualMoodRef.current;
-    if (previous === visualState) return;
-    visualMoodRef.current = visualState;
-    setPreviousVisualMood(previous);
-    setVisualMood(visualState);
-    const timer = window.setTimeout(() => setPreviousVisualMood(null), 220);
-    return () => window.clearTimeout(timer);
-  }, [visualState]);
 
   const beginPerformance = useCallback((next: CompanionPerformance, duration?: number) => {
     if (!enabled || document.visibilityState === "hidden") return;
@@ -750,28 +1087,22 @@ export function CompanionWindow() {
     setPerformance(next);
     performanceEndTimer.current = window.setTimeout(() => {
       performanceEndTimer.current = null;
-      performanceCooldownUntil.current = Date.now() + 450;
+      performanceCooldownUntil.current = Date.now() + 650;
       setPerformance(null);
-    }, duration ?? (next === "sing" ? 2_600 : 3_600));
+    }, duration ?? (next === "sing" ? 1_550 : 1_800));
   }, [enabled, mood, motion]);
 
-  useEffect(() => {
-    if (!enabled || mood !== "idle" || panelOpen || shouldReduceMotion(motion)) {
-      if (performanceEndTimer.current !== null || performance) stopPerformance();
-      return;
-    }
-    if (performance || document.visibilityState === "hidden") return;
-    // One coarse timeout drives an occasional performance. All movement stays on compositor-only
-    // CSS transforms: no pointermove listener, requestAnimationFrame loop, canvas or video decoder.
-    const timer = window.setTimeout(() => {
-      beginPerformance(Math.random() < 0.5 ? "sing" : "dance");
-    }, 8_000 + Math.random() * 8_000);
-    return () => window.clearTimeout(timer);
-  }, [beginPerformance, enabled, mood, motion, panelOpen, performance, stopPerformance]);
-
   useEffect(() => () => {
+    if (hoverIntentTimer.current !== null) window.clearTimeout(hoverIntentTimer.current);
     if (performanceEndTimer.current !== null) window.clearTimeout(performanceEndTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (mood === "idle" && !panelOpen && enabled && !shouldReduceMotion(motion)) return;
+    if (performanceEndTimer.current !== null || hoverIntentTimer.current !== null || performance) {
+      stopPerformance();
+    }
+  }, [enabled, mood, motion, panelOpen, performance, stopPerformance]);
 
   const unreadCount = allSessions.filter((session) => session.unread).length;
   const activeCount = allSessions.filter((session) => session.mood === "working").length;
@@ -865,8 +1196,36 @@ export function CompanionWindow() {
   };
 
   const navigateToSession = async (taskId: string) => {
+    if (navigatingTaskIdRef.current !== null) return;
+    navigatingTaskIdRef.current = taskId;
+    setNavigatingTaskId(taskId);
     setNavigationError(null);
-    if (!native) {
+    try {
+      if (!native) {
+        setUnread((current) => {
+          const next = new Set(current);
+          next.delete(taskId);
+          persistUnread(next);
+          return next;
+        });
+        await closePanel();
+        return;
+      }
+      const requestId = `companion-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const result = new Promise<CompanionNavigationResult>((resolve) => {
+        pendingNavigation.current.set(requestId, resolve);
+        window.setTimeout(() => {
+          if (!pendingNavigation.current.delete(requestId)) return;
+          resolve({ requestId, taskId, ok: false, message: "打开会话超时" });
+        }, 5_000);
+      });
+      const request: CompanionNavigationRequest = { requestId, taskId };
+      await emitToWindow(MAIN_WINDOW_LABEL, COMPANION_NAVIGATE_EVENT, request);
+      const response = await result;
+      if (!response.ok) {
+        setNavigationError(response.message ?? "无法打开这个会话");
+        return;
+      }
       setUnread((current) => {
         const next = new Set(current);
         next.delete(taskId);
@@ -874,38 +1233,103 @@ export function CompanionWindow() {
         return next;
       });
       await closePanel();
-      return;
+    } finally {
+      navigatingTaskIdRef.current = null;
+      setNavigatingTaskId(null);
     }
-    const requestId = `companion-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const result = new Promise<CompanionNavigationResult>((resolve) => {
-      pendingNavigation.current.set(requestId, resolve);
-      window.setTimeout(() => {
-        if (!pendingNavigation.current.delete(requestId)) return;
-        resolve({ requestId, taskId, ok: false, message: "打开会话超时" });
-      }, 5_000);
-    });
-    const request: CompanionNavigationRequest = { requestId, taskId };
-    await emitToWindow(MAIN_WINDOW_LABEL, COMPANION_NAVIGATE_EVENT, request);
-    const response = await result;
-    if (!response.ok) {
-      setNavigationError(response.message ?? "无法打开这个会话");
-      return;
-    }
-    setUnread((current) => {
-      const next = new Set(current);
-      next.delete(taskId);
-      persistUnread(next);
+  };
+
+  const stopSession = async (taskId: string) => {
+    // State updates are asynchronous; this ref closes the same-tick double-click window too.
+    if (stoppingTaskIdsRef.current.has(taskId)) return;
+    stoppingTaskIdsRef.current.add(taskId);
+    setStoppingTaskIds((current) => new Set(current).add(taskId));
+    setStopErrors((current) => {
+      if (!(taskId in current)) return current;
+      const next = { ...current };
+      delete next[taskId];
       return next;
     });
-    await closePanel();
+    try {
+      await agentAbort(taskId);
+      await Promise.allSettled([refreshTasks(), refreshDetail(taskId)]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStopErrors((current) => ({ ...current, [taskId]: `停止失败：${message}` }));
+      // A failed stop must remain actionable and unread; a later successful navigation is the
+      // only interaction that acknowledges this session.
+      setUnread((current) => {
+        const next = new Set(current).add(taskId);
+        persistUnread(next);
+        return next;
+      });
+      await Promise.allSettled([refreshTasks(), refreshDetail(taskId)]);
+    } finally {
+      stoppingTaskIdsRef.current.delete(taskId);
+      setStoppingTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+    }
+  };
+
+  const renderSessionCard = (session: SessionProgress, compact: boolean) => {
+    const detail = details[session.task.id];
+    const live = isTaskLive(session.task, detail);
+    const stopping = stoppingTaskIds.has(session.task.id);
+    const navigating = navigatingTaskId === session.task.id;
+    const stopError = stopErrors[session.task.id];
+    return (
+      <div
+        role="listitem"
+        key={session.task.id}
+        className={`companion-session-card${compact ? " is-pulse" : ""}`}
+      >
+        <button
+          type="button"
+          className={`companion-session-row state-${session.mood}${session.unread ? " is-unread" : ""}`}
+          disabled={navigating}
+          onClick={() => void navigateToSession(session.task.id)}
+          aria-label={`${session.task.title}，${session.label}，${relativeTime(session.task.updated_at)}${session.unread ? "，未读" : ""}`}
+        >
+          <span className="companion-session-dot" aria-hidden="true" />
+          <span className="companion-session-copy">
+            <strong>{session.task.title}</strong>
+            <small>{session.label} · {relativeTime(session.task.updated_at)}</small>
+          </span>
+          {session.unread && <i aria-hidden="true" />}
+          <span className="companion-session-arrow" aria-hidden="true">›</span>
+        </button>
+        <div className="companion-session-actions" aria-label={`${session.task.title} 操作`}>
+          <button
+            type="button"
+            disabled={navigating || stopping}
+            onClick={() => void navigateToSession(session.task.id)}
+          >
+            {navigating ? "打开中…" : "继续跟进"}
+          </button>
+          {live && (
+            <button
+              type="button"
+              className="is-stop"
+              disabled={stopping || navigating}
+              onClick={() => void stopSession(session.task.id)}
+            >
+              {stopping ? "停止中…" : "停止当前运行"}
+            </button>
+          )}
+        </div>
+        {stopError && <p className="companion-session-error" role="alert">{stopError}</p>}
+      </div>
+    );
   };
 
   if (!enabled) return null;
 
   return (
     <main
-      className={`companion-window-root${panelOpen ? " is-expanded" : ""}${hovered ? " is-hovered" : ""} panel-${panelSide} state-${mood} performance-${performance ?? "none"} motion-${motion}${minimized ? " is-mini" : ""}`}
-      style={{ "--companion-sprite": `url(${companionSprite})` } as CSSProperties}
+      className={`companion-window-root${panelOpen ? " is-expanded" : ""}${pulseVisible ? " has-pulses" : ""}${hovered ? " is-hovered" : ""} panel-${panelSide} avatar-${avatarVertical} state-${mood} performance-${performance ?? "none"} motion-${motion}${minimized ? " is-mini" : ""}`}
       onContextMenu={showCloseMenu}
       aria-label="R-Code session 助手窗口"
     >
@@ -919,28 +1343,32 @@ export function CompanionWindow() {
             <button data-companion-panel-close type="button" onClick={() => void closePanel()} aria-label="关闭最近任务">×</button>
           </header>
           <div className="companion-session-list" role="list">
-            {sessions.length === 0 ? (
+            {renderedSessions.length === 0 ? (
               <p className="companion-empty">还没有会话，我会在这里反馈进度。</p>
-            ) : sessions.map((session) => (
-              <div role="listitem" key={session.task.id}>
-                <button
-                  type="button"
-                  className={`companion-session-row state-${session.mood}${session.unread ? " is-unread" : ""}`}
-                  onClick={() => void navigateToSession(session.task.id)}
-                  aria-label={`${session.task.title}，${session.label}，${relativeTime(session.task.updated_at)}${session.unread ? "，未读" : ""}`}
-                >
-                  <span className="companion-session-dot" aria-hidden="true" />
-                  <span className="companion-session-copy">
-                    <strong>{session.task.title}</strong>
-                    <small>{session.label} · {relativeTime(session.task.updated_at)}</small>
-                  </span>
-                  {session.unread && <i aria-hidden="true" />}
-                  <span className="companion-session-arrow" aria-hidden="true">›</span>
-                </button>
+            ) : renderedSessions.map((session) => (
+              <div
+                role="listitem"
+                key={session.task.id}
+                ref={(node) => {
+                  if (node) sessionNodes.current.set(session.task.id, node);
+                  else sessionNodes.current.delete(session.task.id);
+                }}
+                className={`companion-session-card${session.exiting ? " is-exiting" : ""}`}
+              >
+                {renderSessionCard(session, false).props.children}
               </div>
             ))}
           </div>
           {navigationError && <p className="companion-navigation-error" role="alert">{navigationError}</p>}
+        </section>
+      )}
+
+      {pulseVisible && (
+        <section className="companion-pulse-stack" aria-label="Session 进度提醒" aria-live="polite">
+          <div role="list">
+            {pulseSessions.map((session) => renderSessionCard(session, true))}
+          </div>
+          {navigationError && <p className="companion-pulse-error" role="alert">{navigationError}</p>}
         </section>
       )}
 
@@ -955,13 +1383,23 @@ export function CompanionWindow() {
         onPointerDown={handlePointerDown}
         onPointerEnter={() => {
           setHovered(true);
-          if (mood === "idle") {
+          if (mood !== "idle" || hoverIntentTimer.current !== null) return;
+          // Codex uses an intentional hover reaction rather than random background motion. A
+          // short intent delay prevents repeated edge crossings from restarting full-body poses.
+          hoverIntentTimer.current = window.setTimeout(() => {
+            hoverIntentTimer.current = null;
             const next = interactionTurn.current % 2 === 0 ? "sing" : "dance";
             interactionTurn.current += 1;
             beginPerformance(next);
+          }, 320);
+        }}
+        onPointerLeave={() => {
+          setHovered(false);
+          if (hoverIntentTimer.current !== null) {
+            window.clearTimeout(hoverIntentTimer.current);
+            hoverIntentTimer.current = null;
           }
         }}
-        onPointerLeave={() => setHovered(false)}
         onClick={() => void togglePanel()}
         onContextMenu={showCloseMenu}
         onKeyDown={(event) => {
@@ -975,28 +1413,18 @@ export function CompanionWindow() {
       >
         <span className="companion-aura" aria-hidden="true" />
         <span className="companion-hover-spark" aria-hidden="true">♪</span>
-        {previousVisualMood && (
-          <span
-            key={`leaving-${previousVisualMood}`}
-            className="companion-frame-layer is-leaving"
-            aria-hidden="true"
-          >
-            <span className={`companion-sprite-frame sprite-state-${previousVisualMood}`} />
-          </span>
-        )}
         <span
-          key={`current-${visualMood}`}
+          key="companion-sequence"
           className="companion-frame-layer is-current"
           aria-hidden="true"
         >
-          <span className={`companion-sprite-frame sprite-state-${visualMood}`} />
+          <CompanionSprite motion={motion} state={visualState} />
         </span>
         {unreadCount > 0 && (
           <span className="companion-unread-badge" aria-hidden="true">
             {unreadCount > 9 ? "9+" : unreadCount}
           </span>
         )}
-        <span className="companion-ground-shadow" aria-hidden="true" />
       </button>
 
       {browserMenuOpen && (

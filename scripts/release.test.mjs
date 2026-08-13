@@ -174,10 +174,10 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
   assert.equal(config.build.runner.cmd, "../scripts/cargo-tauri-macos-runner.sh");
   assert.equal(config.app.macOSPrivateApi, true);
   assert.ok(globalDependencies, "the host manifest must define global dependencies");
-  assert.doesNotMatch(
+  assert.match(
     globalDependencies,
     /macos-private-api/,
-    "macos-private-api must be enabled by the macOS Tauri config, not for every target",
+    "Tauri requires macos-private-api in the top-level dependency when the macOS config enables it",
   );
   assert.equal(window.decorations, true);
   assert.equal(window.titleBarStyle, "Overlay");

@@ -61,7 +61,9 @@ base64 = { workspace = true }
 tempfile = { workspace = true }
 
 # Tauri 桌面应用壳
-tauri = { workspace = true }
+# Tauri's build-script allowlist validates this feature from the top-level dependency declaration
+# whenever `tauri.macos.conf.json` enables `macOSPrivateApi`; target-scoped features are ignored.
+tauri = { workspace = true, features = ["macos-private-api"] }
 tauri-plugin-updater = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = "2"

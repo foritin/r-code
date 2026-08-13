@@ -1,0 +1,34 @@
+.companion-sprite-frame.companion-sequence-frame {
+  right: 0;
+  bottom: 6px;
+  width: 168px;
+  height: 182px;
+  contain: paint;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+  filter: none;
+  transform: none;
+  will-change: auto;
+}
+
+.companion-window-root.is-expanded .companion-sprite-frame.companion-sequence-frame {
+  width: 168px;
+  height: 182px;
+}
+
+.companion-window-root.is-mini:not(.is-expanded) .companion-sprite-frame.companion-sequence-frame {
+  right: 2px;
+  bottom: 1px;
+  width: 104px;
+  height: 113px;
+}
+
+.companion-window-root.motion-reduced .companion-sequence-frame {
+  will-change: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-window-root:not(.motion-full) .companion-sequence-frame {
+    will-change: auto;
+  }
+}

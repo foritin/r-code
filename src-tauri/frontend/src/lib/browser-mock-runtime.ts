@@ -1272,6 +1272,19 @@ function messagesForBranch(taskId: string, branchId: string): SessionMessage[] {
 function abortTask(taskId: string): void {
   const task = taskById(taskId);
   const detail = detailById(taskId);
+  if (task.state === "archived") throw new Error("会话已归档，不能中止运行");
+  const hasActiveMainRun = detail.runs.some(
+    (run) => run.agent_kind === "main" && run.ended_at == null,
+  );
+  if (
+    task.state !== "exploring"
+    && task.state !== "in_progress"
+    && !hasActiveMainRun
+  ) {
+    // Mirror the native command: a stale Stop that loses to run finalization is a no-op and must
+    // not overwrite review-ready or idle state in browser-backed product tests.
+    return;
+  }
   const endedAt = nowIso();
   for (const run of detail.runs) {
     if (run.ended_at == null) {

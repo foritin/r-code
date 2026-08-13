@@ -50,6 +50,18 @@ async function waitForServer(url, child) {
   throw new Error("Timed out waiting for the frontend test server");
 }
 
+async function settleWithin(promise, timeoutMs) {
+  let timer;
+  const settled = await Promise.race([
+    promise.then(() => true, () => true),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    }),
+  ]);
+  clearTimeout(timer);
+  return settled;
+}
+
 let server;
 let browser;
 let baseUrl;
@@ -67,8 +79,107 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  await browser?.close();
-  server?.kill();
+  if (browser) {
+    const closed = await settleWithin(browser.close().catch(() => {}), 3_000);
+    if (!closed) browser._connection?.close?.("forced companion test teardown");
+  }
+  if (server?.exitCode == null) server.kill();
+});
+
+test("controller handshake replays lost READY/PREF revisions and transparent padding passes clicks through", async () => {
+  const page = await browser.newPage({ viewport: { width: 900, height: 600 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const {
+      attachMainCompanionHandshake,
+      pointHitsCompanionSurface,
+    } = await import("/src/components/companion/CompanionWindowController.tsx");
+    const {
+      COMPANION_PREFERENCES_APPLIED_EVENT,
+      COMPANION_PREFERENCES_EVENT,
+      COMPANION_READY_EVENT,
+    } = await import("/src/components/companion/bridge.ts");
+
+    const listeners = new Map();
+    const cleaned = [];
+    const sent = [];
+    const applied = [];
+    let current = {
+      revision: 1,
+      enabled: true,
+      minimized: false,
+      soundEnabled: false,
+      motion: "system",
+    };
+    const cleanup = await attachMainCompanionHandshake({
+      listen: async (event, handler) => {
+        listeners.set(event, handler);
+        return () => {
+          cleaned.push(event);
+          listeners.delete(event);
+        };
+      },
+      readSnapshot: () => current,
+      sendSnapshot: async (snapshot) => { sent.push(structuredClone(snapshot)); },
+      applySnapshot: (snapshot) => { applied.push(structuredClone(snapshot)); },
+    });
+
+    await listeners.get(COMPANION_READY_EVENT)();
+    current = { ...current, revision: 3, minimized: true };
+    await listeners.get(COMPANION_PREFERENCES_APPLIED_EVENT)({ revision: 1 });
+    const incoming = { ...current, revision: 4, soundEnabled: true };
+    await listeners.get(COMPANION_PREFERENCES_EVENT)(incoming);
+
+    const sprite = document.createElement("span");
+    sprite.className = "companion-sprite-frame";
+    Object.assign(sprite.style, {
+      position: "fixed",
+      left: "100px",
+      top: "120px",
+      width: "80px",
+      height: "100px",
+    });
+    document.body.append(sprite);
+    const visibleHit = pointHitsCompanionSurface(document, 140, 160);
+    const transparentPaddingHit = pointHitsCompanionSurface(document, 20, 20);
+    sprite.remove();
+    cleanup();
+
+    return {
+      sent,
+      applied,
+      cleaned: cleaned.sort(),
+      visibleHit,
+      transparentPaddingHit,
+    };
+  });
+
+  assert.deepEqual(result.sent.map((snapshot) => snapshot.revision), [1, 1, 3],
+    "initial delivery, replayed READY and stale ACK recovery must all use current snapshots");
+  assert.deepEqual(result.applied.map((snapshot) => snapshot.revision), [4]);
+  assert.deepEqual(result.cleaned, [
+    "r-code:companion-preferences",
+    "r-code:companion-preferences-applied",
+    "r-code:companion-ready",
+  ]);
+  assert.equal(result.visibleHit, true);
+  assert.equal(result.transparentPaddingHit, false);
+  await page.close();
+});
+
+test("native companion normalizes restored coordinates before Tauri position IPC", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const normalized = await page.evaluate(async () => {
+    const { integerPhysicalPosition } = await import("/src/components/companion/CompanionWindow.tsx");
+    return integerPhysicalPosition({
+      x: 1253.9999999999998,
+      y: 223.99999999999997,
+    });
+  });
+
+  assert.deepEqual(normalized, { x: 1254, y: 224 });
+  await page.close();
 });
 
 test("independent session assistant animates, reports unread progress and exposes only Close on right click", async () => {
@@ -90,10 +201,18 @@ test("independent session assistant animates, reports unread progress and expose
     "the startup snapshot must establish a baseline without fake unread progress");
 
   const frame = page.locator(".companion-sprite-frame");
-  const before = await frame.evaluate((element) => getComputedStyle(element).transform);
+  const collapsedRects = await page.evaluate(() => {
+    const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+    const sprite = document.querySelector(".companion-sprite-frame")?.getBoundingClientRect();
+    return {
+      avatar: avatar && { width: avatar.width, height: avatar.height },
+      sprite: sprite && { width: sprite.width, height: sprite.height },
+    };
+  });
+  const before = await frame.getAttribute("data-frame-index");
   await page.waitForTimeout(360);
-  const after = await frame.evaluate((element) => getComputedStyle(element).transform);
-  assert.notEqual(before, after, "the full-motion sprite must visibly move over time");
+  const after = await frame.getAttribute("data-frame-index");
+  assert.notEqual(before, after, "the authored sprite sequence must advance frames over time");
 
   await avatar.hover();
   await page.waitForFunction(() => document.querySelector(".companion-window-root")?.classList.contains("is-hovered"));
@@ -117,9 +236,48 @@ test("independent session assistant animates, reports unread progress and expose
   await avatar.click();
   const dialog = page.getByRole("dialog", { name: "最近任务" });
   await dialog.waitFor({ state: "visible" });
-  assert.equal(await dialog.getByRole("listitem").count(), 4);
+  const expandedRects = await page.evaluate(() => {
+    const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+    const sprite = document.querySelector(".companion-sprite-frame")?.getBoundingClientRect();
+    return {
+      avatar: avatar && { width: avatar.width, height: avatar.height },
+      sprite: sprite && { width: sprite.width, height: sprite.height },
+    };
+  });
+  assert.deepEqual(expandedRects, collapsedRects,
+    "opening progress must not squeeze the avatar or its sprite plane");
+  assert.equal(await dialog.locator(".companion-session-card:not(.is-exiting)").count(), 4);
   await page.waitForFunction(() => document.activeElement?.classList.contains("companion-session-row"));
   assert.match(await dialog.innerText(), /等待确认|待审阅|正在实施|正在分析项目/);
+
+  const liveRow = dialog.locator(
+    ".companion-session-card:has(.companion-session-row.state-working), .companion-session-card:has(.companion-session-row.state-attention)",
+  ).first();
+  await liveRow.hover();
+  const followUp = liveRow.getByRole("button", { name: "继续跟进" });
+  const stop = liveRow.getByRole("button", { name: "停止当前运行" });
+  assert.equal(await followUp.evaluate((element) => getComputedStyle(element.parentElement).visibility), "visible",
+    "hover must reveal the companion pill actions");
+  assert.equal(await stop.count(), 1, "live sessions expose the stop action");
+  assert.equal(await liveRow.locator("button button").count(), 0, "pill actions must never nest interactive controls");
+
+  await liveRow.locator(".companion-session-row").focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), "继续跟进",
+    "focus-within must reveal actions before keyboard focus reaches them");
+
+  const bounds = await page.locator(".companion-window-root").evaluate((root) => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    root: root.getBoundingClientRect().toJSON(),
+    panel: root.querySelector(".companion-session-panel")?.getBoundingClientRect().toJSON(),
+    list: root.querySelector(".companion-session-list")?.getBoundingClientRect().toJSON(),
+  }));
+  assert.equal(bounds.viewport.width, 420);
+  assert.equal(bounds.viewport.height, 360);
+  assert.ok(bounds.panel.left >= 0 && bounds.panel.right <= 420 && bounds.panel.top >= 0 && bounds.panel.bottom <= 360,
+    `panel overflowed 420x360: ${JSON.stringify(bounds.panel)}`);
+  assert.ok(bounds.list.left >= 0 && bounds.list.right <= 420 && bounds.list.top >= 0 && bounds.list.bottom <= 360,
+    `scroll list overflowed 420x360: ${JSON.stringify(bounds.list)}`);
   await dialog.getByRole("button", { name: "关闭最近任务" }).click();
   await dialog.waitFor({ state: "detached" });
 
@@ -128,10 +286,20 @@ test("independent session assistant animates, reports unread progress and expose
     const state = useTasksStore.getState();
     const task = state.tasks.find((item) => item.state === "in_progress");
     if (!task) throw new Error("browser mock is missing an in-progress task");
+    const completedAt = new Date().toISOString();
+    const detail = state.details[task.id];
     useTasksStore.setState({
       tasks: state.tasks.map((item) => item.id === task.id
-        ? { ...item, state: "review_ready", updated_at: new Date().toISOString() }
+        ? { ...item, state: "review_ready", updated_at: completedAt }
         : item),
+      details: detail ? {
+        ...state.details,
+        [task.id]: {
+          ...detail,
+          task: { ...detail.task, state: "review_ready", updated_at: completedAt },
+          runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? completedAt })),
+        },
+      } : state.details,
     });
     return { id: task.id, title: task.title };
   });
@@ -139,29 +307,38 @@ test("independent session assistant animates, reports unread progress and expose
   assert.match(await avatar.getAttribute("aria-label"), /1 个未读/);
 
   await avatar.click();
-  const transitionedRow = dialog.getByRole("button", { name: new RegExp(transitionedTask.title) });
-  await transitionedRow.click();
+  const transitionedCard = dialog.locator(".companion-session-card").filter({ hasText: transitionedTask.title });
+  await transitionedCard.hover();
+  await transitionedCard.getByRole("button", { name: "继续跟进" }).click();
   await dialog.waitFor({ state: "detached" });
   assert.equal(await page.locator(".companion-unread-badge").count(), 0,
     "browser navigation acknowledgement clears only the selected session unread state");
 
   await page.emulateMedia({ reducedMotion: "reduce" });
-  assert.equal(await frame.evaluate((element) => getComputedStyle(element).animationName), "none");
+  await page.waitForTimeout(100);
+  const reducedFrame = await frame.getAttribute("data-frame-index");
+  await page.waitForTimeout(360);
+  assert.equal(await frame.getAttribute("data-frame-index"), reducedFrame,
+    "system reduced-motion freezes the authored sequence on a representative frame");
   await page.evaluate(async () => {
     const { useCompanionStore } = await import("/src/store/companion.ts");
     useCompanionStore.getState().setMotion("full");
   });
   await page.waitForFunction(() => document.querySelector(".companion-window-root")?.classList.contains("motion-full"));
   const currentFrame = page.locator(".companion-frame-layer.is-current .companion-sprite-frame");
-  assert.notEqual(await currentFrame.evaluate((element) => getComputedStyle(element).animationName), "none",
+  const fullBefore = await currentFrame.getAttribute("data-frame-index");
+  await page.waitForTimeout(360);
+  assert.notEqual(await currentFrame.getAttribute("data-frame-index"), fullBefore,
     "an explicit full-motion preference must override the OS reduced-motion setting");
   await page.evaluate(async () => {
     const { useCompanionStore } = await import("/src/store/companion.ts");
     useCompanionStore.getState().setMotion("system");
   });
-  await page.waitForFunction(() => getComputedStyle(document.querySelector(".companion-sprite-frame")).animationName === "none");
+  await page.waitForTimeout(80);
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  assert.notEqual(await frame.evaluate((element) => getComputedStyle(element).animationName), "none");
+  const resumedBefore = await frame.getAttribute("data-frame-index");
+  await page.waitForTimeout(360);
+  assert.notEqual(await frame.getAttribute("data-frame-index"), resumedBefore);
 
   await avatar.click({ button: "right" });
   await menu.getByRole("menuitem", { name: "关闭小助手" }).click();
@@ -172,6 +349,41 @@ test("independent session assistant animates, reports unread progress and expose
     useCompanionStore.getState().setEnabled(true);
   });
   await avatar.waitFor({ state: "visible" });
+  await page.close();
+});
+
+test("running and unread sessions surface automatically above the assistant", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
+  await page.addInitScript(() => {
+    localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
+      revision: 1,
+      enabled: true,
+      minimized: false,
+      soundEnabled: false,
+      motion: "full",
+    }));
+    localStorage.setItem("r-code.companion.unread-sessions.v1", JSON.stringify([
+      "mock-task-review",
+      "mock-task-complete",
+    ]));
+  });
+  await page.goto(`${baseUrl}?window=companion`, { waitUntil: "networkidle" });
+  const stack = page.getByRole("region", { name: "Session 进度提醒" });
+  await stack.waitFor({ state: "visible" });
+  assert.equal(await stack.locator(".companion-session-card").count(), 2,
+    "the automatic stack is bounded while keeping urgent/live sessions visible");
+  assert.equal(await page.getByRole("dialog", { name: "最近任务" }).count(), 0,
+    "automatic progress does not require opening the recent-session dialog");
+  const live = stack.locator(".companion-session-card").filter({ hasText: "优化 Rust 编译性能" });
+  await live.hover();
+  assert.equal(await live.getByRole("button", { name: "继续跟进" }).count(), 1);
+  assert.equal(await live.getByRole("button", { name: "停止当前运行" }).count(), 1);
+  const bounds = await stack.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
+  });
+  assert.ok(bounds.top >= 0 && bounds.left >= 0 && bounds.right <= 420 && bounds.bottom <= 360,
+    `automatic pulse stack overflowed: ${JSON.stringify(bounds)}`);
   await page.close();
 });
 
@@ -233,22 +445,42 @@ test("urgent progress wins the four-row limit and archived sessions cannot leave
         ...detail,
         task: { ...detail.task, state: "idle" },
         permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
+        runs: detail.runs.map((run) => ({
+          ...run,
+          ended_at: run.ended_at ?? new Date().toISOString(),
+        })),
       }])),
     });
   });
   await page.waitForFunction(() => document.querySelector(".companion-window-root")?.classList.contains("state-idle"));
   await page.mouse.move(0, 0);
   await avatar.hover();
-  await page.waitForFunction(() => document.querySelector(".sprite-state-sing") !== null);
+  await page.waitForFunction(() => document.querySelector('[data-sprite-state="sing"]') !== null);
+  const idleReference = await page.locator('[data-sprite-state="sing"]').evaluate((frame) => ({
+    image: getComputedStyle(frame).backgroundImage,
+    size: getComputedStyle(frame).backgroundSize,
+    width: frame.getBoundingClientRect().width,
+    height: frame.getBoundingClientRect().height,
+  }));
+  assert.match(idleReference.image, /r-code-miku-v4\.webp/,
+    "hover gestures must reuse the registered silhouette instead of swapping to a narrower atlas");
+  assert.equal(idleReference.size, "800% 900%");
+  assert.ok(Math.abs(idleReference.width - 168) < 0.1);
+  assert.ok(Math.abs(idleReference.height - 182) < 0.1);
   await page.mouse.move(0, 0);
   await avatar.hover();
   await page.waitForTimeout(220);
-  assert.equal(await page.locator(".sprite-state-dance").count(), 0,
+  assert.equal(await page.locator('[data-sprite-state="dance"]').count(), 0,
     "rapid pointer re-entry must not interrupt a performance mid-transition");
   await page.mouse.move(0, 0);
-  await page.waitForTimeout(3_100);
+  await page.waitForTimeout(3_250);
+  await page.mouse.move(0, 0);
   await avatar.hover();
-  await page.waitForFunction(() => document.querySelector(".sprite-state-dance") !== null);
+  await page.waitForFunction(() => {
+    const frame = document.querySelector(".companion-frame-layer.is-current .companion-sprite-frame");
+    return frame?.getAttribute("data-sprite-state") === "dance"
+      || frame?.getAttribute("data-sprite-state") === "sing";
+  });
 
   await page.evaluate(async () => {
     window.__companionAudioClosed = 0;
@@ -270,5 +502,71 @@ test("urgent progress wins the four-row limit and archived sessions cannot leave
     });
   });
   await page.waitForFunction(() => window.__companionAudioClosed === 1);
+  await page.close();
+});
+
+test("session pills stop a live run once and keep failed stops unread", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
+  await page.addInitScript(() => {
+    localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
+      revision: 1,
+      enabled: true,
+      minimized: false,
+      soundEnabled: false,
+      motion: "reduced",
+    }));
+    localStorage.setItem("r-code.companion.unread-sessions.v1", JSON.stringify(["mock-task-queue"]));
+    window.__abortCalls = 0;
+    window.__rCodePerformanceIpcProbe = (command) => {
+      if (command === "cmd_agent_abort") window.__abortCalls += 1;
+    };
+    window.__rCodeBrowserMockDelayMs = { cmd_agent_abort: 180 };
+  });
+  await page.goto(`${baseUrl}?window=companion`, { waitUntil: "networkidle" });
+  const avatar = page.getByRole("button", { name: /R-Code session 助手/ });
+  await avatar.waitFor({ state: "visible" });
+  await avatar.click();
+  const dialog = page.getByRole("dialog", { name: "最近任务" });
+  const liveCard = dialog.locator(".companion-session-card").filter({ hasText: "修复任务队列并发问题" });
+  await liveCard.hover();
+  const stopButton = liveCard.getByRole("button", { name: "停止当前运行" });
+  await stopButton.dblclick({ delay: 10 });
+  await page.waitForFunction(() => window.__abortCalls === 1);
+  await page.waitForFunction(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    return useTasksStore.getState().tasks.find((task) => task.id === "mock-task-queue")?.state === "interrupted";
+  });
+  assert.equal(await page.evaluate(() => window.__abortCalls), 1,
+    "a rapid double click must issue exactly one abort command per task");
+
+  await page.evaluate(async () => {
+    const { browserMockTasks, browserMockDetails } = await import("/src/lib/mock-data.ts");
+    const task = browserMockTasks.find((item) => item.id === "mock-task-api");
+    if (!task) throw new Error("browser mock is missing mock-task-api");
+    task.state = "exploring";
+    task.updated_at = new Date(Date.now() + 2_000).toISOString();
+    browserMockDetails[task.id].task = { ...task };
+    window.__rCodeBrowserMockFailures = { cmd_agent_abort: "demo abort unavailable" };
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.setState({
+      tasks: useTasksStore.getState().tasks.map((item) => item.id === task.id ? { ...task } : item),
+    });
+  });
+  const failedCard = dialog.locator(".companion-session-card").filter({ hasText: "添加请求限流中间件" });
+  await failedCard.hover();
+  await failedCard.getByRole("button", { name: "停止当前运行" }).click();
+  const alert = failedCard.getByRole("alert");
+  await alert.waitFor({ state: "visible" });
+  assert.match(await alert.innerText(), /停止失败.*demo abort unavailable/);
+  assert.match(await avatar.getAttribute("aria-label"), /[1-9] 个未读/,
+    "a failed stop must retain an unread reminder");
+  await page.waitForFunction(() => {
+    const card = [...document.querySelectorAll(".companion-session-card")]
+      .find((element) => element.textContent?.includes("添加请求限流中间件"));
+    const stop = card?.querySelector("button.is-stop");
+    return stop instanceof HTMLButtonElement && !stop.disabled;
+  });
+  assert.equal(await failedCard.locator("button.is-stop").isEnabled(), true,
+    "a failed stop can be retried after the in-flight guard is released");
   await page.close();
 });

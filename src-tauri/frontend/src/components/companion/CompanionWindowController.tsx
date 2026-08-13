@@ -1,5 +1,9 @@
 import { useEffect, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  cursorPosition,
+  getCurrentWindow,
+  type PhysicalPosition,
+} from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import {
@@ -10,6 +14,7 @@ import {
 import {
   COMPANION_NAVIGATED_EVENT,
   COMPANION_NAVIGATE_EVENT,
+  COMPANION_PREFERENCES_APPLIED_EVENT,
   COMPANION_PREFERENCES_EVENT,
   COMPANION_READY_EVENT,
   COMPANION_RESET_POSITION_EVENT,
@@ -20,7 +25,188 @@ import {
   sendCompanionPreferences,
   type CompanionNavigationRequest,
   type CompanionNavigationResult,
+  type CompanionPreferencesApplied,
 } from "./bridge";
+
+type ControllerCleanup = () => void;
+type ControllerListen = <T>(
+  event: string,
+  handler: (payload: T) => void | Promise<void>,
+) => Promise<ControllerCleanup>;
+
+interface MainCompanionHandshakePorts {
+  listen: ControllerListen;
+  readSnapshot: () => CompanionPreferences;
+  sendSnapshot: (snapshot: CompanionPreferences) => Promise<void>;
+  applySnapshot: (snapshot: CompanionPreferences) => void;
+}
+
+/**
+ * Install both halves of the main-window preference handshake before publishing its first event.
+ * READY is intentionally replayable, and a stale delivery ACK immediately resends the latest
+ * revision, so either WebView may win startup without permanently losing the preference snapshot.
+ */
+export async function attachMainCompanionHandshake(
+  ports: MainCompanionHandshakePorts,
+): Promise<ControllerCleanup> {
+  const cleanups: ControllerCleanup[] = [];
+  let disposed = false;
+  const register = async <T,>(
+    event: string,
+    handler: (payload: T) => void | Promise<void>,
+  ): Promise<boolean> => {
+    const cleanup = await ports.listen<T>(event, handler);
+    if (disposed) {
+      cleanup();
+      return false;
+    }
+    cleanups.push(cleanup);
+    return true;
+  };
+
+  if (!await register<CompanionPreferencesApplied>(
+    COMPANION_PREFERENCES_APPLIED_EVENT,
+    async ({ revision }) => {
+      const latest = ports.readSnapshot();
+      if (revision < latest.revision) await ports.sendSnapshot(latest);
+    },
+  )) return () => {};
+  if (!await register<undefined>(COMPANION_READY_EVENT, async () => {
+    await ports.sendSnapshot(ports.readSnapshot());
+  })) return () => {};
+  if (!await register<CompanionPreferences>(COMPANION_PREFERENCES_EVENT, (snapshot) => {
+    ports.applySnapshot(snapshot);
+  })) return () => {};
+
+  await ports.sendSnapshot(ports.readSnapshot());
+  return () => {
+    disposed = true;
+    cleanups.splice(0).forEach((cleanup) => cleanup());
+  };
+}
+
+const COMPANION_INTERACTIVE_SURFACES = [
+  ".companion-session-panel",
+  ".companion-session-card",
+  ".companion-pulse-error",
+  ".companion-browser-menu",
+  ".companion-sprite-frame",
+  ".companion-aura",
+  ".companion-unread-badge",
+] as const;
+
+function rectContainsPoint(rect: DOMRect, x: number, y: number): boolean {
+  return rect.width > 0 && rect.height > 0
+    && x >= rect.left && x <= rect.right
+    && y >= rect.top && y <= rect.bottom;
+}
+
+/** Visible companion surfaces remain interactive; transparent padding passes through natively. */
+export function pointHitsCompanionSurface(documentRoot: Document, x: number, y: number): boolean {
+  return COMPANION_INTERACTIVE_SURFACES.some((selector) =>
+    [...documentRoot.querySelectorAll<HTMLElement>(selector)]
+      .some((element) => rectContainsPoint(element.getBoundingClientRect(), x, y)));
+}
+
+/**
+ * The companion store reads shared localStorage before React mounts. Hold only this WebView's
+ * in-memory copy closed until a main-window snapshot crosses the acknowledged handshake.
+ */
+export function prepareNativeCompanionWindow(): void {
+  if (!isTauriRuntime()) return;
+  useCompanionStore.setState({ enabled: false });
+}
+
+/** Owns native hit testing without coupling window policy to the visual CompanionWindow tree. */
+export function NativeCompanionWindowController() {
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let clickThroughSupported = true;
+    let ignored = false;
+    let pointerActive = false;
+    let pointerReleaseTimer: number | null = null;
+    let tickTimer: number | null = null;
+    let windowPosition: PhysicalPosition | null = null;
+    let scaleFactor = 1;
+    let unlistenMoved: ControllerCleanup | undefined;
+    let unlistenScale: ControllerCleanup | undefined;
+
+    const pointerDown = () => {
+      pointerActive = true;
+      if (pointerReleaseTimer !== null) window.clearTimeout(pointerReleaseTimer);
+      pointerReleaseTimer = window.setTimeout(() => { pointerActive = false; }, 3_000);
+    };
+    const pointerUp = () => {
+      pointerActive = false;
+      if (pointerReleaseTimer !== null) window.clearTimeout(pointerReleaseTimer);
+      pointerReleaseTimer = null;
+    };
+    window.addEventListener("pointerdown", pointerDown, { capture: true });
+    window.addEventListener("pointerup", pointerUp, { capture: true });
+    window.addEventListener("pointercancel", pointerUp, { capture: true });
+
+    const updateIgnoreState = async (next: boolean) => {
+      if (!clickThroughSupported || next === ignored) return;
+      try {
+        await appWindow.setIgnoreCursorEvents(next);
+        ignored = next;
+      } catch {
+        // Wayland/compositor policy may reject click-through. Fail open so the helper remains
+        // usable instead of retrying a denied native command for the lifetime of the app.
+        clickThroughSupported = false;
+      }
+    };
+
+    const tick = async () => {
+      if (disposed || !clickThroughSupported) return;
+      try {
+        if (!windowPosition) windowPosition = await appWindow.outerPosition();
+        if (pointerActive) {
+          await updateIgnoreState(false);
+        } else {
+          const cursor = await cursorPosition();
+          const x = (cursor.x - windowPosition.x) / scaleFactor;
+          const y = (cursor.y - windowPosition.y) / scaleFactor;
+          await updateIgnoreState(!pointHitsCompanionSurface(document, x, y));
+        }
+      } catch {
+        clickThroughSupported = false;
+      }
+      if (!disposed && clickThroughSupported) {
+        tickTimer = window.setTimeout(tick, document.visibilityState === "hidden" ? 400 : 80);
+      }
+    };
+
+    const attach = async () => {
+      [windowPosition, scaleFactor] = await Promise.all([
+        appWindow.outerPosition(),
+        appWindow.scaleFactor(),
+      ]);
+      unlistenMoved = await appWindow.onMoved(({ payload }) => { windowPosition = payload; });
+      unlistenScale = await appWindow.onScaleChanged(({ payload }) => {
+        scaleFactor = payload.scaleFactor;
+      });
+      if (!disposed) await tick();
+    };
+    void attach().catch(() => { clickThroughSupported = false; });
+
+    return () => {
+      disposed = true;
+      if (tickTimer !== null) window.clearTimeout(tickTimer);
+      if (pointerReleaseTimer !== null) window.clearTimeout(pointerReleaseTimer);
+      window.removeEventListener("pointerdown", pointerDown, { capture: true });
+      window.removeEventListener("pointerup", pointerUp, { capture: true });
+      window.removeEventListener("pointercancel", pointerUp, { capture: true });
+      unlistenMoved?.();
+      unlistenScale?.();
+      if (ignored) void appWindow.setIgnoreCursorEvents(false).catch(() => {});
+    };
+  }, []);
+
+  return null;
+}
 
 /**
  * Keeps the main Settings store and the independent native companion WebView in sync.
@@ -35,31 +221,35 @@ export function CompanionWindowController() {
   const positionResetRevision = useCompanionStore((state) => state.positionResetRevision);
   const applySnapshot = useCompanionStore((state) => state.applySnapshot);
   const previousResetRevision = useRef(positionResetRevision);
+  const bridgeGeneration = useRef(0);
+  const bridgeReady = useRef(false);
+  const pendingPositionReset = useRef(false);
 
   useEffect(() => {
-    if (!isTauriRuntime()) return;
+    if (!isTauriRuntime() || !bridgeReady.current) return;
     void sendCompanionPreferences({ revision, enabled, minimized, soundEnabled, motion });
   }, [enabled, minimized, motion, revision, soundEnabled]);
 
   useEffect(() => {
     if (previousResetRevision.current === positionResetRevision) return;
     previousResetRevision.current = positionResetRevision;
+    if (isTauriRuntime() && !bridgeReady.current) {
+      pendingPositionReset.current = true;
+      return;
+    }
     void emitToWindow(COMPANION_WINDOW_LABEL, COMPANION_RESET_POSITION_EVENT, {
       revision: positionResetRevision,
     });
   }, [positionResetRevision]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const generation = ++bridgeGeneration.current;
+    bridgeReady.current = false;
     let disposed = false;
     const cleanups: Array<() => void> = [];
 
     const attach = async () => {
-      cleanups.push(await listenFor<undefined>(COMPANION_READY_EVENT, () => {
-        void sendCompanionPreferences(companionPreferenceSnapshot());
-      }));
-      cleanups.push(await listenFor<CompanionPreferences>(COMPANION_PREFERENCES_EVENT, (snapshot) => {
-        applySnapshot(snapshot);
-      }));
       cleanups.push(await listenFor<CompanionNavigationRequest>(
         COMPANION_NAVIGATE_EVENT,
         async ({ requestId, taskId }) => {
@@ -88,16 +278,34 @@ export function CompanionWindowController() {
           await emitToWindow(COMPANION_WINDOW_LABEL, COMPANION_NAVIGATED_EVENT, result);
         },
       ));
-      // Both WebViews start concurrently. The first eager preference event can arrive before the
-      // companion has installed its listener, while its first READY can likewise beat this
-      // listener. Replaying after every main-side listener is live closes both halves of that race;
-      // the companion also retries READY until this snapshot is observed.
-      await sendCompanionPreferences(companionPreferenceSnapshot());
+      cleanups.push(await attachMainCompanionHandshake({
+        listen: listenFor,
+        readSnapshot: companionPreferenceSnapshot,
+        sendSnapshot: sendCompanionPreferences,
+        applySnapshot,
+      }));
+      if (!disposed && bridgeGeneration.current === generation) {
+        bridgeReady.current = true;
+        // Close the final narrow race where Settings changed while the initial emit was awaiting
+        // delivery but before the reactive publisher was marked ready. ACK de-duplicates this
+        // replay and resends once more only if an even newer revision appeared.
+        await sendCompanionPreferences(companionPreferenceSnapshot());
+        if (pendingPositionReset.current) {
+          pendingPositionReset.current = false;
+          await emitToWindow(COMPANION_WINDOW_LABEL, COMPANION_RESET_POSITION_EVENT, {
+            revision: useCompanionStore.getState().positionResetRevision,
+          });
+        }
+      }
       if (disposed) cleanups.splice(0).forEach((cleanup) => cleanup());
     };
-    void attach();
+    void attach().catch(() => {
+      if (bridgeGeneration.current === generation) bridgeReady.current = false;
+      cleanups.splice(0).forEach((cleanup) => cleanup());
+    });
     return () => {
       disposed = true;
+      if (bridgeGeneration.current === generation) bridgeReady.current = false;
       cleanups.splice(0).forEach((cleanup) => cleanup());
     };
   }, [applySnapshot]);
