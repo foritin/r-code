@@ -7336,7 +7336,7 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
         rendered_results.extend(results.into_iter().map(|result| format!("{result:?}")));
     } else {
         let mut failures = Vec::new();
-        for path in review_status.paths.iter().filter(|path| !path.rejected) {
+        for path in review_status.paths.iter().filter(|path| !path.rejected && path.remaining) {
             match rollback_file(state, task_id, &path.path).await {
                 Ok(result) => rendered_results.push(result),
                 Err(error) => failures.push(format!("{}：{error}", path.path)),
@@ -20996,6 +20996,100 @@ input.on('line', (line) => {
         assert!(after.paths.iter().all(|path| path.path != "task.txt"));
         assert_eq!(after.paths.len(), 1);
         assert_eq!(after.paths[0].path, "user.txt");
+    }
+
+    #[tokio::test]
+    async fn bulk_reject_preserves_accepted_files() {
+        let (_dir, state) = setup_state();
+        let repo = state.project_root.join("review-accept-all");
+        std::fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {} failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        git(&["config", "user.email", "review@example.test"]);
+        git(&["config", "user.name", "Review Test"]);
+        std::fs::write(repo.join("task.txt"), b"baseline\n").unwrap();
+        git(&["add", "task.txt"]);
+        git(&["commit", "--quiet", "-m", "baseline"]);
+
+        let workspace = workspace_open(&state, &repo).await.unwrap();
+        let task = task_create(
+            &state,
+            Some(&workspace.canonical_path),
+            "Review accept",
+            "edit task file",
+            "edit",
+        )
+        .await
+        .unwrap();
+        let run = AgentRun::new(&task.id, "test-model");
+        AgentRunRepository::new(&state.db).create(&run).unwrap();
+        let git_service = GitService::new(repo.clone());
+        let entry_index = git_service.index_snapshot().unwrap().unwrap();
+        let entry_worktree = git_service.entry_snapshot().unwrap().unwrap();
+        let entry_head = git_service.head_tree().unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .save_run_workspace_snapshot(NewRunWorkspaceSnapshot {
+                run_id: &run.id,
+                task_id: &task.id,
+                repo_root: &repo,
+                workspace_root: &repo,
+                entry_head_tree: entry_head.as_deref(),
+                entry_index_tree: &entry_index,
+                entry_worktree_tree: &entry_worktree,
+            })
+            .unwrap();
+
+        std::fs::write(repo.join("task.txt"), b"agent edit\n").unwrap();
+        ChangeService::new(&state.db, state.blobs_dir.clone())
+            .record_snapshot_change(
+                &run.id,
+                &task.id,
+                "task.txt",
+                FileChangeType::Modify,
+                Some(b"baseline\n"),
+                Some(b"agent edit\n"),
+            )
+            .await
+            .unwrap();
+        AgentRunRepository::new(&state.db)
+            .update_review_state(&run.id, ReviewState::Answered)
+            .unwrap();
+
+        let accepted = review_accept_all(&state, &task.id).unwrap();
+        assert!(accepted.fully_accepted);
+
+        // 已接受是终态决定：「拒绝本轮全部」不得再恢复已接受的文件。
+        let results = rollback_task(&state, &task.id).await.unwrap();
+        assert!(
+            results.is_empty(),
+            "accepted files must not be restored: {results:?}"
+        );
+        assert_eq!(
+            std::fs::read(repo.join("task.txt")).unwrap(),
+            b"agent edit\n",
+            "bulk reject must preserve accepted content"
+        );
+        let after = review_git_status(&state, &task.id).unwrap();
+        let task_path = after
+            .paths
+            .iter()
+            .find(|path| path.path == "task.txt")
+            .unwrap();
+        assert!(task_path.accepted);
     }
 
     #[cfg(unix)]

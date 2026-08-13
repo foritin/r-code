@@ -1941,8 +1941,12 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_rollback_task": {
       const taskId = stringArg(args, "taskId");
       const detail = detailById(taskId);
-      const paths = detail.changes.map((change) => change.path);
-      detail.changes = [];
+      const accepted = acceptedReviewPaths.get(taskId) ?? new Set<string>();
+      const rejected = rejectedReviewPaths.get(taskId) ?? new Set<string>();
+      const paths = detail.changes
+        .filter((change) => !accepted.has(change.path) && !rejected.has(change.path))
+        .map((change) => change.path);
+      detail.changes = detail.changes.filter((change) => accepted.has(change.path));
       detail.task.state = "idle";
       touchTask(detail.task);
       markTaskNotificationsRead(taskId);

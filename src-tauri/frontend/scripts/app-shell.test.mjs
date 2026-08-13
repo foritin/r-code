@@ -3027,6 +3027,14 @@ test("review workbench exposes granular acceptance and guarded Git delivery", as
     await workbench.elementHandle(),
   );
   await workbench.getByRole("button", { name: "接受文件", exact: true }).click();
+  await page.waitForFunction(
+    (root) => root.querySelector(".chg-accepted") !== null,
+    await workbench.elementHandle(),
+  );
+  assert.equal(await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).count(), 0, "bulk accept must disappear once every task path is resolved");
+  assert.equal(await workbench.getByRole("button", { name: "拒绝并恢复本轮全部文件", exact: true }).count(), 0, "bulk reject must not stay available after acceptance");
+  assert.equal(await workbench.locator(".chg-rb").count(), 0, "accepted rows must drop their reject action");
+  assert.equal(await workbench.locator(".chg-accept").count(), 0, "accepted rows must drop their accept action");
 
   await workbench.getByRole("tab", { name: "验证与决策", exact: true }).click();
   const delivery = workbench.getByRole("region", { name: "Git 提交与推送" });
@@ -3093,6 +3101,36 @@ test("review rejection animates resolved rows away and exposes guarded bulk reje
     await workbench.elementHandle(),
   );
   await workbench.getByText("工作区原有变更未受影响", { exact: false }).waitFor({ state: "visible" });
+
+  await page.close();
+});
+
+test("bulk review actions disappear after accepting every task path", async () => {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject("D:/project/rust/r-code");
+    useAppStore.getState().openRoom("mock-task-review", "changes");
+  });
+
+  const workbench = page.getByTestId("workbench-panel");
+  await workbench.waitFor({ state: "visible" });
+  await page.waitForFunction(
+    (root) => root.querySelectorAll(".chg-row").length === 2,
+    await workbench.elementHandle(),
+  );
+  await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).click();
+  await page.waitForFunction(
+    (root) => root.querySelectorAll(".chg-row .chg-accepted").length === 2,
+    await workbench.elementHandle(),
+  );
+  assert.equal(await workbench.getByRole("button", { name: "接受本轮全部", exact: true }).count(), 0, "the bulk accept button must leave after the round is accepted");
+  assert.equal(await workbench.getByRole("button", { name: "拒绝并恢复本轮全部文件", exact: true }).count(), 0, "accepted rounds must not expose bulk reject anymore");
+  assert.equal(await workbench.locator(".chg-rb").count(), 0, "accepted rows must not keep per-file reject actions");
+  assert.equal(await workbench.locator(".chg-accept").count(), 0, "accepted rows must not keep per-file accept actions");
 
   await page.close();
 });

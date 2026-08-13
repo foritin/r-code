@@ -103,7 +103,7 @@ export function ModelSwitcher({
   }, { label: "保存模型配置" });
 
   const chooseModel = (provider: ProviderChoice, nextModel: string | null) => {
-    if (running || !provider.ready) return;
+    if (running || applyModel.busy || !provider.ready) return;
     if (provider.name === active.name && nextModel === model) {
       setView("root");
       return;
@@ -119,6 +119,7 @@ export function ModelSwitcher({
     field: "thinking" | "reasoning_effort" | "verbosity",
     value: string | null,
   ) => {
+    if (saveInference.busy) return;
     const next = { ...normalized };
     if (value) next[field] = value;
     else delete next[field];
@@ -183,7 +184,7 @@ export function ModelSwitcher({
         label="模型与推理配置"
         placement={variant === "pill" ? "up" : "down"}
         align={variant === "pill" ? "left" : "right"}
-        disabled={running || applyModel.busy || saveInference.busy}
+        disabled={running}
         menuClassName="model-menu model-config-menu"
         scroll
         openRequest={openRequest}

@@ -51,10 +51,12 @@ import {
   loadCatalog,
   presetOf,
   providerLabel,
+  rememberModel,
 } from "../../lib/provider";
 import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
-import { IconCheck, IconRefresh, IconSearch } from "../icons";
+import { IconCheck, IconChevronDown, IconRefresh, IconSearch } from "../icons";
+import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
 import { pushToast } from "../../store/toast";
 import { McpPanel } from "./McpPanel";
 
@@ -975,28 +977,70 @@ function ProviderSection({
               <div className="provider-form-field provider-form-field-wide">
                 <label htmlFor="set-model">模型</label>
                 <div className="provider-model-input">
-                  {/* datalist 同时保留自由输入与接口候选；不是所有兼容网关都实现 /models。 */}
+                  {/* 输入框保留自由输入；候选列表改用 Menu 弹层——原生 datalist 只会显示与当前值前缀匹配的选项，预填默认模型后其余候选会被过滤掉。 */}
                   <input id="set-model"
                     className="provider-model-text"
-                    list="set-model-options"
                     value={fields.model}
                     placeholder="输入或同步模型名称"
                     onChange={(event) => setFields((value) => ({ ...value, model: event.target.value }))}
                   />
-                  <button
-                    className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
-                    type="button"
-                    disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
-                    title="从当前接口同步模型列表"
-                    onClick={() => void fetchModels()}
-                  >
-                    <IconRefresh width={15} height={15} />
-                    {modelsBusy ? "同步中" : "同步模型"}
-                  </button>
+                  <div className="provider-model-actions">
+                    <Menu
+                      trigger={
+                        <button
+                          className="provider-model-options"
+                          type="button"
+                          disabled={busy || modelChoices.length === 0}
+                          title={modelChoices.length === 0 ? "暂无可选模型，先同步模型列表" : "查看候选模型"}
+                          aria-label="查看候选模型"
+                        >
+                          <IconChevronDown width={13} height={13} />
+                        </button>
+                      }
+                      label="候选模型"
+                      placement="down"
+                      align="right"
+                      scroll
+                      menuClassName="model-menu"
+                    >
+                      {({ close }) => (
+                        <>
+                          <div className="popover-head">
+                            <strong>候选模型</strong>
+                            <span>预设候选与已同步模型</span>
+                          </div>
+                          {modelChoices.length === 0 ? (
+                            <MenuEmpty>没有候选模型，先同步模型列表或手动输入</MenuEmpty>
+                          ) : (
+                            modelChoices.map((modelName) => (
+                              <MenuItem
+                                key={modelName}
+                                close={close}
+                                checked={fields.model.trim() === modelName}
+                                onSelect={() => {
+                                  setFields((value) => ({ ...value, model: modelName }));
+                                  rememberModel(profileName.trim() || activePreset?.id || "", modelName);
+                                }}
+                              >
+                                <span className="model-name" title={modelName}>{modelName}</span>
+                              </MenuItem>
+                            ))
+                          )}
+                        </>
+                      )}
+                    </Menu>
+                    <button
+                      className={`provider-model-refresh${modelsBusy ? " loading" : ""}`}
+                      type="button"
+                      disabled={busy || modelsBusy || pendingVars.length > 0 || !fields.base_url.trim()}
+                      title="从当前接口同步模型列表"
+                      onClick={() => void fetchModels()}
+                    >
+                      <IconRefresh width={15} height={15} />
+                      {modelsBusy ? "同步中" : "同步模型"}
+                    </button>
+                  </div>
                 </div>
-                <datalist id="set-model-options">
-                  {modelChoices.map((model) => <option key={model} value={model} />)}
-                </datalist>
                 {modelsMessage && <span className="provider-field-success" role="status">{modelsMessage}</span>}
                 {modelsError && <span className="provider-field-warning" role="alert">{modelsError}</span>}
               </div>

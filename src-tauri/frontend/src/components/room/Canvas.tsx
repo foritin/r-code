@@ -1094,7 +1094,7 @@ function NormalChangesPanel({
     setError(null);
     setNotice(null);
     const targets = (gitStatus?.paths ?? [])
-      .filter((status) => status.scope !== "workspace" && !status.rejected)
+      .filter((status) => status.scope !== "workspace" && !status.rejected && status.remaining)
       .map((status) => status.path);
     try {
       await rollbackTask(taskId);
@@ -1119,7 +1119,9 @@ function NormalChangesPanel({
   const selectedPathStatus = path ? pathStatus.get(path) : undefined;
   const selectedWorkspaceOnly = selectedPathStatus?.scope === "workspace";
   const selectedPathExiting = path ? exitingPaths.has(path) : false;
-  const rejectableTaskCount = taskPathStatuses.filter((status) => !status.rejected).length;
+  // 已接受的文件是终态决定，不能再被「拒绝本轮全部」恢复；只有仍未处理（含冲突）的路径可拒绝。
+  const rejectableTaskCount = taskPathStatuses.filter((status) => !status.rejected && status.remaining).length;
+  const pendingTaskCount = taskPathStatuses.filter((status) => status.remaining).length;
   const globalDecisionPending = pendingAccepts.has("all") || pendingRejects.has("all");
 
   const lines = diff?.supported ? (diff.lines ?? []) : [];
@@ -1254,7 +1256,7 @@ function NormalChangesPanel({
                 : "接受文件"}
         </button>
       )}
-      {taskPathStatuses.length > 0 && (
+      {pendingTaskCount > 0 && (
         <>
           <button
             className="btn accent sm"
@@ -1351,7 +1353,7 @@ function NormalChangesPanel({
                         onClick={(event) => { event.stopPropagation(); void acceptFileChange(c.path); }}
                       >{pendingAccepts.has(fileAcceptKey(c.path)) ? "…" : "接受"}</button>
                     )}
-                    {!workspaceOnly && !exiting && (
+                    {!workspaceOnly && !exiting && !isPathFullyAccepted(c.path) && !isPathRejected(c.path) && (
                       <button
                         className={"chg-rb" + (confirmPath === c.path ? " confirm" : "")}
                         // 只有 roving 落点那一行的行内按钮进 tab 序，否则 Tab 会把整列按钮走一遍
@@ -1393,7 +1395,7 @@ function NormalChangesPanel({
               类型:{diff.change_type ?? "—"} · before {shortHash(diff.before_hash)} → after{" "}
               {shortHash(diff.after_hash)}
             </div>
-            {!selectedWorkspaceOnly && !selectedPathExiting && <div className="chg-meta-actions">
+            {!selectedWorkspaceOnly && !selectedPathExiting && !isPathFullyAccepted(path) && !isPathRejected(path) && <div className="chg-meta-actions">
               <button
                 className={"btn danger sm" + (confirmPath === path ? " confirm" : "")}
                 disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`)}

@@ -405,3 +405,36 @@ test("an empty provider form applies the complete first preset and keeps the pri
   assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);
   await page.close();
 });
+
+test("model candidate menu lists every preset model while the input is prefilled", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  // Avoid CJK literals in test sources: "设置" is composed from code points.
+  const settingsLabel = String.fromCodePoint(0x8BBE, 0x7F6E);
+  await page.getByRole("button", { name: settingsLabel, exact: true }).click();
+  await page.locator("#set-preset").waitFor({ state: "visible" });
+
+  await page.locator(".provider-list .provider-row").filter({ hasText: "DeepSeek" }).click();
+  await page.waitForFunction(() => document.querySelector("#set-model")?.value === "deepseek-v4-pro");
+
+  // The native datalist was replaced: it filtered suggestions by the prefilled value,
+  // hiding deepseek-v4-flash even though the catalog lists two models.
+  assert.equal(await page.locator("#set-model-options").count(), 0);
+
+  const trigger = page.locator(".provider-model-options");
+  assert.equal(await trigger.isDisabled(), false);
+  await trigger.click();
+
+  const options = page.locator(`[role="menuitemradio"]`);
+  await options.first().waitFor({ state: "visible" });
+  assert.equal(await options.count(), 2, "both preset candidates must be listed while the input keeps its value");
+  for (const name of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+    await page.locator(`[role="menuitemradio"]`, { hasText: name }).waitFor({ state: "visible" });
+  }
+
+  await page.locator(`[role="menuitemradio"]`, { hasText: "deepseek-v4-flash" }).click();
+  assert.equal(await page.locator("#set-model").inputValue(), "deepseek-v4-flash");
+  await options.first().waitFor({ state: "detached" });
+  await page.close();
+});
