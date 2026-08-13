@@ -22,7 +22,7 @@ export interface AttachmentInput {
   name: string;
   mediaType: string;
   data: string;
-  /** macOS only: convert an explicitly unsupported image to local Vision OCR text. */
+  /** Convert an explicitly unsupported image to platform-native OCR text on macOS or Windows. */
   nativeOcr?: boolean;
 }
 

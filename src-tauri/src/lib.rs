@@ -39,6 +39,8 @@ pub mod settings;
 pub mod skills;
 pub mod support_bundle;
 pub mod system_integration;
+#[cfg(target_os = "windows")]
+mod windows_ocr;
 pub mod work_card;
 pub mod workflow_skills;
 

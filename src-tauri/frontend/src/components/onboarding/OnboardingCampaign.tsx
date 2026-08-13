@@ -580,7 +580,7 @@ export function OnboardingCampaign() {
                       {busy ? "保存中" : providerReady && providerActive && !apiKey ? "已就绪" : providerReady && !apiKey ? "设为默认" : "保存"}
                     </button>
                   </div>
-                  <small>{error?.includes("Provider") || error?.includes("密钥") ? error : providerNotice ?? (providerReady ? "已在本机安全保存。" : "macOS 写入本地加密凭据文件，不会请求钥匙串授权。")}</small>
+                  <small>{error?.includes("Provider") || error?.includes("密钥") ? error : providerNotice ?? (providerReady ? "已在本机安全保存。" : "密钥只会保存在当前设备的安全凭据存储中。")}</small>
                 </label>
                 {providerBootstrapError && (
                   <div className="onboarding-bootstrap-note" role="status" title={providerBootstrapError}>

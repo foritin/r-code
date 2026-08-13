@@ -400,7 +400,7 @@ test("macOS chrome falls back to the user agent when WebView platform is unavail
   await page.close();
 });
 
-test("macOS alone offers local OCR for images rejected by a text-only model", async () => {
+test("macOS and Windows offer local OCR for images rejected by a text-only model", async () => {
   const attachment = {
     id: "ocr-image",
     name: "screen.png",
@@ -450,10 +450,34 @@ test("macOS alone offers local OCR for images rejected by a text-only model", as
     };
   }, { attachment });
   assert.equal(windowsResult.capabilities.platform, "windows");
-  assert.equal(windowsResult.capabilities.nativeOcr, false);
-  assert.match(windowsResult.blocked, /不支持图片/);
-  assert.deepEqual(windowsResult.sendable, []);
+  assert.equal(windowsResult.capabilities.nativeOcr, true);
+  assert.deepEqual(windowsResult.capabilities.nativeOcrFormats, ["image/png", "image/jpeg"]);
+  assert.equal(windowsResult.blocked, null);
+  assert.equal(windowsResult.sendable.length, 1);
+  assert.equal(windowsResult.sendable[0].nativeOcr, true);
   await windows.close();
+
+  const linux = await browser.newPage();
+  await linux.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", { configurable: true, get: () => "Linux x86_64" });
+  });
+  await linux.goto(baseUrl, { waitUntil: "networkidle" });
+  const linuxResult = await linux.evaluate(async ({ attachment }) => {
+    const { firstBlockedAttachmentReason, sendableAttachmentInputs } = await import("/src/components/Attachments.tsx");
+    const { platformCapabilities } = await import("/src/lib/ipc.ts");
+    const unsupported = () => ({ state: "unsupported", reason: "当前模型不支持图片" });
+    const capabilities = await platformCapabilities();
+    return {
+      capabilities,
+      blocked: firstBlockedAttachmentReason([attachment], unsupported, capabilities),
+      sendable: sendableAttachmentInputs([attachment], unsupported, capabilities),
+    };
+  }, { attachment });
+  assert.equal(linuxResult.capabilities.platform, "linux");
+  assert.equal(linuxResult.capabilities.nativeOcr, false);
+  assert.match(linuxResult.blocked, /不支持图片/);
+  assert.deepEqual(linuxResult.sendable, []);
+  await linux.close();
 });
 
 test("Windows close hides to the tray while explicit quit stays discoverable", async () => {

@@ -149,8 +149,8 @@ pub fn platform_capabilities() -> PlatformCapabilities {
     };
     PlatformCapabilities {
         platform,
-        native_ocr: cfg!(target_os = "macos"),
-        native_ocr_formats: if cfg!(target_os = "macos") {
+        native_ocr: cfg!(any(target_os = "macos", target_os = "windows")),
+        native_ocr_formats: if cfg!(any(target_os = "macos", target_os = "windows")) {
             vec!["image/png", "image/jpeg"]
         } else {
             Vec::new()
@@ -5158,15 +5158,15 @@ const MAX_IMAGE_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES: usize = 1024 * 1024;
 const MAX_PDF_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ATTACHMENTS_TOTAL_BYTES: usize = 24 * 1024 * 1024;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NATIVE_OCR_ATTACHMENTS: usize = 4;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NATIVE_OCR_EDGE: u32 = 16_384;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NATIVE_OCR_PIXELS_PER_IMAGE: u64 = 40_000_000;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NATIVE_OCR_TOTAL_PIXELS: u64 = 80_000_000;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 const MAX_NATIVE_OCR_TOTAL_TEXT_BYTES: usize = 2 * 1024 * 1024;
 
 /// WebView 传入的附件。`data` 是不含 data URL 前缀的标准 Base64。
@@ -5363,11 +5363,11 @@ fn validate_attachments(
             return Err(format!("暂不支持读取附件 {name}（{media_type}）"));
         };
         if attachment.native_ocr && kind != ValidatedAttachmentKind::Image {
-            return Err(format!("{name} 不是可使用 macOS OCR 的图片附件"));
+            return Err(format!("{name} 不是可使用本机 OCR 的图片附件"));
         }
         if attachment.native_ocr && !matches!(media_type.as_str(), "image/png" | "image/jpeg") {
             return Err(format!(
-                "{name} 的 {media_type} 格式不支持 macOS OCR；请转换为 PNG 或 JPEG"
+                "{name} 的 {media_type} 格式不支持本机 OCR；请转换为 PNG 或 JPEG"
             ));
         }
 
@@ -5384,7 +5384,7 @@ fn validate_attachments(
     Ok(validated)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn validate_native_ocr_budget(attachments: &[ValidatedAttachment]) -> Result<(), String> {
     let ocr_attachments = attachments
         .iter()
@@ -5392,23 +5392,27 @@ fn validate_native_ocr_budget(attachments: &[ValidatedAttachment]) -> Result<(),
         .collect::<Vec<_>>();
     if ocr_attachments.len() > MAX_NATIVE_OCR_ATTACHMENTS {
         return Err(format!(
-            "一次最多使用 macOS OCR 识别 {MAX_NATIVE_OCR_ATTACHMENTS} 张图片"
+            "一次最多使用本机 OCR 识别 {MAX_NATIVE_OCR_ATTACHMENTS} 张图片"
         ));
     }
     let mut total_pixels = 0u64;
     for attachment in ocr_attachments {
-        let (width, height) = crate::mac_ocr::image_dimensions(&attachment.bytes)
-            .map_err(|error| format!("{}：{error}", attachment.name))?;
+        #[cfg(target_os = "macos")]
+        let dimensions = crate::mac_ocr::image_dimensions(&attachment.bytes);
+        #[cfg(target_os = "windows")]
+        let dimensions = crate::windows_ocr::image_dimensions(&attachment.bytes);
+        let (width, height) =
+            dimensions.map_err(|error| format!("{}：{error}", attachment.name))?;
         if width > MAX_NATIVE_OCR_EDGE || height > MAX_NATIVE_OCR_EDGE {
             return Err(format!(
-                "{} 的尺寸 {}×{} 超过 macOS OCR 单边 {} 像素限制",
+                "{} 的尺寸 {}×{} 超过本机 OCR 单边 {} 像素限制",
                 attachment.name, width, height, MAX_NATIVE_OCR_EDGE
             ));
         }
         let pixels = u64::from(width) * u64::from(height);
         if pixels > MAX_NATIVE_OCR_PIXELS_PER_IMAGE {
             return Err(format!(
-                "{} 包含 {} 万像素，超过 macOS OCR 单图 {} 万像素限制",
+                "{} 包含 {} 万像素，超过本机 OCR 单图 {} 万像素限制",
                 attachment.name,
                 pixels / 10_000,
                 MAX_NATIVE_OCR_PIXELS_PER_IMAGE / 10_000
@@ -5417,7 +5421,7 @@ fn validate_native_ocr_budget(attachments: &[ValidatedAttachment]) -> Result<(),
         total_pixels = total_pixels.saturating_add(pixels);
         if total_pixels > MAX_NATIVE_OCR_TOTAL_PIXELS {
             return Err(format!(
-                "本轮图片总像素超过 macOS OCR {} 万像素限制",
+                "本轮图片总像素超过本机 OCR {} 万像素限制",
                 MAX_NATIVE_OCR_TOTAL_PIXELS / 10_000
             ));
         }
@@ -5425,7 +5429,7 @@ fn validate_native_ocr_budget(attachments: &[ValidatedAttachment]) -> Result<(),
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn native_ocr_attachment_name(original: &str) -> String {
     // Keep enough room for the semantic suffix while preserving the sanitized source name.
     format!("{}.ocr.txt", trim_chars(original, 172))
@@ -5438,12 +5442,12 @@ async fn apply_native_ocr(
         return Ok(attachments);
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         return Err("当前平台不提供系统 OCR；请改用支持图片的模型".to_string());
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
         validate_native_ocr_budget(&attachments)?;
         let attachments = tokio::task::spawn_blocking(move || {
@@ -5455,11 +5459,19 @@ async fn apply_native_ocr(
                 }
                 let original_name = attachment.name.clone();
                 let original_media_type = attachment.media_type.clone();
+                #[cfg(target_os = "macos")]
                 let recognized = crate::mac_ocr::recognize_text(&attachment.bytes)
                     .map_err(|error| format!("{original_name} OCR 失败：{error}"))?;
+                #[cfg(target_os = "windows")]
+                let recognized = crate::windows_ocr::recognize_text(&attachment.bytes)
+                    .map_err(|error| format!("{original_name} OCR 失败：{error}"))?;
+                #[cfg(target_os = "macos")]
+                let engine_label = "macOS Vision OCR";
+                #[cfg(target_os = "windows")]
+                let engine_label = "Windows OCR";
                 let text = format!(
-                    "[macOS Vision OCR · 原图片：{}（{}）]\n{}",
-                    original_name, original_media_type, recognized
+                    "[{engine_label} · 原图片：{}（{}）]\n{}",
+                    original_name, original_media_type, recognized,
                 );
                 if text.len() > MAX_TEXT_ATTACHMENT_BYTES {
                     return Err(format!(
@@ -5481,7 +5493,7 @@ async fn apply_native_ocr(
             Ok::<_, String>(attachments)
         })
         .await
-        .map_err(|error| format!("macOS OCR 任务异常结束：{error}"))??;
+        .map_err(|error| format!("本机 OCR 任务异常结束：{error}"))??;
         Ok(attachments)
     }
 }
@@ -11832,7 +11844,7 @@ pub async fn settings_save_provider(
     let show_reasoning = input
         .show_reasoning
         .or(stored_show_reasoning)
-        .unwrap_or(false);
+        .unwrap_or(true);
 
     let root = config_json
         .as_object_mut()
@@ -23325,6 +23337,14 @@ input.on('line', (line) => {
             cfg["provider_status"][provider_name.as_str()]["ready"],
             true
         );
+        assert!(
+            SettingsService::new(state.config_dir.clone())
+                .load_global_unvalidated()
+                .unwrap()
+                .providers[provider_name.as_str()]
+            .show_reasoning,
+            "new and legacy provider configurations should show reasoning by default"
+        );
         assert!(cfg["validation"].is_null());
 
         let config_file = std::fs::read_to_string(state.config_dir.join("config.toml")).unwrap();
@@ -24075,6 +24095,21 @@ input.on('line', (line) => {
         assert!(matches!(
             responses,
             hermes_llm::ProviderConfig::DeepSeekResponses { .. }
+        ));
+
+        let pro_responses = build_provider_config(
+            profile_name,
+            &provider_cfg_with_identity(
+                custom_gateway,
+                "deepseek-v4-pro",
+                ProviderProtocol::OpenAiResponses,
+                "deepseek",
+            ),
+        );
+        assert!(matches!(
+            pro_responses,
+            hermes_llm::ProviderConfig::DeepSeekResponses { model, .. }
+                if model == "deepseek-v4-pro"
         ));
 
         let anthropic = build_provider_config(
@@ -25347,9 +25382,12 @@ input.on('line', (line) => {
     #[test]
     fn platform_capabilities_match_the_compiled_target() {
         let capabilities = platform_capabilities();
-        assert_eq!(capabilities.native_ocr, cfg!(target_os = "macos"));
-        if cfg!(target_os = "macos") {
-            assert_eq!(capabilities.platform, "macos");
+        assert_eq!(
+            capabilities.native_ocr,
+            cfg!(any(target_os = "macos", target_os = "windows"))
+        );
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            assert!(matches!(capabilities.platform, "macos" | "windows"));
             assert_eq!(
                 capabilities.native_ocr_formats,
                 vec!["image/png", "image/jpeg"]
@@ -25359,7 +25397,7 @@ input.on('line', (line) => {
         }
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     #[test]
     fn native_ocr_budget_rejects_oversized_or_excess_images() {
         fn fixture(name: &str, width: u32, height: u32) -> ValidatedAttachment {

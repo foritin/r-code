@@ -167,9 +167,19 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
     firstReasoning: false,
     omittedReasoning: false,
     explicitReasoning: true,
-    defaultReasoning: false,
+    defaultReasoning: true,
   });
   await page.close();
+});
+
+test("provider reasoning is visible by default and credential copy is platform-neutral", () => {
+  const settings = fs.readFileSync(path.join(frontendDir, "src/components/scenes/SettingsScene.tsx"), "utf8");
+  const onboarding = fs.readFileSync(path.join(frontendDir, "src/components/onboarding/OnboardingCampaign.tsx"), "utf8");
+  const mcp = fs.readFileSync(path.join(frontendDir, "src/components/scenes/McpPanel.tsx"), "utf8");
+
+  assert.match(settings, /show_reasoning:\s*profile\?\.show_reasoning \?\? true/);
+  assert.doesNotMatch(onboarding, /macOS 写入/);
+  assert.doesNotMatch(mcp, /macOS 不访问钥匙串|macOS 写入/);
 });
 
 test("local configuration hydration never blocks the onboarding tour", async () => {
@@ -339,9 +349,9 @@ test("an empty provider form applies the complete first preset and keeps the pri
     model: "gpt-5.6-sol",
   });
   const reasoningToggle = page.getByRole("switch", { name: "显示思考过程" });
-  assert.equal(await reasoningToggle.isChecked(), false, "new providers should hide reasoning by default");
+  assert.equal(await reasoningToggle.isChecked(), true, "new providers should show reasoning by default");
   await reasoningToggle.click();
-  assert.equal(await reasoningToggle.isChecked(), true, "the provider preference should remain user-controlled");
+  assert.equal(await reasoningToggle.isChecked(), false, "the provider preference should remain user-controlled");
 
   const webCapability = page.getByLabel("当前模型服务的联网能力");
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");

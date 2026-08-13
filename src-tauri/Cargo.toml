@@ -61,7 +61,7 @@ base64 = { workspace = true }
 tempfile = { workspace = true }
 
 # Tauri 桌面应用壳
-tauri = { workspace = true, features = ["macos-private-api"] }
+tauri = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = "2"
@@ -72,6 +72,17 @@ anyhow = { workspace = true }
 tauri = { workspace = true, features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 zip = { workspace = true }
+# Text-only models can still accept screenshots through Windows' on-device OCR.
+# Keep the WinRT surface target-scoped so non-Windows builds do not compile these bindings.
+windows = { version = "0.61.3", features = [
+    "Foundation",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Security_Cryptography",
+    "Storage_Streams",
+    "Win32_Foundation",
+    "Win32_System_WinRT",
+] }
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }

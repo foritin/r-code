@@ -1552,7 +1552,7 @@ function saveProvider(provider: ProviderSettingsInput): void {
     max_tokens: provider.maxTokens ?? undefined,
     temperature: provider.temperature ?? undefined,
     protocol: provider.protocol ?? undefined,
-    show_reasoning: provider.showReasoning ?? existing?.show_reasoning ?? false,
+    show_reasoning: provider.showReasoning ?? existing?.show_reasoning ?? true,
   };
   browserMockSettings.provider_status[provider.name] = {
     configured: true,
@@ -1677,10 +1677,11 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       const explicitOther = /linux|x11|cros|android|iphone|ipad|ipod/i.test(hint);
       const macOS = explicitMac || (!explicitWindows && !explicitOther
         && /macintosh|mac os x/i.test(navigator.userAgent || ""));
+      const nativeOcr = macOS || explicitWindows;
       return {
         platform: macOS ? "macos" : explicitWindows ? "windows" : /linux|x11/i.test(hint) ? "linux" : "other",
-        nativeOcr: macOS,
-        nativeOcrFormats: macOS ? ["image/png", "image/jpeg"] : [],
+        nativeOcr,
+        nativeOcrFormats: nativeOcr ? ["image/png", "image/jpeg"] : [],
       };
     }
 

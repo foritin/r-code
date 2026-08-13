@@ -70,7 +70,10 @@ export interface DraftAttachment extends AttachmentInput {
 
 export type AttachmentCapabilityResolver = (attachment: DraftAttachment) => ImageCapability;
 
-const MAC_OCR_REASON = "当前模型不接收图片；发送时会用 macOS 系统 OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。";
+function nativeOcrReason(platform: PlatformCapabilities["platform"]): string {
+  const system = platform === "windows" ? "Windows" : platform === "macos" ? "macOS" : "系统";
+  return `当前模型不接收图片；发送时会用 ${system} OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。`;
+}
 export function nativeOcrTextName(name: string): string {
   return `${Array.from(name).slice(0, 172).join("")}.ocr.txt`;
 }
@@ -93,7 +96,11 @@ function effectiveCapability(
 ): ImageCapability {
   const capability = capabilityFor(attachment);
   if (attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities)) {
-    return { state: "supported", modelLabel: capability.modelLabel, reason: MAC_OCR_REASON };
+    return {
+      state: "supported",
+      modelLabel: capability.modelLabel,
+      reason: nativeOcrReason(platformCapabilities.platform),
+    };
   }
   return capability;
 }
@@ -395,7 +402,9 @@ export function AttachmentTray({
           );
         })}
         <span className="sr-only" aria-live="polite">
-          {unsupportedReason ?? (hasNativeOcr ? MAC_OCR_REASON : "附件会随消息发送；图片可点击预览")}
+          {unsupportedReason ?? (hasNativeOcr
+            ? nativeOcrReason(platformCapabilities.platform)
+            : "附件会随消息发送；图片可点击预览")}
         </span>
       </div>
       {previewing?.previewUrl && (

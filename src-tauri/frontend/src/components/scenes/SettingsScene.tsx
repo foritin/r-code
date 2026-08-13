@@ -629,7 +629,7 @@ function ProviderSection({
     max_tokens: OUTPUT_DEFAULT,
     temperature: "0.2",
     protocol: "openai_chat" as ProviderProtocol,
-    show_reasoning: false,
+    show_reasoning: true,
   });
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -680,7 +680,7 @@ function ProviderSection({
       // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
       // 就自己去选一下，这条规矩对新建和编辑一视同仁。
       protocol: fallbackProtocol(preset),
-      show_reasoning: false,
+      show_reasoning: true,
     });
   }, []);
 
@@ -715,7 +715,7 @@ function ProviderSection({
         profile?.protocol ??
         providerStatus[selectedProvider]?.effective_protocol ??
         fallbackProtocol(preset),
-      show_reasoning: profile?.show_reasoning ?? false,
+      show_reasoning: profile?.show_reasoning ?? true,
     });
     setKeyInput("");
     setSaved(null);
@@ -862,7 +862,7 @@ function ProviderSection({
       <div className="section-heading">
         <div>
           <h3>对话模型</h3>
-          <p className="desc">R-Code 对话使用的模型服务。macOS 使用当前用户目录中的本地加密凭据文件，不会请求钥匙串授权；其他平台使用系统凭据库。</p>
+          <p className="desc">R-Code 对话使用的模型服务。访问密钥只保存在当前设备的安全凭据存储中，界面不会回显已保存内容。</p>
         </div>
         <button
           className="btn"

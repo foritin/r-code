@@ -161,10 +161,24 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
   const config = JSON.parse(
     fs.readFileSync(path.join(repoRoot, "src-tauri", "tauri.macos.conf.json"), "utf8"),
   );
+  const hostManifest = fs.readFileSync(
+    path.join(repoRoot, "src-tauri", "Cargo.toml"),
+    "utf8",
+  );
+  const globalDependencies = hostManifest.match(
+    /\[dependencies\]\r?\n([\s\S]*?)(?=\r?\n\[)/,
+  )?.[1];
   const window = config.app.windows[0];
 
   assert.equal(config.identifier, "com.rcode.desktop");
   assert.equal(config.build.runner.cmd, "../scripts/cargo-tauri-macos-runner.sh");
+  assert.equal(config.app.macOSPrivateApi, true);
+  assert.ok(globalDependencies, "the host manifest must define global dependencies");
+  assert.doesNotMatch(
+    globalDependencies,
+    /macos-private-api/,
+    "macos-private-api must be enabled by the macOS Tauri config, not for every target",
+  );
   assert.equal(window.decorations, true);
   assert.equal(window.titleBarStyle, "Overlay");
   assert.equal(window.hiddenTitle, true);

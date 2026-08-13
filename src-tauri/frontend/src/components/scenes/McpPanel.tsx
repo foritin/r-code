@@ -403,7 +403,7 @@ function CustomMcpForm({ server, busy, onCancel, onSave }: {
           <label className="wide">请求头名（每行一个）<textarea className="input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="Authorization" /></label>
         </>}
       </div>
-      <div className="mcp-editor-actions"><span>保存不会启动服务；凭据值稍后单独安全保存（macOS 不访问钥匙串）。</span><button className="btn primary" disabled={busy}>{busy ? "保存中…" : "保存配置"}</button></div>
+      <div className="mcp-editor-actions"><span>保存不会启动服务；凭据稍后单独保存到当前设备的安全凭据存储。</span><button className="btn primary" disabled={busy}>{busy ? "保存中…" : "保存配置"}</button></div>
     </form>
   );
 }
@@ -438,7 +438,7 @@ function CredentialEditor({ server, onClose }: { server: McpServerView; onClose:
   };
   return (
     <div className="mcp-credentials">
-      <div className="mcp-editor-head"><div><strong>{server.display_name} 的凭据</strong><span>macOS 写入当前用户目录的本地加密凭据文件且不访问钥匙串；R-Code 永不回显已保存内容。</span></div><button className="btn ghost" onClick={onClose}>关闭</button></div>
+      <div className="mcp-editor-head"><div><strong>{server.display_name} 的凭据</strong><span>凭据只保存在当前设备的安全凭据存储中；R-Code 永不回显已保存内容。</span></div><button className="btn ghost" onClick={onClose}>关闭</button></div>
       {error && <div className="mcp-banner error">{error}</div>}
       {statuses?.map((item) => <label key={item.name}><span><code>{item.name}</code><small>{item.configured ? "已配置" : "未配置"}</small></span><input className="input" type="password" autoComplete="off" value={values[item.name] ?? ""} onChange={(event) => setValues({ ...values, [item.name]: event.target.value })} placeholder={item.configured ? "输入新值以替换" : "输入凭据"} />{item.configured && <button className="btn ghost" disabled={busy} onClick={() => void clear(item.name)}>清除</button>}</label>)}
       {statuses?.length === 0 && <div className="mcp-empty">该服务没有声明凭据字段。</div>}
