@@ -15,6 +15,7 @@ use r_code_core::dto::{
 };
 use r_code_core::error::ProductError;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use uuid::Uuid;
 
 use crate::Database;
 
@@ -578,14 +579,22 @@ impl<'a> TaskRepository<'a> {
         &self,
         id: &str,
         workspace_path: Option<&str>,
-    ) -> Result<(), ProductError> {
+    ) -> Result<DateTime<Utc>, ProductError> {
         let conn = self.db.conn()?;
-        conn.execute(
-            "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 WHERE id = ?3",
-            params![workspace_path, Utc::now().to_rfc3339(), id],
-        )
-        .map_err(db_err)?;
-        Ok(())
+        let updated_at = Utc::now();
+        let changed = conn
+            .execute(
+                "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND (workspace_path IS NULL OR workspace_path = ?1)",
+                params![workspace_path, updated_at.to_rfc3339(), id],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            return Err(ProductError::StateMachineError(
+                "task workspace is immutable after its first binding".to_string(),
+            ));
+        }
+        Ok(updated_at)
     }
 
     /// 绑定会话在后续运行中使用的具体模型。`None` 表示沿用该服务的默认模型。
@@ -2199,6 +2208,68 @@ impl<'a> WorkspaceRepository<'a> {
                 "workspace upsert returned no row".into(),
             )),
         }
+    }
+
+    /// Atomically register a workspace and bind it to an as-yet unscoped task.
+    /// If the task update fails, the workspace upsert rolls back with it, so callers never
+    /// observe a project in the rail without the conversation that selected it being attached.
+    pub fn upsert_and_attach_task_once(
+        &self,
+        task_id: &str,
+        canonical_path: &str,
+        display_name: &str,
+    ) -> Result<(Workspace, DateTime<Utc>), ProductError> {
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let now = Utc::now();
+        let candidate_id = Uuid::new_v4().simple().to_string();
+        let workspace = {
+            let mut statement = tx
+                .prepare(
+                    "INSERT INTO workspaces \
+                     (id, canonical_path, display_name, access_mode, last_opened_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5) \
+                     ON CONFLICT(canonical_path) DO UPDATE SET \
+                         display_name = excluded.display_name, \
+                         last_opened_at = excluded.last_opened_at \
+                     RETURNING id, canonical_path, display_name, access_mode, last_opened_at, \
+                               memory_mode, memory_generation",
+                )
+                .map_err(db_err)?;
+            let mut rows = statement
+                .query(params![
+                    candidate_id,
+                    canonical_path,
+                    display_name,
+                    access_mode_str(ProjectAccessMode::RequestApproval),
+                    now.to_rfc3339(),
+                ])
+                .map_err(db_err)?;
+            match rows.next().map_err(db_err)? {
+                Some(row) => row_to_workspace(row)?,
+                None => {
+                    return Err(ProductError::DatabaseError(
+                        "workspace attach upsert returned no row".into(),
+                    ));
+                }
+            }
+        };
+        let changed = tx
+            .execute(
+                "UPDATE tasks SET workspace_path = ?1, updated_at = ?2 \
+                 WHERE id = ?3 AND workspace_path IS NULL",
+                params![canonical_path, now.to_rfc3339(), task_id],
+            )
+            .map_err(db_err)?;
+        if changed != 1 {
+            return Err(ProductError::StateMachineError(
+                "task disappeared or already has a workspace while attaching".to_string(),
+            ));
+        }
+        tx.commit().map_err(db_err)?;
+        Ok((workspace, now))
     }
 
     /// 兼容需要提交完整 DTO 的调用方；稳定字段仍由数据库冲突分支保护。

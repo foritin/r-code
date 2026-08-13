@@ -117,7 +117,7 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
           <MenuSeparator />
           <MenuItem close={close} onSelect={() => openDashboard(workspace.canonical_path)}>
             <IconFolderOpen width={15} height={15} />
-            打开项目
+            项目概览
           </MenuItem>
           <MenuItem close={close} onSelect={openProjectFiles}>
             <IconEditor width={15} height={15} />

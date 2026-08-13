@@ -58,6 +58,7 @@ import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/logi
 import { IconCheck, IconChevronDown, IconRefresh, IconSearch } from "../icons";
 import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
 import { pushToast } from "../../store/toast";
+import { useCompanionStore, type CompanionMotion } from "../../store/companion";
 import { McpPanel } from "./McpPanel";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
@@ -75,7 +76,7 @@ const SETTINGS_PANES: Array<{
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
   { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
   { key: "tools", label: "工具与连接", description: "管理内置联网、MCP 服务、凭据和扩展市场。" },
-  { key: "preferences", label: "应用偏好", description: "调整外观、缩放和辅助阅读方式。" },
+  { key: "preferences", label: "外观与小助手", description: "调整外观、缩放、小助手和辅助阅读方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
   { key: "codex", label: "Codex CLI", description: "连接本机 Codex，并管理它的运行偏好。" },
 ];
@@ -92,6 +93,8 @@ const PROTOCOL_LABELS: Record<ProviderProtocol, string> = {
   openai_chat: "OpenAI Chat Completions",
   openai_responses: "OpenAI Responses",
 };
+
+const DEEPSEEK_RESPONSES_MODELS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
 
 /** 按 category 分组，保持目录里的原始顺序。 */
 function groupByCategory(presets: ProviderPreset[]) {
@@ -249,7 +252,7 @@ const PROVIDER_HOSTED_ROUTE_HINTS: Record<string, string> = {
   azure_openai:
     "请切换为 Responses；此外 Azure 订阅管理员必须允许 Web Search，当前鉴权仍需 Entra Token。",
   deepseek:
-    "可用组合是 Responses + deepseek-v4-flash，或 Anthropic 兼容口 + DeepSeek V4。Chat 只有普通 Tool Call。",
+    "Responses 与 Anthropic 兼容口均支持 DeepSeek V4 Flash/Pro。Chat 只有普通 Tool Call。",
   ark: "请切换为 Responses，并使用已支持内置搜索的 Doubao Seed 2 系列模型。Coding Plan 线路不在此范围。",
   dashscope:
     "请切换为 Responses，并使用 qwen3.8 / qwen3.7 / qwen3.6 / qwen3.5 或 qwen3-max 系列；Coder 候选未在官方支持清单中。",
@@ -560,6 +563,7 @@ export function SettingsScene() {
             {activePane === "preferences" && (
               <div className="settings-sheet">
                 <AppearanceSection />
+                <CompanionSection />
                 <AccessibilitySection />
               </div>
             )}
@@ -625,7 +629,7 @@ function ProviderSection({
     max_tokens: OUTPUT_DEFAULT,
     temperature: "0.2",
     protocol: "openai_chat" as ProviderProtocol,
-    show_reasoning: true,
+    show_reasoning: false,
   });
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -676,7 +680,7 @@ function ProviderSection({
       // 新建同样不预选 Responses：下拉框里"看得见"不等于用户确认过。想用 Responses
       // 就自己去选一下，这条规矩对新建和编辑一视同仁。
       protocol: fallbackProtocol(preset),
-      show_reasoning: true,
+      show_reasoning: false,
     });
   }, []);
 
@@ -711,7 +715,7 @@ function ProviderSection({
         profile?.protocol ??
         providerStatus[selectedProvider]?.effective_protocol ??
         fallbackProtocol(preset),
-      show_reasoning: profile?.show_reasoning ?? true,
+      show_reasoning: profile?.show_reasoning ?? false,
     });
     setKeyInput("");
     setSaved(null);
@@ -823,11 +827,11 @@ function ProviderSection({
   const deepSeekV4 = isDeepSeekV4(fields.base_url, fields.model, presetName);
   const outputValue = Number(fields.max_tokens.trim());
   const outputExceedsDeepSeekLimit = deepSeekV4 && Number.isFinite(outputValue) && outputValue > 393_216;
-  const deepSeekResponsesUnsupported =
+  const deepSeekResponsesModelUnsupported =
     activePreset?.id === "deepseek" &&
     normalizeUrl(fields.base_url) === normalizeUrl(activePreset.base_url) &&
     fields.protocol === "openai_responses" &&
-    fields.model.trim() !== "deepseek-v4-flash";
+    !DEEPSEEK_RESPONSES_MODELS.has(fields.model.trim().toLowerCase());
   const allowedProtocolOptions = allowedProtocols(activePreset, fields.base_url);
   const protocolMismatch = Boolean(
     allowedProtocolOptions && !allowedProtocolOptions.includes(fields.protocol)
@@ -843,18 +847,22 @@ function ProviderSection({
     presetName === CUSTOM_PRESET ||
     pendingVars.length > 0 ||
     protocolMismatch ||
-    deepSeekResponsesUnsupported ||
+    deepSeekResponsesModelUnsupported ||
     outputExceedsDeepSeekLimit;
   // 占位符没替换就保存 = 一个必然 404 的地址进了配置
   const saveBlocked =
-    busy || outputExceedsDeepSeekLimit || deepSeekResponsesUnsupported || pendingVars.length > 0;
+    busy
+    || protocolMismatch
+    || outputExceedsDeepSeekLimit
+    || deepSeekResponsesModelUnsupported
+    || pendingVars.length > 0;
 
   return (
     <section className="settings-block provider-settings">
       <div className="section-heading">
         <div>
           <h3>对话模型</h3>
-          <p className="desc">R-Code 对话使用的模型服务。密钥仅保存在系统凭据库。</p>
+          <p className="desc">R-Code 对话使用的模型服务。macOS 使用当前用户目录中的本地加密凭据文件，不会请求钥匙串授权；其他平台使用系统凭据库。</p>
         </div>
         <button
           className="btn"
@@ -1175,12 +1183,12 @@ function ProviderSection({
                       <option key={protocol} value={protocol}>{PROTOCOL_LABELS[protocol]}</option>
                     ))}
                   </select>
-                  {deepSeekResponsesUnsupported && (
+                  {deepSeekResponsesModelUnsupported && (
                     <span className="provider-field-warning" role="alert">
-                      Responses 仅支持 deepseek-v4-flash（0731）；V4 Pro 请改用 Chat 或 Anthropic。
+                      Responses 支持 deepseek-v4-flash（0731）与 deepseek-v4-pro；请使用以上模型。
                     </span>
                   )}
-                  {fields.protocol === "openai_responses" && !deepSeekResponsesUnsupported && (
+                  {fields.protocol === "openai_responses" && !deepSeekResponsesModelUnsupported && (
                     <span className="provider-field-meta">
                       {activePreset && !activePreset.reasoning_replay
                         ? "该服务不支持加密推理回放"
@@ -1734,6 +1742,101 @@ function AppearanceSection() {
         <button className="btn ghost" onClick={zoomReset}>
           复位
         </button>
+      </div>
+    </section>
+  );
+}
+
+function CompanionSection() {
+  const enabled = useCompanionStore((state) => state.enabled);
+  const minimized = useCompanionStore((state) => state.minimized);
+  const soundEnabled = useCompanionStore((state) => state.soundEnabled);
+  const motion = useCompanionStore((state) => state.motion);
+  const setEnabled = useCompanionStore((state) => state.setEnabled);
+  const setMinimized = useCompanionStore((state) => state.setMinimized);
+  const setSoundEnabled = useCompanionStore((state) => state.setSoundEnabled);
+  const setMotion = useCompanionStore((state) => state.setMotion);
+  const resetPosition = useCompanionStore((state) => state.resetPosition);
+
+  return (
+    <section className="settings-block">
+      <h3>R-Code 初音小助手</h3>
+      <p className="desc">独立悬浮在其他应用之上，反馈 session 进度。拖动助手移动；左键查看最近任务并跳转到对应会话，右键关闭。空闲时会偶尔唱歌或跳舞，鼠标移入也会立即回应。所有状态均来自本机任务数据，不会额外调用模型。</p>
+      <div className="field">
+        <label htmlFor="set-companion-enabled">显示小助手</label>
+        <input
+          id="set-companion-enabled"
+          className="switch"
+          type="checkbox"
+          role="switch"
+          checked={enabled}
+          onChange={(event) => {
+            setEnabled(event.target.checked);
+            if (event.target.checked) setMinimized(false);
+          }}
+        />
+        <span className="hint">显示运行、待处理、完成、失败和待审核状态；关闭后可在这里重新开启。</span>
+      </div>
+      <div className="field">
+        <label id="set-companion-shape-label">默认形态</label>
+        <div className="chips" role="radiogroup" aria-labelledby="set-companion-shape-label">
+          <button
+            type="button"
+            role="radio"
+            aria-checked={!minimized}
+            className={`chipbtn${!minimized ? " on" : ""}`}
+            disabled={!enabled}
+            onClick={() => setMinimized(false)}
+          >
+            完整形态
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={minimized}
+            className={`chipbtn${minimized ? " on" : ""}`}
+            disabled={!enabled}
+            onClick={() => setMinimized(true)}
+          >
+            迷你形态
+          </button>
+        </div>
+        <span className="hint">完整形态更易看清动作；迷你形态减少对其他应用的遮挡。</span>
+      </div>
+      <div className="field">
+        <label>悬浮位置</label>
+        <button className="btn ghost" type="button" disabled={!enabled} onClick={resetPosition}>
+          恢复右下角
+        </button>
+        <span className="hint">按住角色本身即可跨应用自由移动；恢复后回到主显示器右下角。</span>
+      </div>
+      <div className="field">
+        <label htmlFor="set-companion-motion">动效</label>
+        <select
+          id="set-companion-motion"
+          className="input"
+          value={motion}
+          disabled={!enabled}
+          onChange={(event) => setMotion(event.target.value as CompanionMotion)}
+        >
+          <option value="system">跟随系统</option>
+          <option value="full">完整动效</option>
+          <option value="reduced">静态形态</option>
+        </select>
+        <span className="hint">唱跳与移入反馈只使用低频计时和合成动画，不持续追踪鼠标；“跟随系统”会遵循减少动态效果设置。</span>
+      </div>
+      <div className="field">
+        <label htmlFor="set-companion-sound">状态提示音</label>
+        <input
+          id="set-companion-sound"
+          className="switch"
+          type="checkbox"
+          role="switch"
+          checked={soundEnabled}
+          disabled={!enabled}
+          onChange={(event) => setSoundEnabled(event.target.checked)}
+        />
+        <span className="hint">默认关闭；仅在授权、完成、失败或待审核等重要 session 变化时播放一次短提示。</span>
       </div>
     </section>
   );
@@ -2572,7 +2675,7 @@ function CodexIntegrationSection({
       <ol className="codex-setup-steps" aria-label="Codex 设置进度">
         <li className={status?.cli_available ? "done" : setupState === "install_cli" ? "current" : "pending"}>
           <span className="codex-step-mark">{status?.cli_available && <IconCheck width={12} height={12} />}</span>
-          <div><strong>Codex CLI</strong><small>{status?.cli_available ? "可运行" : "待安装"}</small></div>
+          <div><strong>Codex CLI</strong><small>{status?.cli_available ? `可运行${status.cli_source_label ? ` · ${status.cli_source_label}` : ""}` : "待安装"}</small></div>
         </li>
         <li className={authReady ? "done" : setupState === "login" || setupState === "check" ? "current" : "pending"}>
           <span className="codex-step-mark">{authReady && <IconCheck width={12} height={12} />}</span>
@@ -2616,7 +2719,8 @@ function CodexIntegrationSection({
             </div>
             <dl className="codex-details-list">
               <dt>CLI</dt>
-              <dd>{status.cli_available ? `${status.cli_version || "可运行"}` : "不可用"}</dd>
+              <dd>{status.cli_available ? `${status.cli_version || "可运行"}${status.cli_source_label ? ` · ${status.cli_source_label}` : ""}` : "不可用"}</dd>
+              {status.cli_available && status.cli_path && <><dt>CLI 位置</dt><dd className="val">{status.cli_path}</dd></>}
               <dt>登录</dt>
               <dd>{loginLabel}</dd>
               <dt>协作 Skill</dt>

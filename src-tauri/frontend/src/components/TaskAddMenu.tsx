@@ -222,7 +222,7 @@ export function TaskAddMenu({
           </button>
           <button className="task-add-item" type="button" onClick={() => folderInputRef.current?.click()}>
             <IconProjects width={17} height={17} />
-            <span><strong>文件夹</strong><small>附加其中可读取的文件，最多 8 个</small></span>
+            <span><strong>附加文件夹中的文件</strong><small>只附加可读取的文件，最多 8 个</small></span>
           </button>
           <button
             className={`task-add-item${goalMode ? " is-active" : ""}`}

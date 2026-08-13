@@ -22,7 +22,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 长上下文改为保留不可丢失的 canonical 完整历史，并把给模型使用的压缩投影单独持久化；高水位压缩会汇总全部旧证据、保留精确尾部，摘要为空或被 `max_tokens` 截断时拒绝替换，避免多轮后因永久丢失工具结果而降智。
 - `read_file` 对大文件采用约 100 KiB 的可靠分页和行内字节游标，明确返回续读位置；主 Agent 可批量读取相关文件，减少重复工具往返，同时不会把超长单行或文件尾部静默截断。
 - 主时间线只挂载最近 80 轮并按流式增量重建尾轮；子代理日志首次加载最近 80 条，之后按游标增量轮询并可向前加载。屏外 Markdown 延迟布局，折叠的长代码和工具输出只挂载前 16 行，降低长窗口滚动、展开和流式输出卡顿。
-- Provider 配置请求在前端跨组件合并并复用缓存，切换会话不再重复读取 Keychain/Credential Manager；DeepSeek、Kimi、自定义 OpenAI Chat、Responses 与 Anthropic 兼容链路完整保留长工具证据和 thinking/reasoning 输出。
+- Provider 配置请求在前端跨组件合并并复用缓存，切换会话不再重复读取持久化凭据；DeepSeek、Kimi、自定义 OpenAI Chat、Responses 与 Anthropic 兼容链路完整保留长工具证据和 thinking/reasoning 输出。
 - 子代理任务页按运行状态分组并可整体收起；命令、文件编辑、工具调用及审核文件默认使用可折叠卡片，文件链接在工作台追加标签而不替换子代理页面。
 
 ### Fixed
@@ -33,12 +33,12 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - 修复子代理日志分页时跨页 `ToolCall`/`ToolResult` 无法配对、结果穿过空页后丢失、半写 JSONL 或日志替换后游标失效，以及 message/reasoning 正文被 20,000 字符静默截断的问题。
 - 修复长时间线每个流式 token 都扫描和复制完整历史、长 reasoning 即使收起仍挂载正文、单窗口信息过多时上滑明显卡顿的问题。
 - 修复 Provider 设置与会话切换期间重复凭据查询造成的卡顿，并确保配置更新后缓存会正确失效而不会继续使用旧模型或旧凭据引用。
-- 修复 macOS 未启用原生 Keychain 后端导致 Provider API Key 与 MCP 凭据“保存成功但立即不可读”的问题；保存后会使用新的凭据入口回读确认，失败时不会清空旧版 TOML 中唯一的明文密钥副本。
+- macOS Provider API Key 与 MCP 凭据改用应用数据目录内的 ChaCha20-Poly1305 加密文件，主密钥与密文权限均为 `0600`，避免开发重编译和升级后反复触发 Keychain 授权；旧 Keychain 项不会被自动读取，需重新输入或使用环境变量。
 - 统一 macOS 桌面、启动期日志、托管 RTK 与独立 MCP Server 的应用数据目录，避免 Bundle ID 差异产生第二套空数据库、RTK 无法被 Codex 子进程发现或支持包缺少日志。
 
 ### Security
 
-- 凭据保存改为面向系统原生凭据库的回读验证与安全迁移；诊断日志、Provider 错误正文和 MCP 配置继续经过脱敏，不回显 API Key、令牌或私钥材料。
+- macOS 加密凭据采用随机独立主密钥、每次写入新 nonce、认证加密、跨进程锁和原子替换；Windows/Linux 保持原平台凭据后端。诊断日志、Provider 错误正文和 MCP 配置继续经过脱敏，不回显 API Key、令牌或私钥材料。
 - 模型压缩只改变可重建的投影视图，不覆盖审计所需的完整会话与工具证据；第三方 MCP 与子代理仍继承主 Agent 的权限边界、审批和审计策略。
 
 ## [0.3.3] - 2026-08-11
@@ -118,7 +118,7 @@ R-Code 的用户可见变化记录在此。格式参考 [Keep a Changelog](https
 - hosted Codex 运行仅禁用由 R-Code 管理的 legacy `mcp_servers.r-code`，保留用户配置的其他 Codex MCP；同树委派由会话内动态工具提供，避免旧工具创建第二个顶层 session。
 - 动态委派审计记录使用宿主派生的唯一 ID，外部 callId 只作展示/关联；委派标签、目标摘要与有效权限档位一并入库。
 - 运行时长改为共享时钟约每秒刷新，并隔离到计时组件，避免整条时间线随计时重渲染。
-- 任务开始后锁定其工作区绑定；需要切换目录时必须先停止当前运行，避免工具访问边界在执行中变化。
+- 会话首次附加工作区后即永久锁定该绑定；需要使用其他目录时新建会话，避免历史变更、回滚和工具访问边界被静默改到另一项目。
 - 发布准备改为事务式写入并在失败时逐字节回滚；发布前同时核对所有 Tauri updater 平台/安装器条目、Release 资产 URL 与对应 `.sig` 内容。
 - GitHub CI、波动测试与发布工作流统一使用 Node 24 原生的 checkout、setup-node 与 artifact actions，消除 Node 20 运行时弃用警告。
 

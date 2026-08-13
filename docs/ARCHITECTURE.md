@@ -54,7 +54,7 @@ flowchart LR
 1. 初始化结构化日志和内存日志缓冲。
 2. 注册 updater、dialog 插件并创建 WebView。
 3. 在应用数据目录创建 `r-code/{db,blobs,sessions,config}`。
-4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到操作系统凭据库，并一次性补写可确定的稳定 `provider_kind`；后续改名或改网关地址不会重新推断身份。
+4. 尝试把旧 `config.toml` 中的 Provider 明文密钥迁移到平台凭据后端：macOS 使用 profile 内本地加密文件且不访问旧 Keychain，Windows/Linux 使用系统凭据库；同时一次性补写可确定的稳定 `provider_kind`，后续改名或改网关地址不会重新推断身份。
 5. 在打开连接池前由 `MigrationManager` 串行执行受保护的 SQLite migration：已有数据库先做完整性校验和 WAL 安全快照，失败会恢复快照并中止启动；目前 schema 版本为 26。
 6. 创建 `CommandState`，装配 SessionStore、PermissionEngine、TerminalManager、ToolGateway 和 AgentBridge。
 7. 从应用数据目录装载 MCP 配置，创建一个共享的 `McpManager` 并注入所有 Agent runtime；此时不连接外部 MCP。
@@ -327,7 +327,7 @@ Gateway 的执行顺序是：工具查找 → 输入路径绑定 → 动态风�
 
 ### 8.3 密钥与日志
 
-Provider API key 通过 `keyring` 写入操作系统凭据库，配置文件只保存非敏感 Provider 元数据。结构化诊断日志在写入磁盘前遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数，按日滚动并固定保留最近 7 天；模型、工具、子代理、MCP 与恢复链路的 operational warning/error 会进入该日志，Prompt、源码正文与完整工具输出不进入普通日志。支持包通过系统目录选择器显式导出，只包含近 7 天脱敏后的 warning/error 明细（保留原始时间戳与模块）和白名单统计。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
+Provider API key 通过平台凭据后端保存：macOS 使用 profile 内的本地加密文件且不访问 Keychain，Windows/Linux 使用操作系统凭据库；普通配置文件只保存非敏感 Provider 元数据。结构化诊断日志在写入磁盘前遮盖 API key、Bearer、Authorization、Cookie 和常见 token 参数，按日滚动并固定保留最近 7 天；模型、工具、子代理、MCP 与恢复链路的 operational warning/error 会进入该日志，Prompt、源码正文与完整工具输出不进入普通日志。支持包通过系统目录选择器显式导出，只包含近 7 天脱敏后的 warning/error 明细（保留原始时间戳与模块）和白名单统计。支持包仍应在上传前人工检查；不要把工作区源码或原始密钥写入问题单。
 
 更完整的漏洞报告方式见根目录 [SECURITY.md](../SECURITY.md)。
 
@@ -425,7 +425,7 @@ Agent 操作终端仍受 Gateway 的风险分类和审批约束；终端本身�
 
 ## 12. Provider、配置与模型发现
 
-Provider 非敏感配置保存在应用 config 目录，密钥在系统凭据库。配置加载顺序支持全局配置叠加工作区设置，并在保存时校验协议和必填字段。
+Provider 非敏感配置保存在应用 config 目录；密钥在 macOS 保存到 `config/credentials/` 本地加密文件，在 Windows/Linux 保存到系统凭据库。配置加载顺序支持全局配置叠加工作区设置，并在保存时校验协议和必填字段。
 
 `ProviderConfig.provider_kind` 是独立于可编辑配置名称和 URL 的稳定目录/厂商身份。新保存由前端提交所选 preset id；兼容调用者省略该字段时沿用已存身份，显式空值才清除。启动时只为旧配置做一次保守推断并落盘，之后修改 profile 名称或网关地址不会改变身份。DeepSeek 专属 Provider、缓存 usage、输出上限和 hosted-tool 路由都以该持久身份为前置条件，不能仅靠一个类似 DeepSeek 的名称或 endpoint 冒充。
 

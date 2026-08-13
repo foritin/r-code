@@ -81,12 +81,12 @@ export function MenuBar() {
   const showShortcuts = () => window.dispatchEvent(new Event("r-code:shortcuts"));
 
   return (
-    <header className="menubar app-topbar">
+    <header className="menubar app-topbar" data-tauri-drag-region>
       <button type="button" className="top-icon desktop-sidebar-toggle" onClick={toggleRail} aria-label={railCollapsed ? "展开侧边栏" : "收起侧边栏"} title={railCollapsed ? "展开侧边栏" : "收起侧边栏"}>
         <IconSidebar width={16} height={16} />
       </button>
-      <nav className="desktop-navigation" aria-label="桌面导航">
-        <div className="desktop-history-actions" aria-label="浏览历史">
+      <nav className="desktop-navigation" aria-label="桌面导航" data-tauri-drag-region>
+        <div className="desktop-history-actions" aria-label="浏览历史" data-tauri-drag-region>
           <button className="desktop-nav-button desktop-history-button" type="button" onClick={goBack} disabled={!canGoBack} aria-label="后退" title="后退">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>
           </button>
@@ -94,7 +94,7 @@ export function MenuBar() {
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
           </button>
         </div>
-        <div className="desktop-app-menus">
+        <div className="desktop-app-menus" data-tauri-drag-region>
           <Menu
             label="文件"
             menuClassName="desktop-menu-popover"
@@ -159,8 +159,8 @@ export function MenuBar() {
         <IconSearch width={16} height={16} />
       </button>
 
-      <div className="topbar-spacer" />
-      <div className="top-actions" aria-label="全局操作">
+      <div className="topbar-spacer" data-tauri-drag-region />
+      <div className="top-actions" aria-label="全局操作" data-tauri-drag-region>
         <Menu
           className="notification-menu-wrap"
           role="dialog"

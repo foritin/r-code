@@ -18,6 +18,8 @@ pub mod ipc;
 pub mod legacy_memory;
 pub mod log_buffer;
 pub mod logging;
+#[cfg(target_os = "macos")]
+mod mac_ocr;
 pub mod mcp_manager;
 pub mod mcp_server;
 pub mod mcp_settings;

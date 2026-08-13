@@ -353,7 +353,7 @@ pub const PRESETS: &[Preset] = &[
         label: "DeepSeek",
         protocol: Protocol::OpenAiChat,
         // 2026-07-31 起，官方主入口同时支持 Chat Completions 与 Responses；
-        // Responses 暂时只开放给 deepseek-v4-flash。
+        // Responses 现已同时开放给 deepseek-v4-flash 与 deepseek-v4-pro。
         native: P_CR,
         auth: AuthStyle::Bearer,
         base_url: "https://api.deepseek.com",
@@ -374,7 +374,7 @@ pub const PRESETS: &[Preset] = &[
         max_output_tokens: Some(393_216),
         context_window: Some(1_000_000),
         note: Some(
-            "V4-Flash 已升级为 0731 版本；Responses 当前仅支持 Flash，V4-Pro 请走 Chat 或 Anthropic 口",
+            "Responses 已支持 V4-Flash（0731）与 V4-Pro；也可使用 Chat 或 Anthropic 兼容口",
         ),
     },
     // 旧版曾把 Anthropic 口展示成第二个 Provider。保留这条只为读取已有配置；
@@ -984,7 +984,7 @@ pub const HOSTED_WEB_ROUTES: &[HostedWebRoute] = &[
         host_pattern: "api.deepseek.com",
         path: "",
         protocol: Protocol::OpenAiResponses,
-        model_patterns: &["deepseek-v4-flash"],
+        model_patterns: &["deepseek-v4-flash", "deepseek-v4-pro"],
         format: HostedWebFormat::Standard,
         read: HostedWebRead::None,
         docs_url: "https://api-docs.deepseek.com/guides/responses_api/",
@@ -996,7 +996,7 @@ pub const HOSTED_WEB_ROUTES: &[HostedWebRoute] = &[
         host_pattern: "api.deepseek.com",
         path: "/v1",
         protocol: Protocol::OpenAiResponses,
-        model_patterns: &["deepseek-v4-flash"],
+        model_patterns: &["deepseek-v4-flash", "deepseek-v4-pro"],
         format: HostedWebFormat::Standard,
         read: HostedWebRead::None,
         docs_url: "https://api-docs.deepseek.com/guides/responses_api/",
@@ -1377,6 +1377,12 @@ mod tests {
             "https://api.deepseek.com",
             Protocol::OpenAiResponses,
             "deepseek-v4-pro",
+        )
+        .is_some());
+        assert!(hosted_web_route(
+            "https://api.deepseek.com",
+            Protocol::OpenAiResponses,
+            "deepseek-v4-unknown",
         )
         .is_none());
         assert!(hosted_web_route(

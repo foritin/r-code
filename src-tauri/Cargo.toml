@@ -61,7 +61,7 @@ base64 = { workspace = true }
 tempfile = { workspace = true }
 
 # Tauri 桌面应用壳
-tauri = { workspace = true }
+tauri = { workspace = true, features = ["macos-private-api"] }
 tauri-plugin-updater = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = "2"
@@ -84,6 +84,14 @@ tar = { workspace = true }
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 # 约束 fix-path-env 的传递依赖，保持 workspace 声明的 Rust 1.80 最低版本。
 home = "=0.5.9"
+# 验证固定 Applications 目录下桌面 bundle 的 ID、OpenAI Team ID 与完整代码签名；
+# 不会扫描或执行 bundle 中除 Contents/Resources/codex 之外的任意路径。
+plist = "1.10"
+core-foundation = "0.10"
+security-framework = "3.7"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSArray", "NSData", "NSDictionary", "NSError", "NSObject", "NSProcessInfo", "NSString"] }
+objc2-vision = { version = "0.3.2", default-features = false, features = ["std", "VNObservation", "VNRecognizeTextRequest", "VNRequest", "VNRequestHandler"] }
 
 [build-dependencies]
 tauri-build = { workspace = true }

@@ -22,6 +22,14 @@ export interface AttachmentInput {
   name: string;
   mediaType: string;
   data: string;
+  /** macOS only: convert an explicitly unsupported image to local Vision OCR text. */
+  nativeOcr?: boolean;
+}
+
+export interface PlatformCapabilities {
+  platform: "macos" | "windows" | "linux" | "other";
+  nativeOcr: boolean;
+  nativeOcrFormats: string[];
 }
 
 export interface SessionAttachmentMeta {
@@ -1052,7 +1060,7 @@ export interface ProviderCatalog {
 }
 
 export interface ProviderModelsInput {
-  /** 配置名，用于在 apiKey 留空时读取已保存的系统凭据。 */
+  /** 配置名，用于在 apiKey 留空时读取已保存的本机凭据。 */
   name: string;
   /** 当前预设 id；自建服务省略。 */
   preset?: string | null;
@@ -1068,7 +1076,7 @@ export interface ProviderModelsResponse {
 export interface ProviderStatus {
   configured: boolean;
   ready: boolean;
-  source: "keychain" | "environment" | "legacy_file" | "missing" | string;
+  source: "encrypted_file" | "keychain" | "environment" | "legacy_file" | "missing" | string;
   /**
    * 这条配置实际会用的线路协议，由后端 `resolve_effective_protocol` 算出。
    *
@@ -1098,6 +1106,9 @@ export interface CodexIntegrationStatus {
   cli_available: boolean;
   cli_path?: string | null;
   cli_version?: string | null;
+  /** 后端实际选中的可执行文件来源；独立 CLI 始终优先于 macOS 桌面 bundle。 */
+  cli_source?: "path" | "npm_global" | "macos_desktop_bundle" | string | null;
+  cli_source_label?: string | null;
   /** 本地命令不可用时的脱敏诊断，不含 CLI 原始输出。 */
   cli_error?: string | null;
   /** 是否找到可运行的 npm，可在用户确认后执行固定的官方安装命令。 */

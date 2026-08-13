@@ -25,6 +25,23 @@ export interface ProjectSummary {
   completedRecently: number;
 }
 
+export const PARTIAL_SUCCESS_RUN_SUMMARY =
+  "部分完成：修改存在但运行或最终总结失败，请审阅工作区改动。";
+
+/** 最新主运行有改动可审阅，但没有完整成功结束。 */
+export function isPartialSuccess(detail?: TaskDetail): boolean {
+  const latestMainRun = detail?.runs.find((run) => run.agent_kind === "main");
+  return latestMainRun?.review_state === "pending"
+    && latestMainRun.summary?.trim() === PARTIAL_SUCCESS_RUN_SUMMARY;
+}
+
+export function reviewAttentionDescription(detail?: TaskDetail): string {
+  const count = detail?.changes.length ?? 0;
+  return isPartialSuccess(detail)
+    ? `修改存在但总结失败 · ${count} 个文件等待审核`
+    : `${count} 个文件等待审核`;
+}
+
 export function taskTitle(task: Task): string {
   return task.title.trim() || task.goal.trim() || "未命名任务";
 }

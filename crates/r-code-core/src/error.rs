@@ -74,6 +74,13 @@ pub enum ProductError {
     #[error("permission error: {0}")]
     PermissionError(String),
 
+    /// Provider 正常结束了一个模型回合，但没有返回任何可持久化的 assistant 内容。
+    ///
+    /// 这是可被运行协调层精确识别的协议结果：若前序工具已经执行，协调层可以进行
+    /// 一次禁用工具的最终总结恢复；普通线路错误不能冒充这一结果。
+    #[error("模型服务未返回可显示内容，请重试或检查模型线路配置")]
+    EmptyAssistantResponse,
+
     /// Git 错误
     #[error("git error: {0}")]
     GitError(String),
@@ -82,7 +89,7 @@ pub enum ProductError {
     #[error("ipc error: {0}")]
     IpcError(String),
 
-    /// 密钥 / Keychain 错误 [doc-07 §5]
+    /// 密钥 / 平台凭据存储错误 [doc-07 §5]
     #[error("secret error: {0}")]
     SecretError(String),
 
@@ -115,6 +122,9 @@ impl From<ProductError> for hermes_error::Error {
             ProductError::ConfigError(msg) => Self::Config(msg),
             ProductError::StateMachineError(msg) => Self::Internal(format!("state machine: {msg}")),
             ProductError::PermissionError(msg) => Self::PermissionDenied(msg),
+            ProductError::EmptyAssistantResponse => {
+                Self::Other("模型服务未返回可显示内容，请重试或检查模型线路配置".to_string())
+            }
             ProductError::GitError(msg) => Self::Storage(format!("git: {msg}")),
             ProductError::IpcError(msg) => Self::Ipc(msg),
             ProductError::SecretError(msg) => Self::Other(format!("secret: {msg}")),

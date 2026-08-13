@@ -57,6 +57,10 @@ pub struct AgentLoopOutcome {
     /// 本轮追加到请求工作集末尾的持久化协议消息。调用方用它更新 canonical
     /// transcript，而不需要把压缩投影或动态注入反向猜测/切片出来。
     pub appended_messages: Vec<Message>,
+    /// Provider-hosted tools completed but the same response contained no visible answer. The
+    /// coordinator must preserve the provider blocks, then make exactly one tool-free summary
+    /// request instead of treating the opaque tool blocks as a successful final response.
+    pub requires_final_summary_recovery: bool,
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
@@ -447,6 +451,8 @@ where
         let mut streaming_started = false;
         let mut received_stream_event = false;
         let mut had_tool_call = false;
+        let mut had_hosted_tool_activity = false;
+        let mut provider_requested_continuation = false;
 
         let connection = provider.stream(frozen_request.clone());
         tokio::pin!(connection);
@@ -459,6 +465,7 @@ where
                     tool_metadata: Vec::new(),
                     usage: total_usage.clone(),
                     appended_messages: Vec::new(),
+                    requires_final_summary_recovery: false,
                 });
             }
             break tokio::select! {
@@ -589,6 +596,7 @@ where
                         break;
                     }
                     flush_text(&mut current_text, &mut assistant_blocks);
+                    had_hosted_tool_activity = true;
                     if let Some(block) = provider_content.and_then(provider_content_to_custom) {
                         assistant_blocks.push(block);
                     }
@@ -613,6 +621,7 @@ where
                     provider_content,
                 } => {
                     flush_text(&mut current_text, &mut assistant_blocks);
+                    had_hosted_tool_activity = true;
                     if let Some(block) = provider_content.and_then(provider_content_to_custom) {
                         assistant_blocks.push(block);
                     }
@@ -632,6 +641,7 @@ where
                     // treat that as a protocol continuation, never as a local tool execution.
                     if other_reason == Some("pause_turn") {
                         had_tool_call = true;
+                        provider_requested_continuation = true;
                     }
                     // P1-E：流空闲 watchdog（vendor 层 120s 无数据）以可恢复标记终止。
                     // 仅当本轮**尚未产出任何内容**（无文本、无工具、无块）时用冻结请求
@@ -676,6 +686,7 @@ where
                                 tool_metadata: Vec::new(),
                                 usage: total_usage.clone(),
                                 appended_messages: Vec::new(),
+                                requires_final_summary_recovery: false,
                             });
                         }
                         // P1-E §8：重试计数对用户可见——每次实际重放前发出事件，
@@ -710,7 +721,14 @@ where
         }
 
         let was_aborted = abort.is_some_and(|flag| flag.load(Ordering::Relaxed));
-        if !was_aborted && !has_persistable_assistant_output(&current_text, &assistant_blocks) {
+        let requires_final_summary_recovery = !was_aborted
+            && had_hosted_tool_activity
+            && !provider_requested_continuation
+            && !has_visible_assistant_text(&current_text, &assistant_blocks);
+        if !was_aborted
+            && !requires_final_summary_recovery
+            && !has_persistable_assistant_output(&current_text, &assistant_blocks)
+        {
             tracing::warn!(
                 received_stream_event,
                 pending_tool_count = pending_tools.len(),
@@ -718,12 +736,7 @@ where
                 output_tokens = total_usage.output_tokens,
                 "provider stream ended without persistable assistant output"
             );
-            let message = if received_stream_event {
-                "模型服务未返回可显示内容，请重试或检查模型线路配置"
-            } else {
-                "模型服务返回了空响应，请重试或检查模型线路配置"
-            };
-            return Err(ProductError::Other(message.to_string()));
+            return Err(ProductError::EmptyAssistantResponse);
         }
 
         flush_text(&mut current_text, &mut assistant_blocks);
@@ -807,6 +820,7 @@ where
             tool_metadata,
             usage: total_usage.clone(),
             appended_messages,
+            requires_final_summary_recovery,
         });
     };
     outcome
@@ -828,6 +842,13 @@ fn has_persistable_assistant_output(current_text: &str, blocks: &[ContentBlock])
             ContentBlock::Thinking { thinking, .. } => !thinking.trim().is_empty(),
             _ => true,
         })
+}
+
+fn has_visible_assistant_text(current_text: &str, blocks: &[ContentBlock]) -> bool {
+    !current_text.trim().is_empty()
+        || blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Text { text } if !text.trim().is_empty()))
 }
 
 fn provider_content_to_custom(content: serde_json::Value) -> Option<ContentBlock> {
@@ -1405,6 +1426,7 @@ mod tests {
         .unwrap();
 
         assert!(!outcome.had_tool_call);
+        assert!(!outcome.requires_final_summary_recovery);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].text_content(), "Rust source summary");
         assert!(matches!(
@@ -1426,6 +1448,65 @@ mod tests {
                 if call_id == "srvtoolu_1"
                     && output["sources"][0]["url"] == "https://www.rust-lang.org"
         )));
+    }
+
+    #[tokio::test]
+    async fn hosted_tool_without_visible_text_preserves_provider_blocks_for_summary_recovery() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::HostedToolUse {
+                id: "srvtoolu_empty".into(),
+                name: "web_search".into(),
+                input: serde_json::json!({"query": "Rust"}),
+                provider_content: Some(serde_json::json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_empty",
+                    "name": "web_search",
+                    "input": {"query": "Rust"},
+                })),
+            },
+            StreamEvent::HostedToolResult {
+                id: "srvtoolu_empty".into(),
+                name: "web_search".into(),
+                output: serde_json::json!({"sources": [{"url": "https://www.rust-lang.org"}]}),
+                is_error: false,
+                provider_content: Some(serde_json::json!({
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_empty",
+                    "content": [{"type": "web_search_result", "url": "https://www.rust-lang.org"}],
+                })),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("web_search");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("search")];
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            false,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.had_tool_call);
+        assert!(outcome.requires_final_summary_recovery);
+        assert_eq!(outcome.appended_messages.len(), 1);
+        assert!(matches!(
+            &outcome.appended_messages[0].content[..],
+            [
+                ContentBlock::Custom { type_name: call, .. },
+                ContentBlock::Custom { type_name: result, .. },
+            ] if call == "server_tool_use" && result == "web_search_tool_result"
+        ));
     }
 
     #[tokio::test]
@@ -1465,6 +1546,7 @@ mod tests {
         .unwrap();
 
         assert!(outcome.had_tool_call);
+        assert!(!outcome.requires_final_summary_recovery);
         assert!(matches!(
             &messages[1].content[..],
             [ContentBlock::Custom { type_name, .. }] if type_name == "server_tool_use"

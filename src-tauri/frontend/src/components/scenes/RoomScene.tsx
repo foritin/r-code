@@ -9,8 +9,8 @@ import {
   agentAbort,
   agentAbortSubagent,
   prepareWorkbenchWindow,
+  taskChooseWorkspace,
   taskSetWorkspace,
-  workspaceChoose,
   workspaceSetAccessMode,
 } from "../../lib/ipc";
 import { useProviders } from "../../lib/provider";
@@ -102,6 +102,7 @@ export function RoomScene() {
   const detail = useTasksStore((s) => (currentTaskId ? s.details[currentTaskId] : undefined));
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
+  const setCurrentProject = useTasksStore((s) => s.setCurrentProject);
   const workspaces = useTasksStore((s) => s.workspaces);
   const listedTask = useTasksStore((s) => currentTaskId ? s.tasks.find((task) => task.id === currentTaskId) : undefined);
   const taskSnapshot = detail?.task ?? listedTask ?? null;
@@ -164,6 +165,11 @@ export function RoomScene() {
   useEffect(() => {
     setHistoryBranchId(null);
   }, [currentTaskId]);
+
+  useEffect(() => {
+    if (!taskSnapshot) return;
+    setCurrentProject(taskSnapshot.workspace_path ?? null);
+  }, [setCurrentProject, taskSnapshot?.id, taskSnapshot?.workspace_path]);
 
   useEffect(() => {
     if (
@@ -418,14 +424,14 @@ export function RoomScene() {
   };
 
   const attachFolder = async () => {
-    if (scopeBusy) return;
+    if (scopeBusy || running) return;
     setScopeBusy(true);
     setScopeError(null);
     try {
-      const selected = await workspaceChoose();
-      if (!selected) return;
-      await taskSetWorkspace(currentTaskId, selected.canonical_path);
+      const attached = await taskChooseWorkspace(currentTaskId);
+      if (!attached?.workspace_path) return;
       await refreshWorkspaces();
+      setCurrentProject(attached.workspace_path);
       await refreshDetail(currentTaskId);
     } catch (cause) {
       setScopeError(String(cause));
@@ -440,8 +446,9 @@ export function RoomScene() {
     setScopeError(null);
     try {
       await workspaceSetAccessMode(workspacePath, accessMode);
-      // 空闲会话会更新 runtime 作用域；运行中禁用此控件，避免当前 run 的策略突变。
-      await taskSetWorkspace(currentTaskId, workspacePath);
+      // 运行中仅保存项目级设置，当前 run 继续使用启动快照。
+      // 空闲时用同路径幂等刷新丢弃缓存 session，下一轮重建权限作用域。
+      if (!running) await taskSetWorkspace(currentTaskId, workspacePath);
       await refreshWorkspaces();
       await refreshDetail(currentTaskId);
     } catch (cause) {
@@ -500,7 +507,7 @@ export function RoomScene() {
             <IconSidebar width={17} height={17} />
           </button>
         </header>
-        <div className="room-scopebar">
+        <div className={`room-scopebar ${workspacePath ? "has-workspace" : "needs-workspace"}`}>
           {workspacePath ? (
             <>
               <IconProjects width={13} height={13} />
@@ -524,8 +531,13 @@ export function RoomScene() {
                 <span className="room-scope-state">编辑分支</span>
               )}
               {!archived && (
-                <button className="quiet-link" disabled={scopeBusy} onClick={() => void attachFolder()}>
-                  <IconAttach width={13} height={13} /> {scopeBusy ? "正在选择…" : "附加文件夹"}
+                <button
+                  className="quiet-link"
+                  disabled={scopeBusy || running}
+                  title={running ? "当前运行结束后才能附加文件夹" : "为此对话一次性附加工作区"}
+                  onClick={() => void attachFolder()}
+                >
+                  <IconAttach width={13} height={13} /> {scopeBusy ? "正在选择…" : running ? "运行结束后可附加" : "附加文件夹"}
                 </button>
               )}
             </>

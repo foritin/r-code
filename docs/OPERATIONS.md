@@ -6,8 +6,8 @@
 
 - 只从项目的 [GitHub Releases](https://github.com/foritin/r-code/releases) 下载安装包。安装前核对操作系统、CPU 架构，以及 Release 正文声明的签名状态。
 - 复制、移动或替换本地数据前，退出 R-Code，并关闭任何正在使用 R-Code 受管 MCP server 的 Codex 客户端。应用运行时不要只复制 `r-code.db`：SQLite 可能仍有活动的 `-wal`、`-shm` 旁车文件。
-- 完整的应用数据备份可能含对话、工作区引用、诊断输出和非敏感配置，应加密保存，并采用与所用工作区相同的访问控制。
-- Provider 与 MCP 凭据位于操作系统凭据库，不在本文的数据目录中。文件备份不会导出这些凭据；在另一台机器恢复后，可能需要重新输入凭据。
+- 完整的应用数据备份可能含对话、工作区引用、诊断输出和凭据材料，应加密保存，并采用与所用工作区相同的访问控制。
+- macOS 的 Provider 与 MCP 凭据位于 profile 的 `config/credentials/` 本地加密文件中，不访问 Keychain；完整 profile 备份会同时包含密文和主密钥，因此可恢复这些凭据。Windows/Linux 仍使用各自的系统凭据库，文件备份不会导出那些系统凭据。
 
 ## 安装
 
@@ -38,7 +38,7 @@ r-code/
 ├─ db/r-code.db     # SQLite 产品状态
 ├─ blobs/           # 内容寻址的基线和大输出
 ├─ sessions/        # JSONL 对话和 Agent 事件
-├─ config/          # 非敏感设置与凭据引用
+├─ config/          # 设置、凭据引用；macOS 还包含本地加密凭据
 ├─ logs/            # 脱敏诊断 JSONL，固定保留七天
 ├─ plans/           # 使用 Plan 模式时生成的 Markdown 投影
 └─ mcp-host/        # 启用 Codex 集成后部署的本地 MCP host
@@ -83,7 +83,7 @@ r-code/
 - Windows NSIS 卸载器提供删除应用数据的选项。普通重装或需要保留历史时不要勾选。勾选后，它会先尝试停止 R-Code 自己的 MCP host，再清理产品的 Roaming/Local AppData 根目录；文件被占用时，删除可能被安排到下次重启。
 - macOS 把应用移到废纸篓只会移除应用包，未必移除 profile；Linux 卸载包同样不保证删除用户数据目录。
 - 需要彻底清除本地历史时，先按组织策略创建并验证备份，然后再删除上面的 profile 路径。删除后，本地对话和任务历史不可恢复。
-- 删除应用数据不保证删除操作系统凭据库条目。只有在确认条目确实属于 R-Code 后，才在 Credential Manager、Keychain 或 secret-service UI 中单独处理；不要靠猜测名称删除无关凭据。
+- macOS 当前凭据位于 profile 的 `config/credentials/`，删除整个应用数据会一并删除它们；旧版本遗留的 Keychain `r-code` 项不会被应用自动读取或删除。Windows/Linux 的系统凭据条目也不会随普通卸载自动消失。只有确认条目确属 R-Code 后才在相应系统 UI 中单独处理，不要靠猜测名称删除无关凭据。
 
 ## 诊断和支持包
 

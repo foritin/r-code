@@ -6,8 +6,8 @@ This guide is for people installing, upgrading, backing up, restoring, or removi
 
 - Download installers only from the project's [GitHub Releases page](https://github.com/foritin/r-code/releases). Match the package to your operating system and CPU architecture, and check the signing state stated in the release notes before installing.
 - Close R-Code and any Codex client using R-Code's managed MCP server before copying, moving, or replacing application data. Never copy only `r-code.db` while the application is running: SQLite may have active `-wal` and `-shm` sidecar files.
-- Treat a full application-data copy as sensitive. It can contain conversations, workspace references, diagnostic output, and non-secret configuration. Store backups in an encrypted location with the same access controls as the workspaces you use in R-Code.
-- Provider and MCP credentials are kept in the operating-system credential store, not in this directory. A file backup does not export those credentials and a restore on another machine can require you to enter them again.
+- Treat a full application-data copy as sensitive. It can contain conversations, workspace references, diagnostic output, and credential material. Store backups in an encrypted location with the same access controls as the workspaces you use in R-Code.
+- On macOS, Provider and MCP credentials live in local encrypted files under `config/credentials/`; R-Code does not access Keychain. A complete profile backup includes both the ciphertext and its master key, so it can restore those credentials. Windows and Linux continue to use their operating-system credential stores, which are not exported by a file backup.
 
 ## Install
 
@@ -38,7 +38,7 @@ r-code/
 ├─ db/r-code.db     # product state in SQLite
 ├─ blobs/           # content-addressed baselines and large outputs
 ├─ sessions/        # JSONL conversation and agent events
-├─ config/          # non-secret settings and credential references
+├─ config/          # settings and references; also encrypted credentials on macOS
 ├─ logs/            # redacted diagnostic JSONL, retained for seven days
 ├─ plans/           # generated Plan Markdown projections, if Plan mode is used
 └─ mcp-host/        # managed local MCP host binaries, if Codex integration is enabled
@@ -83,7 +83,7 @@ Uninstalling the application and deleting its data are separate decisions.
 - The Windows NSIS uninstaller offers a delete-app-data choice. Leave it unchecked for an ordinary reinstall or when you need to preserve history. If selected, the uninstaller also attempts to stop R-Code-owned MCP hosts before removing the product's Roaming and Local AppData roots; a locked file can be scheduled for removal on the next reboot.
 - On macOS, moving the app to Trash removes the application bundle, not necessarily its profile. On Linux, package removal likewise does not guarantee removal of the user data directory.
 - To fully retire local history, first create and verify a backup if required by policy, then remove the profile path above. Removing it is irreversible for local conversations and task history.
-- Removing app data does not promise removal of OS credential-store entries. Use the relevant Credential Manager, Keychain, or secret-service UI only after confirming the entries belong to R-Code; never delete unrelated credentials by name guesswork.
+- Current macOS credentials live under `config/credentials/` inside the profile and are removed with that app-data tree; legacy `r-code` Keychain entries are neither read nor deleted automatically. Windows/Linux system-credential entries likewise survive an ordinary uninstall. Remove an OS-store item only after confirming that it belongs to R-Code; never delete unrelated credentials by guessing names.
 
 ## Diagnostics and support bundles
 

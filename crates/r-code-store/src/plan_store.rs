@@ -18,7 +18,7 @@ use r_code_core::plan::{
     PlanQuestionSet, PlanQuestionSetState, PlanState, PlanView, PublishPlanInput,
     RequestPlanQuestionsInput, UpdatePlanItemInput,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
@@ -1076,6 +1076,125 @@ impl PlanStore {
             return Err(invalid(
                 "implementation dispatch changed while it was staged",
             ));
+        }
+        tx.commit().map_err(db_err)?;
+        drop(conn);
+        self.require_view(task_id, plan_id)
+    }
+
+    /// Persist one explicit continuation of the currently active feature. Repeated clicks while
+    /// the same continuation is pending reuse the existing row; after that row has been delivered,
+    /// a later interrupted/review-ready run receives a fresh identity and can continue again.
+    pub fn stage_implementation_continuation(
+        &self,
+        task_id: &str,
+        plan_id: &str,
+        branch_id: &str,
+        item_id: &str,
+        message: &str,
+    ) -> Result<PlanView, ProductError> {
+        let lock = plan_lock(plan_id)?;
+        let _guard = lock
+            .lock()
+            .map_err(|_| ProductError::Other("Plan lock is poisoned".to_string()))?;
+        let mut conn = self.db.conn()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_err)?;
+        let plan = require_owned_plan(&tx, task_id, plan_id)?;
+        if plan.state != PlanState::Executing
+            || plan.implementation_dispatch_state != PlanImplementationDispatchState::Dispatched
+        {
+            return Err(invalid(
+                "only a dispatched executing Plan can stage a feature continuation",
+            ));
+        }
+        let approved_revision = plan
+            .approved_revision
+            .ok_or_else(|| invalid("executing Plan has no approved revision"))?;
+        let active = load_items(&tx, plan_id, approved_revision)?
+            .into_iter()
+            .find(|item| item.id == item_id && item.state == PlanItemState::InProgress)
+            .ok_or_else(|| invalid("Plan continuation must target the active feature"))?;
+        let task_state: String = tx
+            .query_row(
+                "SELECT state FROM tasks WHERE id = ?1",
+                params![task_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        if !matches!(task_state.as_str(), "interrupted" | "review_ready") {
+            return Err(invalid(format!(
+                "Plan continuation requires an interrupted or review-ready task, got {task_state}"
+            )));
+        }
+        let branch_exists: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_branches \
+                 WHERE task_id = ?1 AND id = ?2 AND is_active = 1)",
+                params![task_id, branch_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        if !branch_exists {
+            return Err(invalid(
+                "Plan continuation requires the active session branch",
+            ));
+        }
+
+        let identity_prefix = format!("plan-continuation:{plan_id}:{}:", active.id);
+        let like_prefix = format!("plan-continuation:{plan_id}:%");
+        let existing = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT id, state FROM queued_messages \
+                     WHERE task_id = ?1 AND branch_id = ?2 AND id LIKE ?3 \
+                       AND state IN ('queued', 'dispatching', 'failed', 'cancelled') \
+                     ORDER BY updated_at DESC, id DESC",
+                )
+                .map_err(db_err)?;
+            let mut rows = statement
+                .query(params![task_id, branch_id, like_prefix])
+                .map_err(db_err)?;
+            let mut found = None;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let id: String = row.get(0).map_err(db_err)?;
+                if id.starts_with(&identity_prefix) {
+                    found = Some((id, row.get::<_, String>(1).map_err(db_err)?));
+                    break;
+                }
+            }
+            found
+        };
+        let now = Utc::now().to_rfc3339();
+        let sort_order: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MIN(sort_order), 0) - 1 FROM queued_messages \
+                 WHERE task_id = ?1 AND branch_id = ?2 \
+                   AND state IN ('queued', 'dispatching', 'failed')",
+                params![task_id, branch_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        if let Some((queue_id, state)) = existing {
+            if matches!(state.as_str(), "failed" | "cancelled") {
+                tx.execute(
+                    "UPDATE queued_messages SET message = ?1, state = 'queued', priority = 1000000, \
+                     sort_order = ?2, updated_at = ?3 WHERE id = ?4 \
+                     AND state IN ('failed', 'cancelled')",
+                    params![message, sort_order, now, queue_id],
+                )
+                .map_err(db_err)?;
+            }
+        } else {
+            let queue_id = format!("{identity_prefix}{}", Uuid::new_v4());
+            tx.execute(
+                "INSERT INTO queued_messages \
+                 (id, task_id, branch_id, message, state, priority, sort_order, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, 'queued', 1000000, ?5, ?6, ?6)",
+                params![queue_id, task_id, branch_id, message, sort_order, now],
+            )
+            .map_err(db_err)?;
         }
         tx.commit().map_err(db_err)?;
         drop(conn);

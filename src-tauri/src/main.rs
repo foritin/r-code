@@ -171,6 +171,44 @@ fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+const COMPANION_WINDOW_LABEL: &str = "companion";
+
+/// Create the process-wide companion window once, but keep it hidden until the persisted frontend
+/// preference has loaded. The window intentionally has no parent so it can remain available when
+/// the main window is minimized or moved to another workspace.
+fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    if app.get_webview_window(COMPANION_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    let builder = tauri::WebviewWindowBuilder::new(
+        app,
+        COMPANION_WINDOW_LABEL,
+        tauri::WebviewUrl::App(PathBuf::from("index.html?window=companion")),
+    )
+    .title("R-Code Companion")
+    .inner_size(168.0, 196.0)
+    .max_inner_size(420.0, 360.0)
+    .resizable(false)
+    .decorations(false)
+    .shadow(false)
+    .transparent(true)
+    .always_on_top(true)
+    .focusable(true)
+    .focused(false)
+    .accept_first_mouse(true)
+    .visible(false)
+    .devtools(false);
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let builder = builder.visible_on_all_workspaces(true);
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let builder = builder.skip_taskbar(true);
+
+    builder.build().map(|_| ())
+}
+
 fn main() {
     // MCP stdio is a protocol endpoint: it must run before the normal JSON logger is
     // initialized, otherwise a single log line would corrupt Codex's JSON-RPC stream.
@@ -240,6 +278,36 @@ fn main() {
                     apply_windows_lifecycle_action(_window.app_handle(), action);
                 }
             }
+
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                if _window.label() == "main" {
+                    // Keep the main WebView (and therefore the companion navigation controller)
+                    // alive behind the conventional macOS close-to-hide behavior. Dock reopen and
+                    // a companion session click can restore the same window without a stale ACK.
+                    api.prevent_close();
+                    if let Err(error) = _window.hide() {
+                        tracing::warn!(%error, "failed to hide the R-Code main window");
+                    }
+                }
+            }
+
+            #[cfg(target_os = "linux")]
+            if let tauri::WindowEvent::CloseRequested { .. } = _event {
+                if _window.label() == "main" {
+                    // Linux has no tray/reopen controller in this build. Closing the hidden
+                    // companion as well prevents an unreachable background process whose session
+                    // navigation controller disappeared with the main WebView.
+                    if let Some(companion) = _window
+                        .app_handle()
+                        .get_webview_window(COMPANION_WINDOW_LABEL)
+                    {
+                        if let Err(error) = companion.close() {
+                            tracing::warn!(%error, "failed to close companion with the main window");
+                        }
+                    }
+                }
+            }
         })
         .setup(|app| {
             // 持久化状态：AppData/r-code/{db,blobs,sessions,config}
@@ -266,13 +334,14 @@ fn main() {
                     }
                 }
             });
-            // 旧版 config.toml 可能仍含明文 api_key：尽早迁入系统凭据库。
-            // Keychain 暂不可用不阻断启动，设置页会给出可见错误而不会泄露密钥。
+            // 旧版 config.toml 可能仍含明文 api_key：尽早迁入当前平台凭据后端。
+            // macOS 只写应用数据目录的加密凭据文件，绝不尝试读取或迁移旧 Keychain 项。
+            // 凭据后端暂不可用不阻断启动，设置页会给出可见错误而不会泄露密钥。
             match r_code_host::settings::SettingsService::new(config_dir.clone())
                 .migrate_legacy_provider_secrets()
             {
                 Ok(count) if count > 0 => {
-                    tracing::info!(count, "migrated provider secrets to OS keychain")
+                    tracing::info!(count, "migrated provider secrets to credential backend")
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "provider secret migration skipped"),
@@ -455,6 +524,12 @@ fn main() {
             }
             app.manage(state);
 
+            if let Err(error) = setup_companion_window(app.handle()) {
+                // A compositor may reject transparent/always-on-top windows. Keep the primary
+                // workspace usable and expose the failure in diagnostics instead of aborting boot.
+                tracing::warn!(%error, "native companion window is unavailable");
+            }
+
             tracing::info!(data_dir = %base.display(), "CommandState initialized (persistent)");
 
             #[cfg(target_os = "windows")]
@@ -474,6 +549,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ping,
             tauri_commands::cmd_app_quit,
+            tauri_commands::cmd_platform_capabilities,
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_project_conversation_create,
             tauri_commands::cmd_task_prepare,
@@ -482,6 +558,7 @@ fn main() {
             tauri_commands::cmd_task_restore,
             tauri_commands::cmd_task_delete,
             tauri_commands::cmd_task_set_workspace,
+            tauri_commands::cmd_task_choose_workspace,
             tauri_commands::cmd_task_set_agent_engine,
             tauri_commands::cmd_task_set_provider,
             tauri_commands::cmd_task_set_model,
@@ -631,6 +708,16 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                if let Some(window) = app_handle.get_webview_window("main") {
+                    if let Err(error) = window.show() {
+                        tracing::warn!(%error, "failed to reopen the R-Code main window");
+                    }
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 let state = app_handle.state::<CommandState>();
                 let manager = state.mcp_manager.clone();

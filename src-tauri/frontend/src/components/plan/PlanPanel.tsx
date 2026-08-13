@@ -677,6 +677,19 @@ export function PlanPanel({
           {loadError && <StatusBar kind="error" compact onDismiss={clearLoadError}>{loadError}</StatusBar>}
           {error && <StatusBar kind="error" compact onDismiss={() => setError(null)}>{error}</StatusBar>}
           {notice && <StatusBar kind="info" compact onDismiss={() => setNotice(null)}>{notice}</StatusBar>}
+          {(task.state === "interrupted" || task.state === "review_ready") && progress.inProgress > 0 && !running && (
+            <StatusBar
+              kind="warn"
+              compact
+              action={{
+                label: busy === "retryImplementation" ? "续接中…" : "继续当前功能",
+                onClick: () => void retryImplementation(),
+                disabled: busy != null,
+              }}
+            >
+              上一轮已停止或留下部分成果，但当前功能仍标记为进行中。续接会沿用同一计划和当前进度，不会重新建立 0/{progress.total} 的任务列表。
+            </StatusBar>
+          )}
 
           {questionSet && (
             <div className="plan-hitl" role="group" aria-label="计划需要你的回答">

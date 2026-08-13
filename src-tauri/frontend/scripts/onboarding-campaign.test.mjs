@@ -146,8 +146,18 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
     });
     const explicitOther = mock.browserMockSettings.config.providers?.[name]?.provider_kind;
     const explicitReasoning = mock.browserMockSettings.config.providers?.[name]?.show_reasoning;
+    const defaultName = `${name}-default-off`;
+    await ipc.settingsSaveProvider({
+      name: defaultName,
+      baseUrl: "https://api.example.com/v1",
+      model: "text-model",
+      protocol: "openai_chat",
+      activate: false,
+    });
+    const defaultReasoning = mock.browserMockSettings.config.providers?.[defaultName]?.show_reasoning;
     await ipc.settingsDeleteProvider(name);
-    return { first, omitted, explicitOther, firstReasoning, omittedReasoning, explicitReasoning };
+    await ipc.settingsDeleteProvider(defaultName);
+    return { first, omitted, explicitOther, firstReasoning, omittedReasoning, explicitReasoning, defaultReasoning };
   });
 
   assert.deepEqual(identities, {
@@ -157,6 +167,7 @@ test("browser settings mock round-trips and preserves providerKind", async () =>
     firstReasoning: false,
     omittedReasoning: false,
     explicitReasoning: true,
+    defaultReasoning: false,
   });
   await page.close();
 });
@@ -328,9 +339,9 @@ test("an empty provider form applies the complete first preset and keeps the pri
     model: "gpt-5.6-sol",
   });
   const reasoningToggle = page.getByRole("switch", { name: "显示思考过程" });
-  assert.equal(await reasoningToggle.isChecked(), true, "new providers should show reasoning by default");
+  assert.equal(await reasoningToggle.isChecked(), false, "new providers should hide reasoning by default");
   await reasoningToggle.click();
-  assert.equal(await reasoningToggle.isChecked(), false, "the provider preference should remain user-controlled");
+  assert.equal(await reasoningToggle.isChecked(), true, "the provider preference should remain user-controlled");
 
   const webCapability = page.getByLabel("当前模型服务的联网能力");
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
@@ -399,7 +410,12 @@ test("an empty provider form applies the complete first preset and keeps the pri
   assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
   await webCapability.getByText(/DeepSeek 服务端 Web Search/).waitFor();
   await page.locator("#set-model").fill("deepseek-v4-pro");
-  await page.getByText(/Responses 仅支持 deepseek-v4-flash/).waitFor({ state: "visible" });
+  assert.equal(await webCapability.getAttribute("data-search-state"), "hosted");
+  await webCapability.getByText("DeepSeek 托管", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), false);
+
+  await page.locator("#set-model").fill("deepseek-v4-unknown");
+  await page.getByText(/Responses 支持 deepseek-v4-flash.*deepseek-v4-pro/).waitFor({ state: "visible" });
   assert.equal(await webCapability.getAttribute("data-search-state"), "attention");
   await webCapability.getByText("需切换线路", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "保存", exact: true }).isDisabled(), true);

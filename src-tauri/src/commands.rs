@@ -29,6 +29,12 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "macos")]
+use core_foundation::url::CFURL;
+#[cfg(target_os = "macos")]
+use security_framework::os::macos::code_signing::{
+    Flags as CodeSigningFlags, SecRequirement, SecStaticCode,
+};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -59,8 +65,9 @@ use r_code_core::dto::{
 use r_code_core::error::ProductError;
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, ApprovePlanInput, CancelPlanInput, CreatePlanInput,
-    PlanExecutionContext, PlanExecutionStatus, PlanItemState, PlanQuestionAnswer, PlanQuestionSet,
-    PlanQuestionSetState, PlanReviewDecision, PlanState, PlanView, UpdatePlanItemInput,
+    PlanExecutionContext, PlanExecutionStatus, PlanImplementationDispatchState, PlanItemState,
+    PlanQuestionAnswer, PlanQuestionSet, PlanQuestionSetState, PlanReviewDecision, PlanState,
+    PlanView, UpdatePlanItemInput,
 };
 use r_code_core::process::hide_background_console;
 use r_code_core::secret::redact_text;
@@ -120,6 +127,36 @@ use crate::support_bundle::{McpServerSupportSummary, SupportBundle};
 use crate::workflow_skills::{
     SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
 };
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformCapabilities {
+    pub platform: &'static str,
+    pub native_ocr: bool,
+    pub native_ocr_formats: Vec<&'static str>,
+}
+
+/// Native feature flags come from the compiled Rust target, never WebView user-agent hints.
+pub fn platform_capabilities() -> PlatformCapabilities {
+    let platform = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    };
+    PlatformCapabilities {
+        platform,
+        native_ocr: cfg!(target_os = "macos"),
+        native_ocr_formats: if cfg!(target_os = "macos") {
+            vec!["image/png", "image/jpeg"]
+        } else {
+            Vec::new()
+        },
+    }
+}
 
 /// 诊断日志中的失败摘要上限。只保留足够定位问题的片段，避免把完整工具输出或
 /// 大段工作区内容复制到日志文件。
@@ -2250,6 +2287,21 @@ fn render_plan_implementation_message(view: &PlanView) -> Result<String, String>
     ))
 }
 
+fn render_plan_implementation_continuation(view: &PlanView) -> Result<(String, String), String> {
+    let active = view
+        .items
+        .iter()
+        .find(|item| item.state == PlanItemState::InProgress)
+        .ok_or_else(|| "Plan 当前没有可续接的 in_progress 功能项".to_string())?;
+    Ok((
+        active.id.clone(),
+        format!(
+            "继续实施当前 Plan 功能事项“{}”。\n\n验收边界：{}\n\n沿用现有计划、工作区变更和进度，只处理这一项；先核对上一轮已完成的工作，再补齐剩余实现与验证。完成或受阻时请更新事项状态。",
+            active.title, active.description
+        ),
+    ))
+}
+
 /// Claim and durably stage the approved Plan while the caller holds the task-local runtime lock.
 /// The SQLite transaction changes task mode, creates/reuses one deterministic queue row, and
 /// acknowledges the Plan handoff together, so no crash window can leave a hidden implementation.
@@ -2369,7 +2421,22 @@ pub async fn plan_retry_implementation(
         .get_plan(task_id, plan_id)
         .map_err(err_str)?
         .ok_or_else(|| "Plan 不存在或不属于当前会话".to_string())?;
-    let view = stage_plan_implementation(state, task_id, plan_id, view)?;
+    let view =
+        if view.plan.implementation_dispatch_state == PlanImplementationDispatchState::Dispatched {
+            if !matches!(task.state, TaskState::Interrupted | TaskState::ReviewReady) {
+                return Err("只有已中断或已有部分成果待审查的 Plan 才能续接当前功能".to_string());
+            }
+            let branch = SessionBranchRepository::new(&state.db)
+                .ensure_active(task_id)
+                .map_err(err_str)?;
+            let (item_id, message) = render_plan_implementation_continuation(&view)?;
+            state
+                .plan_store
+                .stage_implementation_continuation(task_id, plan_id, &branch.id, &item_id, &message)
+                .map_err(err_str)?
+        } else {
+            stage_plan_implementation(state, task_id, plan_id, view)?
+        };
     drop(bridge);
     let _ = view;
     drain_plan_implementation_queue(state, task_id, plan_id).await
@@ -3219,10 +3286,10 @@ pub async fn task_delete(state: &CommandState, task_id: &str) -> Result<(), Stri
     Ok(())
 }
 
-/// 将空闲会话附加到已打开的工作区，或移除其工作区作用域。
+/// 将空闲会话一次性附加到已打开的工作区。
 ///
 /// 工作区一旦附加即可公开受 PathGuard 限制的本地工具；工具调用的审批策略来自
-/// 工作区持久化的项目权限模式。
+/// 工作区持久化的项目权限模式。已绑定会话只允许同路径幂等刷新，不能改绑或解绑。
 pub async fn task_set_workspace(
     state: &CommandState,
     task_id: &str,
@@ -3232,15 +3299,6 @@ pub async fn task_set_workspace(
         .filter(|path| !path.trim().is_empty())
         .map(|path| workspace_root(state, path).map(|root| root.display().to_string()))
         .transpose()?;
-
-    let workspace_access_mode = match &path {
-        Some(path) => WorkspaceService::new(&state.db)
-            .get(path)
-            .map_err(err_str)?
-            .map(|workspace| workspace.access_mode)
-            .unwrap_or(ProjectAccessMode::RequestApproval),
-        None => ProjectAccessMode::RequestApproval,
-    };
 
     let repo = TaskRepository::new(&state.db);
     let task_agent = state.agent.bridge_for(task_id).await;
@@ -3255,24 +3313,70 @@ pub async fn task_set_workspace(
     if matches!(task.state, TaskState::Exploring | TaskState::InProgress)
         || task_has_active_main_run(&state.db, task_id, &bridge)?
     {
-        return Err("当前运行尚未结束，不能在执行期间切换工作区".to_string());
+        return Err("当前运行尚未结束，不能在执行期间附加工作区".to_string());
     }
-    repo.set_workspace_path(task_id, path.as_deref())
+
+    match (task.workspace_path.as_deref(), path.as_deref()) {
+        (Some(current), Some(requested)) if current == requested => {}
+        (Some(_), _) => return Err("此会话已绑定项目；如需使用其他项目，请新建对话".to_string()),
+        (None, None) => return Ok(task),
+        (None, Some(_)) => {}
+    }
+
+    let mut task = task;
+    task.updated_at = repo
+        .set_workspace_path(task_id, path.as_deref())
         .map_err(err_str)?;
+    task.workspace_path = path;
     state.codex_app_server.invalidate(task_id).await;
+    // 与 provider/model 切换保持同一个提交边界：数据库成功后只丢弃缓存映射，
+    // 下一轮会从持久化历史与新工作区重建。这里没有“DB 已改、runtime 更新失败”的假失败。
+    bridge.sessions.remove(task_id);
+    Ok(task)
+}
+
+/// 从尚未登记的本地路径附加会话。任务不可附加时，必须在 workspace
+/// 写入之前失败，避免产生“左栏已添加、会话仍未绑定”的半成功状态。
+pub async fn task_attach_workspace(
+    state: &CommandState,
+    task_id: &str,
+    workspace_path: &Path,
+) -> Result<Task, String> {
+    let canonical = canonical_workspace_path(workspace_path)?;
+    let canonical_path = canonical.display().to_string();
+    let repo = TaskRepository::new(&state.db);
+    let task_agent = state.agent.bridge_for(task_id).await;
+    let mut bridge = task_agent.lock().await;
     let task = repo
         .get(task_id)
         .map_err(err_str)?
-        .ok_or_else(|| format!("task not found after workspace update: {task_id}"))?;
-
-    // 已经建立的 runtime session 保留对话历史；空闲时切换后下一轮采用新作用域。
-    if let Some(session) = bridge.sessions.get(task_id).cloned() {
-        bridge
-            .kind
-            .update_workspace_scope(&session.runtime_session_id, path, workspace_access_mode)
-            .await
-            .map_err(err_str)?;
+        .ok_or_else(|| format!("task not found: {task_id}"))?;
+    if task.state == TaskState::Archived {
+        return Err("会话已归档，不能再附加工作区".to_string());
     }
+    if matches!(task.state, TaskState::Exploring | TaskState::InProgress)
+        || task_has_active_main_run(&state.db, task_id, &bridge)?
+    {
+        return Err("当前运行尚未结束，不能在执行期间附加工作区".to_string());
+    }
+    match task.workspace_path.as_deref() {
+        Some(current) if current == canonical_path => return Ok(task),
+        Some(_) => return Err("此会话已绑定项目；如需使用其他项目，请新建对话".to_string()),
+        None => {}
+    }
+
+    let mut task = task;
+    let display_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("workspace");
+    let (_, updated_at) = WorkspaceService::new(&state.db)
+        .attach_task_once(task_id, &canonical_path, display_name)
+        .map_err(err_str)?;
+    task.updated_at = updated_at;
+    task.workspace_path = Some(canonical_path);
+    state.codex_app_server.invalidate(task_id).await;
+    bridge.sessions.remove(task_id);
     Ok(task)
 }
 
@@ -5054,6 +5158,16 @@ const MAX_IMAGE_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_ATTACHMENT_BYTES: usize = 1024 * 1024;
 const MAX_PDF_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ATTACHMENTS_TOTAL_BYTES: usize = 24 * 1024 * 1024;
+#[cfg(target_os = "macos")]
+const MAX_NATIVE_OCR_ATTACHMENTS: usize = 4;
+#[cfg(target_os = "macos")]
+const MAX_NATIVE_OCR_EDGE: u32 = 16_384;
+#[cfg(target_os = "macos")]
+const MAX_NATIVE_OCR_PIXELS_PER_IMAGE: u64 = 40_000_000;
+#[cfg(target_os = "macos")]
+const MAX_NATIVE_OCR_TOTAL_PIXELS: u64 = 80_000_000;
+#[cfg(target_os = "macos")]
+const MAX_NATIVE_OCR_TOTAL_TEXT_BYTES: usize = 2 * 1024 * 1024;
 
 /// WebView 传入的附件。`data` 是不含 data URL 前缀的标准 Base64。
 #[derive(Debug, Clone, Deserialize)]
@@ -5062,6 +5176,8 @@ pub struct AttachmentInput {
     pub name: String,
     pub media_type: String,
     pub data: String,
+    #[serde(default)]
+    pub native_ocr: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5079,6 +5195,7 @@ struct ValidatedAttachment {
     bytes: Vec<u8>,
     text: Option<String>,
     kind: ValidatedAttachmentKind,
+    native_ocr: bool,
 }
 
 fn image_magic_matches(media_type: &str, bytes: &[u8]) -> bool {
@@ -5245,6 +5362,14 @@ fn validate_attachments(
         } else {
             return Err(format!("暂不支持读取附件 {name}（{media_type}）"));
         };
+        if attachment.native_ocr && kind != ValidatedAttachmentKind::Image {
+            return Err(format!("{name} 不是可使用 macOS OCR 的图片附件"));
+        }
+        if attachment.native_ocr && !matches!(media_type.as_str(), "image/png" | "image/jpeg") {
+            return Err(format!(
+                "{name} 的 {media_type} 格式不支持 macOS OCR；请转换为 PNG 或 JPEG"
+            ));
+        }
 
         validated.push(ValidatedAttachment {
             name,
@@ -5253,9 +5378,112 @@ fn validate_attachments(
             bytes,
             text,
             kind,
+            native_ocr: attachment.native_ocr,
         });
     }
     Ok(validated)
+}
+
+#[cfg(target_os = "macos")]
+fn validate_native_ocr_budget(attachments: &[ValidatedAttachment]) -> Result<(), String> {
+    let ocr_attachments = attachments
+        .iter()
+        .filter(|attachment| attachment.native_ocr)
+        .collect::<Vec<_>>();
+    if ocr_attachments.len() > MAX_NATIVE_OCR_ATTACHMENTS {
+        return Err(format!(
+            "一次最多使用 macOS OCR 识别 {MAX_NATIVE_OCR_ATTACHMENTS} 张图片"
+        ));
+    }
+    let mut total_pixels = 0u64;
+    for attachment in ocr_attachments {
+        let (width, height) = crate::mac_ocr::image_dimensions(&attachment.bytes)
+            .map_err(|error| format!("{}：{error}", attachment.name))?;
+        if width > MAX_NATIVE_OCR_EDGE || height > MAX_NATIVE_OCR_EDGE {
+            return Err(format!(
+                "{} 的尺寸 {}×{} 超过 macOS OCR 单边 {} 像素限制",
+                attachment.name, width, height, MAX_NATIVE_OCR_EDGE
+            ));
+        }
+        let pixels = u64::from(width) * u64::from(height);
+        if pixels > MAX_NATIVE_OCR_PIXELS_PER_IMAGE {
+            return Err(format!(
+                "{} 包含 {} 万像素，超过 macOS OCR 单图 {} 万像素限制",
+                attachment.name,
+                pixels / 10_000,
+                MAX_NATIVE_OCR_PIXELS_PER_IMAGE / 10_000
+            ));
+        }
+        total_pixels = total_pixels.saturating_add(pixels);
+        if total_pixels > MAX_NATIVE_OCR_TOTAL_PIXELS {
+            return Err(format!(
+                "本轮图片总像素超过 macOS OCR {} 万像素限制",
+                MAX_NATIVE_OCR_TOTAL_PIXELS / 10_000
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn native_ocr_attachment_name(original: &str) -> String {
+    // Keep enough room for the semantic suffix while preserving the sanitized source name.
+    format!("{}.ocr.txt", trim_chars(original, 172))
+}
+
+async fn apply_native_ocr(
+    attachments: Vec<ValidatedAttachment>,
+) -> Result<Vec<ValidatedAttachment>, String> {
+    if !attachments.iter().any(|attachment| attachment.native_ocr) {
+        return Ok(attachments);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        return Err("当前平台不提供系统 OCR；请改用支持图片的模型".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        validate_native_ocr_budget(&attachments)?;
+        let attachments = tokio::task::spawn_blocking(move || {
+            let mut attachments = attachments;
+            let mut total_text_bytes = 0usize;
+            for attachment in &mut attachments {
+                if !attachment.native_ocr {
+                    continue;
+                }
+                let original_name = attachment.name.clone();
+                let original_media_type = attachment.media_type.clone();
+                let recognized = crate::mac_ocr::recognize_text(&attachment.bytes)
+                    .map_err(|error| format!("{original_name} OCR 失败：{error}"))?;
+                let text = format!(
+                    "[macOS Vision OCR · 原图片：{}（{}）]\n{}",
+                    original_name, original_media_type, recognized
+                );
+                if text.len() > MAX_TEXT_ATTACHMENT_BYTES {
+                    return Err(format!(
+                        "{original_name} 的 OCR 文本超过 1 MiB，请裁剪图片后重试"
+                    ));
+                }
+                total_text_bytes = total_text_bytes.saturating_add(text.len());
+                if total_text_bytes > MAX_NATIVE_OCR_TOTAL_TEXT_BYTES {
+                    return Err("本轮 OCR 文本总大小超过 2 MiB，请减少图片后重试".to_string());
+                }
+                attachment.name = native_ocr_attachment_name(&original_name);
+                attachment.kind = ValidatedAttachmentKind::Text;
+                attachment.media_type = "text/plain".to_string();
+                attachment.bytes = text.as_bytes().to_vec();
+                attachment.data = BASE64_STANDARD.encode(&attachment.bytes);
+                attachment.text = Some(text);
+                attachment.native_ocr = false;
+            }
+            Ok::<_, String>(attachments)
+        })
+        .await
+        .map_err(|error| format!("macOS OCR 任务异常结束：{error}"))??;
+        Ok(attachments)
+    }
 }
 
 fn user_message_with_attachments(text: &str, attachments: &[ValidatedAttachment]) -> Message {
@@ -5466,6 +5694,36 @@ fn mark_run_aborted(db: &Database, active: &ActiveRun) -> Result<(), String> {
     Ok(())
 }
 
+const PARTIAL_SUCCESS_RUN_SUMMARY: &str =
+    "部分完成：修改存在但运行或最终总结失败，请审阅工作区改动。";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeRunTerminalOutcome {
+    Aborted,
+    PartialSuccess,
+    Failed,
+    CompletedWithChanges,
+    CompletedWithoutChanges,
+}
+
+fn native_run_terminal_outcome(
+    was_aborted: bool,
+    runtime_failed: bool,
+    has_changes: bool,
+) -> NativeRunTerminalOutcome {
+    if was_aborted {
+        NativeRunTerminalOutcome::Aborted
+    } else if runtime_failed && has_changes {
+        NativeRunTerminalOutcome::PartialSuccess
+    } else if runtime_failed {
+        NativeRunTerminalOutcome::Failed
+    } else if has_changes {
+        NativeRunTerminalOutcome::CompletedWithChanges
+    } else {
+        NativeRunTerminalOutcome::CompletedWithoutChanges
+    }
+}
+
 /// 兼容旧 IPC：未提供动作时由服务端选择安全的自动行为。
 pub async fn agent_send(state: &CommandState, task_id: &str, message: &str) -> Result<(), String> {
     agent_send_with_mode(state, task_id, message, AgentSendMode::Auto).await
@@ -5495,7 +5753,6 @@ pub async fn agent_send_with_mode_and_attachments(
     if message.is_empty() && attachments.is_empty() {
         return Err("消息不能为空".to_string());
     }
-    let user_message = user_message_with_attachments(message, &attachments);
 
     // 同一任务的发送、分支切换与模型/主 Agent 配置共用一把 task-local 锁。
     // 先取得锁再读取任务和活跃分支，避免等待期间配置已经改变却仍用旧快照启动。
@@ -5508,6 +5765,16 @@ pub async fn agent_send_with_mode_and_attachments(
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能继续发送消息".to_string());
     }
+    if !attachments.is_empty()
+        && (bridge.active.is_some() || task_has_active_main_run(&state.db, task_id, &bridge)?)
+    {
+        return Err("当前运行结束后才能把附件作为新一轮消息发送".to_string());
+    }
+    // Native OCR can be CPU/memory intensive. Validate the task and reserve its task-local send
+    // boundary before invoking Vision, so archived/running tasks cannot consume OCR resources and
+    // another run cannot start halfway through this conversion.
+    let attachments = apply_native_ocr(attachments).await?;
+    let user_message = user_message_with_attachments(message, &attachments);
     let branch = SessionBranchRepository::new(&state.db)
         .ensure_active(task_id)
         .map_err(err_str)?;
@@ -5553,9 +5820,6 @@ pub async fn agent_send_with_mode_and_attachments(
     let active_is_closing = active
         .as_ref()
         .is_some_and(|active| bridge.closing_run_id.as_deref() == Some(active.run_id.as_str()));
-    if active.is_some() && !attachments.is_empty() {
-        return Err("当前运行结束后才能把附件作为新一轮消息发送".to_string());
-    }
     if active_is_closing && matches!(mode, AgentSendMode::Steer | AgentSendMode::SendNow) {
         // The provider has already reported completion. Preserve the user's intent durably, but
         // never inject into or abort the runtime after the drain loop sealed its final history.
@@ -6026,55 +6290,79 @@ fn spawn_drain_loop_with_resources(
         {
             let mut bridge = agent.lock().await;
             let was_aborted = bridge.aborted();
-            if was_aborted {
-                // runtime 已等待所有子代理确认取消；现在再结束父 Run 并发布终态，
-                // 从而保证 Stop All 不会让仍在收尾的 Working 条目提前消失。
-                let _ = mark_run_aborted(&db, &active);
-                if let Some(sink) = &sink {
-                    sink(
+            match native_run_terminal_outcome(was_aborted, runtime_failed, has_changes) {
+                NativeRunTerminalOutcome::Aborted => {
+                    // runtime 已等待所有子代理确认取消；现在再结束父 Run 并发布终态，
+                    // 从而保证 Stop All 不会让仍在收尾的 Working 条目提前消失。
+                    let _ = mark_run_aborted(&db, &active);
+                    if let Some(sink) = &sink {
+                        sink(
+                            &task_id,
+                            &AgentEvent::State {
+                                state: TaskState::Interrupted,
+                            },
+                        );
+                    }
+                }
+                NativeRunTerminalOutcome::PartialSuccess => {
+                    let runs = AgentRunRepository::new(&db);
+                    let _ = runs.set_summary(&active.run_id, Some(PARTIAL_SUCCESS_RUN_SUMMARY));
+                    let _ = runs.update_review_state(&active.run_id, ReviewState::Pending);
+                    let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::ReviewReady);
+                    let _ = TaskEventStore::new(&db).append_for_branch(
                         &task_id,
-                        &AgentEvent::State {
-                            state: TaskState::Interrupted,
-                        },
+                        &branch_id,
+                        TaskEventType::RunEnded,
                     );
+                    if let Some(sink) = &sink {
+                        sink(
+                            &task_id,
+                            &AgentEvent::State {
+                                state: TaskState::ReviewReady,
+                            },
+                        );
+                    }
                 }
-            } else if runtime_failed {
-                let _ = AgentRunRepository::new(&db)
-                    .update_review_state(&active.run_id, ReviewState::Failed);
-                let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Interrupted);
-                let _ = TaskEventStore::new(&db).append_for_branch(
-                    &task_id,
-                    &branch_id,
-                    TaskEventType::RunEnded,
-                );
-                if let Some(sink) = &sink {
-                    sink(
+                NativeRunTerminalOutcome::Failed => {
+                    let _ = AgentRunRepository::new(&db)
+                        .update_review_state(&active.run_id, ReviewState::Failed);
+                    let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Interrupted);
+                    let _ = TaskEventStore::new(&db).append_for_branch(
                         &task_id,
-                        &AgentEvent::State {
-                            state: TaskState::Interrupted,
-                        },
+                        &branch_id,
+                        TaskEventType::RunEnded,
                     );
+                    if let Some(sink) = &sink {
+                        sink(
+                            &task_id,
+                            &AgentEvent::State {
+                                state: TaskState::Interrupted,
+                            },
+                        );
+                    }
                 }
-            } else {
-                // 正常结束：有变更 → review_ready；零变更 → idle（“已回答”语义）。
-                let final_state = if has_changes {
-                    TaskState::ReviewReady
-                } else {
-                    TaskState::Idle
-                };
-                let _ = AgentRunRepository::new(&db)
-                    .update_review_state(&active.run_id, ReviewState::Pending);
-                let _ = TaskRepository::new(&db).update_state(&task_id, final_state);
-                let _ = TaskEventStore::new(&db).append_for_branch(
-                    &task_id,
-                    &branch_id,
-                    TaskEventType::RunEnded,
-                );
-                if let Some(sink) = &sink {
-                    sink(&task_id, &AgentEvent::State { state: final_state });
-                }
-                if let Some(assistant_text) = assistant_for_memory.as_deref() {
-                    capture_completed_memory_turn(&db, &config_dir, &active, assistant_text);
+                NativeRunTerminalOutcome::CompletedWithChanges
+                | NativeRunTerminalOutcome::CompletedWithoutChanges => {
+                    // 正常结束：有变更 → review_ready；零变更 → idle（“已回答”语义）。
+                    let final_state = if has_changes {
+                        TaskState::ReviewReady
+                    } else {
+                        TaskState::Idle
+                    };
+                    let _ = AgentRunRepository::new(&db)
+                        .update_review_state(&active.run_id, ReviewState::Pending);
+                    let _ = TaskRepository::new(&db).update_state(&task_id, final_state);
+                    let _ = TaskEventStore::new(&db).append_for_branch(
+                        &task_id,
+                        &branch_id,
+                        TaskEventType::RunEnded,
+                    );
+                    if let Some(sink) = &sink {
+                        sink(&task_id, &AgentEvent::State { state: final_state });
+                    }
+                    if let Some(assistant_text) = assistant_for_memory.as_deref() {
+                        capture_completed_memory_turn(&db, &config_dir, &active, assistant_text);
+                    }
                 }
             }
 
@@ -7336,7 +7624,11 @@ pub async fn rollback_task(state: &CommandState, task_id: &str) -> Result<Vec<St
         rendered_results.extend(results.into_iter().map(|result| format!("{result:?}")));
     } else {
         let mut failures = Vec::new();
-        for path in review_status.paths.iter().filter(|path| !path.rejected && path.remaining) {
+        for path in review_status
+            .paths
+            .iter()
+            .filter(|path| !path.rejected && path.remaining)
+        {
             match rollback_file(state, task_id, &path.path).await {
                 Ok(result) => rendered_results.push(result),
                 Err(error) => failures.push(format!("{}：{error}", path.path)),
@@ -8083,7 +8375,7 @@ pub async fn workspace_list(state: &CommandState) -> Result<Vec<Workspace>, Stri
         .map_err(err_str)
 }
 
-pub async fn workspace_open(state: &CommandState, path: &Path) -> Result<Workspace, String> {
+fn canonical_workspace_path(path: &Path) -> Result<PathBuf, String> {
     let canonical = path
         .canonicalize()
         .map_err(|e| format!("cannot open workspace {}: {e}", path.display()))?;
@@ -8094,10 +8386,16 @@ pub async fn workspace_open(state: &CommandState, path: &Path) -> Result<Workspa
         ));
     }
     // 构造 PathGuard 作为最后一道 fail-closed 检查；根路径不可规范化时拒绝入库。
-    let guard = PathGuard::new(canonical).map_err(err_str)?;
-    let canonical_path = guard.root().display().to_string();
-    let display_name = guard
+    Ok(PathGuard::new(canonical)
+        .map_err(err_str)?
         .root()
+        .to_path_buf())
+}
+
+pub async fn workspace_open(state: &CommandState, path: &Path) -> Result<Workspace, String> {
+    let canonical = canonical_workspace_path(path)?;
+    let canonical_path = canonical.display().to_string();
+    let display_name = canonical
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("workspace")
@@ -10820,7 +11118,8 @@ pub async fn verification_output(state: &CommandState, id: &str) -> Result<Strin
 // ============================================================================
 
 /// 从设置页一次性提交的 Provider 配置。API key 仅在命令执行期间存在，随后写入
-/// OS 凭据库，绝不写入 TOML 或回传 WebView。
+/// 平台凭据后端（macOS 本地加密文件、Windows/Linux 系统凭据库），绝不写入 TOML
+/// 或回传 WebView。
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSettingsInput {
@@ -10934,8 +11233,8 @@ fn infer_protocol_never_responses(name: &str, base_url: &str) -> ProviderProtoco
 /// 保存时该往 `config.toml` 写哪个协议。
 ///
 /// 优先级：本次表单显式选的 > 该服务已存的 > 推断。抽成纯函数是为了能直接测——
-/// 走 `settings_save_provider` 会写 OS keychain，而 keychain 是全局的，用真实服务名
-/// （`openai` 之类）跑测试会覆盖开发者本机的密钥。
+/// 走 `settings_save_provider` 会写持久化凭据，用真实服务名（`openai` 之类）跑测试会
+/// 覆盖开发者本机的密钥。
 ///
 /// 最后那步**必须**复用 [`infer_protocol_never_responses`]。这里曾经直接取
 /// `preset.protocol`，而 openai / xai 的预设协议就是 Responses——于是任何不带
@@ -11104,12 +11403,8 @@ fn effective_max_tokens(name: &str, provider: &hermes_config::ProviderConfig) ->
     }
 }
 
-fn provider_env_has_key(name: &str) -> bool {
-    match name {
-        "anthropic" => std::env::var("ANTHROPIC_API_KEY").is_ok(),
-        "openai" => std::env::var("OPENAI_API_KEY").is_ok(),
-        _ => false,
-    }
+fn provider_env_has_key(name: &str, provider_kind: Option<&str>) -> bool {
+    crate::settings::provider_env_value(name, provider_kind).is_some()
 }
 
 /// 只校验一个 Provider 是否足以发起请求。与 `Config::validate` 不同，它不会
@@ -11188,7 +11483,7 @@ pub async fn provider_catalog() -> Result<serde_json::Value, String> {
 }
 
 /// 读取服务端实时模型列表。显式传入的新密钥优先；留空时只从运行时设置视图读取
-/// 该配置已有的 keychain / 环境变量密钥。响应和错误都不会包含密钥或响应正文。
+/// 该配置已有的持久化 / 环境变量密钥。响应和错误都不会包含密钥或响应正文。
 pub async fn provider_models(
     state: &CommandState,
     input: ProviderModelsInput,
@@ -11247,7 +11542,7 @@ pub async fn provider_models(
 
 pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, String> {
     // 宽松加载：未配置 provider 不是错误（由用户自行决定是否配置）。
-    // runtime 视图会从 OS keychain / 环境变量填充密钥，但返回 WebView 前必须清空。
+    // runtime 视图会从平台凭据后端 / 环境变量填充密钥，但返回 WebView 前必须清空。
     let settings = SettingsService::new(state.config_dir.clone());
     settings.migrate_legacy_provider_kinds().map_err(err_str)?;
     let mut config = settings.load_global_unvalidated().map_err(err_str)?;
@@ -11258,11 +11553,16 @@ pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, Str
     };
     let mut provider_status = serde_json::Map::new();
     for (name, provider) in &mut config.providers {
-        let env_name = provider_env_has_key(name).then_some("environment");
+        let env_name =
+            provider_env_has_key(name, provider.provider_kind.as_deref()).then_some("environment");
         let source = if let Some(source) = env_name {
             source
         } else if settings.provider_secret(name).map_err(err_str)?.is_some() {
-            "keychain"
+            if cfg!(target_os = "macos") {
+                "encrypted_file"
+            } else {
+                "keychain"
+            }
         } else if !provider.api_key.trim().is_empty() {
             // 仅兼容尚未迁移的历史 config；绝不把该值返回前端。
             "legacy_file"
@@ -11400,7 +11700,7 @@ pub async fn mcp_market_install(
 ///
 /// 旧版设置页把地址、模型和密钥拆成多次写入，主按钮没有保存密钥，任何中断都会
 /// 留下一个不可用 Provider。本命令将这些字段作为一个事务性意图处理：配置文件
-/// 永远无密钥，密钥始终只进入系统凭据库。
+/// 永远无密钥，密钥始终只进入平台凭据后端（macOS 为本地加密文件）。
 pub async fn settings_save_provider(
     state: &CommandState,
     input: ProviderSettingsInput,
@@ -11465,7 +11765,7 @@ pub async fn settings_save_provider(
         max_tokens: input.max_tokens,
         temperature: input.temperature,
         protocol: None,
-        show_reasoning: true,
+        show_reasoning: false,
     };
     if let (Some(requested), Some(limit)) = (
         input.max_tokens,
@@ -11500,11 +11800,18 @@ pub async fn settings_save_provider(
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(str::to_string);
-    let stored_key = settings.provider_secret(&name).map_err(err_str)?;
+    let env_has_key = provider_env_has_key(&name, provider_kind.as_deref());
+    // An explicit input, legacy value or environment credential already satisfies this save.
+    // Do not open the platform credential store merely to prove that an unused fallback exists.
+    let stored_key = if supplied_key.is_some() || legacy_key.is_some() || env_has_key {
+        None
+    } else {
+        settings.provider_secret(&name).map_err(err_str)?
+    };
     if supplied_key.is_none()
         && legacy_key.is_none()
         && stored_key.as_deref().is_none_or(str::is_empty)
-        && !provider_env_has_key(&name)
+        && !env_has_key
     {
         return Err("请填写访问密钥后再保存".to_string());
     }
@@ -11525,7 +11832,7 @@ pub async fn settings_save_provider(
     let show_reasoning = input
         .show_reasoning
         .or(stored_show_reasoning)
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     let root = config_json
         .as_object_mut()
@@ -11556,7 +11863,7 @@ pub async fn settings_save_provider(
     }
 
     let config: hermes_config::Config = serde_json::from_value(config_json).map_err(err_str)?;
-    // 先确认序列化可行，再写入系统凭据；避免无效字段影响用户已有密钥。
+    // 先确认序列化可行，再写入平台凭据后端；避免无效字段影响用户已有密钥。
     toml::to_string(&config).map_err(err_str)?;
     if let Some(secret) = supplied_key.as_deref().or(legacy_key.as_deref()) {
         settings
@@ -11666,7 +11973,46 @@ struct CodexCliProbe {
     available: bool,
     path: Option<PathBuf>,
     version: Option<String>,
+    source: Option<CodexCliSource>,
     error: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexCliSource {
+    Path,
+    NpmGlobal,
+    MacosDesktopBundle,
+}
+
+impl CodexCliSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Path => "path",
+            Self::NpmGlobal => "npm_global",
+            Self::MacosDesktopBundle => "macos_desktop_bundle",
+        }
+    }
+
+    const fn display_name(self) -> &'static str {
+        match self {
+            Self::Path => "系统 PATH",
+            Self::NpmGlobal => "npm 全局安装",
+            Self::MacosDesktopBundle => "Codex 桌面版内置",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CodexCliCandidate {
+    path: PathBuf,
+    source: CodexCliSource,
+}
+
+#[derive(Debug, Default)]
+struct CodexCliProbeFailures {
+    checked: usize,
+    permission_denied: bool,
+    timed_out: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -11816,6 +12162,18 @@ fn push_executable_candidates(found: &mut Vec<PathBuf>, directory: &Path, names:
     }
 }
 
+fn push_codex_cli_candidates(
+    found: &mut Vec<CodexCliCandidate>,
+    paths: impl IntoIterator<Item = PathBuf>,
+    source: CodexCliSource,
+) {
+    for path in paths {
+        if !found.iter().any(|candidate| candidate.path == path) {
+            found.push(CodexCliCandidate { path, source });
+        }
+    }
+}
+
 fn codex_cli_names() -> &'static [&'static str] {
     if cfg!(windows) {
         // npm 安装通常留下 .cmd shim；只找 exe 会把正常的 npm CLI 误判为未安装。
@@ -11825,21 +12183,130 @@ fn codex_cli_names() -> &'static [&'static str] {
     }
 }
 
-fn codex_cli_paths() -> Vec<PathBuf> {
-    #[cfg(not(windows))]
-    {
-        executable_paths(codex_cli_names())
-    }
+fn initial_codex_cli_candidates() -> Vec<CodexCliCandidate> {
+    let mut found = Vec::new();
+    push_codex_cli_candidates(
+        &mut found,
+        executable_paths(codex_cli_names()),
+        CodexCliSource::Path,
+    );
     #[cfg(windows)]
-    {
-        let mut found = executable_paths(codex_cli_names());
-        if let Some(app_data) = std::env::var_os("APPDATA") {
-            // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
-            let npm_prefix = Path::new(&app_data).join("npm");
-            push_executable_candidates(&mut found, &npm_prefix, codex_cli_names());
-        }
-        found
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        // GUI 应用可能继承了尚未刷新的 PATH；npm 的默认用户级 prefix 仍可直接探测。
+        let npm_prefix = Path::new(&app_data).join("npm");
+        let mut paths = Vec::new();
+        push_executable_candidates(&mut paths, &npm_prefix, codex_cli_names());
+        push_codex_cli_candidates(&mut found, paths, CodexCliSource::NpmGlobal);
     }
+    found
+}
+
+#[cfg(target_os = "macos")]
+const OPENAI_CODEX_BUNDLE_IDENTIFIER: &str = "com.openai.codex";
+#[cfg(target_os = "macos")]
+const OPENAI_CODEX_TEAM_IDENTIFIER: &str = "2DC432GLL2";
+
+#[cfg(target_os = "macos")]
+fn validate_macos_codex_bundle_signature(app_bundle: &Path) -> Result<(), String> {
+    let url = CFURL::from_path(app_bundle, true)
+        .ok_or_else(|| "无法构造 Codex Desktop bundle URL".to_string())?;
+    let code = SecStaticCode::from_path(&url, CodeSigningFlags::NONE)
+        .map_err(|error| format!("无法读取 Codex Desktop 代码签名：{error}"))?;
+    let requirement = format!(
+        "anchor apple generic and identifier \"{OPENAI_CODEX_BUNDLE_IDENTIFIER}\" and certificate leaf[subject.OU] = \"{OPENAI_CODEX_TEAM_IDENTIFIER}\""
+    )
+    .parse::<SecRequirement>()
+    .map_err(|error| format!("无法构造 Codex Desktop 签名要求：{error}"))?;
+    let flags = CodeSigningFlags::CHECK_ALL_ARCHITECTURES
+        | CodeSigningFlags::STRICT_VALIDATE
+        | CodeSigningFlags::RESTRICT_SYMLINKS
+        | CodeSigningFlags::NO_NETWORK_ACCESS;
+    code.check_validity(flags, &requirement)
+        .map_err(|error| format!("Codex Desktop 代码签名不受信任：{error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn verified_macos_codex_bundle_cli_with(
+    app_bundle: &Path,
+    signature_is_valid: impl FnOnce(&Path) -> bool,
+) -> Option<PathBuf> {
+    let app_bundle = app_bundle.canonicalize().ok()?;
+    let info = plist::Value::from_file(app_bundle.join("Contents/Info.plist")).ok()?;
+    let identifier = info
+        .as_dictionary()?
+        .get("CFBundleIdentifier")?
+        .as_string()?;
+    if identifier != OPENAI_CODEX_BUNDLE_IDENTIFIER {
+        return None;
+    }
+    if !signature_is_valid(&app_bundle) {
+        return None;
+    }
+    let cli = app_bundle.join("Contents/Resources/codex");
+    cli.is_file().then_some(cli)
+}
+
+#[cfg(target_os = "macos")]
+fn verified_macos_codex_bundle_cli(app_bundle: &Path) -> Option<PathBuf> {
+    verified_macos_codex_bundle_cli_with(app_bundle, |bundle| {
+        validate_macos_codex_bundle_signature(bundle).is_ok()
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_bundle_root_for_codex_cli(cli_path: &Path) -> Option<&Path> {
+    if cli_path.file_name()? != "codex" {
+        return None;
+    }
+    let resources = cli_path.parent()?;
+    if resources.file_name()? != "Resources" {
+        return None;
+    }
+    let contents = resources.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let app_bundle = contents.parent()?;
+    (app_bundle.extension().and_then(|value| value.to_str()) == Some("app")).then_some(app_bundle)
+}
+
+#[cfg(target_os = "macos")]
+fn validate_macos_bundle_cli_before_launch(cli_path: &Path) -> Result<(), String> {
+    let Some(app_bundle) = macos_bundle_root_for_codex_cli(cli_path) else {
+        return Ok(());
+    };
+    validate_macos_codex_bundle_signature(app_bundle)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codex_app_cli_paths_from_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    const APP_NAMES: &[&str] = &["Codex.app", "ChatGPT.app"];
+    let mut found = Vec::new();
+    for root in roots {
+        for app_name in APP_NAMES {
+            let Some(cli) = verified_macos_codex_bundle_cli(&root.join(app_name)) else {
+                continue;
+            };
+            if !found.contains(&cli) {
+                found.push(cli);
+            }
+        }
+    }
+    found
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codex_app_cli_paths() -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Applications"));
+    }
+    macos_codex_app_cli_paths_from_roots(&roots)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_codex_app_cli_paths() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 fn npm_cli_paths() -> Vec<PathBuf> {
@@ -11874,6 +12341,9 @@ async fn run_codex_cli_at_with_timeout(
     args: &[&str],
     deadline: Duration,
 ) -> Result<std::process::Output, CodexCommandError> {
+    #[cfg(target_os = "macos")]
+    validate_macos_bundle_cli_before_launch(cli_path)
+        .map_err(|_| CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied))?;
     #[cfg(windows)]
     let mut command = if cli_path.extension().is_some_and(|extension| {
         extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
@@ -11989,32 +12459,41 @@ async fn npm_global_prefix(npm_path: &Path) -> Option<PathBuf> {
     prefix.is_absolute().then_some(prefix)
 }
 
-async fn probe_codex_cli() -> CodexCliProbe {
-    let mut paths = codex_cli_paths();
-    let mut permission_denied = false;
-    let mut timed_out = false;
-    let mut checked = 0usize;
-    // 先验证 PATH 和 Windows 默认 npm 目录中的 Codex。此前在验证任何 Codex
-    // 候选前都会启动 `npm --version` 与 `npm prefix -g`，使每次冷探测平白多两个
-    // cmd/Node 进程；只有直接候选全部失败时才需要 npm 的自定义全局 prefix。
-    while let Some(path) = paths.get(checked).cloned() {
-        checked += 1;
-        match run_codex_cli_at(&path, &["--version"]).await {
+async fn probe_new_codex_cli_candidates(
+    candidates: &[CodexCliCandidate],
+    failures: &mut CodexCliProbeFailures,
+) -> Option<CodexCliProbe> {
+    while let Some(candidate) = candidates.get(failures.checked) {
+        failures.checked += 1;
+        match run_codex_cli_at(&candidate.path, &["--version"]).await {
             Ok(output) if output.status.success() => {
-                return CodexCliProbe {
+                return Some(CodexCliProbe {
                     available: true,
-                    path: Some(path),
+                    path: Some(candidate.path.clone()),
                     version: first_nonempty_line(&output.stdout),
+                    source: Some(candidate.source),
                     error: None,
-                };
+                });
             }
             Ok(_) => {}
             Err(CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied)) => {
-                permission_denied = true;
+                failures.permission_denied = true;
             }
-            Err(CodexCommandError::Timeout) => timed_out = true,
+            Err(CodexCommandError::Timeout) => failures.timed_out = true,
             Err(CodexCommandError::Launch(_)) => {}
         }
+    }
+    None
+}
+
+async fn probe_codex_cli() -> CodexCliProbe {
+    let mut candidates = initial_codex_cli_candidates();
+    let mut failures = CodexCliProbeFailures::default();
+    // 先验证 PATH 和 Windows 默认 npm 目录中的 Codex。此前在验证任何 Codex
+    // 候选前都会启动 `npm --version` 与 `npm prefix -g`，使每次冷探测平白多两个
+    // cmd/Node 进程；只有直接候选全部失败时才需要 npm 的自定义全局 prefix。
+    if let Some(probe) = probe_new_codex_cli_candidates(&candidates, &mut failures).await {
+        return probe;
     }
 
     if let Some(npm_path) = probe_npm_cli().await {
@@ -12024,34 +12503,31 @@ async fn probe_codex_cli() -> CodexCliProbe {
             } else {
                 prefix.join("bin")
             };
-            push_executable_candidates(&mut paths, &bin, codex_cli_names());
+            let mut npm_candidates = Vec::new();
+            push_executable_candidates(&mut npm_candidates, &bin, codex_cli_names());
+            push_codex_cli_candidates(&mut candidates, npm_candidates, CodexCliSource::NpmGlobal);
         }
-        while let Some(path) = paths.get(checked).cloned() {
-            checked += 1;
-            match run_codex_cli_at(&path, &["--version"]).await {
-                Ok(output) if output.status.success() => {
-                    return CodexCliProbe {
-                        available: true,
-                        path: Some(path),
-                        version: first_nonempty_line(&output.stdout),
-                        error: None,
-                    };
-                }
-                Ok(_) => {}
-                Err(CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied)) => {
-                    permission_denied = true;
-                }
-                Err(CodexCommandError::Timeout) => timed_out = true,
-                Err(CodexCommandError::Launch(_)) => {}
-            }
+        if let Some(probe) = probe_new_codex_cli_candidates(&candidates, &mut failures).await {
+            return probe;
         }
     }
 
-    let error = if paths.is_empty() {
-        "未检测到可运行的 Codex CLI。请先独立安装 Codex CLI。"
-    } else if permission_denied {
-        "只检测到无法从命令行启动的 Codex Desktop 受保护程序。请独立安装 Codex CLI；安装后刷新状态。"
-    } else if timed_out {
+    // 独立 CLI 始终优先。macOS 最后才检查 OpenAI 签名产品使用的固定 bundle id 与
+    // 固定 Resources 相对路径；候选仍必须实际通过 `codex --version` 才算可用。
+    push_codex_cli_candidates(
+        &mut candidates,
+        macos_codex_app_cli_paths(),
+        CodexCliSource::MacosDesktopBundle,
+    );
+    if let Some(probe) = probe_new_codex_cli_candidates(&candidates, &mut failures).await {
+        return probe;
+    }
+
+    let error = if candidates.is_empty() {
+        "未检测到可运行的 Codex CLI。请安装 Codex CLI，macOS 也可安装包含内置 CLI 的 Codex 桌面版。"
+    } else if failures.permission_denied {
+        "检测到 Codex 命令，但当前用户没有执行权限。请检查文件权限或重新安装 Codex CLI。"
+    } else if failures.timed_out {
         "Codex CLI 启动超时。请在系统终端运行 `codex doctor` 排查。"
     } else {
         "检测到 Codex 命令，但无法正常启动。请在系统终端运行 `codex --version` 排查。"
@@ -12060,6 +12536,7 @@ async fn probe_codex_cli() -> CodexCliProbe {
         available: false,
         path: None,
         version: None,
+        source: None,
         error: Some(error),
     }
 }
@@ -12219,6 +12696,8 @@ pub async fn codex_integration_status() -> Result<serde_json::Value, String> {
         "cli_available": cli.available,
         "cli_path": cli.path,
         "cli_version": cli.version,
+        "cli_source": cli.source.map(CodexCliSource::as_str),
+        "cli_source_label": cli.source.map(CodexCliSource::display_name),
         "cli_error": cli.error,
         "installer_available": npm_path.is_some(),
         "installer_command": CODEX_CLI_INSTALL_COMMAND,
@@ -12989,6 +13468,10 @@ async fn run_codex_mcp_add(
     executable: &Path,
     data_dir: &Path,
 ) -> Result<std::process::Output, String> {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = cli_path.as_deref() {
+        validate_macos_bundle_cli_before_launch(path)?;
+    }
     #[cfg(windows)]
     let mut command = match cli_path {
         Some(path)
@@ -13175,6 +13658,7 @@ async fn codex_start_login_with_mode(mode: CodexLoginMode) -> Result<(), String>
     #[cfg(target_os = "macos")]
     {
         let executable = cli.path.unwrap_or_else(|| PathBuf::from("codex"));
+        validate_macos_bundle_cli_before_launch(&executable)?;
         let command_path = create_macos_codex_login_command_file(&executable, mode)?;
         // 通过 Launch Services 打开 `.command`，不申请控制 Terminal 的 Apple Events
         // 权限；脚本启动后会立即自删，成功时 shell 干净退出，失败时保留诊断输出。
@@ -14671,6 +15155,10 @@ fn codex_child_command(cli_path: Option<PathBuf>) -> Result<TokioCommand, String
     }
     #[cfg(not(windows))]
     {
+        #[cfg(target_os = "macos")]
+        if let Some(path) = cli_path.as_deref() {
+            validate_macos_bundle_cli_before_launch(path)?;
+        }
         Ok(TokioCommand::new(
             cli_path.unwrap_or_else(|| PathBuf::from("codex")),
         ))
@@ -18589,7 +19077,7 @@ pub async fn settings_set(
         }
     }
 
-    // api_key 永不落盘：先写入 OS keychain，再把配置文件中的同一字段固定为空串。
+    // api_key 永不进入普通配置：先写入平台凭据后端，再把 config.toml 字段固定为空串。
     let value = if parts.len() == 3 && parts[0] == "providers" && parts[2] == "api_key" {
         let secret = value
             .as_str()
@@ -19077,6 +19565,17 @@ mod tests {
         assert_eq!(renamed.id, task.id);
         assert_eq!(renamed.title, "After");
         assert!(task_rename(&state, &task.id, "   ").await.is_err());
+        assert!(task_rename(&state, &task.id, &"x".repeat(97))
+            .await
+            .is_err());
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::Archived)
+            .unwrap();
+        assert!(task_rename(&state, &task.id, "Archived")
+            .await
+            .unwrap_err()
+            .contains("已归档"));
     }
 
     #[tokio::test]
@@ -19169,6 +19668,38 @@ mod tests {
         assert!(context.contains("normal final answer does not end"));
         assert!(context.contains("\"progress\""));
         assert!(context.contains("feature-one"));
+
+        for terminal_state in [TaskState::Interrupted, TaskState::ReviewReady] {
+            TaskRepository::new(&state.db)
+                .update_state(&task.id, terminal_state)
+                .unwrap();
+            plan_retry_implementation(&state, &task.id, &approved.plan.id)
+                .await
+                .unwrap();
+            for _ in 0..100 {
+                let task_agent = state.agent.bridge_for(&task.id).await;
+                let bridge = task_agent.lock().await;
+                if !task_has_active_main_run(&state.db, &task.id, &bridge).unwrap() {
+                    break;
+                }
+                drop(bridge);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+        let continuation_count: i64 = state
+            .db
+            .conn()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM queued_messages WHERE id LIKE ?1",
+                [format!("plan-continuation:{}:%", approved.plan.id)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            continuation_count, 2,
+            "interrupted and review-ready retries must each create one delivered continuation"
+        );
 
         let completed = plan_update_item(
             &state,
@@ -19550,20 +20081,12 @@ mod tests {
         let _shim_guard = CODEX_APP_SERVER_SHIM_LOCK.lock().await;
         let (directory, state) = setup_state();
         let workspace_path = directory.path().join("workspace-prepared");
-        let alternate_path = directory.path().join("workspace-prepared-alternate");
         std::fs::create_dir_all(&workspace_path).unwrap();
-        std::fs::create_dir_all(&alternate_path).unwrap();
         let workspace = Workspace::new(workspace_path.to_string_lossy(), "prepared");
-        let alternate = Workspace::new(alternate_path.to_string_lossy(), "alternate");
         let workspace_repository = WorkspaceRepository::new(&state.db);
         workspace_repository.upsert(&workspace).unwrap();
-        workspace_repository.upsert(&alternate).unwrap();
         let workspace = workspace_repository
             .get(&workspace.canonical_path)
-            .unwrap()
-            .unwrap();
-        let alternate = workspace_repository
-            .get(&alternate.canonical_path)
             .unwrap()
             .unwrap();
         let config_path = directory.path().join("codex-prepare-config.toml");
@@ -19587,7 +20110,7 @@ input.on('line', (line) => {
         task_archive(&state, &archived.id).await.unwrap();
         assert!(!state.codex_app_server.contains_task(&archived.id).await);
 
-        let moved = create_prepared_task(
+        let rebound = create_prepared_task(
             &state,
             &workspace,
             &shim,
@@ -19595,10 +20118,10 @@ input.on('line', (line) => {
             "prepared workspace",
         )
         .await;
-        task_set_workspace(&state, &moved.id, Some(&alternate.canonical_path))
+        task_set_workspace(&state, &rebound.id, Some(&workspace.canonical_path))
             .await
             .unwrap();
-        assert!(!state.codex_app_server.contains_task(&moved.id).await);
+        assert!(!state.codex_app_server.contains_task(&rebound.id).await);
 
         let switched =
             create_prepared_task(&state, &workspace, &shim, &config_path, "prepared engine").await;
@@ -21162,6 +21685,7 @@ input.on('line', (line) => {
             name: "clipboard.png".into(),
             media_type: "image/png".into(),
             data: BASE64_STANDARD.encode(png),
+            native_ocr: false,
         };
 
         agent_send_with_mode_and_attachments(
@@ -21814,6 +22338,33 @@ input.on('line', (line) => {
                 .iter()
                 .any(|event| event.event_type == TaskEventType::RunEnded),
             "没有活跃运行时中止不得制造孤儿 run_ended 事件"
+        );
+    }
+
+    #[test]
+    fn native_run_terminal_outcome_preserves_partial_changes_without_weakening_failures() {
+        assert_eq!(
+            native_run_terminal_outcome(false, true, true),
+            NativeRunTerminalOutcome::PartialSuccess,
+            "a failed run with workspace changes must remain reviewable"
+        );
+        assert_eq!(
+            native_run_terminal_outcome(false, true, false),
+            NativeRunTerminalOutcome::Failed,
+            "a total failure without changes must remain interrupted"
+        );
+        assert_eq!(
+            native_run_terminal_outcome(true, true, true),
+            NativeRunTerminalOutcome::Aborted,
+            "an explicit user abort must override partial-success routing"
+        );
+        assert_eq!(
+            native_run_terminal_outcome(false, false, true),
+            NativeRunTerminalOutcome::CompletedWithChanges
+        );
+        assert_eq!(
+            native_run_terminal_outcome(false, false, false),
+            NativeRunTerminalOutcome::CompletedWithoutChanges
         );
     }
 
@@ -22982,6 +23533,145 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
+    async fn task_workspace_binding_is_one_time_idempotent_and_runtime_consistent() {
+        let (directory, state) = setup_state();
+        let first_path = directory.path().join("workspace-first-once");
+        let second_path = directory.path().join("workspace-second-rejected");
+        std::fs::create_dir_all(&first_path).unwrap();
+        std::fs::create_dir_all(&second_path).unwrap();
+        let first = workspace_open(&state, &first_path)
+            .await
+            .unwrap()
+            .canonical_path;
+        let second = workspace_open(&state, &second_path)
+            .await
+            .unwrap()
+            .canonical_path;
+        let task = task_create(&state, None, "一次性工作区", "不可改绑", "ask")
+            .await
+            .unwrap();
+
+        task_prepare(&state, &task.id).await.unwrap();
+        let task_agent = state.agent.bridge_for(&task.id).await;
+        assert!(task_agent.lock().await.sessions.contains_key(&task.id));
+
+        let attached = task_set_workspace(&state, &task.id, Some(&first))
+            .await
+            .unwrap();
+        assert_eq!(attached.workspace_path.as_deref(), Some(first.as_str()));
+        assert!(!task_agent.lock().await.sessions.contains_key(&task.id));
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .workspace_path
+                .as_deref(),
+            Some(first.as_str())
+        );
+
+        let same = task_set_workspace(&state, &task.id, Some(&first))
+            .await
+            .unwrap();
+        assert_eq!(same.workspace_path.as_deref(), Some(first.as_str()));
+
+        let switch_error = task_set_workspace(&state, &task.id, Some(&second))
+            .await
+            .expect_err("a bound conversation must never move to another project");
+        assert!(switch_error.contains("已绑定项目"));
+        let detach_error = task_set_workspace(&state, &task.id, None)
+            .await
+            .expect_err("a bound conversation must never lose its project scope");
+        assert!(detach_error.contains("已绑定项目"));
+        assert_eq!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .workspace_path
+                .as_deref(),
+            Some(first.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn task_attach_workspace_rejects_before_registering_an_unbindable_project() {
+        let (directory, state) = setup_state();
+        let candidate = directory.path().join("workspace-must-not-leak");
+        std::fs::create_dir_all(&candidate).unwrap();
+        let canonical = canonical_workspace_path(&candidate)
+            .unwrap()
+            .display()
+            .to_string();
+        let task = task_create(&state, None, "运行中绑定", "应在登记项目前失败", "ask")
+            .await
+            .unwrap();
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::InProgress)
+            .unwrap();
+
+        let error = task_attach_workspace(&state, &task.id, &candidate)
+            .await
+            .expect_err("a running conversation cannot attach a project");
+        assert!(error.contains("运行尚未结束"));
+        assert!(WorkspaceService::new(&state.db)
+            .get(&canonical)
+            .unwrap()
+            .is_none());
+        assert!(TaskRepository::new(&state.db)
+            .get(&task.id)
+            .unwrap()
+            .unwrap()
+            .workspace_path
+            .is_none());
+
+        TaskRepository::new(&state.db)
+            .update_state(&task.id, TaskState::Idle)
+            .unwrap();
+        state
+            .db
+            .conn()
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TRIGGER reject_workspace_binding \
+                 BEFORE UPDATE OF workspace_path ON tasks \
+                 WHEN NEW.id = '{}' \
+                 BEGIN SELECT RAISE(ABORT, 'forced task binding failure'); END;",
+                task.id.replace('\'', "''")
+            ))
+            .unwrap();
+        let atomic_error = task_attach_workspace(&state, &task.id, &candidate)
+            .await
+            .expect_err("a failed task write must roll back workspace registration");
+        assert!(atomic_error.contains("forced task binding failure"));
+        assert!(WorkspaceService::new(&state.db)
+            .get(&canonical)
+            .unwrap()
+            .is_none());
+        state
+            .db
+            .conn()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_workspace_binding")
+            .unwrap();
+
+        let attached = task_attach_workspace(&state, &task.id, &candidate)
+            .await
+            .unwrap();
+        assert_eq!(attached.workspace_path.as_deref(), Some(canonical.as_str()));
+        assert!(WorkspaceService::new(&state.db)
+            .get(&canonical)
+            .unwrap()
+            .is_some());
+
+        task_archive(&state, &task.id).await.unwrap();
+        let archived_error = task_set_workspace(&state, &task.id, Some(&canonical))
+            .await
+            .expect_err("an archived conversation must reject even an idempotent refresh");
+        assert!(archived_error.contains("已归档"));
+    }
+
+    #[tokio::test]
     async fn task_workspace_cannot_change_while_task_or_main_run_is_active() {
         let (directory, state) = setup_state();
         let first = directory.path().join("workspace-first");
@@ -23161,9 +23851,20 @@ input.on('line', (line) => {
             1
         );
 
-        let unsupported_responses_model = provider_cfg_with_identity(
+        let deepseek_responses_pro = provider_cfg_with_identity(
             "https://api.deepseek.com",
             "deepseek-v4-pro",
+            ProviderProtocol::OpenAiResponses,
+            "deepseek",
+        );
+        assert_eq!(
+            hosted_tools_for_provider("renamed-deepseek", &deepseek_responses_pro).len(),
+            1
+        );
+
+        let unsupported_responses_model = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-unknown",
             ProviderProtocol::OpenAiResponses,
             "deepseek",
         );
@@ -23721,12 +24422,17 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
-    async fn provider_reasoning_visibility_is_independent_and_defaults_on() {
+    async fn provider_reasoning_visibility_is_independent_and_defaults_off() {
         let (_dir, state) = setup_state();
         let hidden_name = format!("reasoning-hidden-{}", uuid::Uuid::new_v4());
         let default_name = format!("reasoning-default-{}", uuid::Uuid::new_v4());
+        let visible_name = format!("reasoning-visible-{}", uuid::Uuid::new_v4());
 
-        for (name, show_reasoning) in [(&hidden_name, Some(false)), (&default_name, None)] {
+        for (name, show_reasoning) in [
+            (&hidden_name, Some(false)),
+            (&default_name, None),
+            (&visible_name, Some(true)),
+        ] {
             settings_save_provider(
                 &state,
                 ProviderSettingsInput {
@@ -23749,7 +24455,8 @@ input.on('line', (line) => {
         let service = SettingsService::new(state.config_dir.clone());
         let stored = service.load_global_unvalidated().unwrap();
         assert!(!stored.providers[&hidden_name].show_reasoning);
-        assert!(stored.providers[&default_name].show_reasoning);
+        assert!(!stored.providers[&default_name].show_reasoning);
+        assert!(stored.providers[&visible_name].show_reasoning);
 
         let hidden_task = task_create_with_agent(
             &state,
@@ -23773,6 +24480,17 @@ input.on('line', (line) => {
         )
         .await
         .unwrap();
+        let visible_task = task_create_with_agent(
+            &state,
+            None,
+            "显示思考",
+            "验证显式展示",
+            "ask",
+            Some(&visible_name),
+            Some("r_code"),
+        )
+        .await
+        .unwrap();
         let reasoning_line = serde_json::to_string(&SessionEvent::System {
             event: R_CODE_REASONING_EVENT.into(),
             data: serde_json::json!({ "text": "公开思考" }),
@@ -23786,19 +24504,27 @@ input.on('line', (line) => {
             "storage-hidden",
         )
         .is_empty());
+        assert!(session_messages_for_task(
+            &state,
+            &default_task.id,
+            &reasoning_line,
+            "branch-default",
+            "storage-default",
+        )
+        .is_empty());
         assert_eq!(
             session_messages_for_task(
                 &state,
-                &default_task.id,
+                &visible_task.id,
                 &reasoning_line,
-                "branch-default",
-                "storage-default",
+                "branch-visible",
+                "storage-visible",
             )
             .len(),
             1
         );
 
-        for name in [&hidden_name, &default_name] {
+        for name in [&hidden_name, &default_name, &visible_name] {
             service.set_provider_secret(name, "").unwrap();
         }
     }
@@ -24572,6 +25298,7 @@ input.on('line', (line) => {
             name: "clipboard.png".into(),
             media_type: "image/png".into(),
             data: BASE64_STANDARD.encode(png),
+            native_ocr: false,
         };
         let validated = validate_attachments(&[input]).unwrap();
         assert_eq!(validated.len(), 1);
@@ -24581,6 +25308,7 @@ input.on('line', (line) => {
             name: "spoofed.png".into(),
             media_type: "image/png".into(),
             data: BASE64_STANDARD.encode(b"not a png"),
+            native_ocr: false,
         };
         assert!(validate_attachments(&[invalid]).is_err());
 
@@ -24588,6 +25316,7 @@ input.on('line', (line) => {
             name: "main.rs".into(),
             media_type: "text/x-rust".into(),
             data: BASE64_STANDARD.encode(b"fn main() {}"),
+            native_ocr: false,
         };
         let validated = validate_attachments(&[source]).unwrap();
         assert_eq!(validated[0].kind, ValidatedAttachmentKind::Text);
@@ -24597,11 +25326,76 @@ input.on('line', (line) => {
             name: "spec.pdf".into(),
             media_type: "application/pdf".into(),
             data: BASE64_STANDARD.encode(b"%PDF-1.7\n"),
+            native_ocr: false,
         };
         assert_eq!(
             validate_attachments(&[pdf]).unwrap()[0].kind,
             ValidatedAttachmentKind::Pdf
         );
+
+        let animated_ocr = AttachmentInput {
+            name: "animation.gif".into(),
+            media_type: "image/gif".into(),
+            data: BASE64_STANDARD.encode(b"GIF89a\x01\x00\x01\x00"),
+            native_ocr: true,
+        };
+        assert!(validate_attachments(&[animated_ocr])
+            .unwrap_err()
+            .contains("PNG 或 JPEG"));
+    }
+
+    #[test]
+    fn platform_capabilities_match_the_compiled_target() {
+        let capabilities = platform_capabilities();
+        assert_eq!(capabilities.native_ocr, cfg!(target_os = "macos"));
+        if cfg!(target_os = "macos") {
+            assert_eq!(capabilities.platform, "macos");
+            assert_eq!(
+                capabilities.native_ocr_formats,
+                vec!["image/png", "image/jpeg"]
+            );
+        } else {
+            assert!(capabilities.native_ocr_formats.is_empty());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_ocr_budget_rejects_oversized_or_excess_images() {
+        fn fixture(name: &str, width: u32, height: u32) -> ValidatedAttachment {
+            let mut bytes = vec![0u8; 24];
+            bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+            bytes[16..20].copy_from_slice(&width.to_be_bytes());
+            bytes[20..24].copy_from_slice(&height.to_be_bytes());
+            ValidatedAttachment {
+                name: name.to_string(),
+                media_type: "image/png".to_string(),
+                data: BASE64_STANDARD.encode(&bytes),
+                bytes,
+                text: None,
+                kind: ValidatedAttachmentKind::Image,
+                native_ocr: true,
+            }
+        }
+
+        assert!(validate_native_ocr_budget(&[fixture("screen.png", 2_000, 1_000)]).is_ok());
+        assert!(
+            validate_native_ocr_budget(&[fixture("huge.png", 20_000, 10_000)])
+                .unwrap_err()
+                .contains("单边")
+        );
+        assert!(validate_native_ocr_budget(&[
+            fixture("1.png", 100, 100),
+            fixture("2.png", 100, 100),
+            fixture("3.png", 100, 100),
+            fixture("4.png", 100, 100),
+            fixture("5.png", 100, 100),
+        ])
+        .unwrap_err()
+        .contains("最多"));
+        let converted = native_ocr_attachment_name("screen.png");
+        assert_eq!(converted, "screen.png.ocr.txt");
+        assert!(converted.chars().count() <= 180);
     }
 
     #[test]
@@ -24830,6 +25624,144 @@ command = "r-code-host"
 
         let default = codex_home_dir_from(None, Some(PathBuf::from("C:/Users/example")));
         assert_eq!(default, PathBuf::from("C:/Users/example/.codex"));
+    }
+
+    #[cfg(unix)]
+    fn codex_probe_test_shim(directory: &Path, name: &str, version: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = directory.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{version}'\n")).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_probe_accepts_desktop_only_candidate() {
+        let directory = TempDir::new().unwrap();
+        let desktop = codex_probe_test_shim(directory.path(), "desktop-codex", "desktop 1.0");
+        let candidates = vec![CodexCliCandidate {
+            path: desktop.clone(),
+            source: CodexCliSource::MacosDesktopBundle,
+        }];
+        let mut failures = CodexCliProbeFailures::default();
+
+        let probe = probe_new_codex_cli_candidates(&candidates, &mut failures)
+            .await
+            .unwrap();
+        assert_eq!(probe.path.as_deref(), Some(desktop.as_path()));
+        assert_eq!(probe.source, Some(CodexCliSource::MacosDesktopBundle));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_probe_accepts_cli_only_candidate() {
+        let directory = TempDir::new().unwrap();
+        let cli = codex_probe_test_shim(directory.path(), "path-codex", "path 1.0");
+        let candidates = vec![CodexCliCandidate {
+            path: cli.clone(),
+            source: CodexCliSource::Path,
+        }];
+        let mut failures = CodexCliProbeFailures::default();
+
+        let probe = probe_new_codex_cli_candidates(&candidates, &mut failures)
+            .await
+            .unwrap();
+        assert_eq!(probe.path.as_deref(), Some(cli.as_path()));
+        assert_eq!(probe.source, Some(CodexCliSource::Path));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn codex_probe_prefers_cli_over_desktop_when_both_are_available() {
+        let directory = TempDir::new().unwrap();
+        let cli = codex_probe_test_shim(directory.path(), "path-codex", "path 1.0");
+        let desktop = codex_probe_test_shim(directory.path(), "desktop-codex", "desktop 1.0");
+        let candidates = vec![
+            CodexCliCandidate {
+                path: cli.clone(),
+                source: CodexCliSource::Path,
+            },
+            CodexCliCandidate {
+                path: desktop,
+                source: CodexCliSource::MacosDesktopBundle,
+            },
+        ];
+        let mut failures = CodexCliProbeFailures::default();
+
+        let probe = probe_new_codex_cli_candidates(&candidates, &mut failures)
+            .await
+            .unwrap();
+        assert_eq!(probe.path.as_deref(), Some(cli.as_path()));
+        assert_eq!(probe.source, Some(CodexCliSource::Path));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_desktop_probe_requires_identity_and_trusted_signature() {
+        let directory = TempDir::new().unwrap();
+        let applications = directory.path().join("Applications");
+        let app = applications.join("ChatGPT.app");
+        let resources = app.join("Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        std::fs::write(resources.join("codex"), b"candidate").unwrap();
+        let mut info = plist::Dictionary::new();
+        info.insert(
+            "CFBundleIdentifier".to_string(),
+            plist::Value::String("com.example.lookalike".to_string()),
+        );
+        plist::Value::Dictionary(info.clone())
+            .to_file_xml(app.join("Contents/Info.plist"))
+            .unwrap();
+        assert!(verified_macos_codex_bundle_cli_with(&app, |_| true).is_none());
+
+        info.insert(
+            "CFBundleIdentifier".to_string(),
+            plist::Value::String("com.openai.codex".to_string()),
+        );
+        plist::Value::Dictionary(info)
+            .to_file_xml(app.join("Contents/Info.plist"))
+            .unwrap();
+        assert!(
+            verified_macos_codex_bundle_cli_with(&app, |_| false).is_none(),
+            "a forged bundle id without OpenAI's signing identity must be rejected"
+        );
+        let found = verified_macos_codex_bundle_cli_with(&app, |_| true).unwrap();
+        assert!(found.ends_with("ChatGPT.app/Contents/Resources/codex"));
+        assert!(validate_macos_codex_bundle_signature(&app).is_err());
+        assert!(
+            codex_child_command(Some(found)).is_err(),
+            "a cached desktop CLI path must be revalidated before every agent launch"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn installed_openai_codex_bundle_satisfies_the_signature_requirement_when_present() {
+        let candidates = [
+            PathBuf::from("/Applications/Codex.app"),
+            PathBuf::from("/Applications/ChatGPT.app"),
+        ];
+        let Some(app) = candidates.into_iter().find(|candidate| {
+            plist::Value::from_file(candidate.join("Contents/Info.plist"))
+                .ok()
+                .and_then(|info| {
+                    info.as_dictionary()?
+                        .get("CFBundleIdentifier")?
+                        .as_string()
+                        .map(|identifier| identifier == OPENAI_CODEX_BUNDLE_IDENTIFIER)
+                })
+                .unwrap_or(false)
+                && candidate.join("Contents/Resources/codex").is_file()
+        }) else {
+            return;
+        };
+        validate_macos_codex_bundle_signature(&app)
+            .unwrap_or_else(|error| panic!("{}: {error}", app.display()));
+        assert!(verified_macos_codex_bundle_cli(&app).is_some());
     }
 
     #[test]
@@ -28208,7 +29140,10 @@ input.on('line', (line) => {{
             None,
             None,
             CodexExecLimits {
-                idle_timeout: Duration::from_millis(250),
+                // Process-group setup and shell startup can exceed a few hundred milliseconds
+                // on loaded macOS CI hosts. Keep the watchdog short while allowing the fixture
+                // to durably publish its descendant PID before the intentional idle stop.
+                idle_timeout: Duration::from_secs(1),
                 hard_timeout: Some(Duration::from_secs(5)),
                 ..Default::default()
             },

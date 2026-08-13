@@ -1,12 +1,13 @@
 import { useCallback, useState } from "react";
-import { taskArchive, taskDelete, taskRestore } from "../lib/ipc";
+import { taskArchive, taskDelete, taskRename, taskRestore } from "../lib/ipc";
 import { isTaskLive, taskTitle } from "../lib/presentation";
 import { useAppStore } from "../store/app";
 import { useTasksStore } from "../store/tasks";
 import { pushToast } from "../store/toast";
 import type { Task, TaskDetail } from "../lib/types";
-import { IconArchive, IconMore, IconRestore, IconTrash } from "./icons";
+import { IconArchive, IconEdit, IconMore, IconRestore, IconTrash } from "./icons";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { TextInputDialog } from "./ui/TextInputDialog";
 import type { SurfacePlacement } from "./ui/AnchoredSurface";
 import { Menu, MenuItem, MenuSeparator } from "./ui/Menu";
 
@@ -25,10 +26,15 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
   const openConversations = useAppStore((state) => state.openConversations);
   const forgetTaskNavigation = useAppStore((state) => state.forgetTaskNavigation);
   const refreshDetail = useTasksStore((state) => state.refreshDetail);
-  const [busy, setBusy] = useState<"archive" | "restore" | "delete" | null>(null);
+  const [busy, setBusy] = useState<"rename" | "archive" | "restore" | "delete" | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const live = isTaskLive(task, detail);
   const title = taskTitle(task);
+  const nextTitle = renameValue.trim();
+  const renameDisabled = !nextTitle || nextTitle === task.title.trim();
 
   const leaveRemovedRoom = useCallback(() => {
     if (currentTaskId === task.id) openConversations();
@@ -49,6 +55,30 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
       setBusy(null);
     }
   }, [busy, leaveRemovedRoom, live, onChanged, refreshTasks, task.id, title]);
+
+  const rename = useCallback(async () => {
+    if (busy || task.state === "archived") return;
+    const next = renameValue.trim();
+    if (!next) {
+      setRenameError("请输入新的会话名称");
+      return;
+    }
+    setBusy("rename");
+    setRenameError(null);
+    try {
+      const renamed = await taskRename(task.id, next);
+      await Promise.all([refreshTasks(), refreshDetail(task.id)]);
+      setRenameOpen(false);
+      onChanged?.();
+      pushToast({ kind: "success", title: "对话已重命名", body: renamed.title });
+    } catch (cause) {
+      const message = String(cause);
+      setRenameError(message);
+      pushToast({ kind: "error", title: "无法重命名对话", body: message });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, onChanged, refreshDetail, refreshTasks, renameValue, task.id, task.state]);
 
   const remove = useCallback(async () => {
     if (busy || live) return;
@@ -113,10 +143,23 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
                 还原对话
               </MenuItem>
             ) : (
-              <MenuItem disabled={live} close={close} onSelect={() => void archive()}>
-                <IconArchive width={15} height={15} />
-                归档对话
-              </MenuItem>
+              <>
+                <MenuItem
+                  close={close}
+                  onSelect={() => {
+                    setRenameValue(task.title.trim() || title);
+                    setRenameError(null);
+                    setRenameOpen(true);
+                  }}
+                >
+                  <IconEdit width={15} height={15} />
+                  重命名对话…
+                </MenuItem>
+                <MenuItem disabled={live} close={close} onSelect={() => void archive()}>
+                  <IconArchive width={15} height={15} />
+                  归档对话
+                </MenuItem>
+              </>
             )}
             <MenuSeparator />
             <MenuItem
@@ -134,6 +177,29 @@ export function TaskActionsMenu({ task, detail, className, placement = "down", o
           </>
         )}
       </Menu>
+      <TextInputDialog
+        open={renameOpen}
+        title="重命名对话"
+        description="只修改列表中显示的名称，不会改变消息、运行记录或项目文件。"
+        label="会话名称"
+        value={renameValue}
+        maxLength={96}
+        confirmLabel="保存名称"
+        busy={busy === "rename"}
+        error={renameError}
+        confirmDisabled={renameDisabled}
+        onChange={(value) => {
+          setRenameValue(value);
+          setRenameError(null);
+        }}
+        onCancel={() => {
+          if (busy !== "rename") {
+            setRenameOpen(false);
+            setRenameError(null);
+          }
+        }}
+        onConfirm={() => void rename()}
+      />
       <ConfirmDialog
         open={confirmDelete}
         title="永久删除这段对话？"

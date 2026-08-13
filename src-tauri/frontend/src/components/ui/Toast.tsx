@@ -18,12 +18,13 @@
  * 唯一的提示）。
  * ---------------------------------------------------------------------------
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { useToastStore, pushToast } from "../../store/toast";
 import type { Toast, ToastKind } from "../../store/toast";
-import type { PermissionRequest, Task, TaskState } from "../../lib/types";
+import type { PermissionRequest, Task, TaskDetail, TaskState } from "../../lib/types";
+import { isPartialSuccess } from "../../lib/presentation";
 import { IconAlert, IconCheck, IconClose } from "../icons";
 
 /** 退场动画时长，与 components.css 的 toastOut 保持一致。 */
@@ -47,14 +48,27 @@ function prefersReducedMotion(): boolean {
  */
 export function ToastHost() {
   const toasts = useToastStore((s) => s.toasts);
+  const hostRef = useRef<HTMLDivElement>(null);
+  const latestToastStamp = toasts[toasts.length - 1]?.createdAt ?? 0;
+
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host || toasts.length === 0) return;
+    // A bounded queue can scroll on short desktop windows. Keep the newest event visible;
+    // keyboard users can focus the region and scroll back to persistent older failures.
+    host.scrollTop = host.scrollHeight;
+  }, [latestToastStamp, toasts.length]);
 
   return (
     <div
+      ref={hostRef}
       className="toast-host"
       role="status"
+      aria-label="通知"
       aria-live="polite"
       aria-atomic="false"
       aria-relevant="additions text"
+      tabIndex={toasts.length > 0 ? 0 : -1}
     >
       {toasts.map((toast) => (
         <ToastCard key={toast.id} toast={toast} />
@@ -131,7 +145,10 @@ function ToastCard({ toast }: { toast: Toast }) {
       className={`toast toast--${toast.kind}` + (leaving ? " is-leaving" : "")}
       role={isError ? "alert" : undefined}
       aria-live={isError ? "assertive" : undefined}
-      onMouseEnter={() => setPaused(true)}
+      // Pause only after deliberate pointer movement. A toast can materialize underneath a
+      // stationary cursor (especially when the compact companion raises the stack); treating
+      // that synthetic hover as intent would make an auto-dismiss notification permanent.
+      onPointerMove={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
@@ -206,10 +223,17 @@ function taskLabel(task: Task): string {
 }
 
 /** 终结态 → 播报内容；返回 null 表示这个状态不值得打扰用户。 */
-function completionToast(task: Task): { kind: ToastKind; title: string; body: string; timeout?: number } | null {
+export function completionToast(task: Task, detail?: TaskDetail): { kind: ToastKind; title: string; body: string; timeout?: number } | null {
   const label = taskLabel(task);
   switch (task.state) {
     case "review_ready":
+      if (isPartialSuccess(detail)) {
+        return {
+          kind: "warn",
+          title: `修改待审阅：${label}`,
+          body: "修改存在但总结失败。工作区改动已保留，请先审阅。",
+        };
+      }
       return { kind: "success", title: `待审阅：${label}`, body: "任务已跑完，改动等你确认。" };
     case "idle":
       return null;
@@ -225,6 +249,20 @@ function completionToast(task: Task): { kind: ToastKind; title: string; body: st
   }
 }
 
+export function completionDetailReady(task: Task, detail?: TaskDetail): boolean {
+  if (
+    !detail
+    || detail.task.state !== task.state
+    || detail.task.updated_at !== task.updated_at
+  ) {
+    return false;
+  }
+  // TaskDetail runs are newest-first. Checking the first main run prevents an older completed
+  // turn from making a still-open current run look ready.
+  const latestMainRun = detail.runs.find((run) => run.agent_kind === "main");
+  return latestMainRun?.ended_at != null;
+}
+
 /**
  * 监听任务状态流转，在"活跃 → 终结"时播报，并在出现待批权限时提醒。
  *
@@ -234,11 +272,12 @@ function completionToast(task: Task): { kind: ToastKind; title: string; body: st
  */
 export function useTaskCompletionToasts(): void {
   useEffect(() => {
-    const openRoom = (taskId: string) => useAppStore.getState().openRoom(taskId);
+    const openRoom = (taskId: string, tab?: "review") => useAppStore.getState().openRoom(taskId, tab);
 
     // 初始快照：启动时已经是终结态的任务不该炸出一堆 toast。
     const seenState = new Map<string, TaskState>();
     const notifiedPermissions = new Set<string>();
+    const pendingCompletionDetails = new Set<string>();
     const initial = useTasksStore.getState();
     // task 列表和 detail 是异步分两批到达的；第一批 detail 只是初始基线，
     // 不能被误判成“刚刚出现”的权限请求。
@@ -250,6 +289,23 @@ export function useTaskCompletionToasts(): void {
       }
     }
 
+    const notifyCompletion = (task: Task, detail?: TaskDetail) => {
+      const spec = completionToast(task, detail);
+      if (!spec) return;
+      const app = useAppStore.getState();
+      // The destination already presents the result and next actions. Showing a second
+      // card that only opens the same room adds an unnecessary click (notably after
+      // startup recovery navigates directly to an interrupted conversation).
+      if (app.scene === "room" && app.currentTaskId === task.id) return;
+      const partial = isPartialSuccess(detail);
+      pushToast({
+        ...spec,
+        action: partial
+          ? { label: "审阅改动", run: () => openRoom(task.id, "review") }
+          : { label: "打开会话", run: () => openRoom(task.id) },
+      });
+    };
+
     return useTasksStore.subscribe((state, prev) => {
       if (state.tasks !== prev.tasks) {
         for (const task of state.tasks) {
@@ -258,23 +314,27 @@ export function useTaskCompletionToasts(): void {
           // before === undefined：首次见到这个任务，它的当前状态属于初始快照。
           if (before === undefined || before === task.state) continue;
           if (!ACTIVE_STATES.has(before) || !TERMINAL_STATES.has(task.state)) continue;
-          const spec = completionToast(task);
-          if (!spec) continue;
-          const app = useAppStore.getState();
-          // The destination already presents the result and next actions. Showing a second
-          // card that only opens the same room adds an unnecessary click (notably after
-          // startup recovery navigates directly to an interrupted conversation).
-          if (app.scene === "room" && app.currentTaskId === task.id) continue;
-          pushToast({
-            ...spec,
-            action: { label: "打开会话", run: () => openRoom(task.id) },
-          });
+          if (task.state === "review_ready") {
+            const detail = state.details[task.id];
+            // task 与 detail 分批刷新。等 run 的 ended_at/summary 到位后再决定是普通
+            // 成功还是“有修改但总结失败”，避免先弹一条误导性的成功通知。
+            if (!completionDetailReady(task, detail)) {
+              pendingCompletionDetails.add(task.id);
+              continue;
+            }
+            notifyCompletion(task, detail);
+          } else {
+            notifyCompletion(task, state.details[task.id]);
+          }
         }
         // 任务被归档/删除后会从列表消失，顺手清理记录，避免 Map 无限增长。
         if (seenState.size > state.tasks.length) {
           const live = new Set(state.tasks.map((t) => t.id));
           for (const id of seenState.keys()) {
-            if (!live.has(id)) seenState.delete(id);
+            if (!live.has(id)) {
+              seenState.delete(id);
+              pendingCompletionDetails.delete(id);
+            }
           }
         }
       }
@@ -283,6 +343,18 @@ export function useTaskCompletionToasts(): void {
         const app = useAppStore.getState();
         const freshByTask = new Map<string, PermissionRequest[]>();
         const stillPending = new Set<string>();
+
+        for (const taskId of [...pendingCompletionDetails]) {
+          const task = state.tasks.find((candidate) => candidate.id === taskId);
+          const detail = state.details[taskId];
+          if (!task || task.state !== "review_ready") {
+            pendingCompletionDetails.delete(taskId);
+            continue;
+          }
+          if (!completionDetailReady(task, detail)) continue;
+          pendingCompletionDetails.delete(taskId);
+          notifyCompletion(task, detail);
+        }
 
         for (const task of state.tasks) {
           const detail = state.details[task.id];

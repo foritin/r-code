@@ -20,6 +20,7 @@ import {
 import { usePoll } from "../../lib/poll";
 import { errText } from "../../lib/format";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../../lib/onboarding";
+import { usePlatformCapabilities } from "../../lib/platform-capabilities";
 import type {
   CodexCliPreferences,
   CodexIntegrationStatus,
@@ -129,6 +130,7 @@ export function HomeScene() {
   const messageDraftBeforeGoalRef = useRef("");
   const composerRef = useRef<HTMLDivElement>(null);
   const attachments = useAttachments();
+  const platformCapabilities = usePlatformCapabilities();
   const { choices: providerChoices, fallback, error: providerError } = useProviders([]);
   // provider 列表可能在 HomeScene 重新挂载后的下一拍才写回本地选择；直接从
   // fallback 派生当前项，避免用户已输入目标但发送按钮短暂保持禁用。
@@ -149,10 +151,12 @@ export function HomeScene() {
   const sendableAttachments = sendableAttachmentInputs(
     attachments.attachments,
     capabilityForAttachment,
+    platformCapabilities,
   );
   const attachmentBlockedReason = firstBlockedAttachmentReason(
     attachments.attachments,
     capabilityForAttachment,
+    platformCapabilities,
   );
   const currentWorkspace = workspaces.find((w) => w.canonical_path === currentWorkspacePath);
   const providerReady = activeProvider?.ready ?? false;
@@ -684,6 +688,7 @@ export function HomeScene() {
           <AttachmentTray
             attachments={attachments.attachments}
             capabilityFor={capabilityForAttachment}
+            platformCapabilities={platformCapabilities}
             onRemove={attachments.remove}
           />
           <div className="chat-composer-foot">
@@ -743,7 +748,7 @@ export function HomeScene() {
                       </MenuItem>
                     ))}
                     <MenuSeparator />
-                    <MenuItem close={close} onSelect={() => void selectFolder()}>
+                    <MenuItem close={close} returnFocusOnClose={false} onSelect={() => void selectFolder()}>
                       <IconAttach width={14} height={14} />
                       {selectingFolder ? "正在打开…" : "选择文件夹…"}
                     </MenuItem>

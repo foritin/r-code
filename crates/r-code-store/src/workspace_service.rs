@@ -94,6 +94,16 @@ impl<'a> WorkspaceService<'a> {
         self.repo.get_by_id(id)
     }
 
+    pub fn attach_task_once(
+        &self,
+        task_id: &str,
+        canonical_path: &str,
+        display_name: &str,
+    ) -> Result<(Workspace, chrono::DateTime<Utc>), ProductError> {
+        self.repo
+            .upsert_and_attach_task_once(task_id, canonical_path, display_name)
+    }
+
     /// 以 generation CAS 更新项目记忆模式。
     pub fn set_memory_mode(
         &self,

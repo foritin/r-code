@@ -11,6 +11,7 @@ import {
 import { SyncHealthBanner } from "./components/shell/SyncHealthBanner";
 import { HomeScene } from "./components/scenes/HomeScene";
 import { ToastHost, useTaskCompletionToasts } from "./components/ui/Toast";
+import { CompanionWindowController } from "./components/companion/CompanionWindowController";
 import { OnboardingCampaign } from "./components/onboarding/OnboardingCampaign";
 import { clearSyncFailure, reportSyncFailure } from "./store/sync-health";
 
@@ -160,6 +161,7 @@ export default function App() {
       )}
       {/* 固定定位 + --z-toast，放在最后一个子节点：不被 .main/.scene 的 overflow 裁掉 */}
       <ToastHost />
+      <CompanionWindowController />
       <SyncHealthBanner />
       <OnboardingCampaign />
     </div>

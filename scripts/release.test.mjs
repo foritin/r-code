@@ -164,11 +164,25 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
   const window = config.app.windows[0];
 
   assert.equal(config.identifier, "com.rcode.desktop");
+  assert.equal(config.build.runner.cmd, "../scripts/cargo-tauri-macos-runner.sh");
   assert.equal(window.decorations, true);
   assert.equal(window.titleBarStyle, "Overlay");
   assert.equal(window.hiddenTitle, true);
   assert.deepEqual(config.bundle.targets, ["app", "dmg"]);
   assert.equal(config.bundle.macOS.minimumSystemVersion, "11.0");
+
+  const runner = fs.readFileSync(
+    path.join(repoRoot, "scripts", "cargo-tauri-macos-runner.sh"),
+    "utf8",
+  );
+  assert.match(runner, /R_CODE_CARGO_ACTION.*run/);
+  assert.match(runner, /codesign/);
+  assert.match(runner, /R_CODE_MACOS_DEV_SIGNING_IDENTITY/);
+  assert.match(runner, /identifier com\.rcode\.desktop\.dev/);
+  assert.doesNotMatch(runner, /--requirements/,
+    "the dev runner must not grant Keychain access to a forgeable identifier-only requirement");
+  assert.match(runner, /testing signed-app behavior/);
+  assert.match(runner, /exec cargo \"\$R_CODE_CARGO_ACTION\"/);
 });
 
 test("macOS local builder supports explicit ad-hoc and notarized modes", () => {

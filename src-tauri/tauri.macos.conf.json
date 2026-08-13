@@ -1,7 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "identifier": "com.rcode.desktop",
+  "build": {
+    "runner": {
+      "cmd": "../scripts/cargo-tauri-macos-runner.sh"
+    }
+  },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "R-Code",

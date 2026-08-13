@@ -5,9 +5,25 @@
 
 ## 已在代码层完成
 
-- Apple 目标启用 `keyring/apple-native`，Provider 和 MCP 凭据使用 macOS Keychain。
-- `SecretStore::store` 会用新的 Keychain `Entry` 回读确认；回读失败时保存失败，旧明文
-  Provider 密钥不会被迁移逻辑清空。
+- macOS 的 Provider 和 MCP 凭据不访问 Keychain；它们保存在应用数据目录的本地加密
+  凭据文件中，因此启动、刷新、保存和执行任务均不会出现系统钥匙串授权框。Windows 与
+  Linux 仍使用各自的系统凭据库。
+- 本地凭据文件及其独立随机主密钥均限制为当前用户可读。该设计避免密钥进入普通配置、
+  日志与支持包，并降低误读风险；由于主密钥也必须在同一 macOS 用户的应用目录中，它
+  不能防御已经取得该用户文件读取权限的恶意程序。这是以明确的安全边界换取无系统授权
+  弹窗，而不是声称等同于 Keychain 的硬件或系统级隔离。
+- 文件位于 `config/credentials/`：`master.key`、`store.v1.enc` 与跨进程 `store.lock`
+  权限均为 `0600`，目录为 `0700`。密文使用 ChaCha20-Poly1305、每次写入生成新 nonce，
+  并以同目录临时文件 + rename 原子替换；格式错误、权限异常链接或认证失败均 fail closed。
+- 旧版本写入 Keychain 的 Provider/MCP 凭据不会被自动读取或迁移，因为迁移本身仍可能
+  触发系统授权框。升级后需重新输入一次或使用环境变量；确认新凭据可用后，再由用户在
+  “钥匙串访问”中手动删除旧 `r-code` 项。
+- 开发机可在启动 R-Code 前提供 `OPENAI_API_KEY`、`ANTHROPIC_API_KEY`、
+  `DEEPSEEK_API_KEY`，或为任意配置提供 `R_CODE_PROVIDER_<配置名>_API_KEY`（配置名会转成
+  大写下划线）；环境凭据优先于持久化文件，因而不会发起对应 Provider 的文件读取。
+  不要把密钥写入会提交的 `.env` 或 shell 配置样例。把密钥明文放进用户数据目录
+  虽然也能绕过授权弹窗，但不符合 R-Code 的安全存储约束，因此没有采用。
+- 代码签名仍用于应用来源与完整性，不再决定本地模型密钥的访问权限。
 - macOS Bundle ID 保持 `com.rcode.desktop`；启动期日志、无参数 MCP server、托管 RTK
   和 Tauri 桌面进程统一使用其数据目录：
   `~/Library/Application Support/com.rcode.desktop/r-code`。
@@ -18,16 +34,20 @@
 
 在一台日常可用的 Mac 上安装当前构建，建议用一份临时工作区完成以下 smoke test。
 
-### 1. Provider Keychain
+### 1. Provider 本地加密凭据
 
 1. 在设置页保存一个可撤销的测试 Provider Key。
 2. 不重启应用，立即发起一次模型请求。
 3. 完全退出并重新打开 R-Code，再发起一次请求。
 4. 更新 Key 后重复请求，随后删除 Key，确认请求明确提示缺少凭据。
-5. 在“钥匙串访问”中确认只存在预期的 R-Code 项，值不会写入
-   `config/config.toml` 或诊断日志。
+5. 确认值不会以明文写入 `config/config.toml`、凭据密文文件、日志或支持包。
+6. 修改 Rust 文件触发 `cargo tauri dev` 重编译，再次读取 Provider 与 MCP 凭据，确认全程
+   不出现 Keychain 授权框。
+7. 改用对应厂商变量或 `R_CODE_PROVIDER_<配置名>_API_KEY` 启动；确认模型服务可用且不会写入
+   本地凭据文件。
 
-验收：保存、跨调用读取、跨重启读取、更新和删除均正常；失败不会清空唯一凭据副本。
+验收：保存、跨调用读取、跨重启读取、更新和删除均正常；文件权限正确、篡改会 fail closed，
+全程不会访问 Keychain 或出现授权框。
 
 ### 2. MCP 凭据
 
@@ -76,7 +96,7 @@ CPU：Apple Silicon / Intel
 R-Code commit 或版本：
 安装方式：DMG / .app / cargo tauri dev
 
-Provider Keychain：通过 / 失败（说明）
+Provider 本地加密凭据 / 无 Keychain 弹窗：通过 / 失败（说明）
 MCP 凭据：通过 / 失败（说明）
 托管 RTK：通过 / 失败（说明）
 日志与支持包：通过 / 失败（说明）

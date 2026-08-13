@@ -58,6 +58,11 @@ pub fn cmd_app_quit(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+pub fn cmd_platform_capabilities() -> r_code_host::commands::PlatformCapabilities {
+    r_code_host::commands::platform_capabilities()
+}
+
 /// 任务创建命令。 [doc-09]
 #[tauri::command]
 pub async fn cmd_task_create(
@@ -149,7 +154,7 @@ pub async fn cmd_task_delete(
     r_code_host::commands::task_delete(&state, &task_id).await
 }
 
-/// 为一个既有会话附加/移除工作区。未授信工作区不会开放本地工具。
+/// 为一个既有会话附加已登记工作区；绑定后仅允许同路径幂等刷新。
 #[tauri::command]
 pub async fn cmd_task_set_workspace(
     state: State<'_, CommandState>,
@@ -157,6 +162,22 @@ pub async fn cmd_task_set_workspace(
     workspace_path: Option<String>,
 ) -> Result<Task, String> {
     r_code_host::commands::task_set_workspace(&state, &task_id, workspace_path.as_deref()).await
+}
+
+/// 为尚未绑定项目的会话选择并一次性附加本地工作区。
+/// 用户取消返回 None；任务状态或唯一绑定校验失败时不登记 workspace。
+#[tauri::command]
+pub async fn cmd_task_choose_workspace(
+    app: AppHandle,
+    state: State<'_, CommandState>,
+    task_id: String,
+) -> Result<Option<Task>, String> {
+    let Some(path) = pick_workspace_folder(app).await? else {
+        return Ok(None);
+    };
+    r_code_host::commands::task_attach_workspace(&state, &task_id, &path)
+        .await
+        .map(Some)
 }
 
 /// 切换空闲会话绑定的模型服务；下一次运行生效。
@@ -797,6 +818,17 @@ pub async fn cmd_workspace_choose(
     app: AppHandle,
     state: State<'_, CommandState>,
 ) -> Result<Option<Workspace>, String> {
+    let selected = pick_workspace_folder(app).await?;
+
+    match selected {
+        Some(path) => r_code_host::commands::workspace_open(&state, &path)
+            .await
+            .map(Some),
+        None => Ok(None),
+    }
+}
+
+async fn pick_workspace_folder(app: AppHandle) -> Result<Option<std::path::PathBuf>, String> {
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
@@ -810,13 +842,7 @@ pub async fn cmd_workspace_choose(
     })
     .await
     .map_err(|e| format!("folder dialog worker failed: {e}"))??;
-
-    match selected {
-        Some(path) => r_code_host::commands::workspace_open(&state, &path)
-            .await
-            .map(Some),
-        None => Ok(None),
-    }
+    Ok(selected)
 }
 
 /// 更新项目级 Agent 权限模式。
@@ -1381,7 +1407,7 @@ pub async fn cmd_settings_select_provider(
     r_code_host::commands::settings_select_provider(&state, &name).await
 }
 
-/// 删除一个 Provider 与其系统凭据。
+/// 删除一个 Provider 与其本机凭据。
 #[tauri::command]
 pub async fn cmd_settings_delete_provider(
     state: State<'_, CommandState>,

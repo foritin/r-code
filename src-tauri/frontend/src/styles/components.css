@@ -442,6 +442,15 @@
 .attachment-copy small { margin-top: 2px; color: var(--fg-faint); font-size: 10px; letter-spacing: .04em; }
 .attachment-chip .attachment-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-chip.is-unknown { border-style: dashed; border-color: var(--border-strong); background: var(--bg-chip); }
+.attachment-chip.is-native-ocr {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-chip));
+}
+.attachment-chip.is-native-ocr .attachment-copy small {
+  color: var(--accent);
+  font-weight: 650;
+  letter-spacing: 0;
+}
 .message-attachment-summary {
   display: flex;
   flex-wrap: wrap;
@@ -761,6 +770,11 @@
 .confirm-dialog-actions { display: flex; justify-content: flex-end; gap: var(--sp-3); margin-top: var(--sp-7); }
 .confirm-dialog .rc-button.rc-button-danger { border-color: var(--edge-danger); background: var(--tint-danger); color: var(--danger); }
 .confirm-dialog .rc-button.rc-button-danger:hover:not(:disabled) { border-color: var(--danger); background: var(--tint-danger-hi); color: var(--danger); }
+.text-input-dialog form { margin-top: var(--sp-6); }
+.text-input-dialog label { display: block; margin-bottom: var(--sp-2); color: var(--fg-muted); font-size: var(--text-xs); font-weight: var(--weight-strong); }
+.text-input-dialog .input { width: 100%; }
+.text-input-dialog-count { display: block; margin-top: var(--sp-2); color: var(--fg-faint); font-size: var(--text-xs); text-align: right; }
+.text-input-dialog-error { margin-top: var(--sp-3); color: var(--danger); font-size: var(--text-xs); line-height: 1.5; }
 
 /* ---------- 快捷键参考 ---------- */
 .shortcuts-grid {
@@ -784,21 +798,33 @@
    正文一律 --fg / --fg-muted，暗色亮色两套主题下都过对比度。
    ============================================================================ */
 .toast-host {
+  --toast-bottom: var(--sp-8);
   position: fixed;
   right: var(--sp-8);
-  bottom: var(--sp-8);
+  bottom: var(--toast-bottom);
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--sp-4);
   width: min(360px, calc(100vw - var(--sp-10)));
+  max-height: max(120px, calc(100dvh - var(--toast-bottom) - var(--sp-8)));
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   /* 队列为空时容器仍然挂载（aria-live 区域要先于内容存在），
      所以整块不能挡住底下的界面，可点性由每条 toast 自己打开。 */
   pointer-events: none;
 }
 
+.toast-host:focus-visible {
+  outline: 2px solid var(--ring-color);
+  outline-offset: 2px;
+}
+
 .toast {
+  flex: 0 0 auto;
   pointer-events: auto;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

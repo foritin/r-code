@@ -365,6 +365,104 @@ test("Plan mode carries Goal into the task, asks per-question HITL, and approves
   await panel.waitFor({ state: "visible" });
   await panel.getByText("实施中", { exact: false }).first().waitFor();
 
+  // An interrupted run keeps the durable feature progress and offers a same-plan continuation.
+  await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }, { browserMockFinishTask }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+      import("/src/lib/browser-mock-runtime.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    browserMockFinishTask(taskId, "interrupted");
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshDetail(taskId),
+    ]);
+  });
+  const continueCurrentFeature = panel.getByRole("button", { name: "继续当前功能", exact: true });
+  await continueCurrentFeature.waitFor({ state: "visible" });
+  assert.match(await panel.getByLabel("计划进度明细").innerText(), /完成 0.*进行中 1.*待处理 1/s);
+  const initialRunCount = await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    return useTasksStore.getState().details[taskId].runs.length;
+  });
+  await continueCurrentFeature.click();
+  const firstContinuationRun = await page.waitForFunction(async (before) => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) return null;
+    const detail = useTasksStore.getState().details[taskId];
+    const active = detail.runs.find((run) => run.agent_kind === "main" && run.ended_at == null);
+    return detail.task.state === "in_progress" && detail.runs.length === before + 1 && active?.id;
+  }, initialRunCount).then((handle) => handle.jsonValue());
+  assert.ok(firstContinuationRun, "clicking continue must start one new main run");
+  await continueCurrentFeature.waitFor({ state: "detached" });
+
+  // Partial success is also a resumable terminal state and creates a fresh continuation after the
+  // previous durable queue row was delivered.
+  await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }, { browserMockFinishTask }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+      import("/src/lib/browser-mock-runtime.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    browserMockFinishTask(taskId, "review_ready");
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshDetail(taskId),
+    ]);
+  });
+  await continueCurrentFeature.waitFor({ state: "visible" });
+  await continueCurrentFeature.click();
+  const secondContinuationRun = await page.waitForFunction(async ({ previous, before }) => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) return null;
+    const detail = useTasksStore.getState().details[taskId];
+    const active = detail.runs.find((run) => run.agent_kind === "main" && run.ended_at == null);
+    return detail.runs.length === before + 2 && active?.id !== previous ? active?.id : null;
+  }, { previous: firstContinuationRun, before: initialRunCount }).then((handle) => handle.jsonValue());
+  assert.ok(secondContinuationRun, "review-ready continuation must have a unique main-run identity");
+  await page.evaluate(async () => {
+    const [{ useAppStore }, { useTasksStore }] = await Promise.all([
+      import("/src/store/app.ts"),
+      import("/src/store/tasks.ts"),
+    ]);
+    const taskId = useAppStore.getState().currentTaskId;
+    if (!taskId) throw new Error("Room task is missing");
+    const state = useTasksStore.getState();
+    const detail = state.details[taskId];
+    const activeTask = { ...detail.task, state: "in_progress" };
+    useTasksStore.setState({
+      tasks: state.tasks.map((item) => item.id === taskId ? activeTask : item),
+      details: {
+        ...state.details,
+        [taskId]: {
+          ...detail,
+          task: activeTask,
+          runs: detail.runs.map((run) => ({
+            ...run,
+            ended_at: run.ended_at ?? new Date().toISOString(),
+          })),
+        },
+      },
+    });
+  });
+
   // An existing task edits its durable Goal through the conversation composer too.
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");

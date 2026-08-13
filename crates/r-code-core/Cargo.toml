@@ -27,8 +27,7 @@ uuid = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-# 安全：OS keychain 集成与日志脱敏 [doc-07 §5, §6]
-keyring = { workspace = true }
+# 安全：平台凭据存储与日志脱敏 [doc-07 §5, §6]
 regex = "1"
 cap-std = "4.0.2"
 
@@ -40,9 +39,17 @@ tempfile = { version = "3", optional = true }
 # Windows Credential Manager。缺失时 keyring 会回落到无法跨 Entry 持久化的 mock。
 keyring = { workspace = true, features = ["windows-native"] }
 
+[target.'cfg(not(any(target_os = "windows", target_os = "macos")))'.dependencies]
+# Linux 等平台保持现有系统凭据后端选择；macOS 明确不链接 keyring/Keychain。
+keyring = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
-# macOS Keychain。Provider 与 MCP 凭据必须在不同 Entry 实例及应用重启后可读取。
-keyring = { workspace = true, features = ["apple-native"] }
+# macOS 使用应用数据目录中的 ChaCha20-Poly1305 加密凭据文件，不访问 Keychain。
+base64 = { workspace = true }
+libc = { workspace = true }
+ring = { workspace = true }
+tempfile = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

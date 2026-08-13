@@ -79,6 +79,8 @@ r2d2_sqlite = "0.25"
 
 # 安全
 blake3 = "1"
+ring = "0.17.14"
+zeroize = "1"
 # OS 原生凭据库后端由消费 crate 按目标平台启用。不要在 workspace 级别无条件
 # 打开某个平台 feature，否则未启用原生后端的平台会回落到 entry-scoped mock store，
 # `set` 虽返回成功但下一次新建 Entry 后无法读取。

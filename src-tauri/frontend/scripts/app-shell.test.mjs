@@ -198,6 +198,143 @@ test("permission choices persist and remain available while a run is active", as
   await page.close();
 });
 
+test("native workspace picker closes its menu without stealing focus back from the system dialog", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  try {
+    await page.evaluate(async () => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      useTasksStore.getState().setCurrentProject(null);
+      useAppStore.getState().setScene("home");
+      globalThis.__rCodeBrowserMockDelayMs = { cmd_workspace_choose: 250 };
+    });
+
+    const trigger = page.locator(".scene-home .scope-pill");
+    await trigger.click();
+    await page.getByRole("menu", { name: "会话可访问的文件夹" })
+      .getByRole("menuitem", { name: /选择文件夹/ })
+      .click();
+    await page.waitForTimeout(50);
+    assert.equal(
+      await trigger.evaluate((element) => document.activeElement === element),
+      false,
+      "closing a launcher for a native dialog must not immediately refocus its trigger",
+    );
+    await page.waitForFunction(async () => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      return useTasksStore.getState().currentProjectId === "D:/project/rust/r-code";
+    });
+  } finally {
+    await page.evaluate(() => { delete globalThis.__rCodeBrowserMockDelayMs; }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("room project attachment is run-safe, one-time, and synchronizes the next-conversation scope", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  let taskId;
+  try {
+    taskId = await page.evaluate(async () => {
+      const { taskCreate } = await import("/src/lib/ipc.ts");
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const task = await taskCreate(null, "附加项目安全测试", "", "ask");
+      await Promise.all([
+        useTasksStore.getState().refreshTasks(),
+        useTasksStore.getState().refreshDetail(task.id),
+      ]);
+      useTasksStore.getState().setCurrentProject("D:/project/rust/api-server");
+      useAppStore.getState().openRoom(task.id);
+      return task.id;
+    });
+
+    await page.getByRole("button", { name: "附加文件夹", exact: true }).waitFor({ state: "visible" });
+    await page.evaluate(async (id) => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const state = useTasksStore.getState();
+      const detail = state.details[id];
+      const fixtureRun = state.details["mock-task-queue"]?.runs.find((run) => run.ended_at == null);
+      const runningTask = { ...detail.task, state: "in_progress", updated_at: new Date().toISOString() };
+      useTasksStore.setState({
+        tasks: state.tasks.map((item) => item.id === id ? runningTask : item),
+        details: {
+          ...state.details,
+          [id]: {
+            ...detail,
+            task: runningTask,
+            runs: [{
+              ...(fixtureRun ?? {}),
+              id: `${id}-ui-running`,
+              task_id: id,
+              ended_at: null,
+            }],
+          },
+        },
+      });
+    }, taskId);
+
+    const blockedAttach = page.getByRole("button", { name: "运行结束后可附加", exact: true });
+    await blockedAttach.waitFor({ state: "visible" });
+    assert.equal(await blockedAttach.isDisabled(), true);
+    assert.match(await blockedAttach.getAttribute("title"), /当前运行结束后/);
+    await page.waitForFunction(async () => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      return useTasksStore.getState().currentProjectId === null;
+    });
+
+    await page.evaluate(async (id) => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const state = useTasksStore.getState();
+      const detail = state.details[id];
+      const idleTask = { ...detail.task, state: "idle", updated_at: new Date().toISOString() };
+      useTasksStore.setState({
+        tasks: state.tasks.map((item) => item.id === id ? idleTask : item),
+        details: { ...state.details, [id]: { ...detail, task: idleTask, runs: [] } },
+      });
+    }, taskId);
+
+    const attach = page.getByRole("button", { name: "附加文件夹", exact: true });
+    await attach.waitFor({ state: "visible" });
+    assert.equal(await attach.isDisabled(), false);
+    await attach.click();
+    await page.locator(".room-conversation-title").getByText(/r-code/).waitFor({ state: "visible" });
+    await page.waitForFunction(async () => {
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      return useTasksStore.getState().currentProjectId === "D:/project/rust/r-code";
+    });
+
+    await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+    const addDialog = page.getByRole("dialog", { name: "添加到任务" });
+    await addDialog.getByRole("button", { name: /^附加文件夹中的文件/ }).waitFor({ state: "visible" });
+    await page.keyboard.press("Escape");
+
+    const binding = await page.evaluate(async (id) => {
+      const { taskDetail, taskSetWorkspace } = await import("/src/lib/ipc.ts");
+      let error = "";
+      try {
+        await taskSetWorkspace(id, "D:/project/rust/api-server");
+      } catch (cause) {
+        error = String(cause);
+      }
+      return { error, workspacePath: (await taskDetail(id)).task.workspace_path };
+    }, taskId);
+    assert.match(binding.error, /已绑定项目/);
+    assert.equal(binding.workspacePath, "D:/project/rust/r-code");
+  } finally {
+    if (taskId) {
+      await page.evaluate(async (id) => {
+        const { taskDelete } = await import("/src/lib/ipc.ts");
+        const { useTasksStore } = await import("/src/store/tasks.ts");
+        await taskDelete(id).catch(() => {});
+        await useTasksStore.getState().refreshTasks().catch(() => {});
+      }, taskId).catch(() => {});
+    }
+    await page.close();
+  }
+});
+
 test("macOS uses native traffic-light chrome and Command-key labels", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.addInitScript(() => {
@@ -218,10 +355,14 @@ test("macOS uses native traffic-light chrome and Command-key labels", async () =
       macClass: app.classList.contains("platform-macos"),
       paddingLeft: Number.parseFloat(getComputedStyle(topbar).paddingLeft),
       customControls: document.querySelectorAll(".app-window-controls").length,
+      topbarDragRegion: topbar.hasAttribute("data-tauri-drag-region"),
+      spacerDragRegion: document.querySelector(".topbar-spacer")?.hasAttribute("data-tauri-drag-region") ?? false,
     };
   });
   assert.equal(chrome.macClass, true);
   assert.equal(chrome.customControls, 0);
+  assert.equal(chrome.topbarDragRegion, true, "the macOS overlay titlebar must use Tauri's native drag contract");
+  assert.equal(chrome.spacerDragRegion, true, "the direct spacer target must remain draggable");
   assert.ok(chrome.paddingLeft >= 70, `traffic lights need a reserved hit area: ${JSON.stringify(chrome)}`);
 
   await page.locator(".desktop-menu-trigger").filter({ hasText: "文件" }).click();
@@ -238,6 +379,81 @@ test("macOS uses native traffic-light chrome and Command-key labels", async () =
   await page.keyboard.press("Meta+N");
   await page.locator("#app.scene-home").waitFor({ state: "visible" });
   await page.close();
+});
+
+test("macOS chrome falls back to the user agent when WebView platform is unavailable", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", {
+      configurable: true,
+      get: () => "Unknown",
+    });
+    Object.defineProperty(navigator, "userAgent", {
+      configurable: true,
+      get: () => "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7) AppleWebKit/605.1.15",
+    });
+  });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  assert.equal(await page.locator("#app.platform-macos").count(), 1);
+  assert.equal(await page.locator(".app-window-controls").count(), 0);
+  await page.close();
+});
+
+test("macOS alone offers local OCR for images rejected by a text-only model", async () => {
+  const attachment = {
+    id: "ocr-image",
+    name: "screen.png",
+    mediaType: "image/png",
+    data: "iVBORw0KGgo=",
+    kind: "image",
+    size: 8,
+  };
+  const mac = await browser.newPage();
+  await mac.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", { configurable: true, get: () => "MacIntel" });
+  });
+  await mac.goto(baseUrl, { waitUntil: "networkidle" });
+  const macResult = await mac.evaluate(async ({ attachment }) => {
+    const { firstBlockedAttachmentReason, sendableAttachmentInputs } = await import("/src/components/Attachments.tsx");
+    const { platformCapabilities } = await import("/src/lib/ipc.ts");
+    const unsupported = () => ({ state: "unsupported", reason: "当前模型不支持图片" });
+    const capabilities = await platformCapabilities();
+    return {
+      capabilities,
+      blocked: firstBlockedAttachmentReason([attachment], unsupported, capabilities),
+      sendable: sendableAttachmentInputs([attachment], unsupported, capabilities),
+    };
+  }, { attachment });
+  assert.equal(macResult.capabilities.platform, "macos");
+  assert.equal(macResult.capabilities.nativeOcr, true);
+  assert.deepEqual(macResult.capabilities.nativeOcrFormats, ["image/png", "image/jpeg"]);
+  assert.equal(macResult.blocked, null);
+  assert.equal(macResult.sendable.length, 1);
+  assert.equal(macResult.sendable[0].nativeOcr, true);
+  await mac.close();
+
+  const windows = await browser.newPage();
+  await windows.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", { configurable: true, get: () => "Win32" });
+  });
+  await windows.goto(baseUrl, { waitUntil: "networkidle" });
+  const windowsResult = await windows.evaluate(async ({ attachment }) => {
+    const { firstBlockedAttachmentReason, sendableAttachmentInputs } = await import("/src/components/Attachments.tsx");
+    const { platformCapabilities } = await import("/src/lib/ipc.ts");
+    const unsupported = () => ({ state: "unsupported", reason: "当前模型不支持图片" });
+    const capabilities = await platformCapabilities();
+    return {
+      capabilities,
+      blocked: firstBlockedAttachmentReason([attachment], unsupported, capabilities),
+      sendable: sendableAttachmentInputs([attachment], unsupported, capabilities),
+    };
+  }, { attachment });
+  assert.equal(windowsResult.capabilities.platform, "windows");
+  assert.equal(windowsResult.capabilities.nativeOcr, false);
+  assert.match(windowsResult.blocked, /不支持图片/);
+  assert.deepEqual(windowsResult.sendable, []);
+  await windows.close();
 });
 
 test("Windows close hides to the tray while explicit quit stays discoverable", async () => {
@@ -654,11 +870,27 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
     live = applyAgentEvent(live, { type: "message", text: "最终回答", delta: true }, 2, nid);
     live = applyAgentEvent(live, { type: "reasoning", text: "下一段思考", delta: true }, 3, nid);
 
+    let acrossTool = applyAgentEvent([], { type: "reasoning", text: "先检查", delta: true }, 1, nid);
+    acrossTool = applyAgentEvent(acrossTool, {
+      type: "tool_call",
+      name: "read_file",
+      input: { path: "src/main.rs" },
+      call_id: "reasoning-tool",
+    }, 2, nid);
+    acrossTool = applyAgentEvent(acrossTool, {
+      type: "tool_result",
+      call_id: "reasoning-tool",
+      output: "ok",
+      is_error: false,
+    }, 3, nid);
+    acrossTool = applyAgentEvent(acrossTool, { type: "reasoning", text: "再核对", delta: true }, 4, nid);
+    acrossTool = applyAgentEvent(acrossTool, { type: "reasoning", text: "边界", delta: true }, 4, nid);
+
     const child = buildLiveEntries([
       { id: "child-r1", kind: "reasoning", label: "模型思考", detail: "检查", at: 1 },
       { id: "child-r2", kind: "reasoning", label: "模型思考", detail: "边界", at: 2 },
     ], "running");
-    return { history, live, child };
+    return { history, live, acrossTool, child };
   });
 
   assert.deepEqual(
@@ -676,6 +908,11 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
   assert.deepEqual(
     contract.child.filter((entry) => entry.kind === "reasoning").map((entry) => entry.text),
     ["检查边界"],
+  );
+  assert.deepEqual(
+    contract.acrossTool.filter((item) => item.kind === "context" && item.label === "模型思考")
+      .map((item) => item.detail),
+    ["先检查\n\n再核对边界"],
   );
   await page.close();
 });
@@ -726,11 +963,14 @@ test("active run duration refreshes on the shared second tick and isolates rende
   await page.close();
 });
 
-test("Ctrl+= zoom keeps the app shell covering the complete webview", async () => {
+test("the platform modifier plus = keeps the zoomed app shell covering the complete webview", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
-  await page.keyboard.press("Control+=");
+  const modifier = await page.evaluate(() => /mac/i.test(navigator.platform || navigator.userAgent))
+    ? "Meta"
+    : "Control";
+  await page.keyboard.press(`${modifier}+=`);
   await page.waitForFunction(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
     return useAppStore.getState().zoomLevel === 110;
@@ -1277,6 +1517,40 @@ test("new task composer remains fully reachable in a compact desktop window", as
   await page.close();
 });
 
+test("project conversations can be renamed from their shared actions menu", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const oldTitle = "更新依赖并修复告警";
+  const newTitle = "依赖升级复盘";
+  const taskRow = page.locator(".sidebar-task-row").filter({ hasText: oldTitle });
+  await taskRow.hover();
+  await taskRow.locator(".task-actions-trigger").click();
+
+  const menu = page.locator('.task-actions-popover[role="menu"]');
+  await menu.waitFor({ state: "visible" });
+  await menu.getByRole("menuitem", { name: "重命名对话…", exact: true }).click();
+
+  const dialog = page.getByRole("dialog", { name: "重命名对话" });
+  await dialog.waitFor({ state: "visible" });
+  const input = dialog.getByRole("textbox", { name: "会话名称" });
+  assert.equal(await input.inputValue(), oldTitle);
+  await input.fill(newTitle);
+  await input.press("Enter");
+
+  await page.getByText("对话已重命名", { exact: true }).waitFor({ state: "visible" });
+  await page.locator(".sidebar-task-row").filter({ hasText: newTitle }).waitFor({ state: "visible" });
+  assert.equal(await page.locator(".sidebar-task-row").filter({ hasText: oldTitle }).count(), 0);
+  assert.equal(await dialog.count(), 0);
+
+  const renamedRow = page.locator(".sidebar-task-row").filter({ hasText: newTitle });
+  await renamedRow.hover();
+  await renamedRow.locator(".task-actions-trigger").click();
+  await page.getByRole("menu", { name: `管理对话：${newTitle}` }).waitFor({ state: "visible" });
+  await page.keyboard.press("Escape");
+  await page.close();
+});
+
 test("project conversations expose archive and confirmed permanent delete", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -1670,6 +1944,8 @@ test("clearing a project removes app records without implying disk deletion", as
   await trigger.click();
   const menu = page.getByRole("menu", { name: "api-server 项目操作" });
   await menu.waitFor({ state: "visible" });
+  await menu.getByRole("menuitem", { name: "项目概览", exact: true }).waitFor({ state: "visible" });
+  assert.equal(await menu.getByRole("menuitem", { name: "打开项目", exact: true }).count(), 0);
   const bounds = await menu.boundingBox();
   assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0);
   assert.ok(bounds.x + bounds.width <= 1200 && bounds.y + bounds.height <= 800, "project menu must stay inside the viewport");

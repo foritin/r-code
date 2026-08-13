@@ -39,6 +39,7 @@ import { resolveActive, type ProviderChoice } from "../../lib/provider";
 import { useAsyncAction } from "../../lib/hooks";
 import { usePoll } from "../../lib/poll";
 import { readComposerDraft, updateComposerDraft } from "../../lib/composer-drafts";
+import { usePlatformCapabilities } from "../../lib/platform-capabilities";
 import { useTasksStore } from "../../store/tasks";
 import { useAppStore } from "../../store/app";
 import { AnchoredSurface } from "../ui/AnchoredSurface";
@@ -60,6 +61,7 @@ import { Menu, MenuItem } from "../ui/Menu";
 import {
   AttachmentTray,
   firstBlockedAttachmentReason,
+  nativeOcrTextName,
   sendableAttachmentInputs,
   useAttachments,
   type DraftAttachment,
@@ -245,6 +247,7 @@ export function Composer({
   const taskFileReference = useAppStore((s) => s.taskFileReferences[taskId]);
   const acknowledgeTaskFileReference = useAppStore((s) => s.acknowledgeTaskFileReference);
   const attachments = useAttachments();
+  const platformCapabilities = usePlatformCapabilities();
   const activeModel = resolveActive(providerChoices, providerFallback, providerName, model);
   const imageCapability = agentEngine === "codex"
     ? codexImageCapability(codexPreferences)
@@ -261,10 +264,12 @@ export function Composer({
   const sendableAttachments = sendableAttachmentInputs(
     attachments.attachments,
     capabilityForAttachment,
+    platformCapabilities,
   );
   const capabilityBlockedReason = firstBlockedAttachmentReason(
     attachments.attachments,
     capabilityForAttachment,
+    platformCapabilities,
   );
   const runBlockedReason = running && !goalMode && attachments.attachments.length > 0
     ? "当前运行结束后才能把附件作为新一轮消息发送。"
@@ -469,7 +474,11 @@ export function Composer({
       onSent(
         message || `已附加 ${files.length} 个文件`,
         mode,
-        files.map((file) => ({
+        files.map((file) => file.nativeOcr ? {
+          name: nativeOcrTextName(file.name),
+          media_type: "text/plain",
+          kind: "text",
+        } : {
           name: file.name,
           media_type: file.mediaType,
           kind: file.mediaType.startsWith("image/")
@@ -477,7 +486,7 @@ export function Composer({
             : file.mediaType === "application/pdf"
               ? "pdf"
               : "text",
-        })),
+        }),
       );
       await agentSend(taskId, message, mode, files);
       const firstTurnTitle = /^新对话(?:\s+\d+)?$/.test(task?.title.trim() ?? "") && !task?.goal.trim()
@@ -1530,6 +1539,7 @@ export function Composer({
         <AttachmentTray
           attachments={attachments.attachments}
           capabilityFor={capabilityForAttachment}
+          platformCapabilities={platformCapabilities}
           blockedReason={runBlockedReason}
           onRemove={attachments.remove}
         />

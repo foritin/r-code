@@ -87,7 +87,6 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
     kind: "local",
     locations: ["room"],
     argumentHint: "<新名称>",
-    blockedWhileRunning: true,
     keywords: ["标题", "名称"],
   },
   {

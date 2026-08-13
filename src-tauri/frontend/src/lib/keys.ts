@@ -54,8 +54,27 @@ export const KEYMAP: Record<KeyAction, KeyBinding> = {
   workbenchReview: { keys: ["g"], label: "G", description: "审核变更", mod: true, shift: true },
 };
 
-const IS_MAC = typeof navigator !== "undefined" && /mac/i.test(navigator.platform || navigator.userAgent);
-const IS_WINDOWS = typeof navigator !== "undefined" && /win/i.test(navigator.platform || navigator.userAgent);
+export type DesktopPlatform = "macos" | "windows" | "other";
+
+/**
+ * 浏览器平台提示只负责前端 chrome；任何原生能力仍必须由 Rust 的 target_os 隔离。
+ * 优先相信明确的平台字段，但当 WebView 因隐私策略返回空值或 Unknown 时回退 UA。
+ */
+export function detectDesktopPlatform(platform: string, userAgent: string): DesktopPlatform {
+  const hint = platform.trim();
+  if (/mac|darwin/i.test(hint)) return "macos";
+  if (/win/i.test(hint)) return "windows";
+  if (/linux|x11|cros|android|iphone|ipad|ipod/i.test(hint)) return "other";
+  if (/macintosh|mac os x/i.test(userAgent)) return "macos";
+  if (/windows|win32|win64/i.test(userAgent)) return "windows";
+  return "other";
+}
+
+const DESKTOP_PLATFORM = typeof navigator === "undefined"
+  ? "other"
+  : detectDesktopPlatform(navigator.platform || "", navigator.userAgent || "");
+const IS_MAC = DESKTOP_PLATFORM === "macos";
+const IS_WINDOWS = DESKTOP_PLATFORM === "windows";
 
 /** 统一的平台判断，供原生标题栏留白和快捷键文案共用。 */
 export function isMacPlatform(): boolean {

@@ -41,7 +41,7 @@ let closeActive: (() => void) | null = null;
 const ITEM_SELECTOR = '[role="menuitem"],[role="menuitemradio"],[role="option"]';
 
 export interface MenuRenderApi {
-  close: () => void;
+  close: (returnFocus?: boolean) => void;
 }
 
 interface Props {
@@ -268,7 +268,9 @@ interface ItemProps {
   className?: string;
   /** 命中后是否关闭菜单，默认 true */
   closeOnSelect?: boolean;
-  close?: () => void;
+  /** 关闭后是否把焦点还给触发器；打开系统原生对话框时应关闭。 */
+  returnFocusOnClose?: boolean;
+  close?: (returnFocus?: boolean) => void;
 }
 
 export function MenuItem({
@@ -280,6 +282,7 @@ export function MenuItem({
   shortcut,
   className,
   closeOnSelect = true,
+  returnFocusOnClose = true,
   close,
 }: ItemProps) {
   const radio = checked !== undefined;
@@ -297,7 +300,7 @@ export function MenuItem({
       }
       onClick={() => {
         onSelect?.();
-        if (closeOnSelect) close?.();
+        if (closeOnSelect) close?.(returnFocusOnClose);
       }}
     >
       {hint ? (

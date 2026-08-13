@@ -369,6 +369,24 @@ function detailById(taskId: string): TaskDetail {
   return detail;
 }
 
+/** Browser-regression hook: settle a mock main run the same way the desktop host would. */
+export function browserMockFinishTask(
+  taskId: string,
+  state: Extract<Task["state"], "interrupted" | "review_ready">,
+): void {
+  const task = taskById(taskId);
+  const detail = detailById(taskId);
+  const timestamp = nowIso();
+  task.state = state;
+  touchTask(task);
+  detail.task = copy(task);
+  for (const run of detail.runs) {
+    if (run.agent_kind !== "main" || run.ended_at != null) continue;
+    run.ended_at = timestamp;
+    run.review_state = state === "interrupted" ? "aborted" : "pending";
+  }
+}
+
 function workspaceByPath(path: string): Workspace {
   const workspace = browserMockWorkspaces.find((item) => item.canonical_path === path);
   if (!workspace) throw new Error(`Demo 中不存在项目 ${path}`);
@@ -618,6 +636,38 @@ function setTaskField(args: MockArgs, field: "workspace_path" | "provider_name" 
   if (field === "model") task.model = optionalStringArg(args, "model");
   if (field === "title") task.title = stringArg(args, "title").trim() || task.title;
   touchTask(task);
+  return task;
+}
+
+function renameTask(args: MockArgs): Task {
+  const task = taskById(stringArg(args, "taskId"));
+  const title = stringArg(args, "title").trim();
+  if (!title) throw new Error("请输入新的会话名称");
+  if (Array.from(title).length > 96) throw new Error("会话名称不能超过 96 个字符");
+  if (task.state === "archived") throw new Error("会话已归档，不能再重命名");
+  task.title = title;
+  touchTask(task);
+  return task;
+}
+
+function setTaskWorkspace(args: MockArgs): Task {
+  const task = taskById(stringArg(args, "taskId"));
+  const requested = optionalStringArg(args, "workspacePath");
+  const detail = browserMockDetails[task.id];
+  if (task.state === "archived") throw new Error("会话已归档，不能再修改工作区");
+  if (
+    task.state === "exploring" ||
+    task.state === "in_progress" ||
+    detail?.runs.some((run) => run.ended_at == null)
+  ) {
+    throw new Error("当前运行尚未结束，不能在执行期间附加工作区");
+  }
+  if (task.workspace_path && requested !== task.workspace_path) {
+    throw new Error("此会话已绑定项目；如需使用其他项目，请新建对话");
+  }
+  if (!task.workspace_path && requested) task.workspace_path = requested;
+  touchTask(task);
+  if (detail) detail.task = copy(task);
   return task;
 }
 
@@ -923,11 +973,44 @@ function retryMockPlanImplementation(taskId: string, planId: string): PlanView {
   if (!view || view.plan.id !== planId || view.plan.state !== "executing") {
     throw new Error("没有可重试的计划实施请求");
   }
+  const task = taskById(taskId);
+  const detail = detailById(taskId);
+  if (detail.runs.some((run) => run.agent_kind === "main" && run.ended_at == null)) {
+    throw new Error("当前运行尚未结束，无需重复启动 Plan 实施");
+  }
   if (view.plan.implementation_dispatch_state === "failed") {
     view.plan.implementation_dispatch_state = "dispatched";
     view.plan.implementation_dispatch_error = null;
     view.plan.implementation_dispatched_at = nowIso();
+  } else if (
+    view.plan.implementation_dispatch_state !== "dispatched" ||
+    !["interrupted", "review_ready"].includes(task.state)
+  ) {
+    throw new Error("只有已中断或已有部分成果待审查的 Plan 才能续接当前功能");
   }
+  const timestamp = nowIso();
+  task.state = "in_progress";
+  touchTask(task);
+  detail.task = copy(task);
+  detail.runs.unshift({
+    id: nextId("plan-continuation-run"),
+    task_id: taskId,
+    branch_id: detail.active_branch.id,
+    parent_run_id: null,
+    agent_kind: "main",
+    agent_label: "主代理",
+    summary: "继续实施当前 Plan 功能事项",
+    delegated_by_tool_call_id: null,
+    model: task.model ?? "gpt-5.6",
+    runtime_kind: "native",
+    external_session_id: null,
+    review_state: "pending",
+    started_at: timestamp,
+    ended_at: null,
+    usage_json: null,
+    access_mode: "full_access",
+    routing_reason: "沿用当前 Plan 与功能进度",
+  });
   return view;
 }
 
@@ -1469,12 +1552,12 @@ function saveProvider(provider: ProviderSettingsInput): void {
     max_tokens: provider.maxTokens ?? undefined,
     temperature: provider.temperature ?? undefined,
     protocol: provider.protocol ?? undefined,
-    show_reasoning: provider.showReasoning ?? existing?.show_reasoning ?? true,
+    show_reasoning: provider.showReasoning ?? existing?.show_reasoning ?? false,
   };
   browserMockSettings.provider_status[provider.name] = {
     configured: true,
     ready: true,
-    source: provider.apiKey ? "keychain" : "environment",
+    source: provider.apiKey ? "encrypted_file" : "environment",
     effective_protocol: provider.protocol ?? "openai_responses",
   };
   if (provider.activate) browserMockSettings.config.default_provider = provider.name;
@@ -1587,6 +1670,19 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
   switch (command) {
     case "ping": return true;
     case "cmd_app_quit": return null;
+    case "cmd_platform_capabilities": {
+      const hint = navigator.platform || "";
+      const explicitMac = /mac|darwin/i.test(hint);
+      const explicitWindows = /win/i.test(hint);
+      const explicitOther = /linux|x11|cros|android|iphone|ipad|ipod/i.test(hint);
+      const macOS = explicitMac || (!explicitWindows && !explicitOther
+        && /macintosh|mac os x/i.test(navigator.userAgent || ""));
+      return {
+        platform: macOS ? "macos" : explicitWindows ? "windows" : /linux|x11/i.test(hint) ? "linux" : "other",
+        nativeOcr: macOS,
+        nativeOcrFormats: macOS ? ["image/png", "image/jpeg"] : [],
+      };
+    }
 
     case "cmd_task_create": return copy(createTask(args));
     case "cmd_project_conversation_create": return copy(createProjectConversation(args));
@@ -1636,7 +1732,11 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       }
       return undefined;
     }
-    case "cmd_task_set_workspace": return copy(setTaskField(args, "workspace_path"));
+    case "cmd_task_set_workspace": return copy(setTaskWorkspace(args));
+    case "cmd_task_choose_workspace": {
+      const workspace = normalizeWorkspace(browserMockWorkspaces[0]);
+      return copy(setTaskWorkspace({ ...args, workspacePath: workspace.canonical_path }));
+    }
     case "cmd_task_set_agent_engine": return copy(setTaskField(args, "agent_engine"));
     case "cmd_task_set_provider": return copy(setTaskField(args, "provider_name"));
     case "cmd_task_set_model": return copy(setTaskField(args, "model"));
@@ -1646,7 +1746,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       touchTask(task);
       return copy(task);
     }
-    case "cmd_task_rename": return copy(setTaskField(args, "title"));
+    case "cmd_task_rename": return copy(renameTask(args));
     case "cmd_task_update_goal": return copy(updateTaskGoal(args));
     case "cmd_task_set_mode": return copy(setTaskMode(args));
     case "cmd_plan_get": return copy(currentMockPlan(stringArg(args, "taskId")));

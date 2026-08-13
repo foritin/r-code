@@ -91,6 +91,7 @@ test("running send strategy stays beside Send, cycles, and controls the transmit
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setZoom(100);
     useAppStore.getState().openRoom("mock-task-queue");
   });
 

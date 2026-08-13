@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent as ReactClipboardEvent } from "react";
-import type { AttachmentInput, AttachmentKind } from "../lib/types";
+import type { AttachmentInput, AttachmentKind, PlatformCapabilities } from "../lib/types";
 import type { ImageCapability } from "./room/model-capabilities";
 import { IconAlert, IconAttach, IconClose, IconFile } from "./icons";
 
@@ -69,6 +69,34 @@ export interface DraftAttachment extends AttachmentInput {
 }
 
 export type AttachmentCapabilityResolver = (attachment: DraftAttachment) => ImageCapability;
+
+const MAC_OCR_REASON = "当前模型不接收图片；发送时会用 macOS 系统 OCR 在本机仅提取文字，识别文本仍会随消息发送给模型。图片布局与非文字内容不会发送。";
+export function nativeOcrTextName(name: string): string {
+  return `${Array.from(name).slice(0, 172).join("")}.ocr.txt`;
+}
+
+export function attachmentUsesNativeOcr(
+  attachment: DraftAttachment,
+  capabilityFor: AttachmentCapabilityResolver,
+  platformCapabilities: PlatformCapabilities,
+): boolean {
+  return attachment.kind === "image"
+    && platformCapabilities.nativeOcr
+    && platformCapabilities.nativeOcrFormats.includes(attachment.mediaType)
+    && capabilityFor(attachment).state === "unsupported";
+}
+
+function effectiveCapability(
+  attachment: DraftAttachment,
+  capabilityFor: AttachmentCapabilityResolver,
+  platformCapabilities: PlatformCapabilities,
+): ImageCapability {
+  const capability = capabilityFor(attachment);
+  if (attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities)) {
+    return { state: "supported", modelLabel: capability.modelLabel, reason: MAC_OCR_REASON };
+  }
+  return capability;
+}
 
 interface UseAttachmentsResult {
   attachments: DraftAttachment[];
@@ -287,11 +315,13 @@ export function AttachmentButton({
 export function AttachmentTray({
   attachments,
   capabilityFor,
+  platformCapabilities,
   blockedReason,
   onRemove,
 }: {
   attachments: DraftAttachment[];
   capabilityFor: AttachmentCapabilityResolver;
+  platformCapabilities: PlatformCapabilities;
   blockedReason?: string | null;
   onRemove: (id: string) => void;
 }) {
@@ -306,15 +336,17 @@ export function AttachmentTray({
   }, [previewing]);
 
   if (attachments.length === 0) return null;
+  const hasNativeOcr = attachments.some((attachment) => attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities));
   const unsupportedReason = blockedReason ?? attachments
-    .map((attachment) => capabilityFor(attachment))
+    .map((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities))
     .find((capability) => capability.state === "unsupported")
     ?.reason;
   return (
     <>
       <div className="composer-attachments" role="list" aria-label="消息附件">
         {attachments.map((attachment) => {
-          const capability = capabilityFor(attachment);
+          const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities);
+          const nativeOcr = attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities);
           const unsupported = capability.state === "unsupported" || Boolean(blockedReason);
           const reason = blockedReason ?? capability.reason;
           const extension = extensionOf(attachment.name).toUpperCase();
@@ -323,6 +355,7 @@ export function AttachmentTray({
               className={
                 `attachment-chip kind-${attachment.kind}`
                 + (unsupported ? " is-unsupported" : capability.state === "unknown" ? " is-unknown" : "")
+                + (nativeOcr ? " is-native-ocr" : "")
               }
               role="listitem"
               aria-disabled={unsupported || undefined}
@@ -347,7 +380,7 @@ export function AttachmentTray({
               {unsupported && <IconAlert className="attachment-warning" width={14} height={14} aria-hidden="true" />}
               <span className="attachment-copy">
                 <span className="attachment-label">{attachment.name}</span>
-                <small>{attachment.kind === "pdf" ? "PDF" : extension || "文本"}</small>
+                <small>{nativeOcr ? "本机 OCR → 文本" : attachment.kind === "pdf" ? "PDF" : extension || "文本"}</small>
               </span>
               <button
                 className="attachment-remove"
@@ -362,7 +395,7 @@ export function AttachmentTray({
           );
         })}
         <span className="sr-only" aria-live="polite">
-          {unsupportedReason ?? "附件会随消息发送；图片可点击预览"}
+          {unsupportedReason ?? (hasNativeOcr ? MAC_OCR_REASON : "附件会随消息发送；图片可点击预览")}
         </span>
       </div>
       {previewing?.previewUrl && (
@@ -391,18 +424,26 @@ export function AttachmentTray({
 export function sendableAttachmentInputs(
   attachments: readonly DraftAttachment[],
   capabilityFor: AttachmentCapabilityResolver,
+  platformCapabilities: PlatformCapabilities,
 ): AttachmentInput[] {
   return attachments
-    .filter((attachment) => capabilityFor(attachment).state !== "unsupported")
-    .map(({ name, mediaType, data }) => ({ name, mediaType, data }));
+    .filter((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities).state !== "unsupported")
+    .map(({ name, mediaType, data, ...attachment }) => ({
+      name,
+      mediaType,
+      data,
+      nativeOcr: attachment.kind === "image"
+        && attachmentUsesNativeOcr({ name, mediaType, data, ...attachment }, capabilityFor, platformCapabilities),
+    }));
 }
 
 export function firstBlockedAttachmentReason(
   attachments: readonly DraftAttachment[],
   capabilityFor: AttachmentCapabilityResolver,
+  platformCapabilities: PlatformCapabilities,
 ): string | null {
   for (const attachment of attachments) {
-    const capability = capabilityFor(attachment);
+    const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities);
     if (capability.state === "unsupported") return capability.reason;
   }
   return null;

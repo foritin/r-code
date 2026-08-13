@@ -1,13 +1,19 @@
+#[cfg(not(target_os = "macos"))]
+use std::sync::LazyLock;
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
 use hermes_config::{Config, ServerSpec};
-use r_code_core::{error::ProductError, secret::SecretStore};
+use r_code_core::error::ProductError;
+#[cfg(target_os = "macos")]
+use r_code_core::secret::EncryptedFileSecretStore;
+#[cfg(not(target_os = "macos"))]
+use r_code_core::secret::SecretStore;
 use r_code_mcp::{
     BuiltinMcpServer, McpClientError, McpServerConfig, McpServerSource, McpTransportConfig,
     SecretRef, SecretResolver,
@@ -19,6 +25,7 @@ use crate::security_config::mcp_credential_account;
 const SETTINGS_FILE: &str = "mcp-servers.toml";
 const REGISTRY_CACHE_FILE: &str = "mcp-registry-cache.json";
 const SETTINGS_SCHEMA_VERSION: u32 = 1;
+#[cfg(not(target_os = "macos"))]
 const SECRET_SERVICE: &str = "r-code";
 pub const RESEARCH_SERVER_ID: &str = "r-code-research";
 type MigratedMcpServer = (McpServerConfig, Vec<(SecretRef, String)>);
@@ -49,9 +56,67 @@ pub trait McpCredentialBackend: Send + Sync + 'static {
     fn delete(&self, account: &str) -> Result<(), ProductError>;
 }
 
+struct CachedMcpCredentialBackend {
+    inner: Arc<dyn McpCredentialBackend>,
+    values: Mutex<BTreeMap<String, Option<String>>>,
+}
+
+impl CachedMcpCredentialBackend {
+    fn new(inner: Arc<dyn McpCredentialBackend>) -> Self {
+        Self {
+            inner,
+            values: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn values(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Option<String>>> {
+        self.values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl McpCredentialBackend for CachedMcpCredentialBackend {
+    fn set(&self, account: &str, value: &str) -> Result<(), ProductError> {
+        let mut values = self.values();
+        if values
+            .get(account)
+            .and_then(Option::as_deref)
+            .is_some_and(|stored| stored == value)
+        {
+            return Ok(());
+        }
+        self.inner.set(account, value)?;
+        values.insert(account.to_string(), Some(value.to_string()));
+        Ok(())
+    }
+
+    fn get(&self, account: &str) -> Result<Option<String>, ProductError> {
+        let mut values = self.values();
+        if let Some(value) = values.get(account) {
+            return Ok(value.clone());
+        }
+        let value = self.inner.get(account)?;
+        values.insert(account.to_string(), value.clone());
+        Ok(value)
+    }
+
+    fn delete(&self, account: &str) -> Result<(), ProductError> {
+        let mut values = self.values();
+        if matches!(values.get(account), Some(None)) {
+            return Ok(());
+        }
+        self.inner.delete(account)?;
+        values.insert(account.to_string(), None);
+        Ok(())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 #[derive(Default)]
 struct OsCredentialBackend;
 
+#[cfg(not(target_os = "macos"))]
 impl McpCredentialBackend for OsCredentialBackend {
     fn set(&self, account: &str, value: &str) -> Result<(), ProductError> {
         SecretStore::new(SECRET_SERVICE).store(account, value)
@@ -63,6 +128,33 @@ impl McpCredentialBackend for OsCredentialBackend {
 
     fn delete(&self, account: &str) -> Result<(), ProductError> {
         SecretStore::new(SECRET_SERVICE).delete(account)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+static OS_MCP_CREDENTIALS: LazyLock<Arc<dyn McpCredentialBackend>> = LazyLock::new(|| {
+    Arc::new(CachedMcpCredentialBackend::new(Arc::new(
+        OsCredentialBackend,
+    )))
+});
+
+#[cfg(target_os = "macos")]
+struct MacFileCredentialBackend {
+    store: EncryptedFileSecretStore,
+}
+
+#[cfg(target_os = "macos")]
+impl McpCredentialBackend for MacFileCredentialBackend {
+    fn set(&self, account: &str, value: &str) -> Result<(), ProductError> {
+        self.store.store(account, value)
+    }
+
+    fn get(&self, account: &str) -> Result<Option<String>, ProductError> {
+        self.store.get(account)
+    }
+
+    fn delete(&self, account: &str) -> Result<(), ProductError> {
+        self.store.delete(account)
     }
 }
 
@@ -124,7 +216,15 @@ pub struct McpSettingsService {
 
 impl McpSettingsService {
     pub fn new(config_dir: PathBuf) -> Self {
-        Self::with_credentials(config_dir, Arc::new(OsCredentialBackend))
+        #[cfg(not(target_os = "macos"))]
+        let credentials = OS_MCP_CREDENTIALS.clone();
+        #[cfg(target_os = "macos")]
+        let credentials: Arc<dyn McpCredentialBackend> = Arc::new(CachedMcpCredentialBackend::new(
+            Arc::new(MacFileCredentialBackend {
+                store: EncryptedFileSecretStore::new(config_dir.clone()),
+            }),
+        ));
+        Self::with_credentials(config_dir, credentials)
     }
 
     pub fn with_credentials(
@@ -346,17 +446,24 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), ProductError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use super::*;
 
     #[derive(Default)]
     struct MemoryCredentials {
         values: Mutex<HashMap<String, String>>,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
+        deletes: AtomicUsize,
     }
 
     impl McpCredentialBackend for MemoryCredentials {
         fn set(&self, account: &str, value: &str) -> Result<(), ProductError> {
+            self.writes.fetch_add(1, Ordering::Relaxed);
             self.values
                 .lock()
                 .unwrap()
@@ -365,13 +472,42 @@ mod tests {
         }
 
         fn get(&self, account: &str) -> Result<Option<String>, ProductError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
             Ok(self.values.lock().unwrap().get(account).cloned())
         }
 
         fn delete(&self, account: &str) -> Result<(), ProductError> {
+            self.deletes.fetch_add(1, Ordering::Relaxed);
             self.values.lock().unwrap().remove(account);
             Ok(())
         }
+    }
+
+    #[test]
+    fn credential_cache_coalesces_repeated_mcp_store_access() {
+        let inner = Arc::new(MemoryCredentials::default());
+        let cached = CachedMcpCredentialBackend::new(inner.clone());
+
+        assert_eq!(cached.get("mcp:server:env:TOKEN").unwrap(), None);
+        assert_eq!(cached.get("mcp:server:env:TOKEN").unwrap(), None);
+        assert_eq!(inner.reads.load(Ordering::Relaxed), 1);
+
+        cached
+            .set("mcp:server:env:TOKEN", "sentinel-secret")
+            .unwrap();
+        cached
+            .set("mcp:server:env:TOKEN", "sentinel-secret")
+            .unwrap();
+        assert_eq!(inner.writes.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            cached.get("mcp:server:env:TOKEN").unwrap().as_deref(),
+            Some("sentinel-secret")
+        );
+        assert_eq!(inner.reads.load(Ordering::Relaxed), 1);
+
+        cached.delete("mcp:server:env:TOKEN").unwrap();
+        cached.delete("mcp:server:env:TOKEN").unwrap();
+        assert_eq!(inner.deletes.load(Ordering::Relaxed), 1);
     }
 
     #[test]

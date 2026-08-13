@@ -5,20 +5,29 @@
 //! 工作区覆盖位于 `<workspace>/.r-code/config.toml`，与全局配置递归合并
 //! （工作区字段覆盖全局同名标量；嵌套表深度合并）。
 //!
-//! 环境变量覆盖（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）在合并后应用，
+//! 环境变量覆盖（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`
+//! 或 `R_CODE_PROVIDER_<配置名>_API_KEY`）在合并后应用，
 //! 优先级最高（仅次于显式参数）。校验在最后执行。
 //!
 //! [doc-14 阶段1] [agent-core/08]
 
-use std::{path::PathBuf, sync::Arc};
+#[cfg(all(not(test), not(target_os = "macos")))]
+use std::sync::LazyLock;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use hermes_config::Config;
 use r_code_agent_worker::AgentPromptPolicy;
 use r_code_core::error::ProductError;
-#[cfg(not(test))]
+#[cfg(all(not(test), target_os = "macos"))]
+use r_code_core::secret::EncryptedFileSecretStore;
+#[cfg(all(not(test), not(target_os = "macos")))]
 use r_code_core::secret::SecretStore;
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_os = "macos")))]
 const SECRET_SERVICE: &str = "r-code";
 const AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
 const MAX_AGENT_PROMPT_CHARS: usize = 20_000;
@@ -29,11 +38,73 @@ trait ProviderCredentialBackend: Send + Sync {
     fn delete(&self, provider: &str) -> Result<(), ProductError>;
 }
 
-#[cfg(not(test))]
+/// Keep credentials that were already resolved in process memory.
+///
+/// Runtime configuration is intentionally reconstructed at several product boundaries (settings,
+/// task launch, model discovery, MCP host startup). Going back to the platform credential backend at
+/// every boundary is unnecessary. The cache also coalesces concurrent first reads by holding its
+/// lock across the blocking platform call. Values are never logged or written to the config file.
+struct CachedProviderCredentialBackend {
+    inner: Arc<dyn ProviderCredentialBackend>,
+    values: Mutex<HashMap<String, Option<String>>>,
+}
+
+impl CachedProviderCredentialBackend {
+    fn new(inner: Arc<dyn ProviderCredentialBackend>) -> Self {
+        Self {
+            inner,
+            values: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn values(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<String>>> {
+        self.values
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl ProviderCredentialBackend for CachedProviderCredentialBackend {
+    fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
+        let mut values = self.values();
+        if values
+            .get(provider)
+            .and_then(Option::as_deref)
+            .is_some_and(|stored| stored == value)
+        {
+            return Ok(());
+        }
+        self.inner.set(provider, value)?;
+        values.insert(provider.to_string(), Some(value.to_string()));
+        Ok(())
+    }
+
+    fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
+        let mut values = self.values();
+        if let Some(value) = values.get(provider) {
+            return Ok(value.clone());
+        }
+        let value = self.inner.get(provider)?;
+        values.insert(provider.to_string(), value.clone());
+        Ok(value)
+    }
+
+    fn delete(&self, provider: &str) -> Result<(), ProductError> {
+        let mut values = self.values();
+        if matches!(values.get(provider), Some(None)) {
+            return Ok(());
+        }
+        self.inner.delete(provider)?;
+        values.insert(provider.to_string(), None);
+        Ok(())
+    }
+}
+
+#[cfg(all(not(test), not(target_os = "macos")))]
 #[derive(Default)]
 struct OsProviderCredentialBackend;
 
-#[cfg(not(test))]
+#[cfg(all(not(test), not(target_os = "macos")))]
 impl ProviderCredentialBackend for OsProviderCredentialBackend {
     fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
         SecretStore::new(SECRET_SERVICE).store(&SettingsService::secret_key(provider), value)
@@ -48,10 +119,38 @@ impl ProviderCredentialBackend for OsProviderCredentialBackend {
     }
 }
 
+#[cfg(all(not(test), not(target_os = "macos")))]
+static OS_PROVIDER_CREDENTIALS: LazyLock<Arc<dyn ProviderCredentialBackend>> =
+    LazyLock::new(|| {
+        Arc::new(CachedProviderCredentialBackend::new(Arc::new(
+            OsProviderCredentialBackend,
+        )))
+    });
+
+#[cfg(all(not(test), target_os = "macos"))]
+struct MacFileProviderCredentialBackend {
+    store: EncryptedFileSecretStore,
+}
+
+#[cfg(all(not(test), target_os = "macos"))]
+impl ProviderCredentialBackend for MacFileProviderCredentialBackend {
+    fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
+        self.store
+            .store(&SettingsService::secret_key(provider), value)
+    }
+
+    fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
+        self.store.get(&SettingsService::secret_key(provider))
+    }
+
+    fn delete(&self, provider: &str) -> Result<(), ProductError> {
+        self.store.delete(&SettingsService::secret_key(provider))
+    }
+}
+
 // Settings unit tests must not mutate a developer or runner's real credential store.
-// SecretStore owns the target-gated native-backend round-trip test; these tests use a
-// process-local backend namespaced by config directory so parallel states do not see
-// each other's provider credentials.
+// Platform credential backends own their integration tests; settings tests use a process-local
+// backend namespaced by config directory so parallel states do not see each other's credentials.
 #[cfg(test)]
 static TEST_PROVIDER_CREDENTIALS: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<(PathBuf, String), String>>,
@@ -104,8 +203,14 @@ pub struct SettingsService {
 impl SettingsService {
     /// 创建设置服务，`config_dir` 为全局配置目录。
     pub fn new(config_dir: PathBuf) -> Self {
-        #[cfg(not(test))]
-        let credentials: Arc<dyn ProviderCredentialBackend> = Arc::new(OsProviderCredentialBackend);
+        #[cfg(all(not(test), not(target_os = "macos")))]
+        let credentials = OS_PROVIDER_CREDENTIALS.clone();
+        #[cfg(all(not(test), target_os = "macos"))]
+        let credentials: Arc<dyn ProviderCredentialBackend> = Arc::new(
+            CachedProviderCredentialBackend::new(Arc::new(MacFileProviderCredentialBackend {
+                store: EncryptedFileSecretStore::new(config_dir.clone()),
+            })),
+        );
         #[cfg(test)]
         let credentials: Arc<dyn ProviderCredentialBackend> =
             Arc::new(TestProviderCredentialBackend {
@@ -200,8 +305,11 @@ impl SettingsService {
         } else {
             Config::default()
         };
-        self.hydrate_secrets(&mut config)?;
+        // Environment credentials have the highest runtime priority. Apply them before the
+        // persisted-credential fallback so an explicitly supplied key never causes an unnecessary
+        // platform store read.
         apply_env(&mut config);
+        self.hydrate_secrets(&mut config)?;
         Ok(config)
     }
 
@@ -242,11 +350,12 @@ impl SettingsService {
         let mut config: Config = toml::from_str(&merged_str)
             .map_err(|e| ProductError::ConfigError(format!("deserialize merged: {e}")))?;
 
-        // 4. OS 密钥链填充文件中被刻意留空的 api_key。
-        self.hydrate_secrets(&mut config)?;
-
-        // 5. 环境变量覆盖（最高优先级，仅次于显式参数）
+        // 4. 环境变量覆盖（最高优先级，仅次于显式参数）。先应用环境凭据可避免
+        // 已明确提供 key 时仍访问持久化凭据。
         apply_env(&mut config);
+
+        // 5. 平台凭据后端只填充仍为空的 api_key。
+        self.hydrate_secrets(&mut config)?;
 
         // 6. 校验
         Self::validate(&config)?;
@@ -255,12 +364,17 @@ impl SettingsService {
 
     /// 保存全局配置到 `config_dir/config.toml`（TOML）。
     ///
-    /// API key 始终剥离，凭据只由 Windows Credential Manager / OS keychain 保存。
+    /// API key 始终剥离；macOS 写入本地加密文件，其他平台写入系统凭据库。
     pub fn save_global(&self, config: &Config) -> Result<(), ProductError> {
-        // 先写入系统凭据库，再落无密钥的 TOML。顺序不能反过来，否则 keychain
-        // 失败时会把用户唯一的凭据静默抹掉。
+        // 先写入平台凭据后端，再落无密钥的 TOML。顺序不能反过来，否则持久化
+        // 失败时会把用户唯一的凭据静默抹掉。环境变量只影响本次进程，不应被复制落盘。
         for (name, provider) in &config.providers {
             if !provider.api_key.trim().is_empty() {
+                if provider_env_value(name, provider.provider_kind.as_deref()).as_deref()
+                    == Some(provider.api_key.as_str())
+                {
+                    continue;
+                }
                 self.set_provider_secret(name, &provider.api_key)?;
             }
         }
@@ -271,7 +385,7 @@ impl SettingsService {
         self.write_global(&sanitized)
     }
 
-    /// 将 Provider API key 写入 OS keychain。空值代表删除已有凭据。
+    /// 持久化 Provider API key。macOS 使用本地 AEAD 文件；空值代表删除已有凭据。
     pub fn set_provider_secret(&self, provider: &str, value: &str) -> Result<(), ProductError> {
         if provider.trim().is_empty() {
             return Err(ProductError::ConfigError(
@@ -290,9 +404,9 @@ impl SettingsService {
         self.credentials.get(provider)
     }
 
-    /// 将旧版 TOML 中的明文 api_key 迁移至 OS keychain。
+    /// 将旧版 TOML 中的明文 api_key 迁移至当前平台凭据后端。
     ///
-    /// 返回迁移条数。调用方可选择把 keychain 不可用作为软错误处理，避免阻塞应用
+    /// 返回迁移条数。调用方可选择把凭据后端不可用作为软错误处理，避免阻塞应用
     /// 启动；迁移成功后 TOML 会立即改写为无密钥版本。
     pub fn migrate_legacy_provider_secrets(&self) -> Result<usize, ProductError> {
         let path = self.config_path();
@@ -385,21 +499,58 @@ impl SettingsService {
     }
 }
 
-/// 环境变量覆盖（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`）。
-///
-/// 仅修改已存在的 provider 条目（与 `hermes_config::Config::apply_env` 语义一致）。
-fn apply_env(config: &mut Config) {
-    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
-        config
-            .providers
-            .entry("anthropic".into())
-            .and_modify(|p| p.api_key = key.clone());
+fn provider_env_name(name: &str) -> Option<String> {
+    let mut normalized = String::with_capacity(name.len());
+    let mut previous_underscore = false;
+    for ch in name.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            previous_underscore = false;
+            ch.to_ascii_uppercase()
+        } else if previous_underscore {
+            continue;
+        } else {
+            previous_underscore = true;
+            '_'
+        };
+        normalized.push(next);
     }
-    if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-        config
-            .providers
-            .entry("openai".into())
-            .and_modify(|p| p.api_key = key.clone());
+    let normalized = normalized.trim_matches('_');
+    (!normalized.is_empty()).then(|| format!("R_CODE_PROVIDER_{normalized}_API_KEY"))
+}
+
+/// Resolve an explicit environment credential for one saved provider profile.
+///
+/// The profile-scoped variable has highest priority and works for every custom profile. Common
+/// vendor variables remain convenient aliases and follow the stable `provider_kind`, so renaming a
+/// DeepSeek profile does not unexpectedly make `DEEPSEEK_API_KEY` stop working.
+pub(crate) fn provider_env_value(name: &str, provider_kind: Option<&str>) -> Option<String> {
+    if let Some(variable) = provider_env_name(name) {
+        if let Ok(value) = std::env::var(variable) {
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+    }
+
+    let kind = provider_kind.unwrap_or(name).trim().to_ascii_lowercase();
+    let variable = match kind.as_str() {
+        "anthropic" => "ANTHROPIC_API_KEY",
+        "openai" => "OPENAI_API_KEY",
+        "deepseek" | "deepseek_anthropic" => "DEEPSEEK_API_KEY",
+        _ => return None,
+    };
+    std::env::var(variable)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// Environment credentials override persisted credentials without touching the platform store.
+/// Only existing provider entries are modified.
+fn apply_env(config: &mut Config) {
+    for (name, provider) in &mut config.providers {
+        if let Some(key) = provider_env_value(name, provider.provider_kind.as_deref()) {
+            provider.api_key = key;
+        }
     }
 }
 
@@ -432,11 +583,52 @@ mod tests {
     use super::*;
     use hermes_config::ProviderConfig;
     use std::path::Path;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
 
     // 环境变量是进程级全局状态，多个测试并行操作会竞态；用锁串行化所有
     // 设置测试（它们都调用 apply_env，会读取 ANTHROPIC_API_KEY）。
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Default)]
+    struct CountingCredentials {
+        values: Mutex<HashMap<String, String>>,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
+        deletes: AtomicUsize,
+    }
+
+    impl ProviderCredentialBackend for CountingCredentials {
+        fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+            self.values
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(provider.to_string(), value.to_string());
+            Ok(())
+        }
+
+        fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            Ok(self
+                .values
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(provider)
+                .cloned())
+        }
+
+        fn delete(&self, provider: &str) -> Result<(), ProductError> {
+            self.deletes.fetch_add(1, Ordering::Relaxed);
+            self.values
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(provider);
+            Ok(())
+        }
+    }
 
     fn lock_env() -> std::sync::MutexGuard<'static, ()> {
         ENV_LOCK
@@ -453,8 +645,133 @@ mod tests {
             temperature: None,
             protocol: None,
             provider_kind: None,
-            show_reasoning: true,
+            show_reasoning: false,
         }
+    }
+
+    #[test]
+    fn process_credential_cache_reads_and_writes_each_value_once() {
+        let inner = Arc::new(CountingCredentials::default());
+        let cached = CachedProviderCredentialBackend::new(inner.clone());
+
+        assert_eq!(cached.get("deepseek").unwrap(), None);
+        assert_eq!(cached.get("deepseek").unwrap(), None);
+        assert_eq!(inner.reads.load(Ordering::Relaxed), 1);
+
+        cached.set("deepseek", "sentinel-secret").unwrap();
+        cached.set("deepseek", "sentinel-secret").unwrap();
+        assert_eq!(inner.writes.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            cached.get("deepseek").unwrap().as_deref(),
+            Some("sentinel-secret")
+        );
+        assert_eq!(inner.reads.load(Ordering::Relaxed), 1);
+
+        cached.delete("deepseek").unwrap();
+        cached.delete("deepseek").unwrap();
+        assert_eq!(inner.deletes.load(Ordering::Relaxed), 1);
+        assert_eq!(cached.get("deepseek").unwrap(), None);
+        assert_eq!(inner.reads.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn environment_credentials_skip_platform_credential_lookup() {
+        let _guard = lock_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "sentinel-env-secret");
+
+        let result = {
+            let tmp = tempfile::tempdir().unwrap();
+            let inner = Arc::new(CountingCredentials::default());
+            let service = SettingsService {
+                config_dir: tmp.path().to_path_buf(),
+                credentials: Arc::new(CachedProviderCredentialBackend::new(inner.clone())),
+            };
+            let mut config = Config::default();
+            config
+                .providers
+                .insert("anthropic".to_string(), valid_provider(""));
+            service.write_global(&config).unwrap();
+            let loaded = service.load_global_unvalidated();
+            (loaded, inner.reads.load(Ordering::Relaxed))
+        };
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        let (loaded, reads) = result;
+        assert_eq!(
+            loaded.unwrap().providers["anthropic"].api_key,
+            "sentinel-env-secret"
+        );
+        assert_eq!(reads, 0);
+    }
+
+    #[test]
+    fn environment_credentials_are_not_copied_into_persistent_store_on_save() {
+        let _guard = lock_env();
+        std::env::set_var("ANTHROPIC_API_KEY", "sentinel-env-only-secret");
+
+        let result = {
+            let tmp = tempfile::tempdir().unwrap();
+            let inner = Arc::new(CountingCredentials::default());
+            let service = SettingsService {
+                config_dir: tmp.path().to_path_buf(),
+                credentials: Arc::new(CachedProviderCredentialBackend::new(inner.clone())),
+            };
+            let mut config = Config::default();
+            let mut provider = valid_provider("sentinel-env-only-secret");
+            provider.provider_kind = Some("anthropic".to_string());
+            config.providers.insert("anthropic".to_string(), provider);
+            let saved = service.save_global(&config);
+            (saved, inner.writes.load(Ordering::Relaxed))
+        };
+
+        std::env::remove_var("ANTHROPIC_API_KEY");
+        assert!(result.0.is_ok());
+        assert_eq!(result.1, 0);
+    }
+
+    #[test]
+    fn deepseek_and_profile_scoped_environment_credentials_skip_platform_lookup() {
+        let _guard = lock_env();
+        std::env::set_var("DEEPSEEK_API_KEY", "sentinel-deepseek-secret");
+        std::env::set_var(
+            "R_CODE_PROVIDER_DEEPSEEK_WORK_API_KEY",
+            "sentinel-profile-secret",
+        );
+
+        let result = {
+            let tmp = tempfile::tempdir().unwrap();
+            let inner = Arc::new(CountingCredentials::default());
+            let service = SettingsService {
+                config_dir: tmp.path().to_path_buf(),
+                credentials: Arc::new(CachedProviderCredentialBackend::new(inner.clone())),
+            };
+            let mut config = Config::default();
+            let mut vendor = valid_provider("");
+            vendor.provider_kind = Some("deepseek".to_string());
+            let mut profile = valid_provider("");
+            profile.provider_kind = Some("deepseek".to_string());
+            config.providers.insert("deepseek".to_string(), vendor);
+            config
+                .providers
+                .insert("DeepSeek Work".to_string(), profile);
+            service.write_global(&config).unwrap();
+            let loaded = service.load_global_unvalidated();
+            (loaded, inner.reads.load(Ordering::Relaxed))
+        };
+
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        std::env::remove_var("R_CODE_PROVIDER_DEEPSEEK_WORK_API_KEY");
+        let (loaded, reads) = result;
+        let loaded = loaded.unwrap();
+        assert_eq!(
+            loaded.providers["deepseek"].api_key,
+            "sentinel-deepseek-secret"
+        );
+        assert_eq!(
+            loaded.providers["DeepSeek Work"].api_key,
+            "sentinel-profile-secret"
+        );
+        assert_eq!(reads, 0);
     }
 
     /// 写入一份合法的全局配置到 `dir/config.toml`，返回其路径。

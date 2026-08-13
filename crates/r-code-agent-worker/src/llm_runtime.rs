@@ -47,6 +47,8 @@ use crate::runtime::{AgentRuntime, SteerResult};
 /// 工具密集任务的阶段性综合间隔。它只触发软提醒，不会终止运行。
 const TOOL_PROGRESS_CHECKPOINT_INTERVAL: usize = 24;
 const MAX_REQUIRED_CONTINUATION_REPROMPTS: usize = 3;
+const FINAL_SUMMARY_RECOVERY_PROMPT: &str = "[system] The previous model turn ended without a visible assistant answer after tool execution. This is the single final-summary recovery attempt. Do not call tools. Based only on the conversation and recorded tool results, provide a concise user-facing final summary of what was changed, what was verified, and any remaining risks. Do not claim work or verification that is not present in the recorded evidence.";
+const FINAL_SUMMARY_RECOVERY_FAILED: &str = "工具已经执行，但模型在一次恢复尝试后仍未生成最终总结。运行未完整成功；工作区若有修改，将保留并进入审核。";
 /// 同一主运行并行执行的子代理上限。
 const MAX_PARALLEL_SUBAGENTS: usize = 3;
 /// 单次主运行可委派的子代理总量上限，防止模型无限排队占用资源。
@@ -781,7 +783,9 @@ impl LlmAgentRuntime {
             external_tools: None,
             max_tokens: max_tokens.unwrap_or(8192),
             temperature,
-            show_reasoning: true,
+            // Raw provider reasoning is opt-in. Answers and tool activity remain visible,
+            // while model-internal notes do not leak into a new profile by default.
+            show_reasoning: false,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             event_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
@@ -1858,6 +1862,8 @@ async fn run_loop(ctx: RunLoopCtx) {
     let mut tool_iterations = 0usize;
     let mut quality_rounds = 0u8;
     let mut continuation_reprompts = 0usize;
+    let mut summary_recovery_attempted = false;
+    let mut summary_recovery_pending = false;
 
     // P0-A：system 是稳定常量——run 开始时构建一次并冻结复用，保证同 run 内
     // 连续工具回合的 system 字节完全一致。workspace attach/detach 是合法缓存
@@ -1889,6 +1895,7 @@ async fn run_loop(ctx: RunLoopCtx) {
         if ctx.abort.load(Ordering::Relaxed) {
             break;
         }
+        let summary_only = std::mem::take(&mut summary_recovery_pending);
 
         // 在 session 锁内同时取走 steer 与工作集。后续的结束判断也在同一把锁内
         // 检查队列，确保 steer 不会落在“检查为空”和“标记完成”之间而丢失。
@@ -1951,7 +1958,8 @@ async fn run_loop(ctx: RunLoopCtx) {
         // Task context is refreshed by the host before each send. Reading it for every iteration
         // lets a cached session change mode/context without replacing protocol history.
         let policy = tool_policy_for_task_mode(mode);
-        let delegation_allowed = ctx.workspace_scope.is_some()
+        let delegation_allowed = !summary_only
+            && ctx.workspace_scope.is_some()
             && mode != TaskMode::Plan
             && !ctx.delegation_disabled.load(Ordering::SeqCst)
             && delegation_directive(&messages) != DelegationDirective::Disabled;
@@ -1969,7 +1977,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             suspension_gate: ctx.suspension_gate.clone(),
             continuation_gate: ctx.continuation_gate.clone(),
         };
-        let tools = client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools);
+        let tools = if summary_only {
+            Vec::new()
+        } else {
+            client_tools_for_hosted_tools(tool_host.tool_specs(), &ctx.hosted_tools)
+        };
         let tools_json_len = serde_json::to_string(&tools)
             .map(|json| json.len())
             .unwrap_or(0);
@@ -2091,6 +2103,9 @@ async fn run_loop(ctx: RunLoopCtx) {
         ) {
             tail_injections.push(hint);
         }
+        if summary_only {
+            tail_injections.push(Message::user_text(FINAL_SUMMARY_RECOVERY_PROMPT));
+        }
         let mut request_messages = Vec::with_capacity(
             messages.len() + tail_injections.len() + usize::from(memory_message.is_some()),
         );
@@ -2105,7 +2120,11 @@ async fn run_loop(ctx: RunLoopCtx) {
             system: Some(system_prompt.clone()),
             messages: Vec::new(), // 由 run_agent_loop_iteration 同步
             tools: Vec::new(),    // 同上
-            hosted_tools: ctx.hosted_tools.clone(),
+            hosted_tools: if summary_only {
+                Vec::new()
+            } else {
+                ctx.hosted_tools.clone()
+            },
             max_tokens: ctx.max_tokens,
             temperature: ctx.temperature,
             // 纯聊天没有长系统提示或工具定义可复用，关闭缓存可避免部分兼容接口
@@ -2164,6 +2183,7 @@ async fn run_loop(ctx: RunLoopCtx) {
                     authoritative_plan_view_from_tool_metadata(&outcome.tool_metadata);
                 let suspended_for_user = ctx.suspension_gate.load(Ordering::SeqCst);
                 let continuation_required = ctx.continuation_gate.load(Ordering::SeqCst);
+                let hosted_summary_recovery = outcome.requires_final_summary_recovery;
                 let mut forced_continuation = false;
                 let should_continue = {
                     let mut sessions = ctx.sessions.lock().await;
@@ -2197,6 +2217,8 @@ async fn run_loop(ctx: RunLoopCtx) {
                     if suspended_for_user || ctx.abort.load(Ordering::Relaxed) {
                         session.accepting_steer = false;
                         false
+                    } else if hosted_summary_recovery && !summary_recovery_attempted {
+                        true
                     } else if outcome.had_tool_call {
                         true
                     } else if !session.steer_queue.is_empty() {
@@ -2224,6 +2246,21 @@ async fn run_loop(ctx: RunLoopCtx) {
                 // any subsequent provider request, child collection or quality-review pass.
                 if suspended_for_user {
                     break;
+                }
+
+                if hosted_summary_recovery {
+                    if summary_recovery_attempted {
+                        terminal_err = Some(FINAL_SUMMARY_RECOVERY_FAILED.to_string());
+                        break;
+                    }
+                    summary_recovery_attempted = true;
+                    summary_recovery_pending = true;
+                    emit_activity(
+                        &ctx.event_tx,
+                        AgentActivityPhase::Requesting,
+                        Some("托管工具已完成，正在进行一次无工具总结恢复…".to_string()),
+                    );
+                    continue;
                 }
 
                 if !should_continue {
@@ -2359,7 +2396,28 @@ Do not mention private reasoning.\n\n{}",
             }
             Err(e) => {
                 tracing::warn!(session_id = %ctx.session_id, "agent loop iteration failed: {e}");
-                terminal_err = Some(user_facing_provider_error(&e.to_string()));
+                let empty_final = matches!(&e, ProductError::EmptyAssistantResponse);
+                let can_recover_summary = empty_final
+                    && tool_iterations > 0
+                    && !summary_recovery_attempted
+                    && !ctx.abort.load(Ordering::Relaxed)
+                    && !ctx.suspension_gate.load(Ordering::SeqCst)
+                    && !ctx.continuation_gate.load(Ordering::SeqCst);
+                if can_recover_summary {
+                    summary_recovery_attempted = true;
+                    summary_recovery_pending = true;
+                    emit_activity(
+                        &ctx.event_tx,
+                        AgentActivityPhase::Requesting,
+                        Some("模型未生成最终总结，正在进行一次无工具恢复…".to_string()),
+                    );
+                    continue;
+                }
+                terminal_err = Some(if empty_final && summary_recovery_attempted {
+                    FINAL_SUMMARY_RECOVERY_FAILED.to_string()
+                } else {
+                    user_facing_provider_error(&e.to_string())
+                });
                 break;
             }
         }
@@ -4608,6 +4666,10 @@ mod tests {
         calls: Arc<AtomicUsize>,
     }
 
+    struct SuccessfulPlanUpdateTool {
+        calls: Arc<AtomicUsize>,
+    }
+
     #[async_trait]
     impl Tool for SuspendTool {
         fn name(&self) -> &str {
@@ -4697,6 +4759,50 @@ mod tests {
                     r#"{"active_feature":null}"#,
                 ))
             }
+        }
+    }
+
+    #[async_trait]
+    impl Tool for SuccessfulPlanUpdateTool {
+        fn name(&self) -> &str {
+            "plan_item_update"
+        }
+
+        fn description(&self) -> &str {
+            "Record a successful test tool call"
+        }
+
+        fn risk_level(&self) -> RiskLevel {
+            RiskLevel::R0
+        }
+
+        fn path_bindings(&self) -> &'static [PathBinding] {
+            &[]
+        }
+
+        fn requires_workspace_scope(&self) -> bool {
+            false
+        }
+
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type": "object"})
+        }
+
+        async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+            Err(ProductError::Other(
+                "trusted execution context required".to_string(),
+            ))
+        }
+
+        async fn execute_with_context(
+            &self,
+            _input: serde_json::Value,
+            _context: &ToolExecutionContext,
+        ) -> Result<ToolExecutionResult, ProductError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ToolExecutionResult::allow_agent_completion(
+                r#"{"active_feature":null}"#,
+            ))
         }
     }
 
@@ -5573,6 +5679,301 @@ mod tests {
         assert!(!events.iter().any(|event| matches!(
             event,
             AgentEvent::Message { text, .. } if text.contains("must not be delivered")
+        )));
+    }
+
+    #[tokio::test]
+    async fn hosted_tool_without_text_gets_exactly_one_tool_free_summary_request() {
+        let requests = Arc::new(StdMutex::new(Vec::new()));
+        let provider = DelayedProvider::new(
+            vec![
+                (
+                    false,
+                    vec![
+                        StreamEvent::HostedToolUse {
+                            id: "hosted-search".to_string(),
+                            name: "web_search".to_string(),
+                            input: serde_json::json!({"query": "Rust"}),
+                            provider_content: Some(serde_json::json!({
+                                "type": "server_tool_use",
+                                "id": "hosted-search",
+                                "name": "web_search",
+                                "input": {"query": "Rust"},
+                            })),
+                        },
+                        StreamEvent::HostedToolResult {
+                            id: "hosted-search".to_string(),
+                            name: "web_search".to_string(),
+                            output: serde_json::json!({"sources": [{"url": "https://www.rust-lang.org"}]}),
+                            is_error: false,
+                            provider_content: Some(serde_json::json!({
+                                "type": "web_search_tool_result",
+                                "tool_use_id": "hosted-search",
+                                "content": [{"type": "web_search_result", "url": "https://www.rust-lang.org"}],
+                            })),
+                        },
+                        StreamEvent::Stop {
+                            reason: StopReason::EndTurn,
+                        },
+                    ],
+                ),
+                (
+                    false,
+                    vec![
+                        StreamEvent::TextDelta {
+                            text: "已根据托管搜索结果完成总结。".to_string(),
+                        },
+                        StreamEvent::Stop {
+                            reason: StopReason::EndTurn,
+                        },
+                    ],
+                ),
+            ],
+            Arc::new(Notify::new()),
+            requests.clone(),
+        );
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        )
+        .with_hosted_tools(vec![HostedToolSpec::web_search()]);
+        let session = runtime.create_session(input()).await.unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "搜索并总结")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(!runtime.is_running());
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity { detail: Some(detail), .. }
+                if detail.contains("托管工具已完成")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, .. } if text.contains("托管搜索结果完成总结")
+        )));
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "hosted recovery must run exactly once");
+        assert!(!requests[0].hosted_tools.is_empty());
+        assert!(requests[1].tools.is_empty());
+        assert!(requests[1].hosted_tools.is_empty());
+        assert!(requests[1]
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|block| matches!(
+                block,
+                ContentBlock::Custom { type_name, .. }
+                    if type_name == "web_search_tool_result"
+            )));
+        assert!(requests[1].messages.iter().any(|message| message
+            .text_content()
+            .contains("single final-summary recovery")));
+    }
+
+    #[tokio::test]
+    async fn successful_tool_then_empty_final_gets_one_summary_only_recovery() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "successful-update".to_string(),
+                name: "plan_item_update".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "successful-update".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::EndTurn,
+        }]));
+        provider.push_text_turn(
+            "已恢复最终总结：修改与验证均以工具结果为准。",
+            hermes_core::Usage::default(),
+        );
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(PermissionEngine::new());
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(SuccessfulPlanUpdateTool {
+            calls: calls.clone(),
+        }));
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            Arc::new(gateway),
+            None,
+            None,
+        );
+        let mut auto_input = input();
+        auto_input.mode = TaskMode::Auto;
+        let session = runtime.create_session(auto_input).await.unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "执行修改")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(!runtime.is_running());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity { detail: Some(detail), .. }
+                if detail.contains("一次无工具恢复")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, .. } if text.contains("已恢复最终总结")
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, delta: false } if text.starts_with("[error]")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn failed_summary_recovery_remains_an_explicit_runtime_failure() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "successful-update".to_string(),
+                name: "plan_item_update".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "successful-update".to_string(),
+                input: serde_json::json!({}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        for _ in 0..2 {
+            provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            }]));
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let engine = Arc::new(PermissionEngine::new());
+        let mut gateway = ToolGateway::new(engine);
+        gateway.register(Box::new(SuccessfulPlanUpdateTool {
+            calls: calls.clone(),
+        }));
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            Arc::new(gateway),
+            None,
+            None,
+        );
+        let mut auto_input = input();
+        auto_input.mode = TaskMode::Auto;
+        let session = runtime.create_session(auto_input).await.unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "执行修改")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(!runtime.is_running());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let events = runtime.poll_events().await.unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, delta: false }
+                if text.contains("一次恢复尝试后仍未生成最终总结")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::Interrupted
+            }
+        )));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::ReviewReady
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn empty_final_without_tools_is_not_recovered_or_reported_as_success() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::EndTurn,
+        }]));
+        let mut runtime = LlmAgentRuntime::new(
+            Box::new(provider),
+            "mock-model".into(),
+            test_gateway(),
+            None,
+            None,
+        );
+        let session = runtime.create_session(input()).await.unwrap();
+
+        runtime
+            .start_run(&session.meta.id, "只回答问题")
+            .await
+            .unwrap();
+        for _ in 0..100 {
+            if !runtime.is_running() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        assert!(!runtime.is_running());
+        let events = runtime.poll_events().await.unwrap();
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Activity { detail: Some(detail), .. }
+                if detail.contains("无工具恢复")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Message { text, delta: false }
+                if text.contains("模型服务未返回可显示内容")
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::State {
+                state: TaskState::Interrupted
+            }
         )));
     }
 
@@ -8880,6 +9281,7 @@ mod compaction_tests {
             tool_metadata: Vec::new(),
             usage: Usage::new(1_234, 56),
             appended_messages: Vec::new(),
+            requires_final_summary_recovery: false,
         };
         assert!(outcome.had_tool_call);
         assert_eq!(outcome.usage.input_tokens, 1_234);

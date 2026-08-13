@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { ErrorBoundary } from "./components/ui/ErrorBoundary";
 import { CodexCliGateProvider } from "./components/codex/CodexCliGate";
+import { CompanionWindow } from "./components/companion/CompanionWindow";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/components.css";
@@ -15,14 +16,21 @@ import "./styles/memory.css";
 import "./styles/workbench.css";
 import "./styles/signature.css";
 import "./styles/onboarding.css";
+import "./styles/companion.css";
+
+const isCompanionWindow = new URLSearchParams(window.location.search).get("window") === "companion";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ErrorBoundary>
-      {/* 全局门禁让所有 Codex 入口共享同一套安装与登录确认。 */}
-      <CodexCliGateProvider>
-        <App />
-      </CodexCliGateProvider>
+      {isCompanionWindow ? (
+        <CompanionWindow />
+      ) : (
+        /* 全局门禁只属于主窗口；独立 companion 不启动完整 App 副作用。 */
+        <CodexCliGateProvider>
+          <App />
+        </CodexCliGateProvider>
+      )}
     </ErrorBoundary>
   </React.StrictMode>
 );

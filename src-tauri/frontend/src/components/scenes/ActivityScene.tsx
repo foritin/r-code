@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { elapsedMinutes } from "../../lib/format";
 import {
   isTaskLive,
+  reviewAttentionDescription,
   sortTasksByUrgency,
   taskActivity,
   taskStateLabel,
@@ -100,7 +101,7 @@ function ActivityNeedRow({ item }: { item: NeedsYouItem }) {
   const detail = details[item.task.id];
   const description = item.kind === "permission"
     ? `等待授权 · ${item.permission!.tool_name}`
-    : `${detail?.changes.length ?? 0} 个文件等待审核`;
+    : reviewAttentionDescription(detail);
 
   return (
     <button className="activity-need-row" onClick={() => openRoom(item.task.id, item.kind === "review_ready" ? "review" : undefined)}>

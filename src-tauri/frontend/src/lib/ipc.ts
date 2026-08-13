@@ -72,6 +72,7 @@ import type {
   PlanRejectResult,
   PlanReviewDecision,
   PlanView,
+  PlatformCapabilities,
   UpdatePlanItemInput,
 } from "./types";
 import {
@@ -149,6 +150,7 @@ async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<
 // ---------- 系统 ----------
 export const ping = () => ipc<boolean>("ping");
 export const appQuit = () => ipc<void>("cmd_app_quit");
+export const platformCapabilities = () => ipc<PlatformCapabilities>("cmd_platform_capabilities");
 
 // ---------- 任务 ----------
 export const taskCreate = (
@@ -182,6 +184,10 @@ export const taskDelete = (taskId: string) =>
 
 export const taskSetWorkspace = (taskId: string, workspacePath: string | null) =>
   ipc<Task>("cmd_task_set_workspace", { taskId, workspacePath });
+
+/** Native folder picker plus one-time task binding; cancellation returns null without side effects. */
+export const taskChooseWorkspace = (taskId: string) =>
+  ipc<Task | null>("cmd_task_choose_workspace", { taskId });
 
 export const taskSetProvider = (taskId: string, providerName: string) =>
   ipc<Task>("cmd_task_set_provider", { taskId, providerName });

@@ -645,6 +645,10 @@
   display: none;
 }
 
+#app.r-code-signature.scene-room .room-scopebar.needs-workspace {
+  display: flex;
+}
+
 #app.r-code-signature .room-conversation-head,
 #app.r-code-signature .workbench-head {
   border-bottom-color: color-mix(in srgb, var(--fg) 7%, transparent);

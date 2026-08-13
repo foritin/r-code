@@ -1411,6 +1411,113 @@ fn restart_preserves_one_staged_implementation_message_for_startup_drain() {
 }
 
 #[test]
+fn plan_feature_continuations_are_unique_while_pending_and_repeatable_after_delivery() {
+    let fixture = Fixture::in_memory("Continue active feature safely");
+    let created = fixture.create_plan();
+    let ready = publish(
+        &fixture.store,
+        &fixture.task.id,
+        &created.plan.id,
+        created.plan.revision,
+        vec![item("feature", "Feature", &[])],
+    );
+    let approved = fixture
+        .store
+        .approve_plan(
+            &fixture.task.id,
+            &ApprovePlanInput {
+                plan_id: ready.plan.id.clone(),
+                expected_revision: ready.plan.revision,
+            },
+        )
+        .unwrap();
+    let branch = SessionBranchRepository::new(&fixture.db)
+        .ensure_active(&fixture.task.id)
+        .unwrap();
+    fixture
+        .store
+        .claim_implementation_dispatch(&fixture.task.id, &approved.plan.id)
+        .unwrap()
+        .unwrap();
+    let staged = fixture
+        .store
+        .stage_implementation_dispatch(
+            &fixture.task.id,
+            &approved.plan.id,
+            &branch.id,
+            "Implement Feature",
+        )
+        .unwrap();
+    QueuedMessageRepository::new(&fixture.db)
+        .set_state(
+            staged
+                .plan
+                .implementation_queue_message_id
+                .as_deref()
+                .unwrap(),
+            QueuedMessageState::Sent,
+        )
+        .unwrap();
+
+    TaskRepository::new(&fixture.db)
+        .update_state(&fixture.task.id, TaskState::Interrupted)
+        .unwrap();
+    let continuation = "Continue Feature without resetting progress";
+    for _ in 0..2 {
+        fixture
+            .store
+            .stage_implementation_continuation(
+                &fixture.task.id,
+                &approved.plan.id,
+                &branch.id,
+                "feature",
+                continuation,
+            )
+            .unwrap();
+    }
+    let pending = QueuedMessageRepository::new(&fixture.db)
+        .list_pending(&fixture.task.id, &branch.id)
+        .unwrap();
+    assert_eq!(pending.len(), 1, "double retry must reuse one pending row");
+    let first_continuation_id = pending[0].id.clone();
+    assert!(first_continuation_id
+        .starts_with(&format!("plan-continuation:{}:feature:", approved.plan.id)));
+    QueuedMessageRepository::new(&fixture.db)
+        .set_state(&first_continuation_id, QueuedMessageState::Sent)
+        .unwrap();
+
+    TaskRepository::new(&fixture.db)
+        .update_state(&fixture.task.id, TaskState::ReviewReady)
+        .unwrap();
+    fixture
+        .store
+        .stage_implementation_continuation(
+            &fixture.task.id,
+            &approved.plan.id,
+            &branch.id,
+            "feature",
+            continuation,
+        )
+        .unwrap();
+    let pending = QueuedMessageRepository::new(&fixture.db)
+        .list_pending(&fixture.task.id, &branch.id)
+        .unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_ne!(pending[0].id, first_continuation_id);
+    let continuation_count: i64 = fixture
+        .db
+        .conn()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM queued_messages WHERE id LIKE ?1",
+            [format!("plan-continuation:{}:%", approved.plan.id)],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(continuation_count, 2);
+}
+
+#[test]
 fn failed_implementation_queue_can_rebind_to_the_new_active_branch_without_duplicates() {
     let fixture = Fixture::in_memory("Retry after branch change");
     let created = fixture.create_plan();

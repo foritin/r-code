@@ -21,6 +21,35 @@ const R_CODE_REASONING_EVENT = "r_code_reasoning";
 const R_CODE_REASONING_LABEL = "模型思考";
 // 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。
 const CODEX_REASONING_SUMMARY_PREFIX = "Codex 思考摘要：";
+// A reasoning row can stay before one or more tool rows while later deltas keep arriving. Remember
+// how much activity was already separated for that exact row so each tool boundary contributes at
+// most one paragraph break. WeakMap keeps this rendering-only state out of the persisted contract.
+const reasoningSeparatedTailSize = new WeakMap<object, number>();
+
+function reasoningIndexInCurrentTurn(items: readonly TimelineItem[]): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    // A user or visible assistant message is a semantic turn boundary. Tool and run rows are
+    // deliberately not boundaries: providers commonly split one reasoning segment around tools.
+    if (item.kind === "you" || item.kind === "agent") return -1;
+    if (item.kind === "context" && item.label === R_CODE_REASONING_LABEL) return index;
+  }
+  return -1;
+}
+
+function appendReasoningInCurrentTurn(items: TimelineItem[], detail: string): number {
+  const index = reasoningIndexInCurrentTurn(items);
+  if (index < 0) return -1;
+  const item = items[index];
+  if (item.kind !== "context") return -1;
+  const tailSize = items.length - index - 1;
+  const separatedTailSize = reasoningSeparatedTailSize.get(item) ?? 0;
+  const separatedByActivity = tailSize > separatedTailSize;
+  item.detail = `${item.detail ?? ""}${separatedByActivity ? "\n\n" : ""}${detail}`;
+  if (separatedByActivity) reasoningSeparatedTailSize.set(item, tailSize);
+  item.collapsible = true;
+  return index;
+}
 
 /** 解析 reasoning summary 事件（F15）：新格式为带 kind 的 JSON；旧格式按前缀回退。 */
 export function codexReasoningSummary(detail: string): string | null {
@@ -405,14 +434,16 @@ export function buildTimeline(
         } else if (m.text === R_CODE_REASONING_EVENT) {
           const detail = reasoningEventDetail(m.output_json);
           if (detail) {
-            items.push({
-              kind: "context",
-              id: m.id ? `reasoning-${m.id}` : nid("reasoning"),
-              t: lastT,
-              label: R_CODE_REASONING_LABEL,
-              detail,
-              collapsible: true,
-            });
+            if (appendReasoningInCurrentTurn(items, detail) < 0) {
+              items.push({
+                kind: "context",
+                id: m.id ? `reasoning-${m.id}` : nid("reasoning"),
+                t: lastT,
+                label: R_CODE_REASONING_LABEL,
+                detail,
+                collapsible: true,
+              });
+            }
           }
         } else if (m.text === CODEX_REASONING_SUMMARY_EVENT) {
           const detail = codexReasoningSummaryDetail(m.output_json);
@@ -787,13 +818,9 @@ export function applyAgentEventInPlace(
       const text = ev.text;
       if (!text) return mutation(-1);
       let changedAt = finishStreamingAgents(items);
-      if (last?.kind === "context" && last.label === R_CODE_REASONING_LABEL) {
-        items[items.length - 1] = {
-          ...last,
-          detail: `${last.detail ?? ""}${text}`,
-          collapsible: true,
-        };
-        changedAt = earliest(changedAt, items.length - 1);
+      const existingIndex = appendReasoningInCurrentTurn(items, text);
+      if (existingIndex >= 0) {
+        changedAt = earliest(changedAt, existingIndex);
       } else {
         items.push({
           kind: "context",

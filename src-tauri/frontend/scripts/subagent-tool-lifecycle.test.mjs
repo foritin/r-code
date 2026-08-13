@@ -234,6 +234,19 @@ test("main and child activity use semantic collapsed groups and runtime-specific
       .flatMap((turn) => turn.items)
       .filter((entry) => entry.kind === "tool_group")
       .map((entry) => [entry.groupKind, entry.tools.length]);
+    const narratedTurn = buildTimelineTurns([
+      { kind: "agent", id: "narration-a", t: 1, text: "现在修改文件。", streaming: false },
+      { kind: "agent", id: "file-result", t: 1, text: "已定位 [实现文件](src/main.rs#L2C3)。", streaming: false },
+      timelineTools[0],
+      { kind: "agent", id: "narration-b", t: 2, text: "接着运行验证。", streaming: false },
+      timelineTools[2],
+      { kind: "agent", id: "final-answer", t: 3, text: "修改与验证已完成。", streaming: false },
+    ])[0].items.map((entry) => ({
+      kind: entry.kind,
+      label: entry.kind === "context" ? entry.label : null,
+      detail: entry.kind === "context" ? entry.detail : null,
+      text: entry.kind === "agent" ? entry.text : null,
+    }));
 
     const host = document.createElement("div");
     document.body.append(host);
@@ -269,6 +282,7 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     return {
       childGroups,
       mainGroups,
+      narratedTurn,
       identities,
       activeGroup,
       titles: [
@@ -285,6 +299,16 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     { kind: "tool_group", groupKind: "file", count: 2 },
   ]);
   assert.deepEqual(result.mainGroups, [["lookup", 2], ["command", 2]]);
+  assert.deepEqual(result.narratedTurn.filter((entry) => entry.kind === "context"), [{
+    kind: "context",
+    label: "执行过程说明 · 2 段",
+    detail: "现在修改文件。\n\n接着运行验证。",
+    text: null,
+  }]);
+  assert.deepEqual(
+    result.narratedTurn.filter((entry) => entry.kind === "agent").map((entry) => entry.text),
+    ["已定位 [实现文件](src/main.rs#L2C3)。", "修改与验证已完成。"],
+  );
   assert.deepEqual(result.identities.map(({ runtime, glyph }) => [runtime, glyph]), [
     ["rcode", "rcode"],
     ["codex", "codex"],
