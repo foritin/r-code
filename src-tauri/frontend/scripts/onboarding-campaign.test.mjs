@@ -452,12 +452,42 @@ test("model candidate menu lists every preset model while the input is prefilled
   assert.equal(await trigger.isDisabled(), false);
   await trigger.click();
 
+  const menu = page.getByRole("menu", { name: "候选模型", exact: true });
   const options = page.locator(`[role="menuitemradio"]`);
   await options.first().waitFor({ state: "visible" });
   assert.equal(await options.count(), 2, "both preset candidates must be listed while the input keeps its value");
   for (const name of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
     await page.locator(`[role="menuitemradio"]`, { hasText: name }).waitFor({ state: "visible" });
   }
+
+  // A captured window scroll listener used to re-measure the portal on every wheel
+  // tick. WebView2 then reset the menu's scrollTop to zero, so the scrollbar was
+  // visible but mouse wheels and trackpads could not move a long model list.
+  await menu.evaluate((element) => {
+    const template = element.querySelector('[role="menuitemradio"]');
+    if (!(template instanceof HTMLElement)) throw new Error("model option template missing");
+    for (let index = 0; index < 24; index += 1) {
+      const clone = template.cloneNode(true);
+      if (!(clone instanceof HTMLElement)) continue;
+      clone.textContent = `scroll-regression-model-${index}`;
+      clone.removeAttribute("aria-checked");
+      element.append(clone);
+    }
+  });
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[role="menu"][aria-label="候选模型"]');
+    return element && element.scrollHeight > element.clientHeight;
+  });
+  await menu.hover();
+  await page.mouse.wheel(0, 520);
+  await page.waitForTimeout(150);
+  const scrollMetrics = await menu.evaluate((element) => ({
+    scrollTop: element.scrollTop,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  assert.ok(scrollMetrics.scrollHeight > scrollMetrics.clientHeight, "long model choices must overflow inside the menu");
+  assert.ok(scrollMetrics.scrollTop > 0, "mouse wheel scrolling must persist instead of snapping back to the first model");
 
   await page.locator(`[role="menuitemradio"]`, { hasText: "deepseek-v4-flash" }).click();
   assert.equal(await page.locator("#set-model").inputValue(), "deepseek-v4-flash");

@@ -1,11 +1,13 @@
 /** 会话级 Provider、模型与模型专属推理参数的紧凑配置入口。 */
-import { useMemo, useState } from "react";
-import { taskSetInference, taskSetModel, taskSetProvider } from "../../lib/ipc";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { providerBalance, taskSetInference, taskSetModel, taskSetProvider } from "../../lib/ipc";
 import { useAsyncAction } from "../../lib/hooks";
+import { errText } from "../../lib/format";
 import { rememberModel, resolveActive, type ProviderChoice } from "../../lib/provider";
-import type { InferenceOptions } from "../../lib/types";
+import type { InferenceOptions, ProviderBalanceResponse } from "../../lib/types";
 import { Menu, MenuEmpty, MenuItem, MenuSeparator } from "../ui/Menu";
 import { StatusBar } from "../ui/StatusBar";
+import { AnchoredSurface } from "../ui/AnchoredSurface";
 import { IconChevronDown } from "../icons";
 import {
   capabilitiesFor,
@@ -65,6 +67,13 @@ export function ModelSwitcher({
   const [view, setView] = useState<View>("root");
   const [pending, setPending] = useState<PendingSwitch | null>(null);
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
+  const [balanceHover, setBalanceHover] = useState(false);
+  const balanceAnchorRef = useRef<HTMLElement | null>(null);
+  const [balance, setBalance] = useState<ProviderBalanceResponse | null>(null);
+  const [balanceState, setBalanceState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [balanceError, setBalanceError] = useState<string | null>(null);
+  const balanceRequest = useRef(0);
+  const balanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const active = resolveActive(choices, fallback, providerName, model);
   const capabilities = useMemo(
     () => capabilitiesFor(active.provider, active.model),
@@ -79,9 +88,62 @@ export function ModelSwitcher({
   );
 
   const openModels = () => {
-    setExpandedProvider(active.name || configuredChoices[0]?.name || null);
+    // 分组默认全部收起，避免长列表一眼铺开；用户按需展开某个 Provider。
+    setExpandedProvider(null);
     setView("models");
   };
+
+  const deepseekHover = active.provider?.kind?.toLowerCase() === "deepseek" && !running;
+
+  const refreshBalance = useCallback(async () => {
+    const request = ++balanceRequest.current;
+    setBalanceState("loading");
+    setBalanceError(null);
+    try {
+      const next = await providerBalance({ name: active.name });
+      if (request !== balanceRequest.current) return;
+      setBalance(next);
+      setBalanceState("ready");
+    } catch (cause) {
+      if (request !== balanceRequest.current) return;
+      setBalance(null);
+      setBalanceError(errText(cause));
+      setBalanceState("error");
+    }
+  }, [active.name]);
+
+  useEffect(() => {
+    balanceRequest.current += 1;
+    setBalance(null);
+    setBalanceState("idle");
+    setBalanceError(null);
+    setBalanceHover(false);
+  }, [active.name]);
+
+  useEffect(() => {
+    if (!balanceHover) {
+      if (balanceTimer.current) {
+        clearTimeout(balanceTimer.current);
+        balanceTimer.current = null;
+      }
+      return;
+    }
+    if (balanceState !== "idle") return;
+    balanceTimer.current = setTimeout(() => {
+      balanceTimer.current = null;
+      void refreshBalance();
+    }, 350);
+    return () => {
+      if (balanceTimer.current) {
+        clearTimeout(balanceTimer.current);
+        balanceTimer.current = null;
+      }
+    };
+  }, [balanceHover, balanceState, refreshBalance]);
+
+  useEffect(() => () => {
+    if (balanceTimer.current) clearTimeout(balanceTimer.current);
+  }, []);
 
   const applyModel = useAsyncAction(async (provider: ProviderChoice, nextModel: string | null) => {
     if (taskId) {
@@ -121,25 +183,65 @@ export function ModelSwitcher({
   ) => {
     if (saveInference.busy) return;
     const next = { ...normalized };
-    if (value) next[field] = value;
-    else delete next[field];
+    if (field === "thinking") {
+      if (value) next.thinking = value;
+      else delete next.thinking;
+      // The effort row is a fixed-depth choice. Changing the thinking policy clears a stale
+      // effort so returning to Smart Balance truly re-enables the local governor, while
+      // choosing Always On starts from DeepSeek's native high default.
+      delete next.reasoning_effort;
+    } else if (field === "reasoning_effort") {
+      if (value) {
+        next.reasoning_effort = value;
+        // A selected effort is an explicit fixed-depth preference. DeepSeek's smart-balance
+        // marker must not remain alongside it or the runtime cannot distinguish user intent.
+        if (capabilities.thinking?.defaultValue === "adaptive") next.thinking = "enabled";
+      } else {
+        delete next.reasoning_effort;
+        // In DeepSeek's UI this row is labelled “Follow Smart Balance”. Clearing a fixed effort
+        // must therefore clear the implicit Always On marker as well; users who want native high
+        // on every round can still choose Always On explicitly from the thinking row.
+        if (capabilities.thinking?.defaultValue === "adaptive") delete next.thinking;
+      }
+    } else if (value) next.verbosity = value;
+    else delete next.verbosity;
     void saveInference.run(next);
     setView("root");
   };
 
   const summary = inferenceSummary(capabilities, normalized);
+  const resetLabel = capabilities.thinking?.defaultValue
+    ? "恢复智能平衡"
+    : "重置为服务默认";
+  const hasCustomInference = Boolean(
+    (normalized.thinking && normalized.thinking !== capabilities.thinking?.defaultValue)
+    || normalized.reasoning_effort
+    || normalized.verbosity,
+  );
   const title = running
     ? "当前运行结束后可修改模型配置"
     : `${active.provider?.label ?? "未选择"} / ${active.model || "未配置"} / ${summary}`;
   const readyClass = active.provider?.ready ? " ready" : "";
+  const triggerTitle = deepseekHover ? undefined : title;
+  const triggerRef = deepseekHover
+    ? (node: HTMLElement | null) => { balanceAnchorRef.current = node; }
+    : undefined;
+  const triggerHover = deepseekHover
+    ? {
+        onMouseEnter: () => setBalanceHover(true),
+        onMouseLeave: () => setBalanceHover(false),
+        onFocus: () => setBalanceHover(true),
+        onBlur: () => setBalanceHover(false),
+      }
+    : {};
   const trigger = variant === "pill" ? (
-    <button type="button" className={`provider-pill model-config-trigger${readyClass}`} title={title} disabled={running}>
+    <button type="button" ref={triggerRef} className={`provider-pill model-config-trigger${readyClass}`} title={triggerTitle} disabled={running} {...triggerHover}>
       <span>{active.provider?.label ?? "模型配置"}</span>
       <small>{active.model || "未配置"} · {summary}</small>
       <IconChevronDown width={12} height={12} />
     </button>
   ) : (
-    <button type="button" className="room-provider-trigger" title={title} disabled={running}>
+    <button type="button" ref={triggerRef} className="room-provider-trigger" title={triggerTitle} disabled={running} {...triggerHover}>
       <span>模型</span>
       <b>{active.provider?.label ?? "未选择"}</b>
       <small>{active.model || "未配置"} · {summary}</small>
@@ -150,31 +252,34 @@ export function ModelSwitcher({
     control: CapabilityControl | undefined,
     field: "thinking" | "reasoning_effort" | "verbosity",
     current: string | null | undefined,
-  ) => (
-    <>
-      <ConfigBack title={VIEW_TITLES[view as Exclude<View, "root">]} onBack={() => setView("root")} />
-      {!control ? (
-        <MenuEmpty>当前模型没有声明这项能力</MenuEmpty>
-      ) : (
-        <>
-          <MenuItem closeOnSelect={false} checked={!current} onSelect={() => chooseOption(field, null)}>
-            {control.defaultLabel}
-          </MenuItem>
-          {control.options.map((option) => (
-            <MenuItem
-              key={option.value}
-              closeOnSelect={false}
-              checked={current === option.value}
-              hint={option.description}
-              onSelect={() => chooseOption(field, option.value)}
-            >
-              {option.label}
+  ) => {
+    const defaultSelected = !current || current === control?.defaultValue;
+    return (
+      <>
+        <ConfigBack title={VIEW_TITLES[view as Exclude<View, "root">]} onBack={() => setView("root")} />
+        {!control ? (
+          <MenuEmpty>当前模型没有声明这项能力</MenuEmpty>
+        ) : (
+          <>
+            <MenuItem closeOnSelect={false} checked={defaultSelected} onSelect={() => chooseOption(field, null)}>
+              {control.defaultLabel}
             </MenuItem>
-          ))}
-        </>
-      )}
-    </>
-  );
+            {control.options.filter((option) => option.value !== control.defaultValue).map((option) => (
+              <MenuItem
+                key={option.value}
+                closeOnSelect={false}
+                checked={current === option.value}
+                hint={option.description}
+                onSelect={() => chooseOption(field, option.value)}
+              >
+                {option.label}
+              </MenuItem>
+            ))}
+          </>
+        )}
+      </>
+    );
+  };
 
   return (
     <div className="room-provider model-config-root">
@@ -189,7 +294,7 @@ export function ModelSwitcher({
         scroll
         openRequest={openRequest}
         onOpenChange={(open) => {
-          if (!open) {
+          if (open) setBalanceHover(false); else {
             setView("root");
             setExpandedProvider(null);
           }
@@ -224,11 +329,11 @@ export function ModelSwitcher({
               />
             )}
             <p className="model-config-note">{capabilities.note}</p>
-            {!normalized.thinking && !normalized.reasoning_effort && !normalized.verbosity ? null : (
+            {!hasCustomInference ? null : (
               <>
                 <MenuSeparator />
                 <button className="model-config-reset" type="button" onClick={() => void saveInference.run({})}>
-                  重置为服务默认
+                  {resetLabel}
                 </button>
               </>
             )}
@@ -304,6 +409,32 @@ export function ModelSwitcher({
           renderOptionView(capabilities.verbosity, "verbosity", normalized.verbosity)
         )}
       </Menu>
+
+      {deepseekHover && balanceHover && balanceAnchorRef.current && (balanceState === "loading" || balanceState === "ready" || balanceState === "error") && (
+        <AnchoredSurface
+          anchorRef={balanceAnchorRef}
+          placement={variant === "pill" ? "up" : "down"}
+          align={variant === "pill" ? "left" : "right"}
+          className="provider-balance-tooltip"
+        >
+          {balanceState === "loading" ? (
+            <span className="provider-balance-loading">查询余额…</span>
+          ) : balanceState === "error" ? (
+            <span className="provider-balance-error">{balanceError ?? "余额查询失败"}</span>
+          ) : balance ? (
+            <>
+              <span className="provider-balance-total">
+                {balance.currency} {balance.total_balance}
+              </span>
+              {(balance.granted_balance || balance.topped_up_balance) && (
+                <span className="provider-balance-detail">
+                  赠送 {balance.granted_balance} · 充值 {balance.topped_up_balance}
+                </span>
+              )}
+            </>
+          ) : null}
+        </AnchoredSurface>
+      )}
 
       {(applyModel.error || saveInference.error) && (
         <StatusBar kind="error" compact onDismiss={() => { applyModel.clearError(); saveInference.clearError(); }}>

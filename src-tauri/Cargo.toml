@@ -12,6 +12,14 @@ description = "R-Code Host：主进程、IPC Server、进程编排"
 name = "r-code-host"
 path = "src/main.rs"
 
+# Tauri removes the default `custom-protocol` feature for `cargo tauri dev` and
+# enables it for packaged builds. R-Code uses the same boundary as its runtime
+# flavor guard: a dev process can never inherit the production identifier or
+# AppData namespace, including when the developer forgets a config override.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 # 公共合同
 hermes-core = { workspace = true }
@@ -59,11 +67,12 @@ blake3 = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 tempfile = { workspace = true }
+ring = { workspace = true }
 
-# Tauri 桌面应用壳
-# Tauri's build-script allowlist validates this feature from the top-level dependency declaration
-# whenever `tauri.macos.conf.json` enables `macOSPrivateApi`; target-scoped features are ignored.
-tauri = { workspace = true, features = ["macos-private-api"] }
+# Tauri 桌面应用壳。CLI-managed features stay out of this cross-platform declaration: the
+# build-script compares it with the active platform config, so a macOS-only feature here makes
+# every native Windows cargo build fail before Rust compilation starts.
+tauri = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 tauri-plugin-dialog = { workspace = true }
 tauri-plugin-opener = "2"
@@ -94,6 +103,10 @@ tar = { workspace = true }
 # Finder 启动的 macOS GUI 应用不会继承登录 shell 的 PATH。固定到已审核的 Tauri
 # helper revision，确保 Homebrew/npm/nvm 安装的 Codex CLI 与 Node.js 能被发现。
 [target.'cfg(target_os = "macos")'.dependencies]
+# The companion is created programmatically and needs transparent-window support on macOS. Keep
+# that Cargo capability target-scoped; `tauri.macos.conf.json` intentionally leaves the CLI-managed
+# flag unset so Windows and ordinary cargo checks validate the shared dependency correctly.
+tauri = { workspace = true, features = ["macos-private-api"] }
 fix-path-env = { git = "https://github.com/tauri-apps/fix-path-env-rs", rev = "c4c45d503ea115a839aae718d02f79e7c7f0f673" }
 # 约束 fix-path-env 的传递依赖，保持 workspace 声明的 Rust 1.80 最低版本。
 home = "=0.5.9"

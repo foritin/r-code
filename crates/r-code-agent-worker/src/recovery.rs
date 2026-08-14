@@ -32,7 +32,7 @@ pub fn scan_orphaned_runs() -> Vec<RecoveryState> {
 mod tests {
     use r_code_core::dto::TaskState;
 
-    use super::{scan_orphaned_runs, RecoveryState};
+    use super::{RecoveryState, scan_orphaned_runs};
 
     #[test]
     fn scan_orphaned_runs_stub_returns_empty() {

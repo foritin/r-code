@@ -827,6 +827,12 @@ pub struct FileChange {
     pub id: String,
     /// 所属 Task ID
     pub task_id: String,
+    /// 所属 Agent Run ID。
+    ///
+    /// 旧版/工作区对账产生的记录可能没有运行归属；面向单轮对话的 UI 必须忽略
+    /// 这类记录，任务级审核仍可继续使用它们。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     /// 关联的 Tool Call ID
     pub tool_call_id: Option<String>,
     /// 文件路径（相对于 workspace root）
@@ -853,6 +859,7 @@ impl FileChange {
         Self {
             id: Uuid::new_v4().to_string(),
             task_id: task_id.into(),
+            run_id: None,
             tool_call_id: None,
             path: path.into(),
             change_type,
@@ -1321,6 +1328,9 @@ pub struct QueuedMessage {
     pub state: QueuedMessageState,
     /// 数字越大越优先；“立即发送”使用更高优先级。
     pub priority: i64,
+    /// 排队附件的 JSON 序列化载荷；为空表示纯文本消息。
+    #[serde(default)]
+    pub attachments_json: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1332,6 +1342,16 @@ impl QueuedMessage {
         message: impl Into<String>,
         priority: i64,
     ) -> Self {
+        Self::new_with_attachments(task_id, branch_id, message, priority, None)
+    }
+
+    pub fn new_with_attachments(
+        task_id: impl Into<String>,
+        branch_id: impl Into<String>,
+        message: impl Into<String>,
+        priority: i64,
+        attachments_json: Option<String>,
+    ) -> Self {
         let now = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
@@ -1340,6 +1360,7 @@ impl QueuedMessage {
             message: message.into(),
             state: QueuedMessageState::Queued,
             priority,
+            attachments_json,
             created_at: now,
             updated_at: now,
         }
@@ -1462,6 +1483,23 @@ pub enum AgentEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// Agent 树内受限的点对点消息活动。
+    ///
+    /// 完整正文只存在于 Worker 的有界内存 mailbox；跨进程事件仅携带字符数，
+    /// 不包含权限、凭据、正文片段或模型私有推理。外层 [`AgentEvent::Scoped`] 的
+    /// scope 始终属于真实发送方，模型输入无法伪造 sender。
+    PeerMessage {
+        /// Worker 根据真实发送方和 `tool_call_id` 派生的稳定幂等键。
+        message_id: String,
+        /// 真实发送 Agent ID（由 Worker 注入）。
+        sender_agent_id: String,
+        /// 目标 Agent ID。
+        recipient_agent_id: String,
+        /// 已进入 mailbox 或已在目标下一次 Provider 请求前交付。
+        status: PeerMessageDeliveryStatus,
+        /// 正文 Unicode 字符数，仅用于无内容的活动提示和诊断。
+        content_chars: usize,
+    },
     /// 单次模型请求的 token 用量（agent loop 单轮内累计）。
     ///
     /// 键与 `hermes_core::Usage` 的 serde 输出一致（`input_tokens` /
@@ -1535,6 +1573,16 @@ pub enum SubagentState {
     Completed,
     Failed,
     Cancelled,
+}
+
+/// Agent 树内点对点消息的可观察交付阶段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerMessageDeliveryStatus {
+    /// 已通过关系、终态和容量校验并进入目标 mailbox。
+    Queued,
+    /// 已从 mailbox 取出，将作为不可信临时消息加入目标下一次 Provider 请求。
+    Delivered,
 }
 
 impl std::fmt::Display for SubagentState {
@@ -1934,6 +1982,30 @@ mod tests {
         assert_eq!(encoded["runtime_kind"], "codex_exec");
         assert_eq!(encoded["model"], "codex-cli");
         assert_eq!(encoded["access_mode"], "full_access");
+    }
+
+    #[test]
+    fn peer_message_event_serde_never_contains_message_content() {
+        let event = AgentEvent::PeerMessage {
+            message_id: "tool-derived-id".to_string(),
+            sender_agent_id: "child-a".to_string(),
+            recipient_agent_id: "child-b".to_string(),
+            status: PeerMessageDeliveryStatus::Delivered,
+            content_chars: 17,
+        };
+        let encoded = serde_json::to_value(&event).unwrap();
+        assert_eq!(encoded["type"], "peer_message");
+        assert_eq!(encoded["message_id"], "tool-derived-id");
+        assert_eq!(encoded["sender_agent_id"], "child-a");
+        assert_eq!(encoded["recipient_agent_id"], "child-b");
+        assert_eq!(encoded["status"], "delivered");
+        assert_eq!(encoded["content_chars"], 17);
+        assert!(encoded.get("content").is_none());
+        assert!(encoded.get("content_preview").is_none());
+        assert_eq!(
+            serde_json::from_value::<AgentEvent>(encoded).unwrap(),
+            event
+        );
     }
 
     #[test]

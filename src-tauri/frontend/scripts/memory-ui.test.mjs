@@ -286,6 +286,7 @@ test("project overview opens memory management in the current project scope", as
   const knowledge = page.getByRole("region", { name: "知识与指令" });
   await knowledge.waitFor({ state: "visible" });
   await knowledge.getByRole("heading", { name: "r-code 的项目记忆", exact: true }).waitFor({ state: "visible" });
+  await knowledge.getByText("这里管理项目专属记忆；启用时同时自动继承全局记忆。", { exact: true }).waitFor({ state: "visible" });
   assert.equal(
     await knowledge.getByRole("button", { name: "r-code", exact: true }).getAttribute("aria-pressed"),
     "true",

@@ -168,17 +168,23 @@ test("macOS packaging keeps native window chrome and app/dmg targets", () => {
   const globalDependencies = hostManifest.match(
     /\[dependencies\]\r?\n([\s\S]*?)(?=\r?\n\[)/,
   )?.[1];
+  const macDependencies = hostManifest.match(
+    /\[target\.'cfg\(target_os = "macos"\)'\.dependencies\]\r?\n([\s\S]*?)(?=\r?\n\[|$)/,
+  )?.[1];
   const window = config.app.windows[0];
 
   assert.equal(config.identifier, "com.rcode.desktop");
   assert.equal(config.build.runner.cmd, "../scripts/cargo-tauri-macos-runner.sh");
-  assert.equal(config.app.macOSPrivateApi, true);
+  assert.equal(config.app.macOSPrivateApi, undefined);
   assert.ok(globalDependencies, "the host manifest must define global dependencies");
-  assert.match(
+  assert.doesNotMatch(
     globalDependencies,
     /macos-private-api/,
-    "Tauri requires macos-private-api in the top-level dependency when the macOS config enables it",
+    "a macOS-only Tauri feature must not break Windows manifest validation",
   );
+  assert.ok(macDependencies, "the host manifest must define macOS dependencies");
+  assert.match(macDependencies, /tauri\s*=\s*\{[^\n]*macos-private-api/,
+    "the macOS target still needs transparent native-window support");
   assert.equal(window.decorations, true);
   assert.equal(window.titleBarStyle, "Overlay");
   assert.equal(window.hiddenTitle, true);
@@ -225,10 +231,45 @@ test("Windows local packaging uses a file-backed Tauri override", () => {
   );
 
   assert.match(script, /"--config", "tauri\.local-package\.conf\.json"/);
+  assert.match(script, /Set-StrictMode -Version Latest/);
+  assert.match(script, /windows-\(msvc\|gnu\|gnullvm\)/);
+  assert.match(script, /rustcCommand\.Source -vV/);
+  assert.match(script, /"--bins"/);
+  assert.match(script, /Expected NSIS payload not found/);
+  assert.doesNotMatch(script, /R-Code_\$\{version\}_\*-setup\.exe/);
   assert.match(script, /\[Security\.Cryptography\.SHA256\]::Create\(\)/);
   assert.equal(override.bundle.createUpdaterArtifacts, false);
   assert.doesNotMatch(script, /--config[^\r\n]*\{.*createUpdaterArtifacts/);
   assert.doesNotMatch(script, /Get-FileHash/);
+});
+
+test("development launch and updater stay isolated from production", () => {
+  const production = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "src-tauri", "tauri.conf.json"), "utf8"),
+  );
+  const development = JSON.parse(
+    fs.readFileSync(path.join(repoRoot, "src-tauri", "tauri.dev.conf.json"), "utf8"),
+  );
+  const manifest = fs.readFileSync(
+    path.join(repoRoot, "src-tauri", "Cargo.toml"),
+    "utf8",
+  );
+  const windowsLauncher = fs.readFileSync(path.join(repoRoot, "dev.ps1"), "utf8");
+  const unixLauncher = fs.readFileSync(path.join(repoRoot, "dev.sh"), "utf8");
+
+  assert.equal(development.productName, "R-Code Dev");
+  assert.equal(development.plugins.updater.active, true);
+  assert.equal(development.plugins.updater.endpoints.length, 1);
+  assert.notEqual(
+    development.plugins.updater.endpoints[0],
+    production.plugins.updater.endpoints[0],
+    "development must never download a production updater payload",
+  );
+  assert.match(development.plugins.updater.endpoints[0], /dev-latest\.json$/);
+  assert.match(manifest, /\[features\][\s\S]*default\s*=\s*\["custom-protocol"\]/);
+  assert.match(manifest, /custom-protocol\s*=\s*\["tauri\/custom-protocol"\]/);
+  assert.match(windowsLauncher, /cargo tauri dev --config "src-tauri\/tauri\.dev\.conf\.json"/);
+  assert.match(unixLauncher, /cargo tauri dev --config "\$repo_root\/src-tauri\/tauri\.dev\.conf\.json"/);
 });
 
 test("release workflow falls back per platform while preserving explicit unsigned prereleases", () => {
@@ -788,6 +829,11 @@ test("CI authenticates every private agent-core checkout and covers Linux", () =
     workflow,
     /name: Test[\s\S]*name: Install Linux dependencies[\s\S]*if: matrix\.os == 'ubuntu-latest'/,
     "Linux workspace tests must install the Tauri host libraries before cargo test",
+  );
+  assert.match(
+    workflow,
+    /name: Test and build Windows frontend[\s\S]*npm test[\s\S]*npm run build/,
+    "the required Windows CI leg must run companion browser contracts and the TypeScript build",
   );
   assert.match(
     workflow,

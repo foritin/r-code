@@ -18,9 +18,6 @@ export type KeyAction =
   | "settings"
   | "toggleRail"
   | "shortcuts"
-  | "zoomIn"
-  | "zoomOut"
-  | "zoomReset"
   | "workbenchSummary"
   | "workbenchTerminal"
   | "workbenchFiles"
@@ -45,9 +42,6 @@ export const KEYMAP: Record<KeyAction, KeyBinding> = {
   settings: { keys: [","], label: ",", description: "设置", mod: true },
   toggleRail: { keys: ["b"], label: "B", description: "折叠/展开侧栏", mod: true },
   shortcuts: { keys: ["/"], label: "/", description: "快捷键参考", mod: true },
-  zoomIn: { keys: ["=", "+"], label: "+", description: "放大", mod: true },
-  zoomOut: { keys: ["-"], label: "−", description: "缩小", mod: true },
-  zoomReset: { keys: ["0"], label: "0", description: "重置缩放", mod: true },
   workbenchSummary: { keys: ["s"], label: "S", description: "运行与子代理", mod: true, alt: true },
   workbenchTerminal: { keys: ["`"], label: "`", description: "任务终端", mod: true },
   workbenchFiles: { keys: ["p"], label: "P", description: "任务文件", mod: true },
@@ -114,17 +108,15 @@ export function useGlobalKeys(handlers: GlobalKeyHandlers): void {
       // macOS 以 Command 为应用快捷键修饰键，Control 必须保留给终端和文本
       // 编辑；Windows/Linux 则只接受 Ctrl，避免把 Meta 误当成应用命令。
       if (IS_MAC ? !e.metaKey : !e.ctrlKey) return;
-      // 缩放是窗口级操作，输入态下也允许；其余快捷键必须让位给原生文本编辑。
       const key = e.key.toLowerCase();
-      const typing = isTypingTarget(e.target);
+      // 输入态完全让位给原生文本编辑，避免覆盖常用编辑组合键。
+      if (isTypingTarget(e.target)) return;
 
       for (const [action, binding] of Object.entries(KEYMAP) as [KeyAction, KeyBinding][]) {
         if (!binding.keys.includes(key)) continue;
         if (Boolean(binding.alt) !== e.altKey) continue;
         if (binding.shift && !e.shiftKey) continue;
         if (!binding.shift && e.shiftKey) continue;
-        const isZoom = action === "zoomIn" || action === "zoomOut" || action === "zoomReset";
-        if (typing && !isZoom) return;
         const handler = ref.current[action];
         if (!handler) return;
         e.preventDefault();

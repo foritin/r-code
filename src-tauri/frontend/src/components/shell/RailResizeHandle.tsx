@@ -11,32 +11,21 @@ export const MIN_MAIN_WIDTH = 420;
 
 export function railWidthForViewport(
   preferredWidth: number,
-  renderedViewportWidth: number,
-  scale = 1,
+  viewportWidth: number,
 ): number {
-  const safeScale = Math.max(scale, 0.01);
-  const logicalMaximum = (renderedViewportWidth - MIN_MAIN_WIDTH) / safeScale;
-  const maximum = Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, logicalMaximum));
+  const maximum = Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, viewportWidth - MIN_MAIN_WIDTH));
   return Math.min(clampRailWidth(preferredWidth), maximum);
 }
 
 function viewportMaximum(): number {
-  const app = document.getElementById("app");
-  const rect = app?.getBoundingClientRect();
-  const scale = rect && app && rect.width > 0 && app.clientWidth > 0
-    ? rect.width / app.clientWidth
-    : 1;
-  return railWidthForViewport(MAX_RAIL_WIDTH, window.innerWidth, scale);
+  return railWidthForViewport(MAX_RAIL_WIDTH, window.innerWidth);
 }
 
 function pointerRailWidth(clientX: number): number {
   const app = document.getElementById("app");
   if (!app) return DEFAULT_RAIL_WIDTH;
   const rect = app.getBoundingClientRect();
-  // CSS zoom scales getBoundingClientRect/clientX, while the grid track remains in
-  // unscaled CSS pixels. Convert back before updating --rc-rail-w.
-  const scale = rect.width > 0 && app.clientWidth > 0 ? rect.width / app.clientWidth : 1;
-  return (clientX - rect.left) / Math.max(scale, 0.01);
+  return clientX - rect.left;
 }
 
 function previewRailWidth(width: number): number {

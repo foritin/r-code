@@ -54,6 +54,10 @@ pub struct AgentLoopOutcome {
     /// P2-G：本轮累计真实 usage（provider 未报告时为全零）。调用方（run_loop）
     /// 用它反推 tokPerChar 校准分层压缩的 token 估算（docs/archive/deepseek-prefix-cache.md §5 P2-G）。
     pub usage: Usage,
+    /// 本轮流式 `ReasoningDelta` 的 Unicode 字符总量。多数兼容接口尚未在 usage
+    /// 中单列 reasoning tokens；runtime 以约 4 字符/token 的保守估算驱动软调控，
+    /// 只改变下一轮推理档位，不截断当前输出。
+    pub reasoning_chars: usize,
     /// 本轮追加到请求工作集末尾的持久化协议消息。调用方用它更新 canonical
     /// transcript，而不需要把压缩投影或动态注入反向猜测/切片出来。
     pub appended_messages: Vec<Message>,
@@ -61,6 +65,10 @@ pub struct AgentLoopOutcome {
     /// coordinator must preserve the provider blocks, then make exactly one tool-free summary
     /// request instead of treating the opaque tool blocks as a successful final response.
     pub requires_final_summary_recovery: bool,
+    /// A provider-hosted web tool returned an explicit error result. The run coordinator may use
+    /// this signal to make one controlled retry with the local web tools, without guessing from
+    /// user-visible text or declaring hosted and local tools in the same request.
+    pub hosted_web_failed: bool,
 }
 
 const MAX_PARALLEL_READ_TOOL_CALLS: usize = 4;
@@ -72,10 +80,23 @@ const STREAM_IDLE_TIMEOUT_REASON: &str = "stream_idle_timeout";
 const MAX_STREAM_RECOVERIES: u32 = 5;
 /// P1-E：流恢复退避基数（500ms * 2^(n-1)，对齐 Reasonix run_loop.go）。
 const STREAM_RECOVERY_BASE_MS: u64 = 500;
+/// P1-E：流正常结束却未返回任何可展示内容时，重放冻结请求的次数上限。
+/// 与流空闲重放同一语义：只重放**尚无任何输出**的轮次，指数退避，避免重复输出。
+const MAX_EMPTY_RESPONSE_RECOVERIES: u32 = 3;
+/// 空响应恢复退避基数（500ms * 2^(n-1)）。
+const EMPTY_RESPONSE_RECOVERY_BASE_MS: u64 = 500;
 #[cfg(not(test))]
 const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const TOOL_ABORT_CLEANUP_GRACE: Duration = Duration::from_millis(100);
+/// Completion watchdog for ordinary opaque ToolHost futures. This is deliberately per call, not a
+/// run deadline: after the timeout the model receives a normal error result and may retry with a
+/// narrower input or choose another tool. Long-running tools with their own progress/cancellation
+/// contract are excluded below.
+#[cfg(not(test))]
+const TOOL_NO_COMPLETION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+#[cfg(test)]
+const TOOL_NO_COMPLETION_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProviderStreamErrorDisposition {
@@ -87,11 +108,7 @@ enum ProviderStreamErrorDisposition {
 /// 将其编码为 `<error_type>: <message>`；这里必须区分可恢复服务端故障和配置错误，
 /// 绝不能把任一类当作正常 Stop 静默完成。
 fn provider_stream_error_disposition(reason: &str) -> Option<ProviderStreamErrorDisposition> {
-    let error_type = reason
-        .split_once(':')
-        .map_or(reason, |(error_type, _)| error_type)
-        .trim()
-        .to_ascii_lowercase();
+    let error_type = provider_stream_error_type(reason)?;
     match error_type.as_str() {
         "overloaded_error" | "rate_limit_error" | "api_error" => {
             Some(ProviderStreamErrorDisposition::Retryable)
@@ -101,15 +118,50 @@ fn provider_stream_error_disposition(reason: &str) -> Option<ProviderStreamError
     }
 }
 
-fn public_provider_stream_error(
-    reason: &str,
-    disposition: ProviderStreamErrorDisposition,
-) -> ProductError {
-    let error_type = reason
+fn provider_stream_error_type(reason: &str) -> Option<String> {
+    let prefix = reason
         .split_once(':')
         .map_or(reason, |(error_type, _)| error_type)
         .trim()
         .to_ascii_lowercase();
+    if prefix.ends_with("_error") {
+        return Some(prefix);
+    }
+    reason
+        .split(['(', ',', ')'])
+        .map(str::trim)
+        .find_map(|part| {
+            part.strip_prefix("type=")
+                .filter(|value| value.ends_with("_error"))
+                .map(str::to_string)
+        })
+}
+
+fn public_provider_stream_error(
+    reason: &str,
+    disposition: ProviderStreamErrorDisposition,
+) -> ProductError {
+    let error_type = provider_stream_error_type(reason).unwrap_or_default();
+    let normalized = reason.to_ascii_lowercase();
+    if disposition == ProviderStreamErrorDisposition::Fatal
+        && error_type == "invalid_request_error"
+        && (normalized.contains("web_search")
+            || normalized.contains("web search")
+            || normalized.contains("server tool")
+            || normalized.contains("hosted tool"))
+        && (normalized.contains("unsupported")
+            || normalized.contains("not support")
+            || normalized.contains("invalid")
+            || normalized.contains("unknown"))
+    {
+        // Keep a stable, credential-free classification marker for the run coordinator. The raw
+        // provider payload has already been logged by the transport; surfacing it here would leak
+        // gateway details while discarding it entirely would make a safe one-shot fallback
+        // impossible for SSE `event: error` responses.
+        return ProductError::Other(
+            "provider: hosted web tool is unsupported by this model route".to_string(),
+        );
+    }
     let message = match (disposition, error_type.as_str()) {
         (_, "authentication_error" | "permission_error") => "模型服务鉴权失败，请检查访问密钥",
         (ProviderStreamErrorDisposition::Fatal, "invalid_request_error") => {
@@ -128,6 +180,188 @@ struct PendingToolCall {
     id: String,
     name: String,
     input: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EditIntent {
+    path: String,
+    old_string: String,
+    new_string: String,
+    replace_all: bool,
+    must_contain: Vec<String>,
+    must_not_contain: Vec<String>,
+}
+
+fn normalized_tool_path(path: &str) -> String {
+    #[cfg(windows)]
+    let path = path
+        .strip_prefix(r"\\?\UNC\")
+        .map(|rest| format!(r"\\{rest}"))
+        .unwrap_or_else(|| path.strip_prefix(r"\\?\").unwrap_or(path).to_string())
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    #[cfg(not(windows))]
+    let path = path.to_string();
+
+    let absolute = path.starts_with('/');
+    let unc = path.starts_with("//");
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                let can_pop = components
+                    .last()
+                    .is_some_and(|previous| *previous != ".." && !previous.ends_with(':'));
+                if can_pop {
+                    components.pop();
+                } else if !absolute {
+                    components.push(component);
+                }
+            }
+            _ => components.push(component),
+        }
+    }
+    let joined = components.join("/");
+    if unc {
+        format!("//{joined}")
+    } else if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+fn normalized_postcondition_literals(input: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut literals = input
+        .get("postcondition")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|condition| condition.get(key))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    literals.sort_unstable();
+    literals.dedup();
+    literals
+}
+
+fn edit_intent(input: &serde_json::Value) -> Option<EditIntent> {
+    Some(EditIntent {
+        path: normalized_tool_path(input.get("path")?.as_str()?),
+        old_string: input.get("old_string")?.as_str()?.to_string(),
+        new_string: input.get("new_string")?.as_str()?.to_string(),
+        replace_all: input
+            .get("replace_all")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        must_contain: normalized_postcondition_literals(input, "must_contain"),
+        must_not_contain: normalized_postcondition_literals(input, "must_not_contain"),
+    })
+}
+
+fn tool_result_error_code(content: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(code) = value.get("code").and_then(serde_json::Value::as_str) {
+            return Some(code.to_string());
+        }
+    }
+    if content.contains("'old_string' was not found") {
+        return Some("old_string_not_found".to_string());
+    }
+    None
+}
+
+#[derive(Debug, Default)]
+struct EditRetryRecord {
+    stale_failures: usize,
+    successful_reread_after_failure: bool,
+}
+
+/// Per-run stale-edit breaker. It is explicit state rather than a transcript scan because the
+/// runtime appends dynamic user-role context messages on every provider request and may compact old
+/// messages. Keeping the state beside the run also lets calls in one provider response update the
+/// budget sequentially.
+#[derive(Debug, Default)]
+pub struct EditRetryGuard {
+    records: HashMap<EditIntent, EditRetryRecord>,
+}
+
+impl EditRetryGuard {
+    fn before_call(&self, call: &PendingToolCall) -> Option<hermes_core::ToolCallOutcome> {
+        if call.name != "edit" {
+            return None;
+        }
+        let intent = edit_intent(&call.input)?;
+        let record = self.records.get(&intent)?;
+        let (code, message) = if record.stale_failures >= 2 {
+            (
+                "repeated_stale_edit",
+                "The same stale edit intent has already failed twice; unchanged execution is blocked.",
+            )
+        } else if !record.successful_reread_after_failure {
+            (
+                "reread_required",
+                "This edit intent already failed against stale content; a successful read_file of the same path is required before another attempt.",
+            )
+        } else {
+            return None;
+        };
+        Some(hermes_core::ToolCallOutcome {
+            content: serde_json::json!({
+                "status": "blocked",
+                "tool": "edit",
+                "code": code,
+                "message": message,
+                "details": {
+                    "path": call.input.get("path").cloned().unwrap_or(serde_json::Value::Null),
+                    "stale_failures": record.stale_failures,
+                    "required_action": "Use read_file on this path, inspect whether the intended end state is already satisfied, and otherwise submit a materially different anchor or explicit postcondition from current content."
+                }
+            })
+            .to_string(),
+            is_error: true,
+            metadata: None,
+        })
+    }
+
+    fn observe(&mut self, call: &PendingToolCall, outcome: &hermes_core::ToolCallOutcome) {
+        if call.name == "read_file" && !outcome.is_error {
+            if let Some(path) = call
+                .input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(normalized_tool_path)
+            {
+                for (intent, record) in &mut self.records {
+                    if intent.path == path && record.stale_failures > 0 {
+                        record.successful_reread_after_failure = true;
+                    }
+                }
+            }
+            return;
+        }
+        if call.name != "edit" {
+            return;
+        }
+        let Some(intent) = edit_intent(&call.input) else {
+            return;
+        };
+        if !outcome.is_error {
+            self.records.remove(&intent);
+            return;
+        }
+        if matches!(
+            tool_result_error_code(&outcome.content).as_deref(),
+            Some("old_string_not_found" | "stale_read" | "reread_required" | "repeated_stale_edit")
+        ) {
+            let record = self.records.entry(intent).or_default();
+            record.stale_failures = record.stale_failures.saturating_add(1);
+            record.successful_reread_after_failure = false;
+        }
+    }
 }
 
 fn is_parallel_read_tool(tools: &[ToolSpec], name: &str) -> bool {
@@ -153,10 +387,19 @@ async fn execute_pending_tool(
     let tool_name = call.name.clone();
     let execution = tool_host.call_with_id(&call_id, &tool_name, call.input.clone());
     tokio::pin!(execution);
+    let watchdog = ordinary_tool_watchdog(&tool_name);
     let Some(abort) = abort else {
-        return execution.await.map_err(map_hermes_err);
+        return match watchdog {
+            Some(timeout) => match tokio::time::timeout(timeout, &mut execution).await {
+                Ok(result) => result.map_err(map_hermes_err),
+                Err(_) => Ok(timed_out_tool_outcome(call, timeout)),
+            },
+            None => execution.await.map_err(map_hermes_err),
+        };
     };
 
+    let deadline = tokio::time::sleep(watchdog.unwrap_or(Duration::from_secs(24 * 60 * 60)));
+    tokio::pin!(deadline);
     loop {
         if abort.load(Ordering::Relaxed) {
             // Built-ins, Bash and MCP use this window to perform cooperative cleanup (including
@@ -167,8 +410,46 @@ async fn execute_pending_tool(
         }
         tokio::select! {
             result = &mut execution => return result.map_err(map_hermes_err),
+            _ = &mut deadline, if watchdog.is_some() => {
+                return Ok(timed_out_tool_outcome(call, watchdog.expect("deadline exists")));
+            }
             _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL) => {}
         }
+    }
+}
+
+fn ordinary_tool_watchdog(name: &str) -> Option<Duration> {
+    if matches!(
+        name,
+        "bash" | "delegate_task" | "collect_subagents" | "request_user_input" | "mcp_call"
+    ) || name.starts_with("mcp__")
+    {
+        return None;
+    }
+    Some(TOOL_NO_COMPLETION_TIMEOUT)
+}
+
+fn timed_out_tool_outcome(
+    call: &PendingToolCall,
+    timeout: Duration,
+) -> hermes_core::ToolCallOutcome {
+    tracing::warn!(
+        tool = %call.name,
+        tool_call_id = %call.id,
+        timeout_ms = timeout.as_millis(),
+        "tool execution produced no completion before the per-call watchdog expired"
+    );
+    hermes_core::ToolCallOutcome {
+        content: serde_json::json!({
+            "status": "timeout",
+            "reason": format!(
+                "{} did not complete within the per-call safety window; retry with a narrower input or use another approach",
+                call.name
+            )
+        })
+        .to_string(),
+        is_error: true,
+        metadata: None,
     }
 }
 
@@ -176,6 +457,7 @@ async fn execute_pending_tools(
     tool_host: &dyn ToolHost,
     tools: &[ToolSpec],
     calls: &[PendingToolCall],
+    retry_guard: &mut EditRetryGuard,
     abort: Option<&AtomicBool>,
 ) -> Result<Vec<hermes_core::ToolCallOutcome>, ProductError> {
     let can_run_in_parallel = calls.len() > 1
@@ -190,7 +472,18 @@ async fn execute_pending_tools(
                 outcomes.push(cancelled_tool_outcome(call));
                 continue;
             }
-            outcomes.push(execute_pending_tool(tool_host, call, abort).await?);
+            if let Some(outcome) = retry_guard.before_call(call) {
+                tracing::warn!(
+                    tool_call_id = %call.id,
+                    "blocked a repeated stale edit before gateway execution"
+                );
+                retry_guard.observe(call, &outcome);
+                outcomes.push(outcome);
+                continue;
+            }
+            let outcome = execute_pending_tool(tool_host, call, abort).await?;
+            retry_guard.observe(call, &outcome);
+            outcomes.push(outcome);
         }
         return Ok(outcomes);
     }
@@ -207,8 +500,10 @@ async fn execute_pending_tools(
                 .map(|call| execute_pending_tool(tool_host, call, abort)),
         )
         .await;
-        for result in results {
-            outcomes.push(result?);
+        for (call, result) in batch.iter().zip(results) {
+            let outcome = result?;
+            retry_guard.observe(call, &outcome);
+            outcomes.push(outcome);
         }
     }
     Ok(outcomes)
@@ -379,15 +674,17 @@ pub async fn run_agent_loop_iteration_streaming_with_abort(
     messages: &mut Vec<Message>,
     tools: &[ToolSpec],
     abort: Option<&AtomicBool>,
+    retry_guard: &mut EditRetryGuard,
     event_tx: tokio::sync::mpsc::UnboundedSender<AgentEvent>,
 ) -> Result<AgentLoopOutcome, ProductError> {
-    run_agent_loop_iteration_with_abort_and_emit(
+    run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
         provider,
         tool_host,
         request,
         messages,
         tools,
         abort,
+        retry_guard,
         true,
         move |event| {
             let _ = event_tx.send(event);
@@ -404,10 +701,40 @@ pub async fn run_agent_loop_iteration_streaming_with_abort(
 pub async fn run_agent_loop_iteration_with_abort_and_emit<F>(
     provider: &dyn LlmProvider,
     tool_host: &dyn ToolHost,
+    request: CompletionRequest,
+    messages: &mut Vec<Message>,
+    tools: &[ToolSpec],
+    abort: Option<&AtomicBool>,
+    emit_activity: bool,
+    emit: F,
+) -> Result<AgentLoopOutcome, ProductError>
+where
+    F: FnMut(AgentEvent),
+{
+    let mut retry_guard = EditRetryGuard::default();
+    run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
+        provider,
+        tool_host,
+        request,
+        messages,
+        tools,
+        abort,
+        &mut retry_guard,
+        emit_activity,
+        emit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_agent_loop_iteration_with_abort_and_emit_with_retry_guard<F>(
+    provider: &dyn LlmProvider,
+    tool_host: &dyn ToolHost,
     mut request: CompletionRequest,
     messages: &mut Vec<Message>,
     tools: &[ToolSpec],
     abort: Option<&AtomicBool>,
+    retry_guard: &mut EditRetryGuard,
     emit_activity: bool,
     mut emit: F,
 ) -> Result<AgentLoopOutcome, ProductError>
@@ -433,6 +760,7 @@ where
     // P1-E：冻结请求供流中断重放（重试字节与首试逐字节一致，不破坏前缀缓存）。
     let frozen_request = request.clone();
     let mut stream_recoveries: u32 = 0;
+    let mut empty_response_recoveries: u32 = 0;
 
     // Provider 建连本身也可能卡住；同时跟踪绝对 deadline 和 abort，
     // 取消时直接 drop vendor future，不再被固定 60s 超时窗口阻塞。
@@ -448,10 +776,18 @@ where
         let mut tool_results: Vec<ContentBlock> = Vec::new();
         let mut tool_metadata: Vec<ToolMetadataObservation> = Vec::new();
         let mut total_usage = Usage::default();
+        let mut reasoning_chars = 0usize;
         let mut streaming_started = false;
+        // A provider response has one forward-only visible phase: private reasoning may precede
+        // the answer, but it must never resume after answer text has started. Some compatible
+        // gateways deliver buffered reasoning deltas late; keep counting those deltas for the
+        // soft reasoning governor, while preventing them from appearing below an answer already
+        // shown to the user. A tool follow-up is a new provider request and gets a fresh gate.
+        let mut answer_started = false;
         let mut received_stream_event = false;
         let mut had_tool_call = false;
         let mut had_hosted_tool_activity = false;
+        let mut hosted_web_failed = false;
         let mut provider_requested_continuation = false;
 
         let connection = provider.stream(frozen_request.clone());
@@ -464,8 +800,10 @@ where
                     had_tool_call: false,
                     tool_metadata: Vec::new(),
                     usage: total_usage.clone(),
+                    reasoning_chars,
                     appended_messages: Vec::new(),
                     requires_final_summary_recovery: false,
+                    hosted_web_failed: false,
                 });
             }
             break tokio::select! {
@@ -507,7 +845,7 @@ where
                     Err(_) => {
                         return Err(map_hermes_err(hermes_error::Error::Provider(
                             "模型流式响应空闲超时".to_string(),
-                        )))
+                        )));
                     }
                 }
             };
@@ -529,9 +867,16 @@ where
                         }
                         streaming_started = true;
                     }
-                    emit(AgentEvent::Reasoning { text, delta: true });
+                    reasoning_chars = reasoning_chars.saturating_add(text.chars().count());
+                    if !answer_started {
+                        emit(AgentEvent::Reasoning { text, delta: true });
+                    }
                 }
                 StreamEvent::TextDelta { text } => {
+                    if text.is_empty() {
+                        continue;
+                    }
+                    answer_started = true;
                     current_text.push_str(&text);
                     if !streaming_started {
                         if emit_activity {
@@ -615,13 +960,16 @@ where
                 }
                 StreamEvent::HostedToolResult {
                     id,
-                    name: _,
+                    name,
                     output,
                     is_error,
                     provider_content,
                 } => {
                     flush_text(&mut current_text, &mut assistant_blocks);
                     had_hosted_tool_activity = true;
+                    if is_error && is_hosted_web_tool_name(&name) {
+                        hosted_web_failed = true;
+                    }
                     if let Some(block) = provider_content.and_then(provider_content_to_custom) {
                         assistant_blocks.push(block);
                     }
@@ -685,8 +1033,10 @@ where
                                 had_tool_call: false,
                                 tool_metadata: Vec::new(),
                                 usage: total_usage.clone(),
+                                reasoning_chars,
                                 appended_messages: Vec::new(),
                                 requires_final_summary_recovery: false,
+                                hosted_web_failed: false,
                             });
                         }
                         // P1-E §8：重试计数对用户可见——每次实际重放前发出事件，
@@ -729,11 +1079,59 @@ where
             && !requires_final_summary_recovery
             && !has_persistable_assistant_output(&current_text, &assistant_blocks)
         {
+            let has_output = streaming_started
+                || !current_text.is_empty()
+                || !assistant_blocks.is_empty()
+                || !pending_tools.is_empty()
+                || !tool_calls.is_empty();
+            // 空流 + 无工具 + 无空闲超时：多为线路/代理瞬断。用冻结请求指数退避
+            // 重放（仅在**完全无输出**时安全），耗尽后才把空响应提升为终态错误。
+            if !has_output && empty_response_recoveries < MAX_EMPTY_RESPONSE_RECOVERIES {
+                empty_response_recoveries += 1;
+                let delay = Duration::from_millis(
+                    EMPTY_RESPONSE_RECOVERY_BASE_MS * 2u64.pow(empty_response_recoveries - 1),
+                );
+                tracing::warn!(
+                    attempt = empty_response_recoveries,
+                    ?delay,
+                    "provider stream ended without any output, replaying frozen request"
+                );
+                emit(AgentEvent::Activity {
+                    phase: r_code_core::dto::AgentActivityPhase::Requesting,
+                    detail: Some(format!(
+                        "模型未返回内容，正在自动重试（{empty_response_recoveries}/{MAX_EMPTY_RESPONSE_RECOVERIES}）"
+                    )),
+                });
+                let recovery_deadline = tokio::time::sleep(delay);
+                tokio::pin!(recovery_deadline);
+                loop {
+                    if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = &mut recovery_deadline => break,
+                        _ = tokio::time::sleep(AGENT_ABORT_POLL_INTERVAL), if abort.is_some() => continue,
+                    }
+                }
+                if abort.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
+                    break 'attempt Ok(AgentLoopOutcome {
+                        had_tool_call: false,
+                        tool_metadata: Vec::new(),
+                        usage: total_usage.clone(),
+                        reasoning_chars,
+                        appended_messages: Vec::new(),
+                        requires_final_summary_recovery: false,
+                        hosted_web_failed: false,
+                    });
+                }
+                continue 'attempt;
+            }
             tracing::warn!(
                 received_stream_event,
                 pending_tool_count = pending_tools.len(),
                 input_tokens = total_usage.input_tokens,
                 output_tokens = total_usage.output_tokens,
+                empty_response_recoveries,
                 "provider stream ended without persistable assistant output"
             );
             return Err(ProductError::EmptyAssistantResponse);
@@ -742,7 +1140,8 @@ where
         flush_text(&mut current_text, &mut assistant_blocks);
 
         if !tool_calls.is_empty() {
-            let outcomes = execute_pending_tools(tool_host, tools, &tool_calls, abort).await?;
+            let outcomes =
+                execute_pending_tools(tool_host, tools, &tool_calls, retry_guard, abort).await?;
             for (call, outcome) in tool_calls.into_iter().zip(outcomes) {
                 // 一旦 assistant 已经声明了一组 ToolUse，就必须为每个调用闭合协议对；
                 // 即使并发期间收到中断，也会为未启动调用合成可记录的取消结果。
@@ -819,11 +1218,20 @@ where
             had_tool_call,
             tool_metadata,
             usage: total_usage.clone(),
+            reasoning_chars,
             appended_messages,
             requires_final_summary_recovery,
+            hosted_web_failed,
         });
     };
     outcome
+}
+
+fn is_hosted_web_tool_name(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "web_search" | "web_fetch" | "web_extractor"
+    )
 }
 
 /// 将累积的文本刷出为 `Text` 内容块。
@@ -891,15 +1299,204 @@ mod tests {
     use hermes_llm::{MockProvider, RecordedTurn};
     use r_code_core::dto::AgentEvent;
     use std::sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
 
     use super::{
-        repair_dangling_tool_uses, run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
+        EditRetryGuard, PendingToolCall, TOOL_NO_COMPLETION_TIMEOUT, edit_intent,
+        normalized_tool_path, ordinary_tool_watchdog, repair_dangling_tool_uses,
+        run_agent_loop_iteration, run_agent_loop_iteration_with_abort,
         run_agent_loop_iteration_with_abort_and_emit,
+        run_agent_loop_iteration_with_abort_and_emit_with_retry_guard,
     };
+
+    fn edit_call(id: &str, old_string: &str) -> PendingToolCall {
+        PendingToolCall {
+            id: id.to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({
+                "path": "src/memory.rs",
+                "old_string": old_string,
+                "new_string": "    Undo,"
+            }),
+        }
+    }
+
+    fn stale_outcome(code: &str) -> ToolCallOutcome {
+        ToolCallOutcome {
+            content: serde_json::json!({ "status": "error", "code": code }).to_string(),
+            is_error: true,
+            metadata: None,
+        }
+    }
+
+    fn successful_read_call(id: &str, path: &str) -> (PendingToolCall, ToolCallOutcome) {
+        (
+            PendingToolCall {
+                id: id.to_string(),
+                name: "read_file".to_string(),
+                input: serde_json::json!({ "path": path }),
+            },
+            ToolCallOutcome {
+                content: "latest contents".to_string(),
+                is_error: false,
+                metadata: None,
+            },
+        )
+    }
+
+    #[test]
+    fn stale_edit_requires_a_successful_reread_before_retry() {
+        let failed = edit_call("edit-1", "    Undo,\n    Undo,");
+        let retry = edit_call("edit-2", "    Undo,\n    Undo,");
+        let mut guard = EditRetryGuard::default();
+        guard.observe(&failed, &stale_outcome("old_string_not_found"));
+
+        let blocked = guard.before_call(&retry).expect("retry must be guarded");
+        let payload: serde_json::Value = serde_json::from_str(&blocked.content).unwrap();
+        assert!(blocked.is_error);
+        assert_eq!(payload["code"], "reread_required");
+    }
+
+    #[test]
+    fn materially_reread_stale_edit_gets_one_recovery_attempt() {
+        let failed = edit_call("edit-1", "    Undo,\n    Undo,");
+        let retry = edit_call("edit-2", "    Undo,\n    Undo,");
+        let mut guard = EditRetryGuard::default();
+        guard.observe(&failed, &stale_outcome("old_string_not_found"));
+        let (read, outcome) = successful_read_call("read-1", "src\\memory.rs");
+        guard.observe(&read, &outcome);
+
+        assert!(guard.before_call(&retry).is_none());
+    }
+
+    #[test]
+    fn same_stale_edit_is_fused_after_two_failures_even_with_rereads() {
+        let first = edit_call("edit-1", "    Undo,\n    Undo,");
+        let second = edit_call("edit-2", "    Undo,\n    Undo,");
+        let third = edit_call("edit-3", "    Undo,\n    Undo,");
+        let mut guard = EditRetryGuard::default();
+        guard.observe(&first, &stale_outcome("old_string_not_found"));
+        let (read, outcome) = successful_read_call("read-1", "src/memory.rs");
+        guard.observe(&read, &outcome);
+        guard.observe(&second, &stale_outcome("old_string_not_found"));
+        let (read, outcome) = successful_read_call("read-2", "src/memory.rs");
+        guard.observe(&read, &outcome);
+
+        let blocked = guard
+            .before_call(&third)
+            .expect("third attempt must be fused");
+        let payload: serde_json::Value = serde_json::from_str(&blocked.content).unwrap();
+        assert_eq!(payload["code"], "repeated_stale_edit");
+        assert_eq!(payload["details"]["stale_failures"], 2);
+
+        let changed_anchor = edit_call("edit-4", "    Agent,\n    Undo,");
+        assert!(guard.before_call(&changed_anchor).is_none());
+    }
+
+    #[test]
+    fn explicit_postcondition_is_a_materially_different_edit_intent() {
+        let first = edit_call("edit-1", "    Undo,\n    Undo,");
+        let mut with_postcondition = edit_call("edit-2", "    Undo,\n    Undo,");
+        with_postcondition.input["postcondition"] = serde_json::json!({
+            "must_contain": ["    Undo,"],
+            "must_not_contain": ["    Undo,\n    Undo,"]
+        });
+        let mut guard = EditRetryGuard::default();
+        guard.observe(&first, &stale_outcome("old_string_not_found"));
+        guard.observe(&first, &stale_outcome("old_string_not_found"));
+
+        assert_ne!(
+            edit_intent(&first.input),
+            edit_intent(&with_postcondition.input)
+        );
+        assert!(guard.before_call(&with_postcondition).is_none());
+    }
+
+    #[test]
+    fn edit_guard_collapses_lexical_path_aliases() {
+        assert_eq!(
+            normalized_tool_path("src/memory.rs"),
+            normalized_tool_path("./src/memory.rs")
+        );
+        assert_eq!(
+            normalized_tool_path("src/memory.rs"),
+            normalized_tool_path("src/sub/../memory.rs")
+        );
+        assert_eq!(
+            normalized_tool_path("src//memory.rs"),
+            normalized_tool_path("src/memory.rs")
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            normalized_tool_path(r"SRC\MEMORY.rs"),
+            normalized_tool_path("src/memory.rs")
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_edit_guard_is_visible_in_both_events_and_model_history() {
+        let failed = edit_call("edit-1", "    Undo,\n    Undo,");
+        let retry = edit_call("edit-2", "    Undo,\n    Undo,");
+        let mut retry_guard = EditRetryGuard::default();
+        retry_guard.observe(&failed, &stale_outcome("old_string_not_found"));
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: retry.id.clone(),
+                name: retry.name.clone(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: retry.id.clone(),
+                input: retry.input.clone(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("edit");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![
+            Message::user_text("remove the duplicate"),
+            Message::user_text("Current local time: 2026-08-14T12:00 (+08:00)."),
+            Message::user_text("Plan mode is not active."),
+        ];
+        let mut events = Vec::new();
+        run_agent_loop_iteration_with_abort_and_emit_with_retry_guard(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            &mut retry_guard,
+            false,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        let event_payload = events
+            .iter()
+            .find_map(|event| match event {
+                AgentEvent::ToolResult {
+                    call_id,
+                    output,
+                    is_error: true,
+                } if call_id == "edit-2" => Some(output),
+                _ => None,
+            })
+            .expect("guarded result must be emitted");
+        assert_eq!(event_payload["code"], "reread_required");
+        assert!(matches!(
+            messages.last().unwrap().content.as_slice(),
+            [ContentBlock::ToolResult { content, is_error: true, .. }]
+                if serde_json::from_str::<serde_json::Value>(content).unwrap()["code"]
+                    == "reread_required"
+        ));
+    }
 
     struct DropFlag(Arc<AtomicBool>);
 
@@ -998,6 +1595,92 @@ mod tests {
                 Err(Error::ToolNotFound(name.to_string()))
             }
         }
+    }
+
+    struct CountingStaleEditHost {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ToolHost for CountingStaleEditHost {
+        async fn list_tools(&self) -> Result<Vec<ToolSpec>> {
+            Ok(vec![ToolSpec {
+                name: "edit".to_string(),
+                description: "always stale edit".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                requires_confirmation: false,
+            }])
+        }
+
+        async fn call(&self, name: &str, _args: serde_json::Value) -> Result<ToolCallOutcome> {
+            if name != "edit" {
+                return Err(Error::ToolNotFound(name.to_string()));
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(stale_outcome("old_string_not_found"))
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_stale_edits_in_one_provider_turn_share_the_same_budget() {
+        let provider = MockProvider::new("mock");
+        let mut stream_events = Vec::new();
+        for index in 1..=3 {
+            let call = edit_call(&format!("edit-{index}"), "    Undo,\n    Undo,");
+            stream_events.push(StreamEvent::ToolUseStart {
+                id: call.id.clone(),
+                name: call.name.clone(),
+            });
+            stream_events.push(StreamEvent::ToolUseComplete {
+                id: call.id,
+                input: call.input,
+            });
+        }
+        stream_events.push(StreamEvent::Stop {
+            reason: StopReason::ToolUse,
+        });
+        provider.push_turn(RecordedTurn::ok(stream_events));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tool_host = CountingStaleEditHost {
+            calls: calls.clone(),
+        };
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("remove the duplicate")];
+
+        let events =
+            run_agent_loop_iteration(&provider, &tool_host, base_request(), &mut messages, &tools)
+                .await
+                .unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let codes = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::ToolResult {
+                    output,
+                    is_error: true,
+                    ..
+                } => output.get("code").and_then(serde_json::Value::as_str),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            codes,
+            vec![
+                "old_string_not_found",
+                "reread_required",
+                "repeated_stale_edit"
+            ]
+        );
+        assert!(matches!(
+            messages.last().unwrap().content.as_slice(),
+            [
+                ContentBlock::ToolResult { .. },
+                ContentBlock::ToolResult { .. },
+                ContentBlock::ToolResult { .. }
+            ]
+        ));
     }
 
     /// 记录每次 `stream` 收到的请求消息，再回放一段固定文本。
@@ -1265,6 +1948,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_tool_watchdog_returns_an_error_result_instead_of_hanging_the_run() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ToolUseStart {
+                id: "stalled-tool".to_string(),
+                name: "read_file".to_string(),
+            },
+            StreamEvent::ToolUseComplete {
+                id: "stalled-tool".to_string(),
+                input: serde_json::json!({"path": "README.md"}),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::ToolUse,
+            },
+        ]));
+        let started = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let completed = Arc::new(AtomicBool::new(false));
+        let tool_host = PendingToolHost {
+            tools: vec![ToolSpec {
+                name: "read_file".to_string(),
+                description: "pending read".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+                source: ToolSource::Builtin,
+                requires_confirmation: false,
+            }],
+            started: started.clone(),
+            dropped: dropped.clone(),
+            completed: completed.clone(),
+        };
+        let mut messages = vec![Message::user_text("read")];
+
+        let events = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_agent_loop_iteration_with_abort(
+                &provider,
+                &tool_host,
+                base_request(),
+                &mut messages,
+                &tool_host.tools,
+                None,
+            ),
+        )
+        .await
+        .expect("the per-tool watchdog must settle the iteration")
+        .unwrap();
+
+        assert!(started.load(Ordering::SeqCst));
+        assert!(dropped.load(Ordering::SeqCst));
+        assert!(!completed.load(Ordering::SeqCst));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolResult {
+                call_id,
+                is_error: true,
+                ..
+            } if call_id == "stalled-tool"
+        )));
+        assert!(
+            messages
+                .last()
+                .is_some_and(|message| message.content.iter().any(|block| matches!(
+                    block,
+                    ContentBlock::ToolResult { content, is_error: true, .. }
+                        if content.contains("timeout")
+                ))),
+            "the model must receive a retryable timeout result"
+        );
+    }
+
+    #[test]
+    fn ordinary_tool_watchdog_exempts_tools_with_their_own_wait_contract() {
+        for name in [
+            "bash",
+            "delegate_task",
+            "collect_subagents",
+            "request_user_input",
+            "mcp_call",
+            "mcp__obsidian__search",
+        ] {
+            assert_eq!(ordinary_tool_watchdog(name), None, "{name}");
+        }
+        assert_eq!(
+            ordinary_tool_watchdog("read_file"),
+            Some(TOOL_NO_COMPLETION_TIMEOUT)
+        );
+    }
+
+    #[tokio::test]
     async fn text_delta_produces_message_events() {
         let provider = MockProvider::new("mock");
         provider.push_text_turn("hello", Usage::new(10, 5));
@@ -1342,7 +2114,7 @@ mod tests {
         let mut messages = vec![Message::user_text("hi")];
         let mut events = Vec::new();
 
-        run_agent_loop_iteration_with_abort_and_emit(
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
             &provider,
             &tool_host,
             base_request(),
@@ -1367,6 +2139,70 @@ mod tests {
         assert_eq!(
             messages.last().map(Message::text_content).as_deref(),
             Some("answer")
+        );
+        assert_eq!(outcome.reasoning_chars, "checking".chars().count());
+    }
+
+    #[tokio::test]
+    async fn provider_reasoning_after_answer_start_is_counted_but_not_emitted() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::ReasoningDelta {
+                text: "checking".into(),
+            },
+            StreamEvent::TextDelta {
+                text: "answer".into(),
+            },
+            StreamEvent::ReasoningDelta {
+                text: "late buffered thought".into(),
+            },
+            StreamEvent::TextDelta {
+                text: " continues".into(),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("noop");
+        let mut messages = vec![Message::user_text("hi")];
+        let mut events = Vec::new();
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &[],
+            None,
+            true,
+            |event| events.push(event),
+        )
+        .await
+        .unwrap();
+
+        let visible = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::Reasoning { text, .. } => Some(("reasoning", text.as_str())),
+                AgentEvent::Message { text, .. } => Some(("message", text.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible,
+            vec![
+                ("reasoning", "checking"),
+                ("message", "answer"),
+                ("message", " continues"),
+            ]
+        );
+        assert_eq!(
+            outcome.reasoning_chars,
+            "checkinglate buffered thought".chars().count()
+        );
+        assert_eq!(
+            messages.last().map(Message::text_content).as_deref(),
+            Some("answer continues")
         );
     }
 
@@ -1427,6 +2263,7 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         assert!(!outcome.requires_final_summary_recovery);
+        assert!(!outcome.hosted_web_failed);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].text_content(), "Rust source summary");
         assert!(matches!(
@@ -1499,6 +2336,7 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         assert!(outcome.requires_final_summary_recovery);
+        assert!(!outcome.hosted_web_failed);
         assert_eq!(outcome.appended_messages.len(), 1);
         assert!(matches!(
             &outcome.appended_messages[0].content[..],
@@ -1507,6 +2345,57 @@ mod tests {
                 ContentBlock::Custom { type_name: result, .. },
             ] if call == "server_tool_use" && result == "web_search_tool_result"
         ));
+    }
+
+    #[tokio::test]
+    async fn hosted_web_error_is_reported_to_the_run_coordinator() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![
+            StreamEvent::HostedToolUse {
+                id: "srvtoolu_failed".into(),
+                name: "web_search".into(),
+                input: serde_json::json!({"query": "Rust"}),
+                provider_content: Some(serde_json::json!({
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_failed",
+                    "name": "web_search",
+                    "input": {"query": "Rust"},
+                })),
+            },
+            StreamEvent::HostedToolResult {
+                id: "srvtoolu_failed".into(),
+                name: "web_search".into(),
+                output: serde_json::json!({"error": "unsupported server tool"}),
+                is_error: true,
+                provider_content: Some(serde_json::json!({
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_failed",
+                    "content": {"type": "web_search_tool_error", "error_code": "unavailable"},
+                })),
+            },
+            StreamEvent::Stop {
+                reason: StopReason::EndTurn,
+            },
+        ]));
+        let tool_host = EchoToolHost::new("web_search");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("search")];
+
+        let outcome = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            false,
+            |_| {},
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.hosted_web_failed);
+        assert!(outcome.requires_final_summary_recovery);
     }
 
     #[tokio::test]
@@ -1663,10 +2552,12 @@ mod tests {
         assert_eq!(outcome.tool_metadata.len(), 1);
         assert_eq!(outcome.tool_metadata[0].tool_name, "plan_item_update");
         assert_eq!(outcome.tool_metadata[0].metadata, metadata);
-        assert!(messages[2]
-            .content
-            .iter()
-            .any(|block| block.is_tool_result()));
+        assert!(
+            messages[2]
+                .content
+                .iter()
+                .any(|block| block.is_tool_result())
+        );
     }
 
     #[tokio::test]
@@ -2154,9 +3045,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(messages.last().unwrap().text_content(), "recovered");
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, AgentEvent::StreamReplay { attempt: 1 })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::StreamReplay { attempt: 1 }))
+        );
     }
 
     #[tokio::test]
@@ -2188,6 +3081,65 @@ mod tests {
             1,
             "failed turns must not append an empty reply"
         );
+    }
+
+    #[tokio::test]
+    async fn hosted_web_sse_contract_error_keeps_a_safe_fallback_marker() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::Other(
+                "invalid_request_error: unsupported server tool web_search".into(),
+            ),
+        }]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+
+        let error = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |_| {},
+        )
+        .await
+        .expect_err("hosted web contract errors must fail the iteration");
+
+        assert!(error.to_string().contains("hosted web tool is unsupported"));
+        assert_eq!(messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn responses_style_error_metadata_is_classified_as_fatal() {
+        let provider = MockProvider::new("mock");
+        provider.push_turn(RecordedTurn::ok(vec![StreamEvent::Stop {
+            reason: StopReason::Other(
+                "unsupported input item (type=invalid_request_error, code=invalid_value, param=input[37])"
+                    .into(),
+            ),
+        }]));
+        let tool_host = EchoToolHost::new("");
+        let tools = tool_host.list_tools().await.unwrap();
+        let mut messages = vec![Message::user_text("hi")];
+
+        let error = run_agent_loop_iteration_with_abort_and_emit(
+            &provider,
+            &tool_host,
+            base_request(),
+            &mut messages,
+            &tools,
+            None,
+            true,
+            |_| {},
+        )
+        .await
+        .expect_err("Responses error metadata must fail the iteration");
+
+        assert!(error.to_string().contains("拒绝了请求"));
+        assert_eq!(messages.len(), 1);
     }
 
     #[tokio::test]
@@ -2278,9 +3230,11 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         // 重放成功：最终消息只含一轮文本，无重复产出。
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "recovered")));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "recovered"))
+        );
         let assistant_text = messages
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -2334,9 +3288,11 @@ mod tests {
 
         assert!(!outcome.had_tool_call);
         // 只消费了一轮（mock 无剩余轮次也不报错：重放被跳过）。
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "partial")));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::Message { text, .. } if text == "partial"))
+        );
         let assistant_text = messages
             .iter()
             .filter(|m| m.role == Role::Assistant)
@@ -2446,9 +3402,11 @@ mod tests {
         .unwrap();
 
         assert!(!outcome.had_tool_call);
-        assert!(!events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::StreamReplay { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::StreamReplay { .. }))
+        );
     }
 
     /// 判断 ToolResult 是否为修复合成的 cancelled 结果（内容为
@@ -2507,10 +3465,12 @@ mod tests {
         )));
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[2].role, Role::User);
-        assert!(messages[2]
-            .content
-            .iter()
-            .any(|block| block.is_tool_result()));
+        assert!(
+            messages[2]
+                .content
+                .iter()
+                .any(|block| block.is_tool_result())
+        );
     }
 
     #[tokio::test]

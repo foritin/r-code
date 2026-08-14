@@ -393,13 +393,13 @@ function CustomMcpForm({ server, busy, onCancel, onSave }: {
         <label>ID<input className="input" required pattern="[a-z][a-z0-9_-]{0,63}" disabled={Boolean(server) || busy} value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="例如 github-tools" /></label>
         <label>显示名称<input className="input" required disabled={busy} value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
         <label className="wide">说明<input className="input" disabled={busy} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-        <label>传输<select className="input" disabled={busy} value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as typeof draft.transport })}><option value="stdio">本机 stdio</option><option value="streamable_http">远程 HTTPS</option></select></label>
+        <label>传输<select className="input" disabled={busy} value={draft.transport} onChange={(event) => setDraft({ ...draft, transport: event.target.value as typeof draft.transport })}><option value="stdio">本机 stdio</option><option value="streamable_http">HTTP / HTTPS</option></select></label>
         {draft.transport === "stdio" ? <>
           <label>可执行文件<input className="input" required disabled={busy} value={draft.executable} onChange={(event) => setDraft({ ...draft, executable: event.target.value })} placeholder="npx / uvx / 绝对路径" /></label>
           <label className="wide">参数（每行一个）<textarea className="input" rows={4} disabled={busy} value={draft.args} onChange={(event) => setDraft({ ...draft, args: event.target.value })} /></label>
           <label className="wide">环境变量名（每行一个）<textarea className="input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="API_TOKEN" /></label>
         </> : <>
-          <label className="wide">HTTPS 地址<input className="input" type="url" required disabled={busy} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp" /></label>
+          <label className="wide">服务地址<input className="input" type="url" required disabled={busy} value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} placeholder="https://example.com/mcp 或 http://127.0.0.1:27200/mcp" /><small className="mcp-field-hint">远程服务必须使用 HTTPS；HTTP 仅允许 localhost、127.0.0.1 或 [::1] 本机回环地址。</small></label>
           <label className="wide">请求头名（每行一个）<textarea className="input" rows={3} disabled={busy} value={draft.names} onChange={(event) => setDraft({ ...draft, names: event.target.value })} placeholder="Authorization" /></label>
         </>}
       </div>

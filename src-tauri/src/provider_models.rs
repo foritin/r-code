@@ -22,6 +22,133 @@ pub struct ProviderModelsResponse {
     pub models: Vec<String>,
 }
 
+/// DeepSeek 官方余额查询结果。金额字段保持接口返回的字符串，避免精度丢失。
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct ProviderBalanceResponse {
+    pub currency: String,
+    pub total_balance: String,
+    pub granted_balance: String,
+    pub topped_up_balance: String,
+}
+
+/// 读取 DeepSeek 官方账户余额。只允许官方 `api.deepseek.com` 主机，避免把用户
+/// 密钥发往自定义网关；响应正文与错误都不会包含密钥。
+pub async fn discover_deepseek_balance(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<ProviderBalanceResponse, String> {
+    let base = Url::parse(base_url.trim().trim_end_matches('/'))
+        .map_err(|_| "接口地址格式无效".to_string())?;
+    if !matches!(base.scheme(), "http" | "https") {
+        return Err("接口地址需要以 http:// 或 https:// 开头".to_string());
+    }
+    if !base.username().is_empty() || base.password().is_some() {
+        return Err("接口地址不能包含用户名或密码".to_string());
+    }
+    if !base
+        .host_str()
+        .is_some_and(|host| host.eq_ignore_ascii_case("api.deepseek.com"))
+    {
+        return Err("余额查询仅支持 DeepSeek 官方接口".to_string());
+    }
+
+    let key = api_key.map(str::trim).filter(|value| !value.is_empty());
+    let Some(key) = key else {
+        return Err("缺少 DeepSeek 访问密钥".to_string());
+    };
+
+    let mut url = base;
+    url.set_path("/user/balance");
+    let client = Client::builder()
+        .connect_timeout(Duration::from_secs(6))
+        .timeout(Duration::from_secs(15))
+        .user_agent(concat!("R-Code/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| "无法初始化余额查询请求".to_string())?;
+    let response = client
+        .get(url)
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(sanitize_network_error)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(balance_http_error(status));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err("余额响应过大，已停止读取".to_string());
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|_| "读取余额响应失败".to_string())?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err("余额响应过大，已停止读取".to_string());
+    }
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|_| "余额接口返回了无法识别的数据".to_string())?;
+    parse_deepseek_balance(&value)
+}
+
+fn parse_deepseek_balance(value: &Value) -> Result<ProviderBalanceResponse, String> {
+    let Some(info) = value.get("balance_infos").and_then(Value::as_array) else {
+        return Err("余额接口返回了无法识别的数据".to_string());
+    };
+    let mut currency = String::new();
+    let mut total = String::new();
+    let mut granted = String::new();
+    let mut topped_up = String::new();
+    for item in info {
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        let Some(name) = item.get("currency").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(balance) = item.get("total_balance").and_then(Value::as_str) else {
+            continue;
+        };
+        currency = name.to_string();
+        total = balance.to_string();
+        granted = item
+            .get("granted_balance")
+            .and_then(Value::as_str)
+            .unwrap_or("0")
+            .to_string();
+        topped_up = item
+            .get("topped_up_balance")
+            .and_then(Value::as_str)
+            .unwrap_or("0")
+            .to_string();
+        break;
+    }
+    if currency.is_empty() || total.is_empty() {
+        return Err("余额接口返回了无法识别的数据".to_string());
+    }
+    Ok(ProviderBalanceResponse {
+        currency,
+        total_balance: total,
+        granted_balance: granted,
+        topped_up_balance: topped_up,
+    })
+}
+
+fn balance_http_error(status: StatusCode) -> String {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            "DeepSeek 鉴权失败，请检查访问密钥".to_string()
+        }
+        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED => {
+            "DeepSeek 未提供余额查询接口".to_string()
+        }
+        StatusCode::TOO_MANY_REQUESTS => "余额查询过于频繁，请稍后重试".to_string(),
+        _ => format!("余额查询失败（HTTP {}）", status.as_u16()),
+    }
+}
+
 /// 从 Provider 的模型目录端点读取可用模型。
 pub async fn discover_models(
     base_url: &str,

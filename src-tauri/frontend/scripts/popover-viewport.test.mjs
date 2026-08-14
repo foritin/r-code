@@ -77,7 +77,7 @@ async function assertBounded(locator, { scrollable = false, innerSelector } = {}
     };
   }, innerSelector);
 
-  // CSS zoom and fractional device pixels can turn the intended 8px margin into ~6px.
+  // Fractional device pixels can turn the intended 8px margin into ~6px.
   // The regression boundary only needs to prove that no edge is clipped.
   const visibleGap = 3;
   assert.ok(metrics.rect.top >= visibleGap, `top ${metrics.rect.top} must remain inside the viewport`);
@@ -162,6 +162,71 @@ test("floating surfaces stay inside a very small viewport and scroll internally"
   await assertBounded(notificationDialog, { scrollable: true, innerSelector: ".notification-menu-list" });
 
   assert.deepEqual(runtimeErrors, []);
+  await page.close();
+});
+
+test("review-ready sessions stay green without losing their review semantics", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    await Promise.all([
+      useTasksStore.getState().refreshDetail("mock-task-permission"),
+      useTasksStore.getState().refreshDetail("mock-task-review"),
+    ]);
+  });
+  await page.locator(".sidebar-task-row").filter({ hasText: "统一错误处理规范" }).waitFor({ state: "visible" });
+
+  const status = await page.evaluate(() => {
+    const dotFor = (title) => {
+      const row = [...document.querySelectorAll(".sidebar-task-row")]
+        .find((candidate) => candidate.textContent?.includes(title));
+      const dot = row?.querySelector(".task-state-dot");
+      if (!(dot instanceof HTMLElement)) throw new Error(`missing sidebar state dot: ${title}`);
+      return {
+        className: dot.className,
+        color: getComputedStyle(dot).backgroundColor,
+      };
+    };
+    const tokenColor = (token) => {
+      const probe = document.createElement("i");
+      probe.style.backgroundColor = `var(${token})`;
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    return {
+      success: tokenColor("--success"),
+      warning: tokenColor("--warning"),
+      running: dotFor("修复任务队列并发问题"),
+      waitingUser: dotFor("优化 Rust 编译性能"),
+      reviewReady: dotFor("统一错误处理规范"),
+    };
+  });
+
+  assert.match(status.reviewReady.className, /\breview\b/, "review-ready remains a distinct semantic state");
+  assert.equal(status.reviewReady.color, status.success, "review-ready is completed work, not a live orange run");
+  for (const active of [status.running, status.waitingUser]) {
+    assert.equal(active.color, status.warning);
+  }
+  assert.match(status.running.className, /\brunning\b/);
+  assert.match(status.waitingUser.className, /\battention\b/);
+
+  await page.getByRole("button", { name: "对话", exact: true }).click();
+  await page.getByRole("tab", { name: "待审核", exact: true }).click();
+  const reviewRow = page.locator(".conversation-row").filter({ hasText: "统一错误处理规范" });
+  await reviewRow.waitFor({ state: "visible" });
+  await reviewRow.getByText("等待审查", { exact: true }).waitFor({ state: "visible" });
+  const conversationStatus = reviewRow.locator(".conversation-status.review");
+  assert.equal(await conversationStatus.count(), 1, "the review filter and review class remain intact");
+  assert.equal(
+    await conversationStatus.locator("i").evaluate((dot) => getComputedStyle(dot).backgroundColor),
+    status.success,
+    "conversation rows share the same completed review color as the sidebar",
+  );
+
   await page.close();
 });
 

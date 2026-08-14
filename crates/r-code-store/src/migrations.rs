@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 ///
 /// `src-tauri::migration::MigrationManager` 也引用这个常量，避免产品层的迁移
 /// 预检和实际 store 迁移版本发生漂移。
-pub const LATEST_SCHEMA_VERSION: u32 = 27;
+pub const LATEST_SCHEMA_VERSION: u32 = 29;
 
 #[derive(Clone, Copy)]
 struct MigrationSpec {
@@ -56,6 +56,8 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec::new(25, MIGRATION_025, false),
     MigrationSpec::new(26, MIGRATION_026, false),
     MigrationSpec::new(27, MIGRATION_027, false),
+    MigrationSpec::new(28, MIGRATION_028, true),
+    MigrationSpec::new(29, MIGRATION_029, false),
 ];
 
 impl MigrationSpec {
@@ -1436,6 +1438,62 @@ CREATE TABLE plan_tool_receipts (
 
 CREATE INDEX idx_plan_tool_receipts_task_plan
     ON plan_tool_receipts(task_id, plan_id, created_at DESC);
+"#;
+
+/// Migration 028: allow agent-authored memory entries and track their run provenance.
+///
+/// The coding agent's `save_memory` tool writes entries with `origin = 'agent'`. This migration
+/// rebuilds `memory_entries` to widen the origin CHECK constraints and adds `source_run_id` /
+/// `source_task_id` provenance columns so per-run and rolling-window rate limits can be enforced.
+const MIGRATION_028: &str = r#"
+CREATE TABLE memory_entries_v28 (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('global', 'project')),
+    workspace_id TEXT REFERENCES workspaces(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('preference', 'constraint', 'convention', 'decision', 'pitfall')),
+    content TEXT NOT NULL CHECK (length(content) BETWEEN 1 AND 1000),
+    normalized_hash TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    origin TEXT NOT NULL CHECK (origin IN ('manual', 'approved_candidate', 'automatic_review', 'undo', 'agent')),
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+    source_job_id TEXT,
+    source_candidate_id TEXT,
+    source_run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
+    source_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (
+        (scope = 'global' AND workspace_id IS NULL
+            AND origin IN ('manual', 'approved_candidate', 'agent'))
+        OR
+        (scope = 'project' AND workspace_id IS NOT NULL
+            AND origin IN ('manual', 'automatic_review', 'undo', 'agent'))
+    ),
+    UNIQUE (scope, workspace_id, normalized_hash)
+);
+
+INSERT INTO memory_entries_v28 (
+    id, scope, workspace_id, kind, content, normalized_hash, version, origin,
+    pinned, source_job_id, source_candidate_id, created_at, updated_at
+)
+SELECT id, scope, workspace_id, kind, content, normalized_hash, version, origin,
+       pinned, source_job_id, source_candidate_id, created_at, updated_at
+FROM memory_entries;
+
+DROP TABLE memory_entries;
+ALTER TABLE memory_entries_v28 RENAME TO memory_entries;
+CREATE UNIQUE INDEX idx_memory_entries_global_hash
+    ON memory_entries(normalized_hash) WHERE scope = 'global';
+CREATE INDEX idx_memory_entries_owner
+    ON memory_entries(scope, workspace_id, pinned DESC, updated_at DESC, id);
+CREATE INDEX idx_memory_entries_agent_run
+    ON memory_entries(origin, source_run_id, created_at);
+"#;
+
+/// Migration 029: persist queued attachments so a message queued while a run is
+/// active no longer has to be rejected or have its files silently dropped.
+const MIGRATION_029: &str = r#"
+ALTER TABLE queued_messages ADD COLUMN attachments_json TEXT;
 "#;
 
 #[cfg(test)]

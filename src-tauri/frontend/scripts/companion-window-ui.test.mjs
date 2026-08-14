@@ -23,6 +23,20 @@ function browserExecutable() {
   ].find((candidate) => candidate && fs.existsSync(candidate));
 }
 
+async function launchBrowser() {
+  try {
+    // Use Playwright's own registry first. This honors PLAYWRIGHT_BROWSERS_PATH and selects the
+    // Chromium revision paired with the installed playwright-core package.
+    return await chromium.launch({ headless: true });
+  } catch (registryError) {
+    const executablePath = browserExecutable();
+    if (!executablePath) throw registryError;
+    // Developer machines may intentionally rely on an installed Chrome/Edge instead of downloading
+    // Playwright Chromium. Keep that local fallback without guessing another project's cache entry.
+    return chromium.launch({ executablePath, headless: true });
+  }
+}
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const candidate = net.createServer();
@@ -75,7 +89,7 @@ test.before(async () => {
     windowsHide: true,
   });
   await waitForServer(baseUrl, server);
-  browser = await chromium.launch({ executablePath: browserExecutable(), headless: true });
+  browser = await launchBrowser();
 });
 
 test.after(async () => {
@@ -170,15 +184,268 @@ test("controller handshake replays lost READY/PREF revisions and transparent pad
 test("native companion normalizes restored coordinates before Tauri position IPC", async () => {
   const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  const normalized = await page.evaluate(async () => {
-    const { integerPhysicalPosition } = await import("/src/components/companion/CompanionWindow.tsx");
-    return integerPhysicalPosition({
-      x: 1253.9999999999998,
-      y: 223.99999999999997,
-    });
+  const result = await page.evaluate(async () => {
+    const {
+      compactLayoutForNativeHeight,
+      integerPhysicalPosition,
+    } = await import("/src/components/companion/CompanionWindow.tsx");
+    return {
+      normalized: integerPhysicalPosition({
+        x: 1253.9999999999998,
+        y: 223.99999999999997,
+      }),
+      layouts: [
+        compactLayoutForNativeHeight(false, true, 2, 360),
+        compactLayoutForNativeHeight(false, true, 2, 440),
+        compactLayoutForNativeHeight(false, true, 3, 520),
+        compactLayoutForNativeHeight(true, true, 2, 196),
+      ],
+    };
   });
 
-  assert.deepEqual(normalized, { x: 1254, y: 224 });
+  assert.deepEqual(result.normalized, { x: 1254, y: 224 });
+  assert.deepEqual(result.layouts, [
+    { minimized: false, hasTracking: true, rows: 1 },
+    { minimized: false, hasTracking: true, rows: 2 },
+    { minimized: false, hasTracking: true, rows: 3 },
+    { minimized: true, hasTracking: false, rows: 0 },
+  ], "the DOM must expose only task rows that the native WebView actually accepted");
+  await page.close();
+});
+
+test("task completion keeps the tracked avatar footprint continuous and fully visible", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 520 } });
+  await page.addInitScript(() => {
+    localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
+      revision: 1,
+      enabled: true,
+      minimized: true,
+      soundEnabled: false,
+      motion: "reduced",
+    }));
+    localStorage.removeItem("r-code.companion.unread-sessions.v1");
+  });
+  await page.goto(`${baseUrl}?window=companion`, { waitUntil: "networkidle" });
+  const avatar = page.getByRole("button", { name: /R-Code session 助手/ });
+  await avatar.waitFor({ state: "visible" });
+  await page.waitForTimeout(2_300);
+
+  const target = await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const state = useTasksStore.getState();
+    const task = state.tasks.find((item) => item.id === "mock-task-queue");
+    if (!task) throw new Error("browser mock is missing the completion target");
+    const endedAt = new Date().toISOString();
+    useTasksStore.setState({
+      tasks: state.tasks.map((item) => item.id === task.id
+        ? { ...item, state: "idle", updated_at: endedAt }
+        : { ...item, state: "archived", updated_at: endedAt }),
+      details: Object.fromEntries(Object.entries(state.details).map(([taskId, detail]) => [taskId, {
+        ...detail,
+        task: {
+          ...detail.task,
+          state: taskId === task.id ? "idle" : "archived",
+          updated_at: endedAt,
+        },
+        permissions: detail.permissions.map((permission) => ({ ...permission, decision: "allow" })),
+        runs: detail.runs.map((run) => ({ ...run, ended_at: run.ended_at ?? endedAt })),
+      }])),
+    });
+    return { id: task.id, title: task.title };
+  });
+  await page.waitForFunction(() => document.querySelector(".companion-unread-badge")?.textContent === "1");
+  await avatar.click();
+  const dialog = page.getByRole("dialog", { name: "最近任务" });
+  await dialog.waitFor({ state: "visible" });
+  const targetCard = dialog.locator(".companion-session-card").filter({ hasText: target.title });
+  await targetCard.locator(".companion-session-row").click();
+  await dialog.waitFor({ state: "detached" });
+  await page.waitForFunction(() => !document.querySelector(".companion-window-root")?.classList.contains("has-tracking"));
+
+  await page.evaluate(async (taskId) => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const state = useTasksStore.getState();
+    const startedAt = new Date().toISOString();
+    const detail = state.details[taskId];
+    useTasksStore.setState({
+      tasks: state.tasks.map((item) => item.id === taskId
+        ? { ...item, state: "in_progress", updated_at: startedAt }
+        : item),
+      details: detail ? {
+        ...state.details,
+        [taskId]: {
+          ...detail,
+          task: { ...detail.task, state: "in_progress", updated_at: startedAt },
+          runs: detail.runs.map((run, index) => index === 0
+            ? { ...run, started_at: run.started_at ?? startedAt, ended_at: null }
+            : run),
+        },
+      } : state.details,
+    });
+  }, target.id);
+  await page.waitForFunction(() => {
+    const root = document.querySelector(".companion-window-root");
+    return root?.classList.contains("state-working") && root.classList.contains("has-tracking");
+  });
+  await page.waitForTimeout(80);
+  const before = await avatar.evaluate((element) => element.getBoundingClientRect().toJSON());
+
+  await page.evaluate(async (taskId) => {
+    window.__companionTrackingTransitions = [];
+    const root = document.querySelector(".companion-window-root");
+    const sample = () => {
+      const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+      window.__companionTrackingTransitions.push({
+        hasTracking: root?.classList.contains("has-tracking") ?? false,
+        avatarTop: avatar?.top ?? null,
+      });
+    };
+    const observer = new MutationObserver(sample);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    window.__companionTrackingObserver = observer;
+    sample();
+
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const state = useTasksStore.getState();
+    const endedAt = new Date().toISOString();
+    const detail = state.details[taskId];
+    useTasksStore.setState({
+      tasks: state.tasks.map((item) => item.id === taskId
+        ? { ...item, state: "idle", updated_at: endedAt }
+        : item),
+      details: detail ? {
+        ...state.details,
+        [taskId]: {
+          ...detail,
+          task: { ...detail.task, state: "idle", updated_at: endedAt },
+          runs: detail.runs.map((run) => ({ ...run, ended_at: endedAt })),
+        },
+      } : state.details,
+    });
+  }, target.id);
+  await page.waitForFunction(() => {
+    const root = document.querySelector(".companion-window-root");
+    return root?.classList.contains("state-success") && root.classList.contains("has-tracking");
+  });
+  await page.waitForTimeout(120);
+  const result = await page.evaluate(() => {
+    window.__companionTrackingObserver?.disconnect();
+    const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+    const sprite = document.querySelector(".companion-sprite-frame")?.getBoundingClientRect();
+    return {
+      transitions: window.__companionTrackingTransitions,
+      avatar: avatar?.toJSON(),
+      sprite: sprite?.toJSON(),
+      spriteState: document.querySelector(".companion-sprite-frame")?.getAttribute("data-sprite-state"),
+      backgroundSize: getComputedStyle(document.querySelector(".companion-sprite-frame")).backgroundSize,
+    };
+  });
+  assert.ok(result.transitions.every((entry) => entry.hasTracking),
+    `completion must not briefly collapse the native tracking footprint: ${JSON.stringify(result.transitions)}`);
+  assert.equal(result.avatar.top, before.top);
+  assert.equal(result.avatar.left, before.left);
+  assert.ok(result.sprite.top >= result.avatar.top && result.sprite.bottom <= result.avatar.bottom,
+    `the completion sprite must remain fully inside its avatar viewport: ${JSON.stringify(result)}`);
+  assert.equal(result.spriteState, "success");
+  assert.equal(result.backgroundSize, "800% 900%");
+  await page.close();
+});
+
+test("Windows mixed-DPI restore and hit testing use destination physical coordinates", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const result = await page.evaluate(async () => {
+    const { restoredAnchorForMonitor } = await import("/src/components/companion/CompanionWindow.tsx");
+    const {
+      createAsyncCleanupScope,
+      createCursorEventPolicy,
+      physicalCursorToLogicalPoint,
+      restoreMainWindowBestEffort,
+    } = await import("/src/components/companion/CompanionWindowController.tsx");
+    const monitor = {
+      name: "Left 150%",
+      position: { x: -2560, y: 0 },
+      size: { width: 2560, height: 1440 },
+      workArea: {
+        position: { x: -2560, y: 0 },
+        size: { width: 2560, height: 1400 },
+      },
+      scaleFactor: 1.5,
+    };
+    const restored = restoredAnchorForMonitor({
+      x: 100,
+      y: 100,
+      monitorName: monitor.name,
+      relativeX: 1,
+      relativeY: 1,
+      scaleFactor: 1,
+    }, { width: 168, height: 196 }, monitor);
+    const point = physicalCursorToLogicalPoint(
+      { x: -2252.5, y: 187.5 },
+      { x: -2400, y: 75 },
+      1.5,
+    );
+    const operations = [];
+    const failures = [];
+    await restoreMainWindowBestEffort({
+      show: async () => { operations.push("show"); },
+      unminimize: async () => {
+        operations.push("unminimize");
+        throw new Error("Windows denied the transition");
+      },
+      setFocus: async () => { operations.push("focus"); },
+    }, (operation) => failures.push(operation));
+
+    let releaseStaleEnable;
+    let markStaleEnableStarted;
+    let nativeIgnored = false;
+    const cursorOperations = [];
+    const staleEnableStarted = new Promise((resolve) => { markStaleEnableStarted = resolve; });
+    const cursorPolicy = createCursorEventPolicy(async (ignored) => {
+      cursorOperations.push(ignored);
+      if (ignored) {
+        markStaleEnableStarted();
+        await new Promise((resolve) => { releaseStaleEnable = resolve; });
+      }
+      nativeIgnored = ignored;
+    });
+    const staleEnable = cursorPolicy.setIgnored(true);
+    await staleEnableStarted;
+    const disable = cursorPolicy.setIgnored(false);
+    releaseStaleEnable();
+    await Promise.all([staleEnable, disable]);
+
+    let releaseLateListener;
+    let lateCleanupCalls = 0;
+    const lateRegistration = new Promise((resolve) => {
+      releaseLateListener = () => resolve(() => { lateCleanupCalls += 1; });
+    });
+    const listenerScope = createAsyncCleanupScope();
+    const retainedLateListener = listenerScope.retain(lateRegistration);
+    listenerScope.dispose();
+    releaseLateListener();
+    const lateListenerRetained = await retainedLateListener;
+
+    return {
+      restored,
+      point,
+      operations,
+      failures,
+      cursorOperations,
+      nativeIgnored,
+      lateCleanupCalls,
+      lateListenerRetained,
+    };
+  });
+
+  assert.deepEqual(result.restored, { x: -252, y: 1106 });
+  assert.deepEqual(result.point, { x: 98.33333333333333, y: 75 });
+  assert.deepEqual(result.operations, ["show", "unminimize", "focus"]);
+  assert.deepEqual(result.failures, ["unminimize"]);
+  assert.deepEqual(result.cursorOperations, [true, false]);
+  assert.equal(result.nativeIgnored, false);
+  assert.equal(result.lateListenerRetained, false);
+  assert.equal(result.lateCleanupCalls, 1);
   await page.close();
 });
 
@@ -246,7 +513,8 @@ test("independent session assistant animates, reports unread progress and expose
   });
   assert.deepEqual(expandedRects, collapsedRects,
     "opening progress must not squeeze the avatar or its sprite plane");
-  assert.equal(await dialog.locator(".companion-session-card:not(.is-exiting)").count(), 4);
+  assert.equal(await dialog.locator(".companion-session-card:not(.is-exiting)").count(), 5,
+    "the scrollable task panel keeps every non-archived session reachable");
   await page.waitForFunction(() => document.activeElement?.classList.contains("companion-session-row"));
   assert.match(await dialog.innerText(), /等待确认|待审阅|正在实施|正在分析项目/);
 
@@ -303,7 +571,12 @@ test("independent session assistant animates, reports unread progress and expose
     });
     return { id: task.id, title: task.title };
   });
-  await page.waitForFunction(() => document.querySelector(".companion-unread-badge")?.textContent === "1");
+  await page.waitForFunction(() => {
+    const badge = document.querySelector(".companion-unread-badge")?.textContent;
+    const trackerLabel = document.querySelector(".companion-pulse-stack")?.getAttribute("aria-label") ?? "";
+    const trackingCount = trackerLabel.match(/共\s+(\d+)\s+个任务/)?.[1];
+    return trackingCount && badge === trackingCount;
+  });
   assert.match(await avatar.getAttribute("aria-label"), /1 个未读/);
 
   await avatar.click();
@@ -353,7 +626,7 @@ test("independent session assistant animates, reports unread progress and expose
 });
 
 test("running and unread sessions surface automatically above the assistant", async () => {
-  const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
+  const page = await browser.newPage({ viewport: { width: 420, height: 520 } });
   await page.addInitScript(() => {
     localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
       revision: 1,
@@ -364,30 +637,311 @@ test("running and unread sessions surface automatically above the assistant", as
     }));
     localStorage.setItem("r-code.companion.unread-sessions.v1", JSON.stringify([
       "mock-task-review",
-      "mock-task-complete",
+      "mock-task-permission",
     ]));
   });
   await page.goto(`${baseUrl}?window=companion`, { waitUntil: "networkidle" });
   const stack = page.getByRole("region", { name: "Session 进度提醒" });
   await stack.waitFor({ state: "visible" });
   assert.equal(await stack.locator(".companion-session-card").count(), 2,
-    "the automatic stack is bounded while keeping urgent/live sessions visible");
+    "two task reminders must render as two independently actionable tracker rows");
   assert.equal(await page.getByRole("dialog", { name: "最近任务" }).count(), 0,
     "automatic progress does not require opening the recent-session dialog");
   const live = stack.locator(".companion-session-card").filter({ hasText: "优化 Rust 编译性能" });
   await live.hover();
   assert.equal(await live.getByRole("button", { name: "继续跟进" }).count(), 1);
   assert.equal(await live.getByRole("button", { name: "停止当前运行" }).count(), 1);
-  const bounds = await stack.evaluate((element) => {
+  await page.waitForFunction(() => {
+    const card = document.querySelector(".companion-pulse-stack .companion-session-card:hover");
+    const actions = card?.querySelector(".companion-session-actions");
+    const supporting = card?.querySelector(".companion-session-copy small");
+    const title = card?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    const actionButtons = [...(card?.querySelectorAll(".companion-session-actions button") ?? [])]
+      .map((button) => button.getBoundingClientRect());
+    const actionTop = Math.min(...actionButtons.map((rect) => rect.top));
+    return actions && supporting
+      && getComputedStyle(actions).opacity === "1"
+      && getComputedStyle(supporting).opacity === "0"
+      && title && Number.isFinite(actionTop) && title.bottom + 4 <= actionTop;
+  });
+  const geometry = await stack.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const avatar = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+    const toggle = document.querySelector(".companion-tracking-toggle")?.getBoundingClientRect();
+    const hoveredCard = element.querySelector(".companion-session-card:hover");
+    const hoveredRow = hoveredCard?.querySelector(".companion-session-row");
+    const unreadMarker = hoveredRow?.querySelector(":scope > i")?.getBoundingClientRect();
+    const hoverActions = [...(hoveredCard?.querySelectorAll(".companion-session-actions button") ?? [])];
+    const hoverAction = hoverActions.at(-1)?.getBoundingClientRect();
+    const actionTop = Math.min(...hoverActions.map((button) => button.getBoundingClientRect().top));
+    const title = hoveredCard?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    const firstRow = element.querySelector(".companion-session-row")?.getBoundingClientRect();
+    const background = hoveredRow ? getComputedStyle(hoveredRow).backgroundColor : "";
+    const alphaMatch = background.match(/rgba\([^)]*,\s*([\d.]+)\)$/);
+    return {
+      stack: { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left, width: rect.width },
+      avatar: avatar && { top: avatar.top, right: avatar.right, bottom: avatar.bottom, left: avatar.left },
+      toggle: toggle && { top: toggle.top, right: toggle.right, bottom: toggle.bottom, left: toggle.left },
+      row: firstRow && { width: firstRow.width, height: firstRow.height },
+      unreadMarker: unreadMarker && { top: unreadMarker.top, right: unreadMarker.right, bottom: unreadMarker.bottom, left: unreadMarker.left },
+      hoverAction: hoverAction && { top: hoverAction.top, right: hoverAction.right, bottom: hoverAction.bottom, left: hoverAction.left },
+      title: title && { top: title.top, right: title.right, bottom: title.bottom, left: title.left },
+      actionTop: Number.isFinite(actionTop) ? actionTop : null,
+      hoverBackground: background,
+      hoverBackgroundAlpha: alphaMatch ? Number(alphaMatch[1]) : 1,
+    };
+  });
+  assert.ok(geometry.stack.top >= 0 && geometry.stack.left >= 0
+    && geometry.stack.right <= 420 && geometry.stack.bottom <= 520,
+  `automatic pulse stack overflowed: ${JSON.stringify(geometry.stack)}`);
+  assert.ok(geometry.avatar, "the assistant must remain visible beside automatic progress");
+  assert.ok(geometry.toggle, "automatic progress exposes a foot-level collapse control");
+  assert.ok(geometry.stack.bottom <= geometry.avatar.top,
+    `automatic progress must stay above the assistant: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.avatar.top - geometry.stack.bottom >= 12
+    && geometry.avatar.top - geometry.stack.bottom <= 22,
+    `automatic progress drifted too far from the assistant's head: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.toggle.top >= geometry.avatar.bottom
+    && geometry.toggle.top - geometry.avatar.bottom <= 8,
+  `the collapse control must sit directly below the assistant's feet: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.stack.width <= 320.5,
+    `automatic progress should remain a compact head-anchored card: ${JSON.stringify(geometry.stack)}`);
+  assert.ok(geometry.hoverBackgroundAlpha >= 0.96,
+    `hover must preserve an opaque readable surface: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.unreadMarker && geometry.hoverAction,
+    `hovered unread reminders must expose both the unread marker and actions: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.hoverAction.right + 4 <= geometry.unreadMarker.left,
+    `hover actions must reserve a visible trailing lane for the unread marker: ${JSON.stringify(geometry)}`);
+  assert.ok(geometry.title && geometry.actionTop !== null && geometry.title.bottom + 4 <= geometry.actionTop,
+    `hover actions must occupy a separate lower lane below the session title: ${JSON.stringify(geometry)}`);
+  if (process.env.R_CODE_COMPANION_STACK_SHOT) {
+    await page.screenshot({ path: process.env.R_CODE_COMPANION_STACK_SHOT });
+  }
+
+  const collapse = page.getByRole("button", { name: "收起 Session 追踪" });
+  await collapse.click();
+  await stack.waitFor({ state: "detached" });
+  const runningCount = page.getByRole("button", { name: /个任务正在运行，展开 Session 追踪/ });
+  await runningCount.waitFor({ state: "visible" });
+  assert.match(await runningCount.innerText(), /^(?:[1-9]|9\+)$/,
+    "collapsed tracking shows the number of currently running tasks");
+  const collapsedAvatar = await page.locator(".companion-avatar").evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
   });
-  assert.ok(bounds.top >= 0 && bounds.left >= 0 && bounds.right <= 420 && bounds.bottom <= 360,
-    `automatic pulse stack overflowed: ${JSON.stringify(bounds)}`);
+  assert.deepEqual(collapsedAvatar, geometry.avatar,
+    "collapsing tracking must not move the assistant");
+  await runningCount.click();
+  await stack.waitFor({ state: "visible" });
+  const reopenedAvatar = await page.locator(".companion-avatar").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left };
+  });
+  assert.deepEqual(reopenedAvatar, geometry.avatar,
+    "reopening tracking must not move the assistant");
+
+  await page.evaluate(async () => {
+    const { useCompanionStore } = await import("/src/store/companion.ts");
+    useCompanionStore.getState().setMinimized(true);
+  });
+  await page.locator(".companion-window-root.is-mini").waitFor({ state: "visible" });
+  await page.waitForFunction(() => document.querySelector(".companion-pulse-stack")?.getBoundingClientRect().width <= 264.5);
+  await live.hover();
+  await page.waitForFunction(() => {
+    const card = document.querySelector(".companion-pulse-stack .companion-session-card:hover");
+    const actions = card?.querySelector(".companion-session-actions");
+    const supporting = card?.querySelector(".companion-session-copy small");
+    const title = card?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    const actionButtons = [...(card?.querySelectorAll(".companion-session-actions button") ?? [])]
+      .map((button) => button.getBoundingClientRect());
+    const actionTop = Math.min(...actionButtons.map((rect) => rect.top));
+    return actions && supporting
+      && getComputedStyle(actions).opacity === "1"
+      && getComputedStyle(supporting).opacity === "0"
+      && title && Number.isFinite(actionTop) && title.bottom + 4 <= actionTop;
+  });
+  const miniGeometry = await stack.evaluate((element) => {
+    const stackRect = element.getBoundingClientRect();
+    const row = element.querySelector(".companion-session-row");
+    const rowRect = row?.getBoundingClientRect();
+    const avatarRect = document.querySelector(".companion-avatar")?.getBoundingClientRect();
+    const hoveredCard = element.querySelector(".companion-session-card:hover");
+    const unreadMarker = hoveredCard?.querySelector(".companion-session-row > i")?.getBoundingClientRect();
+    const hoverActions = [...(hoveredCard?.querySelectorAll(".companion-session-actions button") ?? [])];
+    const hoverAction = hoverActions.at(-1)?.getBoundingClientRect();
+    const actionTop = Math.min(...hoverActions.map((button) => button.getBoundingClientRect().top));
+    const title = hoveredCard?.querySelector(".companion-session-copy strong")?.getBoundingClientRect();
+    return {
+      stack: { top: stackRect.top, right: stackRect.right, bottom: stackRect.bottom, left: stackRect.left, width: stackRect.width },
+      row: rowRect && { width: rowRect.width, height: rowRect.height },
+      avatar: avatarRect && { top: avatarRect.top, right: avatarRect.right, bottom: avatarRect.bottom, left: avatarRect.left },
+      unreadMarker: unreadMarker && { right: unreadMarker.right, left: unreadMarker.left },
+      hoverAction: hoverAction && { right: hoverAction.right, left: hoverAction.left },
+      title: title && { top: title.top, bottom: title.bottom },
+      actionTop: Number.isFinite(actionTop) ? actionTop : null,
+      titleFontSize: row ? getComputedStyle(row.querySelector(".companion-session-copy strong")).fontSize : "",
+    };
+  });
+  assert.ok(geometry.row && miniGeometry.row && miniGeometry.avatar,
+    `mini progress geometry must remain measurable: ${JSON.stringify({ geometry, miniGeometry })}`);
+  assert.ok(miniGeometry.stack.width <= geometry.stack.width - 40,
+    `mini appearance should use a visibly narrower progress stack: ${JSON.stringify({ geometry, miniGeometry })}`);
+  assert.ok(miniGeometry.row.height <= geometry.row.height - 10,
+    `mini appearance should use shorter progress rows: ${JSON.stringify({ geometry, miniGeometry })}`);
+  assert.equal(miniGeometry.titleFontSize, "12px");
+  assert.ok(miniGeometry.stack.bottom <= miniGeometry.avatar.top,
+    `mini progress must remain above the assistant: ${JSON.stringify(miniGeometry)}`);
+  assert.ok(miniGeometry.avatar.top - miniGeometry.stack.bottom >= 12
+    && miniGeometry.avatar.top - miniGeometry.stack.bottom <= 22,
+    `mini progress must remain close to the assistant's head: ${JSON.stringify(miniGeometry)}`);
+  assert.ok(miniGeometry.unreadMarker && miniGeometry.hoverAction
+    && miniGeometry.hoverAction.right + 4 <= miniGeometry.unreadMarker.left,
+  `mini hover actions must not cover the unread marker: ${JSON.stringify(miniGeometry)}`);
+  assert.ok(miniGeometry.title && miniGeometry.actionTop !== null
+    && miniGeometry.title.bottom + 4 <= miniGeometry.actionTop,
+  `mini hover actions must remain below the session title: ${JSON.stringify(miniGeometry)}`);
+  if (process.env.R_CODE_COMPANION_MINI_STACK_SHOT) {
+    await page.screenshot({ path: process.env.R_CODE_COMPANION_MINI_STACK_SHOT });
+  }
+
+  await page.evaluate(async () => {
+    const { useCompanionStore } = await import("/src/store/companion.ts");
+    useCompanionStore.getState().setMinimized(false);
+  });
   await page.close();
 });
 
-test("urgent progress wins the four-row limit and archived sessions cannot leave ghost unread badges", async () => {
+test("progress overflow expands inline, collapses again and stays synchronized as tasks change", async () => {
+  const page = await browser.newPage({ viewport: { width: 420, height: 520 } });
+  await page.addInitScript(() => {
+    localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
+      revision: 1,
+      enabled: true,
+      minimized: false,
+      soundEnabled: false,
+      motion: "reduced",
+    }));
+    localStorage.setItem("r-code.companion.unread-sessions.v1", JSON.stringify([
+      "mock-task-review",
+      "mock-task-permission",
+    ]));
+  });
+  await page.goto(`${baseUrl}?window=companion`, { waitUntil: "networkidle" });
+
+  const stack = page.getByRole("region", { name: /Session 进度提醒，共 \d+ 个任务/ });
+  const cards = stack.locator(".companion-session-card");
+  const overflow = stack.locator(".companion-pulse-more");
+  await overflow.waitFor({ state: "visible" });
+  const compactCount = await cards.count();
+  const overflowText = await overflow.innerText();
+  const hiddenCount = Number(overflowText.match(/还有\s+(\d+)\s+个任务/)?.[1] ?? 0);
+  const trackingCount = compactCount + hiddenCount;
+  assert.equal(compactCount, 2, "the compact tracker keeps its two-row scan target");
+  assert.ok(hiddenCount > 0, "the fixture must exercise a real overflow");
+  assert.equal(await overflow.getAttribute("aria-expanded"), "false");
+  assert.equal(await overflow.getAttribute("aria-controls"), "companion-pulse-list");
+  await page.waitForFunction((count) => (
+    document.querySelector(".companion-unread-badge")?.textContent === String(count)
+  ), trackingCount);
+
+  await overflow.click();
+  await page.waitForFunction((count) => (
+    document.querySelectorAll(".companion-pulse-stack .companion-session-card").length === count
+  ), trackingCount);
+  assert.equal(await overflow.getAttribute("aria-expanded"), "true");
+  assert.equal(await overflow.innerText(), `全部 ${trackingCount} 个任务 · 收起`);
+  assert.equal(await page.getByRole("dialog", { name: "最近任务" }).count(), 0,
+    "view all expands the tracker in place instead of replacing it with another panel");
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains("companion-pulse-more")), true,
+    "the persistent toggle keeps keyboard focus after expansion");
+  const scrollReach = await stack.locator("#companion-pulse-list").evaluate((list) => {
+    list.scrollTop = list.scrollHeight;
+    const listRect = list.getBoundingClientRect();
+    const lastRect = list.lastElementChild?.getBoundingClientRect();
+    return {
+      overflow: list.scrollHeight - list.clientHeight,
+      lastBottom: lastRect?.bottom ?? Infinity,
+      viewportBottom: listRect.bottom,
+    };
+  });
+  assert.ok(scrollReach.overflow > 0 && scrollReach.lastBottom <= scrollReach.viewportBottom + 1,
+    `every expanded task must be reachable inside the bounded tracker: ${JSON.stringify(scrollReach)}`);
+
+  await overflow.click();
+  await page.waitForFunction((count) => (
+    document.querySelectorAll(".companion-pulse-stack .companion-session-card").length === count
+  ), compactCount);
+  assert.equal(await overflow.getAttribute("aria-expanded"), "false");
+  assert.match(await overflow.innerText(), new RegExp(`还有 ${hiddenCount} 个任务 · 查看全部`));
+
+  await overflow.click();
+  await page.waitForFunction((count) => (
+    document.querySelectorAll(".companion-pulse-stack .companion-session-card").length === count
+  ), trackingCount);
+
+  const archiveTask = async (taskId) => {
+    await page.evaluate(async (id) => {
+      const { browserMockTasks, browserMockDetails } = await import("/src/lib/mock-data.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      const updatedAt = new Date().toISOString();
+      const mockTask = browserMockTasks.find((task) => task.id === id);
+      if (mockTask) {
+        mockTask.state = "archived";
+        mockTask.updated_at = updatedAt;
+      }
+      const mockDetail = browserMockDetails[id];
+      if (mockDetail) {
+        mockDetail.task = { ...mockDetail.task, state: "archived", updated_at: updatedAt };
+        mockDetail.runs = mockDetail.runs.map((run) => ({
+          ...run,
+          ended_at: run.ended_at ?? updatedAt,
+        }));
+      }
+      const state = useTasksStore.getState();
+      const currentDetail = state.details[id];
+      useTasksStore.setState({
+        tasks: state.tasks.map((task) => task.id === id
+          ? { ...task, state: "archived", updated_at: updatedAt }
+          : task),
+        details: currentDetail ? {
+          ...state.details,
+          [id]: {
+            ...currentDetail,
+            task: { ...currentDetail.task, state: "archived", updated_at: updatedAt },
+            runs: currentDetail.runs.map((run) => ({
+              ...run,
+              ended_at: run.ended_at ?? updatedAt,
+            })),
+          },
+        } : state.details,
+      });
+    }, taskId);
+  };
+
+  await archiveTask("mock-task-queue");
+  await page.waitForFunction((count) => {
+    const listCount = document.querySelectorAll(".companion-pulse-stack .companion-session-card").length;
+    const badge = document.querySelector(".companion-unread-badge")?.textContent;
+    return listCount === count && badge === String(count);
+  }, trackingCount - 1);
+  assert.equal(await overflow.innerText(), `全部 ${trackingCount - 1} 个任务 · 收起`,
+    "the expanded footer mirrors the live list length after a task disappears");
+
+  await archiveTask("mock-task-review");
+  await page.waitForFunction((count) => {
+    const listCount = document.querySelectorAll(".companion-pulse-stack .companion-session-card").length;
+    const badge = document.querySelector(".companion-unread-badge")?.textContent;
+    return listCount === count && badge === String(count)
+      && !document.querySelector(".companion-pulse-more")
+      && !document.querySelector(".companion-pulse-stack")?.classList.contains("is-showing-all");
+  }, trackingCount - 2);
+  assert.match(await page.getByRole("button", { name: /R-Code session 助手/ }).getAttribute("aria-label"),
+    new RegExp(`${trackingCount - 2} 个任务正在追踪`));
+
+  await page.close();
+});
+
+test("the full task panel keeps every unread session accessible and archived sessions cannot leave ghost badges", async () => {
   const page = await browser.newPage({ viewport: { width: 420, height: 360 } });
   await page.addInitScript(() => {
     localStorage.setItem("r-code.companion.preferences.v2", JSON.stringify({
@@ -414,8 +968,8 @@ test("urgent progress wins the four-row limit and archived sessions cannot leave
   await dialog.waitFor({ state: "visible" });
   assert.equal(await dialog.getByRole("button", { name: /优化 Rust 编译性能/ }).count(), 1,
     "a pending-permission session must remain visible even when five sessions are unread");
-  assert.equal(await dialog.getByRole("button", { name: /更新依赖并修复告警/ }).count(), 0,
-    "the low-priority completed session should yield the four-row slot");
+  assert.equal(await dialog.getByRole("button", { name: /更新依赖并修复告警/ }).count(), 1,
+    "the scrollable full panel must not silently hide the fifth unread session");
   await dialog.getByRole("button", { name: "关闭最近任务" }).click();
 
   await page.evaluate(async () => {

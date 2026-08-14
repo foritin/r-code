@@ -42,6 +42,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
     Engine as _,
 };
+use hermes_config::{SubagentPoolConfig, SubagentProviderSource};
 use hermes_core::{
     CompletionRequest, ContentBlock, FileSource, HostedToolFormat, HostedToolSpec,
     InferenceOptions, Message, Role, SessionEvent, SessionMeta,
@@ -50,9 +51,11 @@ use hermes_store::{SessionStore, DURABLE_USER_MESSAGE_CANCEL_EVENT, DURABLE_USER
 use r_code_agent_worker::{
     native_parent_subagent_access, AgentRuntime, CodexSubagentEventSink, CodexSubagentOutcome,
     CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode as RuntimeDelegationRouterMode,
-    MockAgentRuntime, OrchestrationPolicy, QualityLoopMode as RuntimeQualityLoopMode,
+    ExternalAgentId, FrozenSubagentSlot, FrozenSubagentSlotDescriptor, MockAgentRuntime,
+    NativeSubagentRuntimeOptions, OrchestrationPolicy, QualityLoopMode as RuntimeQualityLoopMode,
     QualityReviewer as RuntimeQualityReviewer, RCodeSubagentRequest, RCodeSubagentRunner,
-    SteerResult,
+    SteerResult, SubagentCandidateOutcome, SubagentCandidateRequest, SubagentCandidateRunner,
+    SubagentCandidateSource, SubagentProviderCapabilities as RuntimeSubagentProviderCapabilities,
 };
 use r_code_core::dto::{
     AgentActivityPhase, AgentEngine, AgentEvent, AgentEventScope, AgentKind, AgentRun,
@@ -94,26 +97,27 @@ pub use r_code_terminal::{TerminalRawBatch, TerminalRawSnapshot};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::Command as TokioCommand;
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_app_server::{
-    recognized_protocol_progress, CodexAppServerError, CodexAppServerLease,
-    CodexAppServerLineEvent, CodexAppServerRegistry, CodexAppServerTransport,
+    CodexAppServerError, CodexAppServerLease, CodexAppServerLineEvent, CodexAppServerRegistry,
+    CodexAppServerTransport, recognized_protocol_progress,
 };
 use crate::codex_mcp::{CodexMcpCallOutcome, CodexMcpRegistry};
 use crate::codex_permissions::{CodexDelegationPermissions, CodexPermissionMode};
-use crate::legacy_memory::{legacy_memory_status as inspect_legacy_memory, LegacyMemoryStatus};
+use crate::legacy_memory::{LegacyMemoryStatus, legacy_memory_status as inspect_legacy_memory};
 use crate::mcp_manager::{
     CreateMcpDraftTool, McpCredentialStatus, McpManager, McpManagerSnapshot,
     McpMarketInstallRequest, McpServerView, McpToggleResult, McpTransportView, McpUpsertRequest,
+    SaveMcpDraftTool,
 };
 use crate::plan_review_tools::{
-    plan_review_accept_feature as accept_plan_review_feature,
+    PlanReviewServices, plan_review_accept_feature as accept_plan_review_feature,
     plan_review_accept_file as accept_plan_review_file,
     plan_review_reject_feature as reject_plan_review_feature,
     plan_review_reject_file as reject_plan_review_file,
-    plan_review_status as current_plan_review_status, PlanReviewServices,
+    plan_review_status as current_plan_review_status,
 };
 use crate::plan_tools::{
     EnterPlanModeTool, PlanItemUpdateTool, PlanPublishTool, RequestUserInputTool,
@@ -121,11 +125,24 @@ use crate::plan_tools::{
 use crate::provider_catalog::{Preset as ProviderPreset, Protocol as ProviderProtocol};
 use crate::replay::{ReplayDepth, ReplayService};
 use crate::search::SearchService;
-use crate::settings::SettingsService;
+use crate::settings::{ProjectAgentPromptPolicy, ProjectPromptMode, SettingsService};
 use crate::skills::SkillManager;
+use crate::subagent_providers::{
+    CatalogBuildInput, CodexCliCatalogInput, HealthView, SubagentFingerprintPepper,
+    SubagentHealthErrorCode, SubagentHealthReceipt, SubagentHealthReceiptDocument,
+    SubagentHealthReceiptStore, SubagentPoolSlotHealth, SubagentPoolSnapshot,
+    SubagentProviderAvailability, SubagentProviderCapabilities, SubagentProviderCatalogEntry,
+    SubagentProviderHealthState, SubagentProviderProbeBatchResponse, SubagentProviderProbeRequest,
+    SubagentProviderProbeResponse, VerifiedExecutableTrustChain,
+    attest_subagent_health_receipt,
+    build_subagent_provider_catalog, compute_subagent_pool_revision,
+    load_or_create_fingerprint_pepper, resolve_subagent_provider_catalog_entry,
+    resolve_subagent_provider_probe_identity, subagent_health_receipt_key,
+};
 use crate::support_bundle::{McpServerSupportSummary, SupportBundle};
 use crate::workflow_skills::{
-    SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
+    SaveWorkflowSkillTool, ScopedWorkflowSkill, ScopedWorkflowSkillDraft, WorkflowSkillCatalog,
+    WorkflowSkillScope, WorkflowSkillSource,
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -297,6 +314,7 @@ struct QueuedDispatchResources {
     paths: AgentRuntimePaths,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
     sink: Option<AgentEventSink>,
 }
 
@@ -315,6 +333,7 @@ fn queued_dispatch_resources(state: &CommandState) -> QueuedDispatchResources {
         },
         tool_gateway: state.tool_gateway.clone(),
         mcp_manager: state.mcp_manager.clone(),
+        subagent_config_mutations: state.subagent_config_mutations.clone(),
         sink,
     }
 }
@@ -661,6 +680,34 @@ async fn flush_pending_reasoning_text(
         .await;
 }
 
+async fn flush_pending_interim_text(
+    session_store: &SessionStore,
+    pending_text: &mut HashMap<String, PendingAssistantText>,
+    scope_key: &str,
+    fallback_storage_id: &str,
+) {
+    let Some(pending) = pending_text.remove(scope_key) else {
+        return;
+    };
+    if !pending.saw_delta || pending.text.trim().is_empty() {
+        return;
+    }
+    let storage_id = if pending.storage_id.is_empty() {
+        fallback_storage_id
+    } else {
+        &pending.storage_id
+    };
+    let _ = session_store
+        .append(
+            storage_id,
+            SessionEvent::System {
+                event: R_CODE_INTERIM_EVENT.into(),
+                data: serde_json::json!({ "text": pending.text }),
+            },
+        )
+        .await;
+}
+
 async fn flush_pending_runtime_text(
     session_store: &SessionStore,
     pending_text: &mut PendingRuntimeText,
@@ -867,6 +914,9 @@ pub struct CommandState {
     pub mcp_manager: Arc<McpManager>,
     /// 旧版审核补录只允许稳定任务扫描一次；当前运行中的任务仍可在结束后重试。
     legacy_reconciliation: tokio::sync::Mutex<LegacyReconciliationCache>,
+    /// Provider、健康 receipt 与子代理池共享同一个持久化一致性域。所有会改变该域的
+    /// IPC 必须经此单写者锁串行，避免 probe/save/delete 之间出现 TOCTOU。
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
 }
 
 /// Agent 事件出口闭包（task_id, event）——由 bin 侧用 AppHandle 实现 emit。
@@ -1000,6 +1050,7 @@ impl CommandState {
             WorkflowSkillCatalog::new(config_dir.join("workflow-skills")),
         )));
         gateway.register(Box::new(CreateMcpDraftTool::new(mcp_manager.clone())));
+        gateway.register(Box::new(SaveMcpDraftTool::new(mcp_manager.clone())));
         // 主任务生命周期控制
         gateway.register(Box::new(EnterPlanModeTool::new(
             db.clone(),
@@ -1032,6 +1083,7 @@ impl CommandState {
         ));
         // 命令执行（静态 R3；实际等级由 classify_shell_command 按命令内容判定）
         gateway.register(Box::new(r_code_gateway::BashTool));
+        let tool_gateway = Arc::new(gateway);
         Self {
             db,
             plan_store,
@@ -1051,9 +1103,10 @@ impl CommandState {
             codex_app_server: Arc::new(CodexAppServerRegistry::default()),
             startup_recovery: Arc::new(Mutex::new(startup_recovery)),
             agent_event_sink: Mutex::new(None),
-            tool_gateway: Arc::new(gateway),
+            tool_gateway,
             mcp_manager,
             legacy_reconciliation: tokio::sync::Mutex::new(LegacyReconciliationCache::default()),
+            subagent_config_mutations: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -1554,6 +1607,19 @@ fn workspace_root(state: &CommandState, workspace_path: &str) -> Result<PathBuf,
     Ok(root)
 }
 
+/// 判断持久化的 workspace 键是否仍指向同一个物理根目录。
+///
+/// Windows 的 `canonicalize` 会为本地路径添加 `\\?\` 前缀，旧记录或测试夹具可能
+/// 保留普通盘符写法。这里按物理路径做 fail-closed 的幂等判断；解析失败或指向其他
+/// 目录时仍由调用方拒绝改绑。
+fn workspace_binding_matches_root(binding: &str, root: &Path) -> bool {
+    let binding = Path::new(binding);
+    binding == root
+        || binding
+            .canonicalize()
+            .is_ok_and(|canonical| canonical == root)
+}
+
 /// 已附加工作区可供用户直接操作；所有文件路径仍在 `workspace_root` 的 PathGuard
 /// 边界内。Agent 自主调用是否需要批准由项目 `access_mode` 决定。
 fn attached_workspace_root(state: &CommandState, workspace_path: &str) -> Result<PathBuf, String> {
@@ -1942,8 +2008,10 @@ pub async fn task_prepare(state: &CommandState, task_id: &str) -> Result<(), Str
             &state.db,
             &state.tool_gateway,
             &state.mcp_manager,
+            &state.subagent_config_mutations,
             &mut bridge,
             task.provider_name.as_deref(),
+            task.workspace_path.as_deref(),
         )
         .await?;
     }
@@ -2885,6 +2953,39 @@ async fn request_compaction_summary(
     Ok(summary.to_string())
 }
 
+/// Context compaction is a bounded evidence-preserving transformation, so an automatic
+/// DeepSeek V4 session should not pay the full Pro reasoning latency for every map/reduce call.
+/// Explicit user choices remain authoritative; only the local smart-balance state (empty or the
+/// legacy `adaptive` marker) is translated to the model's cheapest supported native mode.
+fn deepseek_fast_compaction_inference(
+    provider: &hermes_config::ProviderConfig,
+    model: &str,
+    configured: &InferenceOptions,
+) -> InferenceOptions {
+    if !is_deepseek_provider(provider)
+        || !matches!(configured.thinking.as_deref(), None | Some("adaptive"))
+        || configured.reasoning_effort.is_some()
+    {
+        return configured.clone();
+    }
+
+    let (thinking, reasoning_effort) = match model.trim().to_ascii_lowercase().as_str() {
+        // Flash exposes a real low tier, which is a better fit for loss-aware summarization than
+        // turning reasoning off completely.
+        "deepseek-v4-flash" => (Some("enabled".to_string()), Some("low".to_string())),
+        // Pro has no low tier. A synthetic `low` would be normalized back to high by the service,
+        // so use the documented off mode for this bounded transformation instead.
+        "deepseek-v4-pro" => (Some("disabled".to_string()), None),
+        _ => return configured.clone(),
+    };
+
+    InferenceOptions {
+        thinking,
+        reasoning_effort,
+        verbosity: configured.verbosity.clone(),
+    }
+}
+
 async fn summarize_compaction_groups(
     provider: &dyn hermes_core::LlmProvider,
     model: &str,
@@ -3081,10 +3182,12 @@ pub async fn task_compact_context(
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(provider_config.model.as_str())
         .to_string();
+    let compaction_inference =
+        deepseek_fast_compaction_inference(provider_config, &model, &task.inference);
     let summary = summarize_compaction_history(
         provider.as_ref(),
         &model,
-        &task.inference,
+        &compaction_inference,
         to_summarize,
         focus.as_deref(),
     )
@@ -3295,9 +3398,9 @@ pub async fn task_set_workspace(
     task_id: &str,
     workspace_path: Option<&str>,
 ) -> Result<Task, String> {
-    let path = workspace_path
+    let requested_workspace = workspace_path
         .filter(|path| !path.trim().is_empty())
-        .map(|path| workspace_root(state, path).map(|root| root.display().to_string()))
+        .map(|path| workspace_root(state, path).map(|root| (path.to_string(), root)))
         .transpose()?;
 
     let repo = TaskRepository::new(&state.db);
@@ -3316,12 +3419,16 @@ pub async fn task_set_workspace(
         return Err("当前运行尚未结束，不能在执行期间附加工作区".to_string());
     }
 
-    match (task.workspace_path.as_deref(), path.as_deref()) {
-        (Some(current), Some(requested)) if current == requested => {}
+    let path = match (task.workspace_path.as_deref(), requested_workspace.as_ref()) {
+        (Some(current), Some((_, requested_root)))
+            if workspace_binding_matches_root(current, requested_root) =>
+        {
+            Some(current.to_string())
+        }
         (Some(_), _) => return Err("此会话已绑定项目；如需使用其他项目，请新建对话".to_string()),
         (None, None) => return Ok(task),
-        (None, Some(_)) => {}
-    }
+        (None, Some((requested, _))) => Some(requested.clone()),
+    };
 
     let mut task = task;
     task.updated_at = repo
@@ -3360,7 +3467,7 @@ pub async fn task_attach_workspace(
         return Err("当前运行尚未结束，不能在执行期间附加工作区".to_string());
     }
     match task.workspace_path.as_deref() {
-        Some(current) if current == canonical_path => return Ok(task),
+        Some(current) if workspace_binding_matches_root(current, &canonical) => return Ok(task),
         Some(_) => return Err("此会话已绑定项目；如需使用其他项目，请新建对话".to_string()),
         None => {}
     }
@@ -4304,14 +4411,21 @@ async fn ensure_real_runtime(
     db: &Arc<Database>,
     tool_gateway: &Arc<r_code_gateway::ToolGateway>,
     mcp_manager: &Arc<McpManager>,
+    subagent_config_mutations: &tokio::sync::Mutex<()>,
     bridge: &mut AgentBridge,
     requested_provider: Option<&str>,
+    workspace_path: Option<&str>,
 ) -> Result<(), String> {
+    // Read global Provider config and health receipts as one snapshot. Probe/save/delete/pool-save
+    // use the same writer lock, so a root can never pair a new config file with an old receipt.
+    let subagent_config_guard = subagent_config_mutations.lock().await;
     let settings = SettingsService::new(config_dir.to_path_buf());
     // 设置页允许保留尚未完成的非默认 Provider 草稿；启动会话时只校验当前
     // 选中的 Provider，不能让无关草稿阻断已配置好的服务。
     let config = settings.load_global_unvalidated().map_err(err_str)?;
-    let agent_prompts = settings.load_agent_prompts().map_err(err_str)?;
+    let agent_prompts = settings
+        .resolve_agent_prompts(workspace_path)
+        .map_err(err_str)?;
     // 旧会话没有 provider_name 时才使用全局默认；一旦任务绑定了服务，后续全局
     // 默认变更不应影响它。
     let provider_name = requested_provider
@@ -4328,6 +4442,33 @@ async fn ensure_real_runtime(
             "模型服务“{provider_name}”尚未就绪：{problem}。请在设置中保存后重试"
         ));
     }
+    let persisted_candidate_pool_non_empty = !config.orchestration.subagent_pool.slots.is_empty();
+    let candidate_pool_update = match build_runtime_subagent_candidate_pool(
+            config_dir,
+            db,
+            tool_gateway.permission_engine().clone(),
+            config.clone(),
+        )
+        .await
+        {
+            Ok(pool) => pool,
+            Err(error) => {
+                // Candidate configuration must never make the primary provider unusable. The
+                // explicit unavailable state prevents fallback to a different legacy router.
+                tracing::warn!(%error, "failed to rebuild subagent candidate pool");
+                if persisted_candidate_pool_non_empty {
+                    RuntimeSubagentCandidatePoolUpdate::Unavailable {
+                        revision: "snapshot-unavailable".to_string(),
+                    }
+                } else {
+                    RuntimeSubagentCandidatePoolUpdate::Ready {
+                        revision: "legacy-empty".to_string(),
+                        slots: Vec::new(),
+                    }
+                }
+            }
+        };
+    drop(subagent_config_guard);
 
     // max_tokens / temperature 也是 runtime 的一部分。遗漏这两个字段会导致用户在
     // 设置页保存后，当前进程继续沿用旧的输出上限或随机性。
@@ -4384,6 +4525,9 @@ async fn ensure_real_runtime(
     if matches!(&bridge.kind, AgentRuntimeKind::Real(_))
         && bridge.fingerprint.as_deref() == Some(fingerprint.as_str())
     {
+        if let AgentRuntimeKind::Real(runtime) = &bridge.kind {
+            install_runtime_subagent_candidate_pool(runtime, candidate_pool_update);
+        }
         bridge.resolved_model = Some(pcfg.model.clone());
         return Ok(());
     }
@@ -4395,6 +4539,13 @@ async fn ensure_real_runtime(
     let provider = hermes_llm::create_provider(provider_config).map_err(err_str)?;
     let max_tokens = effective_max_tokens(&provider_name, pcfg);
     let hosted_tools = hosted_tools_for_provider(&provider_name, pcfg);
+    let codex_runner: Arc<dyn CodexSubagentRunner> = Arc::new(RCodeCodexSubagentRunner {
+        db: db.clone(),
+        permission_engine: tool_gateway.permission_engine().clone(),
+        config_dir: config_dir.to_path_buf(),
+        subagent_prompt: agent_prompts.subagent.clone(),
+        model_override: None,
+    });
     let runtime = r_code_agent_worker::LlmAgentRuntime::new(
         provider,
         pcfg.model.clone(),
@@ -4407,12 +4558,8 @@ async fn ensure_real_runtime(
     .with_orchestration_policy(orchestration)
     .with_agent_prompts(agent_prompts.clone())
     .with_external_tools(mcp_manager.clone())
-    .with_codex_subagent_runner(Arc::new(RCodeCodexSubagentRunner {
-        db: db.clone(),
-        permission_engine: tool_gateway.permission_engine().clone(),
-        config_dir: config_dir.to_path_buf(),
-        subagent_prompt: agent_prompts.subagent,
-    }));
+    .with_codex_subagent_runner(codex_runner);
+    install_runtime_subagent_candidate_pool(&runtime, candidate_pool_update);
 
     bridge.kind = AgentRuntimeKind::Real(runtime);
     bridge.sessions.clear(); // provider 配置变了，旧会话随旧 runtime 一起失效
@@ -4519,6 +4666,96 @@ fn split_scoped_event(mut event: &AgentEvent) -> (Option<&AgentEventScope>, &Age
     (scope, event)
 }
 
+const HOST_MAX_PEER_MESSAGE_ID_CHARS: usize = 128;
+const HOST_MAX_PEER_MESSAGE_CONTENT_CHARS: usize = 4_000;
+
+fn run_belongs_to_active_tree(
+    repository: &AgentRunRepository<'_>,
+    task_id: &str,
+    run_id: &str,
+    root_run_id: &str,
+) -> bool {
+    let mut current = run_id.to_string();
+    let mut visited = HashSet::new();
+    // The Worker currently caps a tree at eight descendants. Keep a little defensive headroom
+    // while still rejecting corrupt/cyclic parent chains without an unbounded DB walk.
+    for _ in 0..=16 {
+        if !visited.insert(current.clone()) {
+            return false;
+        }
+        let Ok(Some(run)) = repository.get(&current) else {
+            return false;
+        };
+        if run.task_id != task_id {
+            return false;
+        }
+        if run.id == root_run_id {
+            return run.parent_run_id.is_none();
+        }
+        let Some(parent) = run.parent_run_id else {
+            return false;
+        };
+        current = parent;
+    }
+    false
+}
+
+/// Defense-in-depth projection for Worker-owned peer events. The Worker performs the authoritative
+/// DelegationTree check before enqueueing; the Host independently verifies the scoped sender and
+/// persisted direct parent/child/sibling relationship before forwarding metadata to the WebView.
+fn host_allows_runtime_event(
+    db: &Database,
+    task_id: &str,
+    root_run_id: &str,
+    event: &AgentEvent,
+) -> bool {
+    let (scope, inner) = split_scoped_event(event);
+    let AgentEvent::PeerMessage {
+        message_id,
+        sender_agent_id,
+        recipient_agent_id,
+        content_chars,
+        ..
+    } = inner
+    else {
+        return true;
+    };
+    let Some(scope) = scope else {
+        return false;
+    };
+    if scope.run_id != *sender_agent_id
+        || scope.agent_id != *sender_agent_id
+        || sender_agent_id == recipient_agent_id
+        || message_id.trim().is_empty()
+        || message_id.trim() != message_id
+        || message_id.chars().count() > HOST_MAX_PEER_MESSAGE_ID_CHARS
+        || message_id.chars().any(char::is_control)
+        || *content_chars > HOST_MAX_PEER_MESSAGE_CONTENT_CHARS
+    {
+        return false;
+    }
+
+    let repository = AgentRunRepository::new(db);
+    let (Ok(Some(sender)), Ok(Some(recipient))) = (
+        repository.get(sender_agent_id),
+        repository.get(recipient_agent_id),
+    ) else {
+        return false;
+    };
+    if sender.runtime_kind != AgentRunRuntimeKind::Native
+        || recipient.runtime_kind != AgentRunRuntimeKind::Native
+        || sender.parent_run_id != scope.parent_run_id
+        || !run_belongs_to_active_tree(&repository, task_id, sender_agent_id, root_run_id)
+        || !run_belongs_to_active_tree(&repository, task_id, recipient_agent_id, root_run_id)
+    {
+        return false;
+    }
+
+    recipient_agent_id == sender.parent_run_id.as_deref().unwrap_or_default()
+        || recipient.parent_run_id.as_deref() == Some(sender_agent_id.as_str())
+        || (sender.parent_run_id.is_some() && sender.parent_run_id == recipient.parent_run_id)
+}
+
 /// 把 usage_json 文本解析为 JSON 对象（缺失/非法/非对象时为空对象）。
 fn usage_json_map(json: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::from_str(json).unwrap_or_default()
@@ -4556,9 +4793,8 @@ fn persist_native_usage_event(db: &Database, main_run_id: &str, event: &AgentEve
     let _ = repo.set_usage(run_id, &payload);
 }
 
-/// P1-E §8：流恢复重放计数写库（对齐 Reasonix `agent.go:2976-2978` 的
-/// `RequestAttemptCounter`，同样在 agent 层统计；vendor 连接层重试不在 agent
-/// 层视野内，不纳入计数）。复用 usage_json 列：每收到一次 StreamReplay 事件把
+/// P1-E §8：流恢复重放计数写库，在 agent 层统计；vendor 连接层重试不在 agent
+/// 层视野内，不纳入计数。复用 usage_json 列：每收到一次 StreamReplay 事件把
 /// `stream_retries` 键加一（run 级累计，跨轮不递减），前端 runStreamRetriesLabel
 /// 解析同一 JSON 展示「重试 N 次」；与 Usage 事件同深度——不写会话 JSONL、
 /// 不转发 WebView。
@@ -4784,9 +5020,9 @@ async fn persist_runtime_event(
             input,
             call_id,
         } => {
-            // 文本流以工具调用为自然分段边界。先冲刷，避免“回答—工具—回答”在
-            // 子智能体详情里被重排，或只在父运行彻底退出时才出现。
-            flush_pending_assistant_text(
+            // 文本流以工具调用为自然分段边界。工具调用前的过渡性叙述折叠为“过程”，
+            // 避免逐条渲染成正式回答；真正的最终总结只在 State 收尾时作为消息落盘。
+            flush_pending_interim_text(
                 session_store,
                 &mut pending_text.assistant,
                 &scope_key,
@@ -5094,6 +5330,10 @@ async fn persist_runtime_event(
             // stream_retries 键（与 Usage 同深度）；此处仅保持 match 穷尽。
             // 会话 JSONL 不记录重试次数。
         }
+        AgentEvent::PeerMessage { .. } => {
+            // 点对点消息正文只存在于 Worker 的有界内存 mailbox；跨进程事件仅携带
+            // 字符数，不包含正文片段。此处仅保持 match 穷尽，会话 JSONL 不记录正文。
+        }
     }
 }
 
@@ -5180,7 +5420,8 @@ pub struct AttachmentInput {
     pub native_ocr: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum ValidatedAttachmentKind {
     Image,
     Text,
@@ -5196,6 +5437,58 @@ struct ValidatedAttachment {
     text: Option<String>,
     kind: ValidatedAttachmentKind,
     native_ocr: bool,
+}
+
+/// 排队附件的持久化载荷：只保留重建完整消息所需的字段，避免把 `bytes` 序列化成
+/// 巨大的 JSON 数组（`bytes` 可由 `data` 的 Base64 解码恢复）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct QueuedAttachmentPayload {
+    name: String,
+    media_type: String,
+    data: String,
+    text: Option<String>,
+    kind: ValidatedAttachmentKind,
+}
+
+fn queued_attachments_payload(attachments: &[ValidatedAttachment]) -> Option<String> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let payload = attachments
+        .iter()
+        .map(|attachment| QueuedAttachmentPayload {
+            name: attachment.name.clone(),
+            media_type: attachment.media_type.clone(),
+            data: attachment.data.clone(),
+            text: attachment.text.clone(),
+            kind: attachment.kind,
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&payload).ok()
+}
+
+fn restore_queued_attachments(json: Option<&str>) -> Result<Vec<ValidatedAttachment>, String> {
+    let Some(json) = json.filter(|value| !value.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let payload = serde_json::from_str::<Vec<QueuedAttachmentPayload>>(json).map_err(err_str)?;
+    payload
+        .into_iter()
+        .map(|attachment| {
+            let bytes = BASE64_STANDARD
+                .decode(attachment.data.as_bytes())
+                .map_err(|_| format!("{} 的排队附件已损坏", attachment.name))?;
+            Ok(ValidatedAttachment {
+                name: attachment.name,
+                media_type: attachment.media_type,
+                data: attachment.data,
+                bytes,
+                text: attachment.text,
+                kind: attachment.kind,
+                native_ocr: false,
+            })
+        })
+        .collect()
 }
 
 fn image_magic_matches(media_type: &str, bytes: &[u8]) -> bool {
@@ -5637,32 +5930,6 @@ async fn cancel_staged_steer_with_retry(
     unreachable!("bounded steer cancellation retry loop always returns")
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn start_run_locked(
-    bridge: &mut AgentBridge,
-    db: &Database,
-    plan_store: &PlanStore,
-    session_store: &SessionStore,
-    sessions_dir: &Path,
-    task: &Task,
-    branch: &SessionBranch,
-    message: &str,
-    message_mode: AgentSendMode,
-) -> Result<ActiveRun, String> {
-    start_run_locked_with_message(
-        bridge,
-        db,
-        plan_store,
-        session_store,
-        sessions_dir,
-        task,
-        branch,
-        &Message::user_text(message),
-        message_mode,
-    )
-    .await
-}
-
 fn enqueue_message(
     db: &Database,
     task_id: &str,
@@ -5671,6 +5938,31 @@ fn enqueue_message(
     priority: i64,
 ) -> Result<QueuedMessage, String> {
     let queued = QueuedMessage::new(task_id, branch_id, message, priority);
+    QueuedMessageRepository::new(db)
+        .enqueue(&queued)
+        .map_err(err_str)?;
+    TaskEventStore::new(db)
+        .append_for_branch(task_id, branch_id, TaskEventType::UserMessageQueued)
+        .map_err(err_str)?;
+    Ok(queued)
+}
+
+fn enqueue_message_with_attachments(
+    db: &Database,
+    task_id: &str,
+    branch_id: &str,
+    message: &str,
+    priority: i64,
+    attachments: &[ValidatedAttachment],
+) -> Result<QueuedMessage, String> {
+    let attachments_json = queued_attachments_payload(attachments);
+    let queued = QueuedMessage::new_with_attachments(
+        task_id,
+        branch_id,
+        message,
+        priority,
+        attachments_json,
+    );
     QueuedMessageRepository::new(db)
         .enqueue(&queued)
         .map_err(err_str)?;
@@ -5713,7 +6005,7 @@ const PARTIAL_SUCCESS_RUN_SUMMARY: &str =
 enum NativeRunTerminalOutcome {
     Aborted,
     PartialSuccess,
-    Failed,
+    CompletedWithError,
     CompletedWithChanges,
     CompletedWithoutChanges,
 }
@@ -5728,7 +6020,7 @@ fn native_run_terminal_outcome(
     } else if runtime_failed && has_changes {
         NativeRunTerminalOutcome::PartialSuccess
     } else if runtime_failed {
-        NativeRunTerminalOutcome::Failed
+        NativeRunTerminalOutcome::CompletedWithError
     } else if has_changes {
         NativeRunTerminalOutcome::CompletedWithChanges
     } else {
@@ -5777,10 +6069,11 @@ pub async fn agent_send_with_mode_and_attachments(
     if task.state == TaskState::Archived {
         return Err("会话已归档，不能继续发送消息".to_string());
     }
-    if !attachments.is_empty()
-        && (bridge.active.is_some() || task_has_active_main_run(&state.db, task_id, &bridge)?)
-    {
-        return Err("当前运行结束后才能把附件作为新一轮消息发送".to_string());
+    let has_active_run =
+        bridge.active.is_some() || task_has_active_main_run(&state.db, task_id, &bridge)?;
+    // 附件可以排队等待；只有“引导”因只注入文本而无法承载文件。
+    if !attachments.is_empty() && has_active_run && matches!(mode, AgentSendMode::Steer) {
+        return Err("运行中引导暂不支持附件；请改为排队发送，或等当前运行结束后再发送".to_string());
     }
     // Native OCR can be CPU/memory intensive. Validate the task and reserve its task-local send
     // boundary before invoking Vision, so archived/running tasks cannot consume OCR resources and
@@ -5823,8 +6116,10 @@ pub async fn agent_send_with_mode_and_attachments(
             &state.db,
             &state.tool_gateway,
             &state.mcp_manager,
+            &state.subagent_config_mutations,
             &mut bridge,
             task.provider_name.as_deref(),
+            task.workspace_path.as_deref(),
         )
         .await?;
     }
@@ -5840,7 +6135,7 @@ pub async fn agent_send_with_mode_and_attachments(
         } else {
             1
         };
-        enqueue_message(&state.db, task_id, &branch.id, message, priority)?;
+        enqueue_message_with_attachments(&state.db, task_id, &branch.id, message, priority, &attachments)?;
         return Ok(());
     }
 
@@ -5916,7 +6211,7 @@ pub async fn agent_send_with_mode_and_attachments(
             Ok(())
         }
         AgentSendMode::Queue => {
-            enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
+            enqueue_message_with_attachments(&state.db, task_id, &branch.id, message, 0, &attachments)?;
             // 在空闲 runtime 上“排队”不应留下永远不会被消费的消息；立即交给同一
             // 分发路径，确保其按会话绑定的 provider 进行就绪检查和 runtime 重建。
             if active.is_none() {
@@ -5938,6 +6233,7 @@ pub async fn agent_send_with_mode_and_attachments(
                         },
                         tool_gateway: state.tool_gateway.clone(),
                         mcp_manager: state.mcp_manager.clone(),
+                        subagent_config_mutations: state.subagent_config_mutations.clone(),
                         sink,
                     },
                     task_id.to_string(),
@@ -5948,7 +6244,7 @@ pub async fn agent_send_with_mode_and_attachments(
         }
         AgentSendMode::SendNow => {
             if let Some(active) = active {
-                enqueue_message(&state.db, task_id, &branch.id, message, 1_000_000)?;
+                enqueue_message_with_attachments(&state.db, task_id, &branch.id, message, 1_000_000, &attachments)?;
                 bridge
                     .kind
                     .abort(&active.runtime_session_id)
@@ -5994,7 +6290,7 @@ pub async fn agent_send_with_mode_and_attachments(
                 // Auto 始终表示普通的下一轮消息。同一任务的 runtime 仍在运行时
                 // 就持久化排队；Steer 只接受显式模式，
                 // 避免同一个 Enter 因瞬时运行状态不同而改变含义。
-                enqueue_message(&state.db, task_id, &branch.id, message, 0)?;
+                enqueue_message_with_attachments(&state.db, task_id, &branch.id, message, 0, &attachments)?;
                 Ok(())
             } else {
                 let active = start_run_locked_with_message(
@@ -6037,6 +6333,7 @@ fn spawn_drain_loop(state: &CommandState, active: ActiveRun) {
         state.config_dir.clone(),
         state.tool_gateway.clone(),
         state.mcp_manager.clone(),
+        state.subagent_config_mutations.clone(),
         state.agent_event_sink.lock().unwrap().clone(),
         active,
     );
@@ -6057,6 +6354,7 @@ fn spawn_drain_loop_with_resources(
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
     sink: Option<AgentEventSink>,
     active: ActiveRun,
 ) {
@@ -6122,6 +6420,14 @@ fn spawn_drain_loop_with_resources(
             };
 
             for event in &events {
+                if !host_allows_runtime_event(&db, &task_id, &active.run_id, event) {
+                    tracing::warn!(
+                        task_id,
+                        root_run_id = %active.run_id,
+                        "discarded invalid peer-message event from runtime"
+                    );
+                    continue;
+                }
                 // P0-B：原生线路每轮报告的 usage 直接写入对应 AgentRun（主运行或带
                 // scope 的子代理运行）的 usage_json 列，复用 Codex 线路同一写库 API。
                 // 不写会话 JSONL、不转发 WebView——前端从 usage_json 列读取
@@ -6335,10 +6641,13 @@ fn spawn_drain_loop_with_resources(
                         );
                     }
                 }
-                NativeRunTerminalOutcome::Failed => {
+                NativeRunTerminalOutcome::CompletedWithError => {
+                    // 运行已自然收束，只是过程中留下了可见错误。它已经不再占用
+                    // session，任务应回到可继续对话的 Idle；错误仍由 run review_state
+                    // 与 transcript 保留。Interrupted 只表示用户中止或异常失联。
                     let _ = AgentRunRepository::new(&db)
                         .update_review_state(&active.run_id, ReviewState::Failed);
-                    let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Interrupted);
+                    let _ = TaskRepository::new(&db).update_state(&task_id, TaskState::Idle);
                     let _ = TaskEventStore::new(&db).append_for_branch(
                         &task_id,
                         &branch_id,
@@ -6348,7 +6657,7 @@ fn spawn_drain_loop_with_resources(
                         sink(
                             &task_id,
                             &AgentEvent::State {
-                                state: TaskState::Interrupted,
+                                state: TaskState::Idle,
                             },
                         );
                     }
@@ -6407,6 +6716,7 @@ fn spawn_drain_loop_with_resources(
                 },
                 tool_gateway,
                 mcp_manager,
+                subagent_config_mutations,
                 sink,
             },
             task_id,
@@ -6463,6 +6773,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
         paths,
         tool_gateway,
         mcp_manager,
+        subagent_config_mutations,
         sink,
     } = resources;
     let AgentRuntimePaths {
@@ -6542,6 +6853,14 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             // Codex CLI owns its own process/session lifecycle, but startup still stays under the
             // task-local lock. This closes the gap between the active-run check and durable run
             // creation, so concurrent queue dispatchers cannot claim a second message.
+            let restored_attachments =
+                match restore_queued_attachments(queued.attachments_json.as_deref()) {
+                    Ok(attachments) => attachments,
+                    Err(error) => {
+                        mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
+                        return;
+                    }
+                };
             let started = start_codex_main_with_resources(
                 agent_pool.clone(),
                 external_agents.clone(),
@@ -6551,12 +6870,13 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 config_dir.clone(),
                 tool_gateway.clone(),
                 mcp_manager.clone(),
+                subagent_config_mutations.clone(),
                 codex_app_server.clone(),
                 task,
                 branch.clone(),
                 queued.message.clone(),
                 queued_dispatch_mode(&queued),
-                Vec::new(),
+                restored_attachments,
                 sink.clone(),
             )
             .await;
@@ -6583,8 +6903,10 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 &db,
                 &tool_gateway,
                 &mcp_manager,
+                &subagent_config_mutations,
                 &mut bridge,
                 task.provider_name.as_deref(),
+                task.workspace_path.as_deref(),
             )
             .await
             {
@@ -6593,7 +6915,15 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                 return;
             }
         }
-        let started = start_run_locked(
+        let restored_attachments = match restore_queued_attachments(queued.attachments_json.as_deref()) {
+            Ok(attachments) => attachments,
+            Err(error) => {
+                mark_queued_dispatch_failed(&db, &plan_store, &queued.id, &error);
+                return;
+            }
+        };
+        let queued_message = user_message_with_attachments(&queued.message, &restored_attachments);
+        let started = start_run_locked_with_message(
             &mut bridge,
             &db,
             &plan_store,
@@ -6601,7 +6931,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
             &sessions_dir,
             &task,
             &branch,
-            &queued.message,
+            &queued_message,
             queued_dispatch_mode(&queued),
         )
         .await;
@@ -6634,6 +6964,7 @@ async fn dispatch_next_queued(resources: QueuedDispatchResources, task_id: Strin
                     config_dir,
                     tool_gateway,
                     mcp_manager,
+                    subagent_config_mutations,
                     sink,
                     active,
                 );
@@ -7926,31 +8257,216 @@ pub fn git_push_task(state: &CommandState, task_id: &str) -> Result<GitPushResul
         .map_err(err_str)
 }
 
-pub fn workflow_skills_list(state: &CommandState) -> Result<Vec<WorkflowSkill>, String> {
+fn global_workflow_skill_catalog(state: &CommandState) -> WorkflowSkillCatalog {
     WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+}
+
+fn project_workflow_skill_catalog(
+    state: &CommandState,
+    workspace_path: &str,
+) -> Result<WorkflowSkillCatalog, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    Ok(WorkflowSkillCatalog::new_project(
+        settings
+            .project_knowledge_dir(workspace_path)
+            .map_err(err_str)?
+            .join("workflow-skills"),
+    ))
+}
+
+pub fn workflow_skills_list(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+) -> Result<Vec<ScopedWorkflowSkill>, String> {
+    let inherited = workspace_path.is_some();
+    let mut skills: Vec<_> = global_workflow_skill_catalog(state)
         .list()
-        .map_err(err_str)
+        .map_err(err_str)?
+        .into_iter()
+        .map(|skill| ScopedWorkflowSkill {
+            skill,
+            scope: WorkflowSkillScope::Global,
+            inherited,
+        })
+        .collect();
+    if let Some(workspace_path) = workspace_path {
+        skills.extend(
+            project_workflow_skill_catalog(state, workspace_path)?
+                .list_custom()
+                .map_err(err_str)?
+                .into_iter()
+                .map(|skill| ScopedWorkflowSkill {
+                    skill,
+                    scope: WorkflowSkillScope::Project,
+                    inherited: false,
+                }),
+        );
+    }
+    skills.sort_by(|left, right| {
+        let scope_rank = |value: WorkflowSkillScope| match value {
+            WorkflowSkillScope::Global => 0u8,
+            WorkflowSkillScope::Project => 1u8,
+        };
+        scope_rank(left.scope)
+            .cmp(&scope_rank(right.scope))
+            .then_with(|| left.skill.name.cmp(&right.skill.name))
+    });
+    Ok(skills)
 }
 
 pub fn workflow_skill_save(
     state: &CommandState,
-    draft: WorkflowSkillDraft,
-) -> Result<WorkflowSkill, String> {
-    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
-        .save(draft)
-        .map_err(err_str)
+    workspace_path: Option<&str>,
+    scoped: ScopedWorkflowSkillDraft,
+) -> Result<ScopedWorkflowSkill, String> {
+    let skill = match scoped.scope {
+        WorkflowSkillScope::Global => global_workflow_skill_catalog(state)
+            .save(scoped.draft)
+            .map_err(err_str)?,
+        WorkflowSkillScope::Project => {
+            let workspace_path =
+                workspace_path.ok_or_else(|| "保存项目 Skill 需要项目作用域".to_string())?;
+            if scoped.draft.source != WorkflowSkillSource::Custom {
+                return Err("项目作用域只能创建自定义 Skill".to_string());
+            }
+            if global_workflow_skill_catalog(state)
+                .list()
+                .map_err(err_str)?
+                .iter()
+                .any(|skill| skill.name == scoped.draft.name)
+            {
+                return Err(format!(
+                    "Skill 调用名 /{} 已被全局 Skill 使用，请换一个名称",
+                    scoped.draft.name
+                ));
+            }
+            project_workflow_skill_catalog(state, workspace_path)?
+                .save(scoped.draft)
+                .map_err(err_str)?
+        }
+    };
+    Ok(ScopedWorkflowSkill {
+        skill,
+        scope: scoped.scope,
+        inherited: false,
+    })
 }
 
-pub fn workflow_skill_reset(state: &CommandState, id: &str) -> Result<WorkflowSkill, String> {
-    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
+pub fn workflow_skill_reset(state: &CommandState, id: &str) -> Result<ScopedWorkflowSkill, String> {
+    let skill = global_workflow_skill_catalog(state)
         .reset_builtin(id)
-        .map_err(err_str)
+        .map_err(err_str)?;
+    Ok(ScopedWorkflowSkill {
+        skill,
+        scope: WorkflowSkillScope::Global,
+        inherited: false,
+    })
 }
 
-pub fn workflow_skill_delete(state: &CommandState, id: &str) -> Result<(), String> {
-    WorkflowSkillCatalog::new(state.config_dir.join("workflow-skills"))
-        .delete_custom(id)
-        .map_err(err_str)
+pub fn workflow_skill_delete(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+    scope: WorkflowSkillScope,
+    id: &str,
+) -> Result<(), String> {
+    match scope {
+        WorkflowSkillScope::Global => global_workflow_skill_catalog(state),
+        WorkflowSkillScope::Project => project_workflow_skill_catalog(
+            state,
+            workspace_path.ok_or_else(|| "删除项目 Skill 需要项目作用域".to_string())?,
+        )?,
+    }
+    .delete_custom(id)
+    .map_err(err_str)
+}
+
+pub fn workflow_skill_sync_to_global(
+    state: &CommandState,
+    workspace_path: &str,
+    id: &str,
+) -> Result<ScopedWorkflowSkill, String> {
+    let skill = project_workflow_skill_catalog(state, workspace_path)?
+        .promote_custom_to(id, &global_workflow_skill_catalog(state))
+        .map_err(err_str)?;
+    Ok(ScopedWorkflowSkill {
+        skill,
+        scope: WorkflowSkillScope::Global,
+        inherited: false,
+    })
+}
+
+pub fn knowledge_prompts_get(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    let global = settings.load_agent_prompts().map_err(err_str)?;
+    let project = workspace_path
+        .map(|path| settings.load_project_agent_prompts(path).map_err(err_str))
+        .transpose()?;
+    let project_configured = workspace_path
+        .map(|path| {
+            settings
+                .project_agent_prompts_path(path)
+                .map(|value| value.exists())
+        })
+        .transpose()
+        .map_err(err_str)?
+        .unwrap_or(false);
+    let effective = settings
+        .resolve_agent_prompts(workspace_path)
+        .map_err(err_str)?;
+    Ok(serde_json::json!({
+        "global": global,
+        "project": project,
+        "project_configured": project_configured,
+        "effective": effective,
+    }))
+}
+
+pub fn knowledge_prompts_save(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+    mode: ProjectPromptMode,
+    main_agent: &str,
+    subagent: &str,
+) -> Result<serde_json::Value, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    if let Some(workspace_path) = workspace_path {
+        settings
+            .save_project_agent_prompts(
+                workspace_path,
+                &ProjectAgentPromptPolicy {
+                    mode,
+                    main_agent: main_agent.to_string(),
+                    subagent: subagent.to_string(),
+                },
+            )
+            .map_err(err_str)?;
+    } else {
+        settings
+            .save_agent_prompts(&r_code_agent_worker::AgentPromptPolicy {
+                main_agent: main_agent.to_string(),
+                subagent: subagent.to_string(),
+            })
+            .map_err(err_str)?;
+    }
+    knowledge_prompts_get(state, workspace_path)
+}
+
+pub fn knowledge_prompts_reset(
+    state: &CommandState,
+    workspace_path: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    if let Some(workspace_path) = workspace_path {
+        settings
+            .reset_project_agent_prompts(workspace_path)
+            .map_err(err_str)?;
+    } else {
+        settings.reset_agent_prompts().map_err(err_str)?;
+    }
+    knowledge_prompts_get(state, workspace_path)
 }
 
 /// 将审核反馈作为一个新的用户指令发送给任务，并保留明确的审计事件。
@@ -8151,20 +8667,70 @@ pub async fn change_diff(
     task_id: &str,
     path: &str,
 ) -> Result<ChangeDiff, String> {
+    change_diff_scoped(state, task_id, path, None).await
+}
+
+/// 单次运行内的文件 diff。与任务级审核不同，这个入口不会读取另一轮的最新 review
+/// snapshot，也不会回退到工作区累计 Git 状态。
+pub async fn change_diff_for_run(
+    state: &CommandState,
+    task_id: &str,
+    run_id: &str,
+    path: &str,
+) -> Result<ChangeDiff, String> {
+    change_diff_scoped(state, task_id, path, Some(run_id)).await
+}
+
+async fn change_diff_scoped(
+    state: &CommandState,
+    task_id: &str,
+    path: &str,
+    run_id: Option<&str>,
+) -> Result<ChangeDiff, String> {
     let review = ReviewGitService::new(&state.db, state.blobs_dir.clone());
-    let snapshot = review.file_snapshot(task_id, path).map_err(err_str)?;
-    let changes = ChangeService::new(&state.db, state.blobs_dir.clone())
-        .list_changes(task_id)
-        .await
-        .map_err(err_str)?;
+    let snapshot = match run_id {
+        Some(_) => None,
+        None => review.file_snapshot(task_id, path).map_err(err_str)?,
+    };
+    let service = ChangeService::new(&state.db, state.blobs_dir.clone());
+    let changes = match run_id {
+        Some(run_id) => service.list_changes_for_run(task_id, run_id).await,
+        None => service.list_changes(task_id).await,
+    }
+    .map_err(err_str)?;
 
     // Prefer the current run-scoped review snapshot. The audit table can contain several runs;
     // falling back to its newest matching row keeps live/legacy previews useful without showing
     // an obsolete first edit forever.
-    let change = changes.iter().rev().find(|change| {
-        change.path == path || change.path.ends_with(path) || path.ends_with(&change.path)
-    });
+    let normalized_path = path.replace('\\', "/");
+    let matches_path = |change: &&FileChange| {
+        let candidate = change.path.replace('\\', "/");
+        if run_id.is_some() {
+            candidate == normalized_path
+        } else {
+            candidate == normalized_path
+                || candidate.ends_with(&normalized_path)
+                || normalized_path.ends_with(&candidate)
+        }
+    };
+    let change = if run_id.is_some() {
+        // Finalized workspace snapshots are the net run result and therefore outrank any
+        // intermediate tool audit rows for the same path.
+        changes
+            .iter()
+            .rev()
+            .filter(matches_path)
+            .find(|change| change.tool_call_id.is_none())
+            .or_else(|| changes.iter().rev().find(matches_path))
+    } else {
+        changes.iter().rev().find(matches_path)
+    };
     if snapshot.is_none() && change.is_none() {
+        if let Some(run_id) = run_id {
+            return Err(format!(
+                "no change recorded for run {run_id} and path: {path}"
+            ));
+        }
         return workspace_git_change_diff(state, task_id, path);
     }
     let display_path = snapshot
@@ -8215,9 +8781,15 @@ pub async fn change_diff(
         before.as_deref().unwrap_or(""),
         after.as_deref().unwrap_or(""),
     );
-    let decisions = review
-        .line_decisions(task_id, &display_path)
-        .map_err(err_str)?;
+    let decisions = if run_id.is_none() {
+        Some(
+            review
+                .line_decisions(task_id, &display_path)
+                .map_err(err_str)?,
+        )
+    } else {
+        None
+    };
     for line in &mut lines {
         let kind = match line.kind {
             ChangeDiffLineKind::Add => Some(ReviewDiffLineKind::Add),
@@ -8226,10 +8798,11 @@ pub async fn change_diff(
         };
         line.line_id = kind
             .map(|kind| r_code_store::review_line_id(kind, line.old_no, line.new_no, &line.text));
-        line.review_state = line
-            .line_id
-            .as_ref()
-            .and_then(|line_id| decisions.get(line_id).copied());
+        line.review_state = line.line_id.as_ref().and_then(|line_id| {
+            decisions
+                .as_ref()
+                .and_then(|decisions| decisions.get(line_id).copied())
+        });
     }
     Ok(ChangeDiff {
         supported: true,
@@ -11184,6 +11757,14 @@ pub struct ProviderModelsInput {
     pub protocol: String,
 }
 
+/// 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。后端按配置名取密钥与地址，
+/// 绝不接受前端传来的密钥或自定义地址。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderBalanceInput {
+    pub name: String,
+}
+
 /// 常用服务的保守默认值，直接取自 [`crate::provider_catalog`]。用户仍可在设置页
 /// 覆盖模型或地址。
 ///
@@ -11229,6 +11810,8 @@ fn hosted_tools_for_provider(
     else {
         return Vec::new();
     };
+    // A renamed profile may still carry the stable DeepSeek identity, but a lookalike endpoint
+    // must never inherit the official server-tool capability from its display name alone.
     if route.provider_id == "deepseek" && !is_deepseek_provider(pcfg) {
         return Vec::new();
     }
@@ -11304,7 +11887,7 @@ pub(crate) fn build_provider_config(
     name: &str,
     pcfg: &hermes_config::ProviderConfig,
 ) -> hermes_llm::ProviderConfig {
-    use crate::provider_catalog::{resolve_reasoning_replay, Protocol};
+    use crate::provider_catalog::{Protocol, resolve_reasoning_replay};
 
     let configured = pcfg.base_url.trim();
     // 地址留空时必须回填目录里的默认值：`ProviderConfig::Anthropic { base_url: None }`
@@ -11568,6 +12151,38 @@ pub async fn provider_models(
     serde_json::to_value(response).map_err(err_str)
 }
 
+/// 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。
+///
+/// 密钥与地址都从该配置名解析：环境变量优先，其次平台凭据后端，最后兼容旧配置
+/// 文件明文。自定义网关会直接返回错误，绝不把密钥发往非官方主机。
+pub async fn provider_balance(
+    state: &CommandState,
+    input: ProviderBalanceInput,
+) -> Result<serde_json::Value, String> {
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err("缺少模型服务名称".to_string());
+    }
+    let settings = SettingsService::new(state.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    let provider = config
+        .providers
+        .get(name)
+        .ok_or_else(|| format!("未找到模型服务“{name}”"))?;
+    if !is_deepseek_provider(provider) {
+        return Err("余额查询仅支持 DeepSeek 官方服务".to_string());
+    }
+    let base_url = if provider.base_url.trim().is_empty() {
+        provider_preset(name).map_or("", |preset| preset.base_url)
+    } else {
+        provider.base_url.trim()
+    };
+    let api_key = provider.api_key.trim();
+    let response =
+        crate::provider_models::discover_deepseek_balance(base_url, Some(api_key)).await?;
+    serde_json::to_value(response).map_err(err_str)
+}
+
 pub async fn settings_get(state: &CommandState) -> Result<serde_json::Value, String> {
     // 宽松加载：未配置 provider 不是错误（由用户自行决定是否配置）。
     // runtime 视图会从平台凭据后端 / 环境变量填充密钥，但返回 WebView 前必须清空。
@@ -11733,6 +12348,7 @@ pub async fn settings_save_provider(
     state: &CommandState,
     input: ProviderSettingsInput,
 ) -> Result<(), String> {
+    let _mutation_guard = state.subagent_config_mutations.lock().await;
     let name = input.name.trim().to_string();
     if name.is_empty() {
         return Err("请选择或填写模型服务名称".to_string());
@@ -11926,12 +12542,23 @@ pub async fn settings_select_provider(state: &CommandState, name: &str) -> Resul
 /// 删除一个已保存的 Provider 及其本地凭据。若它正被使用，会切换到另一项可用服务；
 /// 没有候选项时回到未配置状态，而不是留下悬空引用。
 pub async fn settings_delete_provider(state: &CommandState, name: &str) -> Result<(), String> {
+    let _mutation_guard = state.subagent_config_mutations.lock().await;
     let name = name.trim();
     if name.is_empty() {
         return Err("请选择要删除的模型服务".to_string());
     }
     let settings = SettingsService::new(state.config_dir.clone());
     let mut config = settings.load_global_unvalidated().map_err(err_str)?;
+    if config.orchestration.subagent_pool.slots.iter().any(|slot| {
+        matches!(
+            &slot.source,
+            SubagentProviderSource::ApiProvider { provider_id } if provider_id == name
+        )
+    }) {
+        return Err(format!(
+            "模型服务“{name}”仍被子代理候选池引用，请先移除对应槽位"
+        ));
+    }
     if config.providers.remove(name).is_none() {
         return Err(format!("未找到模型服务“{name}”"));
     }
@@ -11949,6 +12576,862 @@ pub async fn settings_delete_provider(state: &CommandState, name: &str) -> Resul
     settings.set_provider_secret(name, "").map_err(err_str)
 }
 
+const SUBAGENT_NATIVE_PERMISSION_PROFILE: &str = "r_code_pathguard_approval_v1";
+const SUBAGENT_CODEX_PERMISSION_PROFILE: &str = "r_code_codex_host_ceiling_v1";
+const SUBAGENT_PROVIDER_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+// `test all` may include every catalog default plus the three configured slot-specific models.
+// This is an input-amplification guard, not the execution-concurrency limit: probes currently run
+// serially under the receipt writer lock (therefore concurrency is bounded to one).
+const SUBAGENT_PROVIDER_PROBE_MAX_BATCH: usize = 64;
+const SUBAGENT_HEALTH_SUCCESS_TTL_MINUTES: i64 = 30;
+const SUBAGENT_HEALTH_FAILURE_TTL_MINUTES: i64 = 5;
+const MAX_CODEX_TRUST_TREE_ENTRIES: usize = 512;
+const MAX_CODEX_ADDITIONAL_BINARIES: usize = 32;
+
+struct SubagentCatalogContext {
+    config: hermes_config::Config,
+    receipts: SubagentHealthReceiptDocument,
+    pepper: SubagentFingerprintPepper,
+    codex: CodexCliCatalogInput,
+    codex_cli_path: Option<PathBuf>,
+}
+
+impl SubagentCatalogContext {
+    fn input(&self, now: chrono::DateTime<chrono::Utc>) -> CatalogBuildInput<'_> {
+        CatalogBuildInput {
+            global_config: &self.config,
+            native_permission_profile: SUBAGENT_NATIVE_PERMISSION_PROFILE,
+            codex: &self.codex,
+            receipts: &self.receipts,
+            pepper: &self.pepper,
+            now,
+        }
+    }
+}
+
+/// Slot-owned API Provider bridge. Native candidates never execute through the one-shot adapter:
+/// the Worker extracts this provider and runs its normal recursive child loop with the shared
+/// PathGuard, approval gateway and DelegationTree.
+struct NativeProviderSubagentCandidateRunner {
+    runtime: NativeSubagentRuntimeOptions,
+}
+
+#[async_trait::async_trait]
+impl SubagentCandidateRunner for NativeProviderSubagentCandidateRunner {
+    fn native_provider(&self) -> Option<Arc<dyn hermes_core::LlmProvider>> {
+        Some(self.runtime.provider.clone())
+    }
+
+    fn native_runtime_options(&self) -> Option<NativeSubagentRuntimeOptions> {
+        Some(self.runtime.clone())
+    }
+
+    async fn run(
+        &self,
+        _request: SubagentCandidateRequest,
+    ) -> Result<SubagentCandidateOutcome, ProductError> {
+        Err(ProductError::Other(
+            "原生 API Provider 候选必须通过 R-Code 子代理运行时执行".to_string(),
+        ))
+    }
+}
+
+/// Codex remains an external leaf. It receives the slot-frozen model and role Prompt, while the
+/// existing Host adapter continues to own CLI authentication, PathGuard and approval mediation.
+struct CodexCliSubagentCandidateRunner {
+    db: Arc<Database>,
+    permission_engine: Arc<PermissionEngine>,
+    config_dir: PathBuf,
+}
+
+fn codex_candidate_event_allowed(event: &AgentEvent) -> bool {
+    matches!(
+        event,
+        AgentEvent::Message { .. }
+            | AgentEvent::ToolCall { .. }
+            | AgentEvent::ToolResult { .. }
+            | AgentEvent::Activity { .. }
+            | AgentEvent::Usage { .. }
+    )
+}
+
+#[async_trait::async_trait]
+impl SubagentCandidateRunner for CodexCliSubagentCandidateRunner {
+    async fn run(
+        &self,
+        request: SubagentCandidateRequest,
+    ) -> Result<SubagentCandidateOutcome, ProductError> {
+        let SubagentCandidateRequest {
+            model,
+            role_prompt,
+            workspace,
+            goal,
+            memory_context,
+            task_id,
+            scope,
+            caller,
+            access_mode,
+            require_approval,
+            abort,
+            event_sink,
+            ..
+        } = request;
+        let workspace = workspace.ok_or_else(|| {
+            ProductError::Other("Codex CLI 候选槽位需要先为当前对话附加一个工作区".into())
+        })?;
+        // External event streams are leaf-only. Use a positive allowlist so a future CLI protocol
+        // cannot forge Worker-owned lifecycle, task state, identity, scope or tree messaging.
+        let guarded_event_sink: CodexSubagentEventSink = Arc::new(move |event| {
+            if !codex_candidate_event_allowed(&event) {
+                tracing::warn!("discarded forbidden event from Codex candidate runner");
+                return;
+            }
+            event_sink(event);
+        });
+        let runner = RCodeCodexSubagentRunner {
+            db: self.db.clone(),
+            permission_engine: self.permission_engine.clone(),
+            config_dir: self.config_dir.clone(),
+            subagent_prompt: role_prompt,
+            model_override: Some(model),
+        };
+        match CodexSubagentRunner::run(
+            &runner,
+            CodexSubagentRequest {
+                workspace,
+                goal,
+                memory_context,
+                task_id,
+                run_id: scope.run_id,
+                caller,
+                access_mode,
+                require_approval,
+                abort,
+                event_sink: guarded_event_sink,
+            },
+        )
+        .await?
+        {
+            CodexSubagentOutcome::Completed(summary) => {
+                Ok(SubagentCandidateOutcome::Completed(summary))
+            }
+            CodexSubagentOutcome::Cancelled => Ok(SubagentCandidateOutcome::Cancelled),
+        }
+    }
+}
+
+fn canonical_regular_file(path: &Path) -> Option<PathBuf> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return None;
+    }
+    path.canonicalize().ok()
+}
+
+#[cfg(windows)]
+fn collect_codex_vendor_binaries(root: &Path) -> Option<Vec<PathBuf>> {
+    let canonical_root = root.canonicalize().ok()?;
+    let mut pending = vec![canonical_root.clone()];
+    let mut visited = 0usize;
+    let mut binaries = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).ok()? {
+            visited = visited.checked_add(1)?;
+            if visited > MAX_CODEX_TRUST_TREE_ENTRIES {
+                return None;
+            }
+            let entry = entry.ok()?;
+            let metadata = std::fs::symlink_metadata(entry.path()).ok()?;
+            if metadata.file_type().is_symlink() {
+                return None;
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+                continue;
+            }
+            if !metadata.is_file()
+                || !entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+            {
+                continue;
+            }
+            let canonical = entry.path().canonicalize().ok()?;
+            if !canonical.starts_with(&canonical_root) {
+                return None;
+            }
+            binaries.push(canonical);
+            if binaries.len() > MAX_CODEX_ADDITIONAL_BINARIES {
+                return None;
+            }
+        }
+    }
+    binaries.sort();
+    binaries.dedup();
+    Some(binaries)
+}
+
+/// Resolve every executable layer used by the already-verified Codex launch path. A script shim
+/// is never accepted as a native binary; incomplete npm layouts remain `trust_required`.
+fn verified_codex_trust_chain(cli_path: Option<&Path>) -> Option<VerifiedExecutableTrustChain> {
+    let cli_path = cli_path?;
+    #[cfg(windows)]
+    {
+        if cli_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+        {
+            return Some(VerifiedExecutableTrustChain::Native {
+                binary: canonical_regular_file(cli_path)?,
+            });
+        }
+        if !cli_path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("cmd"))
+        {
+            return None;
+        }
+        let shim = canonical_regular_file(cli_path)?;
+        let directory = shim.parent()?;
+        let package_root = directory
+            .join("node_modules")
+            .join("@openai")
+            .join("codex");
+        let js_entrypoint = canonical_regular_file(&package_root.join("bin").join("codex.js"))?;
+        let runtime = canonical_regular_file(&directory.join("node.exe")).or_else(|| {
+            executable_paths(&["node.exe"])
+                .into_iter()
+                .find_map(|path| canonical_regular_file(&path))
+        })?;
+        let (platform_package, target_triple) = match std::env::consts::ARCH {
+            "x86_64" => ("codex-win32-x64", "x86_64-pc-windows-msvc"),
+            "aarch64" => ("codex-win32-arm64", "aarch64-pc-windows-msvc"),
+            _ => return None,
+        };
+        let vendor_root = package_root
+            .join("node_modules")
+            .join("@openai")
+            .join(platform_package)
+            .join("vendor")
+            .join(target_triple);
+        let platform_binary =
+            canonical_regular_file(&vendor_root.join("bin").join("codex.exe"))?;
+        let mut additional_binaries = collect_codex_vendor_binaries(&vendor_root)?;
+        additional_binaries.retain(|path| path != &platform_binary);
+        return Some(VerifiedExecutableTrustChain::Npm {
+            shim,
+            runtime,
+            js_entrypoint,
+            platform_binary,
+            additional_binaries,
+        });
+    }
+    #[cfg(not(windows))]
+    {
+        Some(VerifiedExecutableTrustChain::Native {
+            binary: canonical_regular_file(cli_path)?,
+        })
+    }
+}
+
+async fn build_subagent_catalog_context(
+    config_dir: &Path,
+    config: hermes_config::Config,
+) -> Result<SubagentCatalogContext, String> {
+    let settings = SettingsService::new(config_dir.to_path_buf());
+    let pepper = load_or_create_fingerprint_pepper(&settings).map_err(err_str)?;
+    let receipts = SubagentHealthReceiptStore::new(config_dir).load();
+    let cli = probe_codex_cli().await;
+    let auth_ready = if cli.available {
+        probe_codex_login(cli.path.as_deref()).await.state == CodexAuthState::Authenticated
+    } else {
+        false
+    };
+    let config_path = codex_home_dir().join("config.toml");
+    let (_, configured_model, _, _) = read_codex_preference_values(&config_path)?;
+    // Candidate execution is always constrained by the parent run's Host-owned ceiling. Bind the
+    // receipt to that policy instead of trusting arbitrary permission strings in config.toml.
+    let trust_chain = verified_codex_trust_chain(cli.path.as_deref());
+    let codex = CodexCliCatalogInput {
+        configured: cli.available,
+        installed: cli.available,
+        auth_ready,
+        adapter_ready: trust_chain.is_some(),
+        model: configured_model.unwrap_or_default(),
+        permission_profile: SUBAGENT_CODEX_PERMISSION_PROFILE.to_string(),
+        trust_chain,
+    };
+    Ok(SubagentCatalogContext {
+        config,
+        receipts,
+        pepper,
+        codex,
+        codex_cli_path: cli.path,
+    })
+}
+
+async fn load_subagent_catalog_context(
+    state: &CommandState,
+) -> Result<SubagentCatalogContext, String> {
+    let settings = SettingsService::new(state.config_dir.clone());
+    let config = settings.load_global_unvalidated().map_err(err_str)?;
+    build_subagent_catalog_context(&state.config_dir, config).await
+}
+
+fn missing_subagent_entry(
+    request: &SubagentProviderProbeRequest,
+) -> SubagentProviderCatalogEntry {
+    SubagentProviderCatalogEntry {
+        source: request.source.clone(),
+        display_name: "Unavailable provider".to_string(),
+        model: request.model.clone(),
+        configured: false,
+        ready: false,
+        connected: false,
+        selectable: false,
+        supported: false,
+        availability: SubagentProviderAvailability::Unsupported,
+        protocol: None,
+        capabilities: SubagentProviderCapabilities::external(),
+        health: HealthView {
+            state: SubagentProviderHealthState::Failed,
+            verification_level: None,
+            checked_at: None,
+            expires_at: None,
+            latency_ms: None,
+            error: Some(SubagentHealthErrorCode::Unsupported),
+        },
+    }
+}
+
+fn subagent_pool_snapshot_from_context(
+    context: &SubagentCatalogContext,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<SubagentPoolSnapshot, String> {
+    let pool = context.config.orchestration.subagent_pool.clone();
+    let input = context.input(now);
+    let revision = compute_subagent_pool_revision(&input, &pool).map_err(err_str)?;
+    let slot_health = pool
+        .slots
+        .iter()
+        .map(|slot| {
+            let entry = resolve_subagent_provider_catalog_entry(
+                &input,
+                &slot.source,
+                &slot.model,
+            );
+            SubagentPoolSlotHealth {
+                slot_id: slot.slot_id.clone(),
+                source: slot.source.clone(),
+                model: slot.model.clone(),
+                selectable: entry.as_ref().is_some_and(|entry| entry.selectable),
+                availability: entry
+                    .as_ref()
+                    .map_or(SubagentProviderAvailability::Unsupported, |entry| {
+                        entry.availability
+                    }),
+                capabilities: entry
+                    .as_ref()
+                    .map_or_else(SubagentProviderCapabilities::external, |entry| {
+                        entry.capabilities
+                    }),
+                health: entry.map_or_else(HealthView::default, |entry| entry.health),
+            }
+        })
+        .collect();
+    Ok(SubagentPoolSnapshot {
+        revision,
+        pool,
+        catalog: build_subagent_provider_catalog(context.input(now)),
+        slot_health,
+    })
+}
+
+fn runtime_subagent_capabilities(
+    capabilities: SubagentProviderCapabilities,
+) -> RuntimeSubagentProviderCapabilities {
+    RuntimeSubagentProviderCapabilities {
+        supports_full_access: capabilities.supports_full_access,
+        supports_host_delegation: capabilities.supports_host_delegation,
+        supports_live_messages: capabilities.supports_live_messages,
+    }
+}
+
+const SUBAGENT_POOL_UNAVAILABLE_REASON: &str =
+    "已保存的子代理候选池当前不可用；请在设置中重新测试全部槽位后再试";
+
+enum RuntimeSubagentCandidatePoolUpdate {
+    Ready {
+        revision: String,
+        slots: Vec<FrozenSubagentSlot>,
+    },
+    Unavailable {
+        revision: String,
+    },
+}
+
+fn install_runtime_subagent_candidate_pool(
+    runtime: &r_code_agent_worker::LlmAgentRuntime,
+    update: RuntimeSubagentCandidatePoolUpdate,
+) {
+    match update {
+        RuntimeSubagentCandidatePoolUpdate::Ready { revision, slots } => {
+            runtime.replace_subagent_candidate_pool(revision, slots);
+        }
+        RuntimeSubagentCandidatePoolUpdate::Unavailable { revision } => {
+            // Renderer-visible reason is deliberately fixed and contains no provider error,
+            // credential, executable path or CLI output. Full diagnostics remain in Host logs.
+            runtime.replace_subagent_candidate_pool_error(
+                revision,
+                SUBAGENT_POOL_UNAVAILABLE_REASON,
+            );
+        }
+    }
+}
+
+/// Rebuild the source paired with each saved slot for the next root run. The persisted pool is
+/// all-or-nothing at runtime: one invalid/stale receipt disables the whole pool, preventing an
+/// apparently healthy subset from silently changing the user's weighted routing policy.
+async fn build_runtime_subagent_candidate_pool(
+    config_dir: &Path,
+    db: &Arc<Database>,
+    permission_engine: Arc<PermissionEngine>,
+    config: hermes_config::Config,
+) -> Result<RuntimeSubagentCandidatePoolUpdate, String> {
+    let context = build_subagent_catalog_context(config_dir, config).await?;
+    let snapshot = subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?;
+    let revision = snapshot.revision.clone();
+    if let Err(error) = snapshot.pool.validate() {
+        tracing::warn!(%error, "disabled invalid persisted subagent candidate pool");
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+    }
+    if snapshot.pool.slots.is_empty() {
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Ready {
+            revision,
+            slots: Vec::new(),
+        });
+    }
+    if snapshot.slot_health.len() != snapshot.pool.slots.len()
+        || snapshot.slot_health.iter().any(|health| {
+            !health.selectable || health.health.state != SubagentProviderHealthState::Connected
+        })
+    {
+        tracing::warn!(
+            revision,
+            "disabled stale subagent candidate pool until every slot is tested again"
+        );
+        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+    }
+
+    let mut slots = Vec::with_capacity(snapshot.pool.slots.len());
+    for (slot, health) in snapshot
+        .pool
+        .slots
+        .into_iter()
+        .zip(snapshot.slot_health.into_iter())
+    {
+        if slot.slot_id != health.slot_id
+            || slot.source != health.source
+            || slot.model != health.model
+        {
+            tracing::warn!(
+                revision,
+                "disabled inconsistent subagent candidate pool snapshot"
+            );
+            return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+        }
+        let (source, runner): (SubagentCandidateSource, Arc<dyn SubagentCandidateRunner>) =
+            match &slot.source {
+                SubagentProviderSource::ApiProvider { provider_id } => {
+                    let provider_config = context.config.providers.get(provider_id).ok_or_else(|| {
+                        format!("子代理 API Provider“{provider_id}”已不存在")
+                    })?;
+                    let mut exact_config = provider_config.clone();
+                    exact_config.model = slot.model.clone();
+                    let provider = hermes_llm::create_provider(build_provider_config(
+                        provider_id,
+                        &exact_config,
+                    ))
+                    .map_err(err_str)?;
+                    let provider: Arc<dyn hermes_core::LlmProvider> = Arc::from(provider);
+                    let runtime = NativeSubagentRuntimeOptions {
+                        provider,
+                        hosted_tools: hosted_tools_for_provider(provider_id, &exact_config),
+                        max_tokens: effective_max_tokens(provider_id, &exact_config),
+                        temperature: Some(exact_config.temperature),
+                        // ProviderConfig currently has no independent inference profile. Freeze an
+                        // explicit empty profile so the root Provider's reasoning options cannot
+                        // leak into this slot.
+                        inference: Some(InferenceOptions::default()),
+                    };
+                    (
+                        SubagentCandidateSource::NativeProvider {
+                            provider_id: provider_id.clone(),
+                        },
+                        Arc::new(NativeProviderSubagentCandidateRunner { runtime }),
+                    )
+                }
+                SubagentProviderSource::CodexCli => {
+                    if context.codex_cli_path.is_none() || context.codex.trust_chain.is_none() {
+                        tracing::warn!(
+                            revision,
+                            "disabled Codex candidate whose executable trust chain is unavailable"
+                        );
+                        return Ok(RuntimeSubagentCandidatePoolUpdate::Unavailable { revision });
+                    }
+                    (
+                        SubagentCandidateSource::ExternalAgent(ExternalAgentId::Codex),
+                        Arc::new(CodexCliSubagentCandidateRunner {
+                            db: db.clone(),
+                            permission_engine: permission_engine.clone(),
+                            config_dir: config_dir.to_path_buf(),
+                        }),
+                    )
+                }
+            };
+        slots.push(FrozenSubagentSlot {
+            descriptor: FrozenSubagentSlotDescriptor {
+                slot_id: slot.slot_id,
+                source,
+                model: slot.model,
+                weight: slot.weight,
+                role_prompt: slot.prompt,
+                capabilities: runtime_subagent_capabilities(health.capabilities),
+            },
+            runner,
+        });
+    }
+    Ok(RuntimeSubagentCandidatePoolUpdate::Ready { revision, slots })
+}
+
+fn validate_subagent_probe_request(request: &SubagentProviderProbeRequest) -> Result<(), String> {
+    let model = request.model.as_str();
+    if model.is_empty()
+        || model.trim() != model
+        || model.chars().any(char::is_control)
+        || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+    {
+        return Err("子代理模型必须填写、无控制字符且长度有效".to_string());
+    }
+    if let SubagentProviderSource::ApiProvider { provider_id } = &request.source {
+        if provider_id.is_empty()
+            || provider_id.trim() != provider_id
+            || provider_id.chars().any(char::is_control)
+            || provider_id.chars().count() > hermes_config::MAX_SUBAGENT_SOURCE_ID_CHARS
+        {
+            return Err("API Provider 标识无效".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn classify_subagent_probe_error(error: &str) -> SubagentHealthErrorCode {
+    let normalized = error.to_ascii_lowercase();
+    if normalized.contains("timed out") || normalized.contains("timeout") || normalized.contains("超时") {
+        SubagentHealthErrorCode::Timeout
+    } else if normalized.contains("401")
+        || normalized.contains("403")
+        || normalized.contains("auth")
+        || normalized.contains("api key")
+        || normalized.contains("登录")
+    {
+        SubagentHealthErrorCode::AuthenticationFailed
+    } else if normalized.contains("model") || normalized.contains("模型") || normalized.contains("404") {
+        SubagentHealthErrorCode::ModelUnavailable
+    } else if normalized.contains("network")
+        || normalized.contains("connect")
+        || normalized.contains("dns")
+        || normalized.contains("网络")
+    {
+        SubagentHealthErrorCode::NetworkUnavailable
+    } else if normalized.contains("permission") || normalized.contains("denied") || normalized.contains("权限") {
+        SubagentHealthErrorCode::PermissionDenied
+    } else if normalized.contains("protocol")
+        || normalized.contains("parse")
+        || normalized.contains("json")
+        || normalized.contains("协议")
+    {
+        SubagentHealthErrorCode::ProtocolViolation
+    } else {
+        SubagentHealthErrorCode::Unknown
+    }
+}
+
+fn unavailable_probe_error(
+    availability: SubagentProviderAvailability,
+) -> SubagentHealthErrorCode {
+    match availability {
+        SubagentProviderAvailability::NotInstalled => {
+            SubagentHealthErrorCode::ExecutableUnavailable
+        }
+        SubagentProviderAvailability::LoginRequired
+        | SubagentProviderAvailability::NeedsConfiguration => {
+            SubagentHealthErrorCode::AuthenticationFailed
+        }
+        SubagentProviderAvailability::TrustRequired => SubagentHealthErrorCode::PermissionDenied,
+        SubagentProviderAvailability::Unsupported => SubagentHealthErrorCode::Unsupported,
+        SubagentProviderAvailability::Ready => SubagentHealthErrorCode::Unknown,
+    }
+}
+
+async fn run_api_subagent_probe(
+    context: &SubagentCatalogContext,
+    provider_id: &str,
+    model: &str,
+) -> Result<(), SubagentHealthErrorCode> {
+    let provider_config = context
+        .config
+        .providers
+        .get(provider_id)
+        .ok_or(SubagentHealthErrorCode::Unsupported)?;
+    let mut exact_config = provider_config.clone();
+    exact_config.model = model.to_string();
+    let provider = hermes_llm::create_provider(build_provider_config(provider_id, &exact_config))
+        .map_err(|error| classify_subagent_probe_error(&err_str(error)))?;
+    let request = CompletionRequest {
+        model: model.to_string(),
+        system: Some("Connectivity probe. Reply with OK.".to_string()),
+        messages: vec![Message::user_text("OK")],
+        tools: vec![],
+        hosted_tools: vec![],
+        max_tokens: 8,
+        temperature: Some(0.0),
+        enable_caching: false,
+        inference: InferenceOptions::default(),
+    };
+    match timeout(SUBAGENT_PROVIDER_PROBE_TIMEOUT, provider.complete(request)).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(classify_subagent_probe_error(&err_str(error))),
+        Err(_) => Err(SubagentHealthErrorCode::Timeout),
+    }
+}
+
+async fn run_codex_subagent_probe(
+    context: &SubagentCatalogContext,
+    model: &str,
+) -> Result<(), SubagentHealthErrorCode> {
+    let cli_path = context
+        .codex_cli_path
+        .as_deref()
+        .ok_or(SubagentHealthErrorCode::ExecutableUnavailable)?;
+    let models = load_codex_model_catalog(cli_path)
+        .await
+        .map_err(|error| classify_subagent_probe_error(&error))?;
+    models
+        .iter()
+        .any(|candidate| candidate.slug == model)
+        .then_some(())
+        .ok_or(SubagentHealthErrorCode::ModelUnavailable)
+}
+
+fn record_subagent_probe_receipt(
+    context: &mut SubagentCatalogContext,
+    request: &SubagentProviderProbeRequest,
+    identity: crate::subagent_providers::SubagentProviderProbeIdentity,
+    checked_at: chrono::DateTime<chrono::Utc>,
+    latency_ms: u64,
+    result: Result<(), SubagentHealthErrorCode>,
+) {
+    let (status, ttl_minutes, error) = match result {
+        Ok(()) => (
+            SubagentProviderHealthState::Connected,
+            SUBAGENT_HEALTH_SUCCESS_TTL_MINUTES,
+            None,
+        ),
+        Err(error) => (
+            SubagentProviderHealthState::Failed,
+            SUBAGENT_HEALTH_FAILURE_TTL_MINUTES,
+            Some(error),
+        ),
+    };
+    let receipt_key = subagent_health_receipt_key(&request.source, &request.model);
+    let mut receipt = SubagentHealthReceipt {
+        fingerprint: identity.fingerprint.receipt_value(),
+        attestation: String::new(),
+        status,
+        verification_level: Some(identity.verification_level),
+        checked_at,
+        expires_at: checked_at + chrono::Duration::minutes(ttl_minutes),
+        latency_ms: Some(latency_ms),
+        error,
+    };
+    attest_subagent_health_receipt(&context.pepper, &receipt_key, &mut receipt);
+    context.receipts.receipts.insert(receipt_key, receipt);
+}
+
+async fn probe_subagent_provider_once(
+    context: &mut SubagentCatalogContext,
+    request: &SubagentProviderProbeRequest,
+) -> Result<SubagentProviderCatalogEntry, String> {
+    validate_subagent_probe_request(request)?;
+    let checked_at = chrono::Utc::now();
+    let input = context.input(checked_at);
+    let Some(current) = resolve_subagent_provider_catalog_entry(
+        &input,
+        &request.source,
+        &request.model,
+    ) else {
+        return Ok(missing_subagent_entry(request));
+    };
+    let identity = resolve_subagent_provider_probe_identity(
+        &input,
+        &request.source,
+        &request.model,
+    )
+    .ok();
+    let started = Instant::now();
+    let probe_result = if !current.ready {
+        Err(unavailable_probe_error(current.availability))
+    } else {
+        match &request.source {
+            SubagentProviderSource::ApiProvider { provider_id } => {
+                run_api_subagent_probe(context, provider_id, &request.model).await
+            }
+            SubagentProviderSource::CodexCli => {
+                run_codex_subagent_probe(context, &request.model).await
+            }
+        }
+    };
+    if let Some(identity) = identity {
+        record_subagent_probe_receipt(
+            context,
+            request,
+            identity,
+            checked_at,
+            duration_millis(started.elapsed()),
+            probe_result,
+        );
+    }
+    Ok(resolve_subagent_provider_catalog_entry(
+        &context.input(chrono::Utc::now()),
+        &request.source,
+        &request.model,
+    )
+    .unwrap_or_else(|| missing_subagent_entry(request)))
+}
+
+pub async fn subagent_provider_catalog(
+    state: &CommandState,
+) -> Result<crate::subagent_providers::CatalogSnapshot, String> {
+    let _guard = state.subagent_config_mutations.lock().await;
+    let context = load_subagent_catalog_context(state).await?;
+    Ok(build_subagent_provider_catalog(
+        context.input(chrono::Utc::now()),
+    ))
+}
+
+pub async fn subagent_pool_snapshot(
+    state: &CommandState,
+) -> Result<SubagentPoolSnapshot, String> {
+    let _guard = state.subagent_config_mutations.lock().await;
+    let context = load_subagent_catalog_context(state).await?;
+    subagent_pool_snapshot_from_context(&context, chrono::Utc::now())
+}
+
+pub async fn subagent_provider_test(
+    state: &CommandState,
+    request: SubagentProviderProbeRequest,
+) -> Result<SubagentProviderProbeResponse, String> {
+    let _guard = state.subagent_config_mutations.lock().await;
+    let mut context = load_subagent_catalog_context(state).await?;
+    let result = probe_subagent_provider_once(&mut context, &request).await?;
+    SubagentHealthReceiptStore::new(&state.config_dir)
+        .save(&context.receipts)
+        .map_err(err_str)?;
+    Ok(SubagentProviderProbeResponse {
+        result,
+        snapshot: subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?,
+    })
+}
+
+fn deduplicate_subagent_probe_requests(
+    requests: Vec<SubagentProviderProbeRequest>,
+) -> Vec<SubagentProviderProbeRequest> {
+    let mut seen = HashSet::with_capacity(requests.len());
+    requests
+        .into_iter()
+        .filter(|request| {
+            seen.insert(subagent_health_receipt_key(
+                &request.source,
+                &request.model,
+            ))
+        })
+        .collect()
+}
+
+pub async fn subagent_provider_test_batch(
+    state: &CommandState,
+    requests: Vec<SubagentProviderProbeRequest>,
+) -> Result<SubagentProviderProbeBatchResponse, String> {
+    if requests.len() > SUBAGENT_PROVIDER_PROBE_MAX_BATCH {
+        return Err(format!(
+            "一次最多测试 {SUBAGENT_PROVIDER_PROBE_MAX_BATCH} 个子代理来源"
+        ));
+    }
+    // A source may occur once for its catalog model and again in one or more configured slots.
+    // Probe each exact source/model identity once so duplicate UI rows cannot multiply network
+    // calls or rewrite the same receipt repeatedly. Preserve first-seen order for stable rendering.
+    let requests = deduplicate_subagent_probe_requests(requests);
+    let _guard = state.subagent_config_mutations.lock().await;
+    let mut context = load_subagent_catalog_context(state).await?;
+    let mut results = Vec::with_capacity(requests.len());
+    for request in &requests {
+        match probe_subagent_provider_once(&mut context, request).await {
+            Ok(result) => results.push(result),
+            Err(_) => results.push(missing_subagent_entry(request)),
+        }
+    }
+    SubagentHealthReceiptStore::new(&state.config_dir)
+        .save(&context.receipts)
+        .map_err(err_str)?;
+    Ok(SubagentProviderProbeBatchResponse {
+        results,
+        snapshot: subagent_pool_snapshot_from_context(&context, chrono::Utc::now())?,
+    })
+}
+
+pub async fn subagent_pool_save(
+    state: &CommandState,
+    revision: &str,
+    pool: SubagentPoolConfig,
+) -> Result<SubagentPoolSnapshot, String> {
+    pool.validate().map_err(err_str)?;
+    let _guard = state.subagent_config_mutations.lock().await;
+    let mut context = load_subagent_catalog_context(state).await?;
+    let now = chrono::Utc::now();
+    let current = subagent_pool_snapshot_from_context(&context, now)?;
+    if revision != current.revision {
+        return Err("子代理配置已在其他窗口更新，请重新加载后再保存".to_string());
+    }
+    let input = context.input(chrono::Utc::now());
+    for slot in &pool.slots {
+        let entry = resolve_subagent_provider_catalog_entry(&input, &slot.source, &slot.model)
+            .ok_or_else(|| {
+                format!(
+                    "子代理槽位“{}”引用的来源已不存在，请重新选择",
+                    slot.slot_id
+                )
+            })?;
+        if !entry.selectable
+            || entry.health.state != SubagentProviderHealthState::Connected
+            || entry.source != slot.source
+            || entry.model != slot.model
+        {
+            return Err(format!(
+                "子代理槽位“{}”尚未在当前配置指纹下通过连通测试",
+                slot.slot_id
+            ));
+        }
+    }
+
+    context.config.orchestration.subagent_pool = pool;
+    SettingsService::new(state.config_dir.clone())
+        .save_global(&context.config)
+        .map_err(err_str)?;
+    subagent_pool_snapshot_from_context(&context, chrono::Utc::now())
+}
+
 /// Read-only RTK state for Settings. Detection verifies both the official version shape and the
 /// Rust Token Killer `gain` command so an unrelated binary with the same name is ignored.
 pub async fn rtk_status(state: &CommandState) -> Result<crate::rtk::RtkStatus, String> {
@@ -11960,11 +13443,12 @@ pub async fn rtk_status(state: &CommandState) -> Result<crate::rtk::RtkStatus, S
 }
 
 /// Enable or disable R-Code's RTK policy. Detailed failures stay in diagnostics; the WebView gets
-/// intentionally short copy so the switch can roll back without surfacing transport internals.
+/// a structured `code` so it can render actionable guidance for the known "security software
+/// blocked the unsigned binary" case without parsing diagnostic prose.
 pub async fn rtk_set_enabled(
     state: &CommandState,
     enabled: bool,
-) -> Result<crate::rtk::RtkStatus, String> {
+) -> Result<crate::rtk::RtkStatus, crate::rtk::RtkError> {
     let manager = crate::rtk::RtkManager::from_config_dir(state.config_dir.clone());
     match manager.set_enabled(enabled).await {
         Ok(status) => {
@@ -11972,12 +13456,13 @@ pub async fn rtk_set_enabled(
             Ok(status)
         }
         Err(error) => {
-            tracing::error!(%error, requested_enabled = enabled, "RTK settings change failed");
-            Err(if enabled {
-                "RTK 未能启用，请在诊断中查看详情。".to_string()
-            } else {
-                "RTK 未能关闭，请在诊断中查看详情。".to_string()
-            })
+            tracing::error!(
+                %error,
+                code = ?error.code(),
+                requested_enabled = enabled,
+                "RTK settings change failed"
+            );
+            Err(error)
         }
     }
 }
@@ -12680,11 +14165,7 @@ async fn probe_authenticated_codex_cached() -> Result<CodexCliProbe, ProductErro
 /// `auth.json` 是否存在当作登录结论，因为 Codex 可将凭据保存到系统密钥库。
 pub async fn codex_integration_status() -> Result<serde_json::Value, String> {
     let manager = SkillManager::new();
-    let skill_path = manager
-        .install_paths()
-        .into_iter()
-        .find(|path| path.to_string_lossy().contains(".codex"))
-        .ok_or_else(|| "无法确定 Codex Skill 安装位置".to_string())?;
+    let skill_path = manager.codex_install_path();
     let skill_status = match std::fs::read(&skill_path) {
         Ok(contents) if contents == SkillManager::skill_content().as_bytes() => "up_to_date",
         Ok(_) => "update_available",
@@ -13061,6 +14542,7 @@ pub async fn codex_save_cli_preferences(
     verbosity: Option<&str>,
     permission_mode: Option<&str>,
 ) -> Result<CodexCliPreferences, String> {
+    let _subagent_guard = state.subagent_config_mutations.lock().await;
     let _guard = CODEX_PREFERENCES_LOCK.lock().await;
     let cli = require_authenticated_codex_cli().await?;
     let cli_path = cli
@@ -13158,13 +14640,13 @@ pub async fn codex_install_cli(state: &CommandState) -> Result<serde_json::Value
     {
         Ok(output) => output,
         Err(CodexCommandError::Timeout) => {
-            return Err("安装超过 5 分钟仍未完成，已停止 npm 进程。请检查网络后重试。".to_string())
+            return Err("安装超过 5 分钟仍未完成，已停止 npm 进程。请检查网络后重试。".to_string());
         }
         Err(CodexCommandError::Launch(std::io::ErrorKind::PermissionDenied)) => {
-            return Err("系统拒绝启动 npm。请检查 Node.js 安装与当前用户权限。".to_string())
+            return Err("系统拒绝启动 npm。请检查 Node.js 安装与当前用户权限。".to_string());
         }
         Err(CodexCommandError::Launch(_)) => {
-            return Err("无法启动 npm。请确认 Node.js 安装完整后重试。".to_string())
+            return Err("无法启动 npm。请确认 Node.js 安装完整后重试。".to_string());
         }
     };
     if !output.status.success() {
@@ -13733,6 +15215,8 @@ const CODEX_REASONING_SUMMARY_CHARS: usize = 800;
 const CODEX_REASONING_SUMMARY_PREFIX: &str = "Codex 思考摘要：";
 const CODEX_REASONING_SUMMARY_EVENT: &str = "codex_reasoning_summary";
 const R_CODE_REASONING_EVENT: &str = "r_code_reasoning";
+/// 工具调用前的过渡性叙述。UI 折叠为可展开的“过程”条目，而不是逐条渲染成正式回答。
+const R_CODE_INTERIM_EVENT: &str = "r_code_interim";
 const CODEX_RCODE_DELEGATE_TOOL: &str = "rcode_delegate_subagent";
 const CODEX_EXEC_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 /// Windows 上首次加载大型工作区、杀毒扫描和 Rust/Node 工具启动都可能超过 90 秒。
@@ -13770,13 +15254,16 @@ impl CodexRunPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct CodexExecLimits {
     startup_timeout: Duration,
     idle_timeout: Duration,
     /// 仅供确定性测试注入；生产路径不设置总运行时长硬上限。
     hard_timeout: Option<Duration>,
     policy: CodexRunPolicy,
+    /// Host-verified exact model override for a configured candidate slot. It is never accepted
+    /// from an unprobed renderer request.
+    model_override: Option<String>,
 }
 
 impl Default for CodexExecLimits {
@@ -13786,6 +15273,7 @@ impl Default for CodexExecLimits {
             idle_timeout: CODEX_EXEC_IDLE_TIMEOUT,
             hard_timeout: None,
             policy: CodexRunPolicy::Main,
+            model_override: None,
         }
     }
 }
@@ -13799,6 +15287,7 @@ impl CodexExecLimits {
             policy: CodexRunPolicy::Subagent {
                 max_tool_calls: None,
             },
+            model_override: None,
         }
     }
 }
@@ -13860,6 +15349,7 @@ struct RCodeCodexSubagentRunner {
     permission_engine: Arc<PermissionEngine>,
     config_dir: PathBuf,
     subagent_prompt: String,
+    model_override: Option<String>,
 }
 
 fn duration_millis(duration: Duration) -> u64 {
@@ -14051,6 +15541,8 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
                 cancellation.cancel();
             })
         };
+        let mut limits = CodexExecLimits::subagent();
+        limits.model_override = self.model_override.clone();
         let completion = run_codex_delegation_process(
             &workspace,
             &build_codex_delegation_prompt(
@@ -14073,7 +15565,7 @@ impl CodexSubagentRunner for RCodeCodexSubagentRunner {
                 workspace: Some(workspace.clone()),
                 rcode_delegate: None,
             },
-            CodexExecLimits::subagent(),
+            limits,
         )
         .await;
         cancellation_monitor.abort();
@@ -14432,15 +15924,13 @@ evidence, implementation, or verification is still missing."
     )
 }
 
-const CODEX_PARALLEL_EXECUTION_HINT: &str =
-    "Prefer parallel execution for independent operations. \
+const CODEX_PARALLEL_EXECUTION_HINT: &str = "Prefer parallel execution for independent operations. \
 Use a bounded batch of at most four for unrelated read-only inspections and verification commands \
 only when they do not share mutable files, caches, build outputs, package state, or services. \
 Keep writes and result-dependent steps sequential; never parallelize edits, package changes, Git \
 mutations, or commands that may contend for the same resource.";
 
-const CODEX_FILE_LINK_HINT: &str =
-    "Make workspace file references clickable in replies. Link every referenced existing file with \
+const CODEX_FILE_LINK_HINT: &str = "Make workspace file references clickable in replies. Link every referenced existing file with \
 a workspace-relative Markdown destination. Add a one-based location when useful: \
 `[src/lib.rs:42](src/lib.rs#L42)` or `[src/lib.rs:42:7](src/lib.rs#L42C7)`. For a range, show \
 the range in the label and link to its first line, for example \
@@ -14630,8 +16120,30 @@ async fn agent_send_codex_with_mode(
         .get_active_run_for_branch(&task.id, &branch.id)
         .map_err(err_str)?;
     if let Some(active) = active {
+        // 附件不能注入正在运行的 Codex turn；改为排队，等当前 turn 结束后按原样分发。
         if !attachments.is_empty() {
-            return Err("当前 Codex 运行结束后才能把附件作为新一轮消息发送".to_string());
+            if mode == AgentSendMode::Steer {
+                return Err("运行中引导暂不支持附件；请改为排队发送，或等当前运行结束后再发送".to_string());
+            }
+            let priority = if mode == AgentSendMode::SendNow {
+                1_000_000
+            } else {
+                0
+            };
+            enqueue_message_with_attachments(&state.db, &task.id, &branch.id, message, priority, attachments)?;
+            if mode == AgentSendMode::SendNow {
+                let _ = state.external_agents.cancel_task(&task.id).await;
+                TaskRepository::new(&state.db)
+                    .update_state(&task.id, TaskState::Interrupted)
+                    .map_err(err_str)?;
+                state.emit_agent_event(
+                    &task.id,
+                    &AgentEvent::State {
+                        state: TaskState::Interrupted,
+                    },
+                );
+            }
+            return Ok(());
         }
         if mode == AgentSendMode::Steer {
             let operation_id = uuid::Uuid::new_v4().to_string();
@@ -14713,6 +16225,7 @@ async fn agent_send_codex_with_mode(
         state.config_dir.clone(),
         state.tool_gateway.clone(),
         state.mcp_manager.clone(),
+        state.subagent_config_mutations.clone(),
         state.codex_app_server.clone(),
         task.clone(),
         branch.clone(),
@@ -14829,6 +16342,7 @@ async fn start_codex_main_with_resources(
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
     codex_app_server: Arc<CodexAppServerRegistry>,
     task: Task,
     branch: SessionBranch,
@@ -14866,7 +16380,7 @@ async fn start_codex_main_with_resources(
     let prepared_attachments = prepare_codex_attachments(&attachments)?;
     let prepared_memory = prepare_run_memory(&db, &task, &message);
     let main_agent_prompt = SettingsService::new(config_dir.clone())
-        .load_agent_prompts()
+        .resolve_agent_prompts(task.workspace_path.as_deref())
         .map_err(err_str)?
         .main_agent;
     let prompt = codex_main_prompt(
@@ -14977,6 +16491,7 @@ async fn start_codex_main_with_resources(
         config_dir,
         tool_gateway,
         mcp_manager,
+        subagent_config_mutations,
         codex_app_server,
         branch.storage_id,
         run,
@@ -15210,6 +16725,7 @@ fn codex_exec_command_with_permissions(
         permissions,
         prompt,
         &[],
+        None,
         CodexRunPolicy::Subagent {
             max_tool_calls: None,
         },
@@ -15222,6 +16738,7 @@ fn codex_exec_command_with_permissions_and_images(
     permissions: CodexDelegationPermissions,
     prompt: &str,
     image_paths: &[PathBuf],
+    model_override: Option<&str>,
     policy: CodexRunPolicy,
 ) -> Result<TokioCommand, String> {
     if prompt.contains('\0') {
@@ -15233,6 +16750,16 @@ fn codex_exec_command_with_permissions_and_images(
     // This is a fixed CLI flag, never derived from WebView input or config.toml.
     let mut command = codex_child_command(cli_path)?;
     command.args(["exec", "--json"]);
+    if let Some(model) = model_override {
+        if model.is_empty()
+            || model.trim() != model
+            || model.chars().any(char::is_control)
+            || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+        {
+            return Err("Codex 子代理模型标识无效。".to_string());
+        }
+        command.arg("--model").arg(model);
+    }
     if policy.is_subagent() {
         // 子代理是一次性辅助任务：固定中等推理并关闭联网搜索，避免继承用户为主
         // Agent 选择的高推理档位或每轮搜索。覆盖只附加到本次子进程，不写 config.toml。
@@ -15547,6 +17074,7 @@ async fn run_codex_exec_process_with_options_and_permissions_and_images(
         permissions,
         prompt,
         image_paths,
+        limits.model_override.as_deref(),
         limits.policy,
     )
     .and_then(|mut command| command.spawn().map_err(|error| error.to_string()))
@@ -15944,6 +17472,7 @@ struct CodexRCodeDelegateContext {
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
     /// Frozen snapshot prepared for the Codex parent run. Dynamic R-Code children inherit this
     /// exact value rather than querying mutable memory again.
     memory_context: Option<String>,
@@ -16795,8 +18324,10 @@ async fn handle_codex_rcode_dynamic_tool(
             &delegate.db,
             &delegate.tool_gateway,
             &delegate.mcp_manager,
+            &delegate.subagent_config_mutations,
             &mut bridge,
             task.provider_name.as_deref(),
+            task.workspace_path.as_deref(),
         )
         .await
         {
@@ -17481,19 +19012,25 @@ async fn run_codex_app_server_process_with_images_and_registry(
                     .as_ref()
                     .expect("guarded by is_some");
                 let bridge = delegate.agent_pool.bridge_for(&approval.task_id).await;
-                let requested_provider = TaskRepository::new(&delegate.db)
+                let task = TaskRepository::new(&delegate.db)
                     .get(&approval.task_id)
                     .ok()
-                    .flatten()
-                    .and_then(|task| task.provider_name);
+                    .flatten();
+                let requested_provider =
+                    task.as_ref().and_then(|task| task.provider_name.as_deref());
+                let workspace_path = task
+                    .as_ref()
+                    .and_then(|task| task.workspace_path.as_deref());
                 let mut bridge = bridge.lock().await;
                 match ensure_real_runtime(
                     &delegate.config_dir,
                     &delegate.db,
                     &delegate.tool_gateway,
                     &delegate.mcp_manager,
+                    &delegate.subagent_config_mutations,
                     &mut bridge,
-                    requested_provider.as_deref(),
+                    requested_provider,
+                    workspace_path,
                 )
                 .await
                 {
@@ -17580,6 +19117,23 @@ async fn run_codex_app_server_process_with_images_and_registry(
         "approvalPolicy": permissions.approval_policy().as_str(),
         "approvalsReviewer": permissions.approvals_reviewer().as_str(),
     });
+    if let Some(model) = limits.model_override.as_deref() {
+        if model.is_empty()
+            || model.trim() != model
+            || model.chars().any(char::is_control)
+            || model.chars().count() > hermes_config::MAX_SUBAGENT_MODEL_CHARS
+        {
+            transport_owner.finish(false).await;
+            return CodexExecCompletion {
+                failure: Some(CodexExecFailure::ApprovalBridge),
+                ..Default::default()
+            };
+        }
+        thread_params
+            .as_object_mut()
+            .expect("thread/start params are an object")
+            .insert("model".to_string(), serde_json::Value::String(model.to_string()));
+    }
     if limits.policy.is_subagent() {
         thread_params
             .as_object_mut()
@@ -18229,6 +19783,7 @@ fn spawn_codex_main(
     config_dir: PathBuf,
     tool_gateway: Arc<r_code_gateway::ToolGateway>,
     mcp_manager: Arc<McpManager>,
+    subagent_config_mutations: Arc<tokio::sync::Mutex<()>>,
     codex_app_server: Arc<CodexAppServerRegistry>,
     storage_id: String,
     run: AgentRun,
@@ -18281,6 +19836,7 @@ fn spawn_codex_main(
                     config_dir: config_dir.clone(),
                     tool_gateway: tool_gateway.clone(),
                     mcp_manager: mcp_manager.clone(),
+                    subagent_config_mutations: subagent_config_mutations.clone(),
                     memory_context,
                     // Native FullAccess bypasses the gateway approval bridge, so only an
                     // explicitly full-access Codex parent may grant it to a child.
@@ -18317,57 +19873,74 @@ fn spawn_codex_main(
             tracing::warn!(run_id = %run.id, "failed to finalize Codex workspace snapshot: {error}");
         }
 
-        let (review_state, final_state, final_detail) = if completion.cancelled {
-            (
-                ReviewState::Aborted,
-                TaskState::Interrupted,
-                "Codex 主 Agent 已停止。".to_string(),
-            )
-        } else if completion.succeeded {
-            let has_changes = ChangeService::new(&db, PathBuf::new())
+        let has_changes = if completion.cancelled {
+            false
+        } else {
+            ChangeService::new(&db, PathBuf::new())
                 .list_changes(&run.task_id)
                 .await
                 .map(|changes| !changes.is_empty())
-                .unwrap_or(false);
-            (
-                if has_changes {
-                    ReviewState::Pending
-                } else {
-                    ReviewState::Answered
-                },
-                if has_changes {
-                    TaskState::ReviewReady
-                } else {
-                    TaskState::Idle
-                },
+                .unwrap_or(false)
+        };
+        let terminal_outcome =
+            native_run_terminal_outcome(completion.cancelled, !completion.succeeded, has_changes);
+        let (review_state, final_state, final_detail) = match terminal_outcome {
+            NativeRunTerminalOutcome::Aborted => (
+                ReviewState::Aborted,
+                TaskState::Interrupted,
+                "Codex 主 Agent 已停止。".to_string(),
+            ),
+            NativeRunTerminalOutcome::CompletedWithChanges => (
+                ReviewState::Pending,
+                TaskState::ReviewReady,
                 "Codex 主 Agent 已完成。".to_string(),
-            )
-        } else {
-            let detail = codex_exec_failure_message(completion.failure)
-                .replace("Codex CLI 子代理", "Codex 主 Agent");
-            tracing::warn!(
-                task_id = %run.task_id,
-                run_id = %run.id,
-                detail,
-                "Codex main agent failed"
-            );
-            persist_and_emit_external_event(
-                &db,
-                &session_store,
-                &sessions_dir,
-                &storage_id,
-                &run,
-                observable_external_event(
+            ),
+            NativeRunTerminalOutcome::CompletedWithoutChanges => (
+                ReviewState::Answered,
+                TaskState::Idle,
+                "Codex 主 Agent 已完成。".to_string(),
+            ),
+            NativeRunTerminalOutcome::PartialSuccess
+            | NativeRunTerminalOutcome::CompletedWithError => {
+                let detail = codex_exec_failure_message(completion.failure)
+                    .replace("Codex CLI 子代理", "Codex 主 Agent");
+                tracing::warn!(
+                    task_id = %run.task_id,
+                    run_id = %run.id,
+                    detail,
+                    "Codex main agent failed"
+                );
+                persist_and_emit_external_event(
+                    &db,
+                    &session_store,
+                    &sessions_dir,
+                    &storage_id,
                     &run,
-                    AgentEvent::Message {
-                        text: format!("[error] {detail}"),
-                        delta: false,
-                    },
-                ),
-                &sink,
-            )
-            .await;
-            (ReviewState::Failed, TaskState::Interrupted, detail)
+                    observable_external_event(
+                        &run,
+                        AgentEvent::Message {
+                            text: format!("[error] {detail}"),
+                            delta: false,
+                        },
+                    ),
+                    &sink,
+                )
+                .await;
+                if terminal_outcome == NativeRunTerminalOutcome::PartialSuccess {
+                    // Codex 与原生 Agent 使用相同的部分成功语义：错误留在 transcript，
+                    // 已产生的工作区修改仍必须保留在审核入口中。
+                    let _ = repository.set_summary(&run.id, Some(PARTIAL_SUCCESS_RUN_SUMMARY));
+                    (
+                        ReviewState::Pending,
+                        TaskState::ReviewReady,
+                        PARTIAL_SUCCESS_RUN_SUMMARY.to_string(),
+                    )
+                } else {
+                    // 进程已经返回且 run 会在下方关闭。失败详情继续保存在 run 与
+                    // transcript 中，但无修改的 session 已完成，应回到可继续的 Idle。
+                    (ReviewState::Failed, TaskState::Idle, detail)
+                }
+            }
         };
 
         let _ = repository.update_review_state(&run.id, review_state);
@@ -18428,6 +20001,7 @@ fn spawn_codex_main(
                 },
                 tool_gateway,
                 mcp_manager,
+                subagent_config_mutations,
                 sink,
             },
             run.task_id.clone(),
@@ -18729,16 +20303,16 @@ pub async fn agent_delegate_codex(
         CodexAuthState::NotAuthenticated => {
             return Err(
                 "Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string(),
-            )
+            );
         }
         CodexAuthState::Unknown => {
-            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string())
+            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string());
         }
     }
     let configured_permissions =
         read_codex_delegation_permissions(&codex_home_dir().join("config.toml"))?;
     let subagent_prompt = SettingsService::new(state.config_dir.clone())
-        .load_agent_prompts()
+        .resolve_agent_prompts(Some(workspace_path))
         .map_err(err_str)?
         .subagent;
 
@@ -18902,10 +20476,10 @@ pub async fn agent_delegate_codex_mcp(
         CodexAuthState::NotAuthenticated => {
             return Err(
                 "Codex CLI 尚未登录。请在设置中完成浏览器登录或设备码登录后重试。".to_string(),
-            )
+            );
         }
         CodexAuthState::Unknown => {
-            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string())
+            return Err("暂时无法确认 Codex CLI 登录状态，请刷新后重试。".to_string());
         }
     }
     let configured_permissions =
@@ -18918,7 +20492,7 @@ pub async fn agent_delegate_codex_mcp(
         return agent_delegate_codex(state, task_id, &goal, label).await;
     }
     let subagent_prompt = SettingsService::new(state.config_dir.clone())
-        .load_agent_prompts()
+        .resolve_agent_prompts(Some(workspace_path))
         .map_err(err_str)?
         .subagent;
 
@@ -19041,10 +20615,10 @@ pub async fn codex_setup_collaboration(state: &CommandState) -> Result<serde_jso
     match probe_codex_login(cli.path.as_deref()).await.state {
         CodexAuthState::Authenticated => {}
         CodexAuthState::NotAuthenticated => {
-            return Err("Codex CLI 尚未登录。请先完成 Codex 官方登录流程。".to_string())
+            return Err("Codex CLI 尚未登录。请先完成 Codex 官方登录流程。".to_string());
         }
         CodexAuthState::Unknown => {
-            return Err("暂时无法确认 Codex 登录状态，请重新检测后再试。".to_string())
+            return Err("暂时无法确认 Codex 登录状态，请重新检测后再试。".to_string());
         }
     }
 
@@ -19085,6 +20659,13 @@ pub async fn settings_set(
         settings.save_agent_prompts(&prompts).map_err(err_str)?;
         return Ok(());
     }
+
+    if key == "orchestration.subagent_pool"
+        || key.starts_with("orchestration.subagent_pool.")
+    {
+        return Err("子代理候选池只能通过带 revision 的原子保存接口修改".to_string());
+    }
+    let _mutation_guard = state.subagent_config_mutations.lock().await;
 
     // 宽松加载：不经 validate（配置不完整/损坏时也必须能通过 UI 修复）。
     // 文件按 toml::Value 解析（允许部分字段缺失），再转 JSON 供点分写入。
@@ -19234,6 +20815,30 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let state = CommandState::in_memory(dir.path()).unwrap();
         (dir, state)
+    }
+
+    async fn save_test_subagent_receipt(
+        state: &CommandState,
+        request: &SubagentProviderProbeRequest,
+        checked_at: chrono::DateTime<chrono::Utc>,
+        result: Result<(), SubagentHealthErrorCode>,
+    ) {
+        let config = SettingsService::new(state.config_dir.clone())
+            .load_global_unvalidated()
+            .unwrap();
+        let mut context = build_subagent_catalog_context(&state.config_dir, config)
+            .await
+            .unwrap();
+        let identity = resolve_subagent_provider_probe_identity(
+            &context.input(checked_at),
+            &request.source,
+            &request.model,
+        )
+        .unwrap();
+        record_subagent_probe_receipt(&mut context, request, identity, checked_at, 1, result);
+        SubagentHealthReceiptStore::new(&state.config_dir)
+            .save(&context.receipts)
+            .unwrap();
     }
 
     #[tokio::test]
@@ -19593,17 +21198,21 @@ mod tests {
         assert_eq!(renamed.id, task.id);
         assert_eq!(renamed.title, "After");
         assert!(task_rename(&state, &task.id, "   ").await.is_err());
-        assert!(task_rename(&state, &task.id, &"x".repeat(97))
-            .await
-            .is_err());
+        assert!(
+            task_rename(&state, &task.id, &"x".repeat(97))
+                .await
+                .is_err()
+        );
 
         TaskRepository::new(&state.db)
             .update_state(&task.id, TaskState::Archived)
             .unwrap();
-        assert!(task_rename(&state, &task.id, "Archived")
-            .await
-            .unwrap_err()
-            .contains("已归档"));
+        assert!(
+            task_rename(&state, &task.id, "Archived")
+                .await
+                .unwrap_err()
+                .contains("已归档")
+        );
     }
 
     #[tokio::test]
@@ -19930,23 +21539,29 @@ mod tests {
         assert_eq!(repo.list_by_task(&task.id).unwrap().len(), 2);
         assert_eq!(source_history.messages.len(), 2);
         assert!(cleared_history.messages.is_empty());
-        assert!(QueuedMessageRepository::new(&state.db)
-            .list_pending(&task.id, &source.id)
-            .unwrap()
-            .is_empty());
+        assert!(
+            QueuedMessageRepository::new(&state.db)
+                .list_pending(&task.id, &source.id)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(refreshed_task.goal, "");
-        assert!(detail
-            .events
-            .iter()
-            .any(|event| event.event_type == TaskEventType::SessionCleared));
-        assert!(!state
-            .agent
-            .bridge_for(&task.id)
-            .await
-            .lock()
-            .await
-            .sessions
-            .contains_key(&task.id));
+        assert!(
+            detail
+                .events
+                .iter()
+                .any(|event| event.event_type == TaskEventType::SessionCleared)
+        );
+        assert!(
+            !state
+                .agent
+                .bridge_for(&task.id)
+                .await
+                .lock()
+                .await
+                .sessions
+                .contains_key(&task.id)
+        );
     }
 
     #[tokio::test]
@@ -19991,9 +21606,11 @@ mod tests {
         let messages = session_messages_for_branch(&state, &task.id, &source.id)
             .await
             .unwrap();
-        assert!(messages
-            .iter()
-            .all(|message| message.branch_id == source.id));
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.branch_id == source.id)
+        );
         assert_eq!(
             messages
                 .iter()
@@ -20067,10 +21684,12 @@ mod tests {
         let bridge = bridge.lock().await;
         assert!(bridge.sessions.contains_key(&task.id));
         assert!(bridge.active.is_none());
-        assert!(AgentRunRepository::new(&state.db)
-            .list_by_task(&task.id)
-            .unwrap()
-            .is_empty());
+        assert!(
+            AgentRunRepository::new(&state.db)
+                .list_by_task(&task.id)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[cfg(windows)]
@@ -20261,13 +21880,15 @@ input.on('line', (line) => {
 
         assert_ne!(cleared.id, source_branch.id);
         assert!(!state.codex_app_server.contains_task(&task.id).await);
-        assert!(!task_matches_codex_prepare_identity(
-            state.as_ref(),
-            &task.id,
-            Path::new(&workspace.canonical_path),
-            &source_branch.id,
-        )
-        .unwrap());
+        assert!(
+            !task_matches_codex_prepare_identity(
+                state.as_ref(),
+                &task.id,
+                Path::new(&workspace.canonical_path),
+                &source_branch.id,
+            )
+            .unwrap()
+        );
         timeout(
             CODEX_APP_SERVER_FIXTURE_TIMEOUT,
             state.codex_app_server.shutdown(),
@@ -20295,9 +21916,11 @@ input.on('line', (line) => {
             COMPACTION_KEEP_FIRST + 1 + COMPACTION_KEEP_RECENT
         );
         assert_eq!(compacted[0].text_content(), "message-0");
-        assert!(compacted[1]
-            .text_content()
-            .contains("decisions and pending work"));
+        assert!(
+            compacted[1]
+                .text_content()
+                .contains("decisions and pending work")
+        );
         assert_eq!(compacted[1].role, Role::User);
         assert_eq!(compacted[2].text_content(), "message-8");
         assert_eq!(compacted.last().unwrap().text_content(), "message-17");
@@ -20311,9 +21934,11 @@ input.on('line', (line) => {
         let compacted = compacted_working_set(&history, "summary");
         assert!(compacted.len() < history.len());
         assert_eq!(history.len(), 18, "canonical input remains untouched");
-        assert!(history
-            .iter()
-            .any(|message| message.text_content() == "evidence-7"));
+        assert!(
+            history
+                .iter()
+                .any(|message| message.text_content() == "evidence-7")
+        );
     }
 
     #[test]
@@ -20445,15 +22070,21 @@ input.on('line', (line) => {
         let chunks = compaction_source_chunks(&messages).unwrap();
 
         assert!(chunks.len() > 1);
-        assert!(chunks
-            .iter()
-            .any(|chunk| chunk.contains("MIDDLE-EVIDENCE-MUST-REACH-MAP")));
-        assert!(chunks
-            .iter()
-            .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS));
-        assert!(chunks
-            .iter()
-            .all(|chunk| !chunk.contains("中间内容因长度受限已省略")));
+        assert!(
+            chunks
+                .iter()
+                .any(|chunk| chunk.contains("MIDDLE-EVIDENCE-MUST-REACH-MAP"))
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.chars().count() <= COMPACTION_SOURCE_CHARS)
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| !chunk.contains("中间内容因长度受限已省略"))
+        );
     }
 
     #[test]
@@ -20493,6 +22124,77 @@ input.on('line', (line) => {
                 .filter(|chunk| chunk.contains("atomic-call"))
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn deepseek_compaction_uses_fast_native_mode_only_for_smart_balance() {
+        let pro = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-pro",
+            ProviderProtocol::OpenAiChat,
+            "deepseek",
+        );
+        let flash = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-flash",
+            ProviderProtocol::OpenAiChat,
+            "deepseek",
+        );
+
+        let pro_auto = deepseek_fast_compaction_inference(
+            &pro,
+            "deepseek-v4-pro",
+            &InferenceOptions::default(),
+        );
+        assert_eq!(pro_auto.thinking.as_deref(), Some("disabled"));
+        assert_eq!(pro_auto.reasoning_effort, None);
+
+        let flash_auto = deepseek_fast_compaction_inference(
+            &flash,
+            "deepseek-v4-flash",
+            &InferenceOptions {
+                thinking: Some("adaptive".into()),
+                reasoning_effort: None,
+                verbosity: Some("high".into()),
+            },
+        );
+        assert_eq!(flash_auto.thinking.as_deref(), Some("enabled"));
+        assert_eq!(flash_auto.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(flash_auto.verbosity.as_deref(), Some("high"));
+
+        for explicit in [
+            InferenceOptions {
+                thinking: Some("enabled".into()),
+                reasoning_effort: Some("max".into()),
+                ..Default::default()
+            },
+            InferenceOptions {
+                thinking: Some("disabled".into()),
+                ..Default::default()
+            },
+            InferenceOptions {
+                thinking: None,
+                reasoning_effort: Some("high".into()),
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                deepseek_fast_compaction_inference(&pro, "deepseek-v4-pro", &explicit),
+                explicit
+            );
+        }
+
+        let lookalike = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-pro",
+            ProviderProtocol::OpenAiChat,
+            "openai",
+        );
+        let configured = InferenceOptions::default();
+        assert_eq!(
+            deepseek_fast_compaction_inference(&lookalike, "deepseek-v4-pro", &configured),
+            configured
         );
     }
 
@@ -20584,10 +22286,12 @@ input.on('line', (line) => {
 
         let detail = task_detail(&state, &task.id).await.unwrap();
         assert_eq!(detail.task.id, task.id);
-        assert!(detail
-            .events
-            .iter()
-            .any(|e| { e.event_type == TaskEventType::TaskCreated }));
+        assert!(
+            detail
+                .events
+                .iter()
+                .any(|e| { e.event_type == TaskEventType::TaskCreated })
+        );
     }
 
     #[tokio::test]
@@ -20607,14 +22311,18 @@ input.on('line', (line) => {
         .await
         .unwrap();
         assert_eq!(batch.details.len(), 2);
-        assert!(batch
-            .details
-            .iter()
-            .any(|detail| detail.task.id == first.id));
-        assert!(batch
-            .details
-            .iter()
-            .any(|detail| detail.task.id == second.id));
+        assert!(
+            batch
+                .details
+                .iter()
+                .any(|detail| detail.task.id == first.id)
+        );
+        assert!(
+            batch
+                .details
+                .iter()
+                .any(|detail| detail.task.id == second.id)
+        );
     }
 
     #[tokio::test]
@@ -20666,10 +22374,12 @@ input.on('line', (line) => {
         assert_eq!(restored_dashboard.tasks.len(), 1);
         assert!(restored_dashboard.archived.is_empty());
         let restored_global_activity = activity_list(&state, None, 20).await.unwrap();
-        assert!(restored_global_activity
-            .items
-            .iter()
-            .any(|item| item.task_id == task.id));
+        assert!(
+            restored_global_activity
+                .items
+                .iter()
+                .any(|item| item.task_id == task.id)
+        );
     }
 
     #[tokio::test]
@@ -20691,9 +22401,11 @@ input.on('line', (line) => {
         assert_eq!(notification.kind, NotificationKind::ReviewReady);
         assert_eq!(first_page.unread_count, 1);
 
-        assert!(notification_mark_read(&state, &notification.id)
-            .await
-            .unwrap());
+        assert!(
+            notification_mark_read(&state, &notification.id)
+                .await
+                .unwrap()
+        );
         let second_page = notification_list(&state, None, 20, false).await.unwrap();
         assert_eq!(second_page.unread_count, 0);
         assert!(second_page.notifications[0].read_at.is_some());
@@ -20715,9 +22427,11 @@ input.on('line', (line) => {
         let events = TaskEventStore::new(&state.db)
             .list_by_task(&task.id, None, None)
             .unwrap();
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == TaskEventType::ChangeRequested));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == TaskEventType::ChangeRequested)
+        );
     }
 
     #[tokio::test]
@@ -20951,9 +22665,11 @@ input.on('line', (line) => {
             &state.sessions_dir,
             &subagent_storage_id(&branch.storage_id, "child-run"),
         );
-        assert!(std::fs::read_to_string(child_log)
-            .unwrap()
-            .contains("subagent_lifecycle"));
+        assert!(
+            std::fs::read_to_string(child_log)
+                .unwrap()
+                .contains("subagent_lifecycle")
+        );
         let child_messages = subagent_session_messages(&state, &task.id, "child-run")
             .await
             .unwrap();
@@ -21694,9 +23410,10 @@ input.on('line', (line) => {
 
         // session JSONL 应含 assistant 消息与工具调用
         let msgs = session_messages(&state, &task.id).await.unwrap();
-        assert!(msgs
-            .iter()
-            .any(|m| m.kind == "message" && m.role.as_deref() == Some("assistant")));
+        assert!(
+            msgs.iter()
+                .any(|m| m.kind == "message" && m.role.as_deref() == Some("assistant"))
+        );
         assert!(msgs.iter().any(|m| m.kind == "tool_call"));
         assert!(msgs.iter().any(|m| m.kind == "tool_result"));
         assert!(msgs.iter().any(|m| m.kind == "system"));
@@ -22281,9 +23998,11 @@ input.on('line', (line) => {
         );
         assert_eq!(messages[0].attachments.as_ref().map(Vec::len), Some(1));
         assert!(messages[0].text.is_none());
-        assert!(!serde_json::to_string(&messages[0])
-            .unwrap()
-            .contains("secret-base64"));
+        assert!(
+            !serde_json::to_string(&messages[0])
+                .unwrap()
+                .contains("secret-base64")
+        );
     }
 
     #[test]
@@ -22292,9 +24011,11 @@ input.on('line', (line) => {
         let messages = parse_session_messages(content, "branch", "storage");
         assert_eq!(messages[0].text.as_deref(), Some("review"));
         assert_eq!(messages[0].attachments.as_ref().unwrap()[0].name, "main.rs");
-        assert!(!serde_json::to_string(&messages[0])
-            .unwrap()
-            .contains("fn secret"));
+        assert!(
+            !serde_json::to_string(&messages[0])
+                .unwrap()
+                .contains("fn secret")
+        );
     }
 
     #[test]
@@ -22404,7 +24125,7 @@ input.on('line', (line) => {
     }
 
     #[test]
-    fn native_run_terminal_outcome_preserves_partial_changes_without_weakening_failures() {
+    fn native_run_terminal_outcome_separates_completion_from_error_details() {
         assert_eq!(
             native_run_terminal_outcome(false, true, true),
             NativeRunTerminalOutcome::PartialSuccess,
@@ -22412,8 +24133,8 @@ input.on('line', (line) => {
         );
         assert_eq!(
             native_run_terminal_outcome(false, true, false),
-            NativeRunTerminalOutcome::Failed,
-            "a total failure without changes must remain interrupted"
+            NativeRunTerminalOutcome::CompletedWithError,
+            "an ended run without changes is complete even when its transcript contains an error"
         );
         assert_eq!(
             native_run_terminal_outcome(true, true, true),
@@ -22453,14 +24174,18 @@ input.on('line', (line) => {
             .expect("persisted run");
         assert_eq!(closed.review_state, ReviewState::Aborted);
         assert!(closed.ended_at.is_some(), "orphaned run must be closed");
-        assert!(detail
-            .events
-            .iter()
-            .any(|event| event.event_type == TaskEventType::RunAborted));
-        assert!(detail
-            .events
-            .iter()
-            .any(|event| event.event_type == TaskEventType::RunEnded));
+        assert!(
+            detail
+                .events
+                .iter()
+                .any(|event| event.event_type == TaskEventType::RunAborted)
+        );
+        assert!(
+            detail
+                .events
+                .iter()
+                .any(|event| event.event_type == TaskEventType::RunEnded)
+        );
 
         let conn = state.db.conn().unwrap();
         let (tool_status, tool_ended_at): (String, Option<String>) = conn
@@ -22517,9 +24242,11 @@ input.on('line', (line) => {
             .unwrap();
         assert_eq!(status, "error");
         assert!(ended_at.is_some());
-        assert!(output
-            .as_deref()
-            .is_some_and(|value| value.contains("parent run ended")));
+        assert!(
+            output
+                .as_deref()
+                .is_some_and(|value| value.contains("parent run ended"))
+        );
     }
 
     #[tokio::test]
@@ -22831,10 +24558,12 @@ input.on('line', (line) => {
         tokio::time::sleep(std::time::Duration::from_millis(1_800)).await;
         let detail = task_detail(&state, &task.id).await.unwrap();
         assert_eq!(detail.runs.len(), 2);
-        assert!(detail
-            .runs
-            .iter()
-            .any(|run| run.review_state == ReviewState::Aborted));
+        assert!(
+            detail
+                .runs
+                .iter()
+                .any(|run| run.review_state == ReviewState::Aborted)
+        );
         let messages = session_messages(&state, &task.id).await.unwrap();
         assert!(messages.iter().any(|message| {
             message.role.as_deref() == Some("user") && message.text.as_deref() == Some("urgent")
@@ -23067,10 +24796,12 @@ input.on('line', (line) => {
         assert_eq!(removed.removed_sessions, 1);
         assert!(removed.removed);
         assert!(workspace_list(&state).await.unwrap().is_empty());
-        assert!(TaskRepository::new(&state.db)
-            .get(&task.id)
-            .unwrap()
-            .is_none());
+        assert!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .is_none()
+        );
         let remaining_notifications: i64 = state
             .db
             .conn()
@@ -23083,12 +24814,14 @@ input.on('line', (line) => {
             .unwrap();
         assert_eq!(remaining_notifications, 0);
         assert!(!session_log.exists());
-        assert!(!state
-            .terminal_manager
-            .list()
-            .await
-            .into_iter()
-            .any(|(id, _)| id == terminal_id));
+        assert!(
+            !state
+                .terminal_manager
+                .list()
+                .await
+                .into_iter()
+                .any(|(id, _)| id == terminal_id)
+        );
         assert_eq!(
             std::fs::read_to_string(&sentinel).unwrap(),
             "real project content"
@@ -23103,10 +24836,12 @@ input.on('line', (line) => {
         assert_eq!(reopened.canonical_path, workspace.canonical_path);
         assert_ne!(reopened.id, workspace.id);
         assert_eq!(workspace_list(&state).await.unwrap().len(), 1);
-        assert!(TaskRepository::new(&state.db)
-            .get(&task.id)
-            .unwrap()
-            .is_none());
+        assert!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -23188,11 +24923,13 @@ input.on('line', (line) => {
         assert_eq!(result.tasks_interrupted, 1);
         assert_eq!(result.tool_calls_closed, 1);
         assert_eq!(result.permissions_denied, 1);
-        assert!(recovery_data(&state)
-            .await
-            .unwrap()
-            .interrupted_tasks
-            .is_empty());
+        assert!(
+            recovery_data(&state)
+                .await
+                .unwrap()
+                .interrupted_tasks
+                .is_empty()
+        );
 
         let closed_run = AgentRunRepository::new(&state.db)
             .get(&stale_run.id)
@@ -23235,11 +24972,13 @@ input.on('line', (line) => {
         assert_eq!(permission_decision, "deny");
         assert_eq!(fresh_permission_decision, "pending");
 
-        assert!(AgentRunRepository::new(&state.db)
-            .get(&fresh_run.id)
-            .unwrap()
-            .unwrap()
-            .is_active());
+        assert!(
+            AgentRunRepository::new(&state.db)
+                .get(&fresh_run.id)
+                .unwrap()
+                .unwrap()
+                .is_active()
+        );
         assert_eq!(
             TaskRepository::new(&state.db)
                 .get(&fresh_task.id)
@@ -23251,9 +24990,11 @@ input.on('line', (line) => {
         let events = TaskEventStore::new(&state.db)
             .list_by_task(&stale_task.id, None, None)
             .unwrap();
-        assert!(events
-            .iter()
-            .any(|event| event.event_type == TaskEventType::RunAborted));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.event_type == TaskEventType::RunAborted)
+        );
     }
 
     #[tokio::test]
@@ -23304,6 +25045,387 @@ input.on('line', (line) => {
             reset["config"]["agent_prompts"]["main_agent"],
             "main custom"
         );
+    }
+
+    #[tokio::test]
+    async fn generic_settings_cannot_bypass_subagent_pool_cas_or_project_scope() {
+        let (_dir, state) = setup_state();
+        for key in [
+            "orchestration.subagent_pool",
+            "orchestration.subagent_pool.slots",
+        ] {
+            let error = settings_set(&state, key, serde_json::json!({ "slots": [] }))
+                .await
+                .unwrap_err();
+            assert!(error.contains("原子保存接口"), "unexpected error: {error}");
+        }
+        assert!(
+            !state.config_dir.join("config.toml").exists(),
+            "rejected generic writes must not create or mutate global config"
+        );
+
+        // Even a project-local file using the same field name cannot enter the global-only
+        // candidate snapshot. Project prompt policy remains a separate supported overlay.
+        let project_config = state.project_root.join(".r-code").join("config.toml");
+        std::fs::create_dir_all(project_config.parent().unwrap()).unwrap();
+        std::fs::write(
+            project_config,
+            r#"[orchestration.subagent_pool]
+[[orchestration.subagent_pool.slots]]
+slot_id = "project-only"
+model = "must-not-load"
+weight = 100
+prompt = "must not load"
+[orchestration.subagent_pool.slots.source]
+kind = "codex_cli"
+"#,
+        )
+        .unwrap();
+        let snapshot = subagent_pool_snapshot(&state).await.unwrap();
+        assert!(snapshot.pool.slots.is_empty());
+    }
+
+    #[tokio::test]
+    async fn provider_probe_batch_accepts_more_than_three_sources_and_deduplicates_pairs() {
+        let (_dir, state) = setup_state();
+        assert!(SUBAGENT_PROVIDER_PROBE_MAX_BATCH > hermes_config::MAX_SUBAGENT_PROVIDER_SLOTS);
+        let mut requests = (0..5)
+            .map(|index| SubagentProviderProbeRequest {
+                source: SubagentProviderSource::ApiProvider {
+                    provider_id: format!("missing-provider-{index}"),
+                },
+                model: format!("missing-model-{index}"),
+            })
+            .collect::<Vec<_>>();
+        requests.push(requests[2].clone());
+
+        let response = timeout(
+            Duration::from_secs(30),
+            subagent_provider_test_batch(&state, requests),
+        )
+        .await
+        .expect("local batch probe exceeded its bound")
+        .unwrap();
+        assert_eq!(response.results.len(), 5);
+        assert_eq!(response.results[0].model, "missing-model-0");
+        assert_eq!(response.results[4].model, "missing-model-4");
+        assert!(
+            response
+                .results
+                .iter()
+                .all(|entry| !entry.selectable && !entry.connected)
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_pool_save_enforces_cas_health_and_preserves_repeated_sources() {
+        let (_dir, state) = setup_state();
+        let provider_id = format!("pool-save-provider-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_id.clone(),
+                provider_kind: Some("openai".into()),
+                base_url: "https://api.example.test/v1".into(),
+                model: "candidate-model".into(),
+                api_key: Some("sk-pool-save-test".into()),
+                max_tokens: Some(2_048),
+                temperature: Some(0.2),
+                protocol: Some("openai_responses".into()),
+                show_reasoning: Some(false),
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        let request = SubagentProviderProbeRequest {
+            source: SubagentProviderSource::ApiProvider {
+                provider_id: provider_id.clone(),
+            },
+            model: "candidate-model".into(),
+        };
+        let pool = SubagentPoolConfig {
+            slots: vec![
+                hermes_config::SubagentProviderSlot {
+                    slot_id: "implementation".into(),
+                    source: request.source.clone(),
+                    model: request.model.clone(),
+                    weight: 60,
+                    prompt_template_id: Some("implementation".into()),
+                    prompt: "Implement the delegated task.".into(),
+                },
+                hermes_config::SubagentProviderSlot {
+                    slot_id: "review".into(),
+                    source: request.source.clone(),
+                    model: request.model.clone(),
+                    weight: 40,
+                    prompt_template_id: Some("review".into()),
+                    prompt: "Review the delegated task.".into(),
+                },
+            ],
+        };
+
+        let untested = subagent_pool_snapshot(&state).await.unwrap();
+        let untested_error = subagent_pool_save(&state, &untested.revision, pool.clone())
+            .await
+            .unwrap_err();
+        assert!(untested_error.contains("尚未在当前配置指纹下通过连通测试"));
+
+        save_test_subagent_receipt(
+            &state,
+            &request,
+            chrono::Utc::now(),
+            Err(SubagentHealthErrorCode::NetworkUnavailable),
+        )
+        .await;
+        let failed = subagent_pool_snapshot(&state).await.unwrap();
+        let failed_error = subagent_pool_save(&state, &failed.revision, pool.clone())
+            .await
+            .unwrap_err();
+        assert!(failed_error.contains("尚未在当前配置指纹下通过连通测试"));
+
+        save_test_subagent_receipt(
+            &state,
+            &request,
+            chrono::Utc::now() - chrono::Duration::minutes(SUBAGENT_HEALTH_SUCCESS_TTL_MINUTES + 1),
+            Ok(()),
+        )
+        .await;
+        let stale = subagent_pool_snapshot(&state).await.unwrap();
+        let stale_error = subagent_pool_save(&state, &stale.revision, pool.clone())
+            .await
+            .unwrap_err();
+        assert!(stale_error.contains("尚未在当前配置指纹下通过连通测试"));
+
+        save_test_subagent_receipt(&state, &request, chrono::Utc::now(), Ok(())).await;
+        let connected = subagent_pool_snapshot(&state).await.unwrap();
+        let saved = subagent_pool_save(&state, &connected.revision, pool.clone())
+            .await
+            .unwrap();
+        assert_eq!(saved.pool, pool);
+        assert_eq!(saved.slot_health.len(), 2);
+        assert!(saved.slot_health.iter().all(|slot| slot.selectable));
+
+        let conflict =
+            subagent_pool_save(&state, &connected.revision, SubagentPoolConfig::default())
+                .await
+                .unwrap_err();
+        assert!(conflict.contains("其他窗口更新"));
+
+        let delete_error = settings_delete_provider(&state, &provider_id)
+            .await
+            .unwrap_err();
+        assert!(delete_error.contains("仍被子代理候选池引用"));
+        let persisted = SettingsService::new(state.config_dir.clone())
+            .load_global_unvalidated()
+            .unwrap();
+        assert!(persisted.providers.contains_key(&provider_id));
+        assert_eq!(persisted.orchestration.subagent_pool.slots.len(), 2);
+
+        let cleared = subagent_pool_save(&state, &saved.revision, SubagentPoolConfig::default())
+            .await
+            .unwrap();
+        assert!(cleared.pool.slots.is_empty());
+        settings_delete_provider(&state, &provider_id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn runtime_candidate_pool_uses_native_provider_and_marks_stale_pool_unavailable() {
+        let (_dir, state) = setup_state();
+        let provider_id = format!("candidate-provider-{}", uuid::Uuid::new_v4());
+        settings_save_provider(
+            &state,
+            ProviderSettingsInput {
+                name: provider_id.clone(),
+                provider_kind: Some("openai".into()),
+                base_url: "https://api.example.test/v1".into(),
+                model: "candidate-model".into(),
+                api_key: Some("sk-candidate-runtime-test".into()),
+                max_tokens: Some(2_048),
+                temperature: Some(0.2),
+                protocol: Some("openai_responses".into()),
+                show_reasoning: Some(false),
+                activate: Some(true),
+            },
+        )
+        .await
+        .unwrap();
+        let settings = SettingsService::new(state.config_dir.clone());
+        let mut config = settings.load_global_unvalidated().unwrap();
+        let request = SubagentProviderProbeRequest {
+            source: SubagentProviderSource::ApiProvider {
+                provider_id: provider_id.clone(),
+            },
+            model: "candidate-model".into(),
+        };
+        let mut context = build_subagent_catalog_context(&state.config_dir, config.clone())
+            .await
+            .unwrap();
+        let identity = resolve_subagent_provider_probe_identity(
+            &context.input(chrono::Utc::now()),
+            &request.source,
+            &request.model,
+        )
+        .unwrap();
+        record_subagent_probe_receipt(
+            &mut context,
+            &request,
+            identity,
+            chrono::Utc::now(),
+            1,
+            Ok(()),
+        );
+        SubagentHealthReceiptStore::new(&state.config_dir)
+            .save(&context.receipts)
+            .unwrap();
+
+        config.orchestration.subagent_pool = SubagentPoolConfig {
+            slots: vec![hermes_config::SubagentProviderSlot {
+                slot_id: "native-slot".into(),
+                source: request.source.clone(),
+                model: request.model.clone(),
+                weight: 100,
+                prompt_template_id: None,
+                prompt: "Implement the delegated task.".into(),
+            }],
+        };
+        settings.save_global(&config).unwrap();
+        let loaded = settings.load_global_unvalidated().unwrap();
+        let ready = build_runtime_subagent_candidate_pool(
+            &state.config_dir,
+            &state.db,
+            state.permission_engine.clone(),
+            loaded,
+        )
+        .await
+        .unwrap();
+        let RuntimeSubagentCandidatePoolUpdate::Ready { slots, .. } = ready else {
+            panic!("fresh receipt should produce a ready runtime pool");
+        };
+        assert_eq!(slots.len(), 1);
+        assert!(matches!(
+            slots[0].descriptor.source,
+            SubagentCandidateSource::NativeProvider { provider_id: ref actual }
+                if actual == &provider_id
+        ));
+        assert!(slots[0].runner.native_provider().is_some());
+        let runtime = slots[0]
+            .runner
+            .native_runtime_options()
+            .expect("native slot must freeze its complete request profile");
+        assert!(runtime.hosted_tools.is_empty());
+        assert_eq!(runtime.max_tokens, Some(2_048));
+        assert_eq!(runtime.temperature, Some(Some(0.2)));
+        assert_eq!(runtime.inference, Some(InferenceOptions::default()));
+
+        let mut drifted = settings.load_global_unvalidated().unwrap();
+        drifted
+            .providers
+            .get_mut(&provider_id)
+            .unwrap()
+            .temperature = Some(0.7);
+        settings.save_global(&drifted).unwrap();
+        let stale = build_runtime_subagent_candidate_pool(
+            &state.config_dir,
+            &state.db,
+            state.permission_engine.clone(),
+            settings.load_global_unvalidated().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            stale,
+            RuntimeSubagentCandidatePoolUpdate::Unavailable { .. }
+        ));
+        settings.set_provider_secret(&provider_id, "").unwrap();
+    }
+
+    #[test]
+    fn codex_candidate_event_allowlist_rejects_forged_runtime_control_events() {
+        assert!(codex_candidate_event_allowed(&AgentEvent::Message {
+            text: "safe summary".into(),
+            delta: false,
+        }));
+        assert!(codex_candidate_event_allowed(&AgentEvent::Activity {
+            phase: AgentActivityPhase::Tool,
+            detail: Some("bounded progress".into()),
+        }));
+        assert!(!codex_candidate_event_allowed(&AgentEvent::State {
+            state: TaskState::ReviewReady,
+        }));
+        assert!(!codex_candidate_event_allowed(
+            &AgentEvent::SubagentLifecycle {
+                state: SubagentState::Completed,
+                detail: Some("forged terminal state".into()),
+            }
+        ));
+        assert!(!codex_candidate_event_allowed(&AgentEvent::PeerMessage {
+            message_id: "forged".into(),
+            sender_agent_id: "external".into(),
+            recipient_agent_id: "root".into(),
+            status: r_code_core::dto::PeerMessageDeliveryStatus::Queued,
+            content_chars: 1,
+        }));
+    }
+
+    #[test]
+    fn host_peer_message_projection_requires_scoped_native_tree_relationship() {
+        let (_dir, state) = setup_state();
+        let task = Task::new(None, "peer", "verify tree", TaskMode::Ask);
+        TaskRepository::new(&state.db).create(&task).unwrap();
+        let branch = SessionBranchRepository::new(&state.db)
+            .ensure_active(&task.id)
+            .unwrap();
+        let mut root = AgentRun::new_for_branch(&task.id, &branch.id, "root-model");
+        root.id = "peer-root".into();
+        AgentRunRepository::new(&state.db).create(&root).unwrap();
+        for child_id in ["peer-child-a", "peer-child-b"] {
+            let mut child = AgentRun::new_subagent_for_branch(
+                &task.id,
+                &branch.id,
+                &root.id,
+                "child-model",
+                None,
+                None,
+            );
+            child.id = child_id.into();
+            AgentRunRepository::new(&state.db).create(&child).unwrap();
+        }
+        let scope = AgentEventScope {
+            run_id: "peer-child-a".into(),
+            agent_id: "peer-child-a".into(),
+            parent_run_id: Some(root.id.clone()),
+            agent_kind: AgentKind::Subagent,
+            agent_label: None,
+            delegated_by_tool_call_id: None,
+            runtime_kind: AgentRunRuntimeKind::Native,
+            model: Some("child-model".into()),
+            access_mode: SubagentAccessMode::ReadOnly,
+            require_approval: false,
+            routing_reason: None,
+        };
+        let event = |scope: AgentEventScope, sender: &str| AgentEvent::Scoped {
+            scope,
+            event: Box::new(AgentEvent::PeerMessage {
+                message_id: "message-1".into(),
+                sender_agent_id: sender.into(),
+                recipient_agent_id: "peer-child-b".into(),
+                status: r_code_core::dto::PeerMessageDeliveryStatus::Queued,
+                content_chars: 12,
+            }),
+        };
+        assert!(host_allows_runtime_event(
+            &state.db,
+            &task.id,
+            &root.id,
+            &event(scope.clone(), "peer-child-a")
+        ));
+        assert!(!host_allows_runtime_event(
+            &state.db,
+            &task.id,
+            &root.id,
+            &event(scope, "forged-sender")
+        ));
     }
 
     #[tokio::test]
@@ -23425,7 +25547,9 @@ input.on('line', (line) => {
             &state.db,
             &state.tool_gateway,
             &state.mcp_manager,
+            &state.subagent_config_mutations,
             &mut bridge,
+            None,
             None,
         )
         .await
@@ -23452,9 +25576,11 @@ input.on('line', (line) => {
                 .await
                 .is_ok()
         );
-        assert!(tokio::time::timeout(Duration::from_millis(10), same.lock())
-            .await
-            .is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), same.lock())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -23504,7 +25630,9 @@ input.on('line', (line) => {
                 &state.db,
                 &state.tool_gateway,
                 &state.mcp_manager,
+                &state.subagent_config_mutations,
                 &mut bridge,
+                None,
                 None,
             )
             .await
@@ -23684,16 +25812,20 @@ input.on('line', (line) => {
             .await
             .expect_err("a running conversation cannot attach a project");
         assert!(error.contains("运行尚未结束"));
-        assert!(WorkspaceService::new(&state.db)
-            .get(&canonical)
-            .unwrap()
-            .is_none());
-        assert!(TaskRepository::new(&state.db)
-            .get(&task.id)
-            .unwrap()
-            .unwrap()
-            .workspace_path
-            .is_none());
+        assert!(
+            WorkspaceService::new(&state.db)
+                .get(&canonical)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .unwrap()
+                .workspace_path
+                .is_none()
+        );
 
         TaskRepository::new(&state.db)
             .update_state(&task.id, TaskState::Idle)
@@ -23714,10 +25846,12 @@ input.on('line', (line) => {
             .await
             .expect_err("a failed task write must roll back workspace registration");
         assert!(atomic_error.contains("forced task binding failure"));
-        assert!(WorkspaceService::new(&state.db)
-            .get(&canonical)
-            .unwrap()
-            .is_none());
+        assert!(
+            WorkspaceService::new(&state.db)
+                .get(&canonical)
+                .unwrap()
+                .is_none()
+        );
         state
             .db
             .conn()
@@ -23729,10 +25863,12 @@ input.on('line', (line) => {
             .await
             .unwrap();
         assert_eq!(attached.workspace_path.as_deref(), Some(canonical.as_str()));
-        assert!(WorkspaceService::new(&state.db)
-            .get(&canonical)
-            .unwrap()
-            .is_some());
+        assert!(
+            WorkspaceService::new(&state.db)
+                .get(&canonical)
+                .unwrap()
+                .is_some()
+        );
 
         task_archive(&state, &task.id).await.unwrap();
         let archived_error = task_set_workspace(&state, &task.id, Some(&canonical))
@@ -23826,10 +25962,12 @@ input.on('line', (line) => {
             .await
             .unwrap_err();
         assert!(error.contains("需要先附加本地工作区"));
-        assert!(task_set_agent_engine(&state, &task.id, "unknown")
-            .await
-            .unwrap_err()
-            .contains("只支持 r_code 或 codex"));
+        assert!(
+            task_set_agent_engine(&state, &task.id, "unknown")
+                .await
+                .unwrap_err()
+                .contains("只支持 r_code 或 codex")
+        );
     }
 
     #[test]
@@ -23910,6 +26048,18 @@ input.on('line', (line) => {
             1
         );
 
+        let deepseek_unknown_official_model = provider_cfg_with_identity(
+            "https://api.deepseek.com",
+            "deepseek-v4-future",
+            ProviderProtocol::OpenAiResponses,
+            "deepseek",
+        );
+        assert!(
+            hosted_tools_for_provider("renamed-deepseek", &deepseek_unknown_official_model)
+                .is_empty(),
+            "unknown DeepSeek models must not inherit an unverified hosted-tool contract"
+        );
+
         let deepseek_responses = provider_cfg_with_identity(
             "https://api.deepseek.com",
             "deepseek-v4-flash",
@@ -23929,7 +26079,8 @@ input.on('line', (line) => {
         );
         assert_eq!(
             hosted_tools_for_provider("renamed-deepseek", &deepseek_responses_pro).len(),
-            1
+            1,
+            "verified DeepSeek Pro Responses keeps provider-native web search"
         );
 
         let unsupported_responses_model = provider_cfg_with_identity(
@@ -24507,7 +26658,7 @@ input.on('line', (line) => {
     }
 
     #[tokio::test]
-    async fn provider_reasoning_visibility_is_independent_and_defaults_off() {
+    async fn provider_reasoning_visibility_is_independent_and_defaults_on() {
         let (_dir, state) = setup_state();
         let hidden_name = format!("reasoning-hidden-{}", uuid::Uuid::new_v4());
         let default_name = format!("reasoning-default-{}", uuid::Uuid::new_v4());
@@ -24540,7 +26691,7 @@ input.on('line', (line) => {
         let service = SettingsService::new(state.config_dir.clone());
         let stored = service.load_global_unvalidated().unwrap();
         assert!(!stored.providers[&hidden_name].show_reasoning);
-        assert!(!stored.providers[&default_name].show_reasoning);
+        assert!(stored.providers[&default_name].show_reasoning);
         assert!(stored.providers[&visible_name].show_reasoning);
 
         let hidden_task = task_create_with_agent(
@@ -24581,22 +26732,27 @@ input.on('line', (line) => {
             data: serde_json::json!({ "text": "公开思考" }),
         })
         .unwrap();
-        assert!(session_messages_for_task(
-            &state,
-            &hidden_task.id,
-            &reasoning_line,
-            "branch-hidden",
-            "storage-hidden",
-        )
-        .is_empty());
-        assert!(session_messages_for_task(
-            &state,
-            &default_task.id,
-            &reasoning_line,
-            "branch-default",
-            "storage-default",
-        )
-        .is_empty());
+        assert!(
+            session_messages_for_task(
+                &state,
+                &hidden_task.id,
+                &reasoning_line,
+                "branch-hidden",
+                "storage-hidden",
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            session_messages_for_task(
+                &state,
+                &default_task.id,
+                &reasoning_line,
+                "branch-default",
+                "storage-default",
+            )
+            .len(),
+            1
+        );
         assert_eq!(
             session_messages_for_task(
                 &state,
@@ -24845,18 +27001,105 @@ input.on('line', (line) => {
         let diff = change_diff(&state, &task.id, "a.txt").await.unwrap();
         assert!(diff.supported);
         let lines = diff.lines.unwrap();
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Del && l.text == "line2"));
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "line-two"));
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "line4"));
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Ctx && l.text == "line1"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Del && l.text == "line2")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "line-two")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "line4")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Ctx && l.text == "line1")
+        );
+    }
+
+    #[tokio::test]
+    async fn change_diff_for_run_never_reads_a_later_run_of_the_same_path() {
+        let (_dir, state) = setup_state();
+        let workspace_path = scoped_test_workspace(&state).await;
+        let task = task_create(&state, Some(&workspace_path), "T", "g", "edit")
+            .await
+            .unwrap();
+        let runs = r_code_store::repositories::AgentRunRepository::new(&state.db);
+        let tools = r_code_store::repositories::ToolCallRepository::new(&state.db);
+        let first_run = r_code_core::dto::AgentRun::new(&task.id, "test-model");
+        let second_run = r_code_core::dto::AgentRun::new(&task.id, "test-model");
+        runs.create(&first_run).unwrap();
+        runs.create(&second_run).unwrap();
+        let first_call = r_code_core::dto::ToolCall::new(
+            &first_run.id,
+            &task.id,
+            "write_file",
+            "{}",
+            r_code_core::dto::RiskLevel::R1,
+        );
+        let second_call = r_code_core::dto::ToolCall::new(
+            &second_run.id,
+            &task.id,
+            "write_file",
+            "{}",
+            r_code_core::dto::RiskLevel::R1,
+        );
+        tools.create_if_absent(&first_call).unwrap();
+        tools.create_if_absent(&second_call).unwrap();
+
+        let changes = ChangeService::new(&state.db, state.blobs_dir.clone());
+        changes
+            .record_change(
+                &task.id,
+                Path::new("same.txt"),
+                r_code_core::dto::FileChangeType::Modify,
+                Some(&first_call.id),
+                Some(b"original\n"),
+                Some(b"first run\n"),
+                None,
+            )
+            .await
+            .unwrap();
+        changes
+            .record_change(
+                &task.id,
+                Path::new("same.txt"),
+                r_code_core::dto::FileChangeType::Modify,
+                Some(&second_call.id),
+                Some(b"first run\n"),
+                Some(b"second run\n"),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let first = change_diff_for_run(&state, &task.id, &first_run.id, "same.txt")
+            .await
+            .unwrap();
+        let first_lines = first.lines.unwrap();
+        assert!(
+            first_lines
+                .iter()
+                .any(|line| line.kind == ChangeDiffLineKind::Add && line.text == "first run")
+        );
+        assert!(!first_lines.iter().any(|line| line.text == "second run"));
+
+        let second = change_diff_for_run(&state, &task.id, &second_run.id, "same.txt")
+            .await
+            .unwrap();
+        assert!(
+            second
+                .lines
+                .unwrap()
+                .iter()
+                .any(|line| { line.kind == ChangeDiffLineKind::Add && line.text == "second run" })
+        );
     }
 
     #[tokio::test]
@@ -24989,14 +27232,17 @@ input.on('line', (line) => {
         std::fs::write(state.project_root.join("node_modules/hidden.js"), "ignored").unwrap();
 
         let tree = file_list(&state, &workspace_path, None).await.unwrap();
-        assert!(tree
-            .entries
-            .iter()
-            .any(|entry| entry.path == "src" && entry.is_directory));
-        assert!(!tree
-            .entries
-            .iter()
-            .any(|entry| entry.path == "node_modules"));
+        assert!(
+            tree.entries
+                .iter()
+                .any(|entry| entry.path == "src" && entry.is_directory)
+        );
+        assert!(
+            !tree
+                .entries
+                .iter()
+                .any(|entry| entry.path == "node_modules")
+        );
 
         let original = file_read(&state, &workspace_path, "src/lib.rs")
             .await
@@ -25081,9 +27327,11 @@ input.on('line', (line) => {
             Some(&workspace_path),
             &external_path.to_string_lossy(),
         );
-        assert!(arbitrary_external
-            .unwrap_err()
-            .contains("Codex generated_images"));
+        assert!(
+            arbitrary_external
+                .unwrap_err()
+                .contains("Codex generated_images")
+        );
 
         let codex_home = external_dir.path().join(".codex");
         let generated_images = codex_home.join("generated_images");
@@ -25153,19 +27401,23 @@ input.on('line', (line) => {
             .update_state(&task.id, TaskState::InProgress)
             .unwrap();
         assert!(task_delete(&state, &task.id).await.is_err());
-        assert!(TaskRepository::new(&state.db)
-            .get(&task.id)
-            .unwrap()
-            .is_some());
+        assert!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .is_some()
+        );
 
         TaskRepository::new(&state.db)
             .update_state(&task.id, TaskState::Idle)
             .unwrap();
         task_delete(&state, &task.id).await.unwrap();
-        assert!(TaskRepository::new(&state.db)
-            .get(&task.id)
-            .unwrap()
-            .is_none());
+        assert!(
+            TaskRepository::new(&state.db)
+                .get(&task.id)
+                .unwrap()
+                .is_none()
+        );
         assert!(!session_path.exists());
     }
 
@@ -25198,17 +27450,21 @@ input.on('line', (line) => {
         assert_eq!(first_ids, vec![first_terminal.clone()]);
         assert_eq!(second_ids, vec![second_terminal.clone()]);
 
-        assert!(terminal_raw_snapshot(&state, &second.id, &first_terminal)
-            .await
-            .is_err());
+        assert!(
+            terminal_raw_snapshot(&state, &second.id, &first_terminal)
+                .await
+                .is_err()
+        );
         assert!(
             terminal_send(&state, &second.id, &first_terminal, "echo crossed", true)
                 .await
                 .is_err()
         );
-        assert!(terminal_kill(&state, &second.id, &first_terminal)
-            .await
-            .is_err());
+        assert!(
+            terminal_kill(&state, &second.id, &first_terminal)
+                .await
+                .is_err()
+        );
 
         terminal_kill(&state, &first.id, &first_terminal)
             .await
@@ -25233,12 +27489,14 @@ input.on('line', (line) => {
 
         task_delete(&state, &deleted.id).await.unwrap();
 
-        assert!(!state
-            .terminal_manager
-            .list()
-            .await
-            .into_iter()
-            .any(|(terminal_id, _)| terminal_id == deleted_terminal));
+        assert!(
+            !state
+                .terminal_manager
+                .list()
+                .await
+                .into_iter()
+                .any(|(terminal_id, _)| terminal_id == deleted_terminal)
+        );
         assert_eq!(
             terminal_list(&state, &retained.id)
                 .await
@@ -25287,12 +27545,16 @@ input.on('line', (line) => {
         assert!(!truncated);
         // 远处上下文被收敛为 hunk 行
         assert!(lines.iter().any(|l| l.kind == ChangeDiffLineKind::Hunk));
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Del && l.text == "l10"));
-        assert!(lines
-            .iter()
-            .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "l10-changed"));
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Del && l.text == "l10")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.kind == ChangeDiffLineKind::Add && l.text == "l10-changed")
+        );
     }
 
     #[test]
@@ -25424,9 +27686,11 @@ input.on('line', (line) => {
             data: BASE64_STANDARD.encode(b"GIF89a\x01\x00\x01\x00"),
             native_ocr: true,
         };
-        assert!(validate_attachments(&[animated_ocr])
-            .unwrap_err()
-            .contains("PNG 或 JPEG"));
+        assert!(
+            validate_attachments(&[animated_ocr])
+                .unwrap_err()
+                .contains("PNG 或 JPEG")
+        );
     }
 
     #[test]
@@ -25472,15 +27736,17 @@ input.on('line', (line) => {
                 .unwrap_err()
                 .contains("单边")
         );
-        assert!(validate_native_ocr_budget(&[
-            fixture("1.png", 100, 100),
-            fixture("2.png", 100, 100),
-            fixture("3.png", 100, 100),
-            fixture("4.png", 100, 100),
-            fixture("5.png", 100, 100),
-        ])
-        .unwrap_err()
-        .contains("最多"));
+        assert!(
+            validate_native_ocr_budget(&[
+                fixture("1.png", 100, 100),
+                fixture("2.png", 100, 100),
+                fixture("3.png", 100, 100),
+                fixture("4.png", 100, 100),
+                fixture("5.png", 100, 100),
+            ])
+            .unwrap_err()
+            .contains("最多")
+        );
         let converted = native_ocr_attachment_name("screen.png");
         assert_eq!(converted, "screen.png.ocr.txt");
         assert!(converted.chars().count() <= 180);
@@ -25878,11 +28144,13 @@ command = "r-code-host"
 
     #[test]
     fn macos_login_terminal_rejects_control_characters_in_paths() {
-        assert!(macos_codex_login_shell_script(
-            Path::new("/tmp/codex\nmalicious"),
-            CodexLoginMode::Browser,
-        )
-        .is_err());
+        assert!(
+            macos_codex_login_shell_script(
+                Path::new("/tmp/codex\nmalicious"),
+                CodexLoginMode::Browser,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -26205,7 +28473,9 @@ command = "r-code-host"
                 &state.db,
                 &state.tool_gateway,
                 &state.mcp_manager,
+                &state.subagent_config_mutations,
                 &mut bridge,
+                None,
                 None,
             )
             .await
@@ -26237,6 +28507,7 @@ command = "r-code-host"
                 config_dir: state.config_dir.clone(),
                 tool_gateway: state.tool_gateway.clone(),
                 mcp_manager: state.mcp_manager.clone(),
+                subagent_config_mutations: state.subagent_config_mutations.clone(),
                 memory_context: Some(FROZEN_MEMORY_SNAPSHOT.to_string()),
                 max_access: SubagentAccessMode::FullAccess,
                 permission_mode: CodexPermissionMode::RequestApproval,
@@ -26500,7 +28771,9 @@ command = "r-code-host"
                 &state.db,
                 &state.tool_gateway,
                 &state.mcp_manager,
+                &state.subagent_config_mutations,
                 &mut bridge,
+                None,
                 None,
             )
             .await
@@ -26525,6 +28798,7 @@ command = "r-code-host"
                 config_dir: state.config_dir.clone(),
                 tool_gateway: state.tool_gateway.clone(),
                 mcp_manager: state.mcp_manager.clone(),
+                subagent_config_mutations: state.subagent_config_mutations.clone(),
                 memory_context: None,
                 max_access: SubagentAccessMode::ReadOnly,
                 permission_mode: CodexPermissionMode::RequestApproval,
@@ -26679,10 +28953,12 @@ command = "r-code-host"
             tools[0].get("name").and_then(serde_json::Value::as_str),
             Some(CODEX_RCODE_DELEGATE_TOOL)
         );
-        assert!(tools[0]
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|description| description.contains("same R-Code task")));
+        assert!(
+            tools[0]
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|description| description.contains("same R-Code task"))
+        );
         assert!(codex_app_server_dynamic_tools(false).is_empty());
 
         let inherited = serde_json::json!({ "goal": "inspect" });
@@ -26727,12 +29003,14 @@ command = "r-code-host"
             SubagentAccessMode::ReadOnly
         );
         let elevation = serde_json::json!({ "goal": "edit", "access": "full_access" });
-        assert!(codex_rcode_delegate_access(
-            &elevation,
-            SubagentAccessMode::ReadOnly,
-            CodexPermissionMode::ReadOnly
-        )
-        .is_err());
+        assert!(
+            codex_rcode_delegate_access(
+                &elevation,
+                SubagentAccessMode::ReadOnly,
+                CodexPermissionMode::ReadOnly
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -26937,10 +29215,12 @@ command = "r-code-host"
         .expect("approval must become pending");
 
         cancellation.cancel();
-        assert!(permission_engine
-            .decide(&request.id, PermissionDecision::AllowAlways)
-            .await
-            .is_err());
+        assert!(
+            permission_engine
+                .decide(&request.id, PermissionDecision::AllowAlways)
+                .await
+                .is_err()
+        );
         let handling = timeout(Duration::from_secs(2), handler)
             .await
             .expect("cancelled handler must finish")
@@ -27007,10 +29287,12 @@ command = "r-code-host"
         handler.abort();
         assert!(handler.await.unwrap_err().is_cancelled());
         // The lease invalidates synchronously; this assertion does not wait for its async cleanup.
-        assert!(permission_engine
-            .decide(&request.id, PermissionDecision::AllowAlways)
-            .await
-            .is_err());
+        assert!(
+            permission_engine
+                .decide(&request.id, PermissionDecision::AllowAlways)
+                .await
+                .is_err()
+        );
         timeout(Duration::from_secs(2), async {
             while !permission_engine
                 .pending_for_task("task-dropped-approval")
@@ -27101,14 +29383,18 @@ command = "r-code-host"
                 .len(),
             0
         );
-        assert!(blind["permissions"]["fileSystem"]["write"]
-            .as_array()
-            .expect("legacy write array")
-            .is_empty());
-        assert!(blind["permissions"]["fileSystem"]["read"]
-            .as_array()
-            .expect("legacy read array")
-            .is_empty());
+        assert!(
+            blind["permissions"]["fileSystem"]["write"]
+                .as_array()
+                .expect("legacy write array")
+                .is_empty()
+        );
+        assert!(
+            blind["permissions"]["fileSystem"]["read"]
+                .as_array()
+                .expect("legacy read array")
+                .is_empty()
+        );
     }
 
     #[cfg(unix)]
@@ -27134,10 +29420,12 @@ command = "r-code-host"
             "accept",
             Some(workspace.path()),
         );
-        assert!(allowed["permissions"]["fileSystem"]["entries"]
-            .as_array()
-            .expect("entries array")
-            .is_empty());
+        assert!(
+            allowed["permissions"]["fileSystem"]["entries"]
+                .as_array()
+                .expect("entries array")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -27296,10 +29584,12 @@ command = "r-code-host"
             TaskState::Interrupted
         );
         let bridge = task_bridge.lock().await;
-        assert!(active_native_parent_for_delegation(
-            &state.db, &task.id, &branch.id, &parent.id, &bridge,
-        )
-        .is_err());
+        assert!(
+            active_native_parent_for_delegation(
+                &state.db, &task.id, &branch.id, &parent.id, &bridge,
+            )
+            .is_err()
+        );
     }
 
     #[tokio::test]
@@ -28024,6 +30314,7 @@ process.stdin.on('end', () => {
             permission_engine: Arc::new(PermissionEngine::new()),
             config_dir: state.config_dir.clone(),
             subagent_prompt: String::new(),
+            model_override: None,
         };
 
         runner
@@ -28053,11 +30344,13 @@ process.stdin.on('end', () => {
             serde_json::from_str(stored.usage_json.as_deref().unwrap()).unwrap();
         assert_eq!(usage["input_tokens"], 2);
         assert_eq!(usage["tool_calls"], 1);
-        assert!(observed
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|event| matches!(event, AgentEvent::Usage { .. })));
+        assert!(
+            observed
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Usage { .. }))
+        );
     }
 
     #[test]
@@ -28134,6 +30427,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Subagent {
                         max_tool_calls: None,
                     },
+                    model_override: None,
                 },
             )
             .await
@@ -28221,6 +30515,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Subagent {
                     max_tool_calls: None,
                 },
+                model_override: None,
             },
         )
         .await;
@@ -28303,6 +30598,7 @@ input.on('line', (line) => {
                 policy: CodexRunPolicy::Subagent {
                     max_tool_calls: Some(2),
                 },
+                model_override: None,
             },
         )
         .await;
@@ -28388,6 +30684,7 @@ input.on('line', (line) => {
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
             )
             .await
@@ -28475,6 +30772,7 @@ input.on('line', (line) => {
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
             )
             .await
@@ -28549,6 +30847,7 @@ input.on('line', (line) => {
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
             ),
         )
@@ -28624,6 +30923,7 @@ input.on('line', (line) => {
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
             ),
         )
@@ -28707,6 +31007,7 @@ input.on('line', (line) => {{
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
                 Some((&run_registry, "task-pending-steer", &run_config)),
             )
@@ -28823,6 +31124,7 @@ input.on('line', (line) => {{
                     idle_timeout: CODEX_APP_SERVER_FIXTURE_TIMEOUT,
                     hard_timeout: Some(CODEX_APP_SERVER_FIXTURE_TIMEOUT),
                     policy: CodexRunPolicy::Main,
+                    model_override: None,
                 },
                 Some((&run_registry, "task-pending-approval", &run_config)),
             )
@@ -28924,6 +31226,7 @@ input.on('line', (line) => {
                     policy: CodexRunPolicy::Subagent {
                         max_tool_calls: None,
                     },
+                    model_override: None,
                 },
             )
             .await
@@ -29030,6 +31333,7 @@ input.on('line', (line) => {{
                     policy: CodexRunPolicy::Subagent {
                         max_tool_calls: None,
                     },
+                    model_override: None,
                 },
             )
             .await
@@ -29137,6 +31441,7 @@ input.on('line', (line) => {{
                     policy: CodexRunPolicy::Subagent {
                         max_tool_calls: None,
                     },
+                    model_override: None,
                 },
             ),
         )

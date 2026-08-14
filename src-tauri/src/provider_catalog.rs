@@ -560,6 +560,44 @@ pub const PRESETS: &[Preset] = &[
         note: Some("套餐网关未见 /responses，只有 Chat Completions"),
     },
     Preset {
+        id: "ark_agent",
+        label: "火山方舟 Agent Plan（Token Plan）",
+        protocol: Protocol::AnthropicMessages,
+        native: P_A,
+        auth: AuthStyle::Bearer,
+        // Agent Plan（用户常称 Token Plan）与 Coding Plan、按量 API 都是独立计费线路。
+        // 官方 Claude Code 配置使用 /api/plan；AnthropicProvider 会继续拼 /v1/messages。
+        base_url: "https://ark.cn-beijing.volces.com/api/plan",
+        reasoning_replay: false,
+        model: "ark-code-latest",
+        models: &[
+            "ark-code-latest",
+            "doubao-seed-2.0-mini",
+            "doubao-seed-2.0-lite",
+            "deepseek-v4-flash",
+            "doubao-seed-2.1-turbo",
+            "doubao-seed-evolving",
+            "minimax-m3",
+            "glm-5.2",
+            "glm-latest",
+            "kimi-k2.7-code",
+            "deepseek-v4-pro",
+            "kimi-k3",
+        ],
+        category: Category::CnOfficial,
+        website_url: "https://www.volcengine.com/docs/82379/2366394",
+        api_key_url: Some(
+            "https://console.volcengine.com/ark/region:cn-beijing/openManagement?LLM=%7B%7D&OpenModelVisible=false&advancedActiveKey=agentPlan",
+        ),
+        endpoint_candidates: &[],
+        template_vars: &[],
+        max_output_tokens: None,
+        context_window: Some(1_048_576),
+        note: Some(
+            "官方现名 Agent Plan；Token 套餐必须走 /api/plan，改用 /api/v3 会进入按量线路",
+        ),
+    },
+    Preset {
         id: "ark",
         label: "火山方舟（按量 API）",
         protocol: Protocol::OpenAiChat,
@@ -1787,11 +1825,21 @@ mod tests {
     }
 
     #[test]
-    fn ark_plan_and_payg_are_separate_entries() {
-        // 配错 base_url 会静默转成按量计费，两条必须分开存在
-        let plan = find("ark_coding").unwrap();
+    fn ark_coding_agent_and_payg_routes_are_separate_entries() {
+        // 配错 base_url 会静默切换计费线路，Coding、Agent（Token）与按量必须分开。
+        let coding = find("ark_coding").unwrap();
+        let agent = find("ark_agent").unwrap();
         let payg = find("ark").unwrap();
-        assert!(plan.base_url.contains("/api/coding"));
+        assert!(coding.base_url.contains("/api/coding"));
+        assert_eq!(agent.base_url, "https://ark.cn-beijing.volces.com/api/plan");
         assert!(!payg.base_url.contains("/api/coding"));
+        assert!(!payg.base_url.contains("/api/plan"));
+        assert_eq!(agent.protocol, Protocol::AnthropicMessages);
+        assert!(agent.models.contains(&"ark-code-latest"));
+        assert!(agent.models.contains(&"deepseek-v4-pro"));
+        assert!(catalog_dto()
+            .presets
+            .iter()
+            .any(|preset| preset.id == "ark_agent"));
     }
 }

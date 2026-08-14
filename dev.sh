@@ -164,5 +164,5 @@ if $bootstrap_only; then
   exit 0
 fi
 
-step "Starting Tauri development mode"
-exec cargo tauri dev
+step "Starting isolated R-Code Dev"
+exec cargo tauri dev --config "$repo_root/src-tauri/tauri.dev.conf.json"

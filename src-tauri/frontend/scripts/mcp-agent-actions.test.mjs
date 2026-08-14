@@ -22,6 +22,10 @@ const runtime = fs.readFileSync(
 const commands = fs.readFileSync(path.join(repoDir, "src-tauri/src/commands.rs"), "utf8");
 const manager = fs.readFileSync(path.join(repoDir, "src-tauri/src/mcp_manager.rs"), "utf8");
 const workflowSkills = fs.readFileSync(path.join(repoDir, "src-tauri/src/workflow_skills.rs"), "utf8");
+const mcpPanel = fs.readFileSync(
+  path.join(frontendDir, "src/components/scenes/McpPanel.tsx"),
+  "utf8",
+);
 
 test("Agent exposes fixed MCP search and confirmation-preparation tools", () => {
   for (const name of ["mcp_registry_search", "mcp_prepare_install", "mcp_prepare_enable"]) {
@@ -31,10 +35,13 @@ test("Agent exposes fixed MCP search and confirmation-preparation tools", () => 
   assert.match(runtime, /They never install, write configuration, enable a service/);
   assert.doesNotMatch(runtime, /You cannot install or enable an MCP service/);
   assert.match(manager, /fn name\(&self\) -> &str \{\s*"mcp_create_draft"/);
+  assert.match(manager, /fn name\(&self\) -> &str \{\s*"mcp_save_draft"/);
   assert.match(commands, /CreateMcpDraftTool::new\(mcp_manager\.clone\(\)\)/);
+  assert.match(commands, /SaveMcpDraftTool::new\(mcp_manager\.clone\(\)\)/);
   assert.match(runtime, /"mcp_create_draft"/);
+  assert.match(runtime, /`mcp_save_draft`/);
   assert.match(workflowSkills, /"mcp-creator"/);
-  assert.match(workflowSkills, /不得启动服务、执行 MCP 握手、tools\/list、注册、启用/);
+  assert.match(workflowSkills, /不得启动服务、执行(?: MCP )?握手、tools\/list、注册、启用/);
 });
 
 test("conversation confirmation cards are bound to exact MCP tools and host-issued tokens", () => {
@@ -55,8 +62,18 @@ test("MCP confirmations open automatically and replace noisy raw payloads", () =
 });
 
 test("generated MCP drafts only deep-link to manual settings review", () => {
-  assert.match(toolCard, /toolName !== "mcp_create_draft" && toolName !== "mcp_prepare_enable"/);
+  assert.match(toolCard, /toolName !== "mcp_create_draft" && toolName !== "mcp_save_draft"/);
   assert.match(toolCard, /value\.action !== "open_mcp_settings"/);
   assert.match(toolCard, /草稿已创建，尚未启用/);
   assert.match(toolCard, /openMcpSettings\(null, action\.serverId\)/);
+});
+
+test("MCP HTTP editor explains the exact loopback cleartext boundary", () => {
+  assert.match(mcpPanel, /<option value="streamable_http">HTTP \/ HTTPS<\/option>/);
+  assert.match(mcpPanel, />服务地址<input/);
+  assert.match(mcpPanel, /远程服务必须使用 HTTPS/);
+  for (const host of ["localhost", "127.0.0.1", "\[::1\]"]) {
+    assert.match(mcpPanel, new RegExp(host));
+  }
+  assert.match(toolCard, /transport\.url\.startsWith\("http:\/\/"\) \? "本机 HTTP" : "远程 HTTPS"/);
 });

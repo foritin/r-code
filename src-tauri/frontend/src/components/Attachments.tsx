@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ClipboardEvent as ReactClipboardEvent } from "react";
+import { createPortal } from "react-dom";
 import type { AttachmentInput, AttachmentKind, PlatformCapabilities } from "../lib/types";
 import type { ImageCapability } from "./room/model-capabilities";
 import { IconAlert, IconAttach, IconClose, IconFile } from "./icons";
@@ -323,28 +324,48 @@ export function AttachmentTray({
   attachments,
   capabilityFor,
   platformCapabilities,
-  blockedReason,
+  deferredReason,
   onRemove,
 }: {
   attachments: DraftAttachment[];
   capabilityFor: AttachmentCapabilityResolver;
   platformCapabilities: PlatformCapabilities;
-  blockedReason?: string | null;
+  deferredReason?: string | null;
   onRemove: (id: string) => void;
 }) {
   const [previewing, setPreviewing] = useState<DraftAttachment | null>(null);
+  const previewCloseRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!previewing) return undefined;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previewCloseRef.current?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPreviewing(null);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setPreviewing(null);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        previewCloseRef.current?.focus();
+      }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
   }, [previewing]);
+
+  useEffect(() => {
+    if (previewing && !attachments.some((attachment) => attachment.id === previewing.id)) {
+      setPreviewing(null);
+    }
+  }, [attachments, previewing]);
 
   if (attachments.length === 0) return null;
   const hasNativeOcr = attachments.some((attachment) => attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities));
-  const unsupportedReason = blockedReason ?? attachments
+  const unsupportedReason = attachments
     .map((attachment) => effectiveCapability(attachment, capabilityFor, platformCapabilities))
     .find((capability) => capability.state === "unsupported")
     ?.reason;
@@ -354,8 +375,9 @@ export function AttachmentTray({
         {attachments.map((attachment) => {
           const capability = effectiveCapability(attachment, capabilityFor, platformCapabilities);
           const nativeOcr = attachmentUsesNativeOcr(attachment, capabilityFor, platformCapabilities);
-          const unsupported = capability.state === "unsupported" || Boolean(blockedReason);
-          const reason = blockedReason ?? capability.reason;
+          const unsupported = capability.state === "unsupported";
+          const deferred = Boolean(deferredReason) && !unsupported;
+          const reason = unsupported ? capability.reason : deferredReason ?? capability.reason;
           const extension = extensionOf(attachment.name).toUpperCase();
           return (
             <div
@@ -363,9 +385,10 @@ export function AttachmentTray({
                 `attachment-chip kind-${attachment.kind}`
                 + (unsupported ? " is-unsupported" : capability.state === "unknown" ? " is-unknown" : "")
                 + (nativeOcr ? " is-native-ocr" : "")
+                + (deferred ? " is-deferred" : "")
               }
               role="listitem"
-              aria-disabled={unsupported || undefined}
+              aria-disabled={unsupported || deferred || undefined}
               title={reason}
               key={attachment.id}
             >
@@ -387,7 +410,10 @@ export function AttachmentTray({
               {unsupported && <IconAlert className="attachment-warning" width={14} height={14} aria-hidden="true" />}
               <span className="attachment-copy">
                 <span className="attachment-label">{attachment.name}</span>
-                <small>{nativeOcr ? "本机 OCR → 文本" : attachment.kind === "pdf" ? "PDF" : extension || "文本"}</small>
+                <small>
+                  {nativeOcr ? "本机 OCR → 文本" : attachment.kind === "pdf" ? "PDF" : extension || "文本"}
+                  {deferred ? " · 暂缓发送" : ""}
+                </small>
               </span>
               <button
                 className="attachment-remove"
@@ -402,29 +428,35 @@ export function AttachmentTray({
           );
         })}
         <span className="sr-only" aria-live="polite">
-          {unsupportedReason ?? (hasNativeOcr
+          {unsupportedReason ?? deferredReason ?? (hasNativeOcr
             ? nativeOcrReason(platformCapabilities.platform)
             : "附件会随消息发送；图片可点击预览")}
         </span>
       </div>
-      {previewing?.previewUrl && (
-        <div className="attachment-preview-backdrop" role="presentation" onMouseDown={() => setPreviewing(null)}>
+      {previewing?.previewUrl && createPortal(
+        <div
+          className="attachment-preview-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setPreviewing(null);
+          }}
+        >
           <div
             className="attachment-preview"
             role="dialog"
             aria-modal="true"
             aria-label={`预览图片 ${previewing.name}`}
-            onMouseDown={(event) => event.stopPropagation()}
           >
             <header>
               <span>{previewing.name}</span>
-              <button type="button" aria-label="关闭预览" onClick={() => setPreviewing(null)}>
+              <button ref={previewCloseRef} type="button" aria-label="关闭预览" onClick={() => setPreviewing(null)}>
                 <IconClose width={16} height={16} />
               </button>
             </header>
             <img src={previewing.previewUrl} alt={previewing.name} />
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );

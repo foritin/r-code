@@ -98,11 +98,22 @@ function useSystemReducedMotion(): boolean {
   return reduced;
 }
 
+function useDocumentVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState !== "hidden");
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState !== "hidden");
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
+  }, []);
+  return visible;
+}
+
 /** Codex-compatible, single-plane sprite playback with authored per-frame dwell times. */
 export function CompanionSprite({ motion, state }: CompanionSpriteProps) {
   const stageRef = useRef<HTMLSpanElement>(null);
   const systemReduced = useSystemReducedMotion();
-  const reduced = motion === "reduced" || (motion === "system" && systemReduced);
+  const documentVisible = useDocumentVisible();
+  const reduced = !documentVisible || motion === "reduced" || (motion === "system" && systemReduced);
   const requestedSequence = COMPANION_SPRITE_SEQUENCES[state];
 
   const initialStyle = useMemo(() => {

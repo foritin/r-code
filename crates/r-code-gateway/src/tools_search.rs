@@ -28,9 +28,10 @@ use ignore::overrides::OverrideBuilder;
 use ignore::WalkBuilder;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
+use r_code_core::security::path_for_display;
 use serde::Serialize;
 
-use crate::gateway::Tool;
+use crate::gateway::{PathBinding, Tool};
 
 /// 单次调用默认返回的命中上限。
 const DEFAULT_MAX_RESULTS: usize = 100;
@@ -418,7 +419,7 @@ Returned paths are absolute and can be passed straight to read_file or edit."
             if truncated {
                 break;
             }
-            let file_display = file.to_string_lossy().to_string();
+            let file_display = path_for_display(&file);
             files_searched += 1;
 
             // 内层作用域：collector 借走 hits，出了块才还，后面才能动 hits / file_display。
@@ -523,6 +524,10 @@ struct GlobOutput {
 /// 「这个仓库里所有的 `**/*.rs` 在哪」。
 pub struct GlobTool;
 
+/// `path` 对模型是可选的；缺省值必须由会话的 `PathGuard` 注入，不能让
+/// 执行器回落到 R-Code 进程的当前目录。
+const GLOB_PATH_BINDINGS: &[PathBinding] = &[PathBinding::default_root("path")];
+
 #[async_trait]
 impl Tool for GlobTool {
     fn name(&self) -> &str {
@@ -531,6 +536,7 @@ impl Tool for GlobTool {
     fn description(&self) -> &str {
         "Find files by name pattern (e.g. \"**/*.rs\", \"src/**/test_*.py\"), \
 recursing from the given directory and respecting .gitignore. \
+When path is omitted, search from the attached workspace root. \
 A pattern without a slash matches against the file name only, like gitignore. \
 Sort by \"path\" (default) or \"mtime\" to surface recently changed files. \
 Returned paths are absolute."
@@ -538,13 +544,16 @@ Returned paths are absolute."
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R0
     }
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        GLOB_PATH_BINDINGS
+    }
     fn input_schema(&self) -> serde_json::Value {
         serde_json::json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Directory to search from."
+                    "description": "Directory to search from. Optional; defaults to the attached workspace root."
                 },
                 "pattern": {
                     "type": "string",
@@ -568,7 +577,7 @@ Returned paths are absolute."
                     "description": "Ignore .gitignore/.ignore rules. Default false."
                 }
             },
-            "required": ["path", "pattern"]
+            "required": ["pattern"]
         })
     }
 
@@ -647,7 +656,7 @@ Returned paths are absolute."
         let files: Vec<String> = found
             .into_iter()
             .take(max_results)
-            .map(|(p, _)| p.to_string_lossy().to_string())
+            .map(|(p, _)| path_for_display(p))
             .collect();
 
         let hint = if truncated {
@@ -726,6 +735,71 @@ mod tests {
         assert_eq!(hits.len(), 3);
         assert_eq!(v["files_matched"], 2);
         assert_eq!(SearchTool.risk_level(), RiskLevel::R0);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn search_and_glob_hide_windows_verbatim_prefixes_in_results() {
+        let dir = fixture();
+        let canonical_root = fs::canonicalize(dir.path()).unwrap();
+        let raw_root = canonical_root.to_string_lossy().into_owned();
+        assert!(
+            raw_root.starts_with(r"\\?\"),
+            "canonical test path was not verbatim: {raw_root}"
+        );
+
+        let search = SearchTool
+            .execute(serde_json::json!({
+                "path": raw_root,
+                "pattern": "foo",
+                "case": "sensitive",
+                "no_ignore": true
+            }))
+            .await
+            .unwrap();
+        let search = parse(&search);
+        let hit_paths: Vec<&str> = search["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hit| hit["file"].as_str().unwrap())
+            .collect();
+        assert!(hit_paths
+            .iter()
+            .any(|path| *path == path_for_display(canonical_root.join("a.txt"))));
+        assert!(hit_paths.iter().all(|path| !path.starts_with(r"\\?\")));
+
+        let search_files = SearchTool
+            .execute(serde_json::json!({
+                "path": raw_root,
+                "pattern": "foo",
+                "case": "sensitive",
+                "output_mode": "files",
+                "no_ignore": true
+            }))
+            .await
+            .unwrap();
+        let search_files = parse(&search_files);
+        assert!(search_files["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| !file.as_str().unwrap().starts_with(r"\\?\")));
+
+        let glob = GlobTool
+            .execute(serde_json::json!({
+                "path": raw_root,
+                "pattern": "*.rs",
+                "no_ignore": true
+            }))
+            .await
+            .unwrap();
+        let glob = parse(&glob);
+        assert_eq!(
+            glob["files"][0],
+            path_for_display(canonical_root.join("sub").join("d.rs"))
+        );
+        assert!(!glob["files"][0].as_str().unwrap().starts_with(r"\\?\"));
     }
 
     #[tokio::test]
@@ -1043,6 +1117,17 @@ mod tests {
         assert_eq!(v["matched"], 3);
         assert_eq!(v["returned"], 3);
         assert_eq!(GlobTool.risk_level(), RiskLevel::R0);
+    }
+
+    #[test]
+    fn glob_schema_requires_only_pattern_and_defaults_path_to_workspace_root() {
+        let schema = GlobTool.input_schema();
+        assert_eq!(schema["required"], serde_json::json!(["pattern"]));
+
+        let bindings = GlobTool.path_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].key, "path");
+        assert_eq!(bindings[0].arity, crate::gateway::PathArity::DefaultRoot);
     }
 
     #[tokio::test]

@@ -19,7 +19,7 @@ export function ConversationsScene() {
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshDetails = useTasksStore((s) => s.refreshDetails);
   const needsIds = useTasksStore(selectNeedsYouTaskIds);
-  const goHome = useAppStore((s) => s.goHome);
+  const openNewConversation = useAppStore((s) => s.openNewConversation);
   const openRoom = useAppStore((s) => s.openRoom);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -74,7 +74,7 @@ export function ConversationsScene() {
             <h1>所有对话</h1>
             <p>跨项目查看任务状态，在需要时回到具体任务继续处理。</p>
           </div>
-          <button className="rc-button rc-button-primary" onClick={goHome}><IconPlus width={16} height={16} />新对话</button>
+          <button className="rc-button rc-button-primary" onClick={() => openNewConversation(null)}><IconPlus width={16} height={16} />新对话</button>
         </header>
 
         <div className="conversation-toolbar">

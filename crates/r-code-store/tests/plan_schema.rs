@@ -208,12 +208,13 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
              DROP INDEX idx_queued_messages_task_dispatch;
              DROP INDEX idx_queued_messages_task_branch;
              ALTER TABLE queued_messages DROP COLUMN sort_order;
+             ALTER TABLE queued_messages DROP COLUMN attachments_json;
              CREATE INDEX idx_queued_messages_task_branch
                  ON queued_messages(task_id, branch_id, state, priority DESC, created_at ASC);
              ALTER TABLE tasks DROP COLUMN goal_active;
              ALTER TABLE agent_runs DROP COLUMN require_approval;
              ALTER TABLE memory_review_turns DROP COLUMN explicit_remember;
-             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27);",
+             DELETE FROM schema_version WHERE version IN (19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29);",
         )
         .unwrap();
         conn.execute(
@@ -254,6 +255,7 @@ fn clean_database_and_schema_18_upgrade_reach_latest_complete_schema() {
         );
     }
     assert!(table_has_column(&conn, "queued_messages", "sort_order"));
+    assert!(table_has_column(&conn, "queued_messages", "attachments_json"));
     assert!(table_has_column(&conn, "agent_runs", "require_approval"));
     assert!(table_has_column(
         &conn,

@@ -51,7 +51,7 @@ pub trait AgentRuntime: Send + Sync {
     /// 已接纳引导，runtime 必须继续下一轮。运行已结束时返回 `RunFinished`，
     /// 由调用方转为新的持久化队列项，避免消息丢失或重复。
     async fn steer(&mut self, session_id: &str, message: &str)
-        -> Result<SteerResult, ProductError>;
+    -> Result<SteerResult, ProductError>;
 
     /// 中止当前 run。
     async fn abort(&mut self, session_id: &str) -> Result<(), ProductError>;

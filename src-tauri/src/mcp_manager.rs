@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock as StdRwLock,
@@ -132,12 +132,24 @@ pub struct McpUpsertRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct McpUserDraftRequest {
+    pub server_id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    pub transport: McpEditableTransport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpGeneratedDraftRequest {
     pub server_id: String,
     pub display_name: String,
     #[serde(default)]
     pub description: String,
     pub source_path: String,
+    #[serde(default)]
+    pub cleanup_source_after_import: bool,
     pub transport: McpEditableTransport,
 }
 
@@ -172,6 +184,10 @@ const SHORT_MODEL_TOOL_TOKEN_BYTES: usize = 24;
 const AUTO_DISCOVERY_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MCP_TOOL_CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
 const MCP_DRAFT_PATH_BINDINGS: &[PathBinding] = &[PathBinding::required("source_path")];
+const MAX_MANAGED_MCP_SOURCE_FILES: usize = 4_096;
+const MAX_MANAGED_MCP_SOURCE_BYTES: u64 = 128 * 1024 * 1024;
+const GENERATED_MCP_STAGING_DIR: &str = ".r-code-mcp-staging";
+const GENERATED_MCP_STAGING_MARKER: &str = ".r-code-mcp-staging-v1";
 
 #[derive(Clone)]
 pub struct CreateMcpDraftTool {
@@ -191,7 +207,7 @@ impl Tool for CreateMcpDraftTool {
     }
 
     fn description(&self) -> &str {
-        "Save a newly implemented MCP server as a disabled R-Code draft after its source builds and its non-launching tests pass. The source_path must already exist inside the current workspace. This tool never starts, tests, registers, approves, or enables the server; the user must review it in Settings > Tools & Connections and enable it manually."
+        "Import a verified MCP implementation from the current workspace into R-Code's application-managed user data directory, rewrite local launch paths to the managed copy, and save it as a disabled draft. Prefer configuring an existing MCP endpoint or executable instead of creating a new server. This tool never starts, tests, approves, or enables the server; the user must review it in Settings > Tools & Connections and enable it manually."
     }
 
     fn risk_level(&self) -> RiskLevel {
@@ -217,7 +233,12 @@ impl Tool for CreateMcpDraftTool {
                 "source_path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "Existing MCP source directory or entry file inside the attached workspace."
+                    "description": "Existing verified MCP source directory or entry file inside the attached workspace. R-Code imports it into its managed user-data root and preserves the original unless the dedicated staging cleanup contract is explicitly requested."
+                },
+                "cleanup_source_after_import": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Delete the source only when it is the dedicated .r-code-mcp-staging/<server_id> directory and contains the exact R-Code staging marker. Ordinary project source is never deleted."
                 },
                 "transport": {
                     "oneOf": [
@@ -272,8 +293,116 @@ impl Tool for CreateMcpDraftTool {
             "status": "draft_created",
             "action": "open_mcp_settings",
             "server_id": server.id,
-            "source_path": generated_source_path(&server.source),
-            "message": "MCP 草稿已保存并保持关闭。请前往“设置 → 工具与连接”审核启动方案、配置凭据并亲自打开滑钮。"
+            "managed_source_path": generated_source_path(&server.source),
+            "message": "MCP 源码已导入 R-Code 用户数据目录，草稿保持关闭。请前往“设置 → 工具与连接”审核启动方案、配置凭据并亲自打开滑钮。"
+        }))
+        .map_err(|error| ProductError::Other(format!("serialize MCP draft result: {error}")))
+    }
+}
+
+#[derive(Clone)]
+pub struct SaveMcpDraftTool {
+    manager: Arc<McpManager>,
+}
+
+impl SaveMcpDraftTool {
+    pub fn new(manager: Arc<McpManager>) -> Self {
+        Self { manager }
+    }
+}
+
+#[async_trait]
+impl Tool for SaveMcpDraftTool {
+    fn name(&self) -> &str {
+        "mcp_save_draft"
+    }
+
+    fn description(&self) -> &str {
+        "Save an existing MCP HTTP endpoint or native stdio executable as a disabled user configuration draft. This tool never starts, tests, approves, or enables the server. It may update an existing user draft only while that service is disabled; the user must review and enable it in Settings > Tools & Connections."
+    }
+
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R2
+    }
+
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "server_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9_-]*$"
+                },
+                "display_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+                "description": { "type": "string", "maxLength": 1000 },
+                "transport": {
+                    "oneOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "stdio" },
+                                "executable": { "type": "string", "minLength": 1 },
+                                "args": { "type": "array", "items": { "type": "string" }, "maxItems": 128 },
+                                "environment_names": {
+                                    "type": "array",
+                                    "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                                    "maxItems": 64,
+                                    "uniqueItems": true
+                                }
+                            },
+                            "required": ["type", "executable"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "type": { "const": "streamable_http" },
+                                "url": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "Remote endpoints require HTTPS. Cleartext HTTP is accepted only for explicit localhost, 127.0.0.1, or [::1] loopback hosts."
+                                },
+                                "header_names": {
+                                    "type": "array",
+                                    "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+                                    "maxItems": 64,
+                                    "uniqueItems": true
+                                }
+                            },
+                            "required": ["type", "url"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }
+            },
+            "required": ["server_id", "display_name", "transport"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(&self, input: Value) -> Result<String, ProductError> {
+        let request: McpUserDraftRequest = serde_json::from_value(input)
+            .map_err(|error| ProductError::ConfigError(format!("invalid MCP draft: {error}")))?;
+        let server = self
+            .manager
+            .save_user_draft(request)
+            .await
+            .map_err(ProductError::ConfigError)?;
+        serde_json::to_string(&json!({
+            "status": "draft_created",
+            "action": "open_mcp_settings",
+            "server_id": server.id,
+            "message": "MCP 配置已保存为关闭状态。请前往“设置 → 工具与连接”审核地址或启动命令、配置凭据并亲自打开滑钮。"
         }))
         .map_err(|error| ProductError::Other(format!("serialize MCP draft result: {error}")))
     }
@@ -447,18 +576,32 @@ impl McpManager {
     }
 
     async fn list_tools_bounded(&self, server_id: &str) -> Result<Vec<McpToolDescriptor>, String> {
-        tokio::time::timeout(
+        match tokio::time::timeout(
             self.catalog_discovery_timeout,
             self.supervisor.list_tools(server_id),
         )
         .await
-        .map_err(|_| {
-            format!(
-                "MCP 服务 {server_id} 的 tools/list 在 {} 秒内没有响应",
-                self.catalog_discovery_timeout.as_secs()
-            )
-        })?
-        .map_err(|error| error.to_string())
+        {
+            Ok(Ok(tools)) => Ok(tools),
+            Ok(Err(error)) => {
+                tracing::warn!(
+                    server_id,
+                    phase = "tools/list",
+                    error = %error,
+                    "MCP catalog request failed"
+                );
+                Err("MCP 服务连接失败；请查看诊断日志后重试。".to_string())
+            }
+            Err(_) => {
+                tracing::warn!(
+                    server_id,
+                    phase = "tools/list",
+                    timeout_ms = self.catalog_discovery_timeout.as_millis(),
+                    "MCP catalog request timed out"
+                );
+                Err("MCP 服务连接超时；请查看诊断日志后重试。".to_string())
+            }
+        }
     }
 
     async fn cache_server_tools(&self, server_id: &str, tools: Vec<McpToolDescriptor>) {
@@ -613,6 +756,69 @@ impl McpManager {
         Ok(self.view_for(config).await)
     }
 
+    pub async fn save_user_draft(
+        &self,
+        request: McpUserDraftRequest,
+    ) -> Result<McpServerView, String> {
+        let _mutation = self.mutation.lock().await;
+        validate_generated_text("display_name", &request.display_name, 120, false)?;
+        validate_generated_text("description", &request.description, 1_000, true)?;
+        if request.server_id == RESEARCH_SERVER_ID {
+            return Err("内置 MCP 的传输配置不可编辑；可以单独关闭它".to_string());
+        }
+
+        let configs = self.supervisor.config_snapshot().await;
+        let previous = configs
+            .iter()
+            .find(|config| config.id == request.server_id)
+            .cloned();
+        if let Some(previous) = &previous {
+            if previous.enabled {
+                return Err("只能修改已关闭的 MCP 配置；请先在设置中关闭服务".to_string());
+            }
+            if !matches!(&previous.source, McpServerSource::User) {
+                return Err(
+                    "只能更新已有的用户 MCP 配置草稿；生成或市场配置请在设置中审核".to_string(),
+                );
+            }
+        }
+
+        let transport = self.editable_transport(&request.server_id, request.transport)?;
+        let config = McpServerConfig {
+            id: request.server_id,
+            display_name: request.display_name.trim().to_string(),
+            description: request.description.trim().to_string(),
+            enabled: false,
+            source: McpServerSource::User,
+            transport,
+            approved_launch_fingerprint: None,
+        };
+        config.validate().map_err(|error| error.to_string())?;
+        let removed_credentials = previous
+            .as_ref()
+            .map(|previous| {
+                let next = transport_references(&config.transport)
+                    .into_iter()
+                    .map(|(_, reference)| reference.clone())
+                    .collect::<Vec<_>>();
+                transport_references(&previous.transport)
+                    .into_iter()
+                    .map(|(_, reference)| reference.clone())
+                    .filter(|reference| !next.contains(reference))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        self.persist_upsert(config.clone(), configs).await?;
+        self.evict_server_tools(&config.id).await;
+        for reference in removed_credentials {
+            if let Err(error) = self.settings.secret_store().delete(&reference) {
+                tracing::warn!(%error, "could not remove obsolete credential from MCP draft");
+            }
+        }
+        Ok(self.view_for(config).await)
+    }
+
     pub async fn create_generated_draft(
         &self,
         request: McpGeneratedDraftRequest,
@@ -620,15 +826,6 @@ impl McpManager {
         let _mutation = self.mutation.lock().await;
         validate_generated_text("display_name", &request.display_name, 120, false)?;
         validate_generated_text("description", &request.description, 1_000, true)?;
-
-        let source_path = PathBuf::from(request.source_path.trim());
-        if !source_path.is_absolute() {
-            return Err("MCP 草稿源码路径必须是当前项目内的绝对路径".to_string());
-        }
-        let source_path = std::fs::canonicalize(&source_path)
-            .map_err(|_| "MCP 草稿源码路径不存在或无法读取".to_string())?;
-        let source_path = source_path.to_string_lossy().into_owned();
-        validate_generated_text("source_path", &source_path, 4_096, false)?;
 
         let configs = self.supervisor.config_snapshot().await;
         if configs.iter().any(|config| config.id == request.server_id) {
@@ -638,22 +835,59 @@ impl McpManager {
             ));
         }
 
+        let source_path = PathBuf::from(request.source_path.trim());
+        if !source_path.is_absolute() {
+            return Err("待导入的 MCP 源码必须使用当前项目内的绝对路径".to_string());
+        }
+        let source_path = std::fs::canonicalize(&source_path)
+            .map_err(|_| "待导入的 MCP 源码不存在或无法读取".to_string())?;
+        validate_generated_text("source_path", &source_path.to_string_lossy(), 4_096, false)?;
+
         let transport = self.editable_transport(&request.server_id, request.transport)?;
-        let config = McpServerConfig {
+        let mut config = McpServerConfig {
             id: request.server_id,
             display_name: request.display_name.trim().to_string(),
             description: request.description.trim().to_string(),
             enabled: false,
             source: McpServerSource::Generated {
-                source_path,
+                source_path: source_path.to_string_lossy().into_owned(),
                 created_at: chrono::Utc::now().to_rfc3339(),
             },
             transport,
             approved_launch_fingerprint: None,
         };
         config.validate().map_err(|error| error.to_string())?;
-        self.persist_upsert(config.clone(), configs).await?;
+        let cleanup_source_after_import = request.cleanup_source_after_import;
+        if cleanup_source_after_import {
+            validate_generated_staging_source(&config.id, &source_path)?;
+        }
+
+        let managed_source = import_generated_source(
+            &self.settings.managed_sources_root(),
+            &config.id,
+            &source_path,
+        )?;
+        remap_generated_transport(&mut config.transport, &source_path, &managed_source);
+        config.source = McpServerSource::Generated {
+            source_path: managed_source.to_string_lossy().into_owned(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        config.validate().map_err(|error| error.to_string())?;
+        if let Err(error) = self.persist_upsert(config.clone(), configs).await {
+            remove_managed_source(&self.settings.managed_sources_root(), &managed_source);
+            return Err(error);
+        }
         self.evict_server_tools(&config.id).await;
+        if cleanup_source_after_import {
+            if let Err(error) = remove_verified_generated_staging_source(&config.id, &source_path) {
+                tracing::warn!(
+                    server_id = %config.id,
+                    source_path = %source_path.display(),
+                    %error,
+                    "MCP source was imported but the verified workspace staging copy could not be removed"
+                );
+            }
+        }
         Ok(self.view_for(config).await)
     }
 
@@ -667,6 +901,7 @@ impl McpManager {
         if config.is_builtin() {
             return Err("内置 MCP 不能移除，但可以关闭".to_string());
         }
+        let managed_source = generated_source_path(&config.source).map(PathBuf::from);
         let credentials = transport_references(&config.transport)
             .into_iter()
             .map(|(_, reference)| reference.clone())
@@ -688,6 +923,9 @@ impl McpManager {
             };
         }
         self.evict_server_tools(server_id).await;
+        if let Some(managed_source) = managed_source {
+            remove_managed_source(&self.settings.managed_sources_root(), &managed_source);
+        }
         for reference in credentials {
             if let Err(error) = self.settings.secret_store().delete(&reference) {
                 tracing::warn!(%error, "could not remove credential for deleted MCP server");
@@ -1600,9 +1838,205 @@ fn bounded_registry_text(value: &str, max_chars: usize) -> String {
     output
 }
 
+#[derive(Default)]
+struct ManagedSourceBudget {
+    files: usize,
+    bytes: u64,
+}
+
+fn import_generated_source(
+    managed_root: &Path,
+    server_id: &str,
+    source: &Path,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(managed_root)
+        .map_err(|error| format!("无法创建 R-Code MCP 托管目录：{error}"))?;
+    let managed_root = std::fs::canonicalize(managed_root)
+        .map_err(|error| format!("无法读取 R-Code MCP 托管目录：{error}"))?;
+    if managed_root.starts_with(source) || source.starts_with(&managed_root) {
+        return Err("待导入源码不能是 R-Code MCP 托管目录或其父目录".to_string());
+    }
+
+    let destination = managed_root.join(server_id);
+    if destination.exists() {
+        return Err(format!(
+            "R-Code MCP 托管目录已存在：{server_id}；请使用新的唯一服务 ID"
+        ));
+    }
+    let staging = managed_root.join(format!(
+        ".{server_id}.staging-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir(&staging).map_err(|error| format!("无法创建 MCP 导入暂存目录：{error}"))?;
+
+    let mut budget = ManagedSourceBudget::default();
+    let copy_result = if source.is_dir() {
+        copy_generated_source_tree(source, &staging, &mut budget)
+    } else {
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "MCP 源码文件缺少有效文件名".to_string())?;
+        copy_generated_source_tree(source, &staging.join(file_name), &mut budget)
+    };
+    if let Err(error) = copy_result {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    if let Err(error) = std::fs::rename(&staging, &destination) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!("无法原子完成 MCP 源码导入：{error}"));
+    }
+    Ok(destination)
+}
+
+fn copy_generated_source_tree(
+    source: &Path,
+    destination: &Path,
+    budget: &mut ManagedSourceBudget,
+) -> Result<(), String> {
+    let metadata =
+        std::fs::symlink_metadata(source).map_err(|error| format!("读取 MCP 源码失败：{error}"))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("MCP 源码不能包含符号链接：{}", source.display()));
+    }
+    if metadata.is_dir() {
+        std::fs::create_dir_all(destination)
+            .map_err(|error| format!("创建 MCP 托管子目录失败：{error}"))?;
+        for entry in
+            std::fs::read_dir(source).map_err(|error| format!("读取 MCP 源码目录失败：{error}"))?
+        {
+            let entry = entry.map_err(|error| format!("读取 MCP 源码条目失败：{error}"))?;
+            copy_generated_source_tree(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                budget,
+            )?;
+        }
+        return Ok(());
+    }
+    if !metadata.is_file() {
+        return Err(format!(
+            "MCP 源码包含不支持的文件类型：{}",
+            source.display()
+        ));
+    }
+    budget.files = budget.files.saturating_add(1);
+    budget.bytes = budget.bytes.saturating_add(metadata.len());
+    if budget.files > MAX_MANAGED_MCP_SOURCE_FILES || budget.bytes > MAX_MANAGED_MCP_SOURCE_BYTES {
+        return Err(format!(
+            "MCP 源码超过托管上限（最多 {MAX_MANAGED_MCP_SOURCE_FILES} 个文件、{} MiB）",
+            MAX_MANAGED_MCP_SOURCE_BYTES / (1024 * 1024)
+        ));
+    }
+    std::fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|error| format!("复制 MCP 源码文件失败：{error}"))
+}
+
+fn remap_generated_transport(
+    transport: &mut McpTransportConfig,
+    source: &Path,
+    managed_source: &Path,
+) {
+    let McpTransportConfig::Stdio { command, args, .. } = transport else {
+        return;
+    };
+    if let Some(mapped) = remap_generated_path(command, source, managed_source) {
+        *command = mapped.to_string_lossy().into_owned();
+    }
+    for argument in args {
+        if let Some(mapped) = remap_generated_path(argument, source, managed_source) {
+            *argument = mapped.to_string_lossy().into_owned();
+        }
+    }
+}
+
+fn remap_generated_path(value: &str, source: &Path, managed_source: &Path) -> Option<PathBuf> {
+    let candidate = Path::new(value);
+    if value.starts_with('-') {
+        return None;
+    }
+    if source.is_file() {
+        let file_name = source.file_name()?;
+        let refers_to_source = if candidate.is_absolute() {
+            std::fs::canonicalize(candidate).ok().as_deref() == Some(source)
+        } else {
+            candidate == Path::new(file_name)
+        };
+        if refers_to_source {
+            return Some(managed_source.join(source.file_name()?));
+        }
+        return None;
+    }
+    let resolved = if candidate.is_absolute() {
+        std::fs::canonicalize(candidate).ok()?
+    } else {
+        std::fs::canonicalize(source.join(candidate)).ok()?
+    };
+    resolved
+        .strip_prefix(source)
+        .ok()
+        .map(|relative| managed_source.join(relative))
+}
+
+fn expected_generated_staging_marker(server_id: &str) -> String {
+    format!("r-code-mcp-staging-v1\nserver_id={server_id}\n")
+}
+
+fn validate_generated_staging_source(server_id: &str, source: &Path) -> Result<(), String> {
+    if !source.is_dir()
+        || source.file_name() != Some(std::ffi::OsStr::new(server_id))
+        || source.parent().and_then(Path::file_name)
+            != Some(std::ffi::OsStr::new(GENERATED_MCP_STAGING_DIR))
+    {
+        return Err(format!(
+            "自动清理仅允许专用的 {GENERATED_MCP_STAGING_DIR}/<server_id> 暂存目录"
+        ));
+    }
+    let marker = source.join(GENERATED_MCP_STAGING_MARKER);
+    let metadata = std::fs::symlink_metadata(&marker)
+        .map_err(|_| "MCP 暂存目录缺少 R-Code 清理标记；已拒绝自动删除".to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("MCP 暂存目录的 R-Code 清理标记无效；已拒绝自动删除".to_string());
+    }
+    let contents = std::fs::read_to_string(&marker)
+        .map_err(|_| "无法读取 MCP 暂存目录清理标记；已拒绝自动删除".to_string())?;
+    if contents != expected_generated_staging_marker(server_id) {
+        return Err("MCP 暂存目录清理标记与服务 ID 不匹配；已拒绝自动删除".to_string());
+    }
+    Ok(())
+}
+
+fn remove_verified_generated_staging_source(server_id: &str, source: &Path) -> Result<(), String> {
+    // Revalidate immediately before the destructive operation. If another process changed the
+    // reserved staging directory after import, fail closed and preserve it for manual review.
+    validate_generated_staging_source(server_id, source)?;
+    let staging_root = source.parent().map(Path::to_path_buf);
+    std::fs::remove_dir_all(source)
+        .map_err(|error| format!("删除已导入的 MCP 专用暂存目录失败：{error}"))?;
+    if let Some(staging_root) = staging_root {
+        // This is deliberately non-recursive: it only removes the now-empty reserved container
+        // and can never affect another staged server.
+        let _ = std::fs::remove_dir(staging_root);
+    }
+    Ok(())
+}
+
+fn remove_managed_source(managed_root: &Path, managed_source: &Path) {
+    let valid = std::fs::canonicalize(managed_root)
+        .ok()
+        .zip(std::fs::canonicalize(managed_source).ok())
+        .is_some_and(|(root, source)| source.parent() == Some(root.as_path()));
+    if valid {
+        let _ = std::fs::remove_dir_all(managed_source);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use r_code_core::dto::ProjectAccessMode;
+    use r_code_gateway::{PermissionEngine, ToolGateway};
     use r_code_mcp::{McpClientError, McpClientSession, McpConnector};
 
     struct PendingCatalogConnector;
@@ -1674,11 +2108,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("generated-mcp");
         std::fs::create_dir(&source).unwrap();
-        let canonical_source = source
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
+        std::fs::write(source.join("generated-mcp.exe"), b"fixture").unwrap();
         let manager = McpManager::new(temp.path().to_path_buf());
 
         let server = manager
@@ -1687,6 +2117,7 @@ mod tests {
                 display_name: "Generated Example".to_string(),
                 description: "Created by the built-in workflow".to_string(),
                 source_path: source.to_string_lossy().into_owned(),
+                cleanup_source_after_import: false,
                 transport: McpEditableTransport::Stdio {
                     executable: source
                         .join("generated-mcp.exe")
@@ -1702,10 +2133,26 @@ mod tests {
         assert!(!server.enabled);
         assert_eq!(server.state, McpServerState::Disabled);
         assert!(!server.launch_approved);
+        let managed_source = temp
+            .path()
+            .join("mcp-sources")
+            .join("generated-example")
+            .canonicalize()
+            .unwrap();
         assert!(matches!(
             &server.source,
             McpServerSource::Generated { source_path, .. }
-                if source_path == &canonical_source
+                if Path::new(source_path) == managed_source
+        ));
+        assert!(
+            source.join("generated-mcp.exe").is_file(),
+            "ordinary project source must be preserved after import"
+        );
+        assert!(managed_source.join("generated-mcp.exe").is_file());
+        assert!(matches!(
+            &server.transport,
+            McpTransportView::Stdio { executable, .. }
+                if Path::new(executable) == managed_source.join("generated-mcp.exe")
         ));
 
         let action = manager
@@ -1736,6 +2183,83 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generated_draft_only_cleans_a_verified_dedicated_staging_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let server_id = "staged-example";
+        let staging_root = temp.path().join(GENERATED_MCP_STAGING_DIR);
+        let source = staging_root.join(server_id);
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("server.exe"), b"fixture").unwrap();
+        std::fs::write(
+            source.join(GENERATED_MCP_STAGING_MARKER),
+            expected_generated_staging_marker(server_id),
+        )
+        .unwrap();
+        let manager = McpManager::new(temp.path().to_path_buf());
+
+        let server = manager
+            .create_generated_draft(McpGeneratedDraftRequest {
+                server_id: server_id.to_string(),
+                display_name: "Staged Example".to_string(),
+                description: String::new(),
+                source_path: source.to_string_lossy().into_owned(),
+                cleanup_source_after_import: true,
+                transport: McpEditableTransport::Stdio {
+                    executable: source.join("server.exe").to_string_lossy().into_owned(),
+                    args: Vec::new(),
+                    environment_names: Vec::new(),
+                },
+            })
+            .await
+            .unwrap();
+
+        assert!(!source.exists());
+        assert!(
+            !staging_root.exists(),
+            "the empty reserved staging container is removed non-recursively"
+        );
+        let managed_source = generated_source_path(&server.source).unwrap();
+        assert!(Path::new(managed_source).join("server.exe").is_file());
+    }
+
+    #[tokio::test]
+    async fn generated_draft_rejects_cleanup_for_ordinary_project_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("important-existing-source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("keep.txt"), b"must survive").unwrap();
+        let manager = McpManager::new(temp.path().to_path_buf());
+
+        let error = manager
+            .create_generated_draft(McpGeneratedDraftRequest {
+                server_id: "ordinary-example".to_string(),
+                display_name: "Ordinary Example".to_string(),
+                description: String::new(),
+                source_path: source.to_string_lossy().into_owned(),
+                cleanup_source_after_import: true,
+                transport: McpEditableTransport::Stdio {
+                    executable: "server.exe".to_string(),
+                    args: Vec::new(),
+                    environment_names: Vec::new(),
+                },
+            })
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("自动清理仅允许专用"));
+        assert_eq!(
+            std::fs::read(source.join("keep.txt")).unwrap(),
+            b"must survive"
+        );
+        assert!(manager
+            .snapshot()
+            .await
+            .servers
+            .iter()
+            .all(|server| server.id != "ordinary-example"));
+    }
+
+    #[tokio::test]
     async fn generated_draft_never_overwrites_an_existing_server_id() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("generated-mcp");
@@ -1746,6 +2270,7 @@ mod tests {
             display_name: "Generated Example".to_string(),
             description: String::new(),
             source_path: source.to_string_lossy().into_owned(),
+            cleanup_source_after_import: false,
             transport: McpEditableTransport::Stdio {
                 executable: source
                     .join("generated-mcp.exe")
@@ -1808,6 +2333,9 @@ mod tests {
         assert_eq!(payload["status"], "draft_created");
         assert_eq!(payload["action"], "open_mcp_settings");
         assert_eq!(payload["server_id"], "tool-generated-example");
+        assert!(payload["managed_source_path"]
+            .as_str()
+            .is_some_and(|path| path.contains("mcp-sources")));
         assert!(payload.get("confirmation").is_none());
         let server = manager
             .snapshot()
@@ -1818,6 +2346,132 @@ mod tests {
             .unwrap();
         assert!(!server.enabled);
         assert!(!server.launch_approved);
+    }
+
+    #[tokio::test]
+    async fn user_draft_tool_saves_and_updates_loopback_http_without_enabling_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = Arc::new(McpManager::new(temp.path().to_path_buf()));
+        let tool = SaveMcpDraftTool::new(manager.clone());
+
+        assert_eq!(tool.name(), "mcp_save_draft");
+        assert_eq!(tool.risk_level(), RiskLevel::R2);
+        assert!(!tool.requires_workspace_scope());
+        assert!(tool.path_bindings().is_empty());
+        let mut gateway = ToolGateway::new(Arc::new(PermissionEngine::new()));
+        gateway.register(Box::new(tool));
+        assert!(!gateway.requires_workspace_scope("mcp_save_draft"));
+        let output = gateway
+            .execute_call_with_access_mode(
+                "task-mcp-draft",
+                "run-mcp-draft",
+                "mcp_save_draft",
+                json!({
+                "server_id": "obsidian-local",
+                "display_name": "Obsidian Local",
+                "transport": {
+                    "type": "streamable_http",
+                    "url": "http://127.0.0.1:27200/mcp",
+                    "header_names": []
+                }
+                }),
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .unwrap();
+        assert!(!output.is_error);
+        let payload: Value = serde_json::from_str(&output.content).unwrap();
+        assert_eq!(payload["status"], "draft_created");
+        assert_eq!(payload["action"], "open_mcp_settings");
+
+        let first = manager
+            .snapshot()
+            .await
+            .servers
+            .into_iter()
+            .find(|server| server.id == "obsidian-local")
+            .unwrap();
+        assert!(!first.enabled);
+        assert!(!first.launch_approved);
+        assert!(matches!(first.source, McpServerSource::User));
+        assert!(matches!(
+            first.transport,
+            McpTransportView::StreamableHttp { url, .. }
+                if url == "http://127.0.0.1:27200/mcp"
+        ));
+
+        gateway
+            .execute_call_with_access_mode(
+                "task-mcp-draft",
+                "run-mcp-draft-update",
+                "mcp_save_draft",
+                json!({
+                    "server_id": "obsidian-local",
+                    "display_name": "Obsidian Loopback",
+                    "description": "updated while disabled",
+                    "transport": {
+                        "type": "streamable_http",
+                        "url": "http://localhost:27200/mcp",
+                        "header_names": []
+                    }
+                }),
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .unwrap();
+        let matching = manager
+            .snapshot()
+            .await
+            .servers
+            .into_iter()
+            .filter(|server| server.id == "obsidian-local")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].display_name, "Obsidian Loopback");
+        assert!(!matching[0].enabled);
+        assert!(!matching[0].launch_approved);
+        assert!(matches!(
+            &matching[0].transport,
+            McpTransportView::StreamableHttp { url, .. }
+                if url == "http://localhost:27200/mcp"
+        ));
+    }
+
+    #[tokio::test]
+    async fn user_draft_update_rejects_an_enabled_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = McpManager::new(temp.path().to_path_buf());
+        let request = McpUserDraftRequest {
+            server_id: "active-user-mcp".to_string(),
+            display_name: "Active User MCP".to_string(),
+            description: String::new(),
+            transport: McpEditableTransport::StreamableHttp {
+                url: "http://127.0.0.1:27200/mcp".to_string(),
+                header_names: Vec::new(),
+            },
+        };
+        manager.save_user_draft(request.clone()).await.unwrap();
+        let configs = manager.supervisor.config_snapshot().await;
+        let mut active = configs
+            .iter()
+            .find(|config| config.id == request.server_id)
+            .cloned()
+            .unwrap();
+        active.enabled = true;
+        manager.persist_upsert(active, configs).await.unwrap();
+
+        let error = manager.save_user_draft(request).await.unwrap_err();
+        assert!(error.contains("只能修改已关闭的 MCP 配置"));
+        let active = manager
+            .supervisor
+            .config_snapshot()
+            .await
+            .into_iter()
+            .find(|config| config.id == "active-user-mcp")
+            .unwrap();
+        assert!(active.enabled);
     }
 
     #[tokio::test]
@@ -1980,7 +2634,7 @@ mod tests {
                 .await
                 .expect("manual catalog discovery must be bounded")
                 .unwrap_err();
-        assert!(error.contains("tools/list"));
+        assert!(error.contains("连接超时"));
     }
 
     #[tokio::test]

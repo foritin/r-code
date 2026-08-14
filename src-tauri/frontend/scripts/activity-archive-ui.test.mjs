@@ -279,7 +279,6 @@ test.skip("legacy in-window companion behavior was replaced by a native companio
     const { useAppStore } = await import("/src/store/app.ts");
     const { useCompanionStore } = await import("/src/store/companion.ts");
     const { useToastStore } = await import("/src/store/toast.ts");
-    useAppStore.getState().setZoom(100);
     useCompanionStore.getState().setEnabled(true);
     useCompanionStore.getState().setMinimized(false);
     useCompanionStore.getState().setSoundEnabled(false);
@@ -359,20 +358,6 @@ test.skip("legacy in-window companion behavior was replaced by a native companio
   });
   await page.waitForFunction(() => !document.querySelector(".companion-host")?.classList.contains("is-dragging"));
   await page.mouse.up();
-
-  for (const zoom of [200, 80, 100]) {
-    await page.evaluate(async (level) => {
-      const { useAppStore } = await import("/src/store/app.ts");
-      useAppStore.getState().setZoom(level);
-    }, zoom);
-    await page.waitForFunction((expectCompact) =>
-      document.querySelector(".companion-host")?.classList.contains("is-responsive-compact") === expectCompact,
-    zoom === 200);
-    const bounds = await companion.boundingBox();
-    assert.ok(bounds && bounds.x >= 0 && bounds.y >= 0
-      && bounds.x + bounds.width <= 1200 && bounds.y + bounds.height <= 800,
-    `companion must remain on-screen at ${zoom}% zoom`);
-  }
 
   await page.emulateMedia({ reducedMotion: "reduce" });
   const reducedAnimation = await companion.locator(".companion-character").evaluate((element) =>
@@ -486,17 +471,6 @@ test.skip("legacy in-window companion behavior was replaced by a native companio
   assert.ok(panelBox && panelBox.x >= 0 && panelBox.x + panelBox.width <= 640
     && panelBox.y >= 0 && panelBox.y + panelBox.height <= 480,
     `bottom-docked compact panel must expand upward into the viewport: ${JSON.stringify(panelBox)}`);
-  for (const zoom of [200, 80, 100]) {
-    await page.evaluate(async (level) => {
-      const { useAppStore } = await import("/src/store/app.ts");
-      useAppStore.getState().setZoom(level);
-    }, zoom);
-    await page.waitForTimeout(220);
-    panelBox = await panel.boundingBox();
-    assert.ok(panelBox && panelBox.x >= 0 && panelBox.x + panelBox.width <= 640
-      && panelBox.y >= 0 && panelBox.y + panelBox.height <= 480,
-    `open compact panel must remain fully on-screen at ${zoom}% zoom: ${JSON.stringify(panelBox)}`);
-  }
   await page.keyboard.press("Escape");
   await panel.waitFor({ state: "detached" });
 

@@ -11,12 +11,18 @@ use serde_json::{json, Value};
 use thiserror::Error;
 use tokio::sync::{watch, Mutex, RwLock};
 
+use crate::client::{MCP_INITIALIZE_TIMEOUT, MCP_LIST_TOOLS_TIMEOUT};
 use crate::{
     McpClientError, McpClientSession, McpConfigError, McpConnector, McpServerConfig,
     McpServerState, McpServerStatus, McpToolDescriptor,
 };
 
 const MCP_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+const MCP_CONNECT_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(MCP_INITIALIZE_TIMEOUT.as_secs() + 5);
+const MCP_SUPERVISOR_LIST_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(MCP_LIST_TOOLS_TIMEOUT.as_secs() + 1);
+const MCP_SUPERVISOR_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Error)]
 pub enum McpRuntimeError {
@@ -203,7 +209,13 @@ impl McpSupervisor {
     ) -> Result<Vec<McpToolDescriptor>, McpRuntimeError> {
         let slot = self.slot(server_id).await?;
         let session = self.ensure_session(server_id, &slot).await?;
-        match session.list_tools(server_id).await {
+        let discovery =
+            tokio::time::timeout(MCP_SUPERVISOR_LIST_TIMEOUT, session.list_tools(server_id))
+                .await
+                .map_err(|_| {
+                    McpClientError::ListToolsTimeout(MCP_SUPERVISOR_LIST_TIMEOUT.as_secs())
+                });
+        match discovery.and_then(|result| result) {
             Ok(tools) => {
                 self.publish_status(server_id, McpServerState::Running, tools.len(), None);
                 Ok(tools)
@@ -301,7 +313,6 @@ impl McpSupervisor {
                     metadata: Some(json!({
                         "server_id": server_id,
                         "reason": "call_failed",
-                        "detail": error.to_string(),
                     })),
                 })
             }
@@ -382,7 +393,10 @@ impl McpSupervisor {
             }
         }
         self.publish_status(server_id, McpServerState::Starting, 0, None);
-        match self.connector.connect(&config).await {
+        let connection = tokio::time::timeout(MCP_CONNECT_TIMEOUT, self.connector.connect(&config))
+            .await
+            .map_err(|_| McpClientError::ConnectionTimeout(MCP_CONNECT_TIMEOUT.as_secs()));
+        match connection.and_then(|result| result) {
             Ok(session) => {
                 *slot.session.write().await = Some(session.clone());
                 self.publish_status(server_id, McpServerState::Running, 0, None);
@@ -405,7 +419,14 @@ impl McpSupervisor {
         let Some(session) = slot.session.write().await.take() else {
             return Ok(());
         };
-        session.close().await?;
+        tokio::time::timeout(MCP_SUPERVISOR_CLOSE_TIMEOUT, session.close())
+            .await
+            .map_err(|_| {
+                McpClientError::Shutdown(format!(
+                    "MCP session did not close within {} seconds",
+                    MCP_SUPERVISOR_CLOSE_TIMEOUT.as_secs()
+                ))
+            })??;
         Ok(())
     }
 

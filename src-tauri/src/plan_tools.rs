@@ -105,7 +105,7 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        "Safely change the current main task from Agent mode to Plan mode before making writes. Use when the user explicitly requests a structured plan, or when ambiguity, risk, or scope makes direct implementation unsafe. This ends the current Agent run and the host resumes the same request with read-only Plan tools. Returning to Agent mode requires explicit user approval; never use this to restart an already approved/executing Plan."
+        "Safely change the current main task from Agent mode to Plan mode before making writes. Prefer this for high-complexity work: changes spanning multiple interdependent files or subsystems, migrations, design tradeoffs or impact assessments the user must approve, or anything that cannot be verified safely in one pass. Also use it when the user explicitly requests a structured plan. Do not use it for a single, isolated, immediately verifiable change. This ends the current Agent run and the host resumes the same request with read-only Plan tools. Returning to Agent mode requires explicit user approval; never use this to restart an already approved/executing Plan."
     }
 
     fn risk_level(&self) -> RiskLevel {

@@ -349,8 +349,6 @@ function presentTurn(turn: RawTurn): TimelineTurn {
     else output.push(group);
   }
 
-  collapseInterstitialAgentMessages(output, turn.id);
-
   return {
     id: turn.id,
     user: turn.user,
@@ -360,58 +358,6 @@ function presentTurn(turn: RawTurn): TimelineTurn {
       item.kind === "tool_group" || item.kind === "subagent_group" || item.kind === "context"
     ),
   };
-}
-
-/**
- * Models often narrate every tool step ("now editing…", "now verifying…"). Those messages are
- * useful audit context, but rendering each one as a full assistant answer creates a noisy ladder
- * of nodes and makes the actual final answer hard to find. Keep the text, collapse it into one
- * disclosure before the first activity, and leave only messages after the last activity as final
- * responses.
- */
-function collapseInterstitialAgentMessages(output: TimelineDisplayItem[], turnId: string): void {
-  const lastActivity = findLastIndex(output, isExecutionActivityItem);
-  if (lastActivity < 0) return;
-
-  const indices: number[] = [];
-  const messages: string[] = [];
-  for (let index = 0; index < lastActivity; index += 1) {
-    const item = output[index];
-    if (item.kind !== "agent") continue;
-    const text = item.text.trim();
-    if (!text || hasActionableMarkdown(text)) continue;
-    indices.push(index);
-    messages.push(text);
-  }
-  if (indices.length === 0) return;
-
-  const firstIndex = indices[0];
-  const firstItem = output[firstIndex];
-  if (firstItem.kind !== "agent") return;
-  const context: TimelineBaseDisplayItem = {
-    kind: "context",
-    id: `execution-notes-${turnId}`,
-    t: firstItem.t,
-    label: messages.length > 1 ? `执行过程说明 · ${messages.length} 段` : "执行过程说明",
-    detail: messages.join("\n\n"),
-    collapsible: true,
-  };
-
-  for (let cursor = indices.length - 1; cursor >= 0; cursor -= 1) {
-    output.splice(indices[cursor], 1);
-  }
-  output.splice(firstIndex, 0, context);
-}
-
-/** Keep messages whose Markdown contains an interaction or a substantive structured result. */
-function hasActionableMarkdown(text: string): boolean {
-  return text.length > 480
-    || /```|!\[[^\]]*\]\([^\n)]+\)|\[[^\]]+\]\([^\n)]+\)/.test(text)
-    || /^\s{0,3}(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)/m.test(text);
-}
-
-function isExecutionActivityItem(item: TimelineDisplayItem): boolean {
-  return item.kind === "tool_group" || item.kind === "subagent_group";
 }
 
 function toolGroupKind(tool: TimelineToolItem): TimelineToolGroupKind {
@@ -462,7 +408,7 @@ function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSub
   const input = parseRecord(tool.inputJson);
   const output = parseRecord(tool.outputJson);
   const agent = firstString(input, ["agent"]) ?? firstString(output, ["agent"]);
-  const runtimeKind = agent?.toLowerCase() === "codex" ? "codex_exec" : "native";
+  const runtimeKind = placeholderRuntimeKind(agent);
   const goal = firstString(input, ["goal", "task", "prompt"]);
   const label = firstString(input, ["label", "name"])
     ?? firstString(output, ["label", "name"])
@@ -477,6 +423,13 @@ function placeholderSubagent(tool: TimelineToolItem, index: number): TimelineSub
     runtimeKind,
     status,
   };
+}
+
+function placeholderRuntimeKind(agent: string | null | undefined): TimelineRunItem["runtimeKind"] {
+  switch (agent?.trim().toLowerCase()) {
+    case "codex": return "codex_exec";
+    default: return "native";
+  }
 }
 
 function runStatus(run: TimelineRunItem): TimelineSubagentStatus {
@@ -499,9 +452,11 @@ function protocolStatus(value: string | null, toolState: TimelineToolItem["state
 }
 
 function runtimeFallbackLabel(kind: TimelineRunItem["runtimeKind"]): string {
-  if (kind === "codex_exec") return "Codex CLI 子代理";
-  if (kind === "codex_mcp") return "Codex MCP 子代理";
-  return "R-Code 子代理";
+  switch (kind) {
+    case "native": return "R-Code 子代理";
+    case "codex_exec": return "Codex CLI 子代理";
+    case "codex_mcp": return "Codex MCP 子代理";
+  }
 }
 
 function compactLabel(value: string): string {

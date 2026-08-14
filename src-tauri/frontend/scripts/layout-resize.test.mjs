@@ -86,7 +86,7 @@ test.after(async () => {
   server?.kill();
 });
 
-test("desktop sidebar collapses, resizes, persists, and remains accurate under CSS zoom", async () => {
+test("desktop sidebar collapses, resizes, persists, and fits narrow viewports", async () => {
   const page = await browser.newPage({ viewport: { width: 1600, height: 960 } });
   await page.addInitScript(() => {
     if (localStorage.getItem("r-code.rail.collapsed") == null) localStorage.setItem("r-code.rail.collapsed", "0");
@@ -146,18 +146,17 @@ test("desktop sidebar collapses, resizes, persists, and remains accurate under C
   await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
     useAppStore.getState().setRailWidth(380);
-    useAppStore.getState().setZoom(150);
   });
-  const widthBeforeZoomDrag = Number(await page.evaluate(() => localStorage.getItem("r-code.rail.width")));
-  const zoomedHandle = await separator.boundingBox();
-  await page.mouse.move(zoomedHandle.x + zoomedHandle.width / 2, zoomedHandle.y + 80);
+  const widthBeforeDrag = Number(await page.evaluate(() => localStorage.getItem("r-code.rail.width")));
+  const resizedHandle = await separator.boundingBox();
+  await page.mouse.move(resizedHandle.x + resizedHandle.width / 2, resizedHandle.y + 80);
   await page.mouse.down();
-  await page.mouse.move(zoomedHandle.x + zoomedHandle.width / 2 + 60, zoomedHandle.y + 80, { steps: 4 });
+  await page.mouse.move(resizedHandle.x + resizedHandle.width / 2 + 60, resizedHandle.y + 80, { steps: 4 });
   await page.mouse.up();
-  const widthAfterZoomDrag = Number(await page.evaluate(() => localStorage.getItem("r-code.rail.width")));
+  const widthAfterDrag = Number(await page.evaluate(() => localStorage.getItem("r-code.rail.width")));
   assert.ok(
-    widthAfterZoomDrag >= widthBeforeZoomDrag + 38 && widthAfterZoomDrag <= widthBeforeZoomDrag + 42,
-    `60 rendered pixels at 150% zoom should equal 40 CSS pixels: ${widthBeforeZoomDrag} -> ${widthAfterZoomDrag}`,
+    widthAfterDrag >= widthBeforeDrag + 58 && widthAfterDrag <= widthBeforeDrag + 62,
+    `60 rendered pixels should resize the sidebar by 60 CSS pixels: ${widthBeforeDrag} -> ${widthAfterDrag}`,
   );
 
   await page.close();

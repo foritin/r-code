@@ -16,6 +16,11 @@ export interface CapabilityControl {
   label: string;
   options: CapabilityOption[];
   defaultLabel: string;
+  /**
+   * 本地默认策略与某个显式选项等价时，用它合并菜单入口。保存时仍清空字段，
+   * 既兼容旧会话，也避免把 R-Code 的本地策略值误传给模型服务。
+   */
+  defaultValue?: string;
 }
 
 export interface ModelCapabilities {
@@ -36,6 +41,16 @@ export interface ImageCapability {
 const THINKING: CapabilityOption[] = [
   { value: "enabled", label: "开启", description: "让模型先推理再回答" },
   { value: "disabled", label: "关闭", description: "优先低延迟直接回答" },
+];
+
+const DEEPSEEK_THINKING: CapabilityOption[] = [
+  {
+    value: "adaptive",
+    label: "智能平衡（推荐）",
+    description: "R-Code 按任务阶段自动平衡响应速度与推理质量",
+  },
+  { value: "enabled", label: "始终开启", description: "每轮都保持所选推理强度" },
+  { value: "disabled", label: "关闭", description: "关闭深度思考，优先响应速度" },
 ];
 
 const EFFORT_LABELS: Record<string, string> = {
@@ -74,10 +89,19 @@ export function capabilitiesFor(provider: ProviderChoice | undefined, model: str
   const protocol = provider?.protocol;
 
   if (providerKind === "deepseek") {
+    const isFlash = modelName === "deepseek-v4-flash";
+    const reasoningValues = isFlash ? ["low", "high", "max"] : ["high", "max"];
     return {
-      thinking: { label: "思考模式", options: THINKING, defaultLabel: "服务默认" },
-      reasoning: effort(["high", "max"]),
-      note: "DeepSeek 思考模式下温度由服务忽略；高/最大映射到原生 reasoning_effort。",
+      thinking: {
+        label: "思考模式",
+        options: DEEPSEEK_THINKING,
+        defaultLabel: "智能平衡（推荐）",
+        defaultValue: "adaptive",
+      },
+      reasoning: effort(reasoningValues, "跟随智能平衡"),
+      note: isFlash
+        ? "智能平衡由 R-Code 按阶段调节；Flash 支持低/高/最大。选择固定强度或始终开启/关闭会退出自动调节。"
+        : "智能平衡由 R-Code 按阶段调节；Pro 仅支持高/最大，不会发送不受支持的低档。选择固定强度或始终开启/关闭会退出自动调节。",
     };
   }
 
@@ -287,6 +311,15 @@ export function normalizeInference(
   const reasoning = inference?.reasoning_effort ?? undefined;
   if (reasoning && capabilities.reasoning?.options.some((option) => option.value === reasoning)) {
     next.reasoning_effort = reasoning;
+    // Historical sessions may have stored an effort without a thinking mode. For DeepSeek an
+    // effort is an explicit fixed-depth preference, so normalize the visible state to Always On
+    // instead of falsely labelling the same request as Smart Balance.
+    if (
+      capabilities.thinking?.defaultValue === "adaptive"
+      && (!next.thinking || next.thinking === capabilities.thinking.defaultValue)
+    ) {
+      next.thinking = "enabled";
+    }
   }
   const verbosity = inference?.verbosity ?? undefined;
   if (verbosity && capabilities.verbosity?.options.some((option) => option.value === verbosity)) {
@@ -303,7 +336,10 @@ export function optionLabel(control: CapabilityControl | undefined, value: strin
 export function inferenceSummary(capabilities: ModelCapabilities, inference: InferenceOptions): string {
   const parts: string[] = [];
   if (capabilities.thinking && inference.thinking) {
-    parts.push(`思考${optionLabel(capabilities.thinking, inference.thinking)}`);
+    const label = optionLabel(capabilities.thinking, inference.thinking);
+    parts.push(inference.thinking === capabilities.thinking.defaultValue ? label : `思考${label}`);
+  } else if (capabilities.thinking?.defaultValue) {
+    parts.push(capabilities.thinking.defaultLabel);
   }
   if (capabilities.reasoning && inference.reasoning_effort) {
     parts.push(optionLabel(capabilities.reasoning, inference.reasoning_effort));

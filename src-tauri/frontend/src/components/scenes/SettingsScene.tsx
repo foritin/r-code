@@ -9,8 +9,12 @@ import {
   codexSetupCollaboration,
   codexStartDeviceLogin,
   codexStartLogin,
+  companionEnsure,
   logsTail,
   providerModels,
+  IpcCommandError,
+  RTK_BLOCKED_BY_SECURITY_SOFTWARE,
+  rtkOpenSecurityExclusions,
   rtkSetEnabled,
   rtkStatus,
   settingsDeleteProvider,
@@ -20,10 +24,6 @@ import {
   settingsSet,
   supportBundleChoose,
   supportPreview,
-  workflowSkillDelete,
-  workflowSkillReset,
-  workflowSkillSave,
-  workflowSkillsList,
 } from "../../lib/ipc";
 import type {
   AppConfig,
@@ -40,9 +40,6 @@ import type {
   ProviderStatus,
   RtkStatus,
   SupportBundlePreview,
-  WorkflowSkill,
-  WorkflowSkillDraft,
-  WorkflowSkillSource,
 } from "../../lib/types";
 import { clockTime } from "../../lib/format";
 import {
@@ -57,9 +54,12 @@ import { useCodexCliGate } from "../codex/CodexCliGate";
 import { CODEX_LOGIN_WAIT_MINUTES, nextCodexLoginPollDelay } from "../codex/login-watcher";
 import { IconCheck, IconChevronDown, IconRefresh, IconSearch } from "../icons";
 import { Menu, MenuEmpty, MenuItem } from "../ui/Menu";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { pushToast } from "../../store/toast";
 import { useCompanionStore, type CompanionMotion } from "../../store/companion";
 import { McpPanel } from "./McpPanel";
+import { KnowledgeSettingsPane } from "./KnowledgeSettingsPane";
+import { SubagentProvidersPanel } from "./SubagentProvidersPanel";
 
 const LOG_LEVELS = ["debug", "info", "warn", "error"];
 const LOG_FILTERS = ["all", "error", "warn", "info", "debug"] as const;
@@ -76,9 +76,10 @@ const SETTINGS_PANES: Array<{
   { key: "providers", label: "模型服务", description: "配置 R-Code 对话使用的模型与凭据。" },
   { key: "agents", label: "Agent 编排", description: "选择主 Agent、委派路由和可观察的质量复核。" },
   { key: "tools", label: "工具与连接", description: "管理内置联网、MCP 服务、凭据和扩展市场。" },
-  { key: "preferences", label: "外观与小助手", description: "调整外观、缩放、小助手和辅助阅读方式。" },
+  { key: "knowledge", label: "知识与指令", description: "管理公共与项目记忆、协作 Prompt 和可复用 Skills。" },
+  { key: "preferences", label: "外观与小助手", description: "选择界面主题，并管理桌面小助手的反馈方式。" },
   { key: "diagnostics", label: "诊断", description: "查看运行日志，或导出脱敏支持信息。" },
-  { key: "codex", label: "Codex CLI", description: "连接本机 Codex，并管理它的运行偏好。" },
+  { key: "subagents", label: "子代理配置", description: "组合 API Provider 与 Codex CLI 来源，配置子代理槽位、权重、Prompt 与连通性。" },
 ];
 
 const CATEGORY_LABELS: Record<ProviderCategory, string> = {
@@ -253,7 +254,7 @@ const PROVIDER_HOSTED_ROUTE_HINTS: Record<string, string> = {
     "请切换为 Responses；此外 Azure 订阅管理员必须允许 Web Search，当前鉴权仍需 Entra Token。",
   deepseek:
     "Responses 与 Anthropic 兼容口均支持 DeepSeek V4 Flash/Pro。Chat 只有普通 Tool Call。",
-  ark: "请切换为 Responses，并使用已支持内置搜索的 Doubao Seed 2 系列模型。Coding Plan 线路不在此范围。",
+  ark: "请切换为 Responses，并使用已支持内置搜索的 Doubao Seed 2 系列模型。Coding / Agent Plan 订阅线路不在此范围。",
   dashscope:
     "请切换为 Responses，并使用 qwen3.8 / qwen3.7 / qwen3.6 / qwen3.5 或 qwen3-max 系列；Coder 候选未在官方支持清单中。",
   openrouter:
@@ -307,6 +308,13 @@ const PROVIDER_WEB_ALTERNATIVES: Record<
       "当前 Coding Plan OpenAI 口只有 Chat Completions；内置 Web Search 位于方舟按量 API 的 Responses + Doubao Seed 2 组合，不能跨线路套用。",
     docsUrl: "https://www.volcengine.com/docs/82379/1958524?lang=zh",
     docsLabel: "查看方舟 Responses 内置工具",
+  },
+  ark_agent: {
+    badge: "订阅线路",
+    description:
+      "方舟官方现称 Agent Plan（Token Plan）。套餐另含豆包搜索 Harness，但 /api/plan 的 Anthropic 模型口不能直接套用按量 Responses 的 Web Search 参数；当前对话继续使用 R-Code / MCP 工具。",
+    docsUrl: "https://www.volcengine.com/docs/82379/2366394?lang=zh",
+    docsLabel: "查看 Agent Plan 套餐与模型",
   },
   byteplus: {
     badge: "可接远程 MCP",
@@ -478,7 +486,7 @@ function providerStateLabel(status: ProviderStatus | undefined) {
 }
 
 /**
- * 设置页：模型服务、外观、无障碍、日志、支持包与外部 Agent。
+ * 设置页：模型服务、外观与小助手、日志、支持包与子代理配置。
  * settingsGet 失败（配置损坏等）时表单区显示错误条而非空白。
  */
 export function SettingsScene() {
@@ -534,7 +542,7 @@ export function SettingsScene() {
               <p>{pane.description}</p>
             </header>
 
-            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics" || activePane === "codex") && (
+            {configErr && (activePane === "providers" || activePane === "agents" || activePane === "diagnostics" || activePane === "subagents") && (
               <div className="errbar" role="alert">
                 读取配置失败：{configErr}
                 <span className="spacer" />
@@ -561,10 +569,9 @@ export function SettingsScene() {
             )}
 
             {activePane === "preferences" && (
-              <div className="settings-sheet">
+              <div className="settings-preferences">
                 <AppearanceSection />
                 <CompanionSection />
-                <AccessibilitySection />
               </div>
             )}
 
@@ -573,6 +580,8 @@ export function SettingsScene() {
                 <McpPanel />
               </div>
             )}
+
+            {activePane === "knowledge" && <KnowledgeSettingsPane />}
 
             {activePane === "agents" && (
               <div className="settings-sheet">
@@ -592,8 +601,9 @@ export function SettingsScene() {
               </div>
             )}
 
-            {activePane === "codex" && (
-              <div className="settings-sheet">
+            {activePane === "subagents" && (
+              <div className="settings-sheet subagent-configuration-sheet">
+                <SubagentProvidersPanel />
                 <CodexIntegrationSection config={config} reloadConfig={loadConfig} />
               </div>
             )}
@@ -622,6 +632,10 @@ function ProviderSection({
   const [hostedWebRoutes, setHostedWebRoutes] = useState<HostedWebRoute[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [presetName, setPresetName] = useState(CUSTOM_PRESET);
+  // 新建草稿态：点击“新建服务”后左侧出现占位行，保存成功或取消后消失。
+  const [drafting, setDrafting] = useState(false);
+  // 新建态下点击已有服务时暂存目标，等用户确认“放弃未保存的更改”后再切换。
+  const [pendingSelect, setPendingSelect] = useState<string | null>(null);
   const [profileName, setProfileName] = useState("");
   const [fields, setFields] = useState({
     base_url: "",
@@ -803,6 +817,8 @@ function ProviderSection({
         activate,
       });
       setSelectedProvider(name);
+      setDrafting(false);
+      setPendingSelect(null);
       setKeyInput("");
     }, activate ? "已保存，并用于后续新对话" : "配置已保存");
 
@@ -815,6 +831,28 @@ function ProviderSection({
       await settingsDeleteProvider(name);
       if (selectedProvider === name) setSelectedProvider(null);
     }, "配置已删除");
+  };
+
+  const startNewProvider = () => {
+    setDrafting(true);
+    setPendingSelect(null);
+    setSelectedProvider(null);
+    applyPreset(catalog[0]?.id ?? CUSTOM_PRESET);
+  };
+
+  const cancelDraft = () => {
+    setDrafting(false);
+    setPendingSelect(null);
+    setSelectedProvider(
+      configDefault && providers[configDefault] ? configDefault : names[0] ?? null
+    );
+  };
+
+  const commitPendingSelect = () => {
+    const target = pendingSelect;
+    setPendingSelect(null);
+    setDrafting(false);
+    setSelectedProvider(target);
   };
 
   const editing = selectedProvider ? (providers[selectedProvider] as ProviderConfig | undefined) : undefined;
@@ -867,10 +905,7 @@ function ProviderSection({
         <button
           className="btn"
           disabled={busy}
-          onClick={() => {
-            setSelectedProvider(null);
-            applyPreset(catalog[0]?.id ?? CUSTOM_PRESET);
-          }}
+          onClick={startNewProvider}
         >
           新建服务
         </button>
@@ -882,7 +917,18 @@ function ProviderSection({
       <div className="provider-layout">
         <div className="provider-list" aria-label="已保存的模型服务">
           <div className="provider-list-label">已保存的服务</div>
-          {names.length === 0 ? (
+          {drafting && (
+            <button
+              className="provider-row provider-row-draft selected"
+              type="button"
+              disabled={busy}
+            >
+              <span className="provider-row-title">未保存的新服务</span>
+              <span className="provider-row-model">正在填写，保存后生效</span>
+              <span className="provider-row-state">草稿</span>
+            </button>
+          )}
+          {names.length === 0 && !drafting ? (
             <div className="provider-empty">还没有服务。选择一个预设，填入密钥即可开始聊天。</div>
           ) : (
             names.map((name) => {
@@ -894,7 +940,7 @@ function ProviderSection({
                   key={name}
                   className={`provider-row${name === selectedProvider ? " selected" : ""}`}
                   disabled={busy}
-                  onClick={() => setSelectedProvider(name)}
+                  onClick={() => (drafting ? setPendingSelect(name) : setSelectedProvider(name))}
                 >
                   <span className="provider-row-title">
                     {providerLabel(name)}
@@ -1247,12 +1293,22 @@ function ProviderSection({
                 用于新对话
               </button>
             )}
+            {drafting && (
+              <button className="btn" disabled={busy} onClick={cancelDraft}>取消</button>
+            )}
             <span className="spacer" />
-            <button className="btn" disabled={saveBlocked} onClick={() => saveProvider(false)}>保存</button>
             <button className="btn accent" disabled={saveBlocked} onClick={() => saveProvider(true)}>保存并用于新对话</button>
           </div>
         </div>
       </div>
+      <ConfirmDialog
+        open={pendingSelect != null}
+        title="放弃未保存的更改？"
+        description="你正在新建服务，切换后会丢弃尚未保存的配置。"
+        confirmLabel="放弃更改"
+        onConfirm={commitPendingSelect}
+        onCancel={() => setPendingSelect(null)}
+      />
     </section>
   );
 }
@@ -1424,239 +1480,7 @@ function OrchestrationSection({ config, reload }: { config: AppConfig; reload: (
   );
 }
 
-export function AgentPromptsSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
-  const prompts = config.agent_prompts ?? { main_agent: "", subagent: "" };
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState(prompts);
-  const [notice, setNotice] = useState<string | null>(null);
 
-  useEffect(() => {
-    setDraft(prompts);
-  }, [prompts.main_agent, prompts.subagent]);
-
-  const save = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      // 两个字段顺序落盘，避免并发改写同一份用户级配置文件。
-      await settingsSet("agent_prompts.main_agent", draft.main_agent);
-      await settingsSet("agent_prompts.subagent", draft.subagent);
-      await reload();
-      setNotice("协作 Prompt 已保存并应用");
-    } catch (cause) {
-      setError(errText(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const reset = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      await settingsSet("agent_prompts", null);
-      await reload();
-      setNotice("已恢复内置协作 Prompt");
-    } catch (cause) {
-      setError(errText(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <section className="settings-block knowledge-prompt-settings">
-      <h3>协作 Prompt</h3>
-      <p className="desc">
-        作为用户级补充规则应用于主 Agent 与子代理。Prompt 保存在 R-Code AppData，
-        不会写入项目或 Git；工作区权限、显式“不要使用子代理”等运行时硬边界不可被覆盖。
-      </p>
-      {error && <div className="errbar" role="alert">保存协作 Prompt 失败：{error}</div>}
-      {notice && <div className="notebar" role="status">{notice}</div>}
-      <div className="field agent-prompt-field">
-        <label htmlFor="set-main-agent-prompt">主 Agent 协作 Prompt</label>
-        <textarea id="set-main-agent-prompt" className="input" rows={7} value={draft.main_agent} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, main_agent: event.target.value }))} />
-        <span className="hint">说明何时委派、如何汇总，以及主 Agent 对最终结果的责任。</span>
-      </div>
-      <div className="field agent-prompt-field">
-        <label htmlFor="set-subagent-prompt">子代理协作 Prompt</label>
-        <textarea id="set-subagent-prompt" className="input" rows={7} value={draft.subagent} disabled={busy} onChange={(event) => setDraft((current) => ({ ...current, subagent: event.target.value }))} />
-        <span className="hint">约束子代理的任务边界、输出格式与验证责任。</span>
-      </div>
-      <div className="footbar">
-        <span className="spacer" />
-        <button className="btn" disabled={busy} onClick={() => void reset()}>恢复内置 Prompt</button>
-        <button className="btn accent" disabled={busy} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用 Prompt"}</button>
-      </div>
-    </section>
-  );
-}
-
-export function WorkflowSkillsSection() {
-  const [skills, setSkills] = useState<WorkflowSkill[]>([]);
-  const [source, setSource] = useState<WorkflowSkillSource>("builtin");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<WorkflowSkillDraft | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const load = useCallback(async (preferredId?: string) => {
-    const loaded = await workflowSkillsList();
-    setSkills(loaded);
-    const selected = loaded.find((skill) => skill.id === preferredId)
-      ?? loaded.find((skill) => skill.source === source)
-      ?? loaded[0];
-    if (selected) {
-      setSelectedId(selected.id);
-      setSource(selected.source);
-      setDraft({
-        id: selected.id,
-        name: selected.name,
-        description: selected.description,
-        instructions: selected.instructions,
-        source: selected.source,
-        enabled: selected.enabled,
-      });
-    }
-  }, [source]);
-
-  useEffect(() => {
-    void load().catch((cause) => setError(errText(cause)));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const select = (skill: WorkflowSkill) => {
-    setSelectedId(skill.id);
-    setSource(skill.source);
-    setDraft({
-      id: skill.id,
-      name: skill.name,
-      description: skill.description,
-      instructions: skill.instructions,
-      source: skill.source,
-      enabled: skill.enabled,
-    });
-    setConfirmDelete(false);
-    setNotice(null);
-  };
-
-  const switchSource = (nextSource: WorkflowSkillSource) => {
-    setSource(nextSource);
-    const next = skills.find((skill) => skill.source === nextSource);
-    if (next) {
-      select(next);
-      return;
-    }
-    setSelectedId(null);
-    setDraft(null);
-    setConfirmDelete(false);
-    setNotice(null);
-  };
-
-  const startCustom = () => {
-    setSource("custom");
-    setSelectedId(null);
-    setDraft({
-      name: "",
-      description: "",
-      instructions: "",
-      source: "custom",
-      enabled: true,
-    });
-    setConfirmDelete(false);
-  };
-
-  const save = async () => {
-    if (!draft || busy) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const saved = await workflowSkillSave(draft);
-      await load(saved.id);
-      setNotice(saved.source === "builtin" ? "已保存内置 Skill 的用户级覆盖。" : "自定义 Skill 已保存并可立即通过 / 调用。" );
-    } catch (cause) {
-      setError(errText(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const reset = async () => {
-    if (!draft?.id || draft.source !== "builtin" || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const restored = await workflowSkillReset(draft.id);
-      await load(restored.id);
-      setNotice("已恢复随应用发布的默认 Skill。" );
-    } catch (cause) {
-      setError(errText(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    if (!draft?.id || draft.source !== "custom" || busy) return;
-    if (!confirmDelete) {
-      setConfirmDelete(true);
-      window.setTimeout(() => setConfirmDelete(false), 5000);
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      await workflowSkillDelete(draft.id);
-      setDraft(null);
-      setSelectedId(null);
-      await load();
-      setNotice("自定义 Skill 已删除。" );
-    } catch (cause) {
-      setError(errText(cause));
-    } finally {
-      setBusy(false);
-      setConfirmDelete(false);
-    }
-  };
-
-  const visible = skills.filter((skill) => skill.source === source);
-  return (
-    <section className="settings-block workflow-skills-settings">
-      <div className="workflow-skills-title">
-        <div><h3>工作流 Skills</h3><p className="desc">保存在 R-Code AppData，与项目和 Git 隔离；内置与自定义分开管理。</p></div>
-        <button className="btn accent" type="button" onClick={startCustom}>新建自定义 Skill</button>
-      </div>
-      {error && <div className="errbar" role="alert">{error}</div>}
-      {notice && <div className="notebar" role="status">{notice}</div>}
-      <div className="workflow-skills-tabs" role="tablist" aria-label="Skill 来源">
-        <button role="tab" aria-selected={source === "builtin"} className={source === "builtin" ? "on" : ""} onClick={() => switchSource("builtin")}>内置 <span>{skills.filter((skill) => skill.source === "builtin").length}</span></button>
-        <button role="tab" aria-selected={source === "custom"} className={source === "custom" ? "on" : ""} onClick={() => switchSource("custom")}>自定义 <span>{skills.filter((skill) => skill.source === "custom").length}</span></button>
-      </div>
-      <div className="workflow-skills-manager">
-        <nav className="workflow-skills-list" aria-label={source === "builtin" ? "内置 Skills" : "自定义 Skills"}>
-          {visible.length === 0 && <p>还没有自定义 Skill。可以在这里创建，也可以调用 /skill-creator 让模型设计并注册。</p>}
-          {visible.map((skill) => <button key={skill.id} className={selectedId === skill.id ? "selected" : ""} onClick={() => select(skill)}><strong>/{skill.name}</strong><span>{skill.enabled ? "已启用" : "已停用"}{skill.overridden ? " · 已覆盖" : ""}</span><small>{skill.description}</small></button>)}
-        </nav>
-        <div className="workflow-skill-editor">
-          {!draft ? <div className="empty">选择一个 Skill，或新建自定义 Skill。</div> : <>
-            <div className="field"><label htmlFor="workflow-skill-name">调用名</label><input id="workflow-skill-name" className="input" value={draft.name} disabled={busy || draft.source === "builtin"} placeholder="例如 release-check" onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><span className="hint">使用小写字母、数字与单连字符；调用方式为 /{draft.name || "skill-name"}。</span></div>
-            <div className="field"><label htmlFor="workflow-skill-description">简介</label><textarea id="workflow-skill-description" className="input" rows={3} value={draft.description} disabled={busy} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></div>
-            <div className="field agent-prompt-field"><label htmlFor="workflow-skill-instructions">Skill 指令</label><textarea id="workflow-skill-instructions" className="input" rows={10} value={draft.instructions} disabled={busy} onChange={(event) => setDraft({ ...draft, instructions: event.target.value })} /></div>
-            <label className="workflow-skill-enabled"><input type="checkbox" checked={draft.enabled} disabled={busy} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />在 / 补全中启用</label>
-            <div className="footbar"><span className="spacer" />{draft.source === "builtin" ? <button className="btn" disabled={busy || !draft.id} onClick={() => void reset()}>恢复默认</button> : draft.id ? <button className={"btn danger" + (confirmDelete ? " confirm" : "")} disabled={busy} onClick={() => void remove()}>{confirmDelete ? "再次点击确认删除" : "删除"}</button> : null}<button className="btn accent" disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.instructions.trim()} onClick={() => void save()}>{busy ? "保存中…" : "保存并应用"}</button></div>
-          </>}
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => Promise<void> }) {
   const [err, setErr] = useState<string | null>(null);
@@ -1698,50 +1522,44 @@ function LogLevelSection({ config, reload }: { config: AppConfig; reload: () => 
 function AppearanceSection() {
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
-  const zoomLevel = useAppStore((s) => s.zoomLevel);
-  const setZoom = useAppStore((s) => s.setZoom);
-  const zoomReset = useAppStore((s) => s.zoomReset);
 
   const modes: { key: "light" | "dark" | "system"; label: string; hint: string }[] = [
-    { key: "light", label: "亮色", hint: "干净的浅色界面" },
-    { key: "dark", label: "暗色", hint: "适合低光环境" },
-    { key: "system", label: "跟随系统", hint: "随操作系统明暗切换" },
+    { key: "light", label: "亮色", hint: "清晰明快" },
+    { key: "dark", label: "暗色", hint: "沉浸专注" },
+    { key: "system", label: "跟随系统", hint: "自动切换" },
   ];
 
   return (
-    <section className="settings-block">
-      <h3>外观</h3>
-      <div className="field">
-        <label id="set-theme-label">主题</label>
-        <div className="chips" role="radiogroup" aria-labelledby="set-theme-label">
-          {modes.map((m) => (
-            <button
-              key={m.key}
-              role="radio"
-              aria-checked={themeMode === m.key}
-              className={`chipbtn${themeMode === m.key ? " on" : ""}`}
-              onClick={() => setThemeMode(m.key)}
-              title={m.hint}
-            >
-              {m.label}
-            </button>
-          ))}
+    <section className="preference-section preference-appearance" aria-labelledby="appearance-heading">
+      <div className="preference-section-heading">
+        <div>
+          <h3 id="appearance-heading">界面主题</h3>
+          <p>让工作区保持舒适的明暗关系，其他视觉细节沿用系统设计。</p>
         </div>
       </div>
-      <div className="field">
-        <label htmlFor="set-zoom">界面缩放</label>
-        <input id="set-zoom"
-          type="range"
-          min={80}
-          max={200}
-          step={10}
-          value={zoomLevel}
-          onChange={(e) => setZoom(Number(e.target.value))}
-        />
-        <span className="val">{zoomLevel}%</span>
-        <button className="btn ghost" onClick={zoomReset}>
-          复位
-        </button>
+      <div className="theme-options" role="radiogroup" aria-label="界面主题">
+        {modes.map((mode) => {
+          const selected = themeMode === mode.key;
+          return (
+            <button
+              key={mode.key}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              className={`theme-option is-${mode.key}${selected ? " is-selected" : ""}`}
+              onClick={() => setThemeMode(mode.key)}
+            >
+              <span className="theme-option-preview" aria-hidden="true"><i /><i /></span>
+              <span className="theme-option-copy">
+                <strong>{mode.label}</strong>
+                <small>{mode.hint}</small>
+              </span>
+              <span className="theme-option-check" aria-hidden="true">
+                {selected && <IconCheck width={15} height={15} />}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </section>
   );
@@ -1757,29 +1575,61 @@ function CompanionSection() {
   const setSoundEnabled = useCompanionStore((state) => state.setSoundEnabled);
   const setMotion = useCompanionStore((state) => state.setMotion);
   const resetPosition = useCompanionStore((state) => state.resetPosition);
+  const [windowBusy, setWindowBusy] = useState(false);
+
+  const setCompanionVisibility = async (next: boolean) => {
+    if (!next) {
+      setEnabled(false);
+      return;
+    }
+    setWindowBusy(true);
+    try {
+      if (!await companionEnsure()) throw new Error("companion window was not created");
+      setMinimized(false);
+      setEnabled(true);
+    } catch (cause) {
+      console.warn("Companion window could not be enabled.", cause);
+      setEnabled(false);
+      pushToast({
+        kind: "error",
+        title: "无法开启小助手",
+        body: "小助手窗口暂时不可用，请稍后重试。若问题持续，可前往“诊断”查看后台记录。",
+        timeout: 4_000,
+      });
+    } finally {
+      setWindowBusy(false);
+    }
+  };
 
   return (
-    <section className="settings-block">
-      <h3>R-Code 初音小助手</h3>
-      <p className="desc">独立悬浮在其他应用之上，反馈 session 进度。拖动助手移动；左键查看最近任务并跳转到对应会话，右键关闭。空闲时将鼠标停在助手上会触发挥手或轻快跃动；短暂意图延迟可避免经过窗口边缘时误触。所有状态均来自本机任务数据，不会额外调用模型。</p>
-      <div className="field">
-        <label htmlFor="set-companion-enabled">显示小助手</label>
-        <input
-          id="set-companion-enabled"
-          className="switch"
-          type="checkbox"
-          role="switch"
-          checked={enabled}
-          onChange={(event) => {
-            setEnabled(event.target.checked);
-            if (event.target.checked) setMinimized(false);
-          }}
-        />
-        <span className="hint">显示运行、待处理、完成、失败和待审核状态；关闭后可在这里重新开启。</span>
-      </div>
-      <div className="field">
-        <label id="set-companion-shape-label">默认形态</label>
-        <div className="chips" role="radiogroup" aria-labelledby="set-companion-shape-label">
+    <section className="preference-section preference-companion" aria-labelledby="companion-heading">
+      <header className="companion-preference-head">
+        <div>
+          <h3 id="companion-heading">R-Code 初音小助手</h3>
+          <p>悬浮显示任务运行、等待与完成状态。数据只来自本机，不会额外调用模型。</p>
+        </div>
+        <label className="companion-master-control" htmlFor="set-companion-enabled">
+          <span>{windowBusy ? "开启中…" : enabled ? "已开启" : "已关闭"}</span>
+          <input
+            id="set-companion-enabled"
+            className="switch preference-master-switch"
+            type="checkbox"
+            role="switch"
+            aria-label="显示小助手"
+            checked={enabled}
+            disabled={windowBusy}
+            onChange={(event) => void setCompanionVisibility(event.target.checked)}
+          />
+        </label>
+      </header>
+
+      <div className={`preference-rows${enabled ? "" : " is-disabled"}`}>
+        <div className="preference-row">
+          <div className="preference-row-copy">
+            <strong id="set-companion-shape-label">默认形态</strong>
+            <span>完整形态更易看清反馈，迷你形态减少桌面遮挡。</span>
+          </div>
+          <div className="preference-segmented" role="radiogroup" aria-labelledby="set-companion-shape-label">
           <button
             type="button"
             role="radio"
@@ -1801,68 +1651,62 @@ function CompanionSection() {
             迷你形态
           </button>
         </div>
-        <span className="hint">完整形态更易看清动作；迷你形态减少对其他应用的遮挡。</span>
-      </div>
-      <div className="field">
-        <label>悬浮位置</label>
-        <button className="btn ghost" type="button" disabled={!enabled} onClick={resetPosition}>
-          恢复右下角
-        </button>
-        <span className="hint">按住角色本身即可跨应用自由移动；恢复后回到主显示器右下角。</span>
-      </div>
-      <div className="field">
-        <label htmlFor="set-companion-motion">动效</label>
-        <select
-          id="set-companion-motion"
-          className="input"
-          value={motion}
-          disabled={!enabled}
-          onChange={(event) => setMotion(event.target.value as CompanionMotion)}
-        >
-          <option value="system">跟随系统</option>
-          <option value="full">完整动效</option>
-          <option value="reduced">静态形态</option>
-        </select>
-        <span className="hint">移入反馈只使用低频计时和合成动画，不持续追踪鼠标；“跟随系统”会遵循减少动态效果设置。</span>
-      </div>
-      <div className="field">
-        <label htmlFor="set-companion-sound">状态提示音</label>
-        <input
-          id="set-companion-sound"
-          className="switch"
-          type="checkbox"
-          role="switch"
-          checked={soundEnabled}
-          disabled={!enabled}
-          onChange={(event) => setSoundEnabled(event.target.checked)}
-        />
-        <span className="hint">默认关闭；仅在授权、完成、失败或待审核等重要 session 变化时播放一次短提示。</span>
-      </div>
-    </section>
-  );
-}
+        </div>
 
-// ---------- 无障碍 ----------
+        <div className="preference-row">
+          <div className="preference-row-copy">
+            <strong>悬浮位置</strong>
+            <span>拖动角色可自由移动，一键恢复到主显示器右下角。</span>
+          </div>
+          <button className="preference-inline-action" type="button" disabled={!enabled} onClick={resetPosition}>
+            <IconRefresh width={15} height={15} />
+            恢复右下角
+          </button>
+        </div>
 
-function AccessibilitySection() {
-  const accessibleDiffMode = useAppStore((s) => s.accessibleDiffMode);
-  const toggleDiffMode = useAppStore((s) => s.toggleDiffMode);
+        <div className="preference-row">
+          <div className="preference-row-copy">
+            <label htmlFor="set-companion-motion">动效</label>
+            <span>控制小助手的状态动作与移入反馈。</span>
+          </div>
+          <select
+            id="set-companion-motion"
+            className="input preference-select"
+            value={motion}
+            disabled={!enabled}
+            onChange={(event) => setMotion(event.target.value as CompanionMotion)}
+          >
+            <option value="system">跟随系统</option>
+            <option value="full">完整动效</option>
+            <option value="reduced">静态形态</option>
+          </select>
+        </div>
 
-  return (
-    <section className="settings-block">
-      <h3>无障碍</h3>
-      <div className="field">
-        <label htmlFor="set-diff-mode">文本差异视图</label>
-        <input id="set-diff-mode"
-          className="switch"
-          type="checkbox"
-          role="switch"
-          aria-label="文本差异视图"
-          checked={accessibleDiffMode}
-          onChange={toggleDiffMode}
-        />
-        <span className="hint">以文本列表呈现文件变更；使用 F7 和 Shift + F7 在变更间导航。</span>
+        <div className="preference-row">
+          <div className="preference-row-copy">
+            <label htmlFor="set-companion-sound">状态提示音</label>
+            <span>仅在授权、完成、失败或待审核等重要变化时提示一次。</span>
+          </div>
+          <label className="preference-switch-control" htmlFor="set-companion-sound">
+            <span>{soundEnabled ? "已开启" : "已关闭"}</span>
+            <input
+              id="set-companion-sound"
+              className="switch"
+              type="checkbox"
+              role="switch"
+              checked={soundEnabled}
+              disabled={!enabled}
+              onChange={(event) => setSoundEnabled(event.target.checked)}
+            />
+          </label>
+        </div>
       </div>
+
+      <footer className="companion-usage-note" aria-label="小助手操作说明">
+        <span>拖动移动</span>
+        <span>左键查看任务</span>
+        <span>右键关闭</span>
+      </footer>
     </section>
   );
 }
@@ -2396,15 +2240,32 @@ function RtkIntegrationControl() {
       const next = await rtkSetEnabled(enabled);
       setStatus(next);
       setOptimisticEnabled(next.enabled);
-    } catch {
+    } catch (error) {
       setStatus(previous);
       setOptimisticEnabled(previous?.enabled ?? false);
-      pushToast({
-        kind: "warn",
-        title: enabled ? "RTK 未能启用" : "RTK 未能关闭",
-        body: "请稍后重试；详细原因已写入诊断日志。",
-        timeout: 5200,
-      });
+      if (
+        enabled &&
+        error instanceof IpcCommandError &&
+        error.code === RTK_BLOCKED_BY_SECURITY_SOFTWARE
+      ) {
+        pushToast({
+          kind: "warn",
+          title: "RTK 被安全软件拦截",
+          body: `Windows 安全中心可能隔离了 RTK 二进制。请把「${status?.bin_dir ?? "R-Code 的 bin 目录"}」加入排除项，然后重新开启。`,
+          action: {
+            label: "打开安全中心",
+            run: () => void rtkOpenSecurityExclusions().catch(() => {}),
+          },
+          timeout: 0,
+        });
+      } else {
+        pushToast({
+          kind: "warn",
+          title: enabled ? "RTK 未能启用" : "RTK 未能关闭",
+          body: "请稍后重试；详细原因已写入诊断日志。",
+          timeout: 5200,
+        });
+      }
     } finally {
       setTransition(null);
     }

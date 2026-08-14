@@ -197,6 +197,7 @@ impl<'a> ChangeService<'a> {
         let before_hash = store_blob(&blob_store, before_content)?;
         let after_hash = store_blob(&blob_store, after_content)?;
         let mut change = FileChange::new(task_id, path, change_type);
+        change.run_id = Some(run_id.to_string());
         change.before_hash = before_hash.clone();
         change.after_hash = after_hash.clone();
 
@@ -264,7 +265,15 @@ impl<'a> ChangeService<'a> {
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![run_id, path]).map_err(db_err)?;
-        rows.next().map_err(db_err)?.map(row_to_change).transpose()
+        let mut change = rows
+            .next()
+            .map_err(db_err)?
+            .map(row_to_change)
+            .transpose()?;
+        if let Some(change) = change.as_mut() {
+            change.run_id = Some(run_id.to_string());
+        }
+        Ok(change)
     }
 
     fn capture_baseline_bytes(
@@ -443,18 +452,59 @@ impl<'a> ChangeService<'a> {
     }
 
     /// 获取任务的所有变更（按时间升序）。
+    ///
+    /// `run_id` 是从不可变的 snapshot 关联或 tool call 关联中投影出来的，不在
+    /// `file_changes` 重复存储。旧版/工作区对账行保持 `None`。
     pub async fn list_changes(&self, task_id: &str) -> Result<Vec<FileChange>, ProductError> {
         let conn = self.db.conn()?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, task_id, tool_call_id, path, change_type, before_hash, after_hash, old_path, created_at \
-                 FROM file_changes WHERE task_id = ?1 ORDER BY created_at ASC, id ASC",
+                "SELECT fc.id, fc.task_id, fc.tool_call_id, fc.path, fc.change_type, \
+                        fc.before_hash, fc.after_hash, fc.old_path, fc.created_at, \
+                        COALESCE( \
+                            (SELECT rsc.run_id FROM run_snapshot_changes rsc \
+                             WHERE rsc.file_change_id = fc.id), \
+                            (SELECT tc.run_id FROM tool_calls tc WHERE tc.id = fc.tool_call_id) \
+                        ) \
+                 FROM file_changes fc WHERE fc.task_id = ?1 \
+                 ORDER BY fc.created_at ASC, fc.id ASC",
             )
             .map_err(db_err)?;
         let mut rows = stmt.query(params![task_id]).map_err(db_err)?;
         let mut changes = Vec::new();
         while let Some(row) = rows.next().map_err(db_err)? {
-            changes.push(row_to_change(row)?);
+            changes.push(row_to_change_with_run(row)?);
+        }
+        Ok(changes)
+    }
+
+    /// 获取某一次运行产生的变更。snapshot 与 tool call 是权威归属，绝不按时间猜测。
+    pub async fn list_changes_for_run(
+        &self,
+        task_id: &str,
+        run_id: &str,
+    ) -> Result<Vec<FileChange>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT fc.id, fc.task_id, fc.tool_call_id, fc.path, fc.change_type, \
+                        fc.before_hash, fc.after_hash, fc.old_path, fc.created_at \
+                 FROM file_changes fc \
+                 WHERE fc.task_id = ?1 AND ( \
+                    EXISTS(SELECT 1 FROM run_snapshot_changes rsc \
+                           WHERE rsc.file_change_id = fc.id AND rsc.run_id = ?2) \
+                    OR EXISTS(SELECT 1 FROM tool_calls tc \
+                              WHERE tc.id = fc.tool_call_id AND tc.run_id = ?2) \
+                 ) \
+                 ORDER BY fc.created_at ASC, fc.id ASC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![task_id, run_id]).map_err(db_err)?;
+        let mut changes = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let mut change = row_to_change(row)?;
+            change.run_id = Some(run_id.to_string());
+            changes.push(change);
         }
         Ok(changes)
     }
@@ -1025,6 +1075,7 @@ fn row_to_change(row: &rusqlite::Row<'_>) -> Result<FileChange, ProductError> {
     Ok(FileChange {
         id: row.get(0).map_err(db_err)?,
         task_id: row.get(1).map_err(db_err)?,
+        run_id: None,
         tool_call_id: row.get(2).map_err(db_err)?,
         path: row.get(3).map_err(db_err)?,
         change_type,
@@ -1033,6 +1084,13 @@ fn row_to_change(row: &rusqlite::Row<'_>) -> Result<FileChange, ProductError> {
         old_path: row.get(7).map_err(db_err)?,
         created_at,
     })
+}
+
+/// 将带第 10 列 run_id 投影的数据库行映射为 FileChange。
+fn row_to_change_with_run(row: &rusqlite::Row<'_>) -> Result<FileChange, ProductError> {
+    let mut change = row_to_change(row)?;
+    change.run_id = row.get(9).map_err(db_err)?;
+    Ok(change)
 }
 
 /// 将数据库行映射为 FileBaseline。
@@ -1156,6 +1214,10 @@ mod tests {
 
         /// 创建 tool_call 记录（含关联的 agent_run）以满足外键约束。
         fn create_tool_call(&self, tool_call_id: &str) -> String {
+            self.create_tool_call_with_run(tool_call_id).0
+        }
+
+        fn create_tool_call_with_run(&self, tool_call_id: &str) -> (String, String) {
             let conn = self.db.conn().unwrap();
             let run_id = uuid::Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
@@ -1171,7 +1233,7 @@ mod tests {
                 params![tool_call_id, run_id, self.task.id, now],
             )
             .unwrap();
-            tool_call_id.to_string()
+            (tool_call_id.to_string(), run_id)
         }
     }
 
@@ -1424,6 +1486,63 @@ mod tests {
         assert_eq!(changes.len(), 2);
         assert_eq!(changes[0].id, c1.id);
         assert_eq!(changes[1].id, c2.id);
+    }
+
+    #[tokio::test]
+    async fn run_scoped_changes_use_authoritative_tool_ownership() {
+        let fx = Fixture::new();
+        let svc = fx.service();
+        let (_, first_run) = fx.create_tool_call_with_run("tc-run-one");
+        let (_, second_run) = fx.create_tool_call_with_run("tc-run-two");
+
+        svc.record_change(
+            fx.task_id(),
+            Path::new("first.txt"),
+            FileChangeType::Modify,
+            Some("tc-run-one"),
+            Some(b"before one"),
+            Some(b"after one"),
+            None,
+        )
+        .await
+        .unwrap();
+        svc.record_change(
+            fx.task_id(),
+            Path::new("second.txt"),
+            FileChangeType::Modify,
+            Some("tc-run-two"),
+            Some(b"before two"),
+            Some(b"after two"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let all = svc.list_changes(fx.task_id()).await.unwrap();
+        assert_eq!(
+            all.iter()
+                .find(|change| change.path == "first.txt")
+                .unwrap()
+                .run_id
+                .as_deref(),
+            Some(first_run.as_str()),
+        );
+        assert_eq!(
+            all.iter()
+                .find(|change| change.path == "second.txt")
+                .unwrap()
+                .run_id
+                .as_deref(),
+            Some(second_run.as_str()),
+        );
+
+        let first = svc
+            .list_changes_for_run(fx.task_id(), &first_run)
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].path, "first.txt");
+        assert_eq!(first[0].run_id.as_deref(), Some(first_run.as_str()));
     }
 
     // --------------------------------------------------------------------------

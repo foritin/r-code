@@ -18,7 +18,7 @@ import {
   workflowSkillsList,
 } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
-import { errText } from "../../lib/format";
+import { displayPath, errText } from "../../lib/format";
 import { RUNTIME_SETTINGS_CHANGED_EVENT } from "../../lib/onboarding";
 import { usePlatformCapabilities } from "../../lib/platform-capabilities";
 import type {
@@ -92,6 +92,7 @@ export function HomeScene() {
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const openRoom = useAppStore((s) => s.openRoom);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openKnowledge = useAppStore((s) => s.openKnowledge);
   const openMcpSettings = useAppStore((s) => s.openMcpSettings);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
@@ -207,7 +208,7 @@ export function HomeScene() {
   // A model-created Skill is written to AppData through `save_skill`. Keep the home
   // composer catalog fresh so it becomes callable immediately, without restarting R-Code.
   usePoll(async () => {
-    setWorkflowSkills(await workflowSkillsList());
+    setWorkflowSkills(await workflowSkillsList(currentWorkspacePath));
   }, 2000);
 
   const loadRuntimeDefaults = useCallback(() => {
@@ -453,7 +454,7 @@ export function HomeScene() {
         return;
       case "memory":
         setGoal("");
-        setScene("knowledge");
+        openKnowledge("memory");
         return;
       case "theme": {
         const requested = parsed.args.toLowerCase();
@@ -477,7 +478,7 @@ export function HomeScene() {
         return;
       case "plugins":
         setGoal("");
-        setSettingsPane("codex");
+        setSettingsPane("subagents");
         return;
       case "skills":
         setGoal("");
@@ -686,7 +687,7 @@ export function HomeScene() {
             }}
           />
           <AttachmentTray
-            attachments={attachments.attachments}
+            attachments={launching ? [] : attachments.attachments}
             capabilityFor={capabilityForAttachment}
             platformCapabilities={platformCapabilities}
             onRemove={attachments.remove}
@@ -718,7 +719,7 @@ export function HomeScene() {
                 trigger={
                   <button
                     className={`scope-pill${currentWorkspace ? " attached" : ""}`}
-                    title={currentWorkspace?.canonical_path ?? "未附加工作区（纯聊天）"}
+                    title={currentWorkspace ? displayPath(currentWorkspace.canonical_path) : "未附加工作区（纯聊天）"}
                   >
                     <IconProjects width={14} height={14} />
                     <span>{currentWorkspace?.display_name ?? "未附加文件夹"}</span>
@@ -794,7 +795,7 @@ export function HomeScene() {
                     </MenuItem>
                     <MenuSeparator />
                     <MenuItem close={close} onSelect={() => setSettingsPane("agents")}>管理 Agent 编排</MenuItem>
-                    {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>连接 Codex CLI</MenuItem>}
+                    {!codexReady && <MenuItem close={close} onSelect={() => setSettingsPane("subagents")}>连接 Codex CLI</MenuItem>}
                   </>
                 )}
               </Menu>
@@ -841,7 +842,7 @@ export function HomeScene() {
 
             <div className="composer-actions">
               {!engineReady && (
-                <button className="provider-link" onClick={() => setSettingsPane(agentEngine === "codex" ? "codex" : "providers")}>
+                <button className="provider-link" onClick={() => setSettingsPane(agentEngine === "codex" ? "subagents" : "providers")}>
                   {agentEngine === "codex" ? "连接 Codex CLI" : "连接模型服务"}
                 </button>
               )}

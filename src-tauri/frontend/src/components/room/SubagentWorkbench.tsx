@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { subagentSessionMessagePage } from "../../lib/ipc";
 import { usePoll } from "../../lib/poll";
 import { useSharedNow } from "../../lib/shared-clock";
@@ -12,6 +12,7 @@ import {
   IconActivity,
   IconCheck,
   IconChevronDown,
+  IconChevronLeft,
   IconClose,
   IconFile,
   IconHistory,
@@ -44,11 +45,14 @@ interface Props {
   taskId: string;
   workspacePath: string | null;
   subagents: readonly ActivitySubagent[];
+  /** 主运行 ID 用来区分正常顶层委派与父节点已丢失；旧数据可传空数组。 */
+  rootRunIds: readonly string[];
   selectedSubagentId: string | null;
   openSubagentIds: readonly string[];
   toolTabsBefore: ReactNode;
   toolTabsAfter: ReactNode;
   onSelect: (subagentId: string) => void;
+  onBack: () => void;
   onCloseTab: (subagentId: string) => void;
   onOpenLauncher: () => void;
   onHide: () => void;
@@ -110,12 +114,148 @@ type SubagentSectionKind = "attention" | "active" | "completed" | "incomplete";
 
 type SubagentSectionExpansion = Record<SubagentSectionKind, boolean>;
 
+export type SubagentTreeAnomaly = "orphan" | "cycle" | null;
+
+export interface SubagentTreeNode {
+  child: ActivitySubagent;
+  children: SubagentTreeNode[];
+  /** 顶层子代理为 1；仅由已验证无环的 parentRunId 关系推导。 */
+  depth: number;
+  descendantCount: number;
+  activeDescendantCount: number;
+  anomaly: SubagentTreeAnomaly;
+  missingParentId: string | null;
+}
+
 const DEFAULT_SUBAGENT_SECTION_EXPANSION: SubagentSectionExpansion = {
   attention: true,
   active: true,
   completed: false,
   incomplete: true,
 };
+
+/**
+ * 将持久化运行关系变成可安全显示的森林。
+ * 未知父节点提升为 root；self-parent / 多节点环的每个环成员都断边。
+ */
+export function buildSubagentForest(
+  subagents: readonly ActivitySubagent[],
+  rootRunIds: readonly string[] = [],
+): SubagentTreeNode[] {
+  const ordered: ActivitySubagent[] = [];
+  const byId = new Map<string, ActivitySubagent>();
+  for (const child of subagents) {
+    if (!child.id || byId.has(child.id)) continue;
+    byId.set(child.id, child);
+    ordered.push(child);
+  }
+
+  const knownRoots = new Set(rootRunIds.filter(Boolean));
+  const parentById = new Map<string, string | null>();
+  const anomalyById = new Map<string, SubagentTreeAnomaly>();
+  const missingParentById = new Map<string, string | null>();
+  for (const child of ordered) {
+    const parentId = child.parentRunId?.trim() || null;
+    anomalyById.set(child.id, null);
+    missingParentById.set(child.id, null);
+    if (!parentId || knownRoots.has(parentId)) {
+      parentById.set(child.id, null);
+    } else if (!byId.has(parentId)) {
+      parentById.set(child.id, null);
+      anomalyById.set(child.id, "orphan");
+      missingParentById.set(child.id, parentId);
+    } else {
+      parentById.set(child.id, parentId);
+    }
+  }
+
+  // 每个节点最多一个 parent；局部 path map 可确定性找出全部环成员。
+  const completed = new Set<string>();
+  for (const child of ordered) {
+    if (completed.has(child.id)) continue;
+    const path: string[] = [];
+    const position = new Map<string, number>();
+    let current: string | null = child.id;
+    while (current && !completed.has(current)) {
+      const cycleStart = position.get(current);
+      if (cycleStart != null) {
+        for (const cycleId of path.slice(cycleStart)) {
+          parentById.set(cycleId, null);
+          anomalyById.set(cycleId, "cycle");
+        }
+        break;
+      }
+      position.set(current, path.length);
+      path.push(current);
+      current = parentById.get(current) ?? null;
+    }
+    for (const id of path) completed.add(id);
+  }
+
+  const nodeById = new Map<string, SubagentTreeNode>();
+  for (const child of ordered) {
+    nodeById.set(child.id, {
+      child,
+      children: [],
+      depth: 1,
+      descendantCount: 0,
+      activeDescendantCount: 0,
+      anomaly: anomalyById.get(child.id) ?? null,
+      missingParentId: missingParentById.get(child.id) ?? null,
+    });
+  }
+
+  const roots: SubagentTreeNode[] = [];
+  for (const child of ordered) {
+    const node = nodeById.get(child.id);
+    if (!node) continue;
+    const parent = parentById.get(child.id);
+    const parentNode = parent ? nodeById.get(parent) : undefined;
+    if (parentNode) parentNode.children.push(node);
+    else roots.push(node);
+  }
+
+  // 迭代计算深度与后代数，避免异常长链触发 JS 递归栈溢出。
+  const traversal: SubagentTreeNode[] = [];
+  const stack = roots.slice().reverse().map((node) => ({ node, depth: 1 }));
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (!next) break;
+    next.node.depth = next.depth;
+    traversal.push(next.node);
+    for (let index = next.node.children.length - 1; index >= 0; index -= 1) {
+      stack.push({ node: next.node.children[index], depth: next.depth + 1 });
+    }
+  }
+  for (let index = traversal.length - 1; index >= 0; index -= 1) {
+    const node = traversal[index];
+    node.descendantCount = node.children.reduce(
+      (count, descendant) => count + 1 + descendant.descendantCount,
+      0,
+    );
+    node.activeDescendantCount = node.children.reduce(
+      (count, descendant) => count
+        + (isActive(descendant.child.status) ? 1 : 0)
+        + descendant.activeDescendantCount,
+      0,
+    );
+  }
+  return roots;
+}
+
+export function flattenSubagentForest(roots: readonly SubagentTreeNode[]): SubagentTreeNode[] {
+  const flattened: SubagentTreeNode[] = [];
+  const stack = [...roots].reverse();
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) break;
+    flattened.push(node);
+    for (let index = node.children.length - 1; index >= 0; index -= 1) {
+      stack.push(node.children[index]);
+    }
+  }
+  return flattened;
+}
 
 /**
  * 子智能体总览和每个子智能体会话都是独立标签页。
@@ -125,11 +265,13 @@ export function SubagentWorkbench({
   taskId,
   workspacePath,
   subagents,
+  rootRunIds,
   selectedSubagentId,
   openSubagentIds,
   toolTabsBefore,
   toolTabsAfter,
   onSelect,
+  onBack,
   onCloseTab,
   onOpenLauncher,
   onHide,
@@ -143,6 +285,14 @@ export function SubagentWorkbench({
   const childIndexById = useMemo(
     () => new Map(subagents.map((child, index) => [child.id, index])),
     [subagents],
+  );
+  const forest = useMemo(
+    () => buildSubagentForest(subagents, rootRunIds),
+    [rootRunIds, subagents],
+  );
+  const treeNodeById = useMemo(
+    () => new Map(flattenSubagentForest(forest).map((node) => [node.child.id, node])),
+    [forest],
   );
   const selectedIndex = selectedSubagentId == null
     ? -1
@@ -179,12 +329,25 @@ export function SubagentWorkbench({
         focused={focused}
       />
       {selected
-        ? <SubagentInspector key={`${taskId}:${selected.id}`} taskId={taskId} workspacePath={workspacePath} child={selected} index={selectedIndex} onAbort={onAbort} />
+        ? (
+          <SubagentInspector
+            key={`${taskId}:${selected.id}`}
+            taskId={taskId}
+            workspacePath={workspacePath}
+            child={selected}
+            treeNode={treeNodeById.get(selected.id) ?? null}
+            index={selectedIndex}
+            onBack={onBack}
+            onAbort={onAbort}
+          />
+        )
         : (
           <SubagentList
-            children={subagents}
+            forest={forest}
+            allChildren={subagents}
             expandedSections={expandedSections}
             onSelect={onSelect}
+            onAbort={onAbort}
             onToggleSection={toggleSection}
           />
         )}
@@ -245,33 +408,54 @@ function SubagentTabsHeader({
 }
 
 function SubagentList({
-  children,
+  forest,
+  allChildren,
   expandedSections,
   onSelect,
+  onAbort,
   onToggleSection,
 }: {
-  children: readonly ActivitySubagent[];
+  forest: readonly SubagentTreeNode[];
+  allChildren: readonly ActivitySubagent[];
   expandedSections: Readonly<SubagentSectionExpansion>;
   onSelect: (subagentId: string) => void;
+  onAbort: (subagentId: string) => Promise<void>;
   onToggleSection: (kind: SubagentSectionKind) => void;
 }) {
-  const { attention, active, completed, incomplete, indexById } = useMemo(() => ({
-    attention: children.filter((child) => child.status === "waiting_permission"),
-    active: children
-      .filter((child) => child.status === "queued" || child.status === "running")
-      .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id)),
-    completed: children
-      .filter((child) => child.status === "completed")
-      .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt)),
-    incomplete: children
-      .filter((child) => child.status === "failed" || child.status === "cancelled")
-      .sort((a, b) => (b.endedAt ?? b.lastEventAt) - (a.endedAt ?? a.lastEventAt)),
-    indexById: new Map(children.map((child, index) => [child.id, index])),
-  }), [children]);
+  const [stoppingTreeId, setStoppingTreeId] = useState<string | null>(null);
+  const [abortError, setAbortError] = useState<string | null>(null);
+  const { attention, active, completed, incomplete, indexById } = useMemo(() => {
+    const sections: Record<SubagentSectionKind, SubagentTreeNode[]> = {
+      attention: [],
+      active: [],
+      completed: [],
+      incomplete: [],
+    };
+    for (const root of forest) sections[treeSectionKind(root)].push(root);
+    sections.active.sort((a, b) => b.child.startedAt - a.child.startedAt || a.child.id.localeCompare(b.child.id));
+    sections.completed.sort((a, b) => treeLatestAt(b) - treeLatestAt(a));
+    sections.incomplete.sort((a, b) => treeLatestAt(b) - treeLatestAt(a));
+    return {
+      ...sections,
+      indexById: new Map(allChildren.map((child, index) => [child.id, index])),
+    };
+  }, [allChildren, forest]);
   const live = active.length + attention.length > 0;
-  const now = useSharedNow(children.length === 0 ? null : live ? 1000 : 60_000);
+  const now = useSharedNow(allChildren.length === 0 ? null : live ? 1000 : 60_000);
+  const abortTree = useCallback(async (node: SubagentTreeNode) => {
+    if (stoppingTreeId) return;
+    setStoppingTreeId(node.child.id);
+    setAbortError(null);
+    try {
+      await onAbort(node.child.id);
+    } catch (cause) {
+      setAbortError(String(cause));
+    } finally {
+      setStoppingTreeId(null);
+    }
+  }, [onAbort, stoppingTreeId]);
 
-  if (children.length === 0) {
+  if (allChildren.length === 0) {
     return (
       <div className="subagent-list-empty">
         <strong>还没有子智能体</strong>
@@ -282,6 +466,7 @@ function SubagentList({
 
   return (
     <div className="subagent-workbench-list" aria-label="子智能体列表">
+      {abortError && <div className="subagent-tree-error" role="alert">停止子代理分支失败：{abortError}</div>}
       {attention.length > 0 && (
         <SubagentListSection
           key="attention"
@@ -292,6 +477,8 @@ function SubagentList({
           now={now}
           expanded={expandedSections.attention}
           onSelect={onSelect}
+          onAbort={abortTree}
+          stoppingTreeId={stoppingTreeId}
           onToggle={() => onToggleSection("attention")}
         />
       )}
@@ -305,6 +492,8 @@ function SubagentList({
           now={now}
           expanded={expandedSections.active}
           onSelect={onSelect}
+          onAbort={abortTree}
+          stoppingTreeId={stoppingTreeId}
           onToggle={() => onToggleSection("active")}
         />
       )}
@@ -318,6 +507,8 @@ function SubagentList({
           now={now}
           expanded={expandedSections.completed}
           onSelect={onSelect}
+          onAbort={abortTree}
+          stoppingTreeId={stoppingTreeId}
           onToggle={() => onToggleSection("completed")}
         />
       )}
@@ -331,6 +522,8 @@ function SubagentList({
           now={now}
           expanded={expandedSections.incomplete}
           onSelect={onSelect}
+          onAbort={abortTree}
+          stoppingTreeId={stoppingTreeId}
           onToggle={() => onToggleSection("incomplete")}
         />
       )}
@@ -416,20 +609,25 @@ function SubagentListSection({
   now,
   expanded,
   onSelect,
+  onAbort,
+  stoppingTreeId,
   onToggle,
 }: {
   kind: SubagentSectionKind;
   title: string;
-  children: readonly ActivitySubagent[];
+  children: readonly SubagentTreeNode[];
   indexById: ReadonlyMap<string, number>;
   now: number;
   expanded: boolean;
   onSelect: (subagentId: string) => void;
+  onAbort: (node: SubagentTreeNode) => Promise<void>;
+  stoppingTreeId: string | null;
   onToggle: () => void;
 }) {
   const sectionId = useId();
   const titleId = `${sectionId}-title`;
   const rowsId = `${sectionId}-rows`;
+  const flatChildren = useMemo(() => flattenSubagentForest(children), [children]);
 
   return (
     <section
@@ -441,42 +639,87 @@ function SubagentListSection({
         className="subagent-list-section-toggle"
         aria-expanded={expanded}
         aria-controls={rowsId}
-        aria-label={`${expanded ? "收起" : "展开"}${title}子代理，当前 ${children.length} 个`}
+        aria-label={`${expanded ? "收起" : "展开"}${title}子代理，当前 ${flatChildren.length} 个`}
         title={expanded ? `收起${title}` : `展开${title}`}
         onClick={onToggle}
       >
         <span className="subagent-list-section-indicator" aria-hidden="true" />
         <span className="subagent-list-section-title" id={titleId}>{title}</span>
         <span className="subagent-list-section-count" aria-hidden="true">
-          {String(children.length).padStart(2, "0")}
+          {String(flatChildren.length).padStart(2, "0")}
         </span>
         <IconChevronDown className="subagent-list-section-chevron" width={14} height={14} aria-hidden="true" />
       </button>
       <div className="subagent-list-rows" id={rowsId} hidden={!expanded}>
-        {children.map((child) => {
+        {flatChildren.map((node) => {
+          const child = node.child;
           const index = indexById.get(child.id) ?? 0;
+          const branchActive = isActive(child.status) || node.activeDescendantCount > 0;
+          const canAbortBranch = node.descendantCount > 0 && branchActive;
+          const stopping = stoppingTreeId === child.id;
+          const anomaly = treeAnomalyLabel(node);
           return (
-            <button
-              type="button"
-              className={`subagent-list-row status-${child.status}`}
+            <div
+              className={`subagent-list-row status-${child.status}${node.depth > 1 ? " is-descendant" : ""}${node.anomaly ? ` has-${node.anomaly}` : ""}`}
               key={child.id}
+              data-tree-depth={node.depth}
+              data-tree-anomaly={node.anomaly ?? undefined}
+              style={{ "--subagent-tree-depth": Math.max(0, node.depth - 1) } as CSSProperties}
               onClick={() => onSelect(child.id)}
-              aria-label={`${child.label}，${statusLabel(child.status)}`}
             >
-              <SubagentAvatar
-                index={index}
-                identity={child.id}
-                runtimeKind={child.runtimeKind}
-                className={`subagent-list-avatar status-${child.status}`}
-              />
-              <span className="subagent-list-row-copy">
-                <strong title={child.label}>{child.label}</strong>
-                <small title={listObservation(child)}>{listObservation(child)}</small>
-              </span>
-              <span className="subagent-list-row-meta" title={listTimeTitle(child)}>
-                <time>{listTime(child, now)}</time>
-              </span>
-            </button>
+              <button
+                type="button"
+                className="subagent-list-row-select"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelect(child.id);
+                }}
+                aria-label={`${child.label}，深度 ${node.depth}，${statusLabel(child.status)}${anomaly ? `，${anomaly}` : ""}`}
+              >
+                <SubagentAvatar
+                  index={index}
+                  identity={child.id}
+                  runtimeKind={child.runtimeKind}
+                  className={`subagent-list-avatar status-${child.status}`}
+                />
+                <span className="subagent-list-row-copy">
+                  <strong title={child.label}>{child.label}</strong>
+                  <small title={listObservation(child)}>{listObservation(child)}</small>
+                  <span className="subagent-tree-facts" aria-label={treeFactsAriaLabel(node)}>
+                    <span>深度 {node.depth}</span>
+                    <span>{subagentSlotLabel(child)}</span>
+                    <span>{runtimeExecutorName(child.runtimeKind)}</span>
+                    <span>{child.model || "模型未记录"}</span>
+                    {subagentCapabilityLabels(child).map((capability) => (
+                      <span className="is-capability" key={capability}>{capability}</span>
+                    ))}
+                    {peerMessageActivity(child) && (
+                      <span className="is-peer">PeerMessage {peerMessageActivity(child)}</span>
+                    )}
+                    {anomaly && <span className="is-anomaly">{anomaly}</span>}
+                  </span>
+                </span>
+                <span className="subagent-list-row-meta" title={listTimeTitle(child)}>
+                  <time>{listTime(child, now)}</time>
+                </span>
+              </button>
+              {canAbortBranch && (
+                <button
+                  type="button"
+                  className="subagent-tree-abort"
+                  disabled={stoppingTreeId != null}
+                  aria-label={`停止${child.label}及其 ${node.descendantCount} 个后代`}
+                  title={`递归停止此节点及 ${node.descendantCount} 个后代；兄弟节点不受影响`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void onAbort(node);
+                  }}
+                >
+                  <IconStop width={11} height={11} aria-hidden="true" />
+                  {stopping ? "停止中…" : "停止分支"}
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
@@ -488,13 +731,17 @@ function SubagentInspector({
   taskId,
   workspacePath,
   child,
+  treeNode,
   index,
+  onBack,
   onAbort,
 }: {
   taskId: string;
   workspacePath: string | null;
   child: ActivitySubagent;
+  treeNode: SubagentTreeNode | null;
   index: number;
+  onBack: () => void;
   onAbort: (subagentId: string) => Promise<void>;
 }) {
   const [messages, setMessages] = useState<SessionMessage[]>([]);
@@ -511,6 +758,8 @@ function SubagentInspector({
   const scrollRef = useRef<HTMLDivElement>(null);
   const prependAnchorRef = useRef<{ height: number; top: number } | null>(null);
   const active = isActive(child.status);
+  const branchActive = active || (treeNode?.activeDescendantCount ?? 0) > 0;
+  const descendantCount = treeNode?.descendantCount ?? 0;
 
   const enqueuePageRequest = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
     const result = requestTailRef.current.then(operation, operation);
@@ -683,7 +932,7 @@ function SubagentInspector({
   const permissionMode = effectivePermissionMode(permission);
 
   const stop = async () => {
-    if (stopping || !active) return;
+    if (stopping || !branchActive) return;
     setStopping(true);
     setError(null);
     try {
@@ -697,6 +946,18 @@ function SubagentInspector({
 
   return (
     <div className="subagent-detail-body" ref={scrollRef}>
+      <nav className="subagent-detail-navigation" aria-label="子代理详情导航">
+        <button
+          type="button"
+          className="subagent-detail-back"
+          onClick={onBack}
+          aria-label="返回运行与子代理"
+          title="返回运行与子代理"
+        >
+          <IconChevronLeft width={14} height={14} aria-hidden="true" />
+          <span>运行与子代理</span>
+        </button>
+      </nav>
       <article className="subagent-session">
         <button
           type="button"
@@ -717,8 +978,16 @@ function SubagentInspector({
         {expanded && (
           <div className="subagent-session-body" id={`subagent-session-${child.id}`}>
             <div className="subagent-session-meta" aria-label="子智能体编排信息">
-              <span><b>执行器</b>{runtimeExecutorName(child.runtimeKind)}</span>
+              <span><b>深度</b>{treeNode?.depth ?? 1}</span>
+              <span><b>槽位</b>{subagentSlotLabel(child).replace(/^槽位\s*/, "")}</span>
+              <span><b>Provider</b>{runtimeExecutorName(child.runtimeKind)}</span>
+              <span><b>模型</b>{child.model || "未记录"}</span>
+              <span><b>能力</b>{subagentCapabilityLabels(child).join(" · ")}</span>
               <span><b>权限</b>{permissionModeLabel(permissionMode)}</span>
+              {peerMessageActivity(child) && <span><b>PeerMessage</b>{peerMessageActivity(child)}</span>}
+              {treeNode?.anomaly && (
+                <span className="subagent-tree-anomaly"><b>运行关系</b>{treeAnomalyLabel(treeNode)}</span>
+              )}
               {child.routingReason && <span className="subagent-routing-reason"><b>路由</b>{child.routingReason}</span>}
             </div>
             {error && <div className="subagent-session-error">读取子智能体记录失败：{error}</div>}
@@ -755,9 +1024,13 @@ function SubagentInspector({
             <div className={`subagent-session-state status-${child.status}${failedToolCount > 0 ? " has-tool-failures" : ""}`} role="status" aria-live="polite">
               <SubagentStateMark status={child.status} />
               <span>{liveStateLabel(child.status, failedToolCount)}</span>
-              {active && (
+              {branchActive && (
                 <button type="button" disabled={stopping} onClick={() => void stop()}>
-                  <IconStop width={11} height={11} /> {stopping ? "停止中…" : "停止"}
+                  <IconStop width={11} height={11} /> {stopping
+                    ? "停止中…"
+                    : descendantCount > 0
+                      ? `停止此节点及 ${descendantCount} 个后代`
+                      : "停止"}
                 </button>
               )}
             </div>
@@ -765,6 +1038,21 @@ function SubagentInspector({
         )}
       </article>
     </div>
+  );
+}
+
+function treeSectionKind(root: SubagentTreeNode): SubagentSectionKind {
+  const nodes = flattenSubagentForest([root]);
+  if (nodes.some((node) => node.child.status === "waiting_permission")) return "attention";
+  if (nodes.some((node) => node.child.status === "queued" || node.child.status === "running")) return "active";
+  if (root.child.status === "completed") return "completed";
+  return "incomplete";
+}
+
+function treeLatestAt(root: SubagentTreeNode): number {
+  return flattenSubagentForest([root]).reduce(
+    (latest, node) => Math.max(latest, node.child.endedAt ?? node.child.lastEventAt),
+    0,
   );
 }
 
@@ -976,12 +1264,19 @@ function SubagentStateMark({ status }: { status: SubagentStatus }) {
 export function mergeSubagents(current: readonly ActivitySubagent[], runs: readonly AgentRun[]): ActivitySubagent[] {
   const merged = new Map(current.map((child) => [child.id, child]));
   for (const run of runs) {
-    if (run.agent_kind !== "subagent" || merged.has(run.id)) continue;
+    if (run.agent_kind !== "subagent") continue;
+    const prior = merged.get(run.id);
+    if (prior) {
+      const parentRunId = run.parent_run_id?.trim() || null;
+      if (prior.parentRunId !== parentRunId) merged.set(run.id, { ...prior, parentRunId });
+      continue;
+    }
     const startedAt = parseTimestamp(run.started_at);
     const endedAt = run.ended_at ? parseTimestamp(run.ended_at) : null;
     const accessMode = run.access_mode ?? "read_only";
     merged.set(run.id, {
       id: run.id,
+      parentRunId: run.parent_run_id?.trim() || null,
       label: run.agent_label?.trim() || "子智能体",
       runtimeKind: run.runtime_kind,
       model: run.model || null,
@@ -1069,6 +1364,18 @@ export function buildLiveEntries(
       if (text) appendReasoningEntry(entries, { id: event.id, kind: "reasoning", text });
       continue;
     }
+    if (event.kind === "peer_message") {
+      const sender = compactText(event.peerSenderAgentId, 80);
+      const recipient = compactText(event.peerRecipientAgentId, 80);
+      const status = event.peerStatus === "delivered" ? "已送达" : "已排队";
+      pushUniqueStatus(entries, {
+        id: event.id,
+        kind: "status",
+        text: `发送消息${event.peerContentChars != null ? `（${event.peerContentChars} 字符）` : ""} · ${sender ?? "当前子代理"} → ${recipient ?? "目标子代理"} · ${status}`,
+        tone: "normal",
+      });
+      continue;
+    }
     const text = compactText(event.detail) ?? compactText(event.label);
     if (text) pushUniqueStatus(entries, {
       id: event.id,
@@ -1149,6 +1456,12 @@ function buildPersistedEntries(messages: readonly SessionMessage[]): SessionEntr
       continue;
     }
     if (message.kind === "system" && message.text === "r_code_reasoning") {
+      const data = parseObject(message.output_json);
+      const text = visibleText(firstString(data, ["text"]));
+      if (text) appendReasoningEntry(entries, { id, kind: "reasoning", text });
+      continue;
+    }
+    if (message.kind === "system" && message.text === "r_code_interim") {
       const data = parseObject(message.output_json);
       const text = visibleText(firstString(data, ["text"]));
       if (text) appendReasoningEntry(entries, { id, kind: "reasoning", text });
@@ -1386,14 +1699,20 @@ export function groupTranscriptEntries(
   return blocks;
 }
 
-function runtimeName(runtimeKind: AgentRun["runtime_kind"]): "R-Code" | "Codex" {
-  return runtimeKind === "native" ? "R-Code" : "Codex";
+function runtimeName(runtimeKind: AgentRun["runtime_kind"]): string {
+  switch (runtimeKind) {
+    case "native": return "R-Code";
+    case "codex_exec":
+    case "codex_mcp": return "Codex";
+  }
 }
 
-function runtimeExecutorName(runtimeKind: AgentRun["runtime_kind"]): "R-Code" | "Codex CLI" | "Codex MCP" {
-  if (runtimeKind === "codex_exec") return "Codex CLI";
-  if (runtimeKind === "codex_mcp") return "Codex MCP";
-  return "R-Code";
+function runtimeExecutorName(runtimeKind: AgentRun["runtime_kind"]): string {
+  switch (runtimeKind) {
+    case "native": return "R-Code";
+    case "codex_exec": return "Codex CLI";
+    case "codex_mcp": return "Codex MCP";
+  }
 }
 
 function sessionEntriesEquivalent(left: SessionEntry, right: SessionEntry): boolean {
@@ -1528,6 +1847,49 @@ function compactText(value: string | null | undefined, limit = 220): string | nu
   const normalized = value.trim().replace(/\s+/g, " ");
   if (!normalized) return null;
   return normalized.length > limit ? `${normalized.slice(0, limit - 1)}…` : normalized;
+}
+
+function subagentSlotLabel(child: ActivitySubagent): string {
+  const match = child.routingReason?.match(/(?:槽位|slot)\s*(?:[:#：=\-]\s*)?([\w\u4e00-\u9fff-]{1,32})/i);
+  return match?.[1] ? `槽位 ${match[1]}` : "槽位 未记录";
+}
+
+function subagentCapabilityLabels(child: ActivitySubagent): string[] {
+  return child.runtimeKind === "native"
+    ? ["可继续委派", "可实时消息"]
+    : ["叶节点"];
+}
+
+function peerMessageActivity(child: ActivitySubagent): string | null {
+  const peerEvents = child.events.filter((event) => event.kind === "peer_message");
+  if (peerEvents.length === 0) return null;
+  const latest = peerEvents.reduce((current, event) => event.at >= current.at ? event : current);
+  const sender = compactText(latest.peerSenderAgentId, 36) ?? "当前子代理";
+  const recipient = compactText(latest.peerRecipientAgentId, 36) ?? "目标子代理";
+  const size = latest.peerContentChars != null ? ` · ${latest.peerContentChars} 字符` : "";
+  return `${peerEvents.length} 条 · ${sender} → ${recipient} · 最近${latest.peerStatus === "delivered" ? "已送达" : "已排队"}${size}`;
+}
+
+function treeAnomalyLabel(node: SubagentTreeNode): string | null {
+  if (node.anomaly === "cycle") return "运行关系异常，循环已隔离";
+  if (node.anomaly === "orphan") {
+    const missingParent = compactText(node.missingParentId, 48);
+    return missingParent ? `父节点不可用：${missingParent}` : "父节点不可用";
+  }
+  return null;
+}
+
+function treeFactsAriaLabel(node: SubagentTreeNode): string {
+  const child = node.child;
+  return [
+    `深度 ${node.depth}`,
+    subagentSlotLabel(child),
+    `Provider ${runtimeExecutorName(child.runtimeKind)}`,
+    `模型 ${child.model || "未记录"}`,
+    ...subagentCapabilityLabels(child),
+    peerMessageActivity(child) ? `PeerMessage ${peerMessageActivity(child)}` : null,
+    treeAnomalyLabel(node),
+  ].filter((value): value is string => Boolean(value)).join("，");
 }
 
 function isActive(status: SubagentStatus): boolean {

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAppStore } from "../../store/app";
 import { selectNeedsYouTaskIds, selectRunning, useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
@@ -12,6 +12,8 @@ import { useCreateConversation } from "../useCreateConversation";
 import {
   IconActivity,
   IconArchive,
+  IconChevronDown,
+  IconChevronRight,
   IconFolderOpen,
   IconHistory,
   IconInbox,
@@ -19,7 +21,6 @@ import {
   IconSearch,
   IconSettings,
   IconSidebar,
-  IconText,
 } from "../icons";
 
 interface ProjectNode {
@@ -31,7 +32,7 @@ interface ProjectNode {
 export function Rail() {
   const scene = useAppStore((s) => s.scene);
   const setScene = useAppStore((s) => s.setScene);
-  const goHome = useAppStore((s) => s.goHome);
+  const openNewConversation = useAppStore((s) => s.openNewConversation);
   const openDashboard = useAppStore((s) => s.openDashboard);
   const openRoom = useAppStore((s) => s.openRoom);
   const currentTaskId = useAppStore((s) => s.currentTaskId);
@@ -49,6 +50,7 @@ export function Rail() {
   const needsCount = needsTaskIds.size;
   const runningCount = useTasksStore((s) => selectRunning(s).length);
   const { createConversation, creating: creatingConversation } = useCreateConversation();
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => new Set());
 
   usePoll(async () => {
     await refreshTasks();
@@ -82,6 +84,22 @@ export function Rail() {
     }));
   }, [details, tasks, workspaces]);
 
+  const floatingTasks = useMemo(
+    () => tasks
+      .filter((task) => !task.workspace_path)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+    [tasks],
+  );
+
+  const toggleProject = (workspacePath: string) => {
+    setCollapsedProjects((previous) => {
+      const next = new Set(previous);
+      if (next.has(workspacePath)) next.delete(workspacePath);
+      else next.add(workspacePath);
+      return next;
+    });
+  };
+
   const openProject = (workspacePath: string) => {
     openDashboard(workspacePath);
   };
@@ -89,7 +107,7 @@ export function Rail() {
   return (
     <aside className="rail app-sidebar" aria-label="项目与导航">
       <div className="sidebar-brand-row">
-        <button className="sidebar-brand" onClick={goHome} title="R-Code — 新对话" aria-label="R-Code，新建对话">
+        <button className="sidebar-brand" onClick={() => openNewConversation(null)} title="R-Code — 新对话" aria-label="R-Code，新建对话">
           <span className="sidebar-brand-mark" aria-hidden="true">R</span>
           <span className="rail-label">R-Code</span>
         </button>
@@ -100,7 +118,7 @@ export function Rail() {
       <div className="sidebar-create">
         <button
           className="sidebar-new"
-          onClick={() => void createConversation(currentWorkspacePath)}
+          onClick={() => void createConversation(null)}
           title={creatingConversation ? "正在创建新对话" : "新对话"}
           aria-label="新对话"
           aria-busy={creatingConversation}
@@ -119,8 +137,45 @@ export function Rail() {
         <NavItem icon={<IconInbox />} label="待处理" active={scene === "inbox"} count={needsCount} onClick={() => setScene("inbox")} />
         <NavItem icon={<IconActivity />} label="活动" active={scene === "deck"} onClick={() => setScene("deck")} />
         <NavItem icon={<IconArchive />} label="归档" active={scene === "archive"} onClick={() => setScene("archive")} />
-        <NavItem icon={<IconText />} label="知识与指令" active={scene === "knowledge"} onClick={() => setScene("knowledge")} />
       </nav>
+
+      <div className="sidebar-recent">
+        <div className="sidebar-section-head">
+          <span className="rail-label">最近</span>
+        </div>
+        {floatingTasks.length === 0 ? (
+          <p className="sidebar-recent-empty rail-label">无聊天</p>
+        ) : (
+          <div className="sidebar-task-list">
+            {floatingTasks.map((task) => {
+              const state = visualTaskState(task, details[task.id]);
+              const active = scene === "room" && currentTaskId === task.id;
+              return (
+                <div className={`sidebar-task-row${active ? " active" : ""}`} key={task.id}>
+                  <button
+                    className={`sidebar-task${active ? " active" : ""}`}
+                    onClick={() => {
+                      setCurrentWorkspace(null);
+                      openRoom(task.id);
+                    }}
+                    title={`${taskTitle(task)} · ${taskStateLabel(task.state, details[task.id])}`}
+                  >
+                    <i className={`task-state-dot ${state}`} />
+                    <span className="rail-label">{taskTitle(task)}</span>
+                    <time className="rail-label">{elapsedMinutes(task.updated_at)}</time>
+                  </button>
+                  <TaskActionsMenu
+                    task={task}
+                    detail={details[task.id]}
+                    className="sidebar-task-actions"
+                    placement="right"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       <div className="sidebar-projects">
         <div className="sidebar-section-head">
@@ -144,9 +199,13 @@ export function Rail() {
             </button>
           ) : projects.map(({ workspace, tasks: projectTasks }) => {
             const current = workspace.canonical_path === currentWorkspacePath && scene === "dashboard";
+            const isCollapsed = collapsedProjects.has(workspace.canonical_path);
             return (
-              <section className={`sidebar-project${current ? " selected" : ""}`} key={workspace.canonical_path}>
+              <section className={`sidebar-project${current ? " selected" : ""}${isCollapsed ? " is-collapsed" : ""}`} key={workspace.canonical_path}>
                 <div className="sidebar-project-row">
+                  <button type="button" className="sidebar-project-toggle" onClick={() => toggleProject(workspace.canonical_path)} aria-expanded={!isCollapsed} aria-label={`${isCollapsed ? "展开" : "收起"} ${workspace.display_name} 的任务列表`} title={isCollapsed ? "展开任务" : "收起任务"}>
+                    {isCollapsed ? <IconChevronRight width={14} height={14} /> : <IconChevronDown width={14} height={14} />}
+                  </button>
                   <button className="sidebar-project-head" onClick={() => openProject(workspace.canonical_path)} title={`打开 ${workspace.display_name} 项目概览`}>
                     <IconFolderOpen width={16} height={16} />
                     <span className="rail-label">{workspace.display_name}</span>

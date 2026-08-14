@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useState } from "react";
+import { memo, useEffect, useId, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   IconActivity,
   IconChevronDown,
@@ -55,6 +55,7 @@ export const TimelineToolGroup = memo(function TimelineToolGroup({ item, dim = "
       className={`timeline-activity-event kind-${item.groupKind} state-${state}${open ? " open" : ""}${dim}`}
       data-t={item.t}
     >
+      <TimelineTraceAnchor label={title} />
       <button
         type="button"
         className="timeline-activity-toggle ring-inset"
@@ -136,6 +137,7 @@ export function TimelineContextEvent({
         className={`timeline-context-event is-collapsible${open ? " open" : ""}${dim}`}
         data-t={t}
       >
+        <TimelineTraceAnchor label={label} />
         <button
           type="button"
           className="timeline-context-toggle ring-inset"
@@ -164,6 +166,7 @@ export function TimelineContextEvent({
 
   return (
     <div className={`timeline-context-event${dim}`} data-t={t} title={detail ?? undefined}>
+      <TimelineTraceAnchor label={label} />
       <span className="timeline-activity-icon" aria-hidden="true"><IconActivity width={14} height={14} /></span>
       <span>{label}</span>
       {detail && <small>{detail}</small>}
@@ -185,6 +188,7 @@ export function TimelineSubagentGroup({
   const status = subagentGroupStatus(item.agents);
   return (
     <div className={`timeline-subagent-event${dim}`} data-t={item.t} aria-label="子代理运行">
+      <TimelineTraceAnchor label="子代理运行" />
       <div className="timeline-subagent-chips">
         {item.agents.map((agent, index) => {
           const inspectable = Boolean(agent.runId && onInspectSubagent);
@@ -214,6 +218,38 @@ export function TimelineSubagentGroup({
         <span className="timeline-subagent-summary">{status}</span>
       </div>
     </div>
+  );
+}
+
+function TimelineTraceAnchor({ label }: { label: string }) {
+  const jumpToEvent = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    const target = event.currentTarget.parentElement;
+    if (!(target instanceof HTMLElement)) return;
+    const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    target.scrollIntoView({
+      behavior: reducedMotion ? "auto" : "smooth",
+      block: "center",
+      inline: "nearest",
+    });
+    target.classList.remove("is-trace-target");
+    // Restart the arrival cue when the same anchor is selected repeatedly without changing layout.
+    void target.offsetWidth;
+    target.classList.add("is-trace-target");
+    if (reducedMotion) {
+      window.requestAnimationFrame(() => target.classList.remove("is-trace-target"));
+    } else {
+      target.addEventListener("animationend", () => target.classList.remove("is-trace-target"), { once: true });
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="timeline-trace-anchor"
+      aria-label={`定位到${label}`}
+      title={`定位到${label}`}
+      onClick={jumpToEvent}
+    />
   );
 }
 

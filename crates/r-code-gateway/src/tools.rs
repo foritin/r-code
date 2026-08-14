@@ -14,13 +14,14 @@
 //! shell 命令执行（`bash`）在 [`crate::tools_command`]。
 
 use std::io::{BufReader, Read};
+use std::ops::Range;
 use std::path::{Component, Path};
 
 use async_trait::async_trait;
 use r_code_core::dto::RiskLevel;
 use r_code_core::error::ProductError;
 use r_code_core::process::hide_background_console;
-use r_code_core::security::{PathGuard, WorkspaceFileAccess};
+use r_code_core::security::{path_for_display, PathGuard, WorkspaceFileAccess};
 
 use crate::gateway::{PathBinding, Tool, ToolExecutionContext, ToolExecutionResult};
 
@@ -182,12 +183,13 @@ fn open_text_file(
     path: &str,
     workspace_guard: Option<&PathGuard>,
 ) -> Result<std::fs::File, ProductError> {
+    let display_path = path_for_display(path);
     match workspace_guard {
         Some(guard) => guard
             .open_existing_file(Path::new(path), WorkspaceFileAccess::Read)
             .map(|(_, file)| file),
         None => std::fs::File::open(path)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}"))),
+            .map_err(|e| ProductError::Other(format!("failed to read {display_path}: {e}"))),
     }
 }
 
@@ -199,8 +201,9 @@ fn open_text_file(
 fn read_text_file(path: &str, workspace_guard: Option<&PathGuard>) -> Result<String, ProductError> {
     let mut file = open_text_file(path, workspace_guard)?;
     let mut content = String::new();
+    let display_path = path_for_display(path);
     file.read_to_string(&mut content)
-        .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+        .map_err(|e| ProductError::Other(format!("failed to read {display_path}: {e}")))?;
     Ok(content)
 }
 
@@ -208,6 +211,7 @@ fn list_directory_names(
     path: &str,
     workspace_guard: Option<&PathGuard>,
 ) -> Result<Vec<String>, ProductError> {
+    let display_path = path_for_display(path);
     let mut names = match workspace_guard {
         Some(guard) => guard
             .list_existing_directory(Path::new(path))?
@@ -217,7 +221,7 @@ fn list_directory_names(
             .collect(),
         None => {
             let entries = std::fs::read_dir(path)
-                .map_err(|e| ProductError::Other(format!("cannot list {path}: {e}")))?;
+                .map_err(|e| ProductError::Other(format!("cannot list {display_path}: {e}")))?;
             let mut names = Vec::new();
             for entry in entries {
                 let entry =
@@ -251,16 +255,16 @@ fn create_new_file_scoped(
         Some(guard) => guard.create_new_file(path, content).map(|_| ()),
         None => {
             use std::io::Write;
+            let display_path = path_for_display(path);
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(path)
                 .map_err(|e| {
-                    ProductError::Other(format!("failed to create {}: {e}", path.display()))
+                    ProductError::Other(format!("failed to create {display_path}: {e}"))
                 })?;
-            file.write_all(content).map_err(|e| {
-                ProductError::Other(format!("failed to write {}: {e}", path.display()))
-            })
+            file.write_all(content)
+                .map_err(|e| ProductError::Other(format!("failed to write {display_path}: {e}")))
         }
     }
 }
@@ -275,12 +279,14 @@ fn remove_file_scoped(
                 Ok(())
             } else {
                 Err(ProductError::PathNotFound(format!(
-                    "path does not exist: {path:?}"
+                    "path does not exist: {}",
+                    path_for_display(path)
                 )))
             }
         }
-        None => std::fs::remove_file(path)
-            .map_err(|e| ProductError::Other(format!("failed to delete {}: {e}", path.display()))),
+        None => std::fs::remove_file(path).map_err(|e| {
+            ProductError::Other(format!("failed to delete {}: {e}", path_for_display(path)))
+        }),
     }
 }
 
@@ -334,7 +340,7 @@ or its line_byte_offset when one individual line is exceptionally long."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of lines to return. Defaults to 2000."
+                    "description": "Maximum number of lines to return. Defaults to 2000. When scanning a long file, use a large window (500-2000 lines) and page with offset; use a small window only when re-reading a narrow region around an edit anchor."
                 },
                 "line_byte_offset": {
                     "type": "integer",
@@ -368,6 +374,7 @@ fn execute_read_file(
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
+    let display_path = path_for_display(path);
 
     let offset = input
         .get("offset")
@@ -398,7 +405,7 @@ fn execute_read_file(
     loop {
         let count = reader
             .read(&mut bytes)
-            .map_err(|e| ProductError::Other(format!("failed to read {path}: {e}")))?;
+            .map_err(|e| ProductError::Other(format!("failed to read {display_path}: {e}")))?;
         if count == 0 {
             break;
         }
@@ -440,7 +447,7 @@ fn execute_read_file(
                     }
                     if error.error_len().is_some() {
                         return Err(ProductError::Other(format!(
-                            "failed to read {path}: file is not valid UTF-8"
+                            "failed to read {display_path}: file is not valid UTF-8"
                         )));
                     }
                     // A multi-byte scalar was split across read buffers. Keep at most
@@ -453,7 +460,7 @@ fn execute_read_file(
 
     if !utf8_pending.is_empty() {
         return Err(ProductError::Other(format!(
-            "failed to read {path}: file ends with incomplete UTF-8"
+            "failed to read {display_path}: file ends with incomplete UTF-8"
         )));
     }
     pager.finish_eof()?;
@@ -468,17 +475,17 @@ fn execute_read_file(
     let total = pager.total_lines;
     if total == 0 && line_byte_offset > 0 {
         return Err(ProductError::Other(format!(
-            "line_byte_offset {line_byte_offset} is invalid because {path} is empty"
+            "line_byte_offset {line_byte_offset} is invalid because {display_path} is empty"
         )));
     }
     if total == 0 && offset > 1 {
         return Err(ProductError::Other(format!(
-            "offset {offset} is past the end of {path} (0 lines)"
+            "offset {offset} is past the end of {display_path} (0 lines)"
         )));
     }
     if offset.saturating_sub(1) >= total && total > 0 {
         return Err(ProductError::Other(format!(
-            "offset {offset} is past the end of {path} ({total} lines)"
+            "offset {offset} is past the end of {display_path} ({total} lines)"
         )));
     }
 
@@ -489,7 +496,7 @@ fn execute_read_file(
             next_byte_offset,
         }) => {
             let returned_line_byte_offset = if line == offset { line_byte_offset } else { 0 };
-            body.push_str(&format!("\n[{path} 共 {total} 行；"));
+            body.push_str(&format!("\n[{display_path} 共 {total} 行；"));
             if let Some(last_complete) = pager.returned_last_line {
                 body.push_str(&format!(
                     "本次完整返回第 {offset}–{last_complete} 行，并返回"
@@ -505,7 +512,8 @@ fn execute_read_file(
             let last = pager.returned_last_line.unwrap_or(offset.saturating_sub(1));
             let has_more = last < total;
             if has_more || offset > 1 || line_byte_offset > 0 {
-                let mut note = format!("\n[{path} 共 {total} 行；本次返回第 {offset}–{last} 行");
+                let mut note =
+                    format!("\n[{display_path} 共 {total} 行；本次返回第 {offset}–{last} 行");
                 if line_byte_offset > 0 {
                     note.push_str(&format!(
                         "（第 {offset} 行从 UTF-8 字节 {line_byte_offset} 开始）"
@@ -728,9 +736,9 @@ fn execute_load_skill(
 /// R2：中风险。相比 `apply_patch` 的全文件覆盖，本工具有两个关键优势：
 ///
 /// 1. **省 token**：改一行不必重发整个文件，长文件上差别是数量级的。
-/// 2. **自带并发保护**：`old_string` 必须在当前磁盘内容里唯一命中。若文件在模型
-///    读取之后被别人改过，命中数会变成 0 或多于 1，替换直接失败而不是把别人的
-///    修改静默覆盖掉。这比对比哈希更好用——它同时校验了"改的是我以为的那段"。
+/// 2. **局部前置条件**：`old_string` 必须在当前磁盘内容里唯一命中，因此目标片段
+///    已消失或变得歧义时会拒绝写入。可选 `expected_revision` 还能发现本次读取时已经
+///    可见的整文件变化；它不是跨进程文件锁或严格 CAS，不能覆盖读取后的竞态窗口。
 pub struct EditTool;
 
 #[async_trait]
@@ -741,10 +749,13 @@ impl Tool for EditTool {
     fn description(&self) -> &str {
         "Replace an exact literal snippet in a file. This is the preferred way to modify files. \
 old_string must appear exactly once, so include enough surrounding lines to make it unique \
-(indentation must match the file byte for byte). \
+(leading indentation must match). CRLF/LF and trailing line whitespace are handled conservatively. \
 Set replace_all=true to replace every occurrence instead — useful for renaming a symbol. \
-The uniqueness check also guards against overwriting concurrent edits: if the file changed \
-since you read it, the edit fails instead of clobbering."
+After a stale-anchor error, re-read the file and never retry unchanged arguments. Pass the returned \
+current_revision as expected_revision for an additional best-effort stale check before the recovery \
+write; old_string uniqueness remains the primary precondition. Optional postcondition literals \
+can turn an already-completed retry into a verified no-op. \
+These checks reduce stale writes but are not a cross-process lock or strict compare-and-swap."
     }
     fn risk_level(&self) -> RiskLevel {
         RiskLevel::R2
@@ -768,6 +779,27 @@ since you read it, the edit fails instead of clobbering."
                 "replace_all": {
                     "type": "boolean",
                     "description": "Replace every occurrence instead of requiring exactly one. Default false."
+                },
+                "expected_revision": {
+                    "type": "string",
+                    "description": "Optional current_revision from a preceding edit error. Detects a change already visible when this edit starts and rejects it as stale_read; this is not a cross-process filesystem lock."
+                },
+                "postcondition": {
+                    "type": "object",
+                    "description": "Optional explicit invariant used only when old_string is already absent. If every must_contain literal is present and every must_not_contain literal is absent, the edit returns an already_satisfied no-op without writing.",
+                    "properties": {
+                        "must_contain": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "default": []
+                        },
+                        "must_not_contain": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "default": []
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "required": ["path", "old_string", "new_string"]
@@ -809,6 +841,15 @@ fn execute_edit(
         .get("replace_all")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let expected_revision = input
+        .get("expected_revision")
+        .map(|value| {
+            value.as_str().ok_or_else(|| {
+                ProductError::Other("'expected_revision' must be a string".to_string())
+            })
+        })
+        .transpose()?;
+    let postcondition = parse_edit_postcondition(input.get("postcondition"))?;
 
     if old_string.is_empty() {
         return Err(ProductError::Other(
@@ -822,58 +863,384 @@ fn execute_edit(
     }
 
     let content = read_text_file(path, workspace_guard)?;
+    let revision = edit_content_revision(&content);
+    let display_path = path_for_display(path);
+    let (matches, match_kind) = find_edit_matches(&content, old_string);
 
-    let occurrences = content.matches(old_string).count();
-    if occurrences == 0 {
-        return Err(ProductError::Other(format!(
-            "'old_string' was not found in {path}. \
-Re-read the file: it may have changed, or the indentation / line endings may differ."
-        )));
+    if matches.is_empty() {
+        if postcondition
+            .as_ref()
+            .is_some_and(|condition| edit_postcondition_is_satisfied(&content, condition))
+        {
+            return Ok(serde_json::json!({
+                "status": "already_satisfied",
+                "path": display_path,
+                "revision": revision,
+                "written": false,
+                "message": "old_string is absent and the explicit postcondition is satisfied; no file write was needed"
+            })
+            .to_string());
+        }
+        return Err(recoverable_edit_error(
+            "old_string_not_found",
+            format!("'old_string' was not found in {display_path}"),
+            serde_json::json!({
+                "path": display_path,
+                "current_revision": revision,
+                "closest_line_numbers": closest_edit_line_numbers(&content, old_string),
+                "required_action": "Re-read the smallest relevant region, check whether the intended postcondition is already satisfied, and otherwise build a new unique old_string from the latest content.",
+                "retry_policy": "Do not retry the same path/old_string/new_string arguments unchanged. Use current_revision as expected_revision on a recovered write."
+            }),
+        ));
     }
+
+    if let Some(expected) = expected_revision {
+        if expected != revision {
+            return Err(recoverable_edit_error(
+                "stale_read",
+                format!("{display_path} changed after the edit recovery context was captured"),
+                serde_json::json!({
+                    "path": display_path,
+                    "expected_revision": expected,
+                    "current_revision": revision,
+                    "required_action": "Re-read the relevant region and rebuild the edit from the latest file."
+                }),
+            ));
+        }
+    }
+
+    let occurrences = matches.len();
     if occurrences > 1 && !replace_all {
-        let lines = match_line_numbers(&content, old_string);
-        let shown: Vec<String> = lines.iter().take(10).map(usize::to_string).collect();
-        return Err(ProductError::Other(format!(
-            "'old_string' matches {occurrences} places in {path} (lines {}). \
-Add surrounding context to make it unique, or set replace_all=true.",
-            shown.join(", ")
-        )));
+        let lines = match_ranges_line_numbers(&content, &matches);
+        let shown = lines
+            .iter()
+            .take(10)
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(recoverable_edit_error(
+            "old_string_not_unique",
+            format!("'old_string' matches {occurrences} places in {display_path} (lines {shown})"),
+            serde_json::json!({
+                "path": display_path,
+                "current_revision": revision,
+                "occurrences": occurrences,
+                "lines": lines.iter().take(10).copied().collect::<Vec<_>>(),
+                "required_action": "Add the smallest amount of stable surrounding context needed to make old_string unique, or use replace_all only when every occurrence is intentionally targeted."
+            }),
+        ));
+    }
+    if replace_all
+        && matches
+            .windows(2)
+            .any(|window| window[0].end > window[1].start)
+    {
+        return Err(recoverable_edit_error(
+            "overlapping_equivalent_matches",
+            format!(
+                "newline/whitespace-equivalent matches overlap in {display_path}; replace_all is unsafe"
+            ),
+            serde_json::json!({
+                "path": display_path,
+                "current_revision": revision,
+                "required_action": "Use a more specific non-overlapping anchor."
+            }),
+        ));
     }
 
-    let updated = if replace_all {
-        content.replace(old_string, new_string)
+    let replacement = replacement_with_file_line_endings(&content, new_string);
+    let selected_matches = if replace_all {
+        &matches[..]
     } else {
-        content.replacen(old_string, new_string, 1)
+        &matches[..1]
     };
+    let updated = replace_edit_ranges(&content, selected_matches, &replacement);
     atomic_write_scoped(Path::new(path), updated.as_bytes(), workspace_guard)?;
 
-    let first_line = match_line_numbers(&content, old_string)
-        .first()
-        .copied()
-        .unwrap_or(0);
+    let first_line = content[..matches[0].start].matches('\n').count() + 1;
+    let compatibility_note = match match_kind {
+        EditMatchKind::Exact => "",
+        EditMatchKind::LineEndings => " (matched after normalizing CRLF/LF)",
+        EditMatchKind::TrailingWhitespace => {
+            " (matched after normalizing CRLF/LF and trailing line whitespace)"
+        }
+    };
     if replace_all {
         Ok(format!(
-            "edited {path}: replaced {occurrences} occurrence(s)"
+            "edited {display_path}: replaced {occurrences} occurrence(s){compatibility_note}"
         ))
     } else {
-        Ok(format!("edited {path} at line {first_line}"))
+        Ok(format!(
+            "edited {display_path} at line {first_line}{compatibility_note}"
+        ))
     }
 }
 
-/// 找出 `needle` 每次出现所在的 1-based 行号。
-fn match_line_numbers(content: &str, needle: &str) -> Vec<usize> {
-    let mut lines = Vec::new();
-    let mut cursor = 0usize;
-    while let Some(found) = content[cursor..].find(needle) {
-        let absolute = cursor + found;
-        // 出现位置之前的换行数 + 1 即行号。
-        lines.push(content[..absolute].matches('\n').count() + 1);
-        cursor = absolute + needle.len().max(1);
-        if cursor >= content.len() {
-            break;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditMatchKind {
+    Exact,
+    LineEndings,
+    TrailingWhitespace,
+}
+
+#[derive(Debug, Default)]
+struct EditPostcondition {
+    must_contain: Vec<String>,
+    must_not_contain: Vec<String>,
+}
+
+fn parse_edit_postcondition(
+    value: Option<&serde_json::Value>,
+) -> Result<Option<EditPostcondition>, ProductError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| ProductError::Other("'postcondition' must be an object".to_string()))?;
+    if let Some(key) = object
+        .keys()
+        .find(|key| !matches!(key.as_str(), "must_contain" | "must_not_contain"))
+    {
+        return Err(ProductError::Other(format!(
+            "postcondition contains unknown field '{key}'"
+        )));
+    }
+    let parse_literals = |key: &str| -> Result<Vec<String>, ProductError> {
+        let Some(value) = object.get(key) else {
+            return Ok(Vec::new());
+        };
+        let values = value.as_array().ok_or_else(|| {
+            ProductError::Other(format!("postcondition.{key} must be an array of strings"))
+        })?;
+        values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|literal| !literal.is_empty())
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        ProductError::Other(format!(
+                            "postcondition.{key} must contain only non-empty strings"
+                        ))
+                    })
+            })
+            .collect()
+    };
+    let condition = EditPostcondition {
+        must_contain: parse_literals("must_contain")?,
+        must_not_contain: parse_literals("must_not_contain")?,
+    };
+    if condition.must_contain.is_empty() && condition.must_not_contain.is_empty() {
+        return Err(ProductError::Other(
+            "'postcondition' must declare at least one literal invariant".to_string(),
+        ));
+    }
+    if condition
+        .must_contain
+        .iter()
+        .any(|literal| condition.must_not_contain.contains(literal))
+    {
+        return Err(ProductError::Other(
+            "postcondition must not place the same literal in both must_contain and must_not_contain"
+                .to_string(),
+        ));
+    }
+    Ok(Some(condition))
+}
+
+fn edit_postcondition_is_satisfied(content: &str, condition: &EditPostcondition) -> bool {
+    condition
+        .must_contain
+        .iter()
+        .all(|literal| !find_edit_matches(content, literal).0.is_empty())
+        && condition
+            .must_not_contain
+            .iter()
+            .all(|literal| find_edit_matches(content, literal).0.is_empty())
+}
+
+fn recoverable_edit_error(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    details: serde_json::Value,
+) -> ProductError {
+    ProductError::RecoverableToolError {
+        tool: "edit".to_string(),
+        code: code.into(),
+        message: message.into(),
+        details,
+    }
+}
+
+fn edit_content_revision(content: &str) -> String {
+    format!("blake3:{}", blake3::hash(content.as_bytes()).to_hex())
+}
+
+fn exact_match_ranges(content: &str, needle: &str) -> Vec<Range<usize>> {
+    content
+        .match_indices(needle)
+        .map(|(start, matched)| start..start + matched.len())
+        .collect()
+}
+
+fn find_edit_matches(content: &str, needle: &str) -> (Vec<Range<usize>>, EditMatchKind) {
+    let mut matches = exact_match_ranges(content, needle);
+    let mut match_kind = EditMatchKind::Exact;
+
+    let normalized = needle.replace("\r\n", "\n");
+    let crlf = normalized.replace('\n', "\r\n");
+    for candidate in [normalized.as_str(), crlf.as_str()] {
+        if candidate == needle || candidate.is_empty() {
+            continue;
+        }
+        for candidate_match in exact_match_ranges(content, candidate) {
+            if !matches
+                .iter()
+                .any(|existing| existing.start == candidate_match.start)
+            {
+                matches.push(candidate_match);
+                if match_kind == EditMatchKind::Exact {
+                    match_kind = EditMatchKind::LineEndings;
+                }
+            }
         }
     }
+
+    for candidate_match in line_whitespace_match_ranges(content, needle) {
+        if !matches
+            .iter()
+            .any(|existing| existing.start == candidate_match.start)
+        {
+            matches.push(candidate_match);
+            match_kind = EditMatchKind::TrailingWhitespace;
+        }
+    }
+    matches.sort_unstable_by_key(|range| range.start);
+    (matches, match_kind)
+}
+
+#[derive(Debug)]
+struct TextLine<'a> {
+    start: usize,
+    body_end: usize,
+    end: usize,
+    body: &'a str,
+    has_line_ending: bool,
+}
+
+fn text_lines(text: &str) -> Vec<TextLine<'_>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for segment in text.split_inclusive('\n') {
+        let end = start + segment.len();
+        let body_end = if segment.ends_with("\r\n") {
+            end - 2
+        } else if segment.ends_with('\n') {
+            end - 1
+        } else {
+            end
+        };
+        lines.push(TextLine {
+            start,
+            body_end,
+            end,
+            body: &text[start..body_end],
+            has_line_ending: end > body_end,
+        });
+        start = end;
+    }
     lines
+}
+
+fn line_whitespace_match_ranges(content: &str, needle: &str) -> Vec<Range<usize>> {
+    let content_lines = text_lines(content);
+    let needle_lines = text_lines(needle);
+    if needle_lines.is_empty()
+        || needle_lines
+            .iter()
+            .all(|line| line.body.trim_matches([' ', '\t']).is_empty())
+    {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    let mut index = 0usize;
+    while index + needle_lines.len() <= content_lines.len() {
+        let window = &content_lines[index..index + needle_lines.len()];
+        let bodies_match = window.iter().zip(&needle_lines).all(|(current, expected)| {
+            current.body.trim_end_matches([' ', '\t'])
+                == expected.body.trim_end_matches([' ', '\t'])
+                && (!expected.has_line_ending || current.has_line_ending)
+        });
+        if bodies_match {
+            let last_current = window.last().expect("non-empty line window");
+            let last_expected = needle_lines.last().expect("non-empty needle lines");
+            let end = if last_expected.has_line_ending {
+                last_current.end
+            } else {
+                last_current.body_end
+            };
+            matches.push(window[0].start..end);
+            index += needle_lines.len();
+        } else {
+            index += 1;
+        }
+    }
+    matches
+}
+
+fn replacement_with_file_line_endings(content: &str, replacement: &str) -> String {
+    let crlf_count = content.match_indices("\r\n").count();
+    let lf_count = content.bytes().filter(|byte| *byte == b'\n').count();
+    let lone_lf_count = lf_count.saturating_sub(crlf_count);
+    let normalized = replacement.replace("\r\n", "\n");
+    if crlf_count > 0 && lone_lf_count == 0 {
+        normalized.replace('\n', "\r\n")
+    } else if lone_lf_count > 0 && crlf_count == 0 {
+        normalized
+    } else {
+        replacement.to_string()
+    }
+}
+
+fn replace_edit_ranges(content: &str, matches: &[Range<usize>], replacement: &str) -> String {
+    let mut updated = content.to_string();
+    for range in matches.iter().rev() {
+        updated.replace_range(range.clone(), replacement);
+    }
+    updated
+}
+
+fn match_ranges_line_numbers(content: &str, matches: &[Range<usize>]) -> Vec<usize> {
+    matches
+        .iter()
+        .map(|range| content[..range.start].matches('\n').count() + 1)
+        .collect()
+}
+
+fn closest_edit_line_numbers(content: &str, needle: &str) -> Vec<usize> {
+    let mut anchors = needle
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    anchors.sort_unstable();
+    anchors.dedup();
+
+    content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            anchors
+                .iter()
+                .any(|anchor| trimmed == *anchor || trimmed.contains(anchor))
+                .then_some(index + 1)
+        })
+        .take(8)
+        .collect()
 }
 
 // ============================================================================
@@ -943,7 +1310,7 @@ fn execute_apply_patch(
         .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
 
     atomic_write_scoped(Path::new(path), content.as_bytes(), workspace_guard)?;
-    Ok(format!("patched {path}"))
+    Ok(format!("patched {}", path_for_display(path)))
 }
 
 // ============================================================================
@@ -1015,7 +1382,7 @@ fn execute_create_file(
         .ok_or_else(|| ProductError::Other("missing 'content' parameter".to_string()))?;
 
     create_new_file_scoped(Path::new(path), content.as_bytes(), workspace_guard)?;
-    Ok(format!("created {path}"))
+    Ok(format!("created {}", path_for_display(path)))
 }
 
 // ============================================================================
@@ -1076,7 +1443,7 @@ fn execute_delete_file(
         .ok_or_else(|| ProductError::Other("missing 'path' parameter".to_string()))?;
 
     remove_file_scoped(Path::new(path), workspace_guard)?;
-    Ok(format!("deleted {path}"))
+    Ok(format!("deleted {}", path_for_display(path)))
 }
 
 // ============================================================================
@@ -1093,7 +1460,7 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), ProductError> {
     std::fs::write(&tmp_path, content).map_err(|e| {
         ProductError::Other(format!(
             "failed to write temp file {}: {e}",
-            tmp_path.display()
+            path_for_display(&tmp_path)
         ))
     })?;
 
@@ -1102,7 +1469,7 @@ fn atomic_write(path: &Path, content: &[u8]) -> Result<(), ProductError> {
         let _ = std::fs::remove_file(&tmp_path);
         ProductError::Other(format!(
             "failed to rename temp file to {}: {e}",
-            path.display()
+            path_for_display(path)
         ))
     })?;
 
@@ -1144,6 +1511,85 @@ mod tests {
             .execute(serde_json::json!({ "path": "/nonexistent/file.txt" }))
             .await;
         assert!(result.is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_paths_are_hidden_only_at_file_tool_output_boundaries() {
+        let dir = TempDir::new().unwrap();
+        let canonical_root = fs::canonicalize(dir.path()).unwrap();
+        let raw_root = canonical_root.to_string_lossy();
+        assert!(
+            raw_root.starts_with(r"\\?\"),
+            "canonical test path was not verbatim: {raw_root}"
+        );
+
+        let existing = canonical_root.join("existing.txt");
+        fs::write(&existing, "one\ntwo\n").unwrap();
+        let raw_existing = existing.to_string_lossy().into_owned();
+        let display_existing = path_for_display(&existing);
+
+        let read = execute_read_file(
+            &serde_json::json!({ "path": raw_existing, "limit": 1 }),
+            None,
+        )
+        .unwrap();
+        assert!(read.contains(&display_existing), "output was: {read}");
+        assert!(!read.contains(r"\\?\"), "output was: {read}");
+
+        let patched = execute_apply_patch(
+            &serde_json::json!({ "path": raw_existing, "content": "patched\n" }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(patched, format!("patched {display_existing}"));
+        assert_eq!(fs::read_to_string(&existing).unwrap(), "patched\n");
+
+        let created = canonical_root.join("created.txt");
+        let raw_created = created.to_string_lossy().into_owned();
+        let display_created = path_for_display(&created);
+        let created_output = execute_create_file(
+            &serde_json::json!({ "path": raw_created, "content": "new\n" }),
+            None,
+        )
+        .unwrap();
+        assert_eq!(created_output, format!("created {display_created}"));
+        assert_eq!(fs::read_to_string(&created).unwrap(), "new\n");
+
+        let duplicate_error = execute_create_file(
+            &serde_json::json!({ "path": raw_created, "content": "duplicate\n" }),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            duplicate_error.contains(&display_created),
+            "error was: {duplicate_error}"
+        );
+        assert!(
+            !duplicate_error.contains(r"\\?\"),
+            "error was: {duplicate_error}"
+        );
+
+        let deleted =
+            execute_delete_file(&serde_json::json!({ "path": raw_created }), None).unwrap();
+        assert_eq!(deleted, format!("deleted {display_created}"));
+        assert!(!created.exists());
+
+        let missing = canonical_root.join("missing.txt");
+        let raw_missing = missing.to_string_lossy().into_owned();
+        let display_missing = path_for_display(&missing);
+        let missing_error = execute_read_file(&serde_json::json!({ "path": raw_missing }), None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            missing_error.contains(&display_missing),
+            "error was: {missing_error}"
+        );
+        assert!(
+            !missing_error.contains(r"\\?\"),
+            "error was: {missing_error}"
+        );
     }
 
     #[cfg(unix)]
@@ -1728,9 +2174,286 @@ mod tests {
                 "new_string": "hi"
             }))
             .await
+            .unwrap_err();
+        match err {
+            ProductError::RecoverableToolError {
+                tool,
+                code,
+                message,
+                details,
+            } => {
+                assert_eq!(tool, "edit");
+                assert_eq!(code, "old_string_not_found");
+                assert!(message.contains("not found"), "message was: {message}");
+                assert!(details["current_revision"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with("blake3:")));
+                assert_eq!(details["retry_policy"].as_str().is_some(), true);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_matches_lf_anchor_in_crlf_file_and_preserves_crlf() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("windows.rs");
+        fs::write(&file, "enum Origin {\r\n    Agent,\r\n    Undo,\r\n}\r\n").unwrap();
+
+        let out = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "    Agent,\n    Undo,",
+                "new_string": "    Agent,\n    Reviewed,"
+            }))
+            .await
+            .unwrap();
+
+        assert!(out.contains("normalizing CRLF/LF"), "message was: {out}");
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "enum Origin {\r\n    Agent,\r\n    Reviewed,\r\n}\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_matches_crlf_anchor_in_lf_file() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("unix.rs");
+        fs::write(&file, "Agent,\nUndo,\n").unwrap();
+
+        EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "Agent,\r\nUndo,",
+                "new_string": "Agent,\r\nReviewed,"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "Agent,\nReviewed,\n");
+    }
+
+    #[tokio::test]
+    async fn edit_treats_exact_and_crlf_equivalent_matches_as_ambiguous() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("mixed.txt");
+        fs::write(&file, "old\nold\r\n").unwrap();
+
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "old\n",
+                "new_string": "new\n"
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProductError::RecoverableToolError { ref code, .. }
+                if code == "old_string_not_unique"
+        ));
+
+        EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "old\n",
+                "new_string": "new\n",
+                "replace_all": true
+            }))
+            .await
+            .unwrap();
+        assert_eq!(fs::read_to_string(&file).unwrap(), "new\nnew\n");
+    }
+
+    #[tokio::test]
+    async fn edit_replace_all_rejects_overlapping_equivalent_matches() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("overlapping.txt");
+        fs::write(&file, "a\r\na\na").unwrap();
+
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "a\r\na",
+                "new_string": "replaced",
+                "replace_all": true
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProductError::RecoverableToolError { ref code, .. }
+                if code == "overlapping_equivalent_matches"
+        ));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "a\r\na\na");
+    }
+
+    #[tokio::test]
+    async fn edit_uses_utf8_byte_ranges_without_shifting_the_match() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("unicode.txt");
+        fs::write(&file, "界面\r\nold\r\nkeep\r\n").unwrap();
+
+        EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "old\n",
+                "new_string": "新值\n"
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&file).unwrap(),
+            "界面\r\n新值\r\nkeep\r\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn edit_conservatively_ignores_only_trailing_line_whitespace() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("whitespace.txt");
+        fs::write(&file, "alpha  \r\nbeta\t\r\nkeep\r\n").unwrap();
+
+        let out = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "alpha\nbeta\n",
+                "new_string": "done\n"
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("trailing line whitespace"));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "done\r\nkeep\r\n");
+
+        fs::write(&file, "    alpha  \r\n").unwrap();
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "alpha \n",
+                "new_string": "done\n"
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProductError::RecoverableToolError { ref code, .. }
+                if code == "old_string_not_found"
+        ));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "    alpha  \r\n");
+    }
+
+    #[tokio::test]
+    async fn edit_postcondition_can_verify_an_already_completed_noop() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("memory.rs");
+        let current = "enum Origin {\r\n    Agent,\r\n    Undo,\r\n}\r\n";
+        fs::write(&file, current).unwrap();
+
+        let out = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "    Undo,\n    Undo,",
+                "new_string": "    Undo,",
+                "postcondition": {
+                    "must_contain": ["    Undo,"],
+                    "must_not_contain": ["    Undo,\n    Undo,"]
+                }
+            }))
+            .await
+            .unwrap();
+        let outcome: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(outcome["status"], "already_satisfied");
+        assert_eq!(outcome["written"], false);
+        assert_eq!(fs::read_to_string(&file).unwrap(), current);
+    }
+
+    #[tokio::test]
+    async fn edit_postcondition_rejects_unknown_or_contradictory_invariants() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("memory.rs");
+        fs::write(&file, "Undo,\n").unwrap();
+        let path = file.to_str().unwrap();
+
+        let unknown = EditTool
+            .execute(serde_json::json!({
+                "path": path,
+                "old_string": "Undo,\nUndo,",
+                "new_string": "Undo,",
+                "postcondition": {
+                    "must_contain": ["Undo,"],
+                    "must_not_contians": ["Undo,\nUndo,"]
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+
+        let contradictory = EditTool
+            .execute(serde_json::json!({
+                "path": path,
+                "old_string": "Undo,\nUndo,",
+                "new_string": "Undo,",
+                "postcondition": {
+                    "must_contain": ["Undo,"],
+                    "must_not_contain": ["Undo,"]
+                }
+            }))
+            .await
+            .unwrap_err();
+        assert!(contradictory.to_string().contains("both must_contain"));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "Undo,\n");
+    }
+
+    #[tokio::test]
+    async fn edit_postcondition_contradiction_does_not_echo_literals() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("memory.rs");
+        fs::write(&file, "current\n").unwrap();
+        let secret = "DO_NOT_ECHO_POSTCONDITION_LITERAL";
+
+        let message = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "missing",
+                "new_string": "replacement",
+                "postcondition": {
+                    "must_contain": [secret],
+                    "must_not_contain": [secret]
+                }
+            }))
+            .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("not found"), "message was: {err}");
+        assert!(message.contains("both must_contain"));
+        assert!(
+            !message.contains(secret),
+            "postcondition validation error leaked the literal"
+        );
+        assert_eq!(fs::read_to_string(&file).unwrap(), "current\n");
+    }
+
+    #[tokio::test]
+    async fn edit_expected_revision_rejects_a_second_concurrent_change() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("stale.rs");
+        fs::write(&file, "let value = 1;\n").unwrap();
+        let revision = edit_content_revision("let value = 1;\n");
+        fs::write(&file, "let value = 2;\n").unwrap();
+
+        let err = EditTool
+            .execute(serde_json::json!({
+                "path": file.to_str().unwrap(),
+                "old_string": "let value = 2;",
+                "new_string": "let value = 3;",
+                "expected_revision": revision
+            }))
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ProductError::RecoverableToolError { ref code, .. } if code == "stale_read"
+        ));
+        assert_eq!(fs::read_to_string(&file).unwrap(), "let value = 2;\n");
     }
 
     #[tokio::test]
@@ -1782,18 +2505,6 @@ mod tests {
             }))
             .await;
         assert!(err.is_err());
-    }
-
-    #[test]
-    fn match_line_numbers_locates_every_occurrence() {
-        let content = "a\nneedle\nb\nneedle\nc\n";
-        assert_eq!(match_line_numbers(content, "needle"), vec![2, 4]);
-        assert_eq!(match_line_numbers(content, "a"), vec![1]);
-        assert!(match_line_numbers(content, "zzz").is_empty());
-        // 首行命中
-        assert_eq!(match_line_numbers("x\ny\n", "x"), vec![1]);
-        // 跨行片段按起始行计
-        assert_eq!(match_line_numbers("a\nb\nc\n", "b\nc"), vec![2]);
     }
 
     #[test]

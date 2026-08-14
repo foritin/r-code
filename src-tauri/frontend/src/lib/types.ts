@@ -288,7 +288,10 @@ export type ReviewState =
   | "failed";
 
 export type AgentRunKind = "main" | "subagent";
-export type AgentRunRuntimeKind = "native" | "codex_exec" | "codex_mcp";
+export type AgentRunRuntimeKind =
+  | "native"
+  | "codex_exec"
+  | "codex_mcp";
 
 export interface AgentRun {
   id: string;
@@ -347,6 +350,8 @@ export type ChangeType = "create" | "modify" | "delete" | "rename";
 export interface FileChange {
   id: string;
   task_id: string;
+  /** 权威运行归属；旧版/工作区对账记录没有该字段。 */
+  run_id?: string | null;
   tool_call_id: string | null;
   path: string;
   change_type: ChangeType;
@@ -522,6 +527,7 @@ export interface QueuedMessage {
   message: string;
   state: QueuedMessageState;
   priority: number;
+  attachments_json?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -731,6 +737,8 @@ export type SubagentState =
 
 export type SubagentAccessMode = "read_only" | "full_access";
 
+export type PeerMessageDeliveryStatus = "queued" | "delivered";
+
 export interface AgentEventScope {
   run_id: string;
   agent_id: string;
@@ -754,6 +762,16 @@ export type AgentEvent =
   | { type: "plan"; steps: { description: string; completed: boolean }[] }
   | { type: "activity"; phase: AgentActivityPhase; detail?: string }
   | { type: "scoped"; scope: AgentEventScope; event: AgentEvent }
+  | {
+      type: "peer_message";
+      /** 新事件始终提供稳定 ID；可选声明兼容已保存的早期实验事件。 */
+      message_id?: string;
+      sender_agent_id?: string;
+      recipient_agent_id?: string;
+      status?: PeerMessageDeliveryStatus;
+      /** 只暴露字符数；正文仅存在 Worker 有界 mailbox，不进入事件流。 */
+      content_chars?: number;
+    }
   | { type: "subagent_lifecycle"; state: SubagentState; detail?: string }
   | { type: "state"; state: TaskState };
 
@@ -1069,6 +1087,18 @@ export interface ProviderModelsInput {
   protocol: ProviderProtocol;
 }
 
+export interface ProviderBalanceInput {
+  /** 配置名；密钥与地址由后端解析，前端不传。 */
+  name: string;
+}
+
+export interface ProviderBalanceResponse {
+  currency: string;
+  total_balance: string;
+  granted_balance: string;
+  topped_up_balance: string;
+}
+
 export interface ProviderModelsResponse {
   models: string[];
 }
@@ -1084,6 +1114,115 @@ export interface ProviderStatus {
    * 后端在地址被改写时会走启发式，前端看不到那部分逻辑，各猜一次必然对不上。
    */
   effective_protocol?: ProviderProtocol;
+}
+
+// ---------- 子代理 Provider 候选池 ----------
+
+export type SubagentProviderSource =
+  | { kind: "api_provider"; provider_id: string }
+  | { kind: "codex_cli" };
+
+export type SubagentProviderHealthState = "untested" | "connected" | "failed" | "stale";
+export type SubagentProviderVerificationLevel = "inference" | "remote_catalog";
+export type SubagentProviderAvailability =
+  | "ready"
+  | "needs_configuration"
+  | "not_installed"
+  | "login_required"
+  | "trust_required"
+  | "unsupported";
+export type SubagentHealthErrorCode =
+  | "timeout"
+  | "authentication_failed"
+  | "network_unavailable"
+  | "protocol_violation"
+  | "model_unavailable"
+  | "permission_denied"
+  | "executable_unavailable"
+  | "unsupported"
+  | "unknown";
+
+export interface SubagentProviderCapabilities {
+  supports_host_delegation: boolean;
+  supports_live_messages: boolean;
+  supports_full_access: boolean;
+}
+
+export interface SubagentProviderHealthView {
+  state: SubagentProviderHealthState;
+  verification_level?: SubagentProviderVerificationLevel | null;
+  checked_at?: string | null;
+  expires_at?: string | null;
+  latency_ms?: number | null;
+  error?: SubagentHealthErrorCode | null;
+}
+
+export interface SubagentProviderCatalogEntry {
+  source: SubagentProviderSource;
+  display_name: string;
+  model: string;
+  configured: boolean;
+  ready: boolean;
+  connected: boolean;
+  selectable: boolean;
+  supported: boolean;
+  availability: SubagentProviderAvailability;
+  protocol?: string | null;
+  capabilities: SubagentProviderCapabilities;
+  health: SubagentProviderHealthView;
+}
+
+export interface SubagentProviderCatalogSnapshot {
+  generated_at: string;
+  entries: SubagentProviderCatalogEntry[];
+}
+
+export interface SubagentProviderSlot {
+  slot_id: string;
+  source: SubagentProviderSource;
+  model: string;
+  weight: number;
+  prompt_template_id?: string | null;
+  prompt: string;
+}
+
+export interface SubagentPoolConfig {
+  slots: SubagentProviderSlot[];
+}
+
+/** Host 对已保存槽位基于当前指纹重新计算的健康投影。 */
+export interface SubagentPoolSlotHealth {
+  slot_id: string;
+  source: SubagentProviderSource;
+  model: string;
+  selectable: boolean;
+  availability: SubagentProviderAvailability;
+  capabilities: SubagentProviderCapabilities;
+  health: SubagentProviderHealthView;
+}
+
+/** global-only 原子快照；revision 在 catalog、receipt 或 pool 变化时更新。 */
+export interface SubagentPoolSnapshot {
+  /** Host 生成的不透明 CAS token；前端不得解析或递增。 */
+  revision: string;
+  pool: SubagentPoolConfig;
+  catalog: SubagentProviderCatalogSnapshot;
+  slot_health: SubagentPoolSlotHealth[];
+}
+
+export interface SubagentProviderProbeRequest {
+  source: SubagentProviderSource;
+  model: string;
+}
+
+export interface SubagentProviderProbeResponse {
+  result: SubagentProviderCatalogEntry;
+  snapshot: SubagentPoolSnapshot;
+}
+
+export interface SubagentProviderProbeBatchResponse {
+  results: SubagentProviderCatalogEntry[];
+  snapshot: SubagentPoolSnapshot;
 }
 
 export interface ProviderSettingsInput {
@@ -1171,6 +1310,8 @@ export interface RtkStatus {
   version: string | null;
   source: "managed" | "system" | string | null;
   platform: string;
+  /** R-Code 托管二进制所在目录；被安全软件拦截时，用户应把该目录加入排除项。 */
+  bin_dir: string | null;
 }
 
 export interface AppConfig {
@@ -1250,6 +1391,7 @@ export interface GitPushResult {
 }
 
 export type WorkflowSkillSource = "builtin" | "custom";
+export type WorkflowSkillScope = "global" | "project";
 
 export interface WorkflowSkill {
   id: string;
@@ -1259,6 +1401,8 @@ export interface WorkflowSkill {
   source: WorkflowSkillSource;
   enabled: boolean;
   overridden: boolean;
+  scope: WorkflowSkillScope;
+  inherited: boolean;
 }
 
 export interface WorkflowSkillDraft {
@@ -1268,11 +1412,25 @@ export interface WorkflowSkillDraft {
   instructions: string;
   source: WorkflowSkillSource;
   enabled: boolean;
+  scope: WorkflowSkillScope;
 }
 
 export interface AgentPromptConfig {
   main_agent: string;
   subagent: string;
+}
+
+export type ProjectPromptMode = "append" | "override";
+
+export interface ProjectAgentPromptConfig extends AgentPromptConfig {
+  mode: ProjectPromptMode;
+}
+
+export interface KnowledgePromptSnapshot {
+  global: AgentPromptConfig;
+  project: ProjectAgentPromptConfig | null;
+  project_configured: boolean;
+  effective: AgentPromptConfig;
 }
 
 export interface OrchestrationConfig {
@@ -1282,6 +1440,7 @@ export interface OrchestrationConfig {
   quality_loop: "off" | "auto" | "always";
   quality_reviewer: "auto" | "r_code" | "codex";
   max_review_rounds: number;
+  subagent_pool?: SubagentPoolConfig;
 }
 
 /** cmd_settings_get 返回：宽松加载，validation 为软提示（未配置 provider 等）。 */

@@ -45,9 +45,9 @@ pub use lifecycle_purge::{
     AppDataPruneReport, LifecyclePurgeResult, LifecyclePurgeStore, PURGE_REJECT_IN_PROGRESS,
 };
 pub use memory_store::{
-    render_snapshot, sanitize_review_text, CapturedMemoryTurn, LoadedMemorySnapshot,
-    MemoryCandidateView, MemoryEntryDraft, MemoryEntryEdit, MemoryOverview, MemoryReviewClaim,
-    MemoryReviewJobView, MemoryStore,
+    render_snapshot, sanitize_review_text, AgentMemorySaveOutcome, CapturedMemoryTurn,
+    LoadedMemorySnapshot, MemoryCandidateView, MemoryEntryDraft, MemoryEntryEdit, MemoryOverview,
+    MemoryReviewClaim, MemoryReviewJobView, MemoryStore,
 };
 pub use patch_engine::{apply_patch, hash_content, PatchError};
 pub use plan_review::{

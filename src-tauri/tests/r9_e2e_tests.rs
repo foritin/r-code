@@ -61,7 +61,10 @@ fn packaging_config_matrix() {
     let prod = PackagingConfig::production();
     assert_eq!(prod.product_name, "R-Code");
     assert!(!prod.version.is_empty());
-    assert_eq!(prod.identifier, r_code_host::app_paths::bundle_identifier());
+    assert_eq!(
+        prod.identifier,
+        r_code_host::app_paths::production_bundle_identifier()
+    );
 
     // Should have all target platforms
     assert!(prod.targets.len() >= 4); // MSI, NSIS, DMG, AppImage

@@ -6,6 +6,7 @@ import {
 } from "@tauri-apps/api/window";
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
+import { companionEnsure } from "../../lib/ipc";
 import {
   companionPreferenceSnapshot,
   useCompanionStore,
@@ -33,6 +34,36 @@ type ControllerListen = <T>(
   event: string,
   handler: (payload: T) => void | Promise<void>,
 ) => Promise<ControllerCleanup>;
+
+interface AsyncCleanupScope {
+  retain: (registration: Promise<ControllerCleanup>) => Promise<boolean>;
+  dispose: () => void;
+  isDisposed: () => boolean;
+}
+
+/** Tauri listener registration is asynchronous. A cleanup scope closes the race where an effect
+ * unmounts before that registration resolves, immediately releasing every late native listener. */
+export function createAsyncCleanupScope(): AsyncCleanupScope {
+  let disposed = false;
+  const cleanups: ControllerCleanup[] = [];
+  return {
+    async retain(registration) {
+      const cleanup = await registration;
+      if (disposed) {
+        cleanup();
+        return false;
+      }
+      cleanups.push(cleanup);
+      return true;
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      cleanups.splice(0).forEach((cleanup) => cleanup());
+    },
+    isDisposed: () => disposed,
+  };
+}
 
 interface MainCompanionHandshakePorts {
   listen: ControllerListen;
@@ -88,11 +119,13 @@ export async function attachMainCompanionHandshake(
 const COMPANION_INTERACTIVE_SURFACES = [
   ".companion-session-panel",
   ".companion-session-card",
+  ".companion-pulse-more",
   ".companion-pulse-error",
   ".companion-browser-menu",
   ".companion-sprite-frame",
   ".companion-aura",
   ".companion-unread-badge",
+  ".companion-tracking-toggle",
 ] as const;
 
 function rectContainsPoint(rect: DOMRect, x: number, y: number): boolean {
@@ -108,6 +141,70 @@ export function pointHitsCompanionSurface(documentRoot: Document, x: number, y: 
       .some((element) => rectContainsPoint(element.getBoundingClientRect(), x, y)));
 }
 
+/** Converting global physical cursor coordinates through one native scale keeps Windows mixed-DPI
+ * hit testing aligned with WebView CSS pixels, including monitors positioned left of the primary. */
+export function physicalCursorToLogicalPoint(
+  cursor: { x: number; y: number },
+  windowPosition: { x: number; y: number },
+  scaleFactor: number,
+): { x: number; y: number } {
+  const scale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+  return {
+    x: (cursor.x - windowPosition.x) / scale,
+    y: (cursor.y - windowPosition.y) / scale,
+  };
+}
+
+interface RestorableMainWindow {
+  show: () => Promise<void>;
+  unminimize: () => Promise<void>;
+  setFocus: () => Promise<void>;
+}
+
+interface CursorEventPolicy {
+  setIgnored: (ignored: boolean) => Promise<void>;
+}
+
+/** Native window commands cannot be cancelled once dispatched. Serialize cursor-event updates so
+ * a slow stale `true` can never finish after the `false` requested while hiding the companion. */
+export function createCursorEventPolicy(
+  apply: (ignored: boolean) => Promise<void>,
+): CursorEventPolicy {
+  let desired = false;
+  let chain = Promise.resolve();
+  return {
+    setIgnored(ignored) {
+      desired = ignored;
+      const request = chain.catch(() => {}).then(async () => {
+        if (desired !== ignored) return;
+        await apply(ignored);
+      });
+      // A rejected native command must not prevent a later recovery request from running.
+      chain = request.catch(() => {});
+      return request;
+    },
+  };
+}
+
+/** Native focus policy is advisory on Windows. Once application routing succeeds, shell restore
+ * failures must not turn a successful navigation into a false error acknowledgement. */
+export async function restoreMainWindowBestEffort(
+  mainWindow: RestorableMainWindow,
+  onFailure: (operation: string, error: unknown) => void = () => {},
+): Promise<void> {
+  for (const [operation, restore] of [
+    ["show", () => mainWindow.show()],
+    ["unminimize", () => mainWindow.unminimize()],
+    ["focus", () => mainWindow.setFocus()],
+  ] as const) {
+    try {
+      await restore();
+    } catch (error) {
+      onFailure(operation, error);
+    }
+  }
+}
+
 /**
  * The companion store reads shared localStorage before React mounts. Hold only this WebView's
  * in-memory copy closed until a main-window snapshot crosses the acknowledged handshake.
@@ -119,19 +216,33 @@ export function prepareNativeCompanionWindow(): void {
 
 /** Owns native hit testing without coupling window policy to the visual CompanionWindow tree. */
 export function NativeCompanionWindowController() {
+  const enabled = useCompanionStore((state) => state.enabled);
+  const cursorEventPolicy = useRef<CursorEventPolicy | null>(null);
+
   useEffect(() => {
     if (!isTauriRuntime()) return;
     const appWindow = getCurrentWindow();
+    if (!cursorEventPolicy.current) {
+      cursorEventPolicy.current = createCursorEventPolicy(
+        (ignored) => appWindow.setIgnoreCursorEvents(ignored),
+      );
+    }
+    const cursorPolicy = cursorEventPolicy.current;
+    if (!enabled) {
+      // Reset WS_EX_TRANSPARENT while hidden and do not keep polling cursorPosition through IPC.
+      void cursorPolicy.setIgnored(false).catch(() => {});
+      return;
+    }
     let disposed = false;
     let clickThroughSupported = true;
     let ignored = false;
     let pointerActive = false;
     let pointerReleaseTimer: number | null = null;
     let tickTimer: number | null = null;
+    let tickInFlight = false;
     let windowPosition: PhysicalPosition | null = null;
     let scaleFactor = 1;
-    let unlistenMoved: ControllerCleanup | undefined;
-    let unlistenScale: ControllerCleanup | undefined;
+    const nativeListeners = createAsyncCleanupScope();
 
     const pointerDown = () => {
       pointerActive = true;
@@ -150,7 +261,7 @@ export function NativeCompanionWindowController() {
     const updateIgnoreState = async (next: boolean) => {
       if (!clickThroughSupported || next === ignored) return;
       try {
-        await appWindow.setIgnoreCursorEvents(next);
+        await cursorPolicy.setIgnored(next);
         ignored = next;
       } catch {
         // Wayland/compositor policy may reject click-through. Fail open so the helper remains
@@ -160,22 +271,28 @@ export function NativeCompanionWindowController() {
     };
 
     const tick = async () => {
-      if (disposed || !clickThroughSupported) return;
+      if (disposed || !clickThroughSupported || tickInFlight) return;
+      tickInFlight = true;
       try {
+        if (document.visibilityState === "hidden") {
+          await updateIgnoreState(false);
+          return;
+        }
         if (!windowPosition) windowPosition = await appWindow.outerPosition();
         if (pointerActive) {
           await updateIgnoreState(false);
         } else {
           const cursor = await cursorPosition();
-          const x = (cursor.x - windowPosition.x) / scaleFactor;
-          const y = (cursor.y - windowPosition.y) / scaleFactor;
-          await updateIgnoreState(!pointHitsCompanionSurface(document, x, y));
+          const point = physicalCursorToLogicalPoint(cursor, windowPosition, scaleFactor);
+          await updateIgnoreState(!pointHitsCompanionSurface(document, point.x, point.y));
         }
       } catch {
         clickThroughSupported = false;
-      }
-      if (!disposed && clickThroughSupported) {
-        tickTimer = window.setTimeout(tick, document.visibilityState === "hidden" ? 400 : 80);
+      } finally {
+        tickInFlight = false;
+        if (!disposed && clickThroughSupported) {
+          tickTimer = window.setTimeout(tick, document.visibilityState === "hidden" ? 400 : 80);
+        }
       }
     };
 
@@ -184,11 +301,13 @@ export function NativeCompanionWindowController() {
         appWindow.outerPosition(),
         appWindow.scaleFactor(),
       ]);
-      unlistenMoved = await appWindow.onMoved(({ payload }) => { windowPosition = payload; });
-      unlistenScale = await appWindow.onScaleChanged(({ payload }) => {
+      if (!await nativeListeners.retain(appWindow.onMoved(({ payload }) => {
+        windowPosition = payload;
+      }))) return;
+      if (!await nativeListeners.retain(appWindow.onScaleChanged(({ payload }) => {
         scaleFactor = payload.scaleFactor;
-      });
-      if (!disposed) await tick();
+      }))) return;
+      if (!nativeListeners.isDisposed()) await tick();
     };
     void attach().catch(() => { clickThroughSupported = false; });
 
@@ -199,11 +318,12 @@ export function NativeCompanionWindowController() {
       window.removeEventListener("pointerdown", pointerDown, { capture: true });
       window.removeEventListener("pointerup", pointerUp, { capture: true });
       window.removeEventListener("pointercancel", pointerUp, { capture: true });
-      unlistenMoved?.();
-      unlistenScale?.();
-      if (ignored) void appWindow.setIgnoreCursorEvents(false).catch(() => {});
+      nativeListeners.dispose();
+      // Always enqueue the recovery state. `ignored` may still be false while an earlier native
+      // `true` request is in flight; the shared policy guarantees this runs after that request.
+      void cursorPolicy.setIgnored(false).catch(() => {});
     };
-  }, []);
+  }, [enabled]);
 
   return null;
 }
@@ -224,6 +344,18 @@ export function CompanionWindowController() {
   const bridgeGeneration = useRef(0);
   const bridgeReady = useRef(false);
   const pendingPositionReset = useRef(false);
+
+  useEffect(() => {
+    if (!isTauriRuntime() || !enabled) return;
+    let active = true;
+    void companionEnsure().then((available) => {
+      if (!available && active) useCompanionStore.getState().setEnabled(false);
+    }).catch((error) => {
+      console.warn("Native companion window could not be recovered.", error);
+      if (active) useCompanionStore.getState().setEnabled(false);
+    });
+    return () => { active = false; };
+  }, [enabled]);
 
   useEffect(() => {
     if (!isTauriRuntime() || !bridgeReady.current) return;
@@ -267,9 +399,9 @@ export function CompanionWindowController() {
             useAppStore.getState().openRoom(taskId);
             if (isTauriRuntime()) {
               const mainWindow = getCurrentWindow();
-              await mainWindow.show();
-              await mainWindow.unminimize();
-              await mainWindow.setFocus();
+              await restoreMainWindowBestEffort(mainWindow, (operation, error) => {
+                console.warn(`Companion navigation succeeded but main-window ${operation} failed.`, error);
+              });
             }
             result.ok = true;
           } catch (error) {

@@ -3,7 +3,7 @@
  * 激活页签来自 store.app.canvasTab（页签点击或 视图 菜单切换）。
  * Changes 以本轮记录为可操作范围，并合并当前项目的 Git 未提交变更作为只读上下文。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal as XtermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -264,6 +264,10 @@ export function Canvas({
     () => mergeSubagents(activity.subagents, detail?.runs ?? []),
     [activity.subagents, detail?.runs],
   );
+  const subagentRootRunIds = useMemo(
+    () => (detail?.runs ?? []).filter((run) => run.agent_kind === "main").map((run) => run.id),
+    [detail?.runs],
+  );
   const subagentIds = useMemo(
     () => new Set(subagents.map((child) => child.id)),
     [subagents],
@@ -432,11 +436,13 @@ export function Canvas({
           taskId={taskId}
           workspacePath={workspacePath}
           subagents={subagents}
+          rootRunIds={subagentRootRunIds}
           selectedSubagentId={selectedSubagentId}
           openSubagentIds={openSubagentIds}
           toolTabsBefore={toolTabsBeforeSubagents}
           toolTabsAfter={toolTabsAfterSubagents}
           onSelect={onInspectSubagent}
+          onBack={onBackToSubagents}
           onCloseTab={onCloseSubagentTab}
           onOpenLauncher={openLauncher}
           onHide={hideWorkbenchPanel}
@@ -661,7 +667,7 @@ function SummaryPanel({
     : subagentRuns.map((run) => ({ identity: run.id, runtimeKind: run.runtime_kind }));
   const title = task.title.trim() || task.goal.trim() || "未命名会话";
   const hasDistinctGoal = Boolean(task.goal_active && task.goal.trim() && task.goal.trim() !== title);
-  const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "纯聊天");
+  const workspaceLabel = workspaceName ?? (workspacePath ? "已附加文件夹" : "用户路径");
   const modelLabel = activeMainRun?.model || task.provider_name || "默认模型服务";
 
   // 产品只展示 Agent / Plan 两种交互模式。持久层中的 Ask/Edit/Auto 是兼容策略，
@@ -669,7 +675,7 @@ function SummaryPanel({
   const accessLabel =
     workspaceAttached && workspaceAccessMode ? projectAccessModeLabel(workspaceAccessMode) : null;
   const policyLabel = `${modeShortLabel(task.mode)} · ${accessLabel ?? "仅聊天"}`;
-  const policyTitle = `${modeLabel(task.mode)}\n项目权限：${accessLabel ?? "未附加文件夹，只能聊天"}`;
+  const policyTitle = `${modeLabel(task.mode)}\n项目权限：${accessLabel ?? "用户路径 · 仅聊天，无本地工具"}`;
 
   return (
     <div className="sum-wrap">
@@ -684,7 +690,7 @@ function SummaryPanel({
       </div>
       {hasDistinctGoal && <div className="sum-goal" title={task.goal}>{task.goal}</div>}
       <div className="sum-scope">
-        <span title={workspacePath ? displayPath(workspacePath) : "未附加文件夹"}>
+        <span title={workspacePath ? displayPath(workspacePath) : "用户路径"}>
           {workspaceLabel}
         </span>
         <span title={modelLabel}>模型 · {modelLabel}</span>
@@ -834,8 +840,6 @@ function NormalChangesPanel({
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const sessionKey = `${taskId}:changes`;
   const session = readPanelSession<{ selectedPath: string | null; f7Index: number }>(sessionKey);
-  // A11Y-005：设置里的「文本差异视图」开关，此处是它唯一的消费点。
-  const accessibleDiff = useAppStore((s) => s.accessibleDiffMode);
   const [sel, setSel] = useState<string | null>(session?.selectedPath ?? null);
   const [diff, setDiff] = useState<ChangeDiff | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1128,7 +1132,7 @@ function NormalChangesPanel({
   const adds = lines.filter((l) => l.kind === "add").length;
   const dels = lines.filter((l) => l.kind === "del").length;
 
-  // F7/⇧F7 变更点导航（accessible diff：在 add/del 行间循环跳转）
+  // F7/⇧F7 在 add/del 行间循环跳转。
   const changePoints = useMemo(
     () =>
       lines
@@ -1140,8 +1144,8 @@ function NormalChangesPanel({
   const diffBodyRef = useRef<HTMLDivElement>(null);
   useRememberPanelSession(sessionKey, { selectedPath: sel, f7Index: f7Idx });
   // 已经跳过一次的 f7Idx。detail 每 2s 轮询 → changes/lines/changePoints 全是新引用，
-  // 下面那个 effect 会跟着重跑；只认引用的话 scrollIntoView + focus 就会每 2 秒把焦点
-  // 从用户当前位置抢回 diff 行。用它把「effect 重跑」和「用户真的按了 F7」区分开。
+  // 下面那个 effect 会跟着重跑；只认引用的话 scrollIntoView 会每 2 秒把视图
+  // 拉回 diff 行。用它把「effect 重跑」和「用户真的按了 F7」区分开。
   const f7DoneRef = useRef(-1);
 
   useEffect(() => {
@@ -1168,7 +1172,7 @@ function NormalChangesPanel({
     // 轮询刷新只换引用不换 f7Idx，走到这里就直接返回，焦点留在用户自己那儿。
     if (f7Idx === f7DoneRef.current) return;
     if (f7Idx < 0 || f7Idx >= changePoints.length) return;
-    // 按 lines 下标定位，两种呈现共用同一套 data-dline，也顺手修掉了原先按
+    // 按 lines 下标定位，避免原先按
     // querySelectorAll(".dl") 序号定位在 truncated 时整体偏一行的问题。
     const target = diffBodyRef.current?.querySelector<HTMLElement>(
       `[data-dline="${changePoints[f7Idx]}"]`
@@ -1177,33 +1181,7 @@ function NormalChangesPanel({
     if (!target) return;
     f7DoneRef.current = f7Idx;
     target.scrollIntoView({ block: "center", behavior: "smooth" });
-    // 无障碍模式下把焦点也放到该行，屏幕阅读器才会读出跳到了哪一行。
-    if (accessibleDiff) target.focus({ preventScroll: true });
-  }, [f7Idx, changePoints, accessibleDiff]);
-
-  // 无障碍模式：按 @@ 头把行切成变更块，块标题给出「第 N 行起，新增 X 行，删除 Y 行」。
-  const hunks = useMemo<DiffHunk[]>(() => {
-    if (!accessibleDiff || lines.length === 0) return [];
-    let current: DiffHunk = { key: 0, raw: null, start: null, adds: 0, dels: 0, items: [] };
-    const groups: DiffHunk[] = [current];
-    for (let index = 0; index < lines.length; index++) {
-      const line = lines[index];
-      if (line.kind === "hunk") {
-        if (current.items.length === 0) {
-          current.raw = line.text;
-        } else {
-          current = { key: groups.length, raw: line.text, start: null, adds: 0, dels: 0, items: [] };
-          groups.push(current);
-        }
-        continue;
-      }
-      if (current.start == null) current.start = line.new_no ?? line.old_no ?? null;
-      if (line.kind === "add") current.adds += 1;
-      else if (line.kind === "del") current.dels += 1;
-      current.items.push({ index, line });
-    }
-    return groups.filter((group) => group.items.length > 0);
-  }, [accessibleDiff, lines]);
+  }, [f7Idx, changePoints]);
 
   // 最新一段连续 add 行 → .fresh shimmer(仅运行中)
   const freshFrom = useMemo(() => {
@@ -1417,7 +1395,7 @@ function NormalChangesPanel({
                 <span
                   className="kact"
                   title="F7 下一个变更，Shift + F7 上一个"
-                  aria-live={accessibleDiff ? "polite" : undefined}
+                  aria-live="polite"
                 >
                   F7 导航 {f7Idx >= 0 ? `${f7Idx + 1}/${changePoints.length}` : changePoints.length}
                 </span>
@@ -1431,104 +1409,33 @@ function NormalChangesPanel({
               {reviewActions}
             </div>
             <div
-              // 无障碍模式下整块是可聚焦的滚动区（键盘能滚），ring-inset 避免焦点环被裁
-              className={"diff-body" + (accessibleDiff ? " diff-body-a11y ring-inset" : "")}
+              className="diff-body"
               ref={diffBodyRef}
-              role={accessibleDiff ? "region" : undefined}
-              aria-label={accessibleDiff ? `${diff.path} 的文本差异` : undefined}
-              tabIndex={accessibleDiff ? 0 : undefined}
             >
-              {accessibleDiff ? (
-                <>
-                  {diff.truncated && (
-                    <p className="dnote">diff 过大，已按「全删全增」截断呈现。</p>
-                  )}
-                  {lines.length > 0 && (
-                    <p className="dsum">
-                      共 {hunks.length} 个变更块，新增 {adds} 行，删除 {dels} 行。
-                    </p>
-                  )}
-                  {hunks.map((hunk) => (
-                    <div
-                      className="dhunk"
-                      role="group"
-                      aria-labelledby={`dhunk-${hunk.key}`}
-                      key={hunk.key}
-                    >
-                      <h3 className="dhunk-head" id={`dhunk-${hunk.key}`}>
-                        {hunkTitle(hunk)}
-                        {hunk.raw && (
-                          <span className="dhunk-raw" aria-hidden="true">
-                            {hunk.raw}
-                          </span>
-                        )}
-                      </h3>
-                      <ol className="dlines" role="list">
-                        {hunk.items.map(({ index, line }) => {
-                          const no = line.new_no ?? line.old_no ?? null;
-                          return (
-                            <li
-                              className={
-                                "dla ring-inset dla-" +
-                                line.kind +
-                                (f7Idx >= 0 && changePoints[f7Idx] === index ? " f7-cur" : "")
-                              }
-                              key={index}
-                              data-dline={index}
-                              tabIndex={-1}
-                            >
-                              {/* 增删靠这段文本区分，不依赖底色；上下文行按约定留空 */}
-                              <span className="dla-mark">{DIFF_MARK[line.kind]}</span>
-                              <span className="dla-no">
-                                {no == null ? (
-                                  <span className="sr-only">无行号</span>
-                                ) : (
-                                  <>
-                                    <span className="sr-only">第 </span>
-                                    {no}
-                                    <span className="sr-only"> 行</span>
-                                  </>
-                                )}
-                              </span>
-                              <span className="dla-code">{line.text}</span>
-                              {(line.kind === "add" || line.kind === "del") && line.line_id && !selectedWorkspaceOnly && !selectedPathExiting && (
-                                <button className="diff-line-accept" disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`) || acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || line.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, line.line_id!)}>{line.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, line.line_id)) || line.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ol>
-                    </div>
-                  ))}
-                </>
-              ) : (
-                <>
-                  {diff.truncated && <div className="dl hunk">diff 过大,已截断(全删全增)</div>}
-                  {lines.map((l, i) =>
-                    l.kind === "hunk" ? (
-                      <div className="dl hunk" key={i} data-dline={i}>
-                        {l.text}
-                      </div>
-                    ) : (
-                      <div
-                        className={
-                          "dl " +
-                          l.kind +
-                          (i >= freshFrom && i <= freshTo && freshFrom >= 0 ? " fresh" : "") +
-                          (f7Idx >= 0 && changePoints[f7Idx] === i ? " f7-cur" : "")
-                        }
-                        key={i}
-                        data-dline={i}
-                      >
-                        <span className="no">{l.new_no ?? l.old_no ?? ""}</span>
-                        <span className="code">{l.text}</span>
-                        {(l.kind === "add" || l.kind === "del") && l.line_id && !selectedWorkspaceOnly && !selectedPathExiting && (
-                          <button className="diff-line-accept" disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`) || acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || l.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, l.line_id!)}>{l.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
-                        )}
-                      </div>
-                    )
-                  )}
-                </>
+              {diff.truncated && <div className="dl hunk">diff 过大,已截断(全删全增)</div>}
+              {lines.map((l, i) =>
+                l.kind === "hunk" ? (
+                  <div className="dl hunk" key={i} data-dline={i}>
+                    {l.text}
+                  </div>
+                ) : (
+                  <div
+                    className={
+                      "dl " +
+                      l.kind +
+                      (i >= freshFrom && i <= freshTo && freshFrom >= 0 ? " fresh" : "") +
+                      (f7Idx >= 0 && changePoints[f7Idx] === i ? " f7-cur" : "")
+                    }
+                    key={i}
+                    data-dline={i}
+                  >
+                    <span className="no">{l.new_no ?? l.old_no ?? ""}</span>
+                    <span className="code">{l.text}</span>
+                    {(l.kind === "add" || l.kind === "del") && l.line_id && !selectedWorkspaceOnly && !selectedPathExiting && (
+                      <button className="diff-line-accept" disabled={globalDecisionPending || pendingAccepts.has(fileAcceptKey(path)) || pendingRejects.has(`file:${path}`) || acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || l.review_state === "rejected" || isPathFullyAccepted(path) || isPathRejected(path) || pathStatus.get(path)?.safe_to_accept === false} onClick={() => void acceptDiffLine(path, l.line_id!)}>{l.review_state === "rejected" || isPathRejected(path) ? "已拒绝" : acceptedLineKeys.has(lineAcceptKey(path, l.line_id)) || l.review_state === "accepted" || isPathFullyAccepted(path) ? "已接受" : "接受行"}</button>
+                    )}
+                  </div>
+                )
               )}
               {lines.length === 0 && <div className="empty">无 diff 内容。</div>}
             </div>
@@ -1610,37 +1517,6 @@ function typeFullLabel(c: FileChange): string {
     case "rename":
       return "重命名文件";
   }
-}
-
-// ---------- 无障碍 diff（accessibleDiffMode） ----------
-
-/** 一个 @@ 变更块；items 里的 index 是行在 lines 中的下标，F7 靠它对齐。 */
-interface DiffHunk {
-  key: number;
-  /** 原始 @@ 头，仅作视觉参考 */
-  raw: string | null;
-  /** 块内第一行的行号 */
-  start: number | null;
-  adds: number;
-  dels: number;
-  items: { index: number; line: ChangeDiffLine }[];
-}
-
-/** 每行前置的显式文本标记；上下文行留空，读屏不会被噪声淹没。 */
-const DIFF_MARK: Record<ChangeDiffLine["kind"], string> = {
-  add: "+ 新增",
-  del: "- 删除",
-  ctx: "",
-  hunk: "",
-};
-
-function hunkTitle(hunk: DiffHunk): string {
-  const where = hunk.start == null ? "文件开头" : `第 ${hunk.start} 行起`;
-  if (hunk.adds === 0 && hunk.dels === 0) return `${where}，${hunk.items.length} 行上下文`;
-  const parts: string[] = [];
-  if (hunk.adds > 0) parts.push(`新增 ${hunk.adds} 行`);
-  if (hunk.dels > 0) parts.push(`删除 ${hunk.dels} 行`);
-  return `${where}，${parts.join("、")}`;
 }
 
 function shortHash(h: string | null | undefined): string {
@@ -1980,7 +1856,12 @@ function FilesPanel({
                   else openFileContextMenu(entry.path, event);
                 }}
               >
-                <span className="files-tree-arrow">{entry.is_directory ? (isOpen ? "⌄" : "›") : ""}</span>
+                <span
+                  className={`files-tree-arrow${isOpen ? " is-open" : ""}`}
+                  aria-hidden="true"
+                >
+                  {entry.is_directory ? <IconChevronRight width={11} height={11} /> : null}
+                </span>
                 {entry.is_directory ? <IconProjects width={13} height={13} /> : <IconFile width={13} height={13} />}
                 <span>{entry.name}</span>
               </button>
@@ -1998,7 +1879,7 @@ function FilesPanel({
   };
 
   if (!workspacePath) {
-    return <div className="empty">此会话未附加文件夹。附加工作区后即可浏览和编辑文件。</div>;
+    return <div className="empty">当前为用户路径（仅聊天）。附加工作区后即可浏览和编辑文件。</div>;
   }
   if (!workspaceAttached) {
     return <div className="empty">工作区尚未就绪，暂时无法浏览或编辑本地文件。</div>;
@@ -2140,6 +2021,24 @@ function FilesPanel({
 }
 
 // ---------- Terminal ----------
+
+const TERMINAL_SIDEBAR_STORAGE_KEY = "r-code.terminal.sidebar-collapsed";
+
+function initialTerminalSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(TERMINAL_SIDEBAR_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function rememberTerminalSidebarCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(TERMINAL_SIDEBAR_STORAGE_KEY, String(collapsed));
+  } catch {
+    // Restricted WebViews may reject localStorage. The current panel still keeps its state.
+  }
+}
 
 function defaultShell(): string {
   const ua = navigator.userAgent;
@@ -2328,8 +2227,13 @@ function TerminalViewport({
 
     let disposed = false;
     let resizeFrame: number | null = null;
+    let resizeRetryTimer: ReturnType<typeof setTimeout> | null = null;
     let terminal: XtermTerminal | null = null;
     let fit: FitAddon | null = null;
+    let desiredSize = { cols: 0, rows: 0 };
+    let confirmedSize = { cols: 0, rows: 0 };
+    let resizeInFlight = false;
+    let resizeFailures = 0;
     let inputDisposable: { dispose: () => void } | null = null;
     let inputBuffer: ReturnType<typeof createTerminalInputBuffer> | null = null;
     setReadyForId(null);
@@ -2341,11 +2245,50 @@ function TerminalViewport({
     const report = (cause: unknown) => {
       if (!disposed) onError(String(cause));
     };
+    const sameSize = (
+      left: { cols: number; rows: number },
+      right: { cols: number; rows: number },
+    ) => left.cols === right.cols && left.rows === right.rows;
+    const flushResize = () => {
+      if (
+        disposed
+        || resizeInFlight
+        || resizeRetryTimer != null
+        || sameSize(desiredSize, confirmedSize)
+      ) return;
+
+      const target = { ...desiredSize };
+      resizeInFlight = true;
+      void terminalResize(taskId, terminalId, target.cols, target.rows)
+        .then(() => {
+          if (disposed) return;
+          confirmedSize = target;
+          resizeFailures = 0;
+        })
+        .catch(() => {
+          if (disposed) return;
+          resizeFailures += 1;
+          const retryDelay = Math.min(1_000, 120 * (2 ** Math.min(resizeFailures - 1, 3)));
+          resizeRetryTimer = setTimeout(() => {
+            resizeRetryTimer = null;
+            flushResize();
+          }, retryDelay);
+        })
+        .finally(() => {
+          resizeInFlight = false;
+          if (!disposed && resizeRetryTimer == null && !sameSize(desiredSize, confirmedSize)) {
+            flushResize();
+          }
+        });
+    };
     const resize = () => {
       if (disposed || !terminal || !fit || terminalRef.current !== terminal) return;
       try {
         fit.fit();
-        void terminalResize(taskId, terminalId, terminal.cols, terminal.rows).catch(report);
+        const { cols, rows } = terminal;
+        if (cols <= 0 || rows <= 0 || sameSize(desiredSize, { cols, rows })) return;
+        desiredSize = { cols, rows };
+        flushResize();
       } catch {
         // 面板刚挂载或被隐藏时 xterm 可能尚无可测尺寸；下一帧会重试。
       }
@@ -2382,6 +2325,11 @@ function TerminalViewport({
         terminal.loadAddon(fit);
         terminal.open(host);
         terminalRef.current = terminal;
+        // PTY 必须尽早拿到真实 viewport，不能被较慢的历史快照读取阻塞。
+        scheduleResize();
+        void document.fonts?.ready.then(() => {
+          if (!disposed) scheduleResize();
+        });
         inputBuffer = createTerminalInputBuffer(
           (data) => terminalSend(taskId, terminalId, data, false),
           report,
@@ -2404,6 +2352,7 @@ function TerminalViewport({
     return () => {
       disposed = true;
       if (resizeFrame != null) cancelAnimationFrame(resizeFrame);
+      if (resizeRetryTimer != null) clearTimeout(resizeRetryTimer);
       observer.disconnect();
       themeObserver.disconnect();
       inputDisposable?.dispose();
@@ -2490,12 +2439,22 @@ function TerminalPanel({
   const { runWithCodexCli } = useCodexCliGate();
   const sessionKey = `${taskId}:terminal`;
   const session = readPanelSession<{ selectedTerminalId: string | null }>(sessionKey);
+  const sidebarId = useId();
   const [terms, setTerms] = useState<TerminalInfo[]>([]);
   const [selId, setSelId] = useState<string | null>(session?.selectedTerminalId ?? null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialTerminalSidebarCollapsed);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [rowFocus, setRowFocus] = useState(-1);
   useRememberPanelSession(sessionKey, { selectedTerminalId: selId });
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((collapsed) => {
+      const next = !collapsed;
+      rememberTerminalSidebarCollapsed(next);
+      return next;
+    });
+  };
 
   const list = useCallback(async () => {
     try {
@@ -2577,8 +2536,11 @@ function TerminalPanel({
   }, []);
 
   return (
-    <div className="term-wrap">
-      <div className="term-side">
+    <div
+      className={`term-wrap${sidebarCollapsed ? " is-sidebar-collapsed" : ""}`}
+      data-terminal-sidebar={sidebarCollapsed ? "collapsed" : "expanded"}
+    >
+      <div className="term-side" id={sidebarId} aria-hidden={sidebarCollapsed || undefined}>
         <div className="term-new-wrap">
           <button className="btn sm term-new" disabled={creating || !workspacePath || !workspaceAttached} onClick={() => void create()}>
             <IconPlus width={11} height={11} /> 新建终端
@@ -2653,6 +2615,19 @@ function TerminalPanel({
         )}
         {terms.length === 0 && <div className="term-hint">无终端</div>}
       </div>
+      <button
+        type="button"
+        className="term-side-toggle ring-inset"
+        onClick={toggleSidebar}
+        aria-controls={sidebarId}
+        aria-expanded={!sidebarCollapsed}
+        aria-label={sidebarCollapsed ? "展开终端列表" : "收起终端列表"}
+        title={sidebarCollapsed ? "展开终端列表" : "收起终端列表"}
+      >
+        {sidebarCollapsed
+          ? <IconChevronRight width={13} height={13} aria-hidden="true" />
+          : <IconChevronLeft width={13} height={13} aria-hidden="true" />}
+      </button>
       <div className="term-main">
         {error && <div className="panel-error" role="alert">{error}</div>}
         {sel ? (

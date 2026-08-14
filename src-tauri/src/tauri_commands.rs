@@ -4,15 +4,16 @@
 //! `r_code_host::commands` 中的同名 inner（lib 侧可测核心）。
 //! lib 不依赖 tauri（保持单元测试二进制无 GUI 链接）。
 
-use tauri::{AppHandle, PhysicalPosition, PhysicalSize, State, WebviewWindow};
+use tauri::{AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 use hermes_core::InferenceOptions;
 use r_code_core::dto::{
     AgentRun, AgentSendMode, FileChange, PermissionRequest, ProjectAccessMode, QueuedMessage,
     SessionBranch, Task, TaskMode, VerificationRecord, Workspace, WorkspaceMemoryMode,
 };
-use r_code_core::error::{ProductError, PROJECT_CONVERSATION_LIMIT_REACHED_CODE};
+use r_code_core::error::{PROJECT_CONVERSATION_LIMIT_REACHED_CODE, ProductError};
 use r_code_core::plan::{
     AnswerPlanQuestionsInput, PlanReviewDecision, PlanView, UpdatePlanItemInput,
 };
@@ -51,11 +52,43 @@ impl From<ProductError> for CommandError {
     }
 }
 
+impl From<r_code_host::rtk::RtkError> for CommandError {
+    fn from(error: r_code_host::rtk::RtkError) -> Self {
+        Self {
+            code: error.code().unwrap_or("COMMAND_FAILED"),
+            message: error.to_string(),
+            limit: None,
+        }
+    }
+}
+
 /// Explicit application exit. Window close is intentionally different on Windows: it hides the
 /// main window to the notification area so active agents and terminals can continue running.
 #[tauri::command]
 pub fn cmd_app_quit(app: AppHandle) {
     app.exit(0);
+}
+
+/// Ensure the independently rendered companion WebView still exists before Settings enables it.
+/// Window creation can fail transiently (for example while WebView2 is recovering); surfacing the
+/// error lets the toggle roll back instead of persisting an impossible "enabled but absent" state.
+#[tauri::command]
+pub fn cmd_companion_ensure(app: AppHandle) -> Result<bool, String> {
+    if let Err(error) = crate::setup_companion_window(&app) {
+        tracing::warn!(%error, "failed to ensure the native companion window");
+        return Err("native companion window is unavailable".to_string());
+    }
+    if app
+        .get_webview_window(crate::COMPANION_WINDOW_LABEL)
+        .is_none()
+    {
+        tracing::warn!(
+            window_label = crate::COMPANION_WINDOW_LABEL,
+            "native companion window is missing after a successful setup attempt"
+        );
+        return Err("native companion window is unavailable".to_string());
+    }
+    Ok(true)
 }
 
 #[tauri::command]
@@ -718,17 +751,19 @@ pub async fn cmd_git_push_task(
 #[tauri::command]
 pub async fn cmd_workflow_skills_list(
     state: State<'_, CommandState>,
-) -> Result<Vec<r_code_host::WorkflowSkill>, String> {
-    r_code_host::commands::workflow_skills_list(&state)
+    workspace_path: Option<String>,
+) -> Result<Vec<r_code_host::ScopedWorkflowSkill>, String> {
+    r_code_host::commands::workflow_skills_list(&state, workspace_path.as_deref())
 }
 
 /// 新建或保存一条 Skill；内置 Skill 保存为用户级覆盖。
 #[tauri::command]
 pub async fn cmd_workflow_skill_save(
     state: State<'_, CommandState>,
-    draft: r_code_host::WorkflowSkillDraft,
-) -> Result<r_code_host::WorkflowSkill, String> {
-    r_code_host::commands::workflow_skill_save(&state, draft)
+    workspace_path: Option<String>,
+    draft: r_code_host::ScopedWorkflowSkillDraft,
+) -> Result<r_code_host::ScopedWorkflowSkill, String> {
+    r_code_host::commands::workflow_skill_save(&state, workspace_path.as_deref(), draft)
 }
 
 /// 将内置 Skill 恢复为随应用发布的默认内容。
@@ -736,7 +771,7 @@ pub async fn cmd_workflow_skill_save(
 pub async fn cmd_workflow_skill_reset(
     state: State<'_, CommandState>,
     id: String,
-) -> Result<r_code_host::WorkflowSkill, String> {
+) -> Result<r_code_host::ScopedWorkflowSkill, String> {
     r_code_host::commands::workflow_skill_reset(&state, &id)
 }
 
@@ -744,9 +779,54 @@ pub async fn cmd_workflow_skill_reset(
 #[tauri::command]
 pub async fn cmd_workflow_skill_delete(
     state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+    scope: r_code_host::WorkflowSkillScope,
     id: String,
 ) -> Result<(), String> {
-    r_code_host::commands::workflow_skill_delete(&state, &id)
+    r_code_host::commands::workflow_skill_delete(&state, workspace_path.as_deref(), scope, &id)
+}
+
+/// Atomically promote one project Skill into the global AppData catalog.
+#[tauri::command]
+pub async fn cmd_workflow_skill_sync_to_global(
+    state: State<'_, CommandState>,
+    workspace_path: String,
+    id: String,
+) -> Result<r_code_host::ScopedWorkflowSkill, String> {
+    r_code_host::commands::workflow_skill_sync_to_global(&state, &workspace_path, &id)
+}
+
+#[tauri::command]
+pub async fn cmd_knowledge_prompts_get(
+    state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::knowledge_prompts_get(&state, workspace_path.as_deref())
+}
+
+#[tauri::command]
+pub async fn cmd_knowledge_prompts_save(
+    state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+    mode: r_code_host::settings::ProjectPromptMode,
+    main_agent: String,
+    subagent: String,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::knowledge_prompts_save(
+        &state,
+        workspace_path.as_deref(),
+        mode,
+        &main_agent,
+        &subagent,
+    )
+}
+
+#[tauri::command]
+pub async fn cmd_knowledge_prompts_reset(
+    state: State<'_, CommandState>,
+    workspace_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::knowledge_prompts_reset(&state, workspace_path.as_deref())
 }
 
 /// 在审核阶段提出修改请求，启动下一轮 Agent 运行。
@@ -765,8 +845,14 @@ pub async fn cmd_change_diff(
     state: State<'_, CommandState>,
     task_id: String,
     path: String,
+    run_id: Option<String>,
 ) -> Result<ChangeDiff, String> {
-    r_code_host::commands::change_diff(&state, &task_id, &path).await
+    match run_id.as_deref() {
+        Some(run_id) => {
+            r_code_host::commands::change_diff_for_run(&state, &task_id, run_id, &path).await
+        }
+        None => r_code_host::commands::change_diff(&state, &task_id, &path).await,
+    }
 }
 
 /// 运行验证命令。
@@ -1370,6 +1456,54 @@ pub async fn cmd_provider_catalog() -> Result<serde_json::Value, String> {
     r_code_host::commands::provider_catalog().await
 }
 
+#[tauri::command]
+pub async fn cmd_subagent_provider_catalog(
+    state: State<'_, CommandState>,
+) -> Result<r_code_host::subagent_providers::CatalogSnapshot, String> {
+    r_code_host::commands::subagent_provider_catalog(&state).await
+}
+
+#[tauri::command]
+pub async fn cmd_subagent_provider_test(
+    state: State<'_, CommandState>,
+    request: r_code_host::subagent_providers::SubagentProviderProbeRequest,
+) -> Result<r_code_host::subagent_providers::SubagentProviderProbeResponse, String> {
+    r_code_host::commands::subagent_provider_test(&state, request).await
+}
+
+#[tauri::command]
+pub async fn cmd_subagent_provider_test_batch(
+    state: State<'_, CommandState>,
+    requests: Vec<r_code_host::subagent_providers::SubagentProviderProbeRequest>,
+) -> Result<r_code_host::subagent_providers::SubagentProviderProbeBatchResponse, String> {
+    r_code_host::commands::subagent_provider_test_batch(&state, requests).await
+}
+
+#[tauri::command]
+pub async fn cmd_subagent_pool_snapshot(
+    state: State<'_, CommandState>,
+) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, String> {
+    r_code_host::commands::subagent_pool_snapshot(&state).await
+}
+
+#[tauri::command]
+pub async fn cmd_subagent_pool_save(
+    state: State<'_, CommandState>,
+    revision: String,
+    pool: hermes_config::SubagentPoolConfig,
+) -> Result<r_code_host::subagent_providers::SubagentPoolSnapshot, String> {
+    r_code_host::commands::subagent_pool_save(&state, &revision, pool).await
+}
+
+/// 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。
+#[tauri::command]
+pub async fn cmd_provider_balance(
+    state: State<'_, CommandState>,
+    request: r_code_host::commands::ProviderBalanceInput,
+) -> Result<serde_json::Value, String> {
+    r_code_host::commands::provider_balance(&state, request).await
+}
+
 /// 从当前 Provider 的模型目录端点读取可用模型。
 #[tauri::command]
 pub async fn cmd_provider_models(
@@ -1429,8 +1563,23 @@ pub async fn cmd_rtk_status(
 pub async fn cmd_rtk_set_enabled(
     state: State<'_, CommandState>,
     enabled: bool,
-) -> Result<r_code_host::rtk::RtkStatus, String> {
-    r_code_host::commands::rtk_set_enabled(&state, enabled).await
+) -> Result<r_code_host::rtk::RtkStatus, CommandError> {
+    r_code_host::commands::rtk_set_enabled(&state, enabled)
+        .await
+        .map_err(CommandError::from)
+}
+
+/// Open the Windows Security exclusions page so the user can allow the RTK binary after Windows
+/// Defender quarantined it. The custom protocol is handled by the Windows Security app, which is
+/// the only trusted channel when tamper protection blocks scripted exclusion changes.
+#[tauri::command]
+pub fn cmd_rtk_open_security_exclusions(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(
+            r_code_host::rtk::WINDOWS_SECURITY_EXCLUSIONS_URL,
+            None::<&str>,
+        )
+        .map_err(|error| format!("open Windows Security exclusions page: {error}"))
 }
 
 /// 获取 Codex CLI 外部协作入口状态（只读）。

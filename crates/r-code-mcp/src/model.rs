@@ -14,6 +14,7 @@ pub const RESERVED_TOOL_NAMES: &[&str] = &[
     "mcp_prepare_install",
     "mcp_prepare_enable",
     "mcp_create_draft",
+    "mcp_save_draft",
 ];
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub enum McpConfigError {
     EmptyCommand,
     #[error("MCP command or argument contains a control character")]
     CommandControlCharacter,
-    #[error("MCP HTTP URL must use https: {0}")]
+    #[error("MCP HTTP URL must use https unless it targets an explicit local loopback host: {0}")]
     InsecureHttpUrl(String),
     #[error("MCP HTTP URL must not contain embedded credentials")]
     EmbeddedCredentials,
@@ -103,11 +104,12 @@ impl McpTransportConfig {
             Self::StreamableHttp { url, .. } => {
                 let parsed = url::Url::parse(url)
                     .map_err(|_| McpConfigError::InsecureHttpUrl(url.clone()))?;
-                if parsed.scheme() != "https" {
-                    return Err(McpConfigError::InsecureHttpUrl(url.clone()));
-                }
                 if !parsed.username().is_empty() || parsed.password().is_some() {
                     return Err(McpConfigError::EmbeddedCredentials);
+                }
+                let secure_remote = parsed.scheme() == "https" && parsed.host().is_some();
+                if !secure_remote && !is_explicit_loopback_http_url(url, &parsed) {
+                    return Err(McpConfigError::InsecureHttpUrl(url.clone()));
                 }
                 Ok(())
             }
@@ -130,6 +132,65 @@ impl McpTransportConfig {
             )),
         }
     }
+}
+
+/// Cleartext MCP is permitted only for an explicitly written loopback authority.
+///
+/// `url::Url` intentionally canonicalizes legacy IPv4 spellings such as `127.1` and
+/// `2130706433` to `127.0.0.1`. Those spellings are network-loopback in practice, but accepting
+/// them makes the security boundary hard to audit and creates room for parser disagreement in
+/// downstream clients. Check both the parsed host and the original authority so only the three
+/// documented forms are accepted.
+fn is_explicit_loopback_http_url(raw: &str, parsed: &url::Url) -> bool {
+    if parsed.scheme() != "http" || parsed.port() == Some(0) {
+        return false;
+    }
+
+    let Some((scheme, remainder)) = raw.split_once("://") else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("http") {
+        return false;
+    }
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+
+    let raw_host = if authority.starts_with('[') {
+        let Some(end) = authority.find(']') else {
+            return false;
+        };
+        let suffix = &authority[end + 1..];
+        if !valid_optional_port_suffix(suffix) {
+            return false;
+        }
+        &authority[..=end]
+    } else if let Some((host, port)) = authority.rsplit_once(':') {
+        if host.contains(':') || port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return false;
+        }
+        host
+    } else {
+        authority
+    };
+
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => {
+            raw_host.eq_ignore_ascii_case("localhost") && host.eq_ignore_ascii_case("localhost")
+        }
+        Some(url::Host::Ipv4(host)) => raw_host == "127.0.0.1" && host.is_loopback(),
+        Some(url::Host::Ipv6(host)) => raw_host.eq_ignore_ascii_case("[::1]") && host.is_loopback(),
+        None => false,
+    }
+}
+
+fn valid_optional_port_suffix(suffix: &str) -> bool {
+    suffix.is_empty()
+        || suffix
+            .strip_prefix(':')
+            .is_some_and(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

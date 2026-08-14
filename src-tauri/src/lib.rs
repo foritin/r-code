@@ -37,6 +37,7 @@ pub mod search;
 pub mod security_config;
 pub mod settings;
 pub mod skills;
+pub mod subagent_providers;
 pub mod support_bundle;
 pub mod system_integration;
 #[cfg(target_os = "windows")]
@@ -62,7 +63,7 @@ pub use provider_catalog::{
 pub use recovery::{InterruptedTask, RecoveryManager, RecoveryPageData};
 pub use replay::{EvidenceLevel, ReplayDepth, ReplayEntry, ReplayService};
 pub use search::{ReplacePreview, SearchMatch, SearchService};
-pub use security_config::{should_block_navigation, should_block_window_open, SecurityConfig};
+pub use security_config::{SecurityConfig, should_block_navigation, should_block_window_open};
 pub use skills::{SkillManager, SkillStatus};
 pub use support_bundle::{
     BundleContents, ConfigSummary, DbStats, LogEntry, McpServerSupportSummary, SupportBundle,
@@ -72,8 +73,8 @@ pub use work_card::{
     WorkCardBoundary, WorkCardContract,
 };
 pub use workflow_skills::{
-    SaveWorkflowSkillTool, WorkflowSkill, WorkflowSkillCatalog, WorkflowSkillDraft,
-    WorkflowSkillSource,
+    SaveWorkflowSkillTool, ScopedWorkflowSkill, ScopedWorkflowSkillDraft, WorkflowSkill,
+    WorkflowSkillCatalog, WorkflowSkillDraft, WorkflowSkillScope, WorkflowSkillSource,
 };
 
 /// 初始化结构化日志框架。
@@ -81,5 +82,9 @@ pub use workflow_skills::{
 /// 使用 `tracing` crate；日志格式结构化 JSON；支持日志级别动态调整。
 /// [doc-14 阶段1]
 pub fn init_logging() {
-    logging::init();
+    if app_paths::AppFlavor::current() == app_paths::AppFlavor::Development {
+        logging::init_dev();
+    } else {
+        logging::init();
+    }
 }

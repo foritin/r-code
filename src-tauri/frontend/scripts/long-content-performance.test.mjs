@@ -194,6 +194,120 @@ test("a collapsed 1000-line code block mounts only its 16-line preview", async (
   }
 });
 
+test("an expanded code block stays open while streaming appends content", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const initialLines = Array.from(
+    { length: 20 },
+    (_, index) => `streaming_code_line_${String(index + 1).padStart(2, "0")}`,
+  );
+
+  try {
+    await page.evaluate(async (lines) => {
+      const ReactModule = await import("/node_modules/.vite/deps/react.js");
+      const ReactDomModule = await import("/node_modules/.vite/deps/react-dom_client.js");
+      const createElement = ReactModule.createElement ?? ReactModule.default?.createElement;
+      const createRoot = ReactDomModule.createRoot ?? ReactDomModule.default?.createRoot;
+      const { Markdown } = await import("/src/components/room/Markdown.tsx");
+      const host = document.createElement("div");
+      host.id = "streaming-code-fixture";
+      document.body.append(host);
+      const root = createRoot(host);
+      globalThis.__rCodeStreamingMarkdownRoot = root;
+      globalThis.__rCodeRenderStreamingMarkdown = (nextLines) => {
+        root.render(createElement(Markdown, {
+          text: `\`\`\`python\n${nextLines.join("\n")}\n\`\`\``,
+          streaming: true,
+        }));
+      };
+      globalThis.__rCodeRenderStreamingMarkdown(lines);
+    }, initialLines);
+
+    const fixture = page.locator("#streaming-code-fixture");
+    const toggle = fixture.locator(".md-code-toggle");
+    await toggle.waitFor({ state: "visible" });
+    assert.match((await toggle.innerText()).trim(), /^展开全部 · 2[01] 行$/);
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+
+    await page.evaluate((lines) => {
+      globalThis.__rCodeRenderStreamingMarkdown([...lines, "streaming_code_line_21"]);
+    }, initialLines);
+    await page.waitForFunction(
+      () => document.querySelector("#streaming-code-fixture .md-code code")?.textContent?.includes("streaming_code_line_21"),
+    );
+    assert.equal(
+      await fixture.locator(".md-code-toggle").getAttribute("aria-expanded"),
+      "true",
+      "streaming growth must preserve the user's expanded state",
+    );
+  } finally {
+    await page.evaluate(() => {
+      globalThis.__rCodeStreamingMarkdownRoot?.unmount();
+      delete globalThis.__rCodeStreamingMarkdownRoot;
+      delete globalThis.__rCodeRenderStreamingMarkdown;
+    }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("an expanded code block resets when its source is replaced", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const originalLines = Array.from(
+    { length: 20 },
+    (_, index) => `original_code_line_${String(index + 1).padStart(2, "0")}`,
+  );
+  const replacementLines = Array.from(
+    { length: 20 },
+    (_, index) => `replacement_code_line_${String(index + 1).padStart(2, "0")}`,
+  );
+
+  try {
+    await page.evaluate(async (lines) => {
+      const ReactModule = await import("/node_modules/.vite/deps/react.js");
+      const ReactDomModule = await import("/node_modules/.vite/deps/react-dom_client.js");
+      const createElement = ReactModule.createElement ?? ReactModule.default?.createElement;
+      const createRoot = ReactDomModule.createRoot ?? ReactDomModule.default?.createRoot;
+      const { Markdown } = await import("/src/components/room/Markdown.tsx");
+      const host = document.createElement("div");
+      host.id = "replacement-code-fixture";
+      document.body.append(host);
+      const root = createRoot(host);
+      globalThis.__rCodeReplacementMarkdownRoot = root;
+      globalThis.__rCodeRenderReplacementMarkdown = (nextLines) => {
+        root.render(createElement(Markdown, {
+          text: `\`\`\`python\n${nextLines.join("\n")}\n\`\`\``,
+        }));
+      };
+      globalThis.__rCodeRenderReplacementMarkdown(lines);
+    }, originalLines);
+
+    const fixture = page.locator("#replacement-code-fixture");
+    const toggle = fixture.locator(".md-code-toggle");
+    await toggle.waitFor({ state: "visible" });
+    await toggle.click();
+    assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+
+    await page.evaluate((lines) => globalThis.__rCodeRenderReplacementMarkdown(lines), replacementLines);
+    await page.waitForFunction(
+      () => document.querySelector("#replacement-code-fixture .md-code code")?.textContent?.includes("replacement_code_line_01"),
+    );
+    assert.equal(
+      await fixture.locator(".md-code-toggle").getAttribute("aria-expanded"),
+      "false",
+      "a different source replacing the same block position should return to the safe collapsed default",
+    );
+  } finally {
+    await page.evaluate(() => {
+      globalThis.__rCodeReplacementMarkdownRoot?.unmount();
+      delete globalThis.__rCodeReplacementMarkdownRoot;
+      delete globalThis.__rCodeRenderReplacementMarkdown;
+    }).catch(() => {});
+    await page.close();
+  }
+});
+
 test("a collapsed 1000-line tool payload also mounts only its preview", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });

@@ -28,6 +28,16 @@ const MAX_BINARY_BYTES: u64 = 64 * 1024 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Stable error code surfaced to the WebView when the freshly installed RTK binary cannot be
+/// executed. On Windows this is almost always Windows Defender quarantining the unsigned binary
+/// (`Behavior:Win32/DefenseEvasion.A!ml`), which the user must resolve through the Windows
+/// Security exclusions UI — elevation alone cannot bypass tamper protection.
+pub const RTK_BLOCKED_BY_SECURITY_SOFTWARE: &str = "RTK_BLOCKED_BY_SECURITY_SOFTWARE";
+
+/// Deep link that opens the Windows Security exclusions page directly. The Security app handles
+/// this custom protocol even when tamper protection blocks scripted exclusion changes.
+pub const WINDOWS_SECURITY_EXCLUSIONS_URL: &str = "windowsdefender://threat/exclusions";
+
 pub const COMMAND_HINT: &str =
     "RTK (Rust Token Killer) is enabled by the user in R-Code. For supported non-interactive shell work, \
 you must prefer its token-optimized wrappers, for example `rtk rg`, `rtk read`, `rtk git`, \
@@ -50,12 +60,57 @@ pub struct RtkStatus {
     pub version: Option<String>,
     pub source: Option<&'static str>,
     pub platform: String,
+    /// R-Code 托管二进制所在目录；被安全软件拦截时，用户应把该目录加入排除项。
+    pub bin_dir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct RtkProbe {
     version: String,
     managed: bool,
+}
+
+/// Typed failure for RTK enable/install. Carries a stable `code` so the WebView can render
+/// actionable guidance (for example opening the Windows Security exclusions page) without
+/// parsing diagnostic prose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RtkError {
+    code: Option<&'static str>,
+    message: String,
+}
+
+impl RtkError {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn security_block(message: impl Into<String>) -> Self {
+        Self {
+            code: Some(RTK_BLOCKED_BY_SECURITY_SOFTWARE),
+            message: message.into(),
+        }
+    }
+
+    pub fn code(&self) -> Option<&'static str> {
+        self.code
+    }
+}
+
+impl std::fmt::Display for RtkError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for RtkError {}
+
+impl From<String> for RtkError {
+    fn from(message: String) -> Self {
+        Self::new(message)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -132,10 +187,11 @@ impl RtkManager {
                 .as_ref()
                 .map(|probe| if probe.managed { "managed" } else { "system" }),
             platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            bin_dir: Some(self.managed_bin_dir().to_string_lossy().into_owned()),
         }
     }
 
-    pub async fn set_enabled(&self, enabled: bool) -> Result<RtkStatus, String> {
+    pub async fn set_enabled(&self, enabled: bool) -> Result<RtkStatus, RtkError> {
         let _guard = RTK_CHANGE_LOCK.lock().await;
         if !enabled {
             self.disable_policy()?;
@@ -152,7 +208,7 @@ impl RtkManager {
         result
     }
 
-    async fn enable_inner(&self) -> Result<RtkStatus, String> {
+    async fn enable_inner(&self) -> Result<RtkStatus, RtkError> {
         let probe = match self.probe().await {
             Some(probe) => probe,
             None => self.install_managed().await?,
@@ -165,6 +221,7 @@ impl RtkManager {
             version: Some(probe.version),
             source: Some(if probe.managed { "managed" } else { "system" }),
             platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            bin_dir: Some(self.managed_bin_dir().to_string_lossy().into_owned()),
         };
         tracing::info!(
             source = status.source.unwrap_or("unknown"),
@@ -216,7 +273,7 @@ impl RtkManager {
             })
     }
 
-    async fn install_managed(&self) -> Result<RtkProbe, String> {
+    async fn install_managed(&self) -> Result<RtkProbe, RtkError> {
         let asset = release_asset(std::env::consts::OS, std::env::consts::ARCH)?;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(12))
@@ -236,31 +293,46 @@ impl RtkManager {
             return Err(format!(
                 "RTK archive checksum mismatch for {}: expected {}, got {actual}",
                 asset.name, asset.sha256
-            ));
+            )
+            .into());
         }
 
         let binary = extract_rtk_binary(&archive_bytes)?;
         let staging = self.stage_managed_binary(&binary)?;
         let target = self.managed_executable();
         let backup = self.activate_staged_binary(staging.as_ref())?;
-        let verification = match probe_rtk(&target).await {
-            Some(version) if rtk_version_matches_release(&version, RTK_RELEASE_TAG) => Ok(version),
-            Some(version) => Err(format!(
+        let verification = match probe_rtk_outcome(&target).await {
+            ProbeOutcome::Version(version)
+                if rtk_version_matches_release(&version, RTK_RELEASE_TAG) =>
+            {
+                Ok(version)
+            }
+            ProbeOutcome::Version(version) => Err(RtkError::new(format!(
                 "installed RTK version {version:?} does not match release {RTK_RELEASE_TAG}"
-            )),
-            None => Err(format!(
-                "installed RTK binary failed verification at {}",
-                target.display()
-            )),
+            ))),
+            ProbeOutcome::Blocked(detail) => Err(security_block_error(&target, &detail)),
+            ProbeOutcome::Unavailable => {
+                if target.is_file() {
+                    Err(RtkError::new(format!(
+                        "installed RTK binary failed verification at {}",
+                        target.display()
+                    )))
+                } else {
+                    Err(security_block_error(
+                        &target,
+                        "the binary was removed after installation",
+                    ))
+                }
+            }
         };
         let version = match verification {
             Ok(version) => version,
             Err(verification_error) => {
                 return match self.rollback_managed_binary(backup.as_deref()) {
                     Ok(()) => Err(verification_error),
-                    Err(rollback_error) => Err(format!(
+                    Err(rollback_error) => Err(RtkError::new(format!(
                         "{verification_error}; failed to roll back RTK binary: {rollback_error}"
-                    )),
+                    ))),
                 };
             }
         };
@@ -268,14 +340,14 @@ impl RtkManager {
             if let Err(cleanup_error) = std::fs::remove_file(backup_path) {
                 if cleanup_error.kind() != std::io::ErrorKind::NotFound {
                     return match self.rollback_managed_binary(Some(backup_path)) {
-                        Ok(()) => Err(format!(
+                        Ok(()) => Err(RtkError::new(format!(
                             "remove verified RTK backup {}: {cleanup_error}",
                             backup_path.display()
-                        )),
-                        Err(rollback_error) => Err(format!(
+                        ))),
+                        Err(rollback_error) => Err(RtkError::new(format!(
                             "remove verified RTK backup {}: {cleanup_error}; failed to roll back RTK binary: {rollback_error}",
                             backup_path.display()
-                        )),
+                        ))),
                     };
                 }
             }
@@ -488,22 +560,60 @@ fn normalized_path_key(path: &Path) -> OsString {
 }
 
 async fn probe_rtk(path: &Path) -> Option<String> {
-    let version_output = run_probe(path, &["--version"]).await?;
-    let version = first_non_empty_line(&version_output)?;
-    if !version.starts_with("rtk ") || version.len() > 80 {
-        return None;
+    match probe_rtk_outcome(path).await {
+        ProbeOutcome::Version(version) => Some(version),
+        ProbeOutcome::Blocked(_) | ProbeOutcome::Unavailable => None,
     }
-    // The RTK README explicitly warns about a crates.io name collision. `gain --help`
-    // distinguishes Rust Token Killer without changing telemetry or analytics state.
-    let gain_help = run_probe(path, &["gain", "--help"]).await?;
-    let normalized = gain_help.to_ascii_lowercase();
-    if !normalized.contains("token") || !normalized.contains("saving") {
-        return None;
-    }
-    Some(version.to_string())
 }
 
-async fn run_probe(path: &Path, args: &[&str]) -> Option<String> {
+#[derive(Debug, Clone)]
+enum ProbeOutcome {
+    Version(String),
+    /// The process could not be started: Windows Defender (or another security product)
+    /// blocked or quarantined the binary before it could run.
+    Blocked(String),
+    Unavailable,
+}
+
+#[derive(Debug, Clone)]
+enum ProbeRunError {
+    Blocked(String),
+    Failed(String),
+}
+
+async fn probe_rtk_outcome(path: &Path) -> ProbeOutcome {
+    let version_output = match run_probe_outcome(path, &["--version"]).await {
+        Ok(output) => output,
+        Err(ProbeRunError::Blocked(detail)) => return ProbeOutcome::Blocked(detail),
+        Err(ProbeRunError::Failed(detail)) => {
+            tracing::debug!(path = ?path, detail = %detail, "RTK probe could not run the binary");
+            return ProbeOutcome::Unavailable;
+        }
+    };
+    let version = match first_non_empty_line(&version_output) {
+        Some(version) if version.starts_with("rtk ") && version.len() <= 80 => version,
+        _ => return ProbeOutcome::Unavailable,
+    };
+    // The RTK README explicitly warns about a crates.io name collision. `gain --help`
+    // distinguishes Rust Token Killer without changing telemetry or analytics state.
+    match run_probe_outcome(path, &["gain", "--help"]).await {
+        Ok(gain_help) => {
+            let normalized = gain_help.to_ascii_lowercase();
+            if normalized.contains("token") && normalized.contains("saving") {
+                ProbeOutcome::Version(version.to_string())
+            } else {
+                ProbeOutcome::Unavailable
+            }
+        }
+        Err(ProbeRunError::Blocked(detail)) => ProbeOutcome::Blocked(detail),
+        Err(ProbeRunError::Failed(detail)) => {
+            tracing::debug!(path = ?path, detail = %detail, "RTK `gain --help` probe failed");
+            ProbeOutcome::Unavailable
+        }
+    }
+}
+
+async fn run_probe_outcome(path: &Path, args: &[&str]) -> Result<String, ProbeRunError> {
     let mut command = Command::new(path);
     command
         .args(args)
@@ -512,16 +622,44 @@ async fn run_probe(path: &Path, args: &[&str]) -> Option<String> {
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     hide_background_console(command.as_std_mut());
-    let output = timeout(PROBE_TIMEOUT, command.output()).await.ok()?.ok()?;
+    let output = match timeout(PROBE_TIMEOUT, command.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => return Err(spawn_probe_error(&error)),
+        Err(_) => return Err(ProbeRunError::Failed("probe timed out".to_string())),
+    };
     if !output.status.success() {
-        return None;
+        return Err(ProbeRunError::Failed(format!(
+            "probe exited with {}",
+            output.status
+        )));
     }
     let bytes = if output.stdout.is_empty() {
         output.stderr
     } else {
         output.stdout
     };
-    String::from_utf8(bytes).ok()
+    String::from_utf8(bytes).map_err(|error| ProbeRunError::Failed(error.to_string()))
+}
+
+fn spawn_probe_error(error: &std::io::Error) -> ProbeRunError {
+    #[cfg(windows)]
+    {
+        // ERROR_VIRUS_INFECTED (225) is the Win32 code Defender returns when real-time
+        // protection blocks an unsigned binary before CreateProcess completes.
+        const ERROR_VIRUS_INFECTED: i32 = 225;
+        if error.raw_os_error() == Some(ERROR_VIRUS_INFECTED) {
+            return ProbeRunError::Blocked(error.to_string());
+        }
+    }
+    ProbeRunError::Failed(error.to_string())
+}
+
+fn security_block_error(target: &Path, detail: &str) -> RtkError {
+    RtkError::security_block(format!(
+        "installed RTK binary failed verification at {}: {detail}; \
+         security software (for example Windows Defender) likely blocked or quarantined the unsigned binary",
+        target.display()
+    ))
 }
 
 fn first_non_empty_line(value: &str) -> Option<&str> {

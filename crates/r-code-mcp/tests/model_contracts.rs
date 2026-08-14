@@ -57,6 +57,7 @@ fn server_ids_are_stable_and_cannot_shadow_native_tools() {
         "1starts-with-number",
         "has__separator",
         "web_search",
+        "mcp_save_draft",
     ] {
         let mut config = user_stdio_config();
         config.id = id.to_string();
@@ -65,12 +66,46 @@ fn server_ids_are_stable_and_cannot_shadow_native_tools() {
 }
 
 #[test]
-fn http_transport_requires_https_without_embedded_credentials() {
+fn http_transport_allows_only_explicit_loopback_cleartext_without_credentials() {
     let insecure = McpTransportConfig::StreamableHttp {
         url: "http://example.com/mcp".to_string(),
         headers: BTreeMap::new(),
     };
     assert!(insecure.validate().is_err());
+
+    for url in [
+        "http://127.0.0.1:27200/mcp",
+        "http://localhost:27200/mcp",
+        "http://[::1]:27200/mcp",
+    ] {
+        McpTransportConfig::StreamableHttp {
+            url: url.to_string(),
+            headers: BTreeMap::new(),
+        }
+        .validate()
+        .unwrap_or_else(|error| panic!("explicit loopback URL {url} should be allowed: {error}"));
+    }
+
+    for url in [
+        "http://127.0.0.2:27200/mcp",
+        "http://127.1:27200/mcp",
+        "http://2130706433:27200/mcp",
+        "http://localhost.example:27200/mcp",
+        "http://localhost.:27200/mcp",
+        "http://[::ffff:127.0.0.1]:27200/mcp",
+        "http://user@localhost:27200/mcp",
+        "http://localhost:27200@mcp.example/mcp",
+    ] {
+        assert!(
+            McpTransportConfig::StreamableHttp {
+                url: url.to_string(),
+                headers: BTreeMap::new(),
+            }
+            .validate()
+            .is_err(),
+            "non-canonical or non-loopback cleartext URL should be rejected: {url}"
+        );
+    }
 
     let embedded = McpTransportConfig::StreamableHttp {
         url: "https://user:password@example.com/mcp".to_string(),

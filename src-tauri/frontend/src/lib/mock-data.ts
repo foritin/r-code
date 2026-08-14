@@ -229,6 +229,46 @@ function detail(task: Task): TaskDetail {
           ended_at: at(13),
           usage_json: null,
         },
+        {
+          id: `${task.id}-native-child`,
+          task_id: task.id,
+          branch_id: branchId,
+          parent_run_id: runId,
+          agent_kind: "subagent" as const,
+          agent_label: "R-Code 子代理 · 规划验证",
+          summary: "正在把并发修复拆成可验证步骤。",
+          delegated_by_tool_call_id: "delegate-native-child",
+          model: "gpt-5.6-terra",
+          runtime_kind: "native" as const,
+          access_mode: "read_only" as const,
+          require_approval: false,
+          routing_reason: "槽位 1 · 由 R-Code Provider 执行，可继续委派",
+          external_session_id: null,
+          review_state: "pending" as const,
+          started_at: at(5),
+          ended_at: null,
+          usage_json: null,
+        },
+        {
+          id: `${task.id}-native-grandchild`,
+          task_id: task.id,
+          branch_id: branchId,
+          parent_run_id: `${task.id}-native-child`,
+          agent_kind: "subagent" as const,
+          agent_label: "R-Code 孙代理 · 运行定向测试",
+          summary: "正在运行 supervisor 定向测试。",
+          delegated_by_tool_call_id: "delegate-native-grandchild",
+          model: "gpt-5.6-terra",
+          runtime_kind: "native" as const,
+          access_mode: "read_only" as const,
+          require_approval: false,
+          routing_reason: "槽位 3 · 由父子代理继续委派",
+          external_session_id: null,
+          review_state: "pending" as const,
+          started_at: at(4),
+          ended_at: null,
+          usage_json: null,
+        },
       ] : []),
     ],
     events: [
@@ -237,8 +277,8 @@ function detail(task: Task): TaskDetail {
     ],
     changes: isReview || task.id === "mock-task-queue"
       ? [
-          { id: `${task.id}-change-1`, task_id: task.id, tool_call_id: null, path: "src/error.rs", change_type: "modify", before_hash: null, after_hash: null, old_path: null, created_at: at(10) },
-          { id: `${task.id}-change-2`, task_id: task.id, tool_call_id: null, path: "src/api.rs", change_type: "modify", before_hash: null, after_hash: null, old_path: null, created_at: at(9) },
+          { id: `${task.id}-change-1`, task_id: task.id, run_id: runId, tool_call_id: null, path: "src/error.rs", change_type: "modify", before_hash: null, after_hash: null, old_path: null, created_at: at(10) },
+          { id: `${task.id}-change-2`, task_id: task.id, run_id: runId, tool_call_id: null, path: "src/api.rs", change_type: "modify", before_hash: null, after_hash: null, old_path: null, created_at: at(9) },
         ]
       : [],
     permissions: isPermission
@@ -441,6 +481,7 @@ export function browserMockRtkStatus(): RtkStatus {
     version: browserMockRtkAvailable ? "rtk 0.45.0" : null,
     source: browserMockRtkAvailable ? "managed" : null,
     platform: "windows-x86_64",
+    bin_dir: "C:\\Users\\demo\\AppData\\Roaming\\com.r-code.app\\r-code\\bin",
   };
 }
 
@@ -778,21 +819,43 @@ export function browserMockAbortSubagent(taskId: string, subagentId: string): vo
   const run = detail?.runs.find((item) => item.id === subagentId && item.agent_kind === "subagent");
   if (!run || run.ended_at) throw new Error("子代理不存在或已经结束");
   const stoppedAt = new Date().toISOString();
+  const stoppedIds = new Set([subagentId]);
+  let discovered = true;
+  while (discovered) {
+    discovered = false;
+    for (const candidate of detail.runs) {
+      if (
+        candidate.agent_kind === "subagent"
+        && candidate.parent_run_id
+        && stoppedIds.has(candidate.parent_run_id)
+        && !stoppedIds.has(candidate.id)
+      ) {
+        stoppedIds.add(candidate.id);
+        discovered = true;
+      }
+    }
+  }
+  const activeStoppedIds = new Set(
+    detail.runs.filter((item) => stoppedIds.has(item.id) && item.ended_at == null).map((item) => item.id),
+  );
   browserMockDetails[taskId] = {
     ...detail,
-    runs: detail.runs.map((item) => item.id === subagentId ? {
+    runs: detail.runs.map((item) => activeStoppedIds.has(item.id) ? {
       ...item,
       ended_at: stoppedAt,
       review_state: "aborted",
-      summary: "已由用户停止",
+      summary: item.id === subagentId ? "已由用户递归停止" : "已随父子代理分支停止",
     } : item),
-    events: [...detail.events, {
-      id: detail.events.length + 1,
-      task_id: taskId,
-      branch_id: run.branch_id,
-      event_type: "subagent_finished",
-      created_at: stoppedAt,
-    }],
+    events: [
+      ...detail.events,
+      ...[...activeStoppedIds].map((_, index) => ({
+        id: detail.events.length + index + 1,
+        task_id: taskId,
+        branch_id: run.branch_id,
+        event_type: "subagent_finished" as const,
+        created_at: stoppedAt,
+      })),
+    ],
   };
 }
 

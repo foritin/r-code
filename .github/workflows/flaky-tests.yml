@@ -19,9 +19,13 @@ env:
 
 jobs:
   frontend:
-    name: Frontend repeated tests
-    runs-on: ubuntu-latest
+    name: Frontend repeated tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -35,8 +39,13 @@ jobs:
         working-directory: src-tauri/frontend
         run: npm ci
       - name: Install Playwright Chromium
+        if: matrix.os == 'ubuntu-latest'
         working-directory: src-tauri/frontend
         run: npx playwright-core install --with-deps chromium
+      - name: Install Playwright Chromium on Windows
+        if: matrix.os == 'windows-latest'
+        working-directory: src-tauri/frontend
+        run: npx playwright-core install chromium
       - name: Verify flaky-test reporter
         run: node --test scripts/flaky-test-report.test.mjs
       - name: Repeat frontend test suite five times
@@ -51,7 +60,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: flaky-report-frontend
+          name: flaky-report-frontend-${{ runner.os }}
           path: target/flaky-report
           if-no-files-found: ignore
           retention-days: 14

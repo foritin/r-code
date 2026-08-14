@@ -26,6 +26,30 @@ use uuid::Uuid;
 
 use crate::error::ProductError;
 
+/// Render an OS path for people and model-visible diagnostics without leaking Windows' internal
+/// verbatim prefix. The underlying [`PathBuf`] must still be retained for filesystem operations:
+/// removing `\\?\` here is a presentation concern, not a canonicalization step.
+pub fn path_for_display(path: impl AsRef<Path>) -> String {
+    let rendered = path.as_ref().as_os_str().to_string_lossy();
+    #[cfg(windows)]
+    {
+        if let Some(rest) = rendered.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{rest}");
+        }
+        if let Some(rest) = rendered.strip_prefix(r"\\?\") {
+            let bytes = rest.as_bytes();
+            if bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'\\' | b'/')
+            {
+                return rest.to_string();
+            }
+        }
+    }
+    rendered.into_owned()
+}
+
 /// 工作区路径边界守卫 [doc-07 §4, §11]。
 ///
 /// 持有一个已 canonical 化的 root 与固定的目录 capability，提供 containment
@@ -649,6 +673,36 @@ mod tests {
     /// 直接以 TempDir 作为 root。
     fn make_root() -> TempDir {
         TempDir::new().expect("create temp dir")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn display_path_hides_windows_verbatim_prefixes() {
+        assert_eq!(
+            path_for_display(r"\\?\D:\project\r-code\src\main.rs"),
+            r"D:\project\r-code\src\main.rs"
+        );
+        assert_eq!(
+            path_for_display(r"\\?\UNC\server\share\file.rs"),
+            r"\\server\share\file.rs"
+        );
+        assert_eq!(
+            path_for_display(r"D:\project\r-code\src\main.rs"),
+            r"D:\project\r-code\src\main.rs"
+        );
+        assert_eq!(
+            path_for_display(r"\\?\Volume{1234}\project\main.rs"),
+            r"\\?\Volume{1234}\project\main.rs"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn display_path_preserves_literal_unix_names_that_look_verbatim() {
+        assert_eq!(
+            path_for_display(r"\\?\D:\project\r-code\src\main.rs"),
+            r"\\?\D:\project\r-code\src\main.rs"
+        );
     }
 
     /// 创建一个外层 TempDir，并在其中建 `root` 子目录，便于放置 root 外部

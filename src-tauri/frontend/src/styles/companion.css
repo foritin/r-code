@@ -30,44 +30,67 @@
   display: block;
 }
 
-.companion-window-root.has-pulses:not(.is-expanded) {
+.companion-window-root.has-tracking:not(.is-expanded) {
   display: block;
 }
 
-.companion-window-root.has-pulses:not(.is-expanded) .companion-avatar {
+.companion-window-root.has-tracking:not(.is-expanded) .companion-avatar {
   position: absolute;
   right: 0;
-  bottom: 0;
+  bottom: 40px;
 }
 
-.companion-window-root.has-pulses:not(.is-expanded).panel-right .companion-avatar {
+.companion-window-root.has-tracking:not(.is-expanded).panel-right .companion-avatar {
   right: auto;
   left: 0;
 }
 
-.companion-window-root.has-pulses:not(.is-expanded).avatar-top .companion-avatar {
-  top: 0;
-  bottom: auto;
-}
-
 .companion-pulse-stack {
   position: absolute;
-  top: 8px;
+  top: auto;
   right: 8px;
-  left: 8px;
+  bottom: 254px;
+  left: auto;
   z-index: 10;
-  max-height: 176px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  width: min(320px, calc(100% - 16px));
+  max-height: calc(100vh - 272px);
+  overflow: hidden;
   pointer-events: none;
+  scrollbar-width: none;
 }
 
-.companion-window-root.has-pulses:not(.is-expanded).avatar-top .companion-pulse-stack {
-  top: auto;
-  bottom: 8px;
+.companion-pulse-stack::-webkit-scrollbar { display: none; }
+
+.companion-window-root.has-pulses:not(.is-expanded).panel-right .companion-pulse-stack {
+  right: auto;
+  left: 8px;
 }
 
 .companion-pulse-stack > div[role="list"] {
   display: grid;
+  align-content: start;
   gap: 8px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(104, 221, 213, 0.34) transparent;
+  scrollbar-width: none;
+}
+
+.companion-pulse-stack.is-showing-all > div[role="list"] {
+  padding: 2px 4px 2px 2px;
+  pointer-events: auto;
+  scrollbar-width: thin;
+}
+
+.companion-pulse-stack > div[role="list"]::-webkit-scrollbar { width: 0; }
+.companion-pulse-stack.is-showing-all > div[role="list"]::-webkit-scrollbar { width: 4px; }
+.companion-pulse-stack.is-showing-all > div[role="list"]::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(104, 221, 213, 0.34);
 }
 
 .companion-pulse-stack .companion-session-card {
@@ -76,16 +99,21 @@
 }
 
 .companion-pulse-stack .companion-session-row {
-  min-height: 72px;
+  --companion-pulse-row-height: 72px;
+  min-height: var(--companion-pulse-row-height);
   padding: 11px 13px;
   border-color: rgba(255, 255, 255, 0.16);
   border-radius: 26px;
   background:
     linear-gradient(110deg, rgba(34, 38, 40, 0.92), rgba(16, 19, 21, 0.86)),
-    rgba(12, 15, 17, 0.88);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, .36), inset 0 1px rgba(255, 255, 255, .1);
+    rgba(12, 15, 17, 0.98);
+  box-shadow: inset 0 1px rgba(255, 255, 255, .1);
   backdrop-filter: blur(20px) saturate(1.12);
   -webkit-backdrop-filter: blur(20px) saturate(1.12);
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .companion-pulse-stack .companion-session-copy strong {
@@ -96,9 +124,13 @@
   font-size: 11px;
 }
 
+.companion-pulse-stack .companion-session-copy {
+  transition: transform 180ms cubic-bezier(.2, .8, .2, 1);
+}
+
 .companion-pulse-stack .companion-session-actions {
   right: 13px;
-  bottom: 10px;
+  bottom: 8px;
   left: 30px;
 }
 
@@ -119,9 +151,147 @@
   pointer-events: auto;
 }
 
-.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-avatar {
+.companion-window-root.is-mini.has-tracking:not(.is-expanded) .companion-avatar {
   width: 108px;
   height: 116px;
+}
+
+.companion-pulse-more {
+  display: block;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  min-height: 34px;
+  margin: 8px auto 0;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(20, 25, 28, 0.98);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07), 0 8px 22px rgba(0, 0, 0, 0.2);
+  color: #b8cacc;
+  cursor: pointer;
+  font: 700 11px/1 Inter, "PingFang SC", system-ui, sans-serif;
+  pointer-events: auto;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+.companion-pulse-more:hover,
+.companion-pulse-more:focus-visible {
+  border-color: rgba(104, 221, 213, 0.48);
+  background: rgba(24, 34, 37, 0.99);
+  color: #f3fbfb;
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-pulse-stack {
+  bottom: 174px;
+  width: min(264px, calc(100% - 16px));
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-pulse-stack > div[role="list"] {
+  gap: 6px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-row {
+  --companion-pulse-row-height: 60px;
+  padding: 9px 11px;
+  border-radius: 22px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-dot {
+  width: 7px;
+  height: 7px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-copy strong {
+  font-size: 12px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-copy small {
+  margin-top: 3px;
+  font-size: 10px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-arrow {
+  font-size: 16px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-actions {
+  bottom: 6px;
+  left: 27px;
+}
+
+.companion-window-root.is-mini.has-pulses:not(.is-expanded) .companion-session-actions button {
+  min-height: 26px;
+  padding-inline: 7px;
+}
+
+.companion-tracking-toggle {
+  position: absolute;
+  right: 68px;
+  bottom: 4px;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  background: rgba(20, 25, 28, 0.97);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.08);
+  color: #f1f8f8;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  transition: border-color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.companion-window-root.panel-right .companion-tracking-toggle {
+  right: auto;
+  left: 68px;
+}
+
+.companion-window-root.is-mini .companion-tracking-toggle {
+  right: 40px;
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+
+.companion-window-root.is-mini.panel-right .companion-tracking-toggle {
+  right: auto;
+  left: 40px;
+}
+
+.companion-window-root.is-mini .companion-tracking-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.companion-tracking-toggle svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.companion-tracking-toggle:hover,
+.companion-tracking-toggle:focus-visible {
+  border-color: rgba(112, 232, 223, 0.56);
+  background: rgba(25, 37, 40, 0.98);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.companion-tracking-toggle.is-collapsed {
+  border-color: rgba(92, 196, 239, 0.48);
+  background: rgba(18, 60, 82, 0.97);
+  color: #dff8ff;
 }
 
 .companion-avatar {
@@ -444,9 +614,24 @@
 
 .companion-session-card:hover .companion-session-row,
 .companion-session-card:focus-within .companion-session-row {
-  border-color: rgba(104, 221, 213, 0.42);
-  background: rgba(104, 221, 213, 0.09);
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), inset 0 1px rgba(255, 255, 255, 0.06);
+  border-color: rgba(104, 221, 213, 0.36);
+  background:
+    linear-gradient(100deg, rgba(104, 221, 213, 0.1), rgba(104, 221, 213, 0.025)),
+    rgba(12, 24, 27, 0.98);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18), inset 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* Reveal actions in place: the row keeps its fixed height so hovering never displaces its
+   neighbours. Only the title block nudges up into the reserved upper lane while the meta line
+   cross-fades into the action row. */
+.companion-pulse-stack .companion-session-card:hover .companion-session-row,
+.companion-pulse-stack .companion-session-card:focus-within .companion-session-row {
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26), inset 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.companion-pulse-stack .companion-session-card:hover .companion-session-copy,
+.companion-pulse-stack .companion-session-card:focus-within .companion-session-copy {
+  transform: translateY(-7px);
 }
 
 .companion-session-dot {
@@ -481,6 +666,8 @@
 }
 
 .companion-session-row > i {
+  position: relative;
+  z-index: 3;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -507,12 +694,17 @@
   pointer-events: none;
 }
 
+/* Keep the unread signal in its own trailing lane while hover actions occupy the second row. */
+.companion-session-row.is-unread + .companion-session-actions {
+  right: 44px;
+}
+
 .companion-session-card:hover .companion-session-actions,
 .companion-session-card:focus-within .companion-session-actions {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
-  transition-delay: 0s;
+  transition-delay: 60ms, 60ms, 0s;
 }
 
 .companion-session-actions button { pointer-events: auto; }

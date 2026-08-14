@@ -7,7 +7,6 @@
     }
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "R-Code",
@@ -17,6 +16,7 @@
         "minHeight": 640,
         "center": true,
         "resizable": true,
+        "zoomHotkeysEnabled": true,
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true

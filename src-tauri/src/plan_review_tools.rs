@@ -302,6 +302,10 @@ impl Tool for TrackedWriteTool {
         self.inner.risk_for(input)
     }
 
+    fn requires_explicit_approval(&self, input: &serde_json::Value) -> bool {
+        self.inner.requires_explicit_approval(input)
+    }
+
     fn path_bindings(&self) -> &'static [PathBinding] {
         self.inner.path_bindings()
     }

@@ -218,6 +218,15 @@ pub trait Tool: Send + Sync {
     fn risk_for(&self, _input: &serde_json::Value) -> RiskLevel {
         self.risk_level()
     }
+    /// Whether this call must pass through an explicit user-approval policy even when the project
+    /// otherwise grants full access.
+    ///
+    /// The gateway uses `RequestApproval` only for the permission-engine decision. The trusted
+    /// execution context retains the project's original access mode, and an existing standing
+    /// Allow/AllowAlways rule remains authoritative.
+    fn requires_explicit_approval(&self, _input: &serde_json::Value) -> bool {
+        false
+    }
     /// 声明需要经 `PathGuard` 重绑定的输入键。默认单个必填 `path`。
     fn path_bindings(&self) -> &'static [PathBinding] {
         DEFAULT_PATH_BINDINGS
@@ -689,6 +698,11 @@ impl ToolGateway {
         }
 
         // 5. 权限检查
+        let permission_access_mode = if tool.requires_explicit_approval(&input) {
+            ProjectAccessMode::RequestApproval
+        } else {
+            access_mode
+        };
         let check_result = self
             .permission_engine
             .check_detailed_with_access_mode(
@@ -700,7 +714,7 @@ impl ToolGateway {
                 risk_level,
                 &input.to_string(),
                 target,
-                access_mode,
+                permission_access_mode,
             )
             .await;
 
@@ -872,6 +886,11 @@ impl ToolGateway {
                     .as_ref()
                     .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
         });
+        let permission_access_mode = if tool.requires_explicit_approval(&input) {
+            ProjectAccessMode::RequestApproval
+        } else {
+            access_mode
+        };
         let check_result = self
             .permission_engine
             .check_detailed_with_access_mode_and_lifecycle(
@@ -883,7 +902,7 @@ impl ToolGateway {
                 risk_level,
                 input_summary,
                 target,
-                access_mode,
+                permission_access_mode,
                 Some(cancellation),
                 Some(APPROVAL_WAIT_TIMEOUT),
             )
@@ -1226,6 +1245,55 @@ impl Tool for WriteTool {
     async fn execute(&self, input: serde_json::Value) -> Result<String, ProductError> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or("");
         Ok(format!("wrote to {path}"))
+    }
+}
+
+/// R2 fixture whose host policy always requires an explicit approval decision, including when the
+/// project itself is configured for full access.
+#[cfg(test)]
+struct ExplicitApprovalTool {
+    seen_access_modes: Arc<std::sync::Mutex<Vec<ProjectAccessMode>>>,
+}
+
+#[async_trait]
+#[cfg(test)]
+impl Tool for ExplicitApprovalTool {
+    fn name(&self) -> &str {
+        "workspace_approval"
+    }
+    fn description(&self) -> &str {
+        "Explicit approval fixture"
+    }
+    fn risk_level(&self) -> RiskLevel {
+        RiskLevel::R2
+    }
+    fn requires_explicit_approval(&self, _input: &serde_json::Value) -> bool {
+        true
+    }
+    fn path_bindings(&self) -> &'static [PathBinding] {
+        &[]
+    }
+    fn requires_workspace_scope(&self) -> bool {
+        false
+    }
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+    async fn execute(&self, _input: serde_json::Value) -> Result<String, ProductError> {
+        Err(ProductError::Other(
+            "workspace_approval requires trusted execution context".to_string(),
+        ))
+    }
+    async fn execute_with_context(
+        &self,
+        _input: serde_json::Value,
+        context: &ToolExecutionContext,
+    ) -> Result<ToolExecutionResult, ProductError> {
+        self.seen_access_modes
+            .lock()
+            .unwrap()
+            .push(context.access_mode);
+        Ok(ToolExecutionResult::from("approved".to_string()))
     }
 }
 
@@ -2113,6 +2181,117 @@ mod tests {
         assert_eq!(pending[0].run_id.as_deref(), Some("r1"));
         assert_eq!(pending[0].caller.as_deref(), Some("agent"));
         assert_eq!(pending[0].tool_call_id, audit_id);
+    }
+
+    #[tokio::test]
+    async fn explicit_approval_tool_needs_approval_under_full_access_but_honors_standing_allow() {
+        let (engine, mut gw) = make_gateway();
+        let seen_access_modes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        gw.register(Box::new(ExplicitApprovalTool {
+            seen_access_modes: seen_access_modes.clone(),
+        }));
+
+        let input = serde_json::json!({"change": "previewed"});
+        let error = gw
+            .execute_call_with_access_mode(
+                "task-explicit",
+                "run-explicit",
+                "workspace_approval",
+                input.clone(),
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .expect_err("full access must not silently bypass this tool's approval gate");
+        assert!(matches!(error, ProductError::PermissionError(_)));
+        assert!(seen_access_modes.lock().unwrap().is_empty());
+
+        let pending = engine.pending_for_task("task-explicit").await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].tool_name, "workspace_approval");
+        engine
+            .decide(&pending[0].id, PermissionDecision::AllowAlways)
+            .await
+            .unwrap();
+
+        let outcome = gw
+            .execute_call_with_access_mode(
+                "task-explicit",
+                "run-explicit-2",
+                "workspace_approval",
+                input,
+                None,
+                ProjectAccessMode::FullAccess,
+            )
+            .await
+            .unwrap();
+        assert_eq!(outcome.content, "approved");
+        assert_eq!(
+            seen_access_modes.lock().unwrap().as_slice(),
+            &[ProjectAccessMode::FullAccess]
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_approval_tool_waits_under_full_access_and_keeps_original_context_mode() {
+        let (engine, mut gateway) = make_gateway();
+        let seen_access_modes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        gateway.register(Box::new(ExplicitApprovalTool {
+            seen_access_modes: seen_access_modes.clone(),
+        }));
+        let gateway = Arc::new(gateway);
+
+        let execution = {
+            let gateway = gateway.clone();
+            tokio::spawn(async move {
+                gateway
+                    .execute_with_wait_with_access_mode(
+                        "task-explicit-wait",
+                        "run-explicit-wait",
+                        Some("call-explicit-wait"),
+                        "workspace_approval",
+                        serde_json::json!({"change": "previewed"}),
+                        None,
+                        "apply previewed workspace change",
+                        None,
+                        ProjectAccessMode::FullAccess,
+                    )
+                    .await
+            })
+        };
+
+        let request = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Some(request) = engine
+                    .pending_for_task("task-explicit-wait")
+                    .await
+                    .into_iter()
+                    .next()
+                {
+                    break request;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("full-access call must enter the pending approval queue");
+        assert!(!execution.is_finished());
+        assert!(seen_access_modes.lock().unwrap().is_empty());
+
+        engine
+            .decide(&request.id, PermissionDecision::Allow)
+            .await
+            .unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), execution)
+            .await
+            .expect("approved call must resume promptly")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.content, "approved");
+        assert_eq!(
+            seen_access_modes.lock().unwrap().as_slice(),
+            &[ProjectAccessMode::FullAccess]
+        );
     }
 
     #[tokio::test]

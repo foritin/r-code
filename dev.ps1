@@ -178,8 +178,8 @@ try {
         Write-Host "[R-Code] 依赖已就绪。" -ForegroundColor Green
     }
     else {
-        Write-Step "启动 Tauri 开发模式"
-        & cargo tauri dev
+        Write-Step "启动隔离的 R-Code Dev"
+        & cargo tauri dev --config "src-tauri/tauri.dev.conf.json"
         $scriptExitCode = $LASTEXITCODE
     }
 }

@@ -433,6 +433,16 @@ pub struct MemoryEntryDraft {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+/// Result of an agent-initiated memory save (`save_memory` tool).
+pub enum AgentMemorySaveOutcome {
+    /// A brand-new entry was persisted with `origin = "agent"`.
+    Created(MemoryEntry),
+    /// The same normalized content already exists in this scope; nothing was written.
+    Duplicate { existing_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MemoryEntryEdit {
     pub expected_version: u64,
     pub kind: MemoryKind,
@@ -1375,6 +1385,127 @@ impl<'a> MemoryStore<'a> {
         )
         .map_err(db_err)?;
         get_entry(&conn, &id)?.ok_or_else(|| memory_err("created memory entry disappeared"))
+    }
+
+    /// List approved memory entries visible to the agent: global entries plus,
+    /// when a workspace id is supplied, that project's entries. Every persisted
+    /// entry is already approved; pending proposals live in the candidates table.
+    pub fn list_agent_entries(
+        &self,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<MemoryEntry>, ProductError> {
+        let conn = self.db.conn()?;
+        let mut entries = list_entries(&conn, "global", None)?;
+        if let Some(workspace_id) = workspace_id {
+            entries.extend(list_entries(&conn, "project", Some(workspace_id))?);
+        }
+        Ok(entries)
+    }
+
+    /// Persist an entry authored directly by the coding agent (`save_memory` tool).
+    ///
+    /// Content is normalized and deduplicated per scope using `normalized_hash`:
+    /// an exact duplicate returns [`AgentMemorySaveOutcome::Duplicate`] instead of
+    /// inserting a new row. Rows carry `origin = "agent"` plus `source_run_id` /
+    /// `source_task_id` provenance for rate-limit accounting. The duplicate check,
+    /// capacity check, insert, and counter visibility share one transaction.
+    pub fn save_agent_entry(
+        &self,
+        draft: &MemoryEntryDraft,
+        run_id: &str,
+        task_id: &str,
+    ) -> Result<AgentMemorySaveOutcome, ProductError> {
+        let content = validate_entry_content(&draft.content)?;
+        let (scope, workspace_id, origin) = match draft.scope.as_str() {
+            "global" if draft.workspace_id.is_none() => ("global", None, "agent"),
+            "project" => {
+                let workspace_id = draft
+                    .workspace_id
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| memory_err("project memory requires a workspace"))?;
+                ("project", Some(workspace_id), "agent")
+            }
+            _ => return Err(memory_err("invalid memory owner")),
+        };
+        let conn = self.db.conn()?;
+        let tx =
+            Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).map_err(db_err)?;
+        let hash = content_hash(&content);
+        let existing: Option<String> = tx
+            .query_row(
+                "SELECT id FROM memory_entries
+                 WHERE scope = ?1 AND ((?2 IS NULL AND workspace_id IS NULL) OR workspace_id = ?2)
+                   AND normalized_hash = ?3",
+                params![scope, workspace_id, hash],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+        if let Some(existing_id) = existing {
+            return Ok(AgentMemorySaveOutcome::Duplicate { existing_id });
+        }
+        enforce_scope_capacity(&tx, scope, workspace_id, None, &content)?;
+        let id = Uuid::new_v4().to_string();
+        let now = now_text();
+        tx.execute(
+            "INSERT INTO memory_entries (
+                 id, scope, workspace_id, kind, content, normalized_hash, version, origin,
+                 pinned, source_job_id, source_candidate_id, source_run_id, source_task_id,
+                 created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?8, NULL, NULL, ?9, ?10, ?11, ?11)",
+            params![
+                id,
+                scope,
+                workspace_id,
+                kind_name(draft.kind),
+                content,
+                hash,
+                origin,
+                if draft.pinned { 1_i64 } else { 0_i64 },
+                run_id,
+                task_id,
+                now,
+            ],
+        )
+        .map_err(db_err)?;
+        let entry =
+            get_entry(&tx, &id)?.ok_or_else(|| memory_err("created memory entry disappeared"))?;
+        tx.commit().map_err(db_err)?;
+        Ok(AgentMemorySaveOutcome::Created(entry))
+    }
+
+    /// Number of agent-authored entries written by `run_id` (all time).
+    pub fn agent_write_count_for_run(&self, run_id: &str) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries
+                 WHERE origin = 'agent' AND source_run_id = ?1",
+                params![run_id],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        u64::try_from(count).map_err(|_| memory_err("agent write count overflow"))
+    }
+
+    /// Number of agent-authored entries written by `run_id` at or after `since`,
+    /// for inclusive rolling-window rate limiting.
+    pub fn agent_write_count_since(
+        &self,
+        run_id: &str,
+        since: DateTime<Utc>,
+    ) -> Result<u64, ProductError> {
+        let conn = self.db.conn()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memory_entries
+                 WHERE origin = 'agent' AND source_run_id = ?1 AND created_at >= ?2",
+                params![run_id, since.to_rfc3339()],
+                |row| row.get(0),
+            )
+            .map_err(db_err)?;
+        u64::try_from(count).map_err(|_| memory_err("agent write count overflow"))
     }
 
     pub fn edit_entry(
@@ -2565,6 +2696,9 @@ fn entry_from_row(row: EntryRow) -> Result<MemoryEntry, ProductError> {
         ("global", None, "approved_candidate") => MemoryOwner::Global {
             authorization: GlobalMemoryAuthorization::ApprovedCandidate,
         },
+        ("global", None, "agent") => MemoryOwner::Global {
+            authorization: GlobalMemoryAuthorization::Agent,
+        },
         ("project", Some(workspace_id), "manual") => MemoryOwner::Project {
             workspace_id,
             origin: ProjectMemoryOrigin::Manual,
@@ -2572,6 +2706,10 @@ fn entry_from_row(row: EntryRow) -> Result<MemoryEntry, ProductError> {
         ("project", Some(workspace_id), "automatic_review") => MemoryOwner::Project {
             workspace_id,
             origin: ProjectMemoryOrigin::AutomaticReview,
+        },
+        ("project", Some(workspace_id), "agent") => MemoryOwner::Project {
+            workspace_id,
+            origin: ProjectMemoryOrigin::Agent,
         },
         ("project", Some(workspace_id), "undo") => MemoryOwner::Project {
             workspace_id,

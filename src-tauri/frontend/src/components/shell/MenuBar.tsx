@@ -27,17 +27,17 @@ export function MenuBar() {
   const macOS = isMacPlatform();
   const windows = isWindowsPlatform();
   const setScene = useAppStore((s) => s.setScene);
-  const goHome = useAppStore((s) => s.goHome);
+  const openNewConversation = useAppStore((s) => s.openNewConversation);
   const goBack = useAppStore((s) => s.goBack);
   const goForward = useAppStore((s) => s.goForward);
   const canGoBack = useAppStore((s) => s.navigationBack.length > 0);
   const canGoForward = useAppStore((s) => s.navigationForward.length > 0);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openKnowledge = useAppStore((s) => s.openKnowledge);
   const openRoom = useAppStore((s) => s.openRoom);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
   const toggleRail = useAppStore((s) => s.toggleRail);
   const toggleSearch = useAppStore((s) => s.toggleSearch);
-  const zoomReset = useAppStore((s) => s.zoomReset);
   const needsYou = useTasksStore(selectNeedsYou);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [notificationPage, setNotificationPage] = useState<NotificationPage | null>(null);
@@ -101,7 +101,7 @@ export function MenuBar() {
             trigger={<button className="desktop-nav-button desktop-menu-trigger" type="button">文件</button>}
           >
             {({ close }) => <>
-              <MenuItem close={close} shortcut={keyLabel("new")} onSelect={goHome}>新建任务</MenuItem>
+              <MenuItem close={close} shortcut={keyLabel("new")} onSelect={() => openNewConversation(null)}>新建任务</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("projects")}>打开项目…</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("editor")}>当前项目文件</MenuItem>
               <MenuSeparator />
@@ -135,9 +135,7 @@ export function MenuBar() {
               <MenuItem close={close} onSelect={() => setScene("inbox")}>待处理</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("deck")}>活动</MenuItem>
               <MenuItem close={close} onSelect={() => setScene("archive")}>归档</MenuItem>
-              <MenuItem close={close} onSelect={() => setScene("knowledge")}>知识与指令</MenuItem>
-              <MenuSeparator />
-              <MenuItem close={close} shortcut={keyLabel("zoomReset")} onSelect={zoomReset}>重置缩放</MenuItem>
+              <MenuItem close={close} onSelect={() => openKnowledge("memory")}>知识与指令设置</MenuItem>
             </>}
           </Menu>
           <Menu
@@ -150,7 +148,7 @@ export function MenuBar() {
               <MenuSeparator />
               <MenuItem close={close} shortcut={keyLabel("shortcuts")} onSelect={showShortcuts}>快捷键</MenuItem>
               <MenuItem close={close} onSelect={() => setSettingsPane("diagnostics")}>诊断与支持</MenuItem>
-              <MenuItem close={close} onSelect={() => setSettingsPane("codex")}>Codex 协作</MenuItem>
+              <MenuItem close={close} onSelect={() => setSettingsPane("subagents")}>子代理配置</MenuItem>
             </>}
           </Menu>
         </div>

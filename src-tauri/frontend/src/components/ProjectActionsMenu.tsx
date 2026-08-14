@@ -27,6 +27,7 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
   const openDashboard = useAppStore((state) => state.openDashboard);
   const openConversations = useAppStore((state) => state.openConversations);
   const setScene = useAppStore((state) => state.setScene);
+  const openKnowledgeSettings = useAppStore((state) => state.openKnowledge);
   const forgetTaskNavigation = useAppStore((state) => state.forgetTaskNavigation);
   const [checking, setChecking] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -51,8 +52,8 @@ export function ProjectActionsMenu({ workspace }: { workspace: Workspace }) {
 
   const openKnowledge = useCallback(() => {
     setCurrentProject(workspace.canonical_path);
-    setScene("knowledge");
-  }, [setCurrentProject, setScene, workspace.canonical_path]);
+    openKnowledgeSettings("memory");
+  }, [openKnowledgeSettings, setCurrentProject, workspace.canonical_path]);
 
   const prepareRemoval = useCallback(async () => {
     if (checking || removing || hasLiveTask) return;

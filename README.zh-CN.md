@@ -80,8 +80,14 @@ bash ./dev.sh --bootstrap-only
 初始化完成后，启动阶段等价于：
 
 ```bash
-cargo tauri dev
+cargo tauri dev --config src-tauri/tauri.dev.conf.json
 ```
+
+开发进程固定使用 `R-Code Dev` 身份和独立的 AppData、WebView、SQLite、日志、
+凭据、Codex/Claude 配置与 npm 全局前缀；它可以和已安装的 `R-Code` 同时运行。
+即使直接执行 `cargo tauri dev` 而漏掉配置参数，运行时隔离守卫也会强制切换到
+Dev identifier，绝不会打开正式版数据。开发版更新器只读取独立的
+`dev-latest.json` 通道，代码修改仍由 Vite/Tauri 自动热更新。
 
 只手动初始化产品构建所需子模块时：
 

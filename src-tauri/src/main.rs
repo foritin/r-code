@@ -114,7 +114,7 @@ fn show_main_window(app: &tauri::AppHandle) {
         tracing::warn!(%error, "failed to focus the R-Code main window");
     }
     if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
-        let _ = tray.set_tooltip(Some("R-Code"));
+        let _ = tray.set_tooltip(Some(r_code_host::app_paths::product_name()));
     }
 }
 
@@ -127,7 +127,10 @@ fn hide_main_window(app: &tauri::AppHandle) {
     match window.hide() {
         Ok(()) => {
             if let Some(tray) = app.tray_by_id(MAIN_TRAY_ID) {
-                let _ = tray.set_tooltip(Some("R-Code — 正在后台运行"));
+                let _ = tray.set_tooltip(Some(format!(
+                    "{} — 正在后台运行",
+                    r_code_host::app_paths::product_name()
+                )));
             }
         }
         Err(error) => tracing::warn!(%error, "failed to hide the R-Code main window"),
@@ -150,16 +153,29 @@ fn apply_windows_lifecycle_action(app: &tauri::AppHandle, action: WindowsLifecyc
 /// shell restriction or icon failure can never leave the user with an unreachable application.
 #[cfg(target_os = "windows")]
 fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "打开 R-Code", true, None::<&str>)?;
+    let product_name = r_code_host::app_paths::product_name();
+    let show = MenuItem::with_id(
+        app,
+        TRAY_SHOW_ID,
+        format!("打开 {product_name}"),
+        true,
+        None::<&str>,
+    )?;
     let hide = MenuItem::with_id(app, TRAY_HIDE_ID, "隐藏到系统托盘", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, TRAY_QUIT_ID, "退出 R-Code", true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        TRAY_QUIT_ID,
+        format!("退出 {product_name}"),
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(app, &[&show, &hide, &separator, &quit])?;
 
     let mut tray = TrayIconBuilder::with_id(MAIN_TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("R-Code")
+        .tooltip(product_name)
         .on_menu_event(|app, event| {
             apply_windows_lifecycle_action(app, windows_tray_menu_action(event.id().as_ref()));
         })
@@ -187,7 +203,13 @@ fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
 const COMPANION_WINDOW_LABEL: &str = "companion";
 const COMPANION_MIN_INNER_SIZE: (f64, f64) = (108.0, 116.0);
 const COMPANION_INITIAL_INNER_SIZE: (f64, f64) = (168.0, 196.0);
-const COMPANION_MAX_INNER_SIZE: (f64, f64) = (420.0, 360.0);
+// Two visible task rows plus the explicit overflow affordance need 520 logical px. The same
+// shared limit is used by WebView2 and WKWebView, so Windows and macOS keep identical tracking.
+const COMPANION_MAX_INNER_SIZE: (f64, f64) = (420.0, 520.0);
+
+fn is_companion_window(label: &str) -> bool {
+    label == COMPANION_WINDOW_LABEL
+}
 
 /// Create the process-wide companion window once, but keep it hidden until the persisted frontend
 /// preference has loaded. The window intentionally has no parent so it can remain available when
@@ -202,7 +224,10 @@ fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         COMPANION_WINDOW_LABEL,
         tauri::WebviewUrl::App(PathBuf::from("index.html?window=companion")),
     )
-    .title("R-Code Companion")
+    .title(format!(
+        "{} Companion",
+        r_code_host::app_paths::product_name()
+    ))
     .inner_size(
         COMPANION_INITIAL_INNER_SIZE.0,
         COMPANION_INITIAL_INNER_SIZE.1,
@@ -210,6 +235,10 @@ fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     .min_inner_size(COMPANION_MIN_INNER_SIZE.0, COMPANION_MIN_INNER_SIZE.1)
     .max_inner_size(COMPANION_MAX_INNER_SIZE.0, COMPANION_MAX_INNER_SIZE.1)
     .resizable(false)
+    // `resizable(false)` already disables Windows left/right Aero Snap; `maximizable(false)`
+    // disables the top-edge maximize trigger so dragging the assistant to the screen top no
+    // longer previews/maximizes and bounces back down.
+    .maximizable(false)
     .decorations(false)
     .shadow(false)
     .transparent(true)
@@ -217,6 +246,9 @@ fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
     .always_on_top(true)
     .focusable(true)
     .focused(false)
+    // The frameless assistant has an explicit, recoverable Close action. Prevent Alt+F4 from
+    // destroying its only WebView behind the Settings toggle on Windows.
+    .closable(false)
     .accept_first_mouse(true)
     .visible(false)
     .devtools(false);
@@ -231,6 +263,15 @@ fn setup_companion_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn main() {
+    let flavor = r_code_host::app_paths::AppFlavor::current();
+    if let Err(error) = flavor.prepare_process_environment() {
+        eprintln!(
+            "{} could not initialize its isolated environment: {error}",
+            flavor.product_name()
+        );
+        std::process::exit(2);
+    }
+
     // MCP stdio is a protocol endpoint: it must run before the normal JSON logger is
     // initialized, otherwise a single log line would corrupt Codex's JSON-RPC stream.
     match mcp_server_data_dir_from_args() {
@@ -257,8 +298,18 @@ fn main() {
         eprintln!("R-Code could not import the macOS login-shell PATH: {error}");
     }
 
+    let mut context = tauri::generate_context!();
+    if let Err(error) = flavor.apply_to_tauri_config(context.config_mut()) {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
+
     r_code_host::init_logging();
-    tracing::info!("R-Code Host starting (Tauri shell)...");
+    tracing::info!(
+        flavor = flavor.as_str(),
+        identifier = flavor.bundle_identifier(),
+        "R-Code Host starting (Tauri shell)..."
+    );
 
     let builder = tauri::Builder::default();
     // A tray application must remain single-instance: launching R-Code again while its window is
@@ -286,6 +337,16 @@ fn main() {
         // `<a target="_blank">` 交给系统默认浏览器，避免 WebView 内部静默吞掉外链。
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|_window, _event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                if is_companion_window(_window.label()) {
+                    // Alt+F4 / Cmd+W is not the companion's product-level Close action. Keep the
+                    // reusable WebView alive; its context menu and Settings toggle hide it while
+                    // synchronizing the persisted preference.
+                    api.prevent_close();
+                    return;
+                }
+            }
+
             #[cfg(target_os = "windows")]
             if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
                 // Hide only when a restore tray exists. Without one, explicitly exit both native
@@ -564,6 +625,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             ping,
             tauri_commands::cmd_app_quit,
+            tauri_commands::cmd_companion_ensure,
             tauri_commands::cmd_platform_capabilities,
             tauri_commands::cmd_task_create,
             tauri_commands::cmd_project_conversation_create,
@@ -635,6 +697,10 @@ fn main() {
             tauri_commands::cmd_workflow_skill_save,
             tauri_commands::cmd_workflow_skill_reset,
             tauri_commands::cmd_workflow_skill_delete,
+            tauri_commands::cmd_workflow_skill_sync_to_global,
+            tauri_commands::cmd_knowledge_prompts_get,
+            tauri_commands::cmd_knowledge_prompts_save,
+            tauri_commands::cmd_knowledge_prompts_reset,
             tauri_commands::cmd_change_request,
             tauri_commands::cmd_run_verification,
             tauri_commands::cmd_verification_list,
@@ -703,13 +769,21 @@ fn main() {
             tauri_commands::cmd_mcp_market_prepare_install,
             tauri_commands::cmd_mcp_market_install,
             tauri_commands::cmd_provider_catalog,
+            tauri_commands::cmd_provider_catalog,
+            tauri_commands::cmd_subagent_provider_catalog,
+            tauri_commands::cmd_subagent_provider_test,
+            tauri_commands::cmd_subagent_provider_test_batch,
+            tauri_commands::cmd_subagent_pool_snapshot,
+            tauri_commands::cmd_subagent_pool_save,
             tauri_commands::cmd_provider_models,
+            tauri_commands::cmd_provider_balance,
             tauri_commands::cmd_settings_set,
             tauri_commands::cmd_settings_save_provider,
             tauri_commands::cmd_settings_select_provider,
             tauri_commands::cmd_settings_delete_provider,
             tauri_commands::cmd_rtk_status,
             tauri_commands::cmd_rtk_set_enabled,
+            tauri_commands::cmd_rtk_open_security_exclusions,
             tauri_commands::cmd_codex_integration_status,
             tauri_commands::cmd_codex_install_cli,
             tauri_commands::cmd_codex_start_login,
@@ -720,7 +794,7 @@ fn main() {
             tauri_commands::cmd_codex_cli_preferences,
             tauri_commands::cmd_codex_save_cli_preferences,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             #[cfg(target_os = "macos")]
@@ -804,7 +878,7 @@ mod companion_window_tests {
     fn companion_dynamic_sizes_stay_inside_the_native_contract() {
         assert_eq!(COMPANION_MIN_INNER_SIZE, (108.0, 116.0));
         assert_eq!(COMPANION_INITIAL_INNER_SIZE, (168.0, 196.0));
-        assert_eq!(COMPANION_MAX_INNER_SIZE, (420.0, 360.0));
+        assert_eq!(COMPANION_MAX_INNER_SIZE, (420.0, 520.0));
         assert!(COMPANION_MIN_INNER_SIZE.0 <= COMPANION_INITIAL_INNER_SIZE.0);
         assert!(COMPANION_MIN_INNER_SIZE.1 <= COMPANION_INITIAL_INNER_SIZE.1);
         assert!(COMPANION_INITIAL_INNER_SIZE.0 <= COMPANION_MAX_INNER_SIZE.0);

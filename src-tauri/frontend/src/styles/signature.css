@@ -799,7 +799,8 @@
 }
 
 #app.r-code-signature .timeline-run-summaries,
-#app.r-code-signature .timeline-turn-trace {
+#app.r-code-signature .timeline-turn-trace,
+#app.r-code-signature .timeline-process-disclosure {
   max-width: 930px;
 }
 
@@ -923,7 +924,7 @@
 }
 
 #app.r-code-signature .subagent-list-row:hover,
-#app.r-code-signature .subagent-list-row:focus-visible {
+#app.r-code-signature .subagent-list-row:focus-within {
   background: linear-gradient(90deg, var(--signature-accent-faint), transparent 72%);
 }
 
@@ -1002,7 +1003,8 @@
 }
 
 #app.r-code-signature .scene-room .composer-queue-stack {
-  margin-bottom: 8px;
+  width:min(100%, 33.333%);
+  margin:0 auto 8px;
   border-color: var(--signature-panel-edge);
   border-radius: 12px;
   background: var(--signature-control);

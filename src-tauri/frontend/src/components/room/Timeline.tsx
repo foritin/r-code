@@ -20,12 +20,24 @@ import {
   sessionMessages,
   sessionMessagesForBranch,
 } from "../../lib/ipc";
-import type { AgentEvent, AgentSendMode, SessionAttachmentMeta } from "../../lib/types";
+import type {
+  AgentEvent,
+  AgentRunRuntimeKind,
+  AgentSendMode,
+  FileChange,
+  SessionAttachmentMeta,
+} from "../../lib/types";
 import { useTasksStore } from "../../store/tasks";
 import { IconAttach, IconChevronDown, IconChevronRight } from "../icons";
 import { parseWorkflowInvocation } from "../../lib/slash-commands";
 import { useSharedNow } from "../../lib/shared-clock";
-import { applyAgentEventInPlace, buildTimeline, mergeRunItems, type TimelineItem } from "./model";
+import {
+  applyAgentEventInPlace,
+  buildTimeline,
+  mergeRunItems,
+  type PlanStep,
+  type TimelineItem,
+} from "./model";
 import { Markdown } from "./Markdown";
 import {
   TimelineContextEvent,
@@ -38,6 +50,7 @@ import {
   type TimelineRunItem,
   type TimelineUserItem,
 } from "./timeline-presentation";
+import { TimelineRunChangeSummary } from "./TimelineRunChangeSummary";
 
 export interface TimelineHandle {
   /** 发送失败（消息可能已落盘）→ 以持久化历史重建。 */
@@ -59,6 +72,8 @@ interface Props {
   reviewing: boolean;
   /** 透传流式事件给 Room 的可观察活动 reducer。 */
   onAgentEvent?: (event: AgentEvent) => void;
+  /** 最新轻量计划摘要；供输入框上方的 Session 状态条复用，不重复读取历史。 */
+  onPlanChange?: (steps: readonly PlanStep[]) => void;
   /** 点击内联子代理芯片后在任务工作台打开公开运行详情。 */
   onInspectSubagent?: (runId: string) => void;
   selectedSubagentId?: string | null;
@@ -95,10 +110,12 @@ function queuedStateLabel(state: "queued" | "dispatching" | "failed"): string {
   }
 }
 
-function runRuntimeLabel(kind: "native" | "codex_exec" | "codex_mcp"): string {
-  if (kind === "codex_exec") return "Codex CLI";
-  if (kind === "codex_mcp") return "Codex MCP";
-  return "R-Code Agent";
+function runRuntimeLabel(kind: AgentRunRuntimeKind): string {
+  switch (kind) {
+    case "native": return "R-Code Agent";
+    case "codex_exec": return "Codex CLI";
+    case "codex_mcp": return "Codex MCP";
+  }
 }
 
 function runTimeLabel(value: string): string {
@@ -179,6 +196,41 @@ function runDurationLabel(startedAt: string, endedAt: string | null, now: number
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+const ARCHIVABLE_RUN_STATES = new Set<TimelineRunItem["state"]>([
+  "finished",
+  "accepted",
+  "answered",
+]);
+
+function completedProcessDurationLabel(runs: readonly TimelineRunItem[]): string | null {
+  if (runs.length === 0) return null;
+  let startedAt = Number.POSITIVE_INFINITY;
+  let endedAt = Number.NEGATIVE_INFINITY;
+  for (const run of runs) {
+    if (!run.endedAt) return null;
+    const start = Date.parse(run.startedAt);
+    const end = Date.parse(run.endedAt);
+    if (Number.isNaN(start) || Number.isNaN(end)) return null;
+    startedAt = Math.min(startedAt, start);
+    endedAt = Math.max(endedAt, end);
+  }
+
+  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+  if (seconds < 60) return `耗时 ${seconds}秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) {
+    return remainingSeconds > 0
+      ? `耗时 ${minutes}分 ${remainingSeconds}秒`
+      : `耗时 ${minutes}分`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0
+    ? `耗时 ${hours}小时 ${String(remainingMinutes).padStart(2, "0")}分`
+    : `耗时 ${hours}小时`;
+}
+
 /**
  * F16：duration 的渲染隔离。共享时钟订阅下沉到本组件：`now` 每秒变化时
  * 只有正在运行的 run 条目重新渲染，父 Timeline 不再因时钟订阅而整体重渲染。
@@ -202,6 +254,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     running,
     reviewing,
     onAgentEvent,
+    onPlanChange,
     onInspectSubagent,
     selectedSubagentId,
   },
@@ -216,12 +269,25 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const [editError, setEditError] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
   const [expandedRunIds, setExpandedRunIds] = useState<Set<string>>(() => new Set());
+  const [expandedProcessTurnIds, setExpandedProcessTurnIds] = useState<Set<string>>(() => new Set());
   const [visibleTurnLimit, setVisibleTurnLimit] = useState(80);
   const refreshDetail = useTasksStore((s) => s.refreshDetail);
   const eventsLen = useTasksStore((s) =>
     s.details[taskId]?.task.id === taskId ? s.details[taskId].events.length : 0
   );
   const taskRuns = useTasksStore((s) => s.details[taskId]?.runs);
+  const taskChanges = useTasksStore((s) => s.details[taskId]?.changes);
+  const changesByRun = useMemo(() => {
+    const grouped = new Map<string, FileChange[]>();
+    for (const change of taskChanges ?? []) {
+      const runId = change.run_id;
+      if (!runId) continue;
+      const group = grouped.get(runId);
+      if (group) group.push(change);
+      else grouped.set(runId, [change]);
+    }
+    return grouped;
+  }, [taskChanges]);
   const runsStamp = useMemo(
     () => [...(taskRuns ?? [])]
       .sort((a, b) => a.started_at.localeCompare(b.started_at) || a.id.localeCompare(b.id))
@@ -242,6 +308,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   const prependScrollHeightRef = useRef<number | null>(null);
   const previousTurnCountRef = useRef(0);
   const reloadGenerationRef = useRef(0);
+  const announcedPlanSignatureRef = useRef<string | null>(null);
 
   const replaceItems = useCallback((items: TimelineItem[]) => {
     itemsRef.current = items;
@@ -300,6 +367,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
     setEditError(null);
     setResending(false);
     setExpandedRunIds(new Set());
+    setExpandedProcessTurnIds(new Set());
     setVisibleTurnLimit(80);
     previousTurnCountRef.current = 0;
     void reload();
@@ -308,6 +376,29 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       reloadGenerationRef.current += 1;
     };
   }, [reload, replaceItems]);
+
+  // Declare this after the task/branch reset effect: on navigation, `itemsRef` must be cleared
+  // before the new Room can observe a plan, otherwise one frame may leak the previous Session's
+  // latest checklist into the compact summary strip.
+  useEffect(() => {
+    let latest: readonly PlanStep[] = [];
+    for (let index = itemsRef.current.length - 1; index >= 0; index -= 1) {
+      const item = itemsRef.current[index];
+      if (item.kind === "plan") {
+        latest = item.steps;
+        break;
+      }
+      // A plan belongs to the turn that emitted it. Once a newer user message exists, keep the
+      // strip quiet until that run publishes its own steps instead of showing a stale checklist.
+      if (item.kind === "you") break;
+    }
+    const signature = `${taskId}:${branchId ?? "main"}\u0001${latest
+      .map((step) => `${step.completed ? "1" : "0"}:${step.description}`)
+      .join("\u0000")}`;
+    if (announcedPlanSignatureRef.current === signature) return;
+    announcedPlanSignatureRef.current = signature;
+    onPlanChange?.(latest);
+  }, [branchId, onPlanChange, taskId, timelineRevision]);
 
   useEffect(() => {
     if (editingMessageId) {
@@ -443,6 +534,14 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
       return next;
     });
   }, []);
+  const toggleTurnProcess = useCallback((turnId: string) => {
+    setExpandedProcessTurnIds((current) => {
+      const next = new Set(current);
+      if (next.has(turnId)) next.delete(turnId);
+      else next.add(turnId);
+      return next;
+    });
+  }, []);
   const resendEdited = useCallback(async () => {
     const messageId = editingMessageId;
     const message = editingText.trim();
@@ -504,7 +603,7 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
   }, [branchId, reviewing, visibleTurns]);
   type RenderableItem = TimelineUserItem | TimelineRunItem | TimelineDisplayItem;
 
-  const renderTimelineItem = (it: RenderableItem, finalResponse = false) => {
+  const renderTimelineItem = (it: RenderableItem, finalResponse = false, progressUpdate = false) => {
     switch (it.kind) {
       case "ms":
         return (
@@ -631,11 +730,11 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
         const provisional = it.id === provisionalAgentId;
         return (
           <div
-            className={`agent${finalResponse ? " timeline-final-response" : ""}${provisional ? " is-provisional" : ""}${dim(it.t)}`}
+            className={`agent${finalResponse ? " timeline-final-response" : ""}${progressUpdate ? " timeline-progress-update" : ""}${provisional ? " is-provisional" : ""}${dim(it.t)}`}
             data-t={it.t}
             key={it.id}
           >
-            <div className="who">R-CODE</div>
+            {!progressUpdate && <div className="who">R-CODE</div>}
             {provisional && (
               <div className="agent-delivery-state" role="status">
                 <span>草稿</span>
@@ -754,22 +853,98 @@ export const Timeline = forwardRef<TimelineHandle, Props>(function Timeline(
               : last,
           -1
         );
+        const lastExecutionActivity = turn.items.reduce(
+          (last, item, index) =>
+            item.kind === "tool_group" || item.kind === "subagent_group" ? index : last,
+          -1
+        );
         const finalResponseIndex = turn.hasActivity
           ? turn.items.findIndex((item, index) => index > lastActivity && item.kind === "agent")
           : -1;
+        const finalResponse = finalResponseIndex >= 0 ? turn.items[finalResponseIndex] : null;
+        const processDuration = completedProcessDurationLabel(turn.runs);
+        const canArchiveProcess = Boolean(
+          turn.hasActivity
+          && finalResponse?.kind === "agent"
+          && !finalResponse.streaming
+          && finalResponse.id !== provisionalAgentId
+          && processDuration
+          && turn.runs.every((run) => ARCHIVABLE_RUN_STATES.has(run.state))
+        );
+        const processExpanded = canArchiveProcess && expandedProcessTurnIds.has(turn.id);
+        const processDetailsId = `timeline-process-${turn.id}`;
         return (
-          <section className={`timeline-turn${turn.hasActivity ? " has-activity" : ""}`} key={turn.id}>
+          <section
+            className={`timeline-turn${turn.hasActivity ? " has-activity" : ""}${canArchiveProcess ? " has-archived-process" : ""}`}
+            key={turn.id}
+          >
             {turn.user && renderTimelineItem(turn.user)}
-            {turn.runs.length > 0 && (
-              <div className="timeline-run-summaries">
-                {turn.runs.map((run) => renderTimelineItem(run))}
-              </div>
+            {canArchiveProcess ? (
+              <>
+                <div className={`timeline-process-disclosure${processExpanded ? " is-expanded" : ""}`}>
+                  <button
+                    type="button"
+                    className="timeline-process-toggle ring-inset"
+                    aria-expanded={processExpanded}
+                    aria-controls={processDetailsId}
+                    title={processExpanded ? "收起本轮思考与执行过程" : "展开本轮思考与执行过程"}
+                    onClick={() => toggleTurnProcess(turn.id)}
+                  >
+                    <span className="timeline-process-duration">{processDuration}</span>
+                    <span className="timeline-process-chevron" aria-hidden="true">
+                      {processExpanded
+                        ? <IconChevronDown width={13} height={13} />
+                        : <IconChevronRight width={13} height={13} />}
+                    </span>
+                    <span className="timeline-process-rule" aria-hidden="true" />
+                  </button>
+                  {processExpanded && (
+                    <div className="timeline-process-body" id={processDetailsId}>
+                      <div className="timeline-run-summaries">
+                        {turn.runs.map((run) => renderTimelineItem(run))}
+                      </div>
+                      <div className="timeline-turn-trace has-activity">
+                        {turn.items.slice(0, finalResponseIndex).map((item, index) => {
+                          const progressUpdate = item.kind === "agent" && index < lastExecutionActivity;
+                          return renderTimelineItem(item, false, progressUpdate);
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <div className="timeline-turn-trace timeline-process-final">
+                  {turn.items.slice(finalResponseIndex).map((item, index) => {
+                    const originalIndex = finalResponseIndex + index;
+                    const progressUpdate = item.kind === "agent" && originalIndex < lastExecutionActivity;
+                    return renderTimelineItem(item, originalIndex === finalResponseIndex, progressUpdate);
+                  })}
+                </div>
+              </>
+            ) : (
+              <>
+                {turn.runs.length > 0 && (
+                  <div className="timeline-run-summaries">
+                    {turn.runs.map((run) => renderTimelineItem(run))}
+                  </div>
+                )}
+                <div className={`timeline-turn-trace${turn.hasActivity ? " has-activity" : ""}`}>
+                  {turn.items.map((item, index) => {
+                    const progressUpdate = item.kind === "agent" && index < lastExecutionActivity;
+                    return renderTimelineItem(item, index === finalResponseIndex, progressUpdate);
+                  })}
+                </div>
+              </>
             )}
-            <div className={`timeline-turn-trace${turn.hasActivity ? " has-activity" : ""}`}>
-              {turn.items.map((item, index) =>
-                renderTimelineItem(item, index === finalResponseIndex)
-              )}
-            </div>
+            {!branchId && turn.runs
+              .filter((run) => run.endedAt != null && (changesByRun.get(run.runId)?.length ?? 0) > 0)
+              .map((run) => (
+                <TimelineRunChangeSummary
+                  key={`changes-${run.runId}`}
+                  taskId={taskId}
+                  runId={run.runId}
+                  changes={changesByRun.get(run.runId) ?? []}
+                />
+              ))}
           </section>
         );
       })}

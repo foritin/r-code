@@ -46,6 +46,9 @@ const COLLAPSED_FULL = { width: 168, height: 196 };
 const COLLAPSED_MINI = { width: 108, height: 116 };
 const EXPANDED = { width: 420, height: 360 };
 const PULSE = { width: 420, height: 360 };
+const PULSE_ROW_STRIDE = 80;
+const MAX_PULSE_SESSIONS = 2;
+const TRACKING_FOOTER_HEIGHT = 40;
 const WINDOW_INSET = 18;
 const POSITION_KEY = "r-code.companion.native-position.v1";
 const UNREAD_KEY = "r-code.companion.unread-sessions.v1";
@@ -99,6 +102,12 @@ interface CompanionWindowPlacement {
   position: PersistedPosition;
 }
 
+interface CompanionCompactLayout {
+  minimized: boolean;
+  hasTracking: boolean;
+  rows: number;
+}
+
 function shouldReduceMotion(motion: CompanionMotion): boolean {
   if (motion === "reduced") return true;
   if (motion === "full") return false;
@@ -107,6 +116,40 @@ function shouldReduceMotion(motion: CompanionMotion): boolean {
 
 function collapsedSize(minimized: boolean) {
   return minimized ? COLLAPSED_MINI : COLLAPSED_FULL;
+}
+
+function companionFootprint(minimized: boolean, hasTracking: boolean) {
+  const compact = collapsedSize(minimized);
+  return hasTracking
+    ? { width: compact.width, height: compact.height + TRACKING_FOOTER_HEIGHT }
+    : compact;
+}
+
+function pulseWindowSize(rows: number) {
+  return {
+    width: PULSE.width,
+    height: PULSE.height + Math.max(0, rows - 1) * PULSE_ROW_STRIDE,
+  };
+}
+
+export function compactLayoutForNativeHeight(
+  minimized: boolean,
+  hasTracking: boolean,
+  requestedRows: number,
+  logicalHeight: number,
+): CompanionCompactLayout {
+  if (!hasTracking || logicalHeight < PULSE.height - 2) {
+    return { minimized, hasTracking: false, rows: 0 };
+  }
+  const capacity = 1 + Math.max(
+    0,
+    Math.floor((logicalHeight - PULSE.height + 2) / PULSE_ROW_STRIDE),
+  );
+  return {
+    minimized,
+    hasTracking: true,
+    rows: Math.max(1, Math.min(requestedRows, capacity)),
+  };
 }
 
 /** Tauri serializes PhysicalPosition as i32; monitor/DPI math may leave IEEE-754 fractions. */
@@ -132,6 +175,26 @@ function positionForMonitor(position: PersistedPosition, width: number, height: 
   };
 }
 
+/** Restore a compact anchor using the destination monitor's physical scale, not the scale of the
+ * monitor where the hidden WebView happened to start. This is critical for Windows mixed-DPI
+ * layouts, whose monitor work areas and native positions are all physical coordinates. */
+export function restoredAnchorForMonitor(
+  position: Pick<PersistedPosition, "x" | "y" | "relativeX" | "relativeY">,
+  logicalSize: { width: number; height: number },
+  monitor: Monitor,
+): PersistedPosition {
+  const width = logicalSize.width * monitor.scaleFactor;
+  const height = logicalSize.height * monitor.scaleFactor;
+  const area = monitor.workArea;
+  const restored = Number.isFinite(position.relativeX) && Number.isFinite(position.relativeY)
+    ? {
+      x: area.position.x + Math.max(0, Math.min(1, position.relativeX!)) * Math.max(0, area.size.width - width),
+      y: area.position.y + Math.max(0, Math.min(1, position.relativeY!)) * Math.max(0, area.size.height - height),
+    }
+    : position;
+  return positionForMonitor(restored, width, height, monitor);
+}
+
 /**
  * Expand around the pet's compact top-left anchor, choosing the screen quadrant with room first.
  * `panelSide` names the content side, so a left panel keeps the pet on the window's right edge.
@@ -142,6 +205,7 @@ function placementAroundAvatar(
   target: { width: number; height: number },
   scale: number,
   monitor: Monitor | null,
+  verticalPlacement: "adaptive" | "above" = "adaptive",
 ): CompanionWindowPlacement {
   const compactWidth = compact.width * scale;
   const compactHeight = compact.height * scale;
@@ -159,7 +223,12 @@ function placementAroundAvatar(
     const roomAbove = avatar.y - area.position.y;
     const roomBelow = area.position.y + area.size.height - (avatar.y + compactHeight);
     panelSide = roomLeft >= deltaX || roomLeft >= roomRight ? "left" : "right";
-    avatarVertical = roomAbove >= deltaY || roomAbove >= roomBelow ? "bottom" : "top";
+    // Automatic progress is a spatial attachment to the assistant, not a generic popover. Keep
+    // it above the head even near a monitor edge; clamping moves the combined composition instead
+    // of flipping the progress card underneath the assistant.
+    if (verticalPlacement === "adaptive") {
+      avatarVertical = roomAbove >= deltaY || roomAbove >= roomBelow ? "bottom" : "top";
+    }
   }
 
   const raw = {
@@ -217,6 +286,10 @@ function taskMood(task: Task, detail: TaskDetail | undefined): CompanionMood {
 
 function taskSignature(task: Task, detail: TaskDetail | undefined): string {
   return `${task.state}:${Number(isTaskLive(task, detail))}:${pendingPermissionCount(detail)}`;
+}
+
+function signatureWasLive(signature: string | undefined): boolean {
+  return signature?.split(":")[1] === "1";
 }
 
 function taskProgressLabel(task: Task, detail: TaskDetail | undefined): string {
@@ -373,6 +446,13 @@ export function CompanionWindow() {
   const [successUntil, setSuccessUntil] = useState(0);
   const [performance, setPerformance] = useState<CompanionPerformance | null>(null);
   const [hovered, setHovered] = useState(false);
+  const [trackingCollapsed, setTrackingCollapsed] = useState(false);
+  const [trackingShowingAll, setTrackingShowingAll] = useState(false);
+  const [nativeCompactLayout, setNativeCompactLayout] = useState<CompanionCompactLayout>(() => ({
+    minimized,
+    hasTracking: false,
+    rows: 0,
+  }));
   const initializedTasks = useRef(false);
   const taskSignatures = useRef(new Map<string, string>());
   const anchorPosition = useRef<PersistedPosition | null>(null);
@@ -384,6 +464,7 @@ export function CompanionWindow() {
   const nativeLayoutInFlight = useRef(false);
   const suppressNativeMovesUntil = useRef(0);
   const pulseOpenRef = useRef(false);
+  const pulseRowsRef = useRef(1);
   const movedDuringPointer = useRef(false);
   const pointerDragCandidate = useRef(false);
   const suppressNextClick = useRef(false);
@@ -393,6 +474,7 @@ export function CompanionWindow() {
   const previousCueMood = useRef<CompanionMood>("idle");
   const avatarRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLElement>(null);
+  const pulseListRef = useRef<HTMLDivElement>(null);
   const performanceEndTimer = useRef<number | null>(null);
   const hoverIntentTimer = useRef<number | null>(null);
   const performanceCooldownUntil = useRef(0);
@@ -407,6 +489,16 @@ export function CompanionWindow() {
   const sessionExitTimers = useRef(new Map<string, number>());
 
   const native = isTauriRuntime();
+
+  const commitNativeCompactLayout = useCallback((next: CompanionCompactLayout) => {
+    setNativeCompactLayout((current) => (
+      current.minimized === next.minimized
+      && current.hasTracking === next.hasTracking
+      && current.rows === next.rows
+        ? current
+        : next
+    ));
+  }, []);
 
   useEffect(() => {
     panelOpenRef.current = panelOpen;
@@ -459,8 +551,9 @@ export function CompanionWindow() {
     window.setTimeout(() => avatarRef.current?.focus(), 0);
     if (!native) return;
     const appWindow = getCurrentWindow();
-    const compact = collapsedSize(minimized);
-    const nextSize = pulseOpenRef.current ? PULSE : collapsedSize(minimized);
+    const hasTracking = pulseOpenRef.current;
+    const compact = companionFootprint(minimized, hasTracking);
+    const nextSize = hasTracking ? pulseWindowSize(pulseRowsRef.current) : collapsedSize(minimized);
     const generation = beginNativeLayout();
     try {
       await appWindow.setSize(new LogicalSize(nextSize.width, nextSize.height));
@@ -470,7 +563,7 @@ export function CompanionWindow() {
         nativeScaleFactorRef.current = scale;
         if (!nativeLayoutIsCurrent(generation)) return;
         const placement = pulseOpenRef.current
-          ? placementAroundAvatar(anchorPosition.current, compact, nextSize, scale, monitor)
+          ? placementAroundAvatar(anchorPosition.current, compact, nextSize, scale, monitor, "above")
           : {
             avatarVertical: "bottom" as const,
             panelSide: "left" as const,
@@ -479,29 +572,58 @@ export function CompanionWindow() {
         applyWindowPlacement(placement);
         await appWindow.setPosition(nativePhysicalPosition(placement.position));
       }
+      if (nativeLayoutIsCurrent(generation)) {
+        const [actualSize, actualScale] = await Promise.all([
+          appWindow.outerSize(),
+          appWindow.scaleFactor(),
+        ]);
+        commitNativeCompactLayout(compactLayoutForNativeHeight(
+          minimized,
+          hasTracking,
+          pulseRowsRef.current,
+          actualSize.height / actualScale,
+        ));
+      }
     } finally {
       finishNativeLayout(generation);
     }
-  }, [applyWindowPlacement, beginNativeLayout, finishNativeLayout, minimized, native, nativeLayoutIsCurrent]);
+  }, [
+    applyWindowPlacement,
+    beginNativeLayout,
+    commitNativeCompactLayout,
+    finishNativeLayout,
+    minimized,
+    native,
+    nativeLayoutIsCurrent,
+  ]);
 
   const resetNativePosition = useCallback(async () => {
     if (!native) return;
     const appWindow = getCurrentWindow();
     const monitor = await primaryMonitor();
     if (!monitor) return;
-    const [size, scale] = await Promise.all([appWindow.outerSize(), appWindow.scaleFactor()]);
-    nativeScaleFactorRef.current = scale;
-    const compact = collapsedSize(minimized);
-    const compactWidth = compact.width * scale;
-    const compactHeight = compact.height * scale;
+    const [size, currentScale] = await Promise.all([appWindow.outerSize(), appWindow.scaleFactor()]);
+    const targetScale = monitor.scaleFactor;
+    nativeScaleFactorRef.current = targetScale;
+    const hasTracking = pulseOpenRef.current;
+    const compact = companionFootprint(minimized, hasTracking);
+    const compactWidth = compact.width * targetScale;
+    const compactHeight = compact.height * targetScale;
     const avatarAnchor = {
-      x: monitor.workArea.position.x + monitor.workArea.size.width - compactWidth - WINDOW_INSET * scale,
-      y: monitor.workArea.position.y + monitor.workArea.size.height - compactHeight - WINDOW_INSET * scale,
+      x: monitor.workArea.position.x + monitor.workArea.size.width - compactWidth - WINDOW_INSET * targetScale,
+      y: monitor.workArea.position.y + monitor.workArea.size.height - compactHeight - WINDOW_INSET * targetScale,
     };
     const compactAnchor = positionForMonitor(avatarAnchor, compactWidth, compactHeight, monitor);
-    const target = { width: size.width / scale, height: size.height / scale };
-    const placement = size.width > compactWidth + 1 || size.height > compactHeight + 1
-      ? placementAroundAvatar(compactAnchor, compact, target, scale, monitor)
+    const target = { width: size.width / currentScale, height: size.height / currentScale };
+    const placement = target.width > compact.width + 1 || target.height > compact.height + 1
+      ? placementAroundAvatar(
+        compactAnchor,
+        compact,
+        target,
+        targetScale,
+        monitor,
+        hasTracking ? "above" : "adaptive",
+      )
       : {
         avatarVertical: "bottom" as const,
         panelSide: "left" as const,
@@ -517,40 +639,49 @@ export function CompanionWindow() {
     if (!native) return;
     const appWindow = getCurrentWindow();
     const saved = readPosition();
-    const [monitors, size, scale] = await Promise.all([
+    const [monitors, size, currentScale] = await Promise.all([
       availableMonitors(),
       appWindow.outerSize(),
       appWindow.scaleFactor(),
     ]);
-    nativeScaleFactorRef.current = scale;
-    const compact = collapsedSize(minimized);
-    const compactWidth = compact.width * scale;
-    const compactHeight = compact.height * scale;
+    const hasTracking = pulseOpenRef.current;
+    const compact = companionFootprint(minimized, hasTracking);
     if (saved) {
       const named = monitors.find((monitor) => monitor.name && monitor.name === saved.monitorName);
+      const savedScale = saved.scaleFactor && saved.scaleFactor > 0
+        ? saved.scaleFactor
+        : currentScale;
+      const savedWidth = compact.width * savedScale;
+      const savedHeight = compact.height * savedScale;
       const intersecting = monitors
-        .filter((monitor) => intersectsWorkArea(saved, compactWidth, compactHeight, monitor))
-        .sort((a, b) => workAreaIntersection(saved, compactWidth, compactHeight, b)
-          - workAreaIntersection(saved, compactWidth, compactHeight, a))[0];
+        .filter((monitor) => intersectsWorkArea(saved, savedWidth, savedHeight, monitor))
+        .sort((a, b) => workAreaIntersection(saved, savedWidth, savedHeight, b)
+          - workAreaIntersection(saved, savedWidth, savedHeight, a))[0];
       const monitor = named ?? intersecting;
       if (monitor) {
-        const area = monitor.workArea;
-        const restoredAnchor = named && Number.isFinite(saved.relativeX) && Number.isFinite(saved.relativeY)
-          ? {
-            x: area.position.x + Math.max(0, Math.min(1, saved.relativeX!)) * Math.max(0, area.size.width - compactWidth),
-            y: area.position.y + Math.max(0, Math.min(1, saved.relativeY!)) * Math.max(0, area.size.height - compactHeight),
-          }
-          : saved;
-        const compactAnchor = positionForMonitor(restoredAnchor, compactWidth, compactHeight, monitor);
-        const target = { width: size.width / scale, height: size.height / scale };
-        const placement = size.width > compactWidth + 1 || size.height > compactHeight + 1
-          ? placementAroundAvatar(compactAnchor, compact, target, scale, monitor)
+        const targetScale = monitor.scaleFactor;
+        const compactWidth = compact.width * targetScale;
+        const compactHeight = compact.height * targetScale;
+        const compactAnchor = named
+          ? restoredAnchorForMonitor(saved, compact, monitor)
+          : positionForMonitor(saved, compactWidth, compactHeight, monitor);
+        const target = { width: size.width / currentScale, height: size.height / currentScale };
+        const placement = target.width > compact.width + 1 || target.height > compact.height + 1
+          ? placementAroundAvatar(
+            compactAnchor,
+            compact,
+            target,
+            targetScale,
+            monitor,
+            hasTracking ? "above" : "adaptive",
+          )
           : {
             avatarVertical: "bottom" as const,
             panelSide: "left" as const,
             position: compactAnchor,
           };
         applyWindowPlacement(placement);
+        nativeScaleFactorRef.current = targetScale;
         anchorPosition.current = compactAnchor;
         persistPosition(persistedPosition(compactAnchor, compactWidth, compactHeight, monitor));
         await appWindow.setPosition(nativePhysicalPosition(placement.position));
@@ -575,13 +706,14 @@ export function CompanionWindow() {
       currentMonitor(),
     ]);
     nativeScaleFactorRef.current = scale;
+    const currentFootprint = companionFootprint(minimized, pulseOpenRef.current);
     const compact = collapsedSize(minimized);
     // The actual window position is authoritative. A drag can be followed by a click before the
     // debounced persistence timer fires; using a cached anchor there would make close jump back.
     const avatarPosition = avatarAnchorFromWindow(
       position,
       currentSize,
-      compact,
+      currentFootprint,
       scale,
       panelSideRef.current,
       avatarVerticalRef.current,
@@ -660,6 +792,7 @@ export function CompanionWindow() {
     let persistTimer: number | null = null;
     let moveGeneration = 0;
     let latestAnchor: PersistedPosition | null = null;
+    let latestFootprint = collapsedSize(useCompanionStore.getState().minimized);
     void appWindow.onMoved(({ payload }) => {
       if (pointerDragCandidate.current) movedDuringPointer.current = true;
       if (
@@ -667,7 +800,11 @@ export function CompanionWindow() {
         || nativeLayoutInFlight.current
         || Date.now() < suppressNativeMovesUntil.current
       ) return;
-      const compact = collapsedSize(useCompanionStore.getState().minimized);
+      const compact = companionFootprint(
+        useCompanionStore.getState().minimized,
+        pulseOpenRef.current,
+      );
+      latestFootprint = compact;
       const scale = nativeScaleFactorRef.current;
       // Snapshot the layout at the move event. A pulse can finish before the persistence debounce;
       // deriving the anchor later from mutable refs would reinterpret this coordinate system.
@@ -676,7 +813,7 @@ export function CompanionWindow() {
           { x: payload.x, y: payload.y },
           {
             width: PULSE.width * scale,
-            height: PULSE.height * scale,
+            height: pulseWindowSize(pulseRowsRef.current).height * scale,
           },
           compact,
           scale,
@@ -696,10 +833,14 @@ export function CompanionWindow() {
         if (!settledAnchor) return;
         void Promise.all([appWindow.scaleFactor(), currentMonitor()]).then(([scale, monitor]) => {
           if (disposed || generation !== moveGeneration) return;
-          const compact = collapsedSize(useCompanionStore.getState().minimized);
           nativeScaleFactorRef.current = scale;
           persistPosition(monitor
-            ? persistedPosition(settledAnchor, compact.width * scale, compact.height * scale, monitor)
+            ? persistedPosition(
+              settledAnchor,
+              latestFootprint.width * scale,
+              latestFootprint.height * scale,
+              monitor,
+            )
             : settledAnchor);
         });
       }, 160);
@@ -718,8 +859,28 @@ export function CompanionWindow() {
     if (!native) return;
     const appWindow = getCurrentWindow();
     let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void appWindow.onScaleChanged(({ payload }) => {
+      // Windows emits this while crossing monitors with different scaling. Update the drag/pulse
+      // coordinate basis immediately; persistence still queries the settled scale once more.
+      nativeScaleFactorRef.current = payload.scaleFactor;
+    }).then((cleanup) => {
+      if (disposed) cleanup();
+      else unlisten = cleanup;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [native]);
+
+  useEffect(() => {
+    if (!native) return;
+    const appWindow = getCurrentWindow();
+    let disposed = false;
     const update = async () => {
       if (!enabled) {
+        await appWindow.setIgnoreCursorEvents(false).catch(() => {});
         await appWindow.hide().catch(() => {});
         return;
       }
@@ -747,6 +908,10 @@ export function CompanionWindow() {
         // an enabled companion permanently hidden.
         console.warn("Companion position could not be restored; showing at its current position.", error);
       }
+      if (disposed) return;
+      // A previously hidden Windows window can still carry WS_EX_TRANSPARENT. Restore native
+      // interactivity before showing it so the user's first click cannot fall through.
+      await appWindow.setIgnoreCursorEvents(false).catch(() => {});
       if (disposed) return;
       await appWindow.show();
     };
@@ -933,20 +1098,69 @@ export function CompanionWindow() {
       if (priorityDelta) return priorityDelta;
       const unreadDelta = Number(b.unread) - Number(a.unread);
       return unreadDelta || Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
-    })
-    .slice(0, 4), [allSessions]);
+    }), [allSessions]);
 
-  const pulseSessions = useMemo<SessionProgress[]>(() => [...allSessions]
-    .filter((session) => isTaskLive(session.task, details[session.task.id]) || session.unread)
+  const trackedSessions = useMemo<SessionProgress[]>(() => [...allSessions]
+    .filter((session) => {
+      const live = isTaskLive(session.task, details[session.task.id]);
+      // Completion/error/review notifications are acknowledged in the task-signature effect below.
+      // Keep the previous live footprint for that one render so the native window never shrinks
+      // underneath an avatar that has already switched back to the tracked (40 px footer) layout.
+      const pendingUnreadTransition = !live
+        && signatureWasLive(taskSignatures.current.get(session.task.id));
+      return live || session.unread || pendingUnreadTransition;
+    })
     .sort((a, b) => {
+      // The red badge is an unread count, so its rows must win the compact viewport. Live but
+      // already-seen work remains reachable through the explicit overflow/full panel.
+      const unreadDelta = Number(b.unread) - Number(a.unread);
+      if (unreadDelta) return unreadDelta;
       const priorityDelta = MOOD_PRIORITY[b.mood] - MOOD_PRIORITY[a.mood];
       if (priorityDelta) return priorityDelta;
       return Date.parse(b.task.updated_at) - Date.parse(a.task.updated_at);
-    })
-    .slice(0, 2), [allSessions, details]);
+    }), [allSessions, details]);
+  const pulseSessions = useMemo(
+    () => trackedSessions.slice(0, MAX_PULSE_SESSIONS),
+    [trackedSessions],
+  );
+  const hiddenPulseCount = Math.max(0, trackedSessions.length - pulseSessions.length);
+  const pulseRows = pulseSessions.length + Number(hiddenPulseCount > 0);
 
-  const pulseVisible = !panelOpen && pulseSessions.length > 0;
-  pulseOpenRef.current = pulseSessions.length > 0;
+  const hasTracking = trackedSessions.length > 0;
+  // React can describe the next task-row layout before WebView2/WKWebView has completed the native
+  // resize. Keep rendering the last committed compact geometry until the native promise resolves;
+  // otherwise a second row is painted into a one-row window and the avatar footer clips its head.
+  const displayLayout = native
+    ? nativeCompactLayout
+    : { minimized, hasTracking, rows: hasTracking ? pulseRows : 0 };
+  const displayHasTracking = displayLayout.hasTracking;
+  const displayPulseRows = displayHasTracking
+    ? Math.min(pulseRows, Math.max(1, displayLayout.rows))
+    : 0;
+  const compactDisplayedPulseSessions = pulseSessions.slice(
+    0,
+    Math.min(pulseSessions.length, displayPulseRows),
+  );
+  const displayPulseOverflow = hiddenPulseCount > 0
+    && displayPulseRows > compactDisplayedPulseSessions.length;
+  const showingAllPulseSessions = trackingShowingAll && displayPulseOverflow;
+  const displayedPulseSessions = showingAllPulseSessions
+    ? trackedSessions
+    : compactDisplayedPulseSessions;
+  const pulseVisible = !panelOpen && displayHasTracking && !trackingCollapsed;
+  pulseOpenRef.current = hasTracking;
+  pulseRowsRef.current = Math.max(1, pulseRows);
+
+  useEffect(() => {
+    if (!hasTracking) setTrackingCollapsed(false);
+    if (!hasTracking || hiddenPulseCount === 0 || trackingCollapsed || panelOpen) {
+      setTrackingShowingAll(false);
+    }
+  }, [hasTracking, hiddenPulseCount, panelOpen, trackingCollapsed]);
+
+  useEffect(() => {
+    if (!trackingShowingAll) pulseListRef.current?.scrollTo({ top: 0 });
+  }, [trackingShowingAll]);
 
   useEffect(() => {
     if (!native || panelOpen) return;
@@ -960,15 +1174,23 @@ export function CompanionWindow() {
       const currentSize = await appWindow.outerSize();
       const scale = await appWindow.scaleFactor();
       nativeScaleFactorRef.current = scale;
-      const target = pulseVisible ? PULSE : collapsedSize(minimized);
+      const target = hasTracking ? pulseWindowSize(pulseRows) : collapsedSize(minimized);
       const targetWidth = target.width * scale;
       const targetHeight = target.height * scale;
       if (
         Math.abs(currentSize.width - targetWidth) < 1
         && Math.abs(currentSize.height - targetHeight) < 1
-      ) return;
+      ) {
+        commitNativeCompactLayout(compactLayoutForNativeHeight(
+          minimized,
+          hasTracking,
+          pulseRows,
+          currentSize.height / scale,
+        ));
+        return;
+      }
       const [position, monitor] = await Promise.all([appWindow.outerPosition(), currentMonitor()]);
-      const compact = collapsedSize(minimized);
+      const compact = companionFootprint(minimized, hasTracking);
       const avatarAnchor = anchorPosition.current ?? avatarAnchorFromWindow(
         position,
         currentSize,
@@ -979,8 +1201,8 @@ export function CompanionWindow() {
       );
       const generation = beginNativeLayout();
       try {
-        const placement = pulseVisible
-          ? placementAroundAvatar(avatarAnchor, compact, target, scale, monitor)
+        const placement = hasTracking
+          ? placementAroundAvatar(avatarAnchor, compact, target, scale, monitor, "above")
           : {
             avatarVertical: "bottom" as const,
             panelSide: "left" as const,
@@ -990,6 +1212,19 @@ export function CompanionWindow() {
         await appWindow.setSize(new LogicalSize(target.width, target.height));
         if (disposed || !nativeLayoutIsCurrent(generation)) return;
         await appWindow.setPosition(nativePhysicalPosition(placement.position));
+        if (!disposed && nativeLayoutIsCurrent(generation)) {
+          const [actualSize, actualScale] = await Promise.all([
+            appWindow.outerSize(),
+            appWindow.scaleFactor(),
+          ]);
+          if (disposed || !nativeLayoutIsCurrent(generation)) return;
+          commitNativeCompactLayout(compactLayoutForNativeHeight(
+            minimized,
+            hasTracking,
+            pulseRows,
+            actualSize.height / actualScale,
+          ));
+        }
       } finally {
         finishNativeLayout(generation);
       }
@@ -999,12 +1234,14 @@ export function CompanionWindow() {
   }, [
     applyWindowPlacement,
     beginNativeLayout,
+    commitNativeCompactLayout,
     finishNativeLayout,
     minimized,
     native,
     nativeLayoutIsCurrent,
     panelOpen,
-    pulseVisible,
+    hasTracking,
+    pulseRows,
   ]);
 
   const [renderedSessions, setRenderedSessions] = useState<RenderedSessionProgress[]>(() =>
@@ -1105,8 +1342,13 @@ export function CompanionWindow() {
   }, [enabled, mood, motion, panelOpen, performance, stopPerformance]);
 
   const unreadCount = allSessions.filter((session) => session.unread).length;
-  const activeCount = allSessions.filter((session) => session.mood === "working").length;
-  const ariaLabel = `R-Code session 助手，${unreadCount} 个未读，${activeCount} 个任务正在运行`;
+  const activeCount = allSessions.filter((session) =>
+    isTaskLive(session.task, details[session.task.id])).length;
+  // The badge is visible only while something is unread, but its numeral mirrors the tracker it
+  // opens. This avoids showing “2” beside a compact list that expands to four task reminders.
+  const trackingCount = trackedSessions.length;
+  const badgeCount = unreadCount > 0 ? trackingCount : 0;
+  const ariaLabel = `R-Code session 助手，${trackingCount} 个任务正在追踪，其中 ${unreadCount} 个未读，${activeCount} 个任务正在运行`;
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -1329,7 +1571,7 @@ export function CompanionWindow() {
 
   return (
     <main
-      className={`companion-window-root${panelOpen ? " is-expanded" : ""}${pulseVisible ? " has-pulses" : ""}${hovered ? " is-hovered" : ""} panel-${panelSide} avatar-${avatarVertical} state-${mood} performance-${performance ?? "none"} motion-${motion}${minimized ? " is-mini" : ""}`}
+      className={`companion-window-root${panelOpen ? " is-expanded" : ""}${displayHasTracking ? " has-tracking" : ""}${pulseVisible ? " has-pulses" : ""}${hovered ? " is-hovered" : ""} panel-${panelSide} avatar-${avatarVertical} state-${mood} performance-${performance ?? "none"} motion-${motion}${displayLayout.minimized ? " is-mini" : ""}`}
       onContextMenu={showCloseMenu}
       aria-label="R-Code session 助手窗口"
     >
@@ -1364,10 +1606,31 @@ export function CompanionWindow() {
       )}
 
       {pulseVisible && (
-        <section className="companion-pulse-stack" aria-label="Session 进度提醒" aria-live="polite">
-          <div role="list">
-            {pulseSessions.map((session) => renderSessionCard(session, true))}
+        <section
+          id="companion-pulse-stack"
+          className={`companion-pulse-stack${showingAllPulseSessions ? " is-showing-all" : ""}`}
+          aria-label={`Session 进度提醒，共 ${trackingCount} 个任务`}
+          aria-live="polite"
+        >
+          <div ref={pulseListRef} id="companion-pulse-list" role="list">
+            {displayedPulseSessions.map((session) => renderSessionCard(session, true))}
           </div>
+          {displayPulseOverflow && (
+            <button
+              type="button"
+              className="companion-pulse-more"
+              aria-controls="companion-pulse-list"
+              aria-expanded={showingAllPulseSessions}
+              onClick={(event) => {
+                event.stopPropagation();
+                setTrackingShowingAll((current) => !current);
+              }}
+            >
+              {showingAllPulseSessions
+                ? `全部 ${trackingCount} 个任务 · 收起`
+                : `还有 ${hiddenPulseCount} 个任务 · 查看全部`}
+            </button>
+          )}
           {navigationError && <p className="companion-pulse-error" role="alert">{navigationError}</p>}
         </section>
       )}
@@ -1420,12 +1683,38 @@ export function CompanionWindow() {
         >
           <CompanionSprite motion={motion} state={visualState} />
         </span>
-        {unreadCount > 0 && (
+        {badgeCount > 0 && (
           <span className="companion-unread-badge" aria-hidden="true">
-            {unreadCount > 9 ? "9+" : unreadCount}
+            {badgeCount > 9 ? "9+" : badgeCount}
           </span>
         )}
       </button>
+
+      {!panelOpen && displayHasTracking && (
+        <button
+          type="button"
+          className={`companion-tracking-toggle${trackingCollapsed ? " is-collapsed" : ""}`}
+          aria-label={trackingCollapsed
+            ? `${activeCount} 个任务正在运行，展开 Session 追踪`
+            : "收起 Session 追踪"}
+          aria-controls="companion-pulse-stack"
+          aria-expanded={!trackingCollapsed}
+          title={trackingCollapsed ? "展开 Session 追踪" : "收起 Session 追踪"}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!trackingCollapsed) setTrackingShowingAll(false);
+            setTrackingCollapsed((current) => !current);
+          }}
+        >
+          {trackingCollapsed ? (
+            <span>{activeCount > 9 ? "9+" : activeCount}</span>
+          ) : (
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m5 7.5 5 5 5-5" />
+            </svg>
+          )}
+        </button>
+      )}
 
       {browserMenuOpen && (
         <div className="companion-browser-menu" role="menu">

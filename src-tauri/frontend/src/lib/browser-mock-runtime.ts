@@ -39,6 +39,15 @@ import type {
   SearchMatch,
   SessionBranch,
   SessionMessage,
+  SubagentPoolConfig,
+  SubagentPoolSnapshot,
+  SubagentProviderCatalogEntry,
+  SubagentProviderCatalogSnapshot,
+  SubagentProviderHealthView,
+  SubagentProviderProbeBatchResponse,
+  SubagentProviderProbeRequest,
+  SubagentProviderProbeResponse,
+  SubagentProviderSource,
   SubagentSessionMessagePage,
   SubagentSessionMessagePageRequest,
   Task,
@@ -52,6 +61,7 @@ import type {
   WorkspaceMemoryMode,
   WorkflowSkill,
   WorkflowSkillDraft,
+  ProjectAgentPromptConfig,
 } from "./types";
 import {
   browserMockAbortSubagent,
@@ -105,6 +115,7 @@ let mockMemoryOverview: MemoryOverview = {
   pending_candidates: [],
   recent_jobs: [],
 };
+
 let mockMcpServers: McpServerView[] = [
   {
     id: "generated-demo",
@@ -177,6 +188,8 @@ const defaultWorkflowSkills: WorkflowSkill[] = [
     source: "builtin",
     enabled: true,
     overridden: false,
+    scope: "global",
+    inherited: false,
   },
   {
     id: "builtin:skill-creator",
@@ -186,6 +199,8 @@ const defaultWorkflowSkills: WorkflowSkill[] = [
     source: "builtin",
     enabled: true,
     overridden: false,
+    scope: "global",
+    inherited: false,
   },
   {
     id: "builtin:review-changes",
@@ -195,6 +210,8 @@ const defaultWorkflowSkills: WorkflowSkill[] = [
     source: "builtin",
     enabled: true,
     overridden: false,
+    scope: "global",
+    inherited: false,
   },
   {
     id: "builtin:git-commit-push",
@@ -204,9 +221,13 @@ const defaultWorkflowSkills: WorkflowSkill[] = [
     source: "builtin",
     enabled: true,
     overridden: false,
+    scope: "global",
+    inherited: false,
   },
 ];
 let workflowSkills = defaultWorkflowSkills.map((skill) => ({ ...skill }));
+const projectWorkflowSkills = new Map<string, WorkflowSkill[]>();
+const projectPromptConfigs = new Map<string, ProjectAgentPromptConfig>();
 const legacyMemoryStatusByWorkspace = new Map<string, LegacyMemoryStatus>([
   ["D:/project/rust/r-code", { exists: true, git_tracking: "tracked" }],
   ["D:/project/rust/api-server", { exists: true, git_tracking: "untracked" }],
@@ -254,6 +275,296 @@ function nowIso(): string {
 function nextId(prefix: string): string {
   sequence += 1;
   return `demo-${prefix}-${Date.now().toString(36)}-${sequence}`;
+}
+
+const MOCK_NATIVE_SUBAGENT_CAPABILITIES = {
+  supports_host_delegation: true,
+  supports_live_messages: true,
+  supports_full_access: true,
+} as const;
+const MOCK_CODEX_SUBAGENT_CAPABILITIES = {
+  supports_host_delegation: false,
+  supports_live_messages: false,
+  supports_full_access: false,
+} as const;
+
+let mockSubagentPoolRevision = 1;
+let mockSubagentPool: SubagentPoolConfig = { slots: [] };
+const mockSubagentHealth = new Map<string, SubagentProviderHealthView>();
+
+function mockSubagentSourceKey(source: SubagentProviderSource): string {
+  return source.kind === "api_provider" ? `api:${source.provider_id}` : "codex_cli";
+}
+
+function mockSubagentCandidateKey(source: SubagentProviderSource, model: string): string {
+  return `${mockSubagentSourceKey(source)}\u0000${model}`;
+}
+
+function mockSubagentRevisionToken(): string {
+  return `mock-subagent-revision-${mockSubagentPoolRevision}`;
+}
+
+function sameMockSubagentSource(left: SubagentProviderSource, right: SubagentProviderSource): boolean {
+  return mockSubagentSourceKey(left) === mockSubagentSourceKey(right);
+}
+
+function mockInitialSubagentHealth(
+  source: SubagentProviderSource,
+  model: string,
+): SubagentProviderHealthView {
+  if (source.kind === "api_provider" && source.provider_id === "openai"
+    && model === browserMockSettings.config.providers?.openai?.model) {
+    return {
+      state: "connected",
+      verification_level: "inference",
+      checked_at: nowIso(),
+      expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+      latency_ms: 168,
+    };
+  }
+  if (source.kind === "api_provider" && source.provider_id === "deepseek"
+    && model === browserMockSettings.config.providers?.deepseek?.model) {
+    return {
+      state: "failed",
+      verification_level: "inference",
+      checked_at: nowIso(),
+      expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+      latency_ms: 920,
+      error: "network_unavailable",
+    };
+  }
+  return { state: "untested" };
+}
+
+function mockSubagentHealthFor(
+  source: SubagentProviderSource,
+  model: string,
+): SubagentProviderHealthView {
+  const key = mockSubagentCandidateKey(source, model);
+  const existing = mockSubagentHealth.get(key);
+  if (existing) {
+    if (existing.state === "connected" && existing.expires_at && Date.parse(existing.expires_at) <= Date.now()) {
+      const stale = { ...existing, state: "stale" as const };
+      mockSubagentHealth.set(key, stale);
+      mockSubagentPoolRevision += 1;
+      return stale;
+    }
+    return existing;
+  }
+  const initial = mockInitialSubagentHealth(source, model);
+  mockSubagentHealth.set(key, initial);
+  return initial;
+}
+
+function markMockSubagentSourceStale(source: SubagentProviderSource): void {
+  const prefix = `${mockSubagentSourceKey(source)}\u0000`;
+  for (const [key, health] of mockSubagentHealth) {
+    if (key.startsWith(prefix) && health.state === "connected") {
+      mockSubagentHealth.set(key, { ...health, state: "stale" });
+    }
+  }
+  mockSubagentPoolRevision += 1;
+}
+
+function validMockSubagentIdentifier(value: string, maxChars: number): boolean {
+  return value.length > 0
+    && value.trim() === value
+    && [...value].length <= maxChars
+    && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
+
+function mockSubagentCatalog(): SubagentProviderCatalogSnapshot {
+  const entries: SubagentProviderCatalogEntry[] = [];
+  const providers = Object.entries(browserMockSettings.config.providers ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  for (const [providerId, provider] of providers) {
+    const status = browserMockSettings.provider_status[providerId];
+    if (!status?.configured) continue;
+    const source: SubagentProviderSource = { kind: "api_provider", provider_id: providerId };
+    const model = provider.model?.trim() ?? "";
+    const ready = status.ready && model.length > 0;
+    const health = mockSubagentHealthFor(source, model);
+    entries.push({
+      source,
+      display_name: providerId === "openai" ? "OpenAI API" : providerId === "deepseek" ? "DeepSeek API" : providerId,
+      model,
+      configured: true,
+      ready,
+      connected: health.state === "connected",
+      selectable: ready && health.state === "connected",
+      supported: true,
+      availability: ready ? "ready" : "needs_configuration",
+      protocol: provider.protocol ?? null,
+      capabilities: { ...MOCK_NATIVE_SUBAGENT_CAPABILITIES },
+      health: { ...health },
+    });
+  }
+
+  const codexStatus = browserMockCodexIntegrationStatus();
+  const codexSource: SubagentProviderSource = { kind: "codex_cli" };
+  const codexModel = browserMockCliPreferences().model ?? "gpt-5.6-sol";
+  const codexReady = codexStatus.integration_ready === true;
+  const codexHealth = mockSubagentHealthFor(codexSource, codexModel);
+  const codexAvailability = !codexStatus.cli_available
+    ? "not_installed"
+    : codexStatus.auth_status !== "authenticated"
+      ? "login_required"
+      : codexReady
+        ? "ready"
+        : "trust_required";
+  entries.push({
+    source: codexSource,
+    display_name: "Codex CLI",
+    model: codexModel,
+    configured: codexStatus.config_exists,
+    ready: codexReady,
+    connected: codexHealth.state === "connected",
+    selectable: codexReady && codexHealth.state === "connected",
+    supported: true,
+    availability: codexAvailability,
+    protocol: "codex_cli",
+    capabilities: { ...MOCK_CODEX_SUBAGENT_CAPABILITIES },
+    health: { ...codexHealth },
+  });
+
+  return { generated_at: nowIso(), entries };
+}
+
+function mockSubagentEntryFor(
+  source: SubagentProviderSource,
+  model: string,
+  catalog = mockSubagentCatalog(),
+): SubagentProviderCatalogEntry | null {
+  const base = catalog.entries.find((entry) => sameMockSubagentSource(entry.source, source));
+  if (!base) return null;
+  const health = mockSubagentHealthFor(source, model);
+  return {
+    ...base,
+    source: copy(source),
+    model,
+    connected: health.state === "connected",
+    selectable: base.ready && base.supported && health.state === "connected",
+    health: { ...health },
+  };
+}
+
+function mockSubagentPoolSnapshot(): SubagentPoolSnapshot {
+  const catalog = mockSubagentCatalog();
+  return {
+    revision: mockSubagentRevisionToken(),
+    pool: copy(mockSubagentPool),
+    catalog,
+    slot_health: mockSubagentPool.slots.map((slot) => {
+      const entry = mockSubagentEntryFor(slot.source, slot.model, catalog);
+      return {
+        slot_id: slot.slot_id,
+        source: copy(slot.source),
+        model: slot.model,
+        selectable: entry?.selectable ?? false,
+        availability: entry?.availability ?? "unsupported",
+        capabilities: entry?.capabilities ?? { ...MOCK_CODEX_SUBAGENT_CAPABILITIES },
+        health: entry?.health ?? { state: "untested" },
+      };
+    }),
+  };
+}
+
+function mockProbeSubagentProvider(request: SubagentProviderProbeRequest): SubagentProviderCatalogEntry {
+  const model = request.model.trim();
+  if (!model) throw new Error("子代理模型不能为空");
+  const catalog = mockSubagentCatalog();
+  const base = catalog.entries.find((entry) => sameMockSubagentSource(entry.source, request.source));
+  if (!base) throw new Error("子代理来源不存在或已被删除");
+
+  const connected = base.ready && !(request.source.kind === "api_provider" && request.source.provider_id === "deepseek");
+  const health: SubagentProviderHealthView = connected
+    ? {
+        state: "connected",
+        verification_level: request.source.kind === "codex_cli" ? "remote_catalog" : "inference",
+        checked_at: nowIso(),
+        expires_at: new Date(Date.now() + 30 * 60_000).toISOString(),
+        latency_ms: request.source.kind === "codex_cli" ? 242 : 184,
+      }
+    : {
+        state: "failed",
+        verification_level: request.source.kind === "codex_cli" ? "remote_catalog" : "inference",
+        checked_at: nowIso(),
+        expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+        latency_ms: 900,
+        error: base.ready ? "network_unavailable" : "authentication_failed",
+      };
+  mockSubagentHealth.set(mockSubagentCandidateKey(request.source, model), health);
+  return {
+    ...base,
+    source: copy(request.source),
+    model,
+    connected,
+    selectable: connected,
+    health,
+  };
+}
+
+function mockSubagentProviderTest(request: SubagentProviderProbeRequest): SubagentProviderProbeResponse {
+  const result = mockProbeSubagentProvider(request);
+  mockSubagentPoolRevision += 1;
+  return { result, snapshot: mockSubagentPoolSnapshot() };
+}
+
+function mockSubagentProviderTestBatch(requests: SubagentProviderProbeRequest[]): SubagentProviderProbeBatchResponse {
+  const results = requests.map(mockProbeSubagentProvider);
+  mockSubagentPoolRevision += 1;
+  return { results, snapshot: mockSubagentPoolSnapshot() };
+}
+
+function mockSaveSubagentPool(revision: string, pool: SubagentPoolConfig): SubagentPoolSnapshot {
+  if (revision !== mockSubagentRevisionToken()) {
+    throw new Error("子代理配置已在其他窗口更新，请重新加载后再保存");
+  }
+  if (!pool || !Array.isArray(pool.slots)) throw new Error("子代理候选池格式无效");
+  if (pool.slots.length > 3) throw new Error("子代理候选池最多支持 3 个槽位");
+
+  const catalog = mockSubagentCatalog();
+  const ids = new Set<string>();
+  let weightTotal = 0;
+  for (const slot of pool.slots) {
+    if (!validMockSubagentIdentifier(slot.slot_id, 80) || ids.has(slot.slot_id)) {
+      throw new Error("子代理槽位 ID 必须非空、无控制字符、最多 80 字符且唯一");
+    }
+    ids.add(slot.slot_id);
+    if (!Number.isInteger(slot.weight) || slot.weight < 1 || slot.weight > 100) {
+      throw new Error("每个子代理权重必须是 1 到 100 的整数");
+    }
+    weightTotal += slot.weight;
+    if (!validMockSubagentIdentifier(slot.model, 320)) throw new Error("子代理模型必须填写、无控制字符且最多 320 字符");
+    if (slot.source.kind === "api_provider" && !validMockSubagentIdentifier(slot.source.provider_id, 160)) {
+      throw new Error("API Provider 标识无效或超过 160 字符");
+    }
+    if (slot.prompt_template_id != null && !validMockSubagentIdentifier(slot.prompt_template_id, 80)) {
+      throw new Error("Prompt 模板标识无效或超过 80 字符");
+    }
+    if (!slot.prompt.trim() || slot.prompt.includes("\u0000") || [...slot.prompt].length > 12_000) {
+      throw new Error("子代理 Prompt 必须非空且不超过 12000 字符");
+    }
+    const entry = mockSubagentEntryFor(slot.source, slot.model, catalog);
+    if (!entry?.selectable || entry.health.state !== "connected") {
+      throw new Error("只有当前配置指纹下连通测试通过的来源与模型才能保存");
+    }
+  }
+  if (pool.slots.length > 0 && weightTotal !== 100) {
+    throw new Error(`子代理权重合计必须为 100，当前为 ${weightTotal}`);
+  }
+
+  mockSubagentPool = copy(pool);
+  browserMockSettings.config.orchestration ??= {
+    default_agent_engine: "r_code",
+    delegation_router: "balanced",
+    allow_cross_engine_delegation: true,
+    quality_loop: "off",
+    quality_reviewer: "r_code",
+    max_review_rounds: 1,
+  };
+  browserMockSettings.config.orchestration.subagent_pool = copy(pool);
+  mockSubagentPoolRevision += 1;
+  return mockSubagentPoolSnapshot();
 }
 
 function newWorkspaceId(): string {
@@ -1553,6 +1864,32 @@ function setConfigValue(key: string, value: unknown): void {
   if (parts[0]) target[parts[0]] = value;
 }
 
+function browserKnowledgePromptSnapshot(workspacePath: string | null) {
+  const global = browserMockSettings.config.agent_prompts ?? { main_agent: "", subagent: "" };
+  const project = workspacePath ? projectPromptConfigs.get(workspacePath) ?? null : null;
+  const append = (base: string, addition: string) => {
+    const scoped = addition.trim();
+    if (!scoped) return base;
+    return base.trim()
+      ? `${base.trimEnd()}\n\nProject-specific collaboration guidance:\n${scoped}`
+      : scoped;
+  };
+  const effective = !project
+    ? { ...global }
+    : project.mode === "override"
+      ? { main_agent: project.main_agent, subagent: project.subagent }
+      : {
+          main_agent: append(global.main_agent, project.main_agent),
+          subagent: append(global.subagent, project.subagent),
+        };
+  return {
+    global: { ...global },
+    project: project ? { ...project } : workspacePath ? { mode: "append", main_agent: "", subagent: "" } : null,
+    project_configured: Boolean(project),
+    effective,
+  };
+}
+
 function saveProvider(provider: ProviderSettingsInput): void {
   browserMockSettings.config.providers ??= {};
   const existing = browserMockSettings.config.providers[provider.name];
@@ -1573,6 +1910,7 @@ function saveProvider(provider: ProviderSettingsInput): void {
     source: provider.apiKey ? "encrypted_file" : "environment",
     effective_protocol: provider.protocol ?? "openai_responses",
   };
+  markMockSubagentSourceStale({ kind: "api_provider", provider_id: provider.name });
   if (provider.activate) browserMockSettings.config.default_provider = provider.name;
 }
 
@@ -1677,9 +2015,10 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
   if (delayMs > 0) {
     await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
   }
-  const forcedFailure = (globalThis as { __rCodeBrowserMockFailures?: Record<string, string> })
+  const forcedFailure = (globalThis as { __rCodeBrowserMockFailures?: Record<string, unknown> })
     .__rCodeBrowserMockFailures?.[command];
-  if (forcedFailure) throw new Error(forcedFailure);
+  if (typeof forcedFailure === "string") throw new Error(forcedFailure);
+  if (forcedFailure) throw forcedFailure;
   switch (command) {
     case "ping": return true;
     case "cmd_app_quit": return null;
@@ -2017,7 +2356,12 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       branch: "codex/demo",
       upstream: "origin/codex/demo",
     };
-    case "cmd_workflow_skills_list": return copy(workflowSkills);
+    case "cmd_workflow_skills_list": {
+      const workspacePath = typeof args.workspacePath === "string" ? args.workspacePath : null;
+      const global = workflowSkills.map((skill) => ({ ...skill, inherited: Boolean(workspacePath) }));
+      const project = workspacePath ? projectWorkflowSkills.get(workspacePath) ?? [] : [];
+      return copy([...global, ...project]);
+    }
     case "cmd_workflow_skill_save": {
       const draft = args.draft as WorkflowSkillDraft;
       const id = draft.id ?? `custom:${globalThis.crypto.randomUUID()}`;
@@ -2025,10 +2369,26 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
         ...draft,
         id,
         overridden: draft.source === "builtin",
+        inherited: false,
       };
-      const index = workflowSkills.findIndex((skill) => skill.id === id);
-      if (index >= 0) workflowSkills[index] = saved;
-      else workflowSkills.push(saved);
+      const workspacePath = typeof args.workspacePath === "string" ? args.workspacePath : null;
+      if (draft.scope === "project") {
+        if (!workspacePath) throw new Error("保存项目 Skill 需要项目作用域");
+        if (workflowSkills.some((skill) => skill.name === draft.name)) {
+          throw new Error(`Skill 调用名 /${draft.name} 已被全局 Skill 使用，请换一个名称`);
+        }
+        const project = projectWorkflowSkills.get(workspacePath) ?? [];
+        const duplicate = project.find((skill) => skill.name === draft.name && skill.id !== id);
+        if (duplicate) throw new Error(`Skill 调用名 /${draft.name} 已存在`);
+        const index = project.findIndex((skill) => skill.id === id);
+        if (index >= 0) project[index] = saved;
+        else project.push(saved);
+        projectWorkflowSkills.set(workspacePath, project);
+      } else {
+        const index = workflowSkills.findIndex((skill) => skill.id === id);
+        if (index >= 0) workflowSkills[index] = saved;
+        else workflowSkills.push(saved);
+      }
       return copy(saved);
     }
     case "cmd_workflow_skill_reset": {
@@ -2042,8 +2402,56 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     }
     case "cmd_workflow_skill_delete": {
       const id = stringArg(args, "id");
-      workflowSkills = workflowSkills.filter((skill) => skill.id !== id || skill.source === "builtin");
+      if (args.scope === "project" && typeof args.workspacePath === "string") {
+        projectWorkflowSkills.set(
+          args.workspacePath,
+          (projectWorkflowSkills.get(args.workspacePath) ?? []).filter((skill) => skill.id !== id),
+        );
+      } else {
+        workflowSkills = workflowSkills.filter((skill) => skill.id !== id || skill.source === "builtin");
+      }
       return null;
+    }
+    case "cmd_workflow_skill_sync_to_global": {
+      const id = stringArg(args, "id");
+      const workspacePath = stringArg(args, "workspacePath");
+      const project = projectWorkflowSkills.get(workspacePath) ?? [];
+      const index = project.findIndex((skill) => skill.id === id);
+      if (index < 0) throw new Error(`Project Skill not found: ${id}`);
+      const [skill] = project.splice(index, 1);
+      if (workflowSkills.some((item) => item.name === skill.name)) {
+        project.splice(index, 0, skill);
+        throw new Error(`Skill 调用名 /${skill.name} 已被全局 Skill 使用`);
+      }
+      projectWorkflowSkills.set(workspacePath, project);
+      const global = { ...skill, scope: "global" as const, inherited: false };
+      workflowSkills.push(global);
+      return copy(global);
+    }
+    case "cmd_knowledge_prompts_get": {
+      const workspacePath = typeof args.workspacePath === "string" ? args.workspacePath : null;
+      return copy(browserKnowledgePromptSnapshot(workspacePath));
+    }
+    case "cmd_knowledge_prompts_save": {
+      const workspacePath = typeof args.workspacePath === "string" ? args.workspacePath : null;
+      const mainAgent = stringArg(args, "mainAgent");
+      const subagent = stringArg(args, "subagent");
+      if (workspacePath) {
+        projectPromptConfigs.set(workspacePath, {
+          mode: args.mode === "override" ? "override" : "append",
+          main_agent: mainAgent,
+          subagent,
+        });
+      } else {
+        browserMockSettings.config.agent_prompts = { main_agent: mainAgent, subagent };
+      }
+      return copy(browserKnowledgePromptSnapshot(workspacePath));
+    }
+    case "cmd_knowledge_prompts_reset": {
+      const workspacePath = typeof args.workspacePath === "string" ? args.workspacePath : null;
+      if (workspacePath) projectPromptConfigs.delete(workspacePath);
+      else setConfigValue("agent_prompts", null);
+      return copy(browserKnowledgePromptSnapshot(workspacePath));
     }
     case "cmd_rollback_file": {
       const detail = detailById(stringArg(args, "taskId"));
@@ -2122,6 +2530,7 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
       return undefined;
     }
     case "cmd_prepare_workbench_window": return false;
+    case "cmd_companion_ensure": return true;
 
     case "cmd_workspace_list": return copy(browserMockWorkspaces.map(normalizeWorkspace));
     case "cmd_workspace_open": {
@@ -2502,13 +2911,28 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_settings_select_provider": browserMockSettings.config.default_provider = stringArg(args, "name"); return undefined;
     case "cmd_settings_delete_provider": {
       const name = stringArg(args, "name");
+      if (mockSubagentPool.slots.some((slot) => slot.source.kind === "api_provider" && slot.source.provider_id === name)) {
+        throw new Error("该 API Provider 正被子代理候选池引用，请先移除对应槽位");
+      }
       delete browserMockSettings.config.providers?.[name];
       delete browserMockSettings.provider_status[name];
+      markMockSubagentSourceStale({ kind: "api_provider", provider_id: name });
       if (browserMockSettings.config.default_provider === name) browserMockSettings.config.default_provider = undefined;
       return undefined;
     }
+    case "cmd_subagent_provider_catalog": return copy(mockSubagentCatalog());
+    case "cmd_subagent_provider_test":
+      return copy(mockSubagentProviderTest(args.request as SubagentProviderProbeRequest));
+    case "cmd_subagent_provider_test_batch": {
+      if (!Array.isArray(args.requests)) throw new Error("子代理批量测试参数无效");
+      return copy(mockSubagentProviderTestBatch(args.requests as SubagentProviderProbeRequest[]));
+    }
+    case "cmd_subagent_pool_snapshot": return copy(mockSubagentPoolSnapshot());
+    case "cmd_subagent_pool_save":
+      return copy(mockSaveSubagentPool(stringArg(args, "revision"), args.pool as SubagentPoolConfig));
     case "cmd_rtk_status": return copy(browserMockRtkStatus() satisfies RtkStatus);
     case "cmd_rtk_set_enabled": return copy(browserMockSetRtkEnabled(args.enabled === true));
+    case "cmd_rtk_open_security_exclusions": return undefined;
     case "cmd_codex_integration_status": return copy(browserMockCodexIntegrationStatus());
     case "cmd_codex_install_cli": return copy(browserMockInstallCli());
     case "cmd_codex_start_login":
@@ -2517,12 +2941,16 @@ export async function browserMockInvoke(command: string, args: MockArgs = {}): P
     case "cmd_codex_install_mcp_server": browserMockInstallMcp(); return undefined;
     case "cmd_codex_setup_collaboration": return copy(browserMockSetupCollaboration());
     case "cmd_codex_cli_preferences": return copy(browserMockCliPreferences());
-    case "cmd_codex_save_cli_preferences": return copy(browserMockSaveCliPreferences(
-      optionalStringArg(args, "model"),
-      optionalStringArg(args, "reasoningEffort"),
-      optionalStringArg(args, "verbosity"),
-      optionalStringArg(args, "permissionMode"),
-    ));
+    case "cmd_codex_save_cli_preferences": {
+      const result = browserMockSaveCliPreferences(
+        optionalStringArg(args, "model"),
+        optionalStringArg(args, "reasoningEffort"),
+        optionalStringArg(args, "verbosity"),
+        optionalStringArg(args, "permissionMode"),
+      );
+      markMockSubagentSourceStale({ kind: "codex_cli" });
+      return copy(result);
+    }
     case "cmd_logs_tail": {
       const logs: LogEntry[] = [
         { timestamp: nowIso(), level: "INFO", target: "r_code::demo", message: "完整浏览器 Demo 已就绪" },

@@ -20,6 +20,9 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+https://github.com)"
 );
+const MAX_TRANSIENT_RETRIES: usize = 2;
+const TRANSIENT_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
+const JINA_READER_ORIGIN: &str = "https://r.jina.ai";
 
 #[derive(Debug, Error)]
 pub enum WebError {
@@ -43,6 +46,8 @@ pub enum WebError {
     InvalidRedirect,
     #[error("web service returned HTTP {0}")]
     HttpStatus(u16),
+    #[error("web page was not found; choose a verified URL from web_search results")]
+    NotFound,
     #[error("web response MIME type is not supported: {0}")]
     UnsupportedMime(String),
     #[error("web response could not be decoded")]
@@ -232,11 +237,36 @@ impl WebClient {
         raw_url: &str,
         max_chars: Option<usize>,
     ) -> Result<WebFetchResult, WebError> {
-        let response = self
+        let original_url = Url::parse(raw_url).map_err(|_| WebError::MissingHost)?;
+
+        let (response, used_reader) = match self
             .get_following_safe_redirects(raw_url, BTreeMap::new())
-            .await?;
+            .await
+        {
+            Ok(response) if reader_fallback_status(response.status) => {
+                tracing::info!(
+                    target_host = original_url.host_str().unwrap_or_default(),
+                    status = response.status,
+                    "native web fetch blocked by target; using Jina Reader fallback"
+                );
+                (self.fetch_via_jina_reader(&original_url).await?, true)
+            }
+            Ok(response) => (response, false),
+            Err(WebError::RedirectLimit) => {
+                tracing::info!(
+                    target_host = original_url.host_str().unwrap_or_default(),
+                    "native web fetch hit a redirect challenge; using Jina Reader fallback"
+                );
+                (self.fetch_via_jina_reader(&original_url).await?, true)
+            }
+            Err(error) => return Err(error),
+        };
         if !(200..300).contains(&response.status) {
-            return Err(WebError::HttpStatus(response.status));
+            return if response.status == 404 {
+                Err(WebError::NotFound)
+            } else {
+                Err(WebError::HttpStatus(response.status))
+            };
         }
         let content_type = response
             .headers
@@ -273,7 +303,11 @@ impl WebClient {
             .min(self.limits.max_chars);
         let (content, character_truncated) = truncate_chars(decoded, character_limit);
         Ok(WebFetchResult {
-            url: response.url.to_string(),
+            url: if used_reader {
+                original_url.to_string()
+            } else {
+                response.url.to_string()
+            },
             content_type,
             title,
             content,
@@ -361,16 +395,8 @@ impl WebClient {
         let mut url = Url::parse(raw_url).map_err(|_| WebError::MissingHost)?;
         let mut headers = headers;
         for redirect_count in 0..=self.limits.max_redirects {
-            let approved_addresses = self.validate_and_resolve(&url).await?;
             let response = self
-                .http
-                .get(WebHttpRequest {
-                    url: url.clone(),
-                    headers: headers.clone(),
-                    approved_addresses,
-                    timeout: Duration::from_millis(self.limits.timeout_ms),
-                    max_bytes: self.limits.max_bytes,
-                })
+                .request_with_transient_retries(url.clone(), headers.clone())
                 .await?;
             if (300..400).contains(&response.status) {
                 if redirect_count == self.limits.max_redirects {
@@ -398,6 +424,52 @@ impl WebClient {
             });
         }
         Err(WebError::RedirectLimit)
+    }
+
+    async fn request_with_transient_retries(
+        &self,
+        url: Url,
+        headers: BTreeMap<String, String>,
+    ) -> Result<WebHttpResponse, WebError> {
+        for attempt in 0..=MAX_TRANSIENT_RETRIES {
+            let result = match self.validate_and_resolve(&url).await {
+                Ok(approved_addresses) => {
+                    self.http
+                        .get(WebHttpRequest {
+                            url: url.clone(),
+                            headers: headers.clone(),
+                            approved_addresses,
+                            timeout: Duration::from_millis(self.limits.timeout_ms),
+                            max_bytes: self.limits.max_bytes,
+                        })
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            let should_retry = match &result {
+                Err(error) => transient_transport_error(error),
+                Ok(response) => transient_http_status(response.status),
+            };
+            if !should_retry || attempt == MAX_TRANSIENT_RETRIES {
+                return result;
+            }
+            tokio::time::sleep(TRANSIENT_RETRY_BASE_DELAY * 2u32.pow(attempt as u32)).await;
+        }
+        unreachable!("bounded retry loop always returns")
+    }
+
+    async fn fetch_via_jina_reader(&self, original_url: &Url) -> Result<SafeResponse, WebError> {
+        let reader_url = jina_reader_url(original_url)?;
+        // Never forward target-site cookies, Authorization, or search credentials. The Reader
+        // receives only an explicit text accept header and the already-validated public URL.
+        let headers = BTreeMap::from([("accept".to_string(), "text/plain".to_string())]);
+        let response = self
+            .get_following_safe_redirects(reader_url.as_str(), headers)
+            .await?;
+        if reader_fallback_status(response.status) {
+            return Err(WebError::HttpStatus(response.status));
+        }
+        Ok(response)
     }
 
     async fn validate_and_resolve(&self, url: &Url) -> Result<Vec<IpAddr>, WebError> {
@@ -431,6 +503,28 @@ impl WebClient {
         }
         Ok(addresses)
     }
+}
+
+fn transient_transport_error(error: &WebError) -> bool {
+    matches!(
+        error,
+        WebError::DnsLookup | WebError::Timeout | WebError::RequestFailed
+    )
+}
+
+fn transient_http_status(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429 | 500..=599)
+}
+
+fn reader_fallback_status(status: u16) -> bool {
+    matches!(status, 403 | 406 | 412)
+}
+
+fn jina_reader_url(original_url: &Url) -> Result<Url, WebError> {
+    let mut target = original_url.clone();
+    target.set_fragment(None);
+    Url::parse(&format!("{JINA_READER_ORIGIN}/{}", target.as_str()))
+        .map_err(|_| WebError::MissingHost)
 }
 
 /// Carry a bounded challenge cookie only across a same-origin redirect. Some documentation sites
@@ -710,6 +804,7 @@ fn web_error_code(error: &WebError) -> &'static str {
         WebError::RequestFailed => "request_failed",
         WebError::RedirectLimit | WebError::InvalidRedirect => "redirect_failed",
         WebError::HttpStatus(_) => "http_status",
+        WebError::NotFound => "not_found",
         WebError::UnsupportedMime(_) => "unsupported_mime",
         WebError::Decode => "decode_failed",
         WebError::InvalidQuery => "invalid_query",

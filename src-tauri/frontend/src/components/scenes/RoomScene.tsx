@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSS
 import { useAppStore } from "../../store/app";
 import { useTasksStore } from "../../store/tasks";
 import { usePoll } from "../../lib/poll";
+import { displayPath } from "../../lib/format";
 import {
   agentAbort,
   agentAbortSubagent,
@@ -18,6 +19,8 @@ import { StatusBar } from "../ui/StatusBar";
 import type { AgentEvent, AgentSendMode, ProjectAccessMode, SessionBranch } from "../../lib/types";
 import { Timeline, type TimelineHandle } from "../room/Timeline";
 import { Composer } from "../room/Composer";
+import { SessionRunSummary } from "../room/SessionRunSummary";
+import type { PlanStep } from "../room/model";
 import { PendingPermissions } from "../room/Permissions";
 import { Canvas } from "../room/Canvas";
 import { TaskActionsMenu } from "../TaskActionsMenu";
@@ -111,6 +114,7 @@ export function RoomScene() {
   const [scopeBusy, setScopeBusy] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [historyBranchId, setHistoryBranchId] = useState<string | null>(null);
+  const [livePlanSteps, setLivePlanSteps] = useState<readonly PlanStep[]>([]);
   const boundProvider = useTasksStore((s) =>
     currentTaskId ? s.details[currentTaskId]?.task.provider_name ?? null : null
   );
@@ -155,6 +159,16 @@ export function RoomScene() {
         .join("|"),
     };
   }, [detail]);
+  const activeMainRun = useMemo(() => [...(detail?.runs ?? [])]
+    .filter((run) => run.agent_kind === "main" && run.ended_at == null)
+    .sort((left, right) => right.started_at.localeCompare(left.started_at))[0] ?? null,
+  [detail?.runs]);
+  const activeRunChanges = useMemo(
+    () => activeMainRun
+      ? (detail?.changes ?? []).filter((change) => change.run_id === activeMainRun.id)
+      : [],
+    [activeMainRun, detail?.changes],
+  );
   const historicalBranches = useMemo(
     () => [...(detail?.branches ?? [])]
       .filter((branch) => branch.id !== detail?.active_branch.id)
@@ -164,7 +178,22 @@ export function RoomScene() {
 
   useEffect(() => {
     setHistoryBranchId(null);
+    setLivePlanSteps([]);
   }, [currentTaskId]);
+
+  const observePlan = useCallback((steps: readonly PlanStep[]) => {
+    if (historyBranchId) return;
+    setLivePlanSteps((current) => {
+      if (
+        current.length === steps.length
+        && current.every((step, index) =>
+          step.completed === steps[index]?.completed
+          && step.description === steps[index]?.description
+        )
+      ) return current;
+      return [...steps];
+    });
+  }, [historyBranchId]);
 
   useEffect(() => {
     if (!taskSnapshot) return;
@@ -477,7 +506,7 @@ export function RoomScene() {
           <IconProjects width={16} height={16} />
           <div className="room-conversation-title">
             <strong>{task?.title || "任务会话"}</strong>
-            <span>{workspace?.display_name ?? "未附加项目"} · {historyBranchId ? "历史分支，只读" : archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
+            <span>{workspace?.display_name ?? "用户路径"} · {historyBranchId ? "历史分支，只读" : archived ? "已归档，只读" : running ? "正在运行" : "会话就绪"}</span>
           </div>
           {historicalBranches.length > 0 && (
             <label className="room-history-picker">
@@ -511,7 +540,7 @@ export function RoomScene() {
           {workspacePath ? (
             <>
               <IconProjects width={13} height={13} />
-              <span title={workspacePath}>{workspace?.display_name ?? "已附加文件夹"}</span>
+              <span title={displayPath(workspacePath)}>{workspace?.display_name ?? "已附加文件夹"}</span>
               <span className="room-scope-state scoped">
                 {projectAccessModeLabel(workspaceAccessMode)}
               </span>
@@ -526,7 +555,7 @@ export function RoomScene() {
             </>
           ) : (
             <>
-              <span>此对话未附加文件夹</span>
+              <span>用户路径 · 仅聊天，无本地工具</span>
               {detail?.active_branch.id && detail.active_branch.id !== "main" && (
                 <span className="room-scope-state">编辑分支</span>
               )}
@@ -573,6 +602,7 @@ export function RoomScene() {
           running={running}
           reviewing={running && activity.phase === "reviewing"}
           onAgentEvent={observeAgentEvent}
+          onPlanChange={observePlan}
           selectedSubagentId={selectedSubagentId}
           onInspectSubagent={inspectSubagent}
         />
@@ -581,6 +611,16 @@ export function RoomScene() {
         ) : (
           <>
             <PendingPermissions taskId={currentTaskId} />
+            {activeMainRun && (
+              <SessionRunSummary
+                taskId={currentTaskId}
+                runId={activeMainRun.id}
+                running
+                liveSteps={livePlanSteps}
+                planView={planController.view}
+                changes={activeRunChanges}
+              />
+            )}
             <Composer
               key={currentTaskId}
               taskId={currentTaskId}

@@ -38,7 +38,38 @@ export function displayPath(path: string): string {
   const uncPrefix = "\\\\?\\UNC\\";
   const verbatimPrefix = "\\\\?\\";
   if (path.startsWith(uncPrefix)) return `\\\\${path.slice(uncPrefix.length)}`;
-  return path.startsWith(verbatimPrefix) ? path.slice(verbatimPrefix.length) : path;
+  const drivePath = path.startsWith(verbatimPrefix) ? path.slice(verbatimPrefix.length) : "";
+  return /^[A-Za-z]:[\\/]/.test(drivePath) ? drivePath : path;
+}
+
+function stripVerbatimDrivePrefixes(text: string, marker: string, escapedSeparator: boolean): string {
+  let rendered = text;
+  let cursor = 0;
+  while (cursor < rendered.length) {
+    const markerIndex = rendered.indexOf(marker, cursor);
+    if (markerIndex < 0) break;
+    const driveIndex = markerIndex + marker.length;
+    const drive = rendered[driveIndex];
+    const separator = rendered[driveIndex + 2];
+    const validSeparator = escapedSeparator
+      ? separator === "/" || (separator === "\\" && rendered[driveIndex + 3] === "\\")
+      : separator === "/" || separator === "\\";
+    if (drive && /[A-Za-z]/.test(drive) && rendered[driveIndex + 1] === ":" && validSeparator) {
+      rendered = rendered.slice(0, markerIndex) + rendered.slice(driveIndex);
+      cursor = markerIndex + 3;
+    } else {
+      cursor = driveIndex;
+    }
+  }
+  return rendered;
+}
+
+/** 仅用于可见文本：兼容旧会话中的原始及 JSON 转义 Windows verbatim 路径。 */
+export function displayPathsInText(text: string): string {
+  const escapedUnc = text.replaceAll("\\\\\\\\?\\\\UNC\\\\", "\\\\\\\\");
+  const escapedDrive = stripVerbatimDrivePrefixes(escapedUnc, "\\\\\\\\?\\\\", true);
+  const rawUnc = escapedDrive.replaceAll("\\\\?\\UNC\\", "\\\\");
+  return stripVerbatimDrivePrefixes(rawUnc, "\\\\?\\", false);
 }
 
 /** RFC3339 → "HH:MM"（本地时间） */
@@ -113,7 +144,11 @@ export function toolTarget(inputJson: string | null | undefined): string {
   if (!inputJson) return "";
   try {
     const v = JSON.parse(inputJson) as Record<string, unknown>;
-    for (const k of ["path", "file_path", "filePath", "filename", "command", "cmd", "query", "pattern"]) {
+    for (const k of ["path", "file_path", "filePath", "filename"]) {
+      const val = v[k];
+      if (typeof val === "string" && val) return displayPath(val);
+    }
+    for (const k of ["command", "cmd", "query", "pattern"]) {
       const val = v[k];
       if (typeof val === "string" && val) return val;
     }

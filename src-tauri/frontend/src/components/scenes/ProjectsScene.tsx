@@ -64,7 +64,7 @@ export function ProjectsScene() {
                   <article className={`workspace-row${current ? " current" : ""}`} key={workspace.id}>
                     <button className="workspace-main" onClick={() => openDashboard(workspace.canonical_path)} title={`打开 ${workspace.display_name} 项目`}>
                       <span className="workspace-glyph"><IconProjects width={16} height={16} /></span>
-                      <span className="workspace-copy"><strong>{workspace.display_name}</strong><small title={workspace.canonical_path}>{displayPath(workspace.canonical_path)}</small></span>
+                      <span className="workspace-copy"><strong>{workspace.display_name}</strong><small title={displayPath(workspace.canonical_path)}>{displayPath(workspace.canonical_path)}</small></span>
                       {current && <span className="current-mark"><IconCheck width={13} height={13} /> 当前项目</span>}
                     </button>
                     <div className="workspace-actions"><span className="workspace-access scoped">{projectAccessModeLabel(workspace.access_mode)}</span></div>

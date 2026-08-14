@@ -100,9 +100,11 @@ function sameWorkflowSkillCatalog(left: WorkflowSkill[], right: WorkflowSkill[])
       && skill.name === next.name
       && skill.description === next.description
       && skill.instructions === next.instructions
-      && skill.source === next.source
-      && skill.enabled === next.enabled
-      && skill.overridden === next.overridden;
+    && skill.source === next.source
+    && skill.enabled === next.enabled
+    && skill.overridden === next.overridden
+    && skill.scope === next.scope
+    && skill.inherited === next.inherited;
   });
 }
 
@@ -241,6 +243,7 @@ export function Composer({
   const setScene = useAppStore((s) => s.setScene);
   const setSearchOpen = useAppStore((s) => s.setSearchOpen);
   const setSettingsPane = useAppStore((s) => s.setSettingsPane);
+  const openKnowledge = useAppStore((s) => s.openKnowledge);
   const openMcpSettings = useAppStore((s) => s.openMcpSettings);
   const themeMode = useAppStore((s) => s.themeMode);
   const setThemeMode = useAppStore((s) => s.setThemeMode);
@@ -271,8 +274,11 @@ export function Composer({
     capabilityForAttachment,
     platformCapabilities,
   );
-  const runBlockedReason = running && !goalMode && attachments.attachments.length > 0
-    ? "当前运行结束后才能把附件作为新一轮消息发送。"
+  const runBlockedReason = running
+    && !goalMode
+    && attachments.attachments.length > 0
+    && sendMode === "steer"
+    ? "运行中引导暂不支持附件；请改为排队发送，或等当前运行结束后再发送。"
     : null;
   const attachmentBlockedReason = runBlockedReason ?? capabilityBlockedReason;
 
@@ -390,7 +396,7 @@ export function Composer({
   // composer is visible so a newly registered Skill appears in `/` completion without a
   // reload or a new conversation.
   usePoll(async () => {
-    const skills = await workflowSkillsList();
+    const skills = await workflowSkillsList(workspacePath);
     setWorkflowSkills((current) => sameWorkflowSkillCatalog(current, skills) ? current : skills);
   }, 2000);
 
@@ -576,7 +582,7 @@ export function Composer({
         const activeAgents = (useTasksStore.getState().details[taskId]?.runs ?? [])
           .filter((run) => run.ended_at == null).length;
         setNotice(
-          `${workspaceAttached ? `项目 ${workspaceName ?? "已附加"} · ${projectAccessModeLabel(workspaceAccessMode)}` : "纯聊天 · 未附加项目"}；` +
+          `${workspaceAttached ? `项目 ${workspaceName ?? "已附加"} · ${projectAccessModeLabel(workspaceAccessMode)}` : "用户路径 · 仅聊天，无本地工具"}；` +
           `主 Agent ${agentEngine === "codex" ? "Codex CLI" : "R-Code"}；` +
           (agentEngine === "r_code" ? `模型 ${providerName ?? "默认服务"} / ${model ?? "服务默认"}；` : "模型使用 Codex CLI 设置；") +
           `${messageCount} 条消息 · ${activeAgents} 个运行中 Agent · ${queuedMessages.length} 条排队。`,
@@ -680,7 +686,7 @@ export function Composer({
         return;
       case "memory":
         setCurrentProject(workspacePath);
-        setScene("knowledge");
+        openKnowledge("memory");
         return;
       case "theme": {
         const requested = parsed.args.toLowerCase();
@@ -702,7 +708,7 @@ export function Composer({
         setNotice("内置工作流：/plan、/doctor、/debug、/fix、/explain、/init、/code-review、/security-review、/simplify、/docs、/research、/qa。输入 / 后可搜索并查看说明。");
         return;
       case "plugins":
-        setSettingsPane("codex");
+        setSettingsPane("subagents");
         return;
       case "help":
         setNotice("会话：/clear /resume /compact /fork /rename /context /usage /copy /export /stop；控制：/search /pending /activity /projects /model /permissions /agents /diff /undo /files /terminal /review /verify；输入 / 可搜索工作流和扩展。");
@@ -715,6 +721,7 @@ export function Composer({
     onAbort,
     onSendFailed,
     onShowSubagents,
+    openKnowledge,
     openMcpSettings,
     providerName,
     queuedMessages.length,
@@ -1537,10 +1544,10 @@ export function Composer({
         />
 
         <AttachmentTray
-          attachments={attachments.attachments}
+          attachments={sending ? [] : attachments.attachments}
           capabilityFor={capabilityForAttachment}
           platformCapabilities={platformCapabilities}
-          blockedReason={runBlockedReason}
+          deferredReason={runBlockedReason}
           onRemove={attachments.remove}
         />
 

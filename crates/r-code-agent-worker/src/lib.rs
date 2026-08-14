@@ -16,19 +16,26 @@
 
 pub mod agent_loop;
 pub mod cache_shape;
+mod delegation_tree;
 pub mod llm_runtime;
 pub mod mock_runtime;
 pub mod recovery;
 pub mod runtime;
 
 pub use agent_loop::run_agent_loop_iteration;
-pub use cache_shape::{capture, compare, CacheChangeCause, PrefixShape};
+pub use cache_shape::{CacheChangeCause, PrefixShape, capture, compare};
 pub use llm_runtime::{
-    native_parent_subagent_access, AgentPromptPolicy, CodexSubagentEventSink, CodexSubagentOutcome,
-    CodexSubagentRequest, CodexSubagentRunner, DelegationRouterMode, LlmAgentRuntime,
+    AgentPromptPolicy, CodexSubagentEventSink, CodexSubagentOutcome, CodexSubagentRequest,
+    CodexSubagentRunner, DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT, DelegationLimits,
+    DelegationRouterMode, ExternalAgentDescriptor, ExternalAgentEventSink, ExternalAgentId,
+    ExternalAgentOutcome, ExternalAgentRequest, ExternalAgentRunner, FrozenSubagentCandidatePool,
+    FrozenSubagentSlot, FrozenSubagentSlotDescriptor, LlmAgentRuntime, MAX_ACTIVE_DESCENDANTS,
+    MAX_DESCENDANTS_PER_TREE, MAX_SUBAGENT_DEPTH, NativeSubagentRuntimeOptions,
     OrchestrationPolicy, QualityLoopMode, QualityReviewer, RCodeSubagentOutcome,
-    RCodeSubagentRequest, RCodeSubagentRunner, DEFAULT_MAIN_AGENT_PROMPT, DEFAULT_SUBAGENT_PROMPT,
+    RCodeSubagentRequest, RCodeSubagentRunner, SubagentCandidateOutcome, SubagentCandidateRequest,
+    SubagentCandidateRunner, SubagentCandidateSource, SubagentProviderCapabilities,
+    native_parent_subagent_access,
 };
 pub use mock_runtime::MockAgentRuntime;
-pub use recovery::{scan_orphaned_runs, RecoveryState};
+pub use recovery::{RecoveryState, scan_orphaned_runs};
 pub use runtime::{AgentRuntime, SteerResult};

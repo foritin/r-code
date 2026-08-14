@@ -14,27 +14,34 @@ import type {
   SessionMessage,
   TaskEvent,
 } from "../../lib/types";
-import { toolTarget } from "../../lib/format";
+import { displayPathsInText, toolTarget } from "../../lib/format";
 
 const CODEX_REASONING_SUMMARY_EVENT = "codex_reasoning_summary";
 const R_CODE_REASONING_EVENT = "r_code_reasoning";
 const R_CODE_REASONING_LABEL = "模型思考";
+const R_CODE_INTERIM_EVENT = "r_code_interim";
+const R_CODE_INTERIM_LABEL = "执行过程";
 // 旧格式前缀（已持久化事件的兼容回退；新事件为结构化 JSON，见 codexReasoningSummary）。
 const CODEX_REASONING_SUMMARY_PREFIX = "Codex 思考摘要：";
-// A reasoning row can stay before one or more tool rows while later deltas keep arriving. Remember
-// how much activity was already separated for that exact row so each tool boundary contributes at
-// most one paragraph break. WeakMap keeps this rendering-only state out of the persisted contract.
-const reasoningSeparatedTailSize = new WeakMap<object, number>();
 
 function reasoningIndexInCurrentTurn(items: readonly TimelineItem[]): number {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    // A user or visible assistant message is a semantic turn boundary. Tool and run rows are
-    // deliberately not boundaries: providers commonly split one reasoning segment around tools.
-    if (item.kind === "you" || item.kind === "agent") return -1;
+    // Reasoning is chronological, not a mutable summary. Visible messages and tool activity both
+    // close the current segment; a later provider request may create a new segment after its tool.
+    if (item.kind === "you" || item.kind === "agent" || item.kind === "tool") return -1;
     if (item.kind === "context" && item.label === R_CODE_REASONING_LABEL) return index;
   }
   return -1;
+}
+
+function answerStartedSinceLastTool(items: readonly TimelineItem[]): boolean {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.kind === "tool" || item.kind === "you") return false;
+    if (item.kind === "agent") return true;
+  }
+  return false;
 }
 
 function appendReasoningInCurrentTurn(items: TimelineItem[], detail: string): number {
@@ -42,11 +49,7 @@ function appendReasoningInCurrentTurn(items: TimelineItem[], detail: string): nu
   if (index < 0) return -1;
   const item = items[index];
   if (item.kind !== "context") return -1;
-  const tailSize = items.length - index - 1;
-  const separatedTailSize = reasoningSeparatedTailSize.get(item) ?? 0;
-  const separatedByActivity = tailSize > separatedTailSize;
-  item.detail = `${item.detail ?? ""}${separatedByActivity ? "\n\n" : ""}${detail}`;
-  if (separatedByActivity) reasoningSeparatedTailSize.set(item, tailSize);
+  item.detail = `${item.detail ?? ""}${detail}`;
   item.collapsible = true;
   return index;
 }
@@ -206,7 +209,7 @@ export function summarizeOutput(outputJson: string | null | undefined, isError: 
   const body = firstLine.trim();
   const cut = body.length > 72 ? body.slice(0, 71) + "…" : body;
   if (!cut) return isError ? "error" : "done";
-  return cut;
+  return displayPathsInText(cut);
 }
 
 function safeStringify(v: unknown): string {
@@ -433,7 +436,7 @@ export function buildTimeline(
           });
         } else if (m.text === R_CODE_REASONING_EVENT) {
           const detail = reasoningEventDetail(m.output_json);
-          if (detail) {
+          if (detail && !answerStartedSinceLastTool(items)) {
             if (appendReasoningInCurrentTurn(items, detail) < 0) {
               items.push({
                 kind: "context",
@@ -444,6 +447,18 @@ export function buildTimeline(
                 collapsible: true,
               });
             }
+          }
+        } else if (m.text === R_CODE_INTERIM_EVENT) {
+          const detail = reasoningEventDetail(m.output_json);
+          if (detail) {
+            items.push({
+              kind: "context",
+              id: m.id ? `interim-${m.id}` : nid("interim"),
+              t: lastT,
+              label: R_CODE_INTERIM_LABEL,
+              detail,
+              collapsible: true,
+            });
           }
         } else if (m.text === CODEX_REASONING_SUMMARY_EVENT) {
           const detail = codexReasoningSummaryDetail(m.output_json);
@@ -786,6 +801,37 @@ function finishStreamingAgents(items: TimelineItem[], exceptIndex = -1): number 
   return changedAt;
 }
 
+/**
+ * 工具调用前的过渡性叙述折叠为“执行过程”。与 `Reasoning` 同一折叠语义：只保留
+ * 可展开的 context 条目，不再逐条渲染成正式回答；真正的最终总结仍走 agent 气泡。
+ */
+function foldStreamingAgentsAsInterim(items: TimelineItem[]): number {
+  const indexes = streamingAgentIndexes(items);
+  if (indexes.length === 0) return -1;
+  let changedAt = -1;
+  for (const index of indexes) {
+    const item = items[index];
+    if (item.kind === "agent" && item.streaming) {
+      const text = item.text.trim();
+      if (text) {
+        items[index] = {
+          kind: "context",
+          id: item.id,
+          t: item.t,
+          label: R_CODE_INTERIM_LABEL,
+          detail: text,
+          collapsible: true,
+        };
+      } else {
+        items[index] = { ...item, streaming: false };
+      }
+      changedAt = earliest(changedAt, index);
+    }
+  }
+  streamingAgentsByItems.set(items, []);
+  return changedAt;
+}
+
 export interface TimelineEventMutation {
   changed: boolean;
   /** 受影响的最早原始条目；增量呈现只需从其所属轮次向后重建。 */
@@ -817,6 +863,9 @@ export function applyAgentEventInPlace(
     case "reasoning": {
       const text = ev.text;
       if (!text) return mutation(-1);
+      // Provider adapters should enforce this phase boundary. Keep a UI-side guard for replayed
+      // history and third-party gateways so a late delta cannot appear beneath an active answer.
+      if (answerStartedSinceLastTool(items)) return mutation(-1);
       let changedAt = finishStreamingAgents(items);
       const existingIndex = appendReasoningInCurrentTurn(items, text);
       if (existingIndex >= 0) {
@@ -849,7 +898,8 @@ export function applyAgentEventInPlace(
       return mutation(changedAt);
     }
     case "tool_call": {
-      let changedAt = finishStreamingAgents(items);
+      // 工具调用前的过渡性叙述折叠为“执行过程”，不逐条渲染成正式回答。
+      let changedAt = foldStreamingAgentsAsInterim(items);
       let inputJson: string | undefined;
       try {
         inputJson = JSON.stringify(ev.input);
@@ -939,6 +989,7 @@ export function applyAgentEventInPlace(
       return mutation(changedAt);
     }
     case "scoped":
+    case "peer_message":
     case "subagent_lifecycle":
       // 子代理详情由 Working 列表和持久化运行树呈现；主时间线默认保持折叠。
       return mutation(-1);
@@ -955,7 +1006,7 @@ export function applyAgentEvent(
   nid: () => string
 ): TimelineItem[] {
   // 不进入时间线的高频 scoped 事件直接复用旧快照，避免无意义复制和 React 渲染。
-  if (ev.type === "scoped" || ev.type === "subagent_lifecycle") return prev;
+  if (ev.type === "scoped" || ev.type === "peer_message" || ev.type === "subagent_lifecycle") return prev;
   if (ev.type === "reasoning" && !ev.text) return prev;
 
   const items = [...prev];

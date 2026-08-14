@@ -45,8 +45,10 @@ test("companion is a separate native-window entry with a narrow capability", () 
   assert.match(controller, /attachMainCompanionHandshake/);
   assert.match(controller, /setIgnoreCursorEvents/);
   assert.match(controller, /pointHitsCompanionSurface/);
+  assert.match(controller, /\.companion-pulse-more/);
   assert.match(controller, /openRoom\(taskId\)/);
   assert.match(controller, /mainWindow\.show\(\)/);
+  assert.match(controller, /restoreMainWindowBestEffort/);
   assert.match(controller, /sendSnapshot: sendCompanionPreferences/);
   assert.match(controller, /readSnapshot: companionPreferenceSnapshot/);
   assert.match(bridge, /COMPANION_STARTUP_LISTENERS/);
@@ -57,7 +59,11 @@ test("companion is a separate native-window entry with a narrow capability", () 
   assert.match(rustMain, /background_color\(tauri::webview::Color\(0, 0, 0, 0\)\)/);
   assert.match(rustMain, /min_inner_size\(/);
   assert.match(rustMain, /max_inner_size\(/);
+  assert.match(rustMain, /maximizable\(false\)/);
   assert.match(rustMain, /devtools\(false\)/);
+  assert.match(rustMain, /closable\(false\)/);
+  assert.match(rustMain, /cmd_companion_ensure/);
+  assert.match(rustMain, /is_companion_window/);
   assert.match(rustMain, /RunEvent::Reopen/);
   assert.match(rustMain, /_window\.app_handle\(\)\.exit\(0\)/);
   assert.deepEqual(capability.windows, ["companion"]);
@@ -85,10 +91,24 @@ test("session assistant exposes progress, unread, native drag and one-item close
   assert.match(component, /pendingPermissionCount/);
   assert.match(component, /initializedTasks/);
   assert.match(component, /playCue/);
-  assert.match(settings, /独立悬浮在其他应用之上/);
-  assert.match(settings, /左键查看最近任务并跳转到对应会话/);
+  assert.match(settings, /悬浮显示任务运行、等待与完成状态/);
+  assert.match(settings, /左键查看任务/);
+  assert.match(settings, /companionEnsure/);
   assert.match(store, /r-code\.companion\.preferences\.v2/);
   assert.match(store, /revision/);
+});
+
+test("companion recovery tolerates only an exact legacy-host command mismatch", () => {
+  const ipc = read("src/lib/ipc.ts");
+  const settings = read("src/components/scenes/SettingsScene.tsx");
+  const commands = read("../src/tauri_commands.rs");
+
+  assert.match(ipc, /LEGACY_COMPANION_ENSURE_MISSING_ERROR\s*=\s*\n\s*"Command cmd_companion_ensure not found"/);
+  assert.match(ipc, /if \(!isLegacyCompanionEnsureMissing\(cause\)\) throw cause/);
+  assert.match(ipc, /using its startup-created window/);
+  assert.match(commands, /get_webview_window\(crate::COMPANION_WINDOW_LABEL\)[\s\S]*?\.is_none\(\)[\s\S]*?tracing::warn![\s\S]*?return Err\("native companion window is unavailable"\.to_string\(\)\)/);
+  assert.match(settings, /catch \(cause\)[\s\S]*?console\.warn\("Companion window could not be enabled\.", cause\)/);
+  assert.doesNotMatch(settings, /详细信息已写入诊断日志/);
 });
 
 test("six progress moods plus singing and dancing use bounded single-plane sprite sequences", () => {
@@ -135,6 +155,8 @@ test("six progress moods plus singing and dancing use bounded single-plane sprit
   assert.match(component, /actual window position is authoritative/);
   assert.match(component, /placementAroundAvatar/);
   assert.match(component, /integerPhysicalPosition/);
+  assert.match(component, /restoredAnchorForMonitor/);
+  assert.match(component, /monitor\.scaleFactor/);
   assert.match(component, /Math\.round\(position\.x\)/);
   assert.doesNotMatch(component, /setPosition\(new PhysicalPosition/);
   assert.match(component, /Companion position could not be restored; showing at its current position/);
@@ -142,8 +164,20 @@ test("six progress moods plus singing and dancing use bounded single-plane sprit
   assert.match(component, /roomLeft >= deltaX \|\| roomLeft >= roomRight/);
   assert.match(component, /roomAbove >= deltaY \|\| roomAbove >= roomBelow/);
   assert.match(component, /avatarAnchorFromWindow/);
-  assert.match(css, /has-pulses:not\(\.is-expanded\)\.panel-right \.companion-avatar/);
-  assert.match(css, /has-pulses:not\(\.is-expanded\)\.avatar-top \.companion-avatar/);
+  assert.match(css, /has-tracking:not\(\.is-expanded\)\.panel-right \.companion-avatar/);
+  assert.doesNotMatch(css, /has-tracking:not\(\.is-expanded\)\.avatar-top \.companion-avatar/);
+  assert.match(css, /\.companion-window-root\.is-mini \.companion-tracking-toggle\s*\{[\s\S]*?width: 28px/);
+  assert.match(component, /companionFootprint/);
+  assert.match(component, /MAX_PULSE_SESSIONS = 2/);
+  assert.match(component, /trackedSessions\.slice\(0, MAX_PULSE_SESSIONS\)/);
+  assert.match(component, /hiddenPulseCount/);
+  assert.match(component, /还有 \$\{hiddenPulseCount\} 个任务 · 查看全部/);
+  assert.match(component, /trackingShowingAll/);
+  assert.match(component, /全部 \$\{trackingCount\} 个任务 · 收起/);
+  assert.match(component, /aria-expanded=\{showingAllPulseSessions\}/);
+  assert.match(component, /badgeCount = unreadCount > 0 \? trackingCount : 0/);
+  assert.match(component, /companion-tracking-toggle/);
+  assert.match(component, /个任务正在运行，展开 Session 追踪/);
   assert.match(component, /useEffect\(\(\) => \{\s*panelOpenRef\.current = panelOpen;\s*\}, \[panelOpen\]\)/);
   assert.doesNotMatch(spriteCss, /transition:\s*opacity|drop-shadow/);
   assert.doesNotMatch(css, /companionFrameEnter|companionFrameLeave/);

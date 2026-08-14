@@ -295,7 +295,7 @@ export const SLASH_COMMANDS: SlashCommandDefinition[] = [
   {
     name: "settings",
     title: "打开设置",
-    description: "管理模型服务、外观、诊断与 Codex CLI。",
+    description: "管理模型服务、外观、诊断与子代理配置。",
     category: "view",
     kind: "local",
     locations: ["home", "room"],

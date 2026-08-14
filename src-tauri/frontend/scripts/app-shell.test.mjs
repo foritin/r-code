@@ -81,6 +81,16 @@ async function openProjectFiles(page, workspacePath = "D:/project/rust/r-code") 
   await page.locator(".file-workspace").waitFor({ state: "visible" });
 }
 
+async function openKnowledgeSettings(page, tab = "memory") {
+  await page.evaluate(async (target) => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().openKnowledge(target);
+  }, tab);
+  const center = page.getByRole("region", { name: "知识与指令" });
+  await center.waitFor({ state: "visible" });
+  return center;
+}
+
 test.before(async () => {
   const port = await freePort();
   baseUrl = `http://127.0.0.1:${port}/`;
@@ -112,6 +122,47 @@ test("product mode labels collapse compatibility policies into Agent and Plan", 
   assert.deepEqual(labels.map((item) => item.short), ["Agent", "Agent", "Agent", "Plan"]);
   assert.ok(labels.slice(0, 3).every((item) => item.long.startsWith("Agent —")));
   assert.match(labels[3].long, /^Plan —/);
+  await page.close();
+});
+
+test("Windows verbatim paths stay canonical internally but render without the device prefix", async () => {
+  const page = await browser.newPage();
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const rendered = await page.evaluate(async () => {
+    const { displayPath, displayPathsInText, toolTarget } = await import("/src/lib/format.ts");
+    const { summarizeOutput } = await import("/src/components/room/model.ts");
+    const drive = String.raw`\\?\D:\project\rust\r-code\src-tauri`;
+    const unc = String.raw`\\?\UNC\server\share\r-code`;
+    const volume = String.raw`\\?\Volume{1234}\r-code`;
+    const command = `type ${drive}`;
+    const historicalError = JSON.stringify({ error: `failed to edit ${drive}` });
+    const historicalJson = displayPathsInText(JSON.stringify({ path: drive, unc, volume }));
+    return {
+      drive: displayPath(drive),
+      unc: displayPath(unc),
+      volume: displayPath(volume),
+      pathTarget: toolTarget(JSON.stringify({ path: drive })),
+      commandTarget: toolTarget(JSON.stringify({ command })),
+      queryTarget: toolTarget(JSON.stringify({ query: drive })),
+      historicalSummary: summarizeOutput(historicalError, true),
+      historicalJson: JSON.parse(historicalJson),
+    };
+  });
+
+  assert.deepEqual(rendered, {
+    drive: String.raw`D:\project\rust\r-code\src-tauri`,
+    unc: String.raw`\\server\share\r-code`,
+    volume: String.raw`\\?\Volume{1234}\r-code`,
+    pathTarget: String.raw`D:\project\rust\r-code\src-tauri`,
+    commandTarget: String.raw`type \\?\D:\project\rust\r-code\src-tauri`,
+    queryTarget: String.raw`\\?\D:\project\rust\r-code\src-tauri`,
+    historicalSummary: String.raw`failed to edit D:\project\rust\r-code\src-tauri`,
+    historicalJson: {
+      path: String.raw`D:\project\rust\r-code\src-tauri`,
+      unc: String.raw`\\server\share\r-code`,
+      volume: String.raw`\\?\Volume{1234}\r-code`,
+    },
+  });
   await page.close();
 });
 
@@ -400,6 +451,85 @@ test("macOS chrome falls back to the user agent when WebView platform is unavail
   await page.close();
 });
 
+test("attachment image preview closes from either side of the dialog", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setScene("home");
+  });
+  await page.locator("#app.scene-home").waitFor({ state: "visible" });
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  await page.getByRole("dialog", { name: "添加到任务", exact: true }).locator('input[type="file"]').first().setInputFiles({
+    name: "preview.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+
+  const thumbnail = page.getByRole("button", { name: "预览图片 preview.png", exact: true });
+  const dialog = page.getByRole("dialog", { name: "预览图片 preview.png", exact: true });
+  const closePreview = dialog.getByRole("button", { name: "关闭预览", exact: true });
+  const openPreview = async () => {
+    await thumbnail.click();
+    await dialog.waitFor({ state: "visible" });
+    return page.evaluate(() => {
+      const preview = document.querySelector(".attachment-preview");
+      if (!(preview instanceof HTMLElement)) throw new Error("attachment preview is missing");
+      const rect = preview.getBoundingClientRect();
+      const y = Math.max(1, Math.min(window.innerHeight - 2, rect.top + rect.height / 2));
+      const left = { x: Math.max(1, rect.left / 2), y };
+      const right = { x: Math.min(window.innerWidth - 2, (rect.right + window.innerWidth) / 2), y };
+      const hitsBackdrop = ({ x, y: pointY }) => (
+        document.elementFromPoint(x, pointY)?.closest(".attachment-preview-backdrop") != null
+      );
+      return {
+        left,
+        right,
+        leftHitsBackdrop: hitsBackdrop(left),
+        rightHitsBackdrop: hitsBackdrop(right),
+      };
+    });
+  };
+
+  const right = await openPreview();
+  assert.equal(await closePreview.evaluate((button) => document.activeElement === button), true, "modal focus should start on its close button");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await closePreview.evaluate((button) => document.activeElement === button), true, "modal focus must not escape into the composer");
+  assert.equal(right.rightHitsBackdrop, true, "the right empty area should belong to the preview backdrop");
+  await page.mouse.click(right.right.x, right.right.y);
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await thumbnail.evaluate((button) => document.activeElement === button), true, "closing the preview should restore thumbnail focus");
+
+  const left = await openPreview();
+  assert.equal(left.leftHitsBackdrop, true, "the left empty area should belong to the preview backdrop");
+  await page.mouse.click(left.left.x, left.left.y);
+  await dialog.waitFor({ state: "detached" });
+
+  await openPreview();
+  await page.keyboard.press("Escape");
+  await dialog.waitFor({ state: "detached" });
+  assert.equal(await thumbnail.evaluate((button) => document.activeElement === button), true, "Escape should close the preview and restore focus");
+
+  await openPreview();
+  await page.getByRole("button", { name: "删除附件 preview.png", exact: true }).evaluate((button) => button.click());
+  await dialog.waitFor({ state: "detached" });
+  await page.getByRole("button", { name: "添加到任务", exact: true }).click();
+  await page.getByRole("dialog", { name: "添加到任务", exact: true }).locator('input[type="file"]').first().setInputFiles({
+    name: "replacement.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+X2NDWQAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await page.getByRole("button", { name: "预览图片 replacement.png", exact: true }).waitFor({ state: "visible" });
+  assert.equal(await page.locator(".attachment-preview-backdrop").count(), 0, "a removed image preview must not reappear after adding another attachment");
+  await page.close();
+});
+
 test("macOS and Windows offer local OCR for images rejected by a text-only model", async () => {
   const attachment = {
     id: "ocr-image",
@@ -456,6 +586,51 @@ test("macOS and Windows offer local OCR for images rejected by a text-only model
   assert.equal(windowsResult.sendable.length, 1);
   assert.equal(windowsResult.sendable[0].nativeOcr, true);
   await windows.close();
+
+  const runningWindows = await browser.newPage();
+  await runningWindows.addInitScript(() => {
+    Object.defineProperty(navigator, "platform", { configurable: true, get: () => "Win32" });
+  });
+  await runningWindows.goto(baseUrl, { waitUntil: "networkidle" });
+  await runningWindows.evaluate(async () => {
+    const { browserMockDetails, browserMockTasks } = await import("/src/lib/mock-data.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const task = browserMockTasks.find((candidate) => candidate.id === "mock-task-queue");
+    const detail = browserMockDetails["mock-task-queue"];
+    if (!task || !detail) throw new Error("running OCR fixture is missing");
+    task.provider_name = "deepseek";
+    task.model = "deepseek-v4-pro";
+    detail.task.provider_name = "deepseek";
+    detail.task.model = "deepseek-v4-pro";
+    await Promise.all([
+      useTasksStore.getState().refreshTasks(),
+      useTasksStore.getState().refreshDetail("mock-task-queue"),
+      useTasksStore.getState().refreshWorkspaces(),
+    ]);
+    useAppStore.getState().openRoom("mock-task-queue");
+  });
+  const runningComposer = runningWindows.locator(".scene-room .composer");
+  await runningComposer.getByRole("textbox", { name: "给 Agent 的消息" }).waitFor({ state: "visible" });
+  await runningComposer.getByRole("button", { name: "添加到任务" }).click();
+  await runningWindows.getByRole("dialog", { name: "添加到任务" }).locator('input[type="file"]').first().setInputFiles({
+    name: "screen.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("iVBORw0KGgo=", "base64"),
+  });
+  const deferredOcr = runningComposer.locator(".attachment-chip.is-native-ocr");
+  await deferredOcr.waitFor({ state: "visible" });
+  assert.match(await deferredOcr.innerText(), /本机 OCR → 文本/);
+  assert.match(await deferredOcr.getAttribute("class"), /is-deferred/);
+  assert.doesNotMatch(await deferredOcr.getAttribute("class"), /is-unsupported/);
+  assert.equal(await deferredOcr.locator(".attachment-warning").count(), 0, "deferred OCR must not look like a deleted attachment");
+  assert.equal(
+    await deferredOcr.locator(".attachment-label").evaluate((element) => getComputedStyle(element).textDecorationLine),
+    "none",
+    "a retained OCR attachment must not be struck through",
+  );
+  assert.match(await deferredOcr.getAttribute("title"), /当前运行结束后/);
+  await runningWindows.close();
 
   const linux = await browser.newPage();
   await linux.addInitScript(() => {
@@ -534,7 +709,7 @@ test("Codex login watcher is bounded and never schedules beyond its deadline", a
   await page.close();
 });
 
-test("task status colors use orange while running and green when idle", async () => {
+test("task status colors use orange while live or waiting and green after completion", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
@@ -566,9 +741,39 @@ test("task status colors use orange while running and green when idle", async ()
 
   assert.equal(colors.running, colors.warning);
   assert.equal(colors.waitingWhileRunning, colors.running);
-  assert.equal(colors.reviewReady, colors.warning);
+  assert.equal(colors.reviewReady, colors.success);
   assert.equal(colors.finished, colors.success);
   assert.notEqual(colors.running, colors.finished);
+
+  await page.evaluate(async () => {
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    // Sidebar bootstrap intentionally loads task summaries only. Fetch the detail before
+    // mutating its latest run so this assertion exercises the real presentation path instead of
+    // depending on another test having opened the conversation first.
+    await useTasksStore.getState().refreshDetail("mock-task-complete");
+    const state = useTasksStore.getState();
+    const detail = state.details["mock-task-complete"];
+    if (!detail) throw new Error("completed task detail is missing");
+    useTasksStore.setState({
+      details: {
+        ...state.details,
+        [detail.task.id]: {
+          ...detail,
+          runs: detail.runs.map((run, index) => index === 0
+            ? { ...run, review_state: "failed", ended_at: run.ended_at ?? new Date().toISOString() }
+            : run),
+        },
+      },
+    });
+  });
+  const completedWithError = page.locator(".sidebar-task").filter({ hasText: "更新依赖并修复告警" });
+  await page.waitForFunction(() => document.querySelector(".sidebar-task[title*='已完成（含错误）']") != null);
+  assert.match(await completedWithError.getAttribute("title"), /已完成（含错误）/);
+  assert.equal(
+    await completedWithError.locator(".task-state-dot").evaluate((dot) => getComputedStyle(dot).backgroundColor),
+    colors.success,
+    "an ended session stays green even when its latest run retains an error",
+  );
 
   await page.locator(".sidebar-nav-item").filter({ hasText: "对话" }).click();
   await page.locator("#main-content > .scene-conversations").waitFor({ state: "visible" });
@@ -594,11 +799,25 @@ test("task status colors use orange while running and green when idle", async ()
 test("Codex one-click setup resumes automatically after browser login", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  await page.evaluate(async () => {
+  const normalizedLegacyPane = await page.evaluate(async () => {
     const { useAppStore } = await import("/src/store/app.ts");
     useAppStore.getState().setSettingsPane("codex");
     useAppStore.getState().setScene("settings");
+    return useAppStore.getState().settingsPane;
   });
+  assert.equal(normalizedLegacyPane, "subagents", "legacy codex settings key must normalize to the subagents module");
+
+  const subagentSettings = page.getByRole("button", { name: "子代理配置", exact: true });
+  await subagentSettings.waitFor({ state: "visible" });
+  assert.equal(await subagentSettings.getAttribute("aria-current"), "page");
+  assert.equal(
+    await page.getByRole("navigation", { name: "设置分类" }).getByRole("button", { name: "Codex CLI", exact: true }).count(),
+    0,
+    "Codex CLI may be a candidate source, never the top-level settings module",
+  );
+  assert.equal(await page.getByRole("heading", { name: "子代理配置", exact: true }).count(), 1);
+  assert.equal(await page.locator(".local-integrations-panel").count(), 0);
+  assert.equal(await page.getByText("其他 Agent 与开发工具", { exact: true }).count(), 0);
 
   const setup = page.locator(".codex-setup");
   await setup.waitFor({ state: "visible" });
@@ -623,7 +842,7 @@ test("Codex subagent switch persists immediately and remains reversible", async 
     await codexInstallCli();
     await codexStartLogin();
     await codexSetupCollaboration();
-    useAppStore.getState().setSettingsPane("codex");
+    useAppStore.getState().setSettingsPane("subagents");
     useAppStore.getState().setScene("settings");
   });
 
@@ -646,6 +865,128 @@ test("Codex subagent switch persists immediately and remains reversible", async 
   await page.close();
 });
 
+test("subagent configuration supports repeatable weighted slots, editable prompts, and fail-closed probes", async () => {
+  const page = await browser.newPage({ viewport: { width: 1180, height: 920 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const originalPool = await page.evaluate(async () => {
+    const {
+      codexInstallCli,
+      codexSetupCollaboration,
+      codexStartLogin,
+      subagentPoolSnapshot,
+    } = await import("/src/lib/ipc.ts");
+    const { useAppStore } = await import("/src/store/app.ts");
+    await codexInstallCli();
+    await codexStartLogin();
+    await codexSetupCollaboration();
+    const snapshot = await subagentPoolSnapshot();
+    useAppStore.getState().setSettingsPane("subagents");
+    useAppStore.getState().setScene("settings");
+    return snapshot.pool;
+  });
+
+  try {
+    const panel = page.locator(".subagent-providers-panel");
+    await panel.waitFor({ state: "visible" });
+    assert.equal(await page.getByRole("heading", { name: "子代理配置", exact: true }).count(), 1);
+    assert.equal(await panel.getByText("Reasonix", { exact: false }).count(), 0);
+    assert.equal(await panel.getByText("Claude Code", { exact: false }).count(), 0);
+    assert.equal(await panel.getByText("OpenCode", { exact: false }).count(), 0);
+    assert.equal(await panel.getByText("Gemini CLI", { exact: false }).count(), 0);
+
+    await panel.getByRole("button", { name: "全部测试", exact: true }).click();
+    await panel.getByText(/批量测试完成：2\/3 项已连通/).waitFor({ state: "visible" });
+    const deepseek = panel.locator('[data-source-key="api:deepseek"]');
+    const openai = panel.locator('[data-source-key="api:openai"]');
+    const codex = panel.locator('[data-source-key="codex_cli"]');
+    assert.match(await deepseek.innerText(), /连接失败/);
+    assert.match(await openai.innerText(), /已连通/);
+    assert.match(await codex.innerText(), /已连通/);
+    assert.match(await codex.innerText(), /叶节点 · 不继续派生/);
+    assert.match(await openai.innerText(), /原生节点 · 可继续委派/);
+
+    const add = panel.getByTestId("subagent-add-slot");
+    await add.click();
+    await add.click();
+    await add.click();
+    const cards = panel.getByTestId("subagent-slot-card");
+    assert.equal(await cards.count(), 3, "the pool must allow three stable slots");
+    assert.equal(await add.isDisabled(), true, "a fourth slot must never be addable");
+    await panel.getByRole("button", { name: "删除槽位 3", exact: true }).click();
+    assert.equal(await cards.count(), 2);
+
+    const sources = panel.getByRole("combobox", { name: /槽位 \d 来源/ });
+    assert.deepEqual(await sources.evaluateAll((items) => items.map((item) => item.value)), ["api:openai", "api:openai"]);
+    assert.equal(
+      await sources.first().locator('option[value="api:deepseek"]').evaluate((option) => option.disabled),
+      true,
+      "a failed source must stay visible but cannot be selected",
+    );
+
+    const weights = panel.getByRole("spinbutton", { name: /槽位 \d 权重/ });
+    await weights.nth(0).fill("60");
+    await weights.nth(1).fill("39");
+    const save = panel.getByTestId("subagent-save-pool");
+    await panel.getByText("权重合计必须为 100%，当前为 99%。", { exact: true }).waitFor({ state: "visible" });
+    assert.equal(await save.isDisabled(), true);
+    await weights.nth(1).fill("40");
+
+    const models = panel.getByRole("textbox", { name: /槽位 \d 模型/ });
+    await models.nth(1).fill("gpt-5.6-terra");
+    await panel.getByText("槽位 2 的来源与模型尚未通过当前配置下的连通测试。", { exact: true })
+      .waitFor({ state: "visible" });
+    assert.equal(await save.isDisabled(), true);
+    await cards.nth(1).getByRole("button", { name: "测试此槽", exact: true }).click();
+    await cards.nth(1).getByText("已连通", { exact: true }).waitFor({ state: "visible" });
+
+    const templates = panel.getByRole("combobox", { name: /槽位 \d Prompt 模板/ });
+    await templates.nth(0).selectOption("implementation");
+    await templates.nth(1).selectOption("test_verification");
+    const prompts = panel.getByRole("textbox", { name: /槽位 \d 最终 Prompt/ });
+    const implementationPrompt = await prompts.nth(0).inputValue();
+    await prompts.nth(0).fill(`${implementationPrompt}\n额外要求：优先保持 CRLF，并报告验证命令。`);
+
+    assert.equal(await save.isDisabled(), false);
+    await save.click();
+    await panel.getByText("子代理候选池已原子保存。", { exact: true }).waitFor({ state: "visible" });
+
+    const saved = await page.evaluate(async () => {
+      const { subagentPoolSnapshot } = await import("/src/lib/ipc.ts");
+      return (await subagentPoolSnapshot()).pool;
+    });
+    assert.equal(saved.slots.length, 2);
+    assert.deepEqual(saved.slots.map((slot) => slot.source), [
+      { kind: "api_provider", provider_id: "openai" },
+      { kind: "api_provider", provider_id: "openai" },
+    ]);
+    assert.deepEqual(saved.slots.map((slot) => slot.weight), [60, 40]);
+    assert.deepEqual(saved.slots.map((slot) => slot.model), ["gpt-5.6-sol", "gpt-5.6-terra"]);
+    assert.deepEqual(saved.slots.map((slot) => slot.prompt_template_id), ["implementation", "test_verification"]);
+    assert.match(saved.slots[0].prompt, /额外要求：优先保持 CRLF/);
+
+    const staleSaveError = await page.evaluate(async () => {
+      const { subagentPoolSave, subagentPoolSnapshot } = await import("/src/lib/ipc.ts");
+      const first = await subagentPoolSnapshot();
+      const second = await subagentPoolSnapshot();
+      await subagentPoolSave(first.revision, first.pool);
+      try {
+        await subagentPoolSave(second.revision, second.pool);
+        return null;
+      } catch (error) {
+        return String(error);
+      }
+    });
+    assert.match(staleSaveError ?? "", /其他窗口更新|重新加载/);
+  } finally {
+    await page.evaluate(async (pool) => {
+      const { subagentPoolSave, subagentPoolSnapshot } = await import("/src/lib/ipc.ts");
+      const current = await subagentPoolSnapshot();
+      await subagentPoolSave(current.revision, pool);
+    }, originalPool).catch(() => {});
+    await page.close();
+  }
+});
+
 test("RTK setting installs once, configures new Codex runs, and disables without uninstalling", async () => {
   const page = await browser.newPage({ viewport: { width: 860, height: 760 } });
   const consoleErrors = [];
@@ -661,7 +1002,7 @@ test("RTK setting installs once, configures new Codex runs, and disables without
     globalThis.__rCodePerformanceIpcProbe = (command, args) => {
       if (command.startsWith("cmd_rtk_")) globalThis.__rCodeRtkCalls.push({ command, args });
     };
-    useAppStore.getState().setSettingsPane("codex");
+    useAppStore.getState().setSettingsPane("subagents");
     useAppStore.getState().setScene("settings");
   });
 
@@ -719,7 +1060,7 @@ test("RTK enable failure rolls the switch back and shows only a short-lived safe
     globalThis.__rCodeBrowserMockFailures = {
       cmd_rtk_set_enabled: "PRIVATE_INSTALL_DIAGNOSTIC should never enter the settings UI",
     };
-    useAppStore.getState().setSettingsPane("codex");
+    useAppStore.getState().setSettingsPane("subagents");
     useAppStore.getState().setScene("settings");
   });
 
@@ -892,7 +1233,7 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
     let live = applyAgentEvent([], { type: "reasoning", text: "先检查", delta: true }, 1, nid);
     live = applyAgentEvent(live, { type: "reasoning", text: "依赖关系", delta: true }, 1, nid);
     live = applyAgentEvent(live, { type: "message", text: "最终回答", delta: true }, 2, nid);
-    live = applyAgentEvent(live, { type: "reasoning", text: "下一段思考", delta: true }, 3, nid);
+    live = applyAgentEvent(live, { type: "reasoning", text: "迟到思考", delta: true }, 3, nid);
 
     let acrossTool = applyAgentEvent([], { type: "reasoning", text: "先检查", delta: true }, 1, nid);
     acrossTool = applyAgentEvent(acrossTool, {
@@ -925,8 +1266,7 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
     contract.live.map((item) => [item.kind, item.label ?? null, item.detail ?? item.text, item.streaming ?? null]),
     [
       ["context", "模型思考", "先检查依赖关系", null],
-      ["agent", null, "最终回答", false],
-      ["context", "模型思考", "下一段思考", null],
+      ["agent", null, "最终回答", true],
     ],
   );
   assert.deepEqual(
@@ -936,7 +1276,7 @@ test("provider reasoning is coalesced, separated from answers, and replayable", 
   assert.deepEqual(
     contract.acrossTool.filter((item) => item.kind === "context" && item.label === "模型思考")
       .map((item) => item.detail),
-    ["先检查\n\n再核对边界"],
+    ["先检查", "再核对边界"],
   );
   await page.close();
 });
@@ -984,75 +1324,254 @@ test("active run duration refreshes on the shared second tick and isolates rende
     return { name, rows };
   });
   assert.deepEqual(otherContent, { name: "处理中", rows: 1 });
+  assert.equal(
+    await page.locator(".timeline-process-disclosure").count(),
+    0,
+    "an active run must keep its live activity trace visible instead of archiving it",
+  );
+  await page.locator(".timeline-turn-trace.has-activity").first().waitFor({ state: "visible" });
   await page.close();
 });
 
-test("the platform modifier plus = keeps the zoomed app shell covering the complete webview", async () => {
+test("a successful turn archives its process behind the duration while keeping the final summary visible", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-
-  const modifier = await page.evaluate(() => /mac/i.test(navigator.platform || navigator.userAgent))
-    ? "Meta"
-    : "Control";
-  await page.keyboard.press(`${modifier}+=`);
-  await page.waitForFunction(async () => {
+  await page.evaluate(async () => {
+    const { browserMockDetails, browserMockSetMessages } = await import("/src/lib/mock-data.ts");
     const { useAppStore } = await import("/src/store/app.ts");
-    return useAppStore.getState().zoomLevel === 110;
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    const taskId = "mock-task-complete";
+    const detail = browserMockDetails[taskId];
+    const startedAt = "2026-08-14T01:00:00.000Z";
+    const endedAt = "2026-08-14T01:01:13.000Z";
+    detail.runs[0].started_at = startedAt;
+    detail.runs[0].ended_at = endedAt;
+    detail.runs[0].review_state = "accepted";
+    detail.runs[0].summary = "过程归档交互已完成";
+    browserMockSetMessages(taskId, [
+      {
+        id: "complete-user",
+        branch_id: "main",
+        kind: "message",
+        role: "user",
+        text: "完成时间线过程归档",
+        timestamp: startedAt,
+      },
+      {
+        id: "complete-reasoning",
+        branch_id: "main",
+        kind: "system",
+        text: "r_code_reasoning",
+        output_json: JSON.stringify({ text: "先检查完成态与运行态边界" }),
+      },
+      {
+        id: "complete-progress",
+        branch_id: "main",
+        kind: "message",
+        role: "assistant",
+        text: "我先核对相关实现，再执行定向修改。",
+      },
+      {
+        id: "complete-tool-call",
+        branch_id: "main",
+        kind: "tool_call",
+        tool_name: "read_file",
+        call_id: "complete-read",
+        input_json: JSON.stringify({ path: "src/main.rs" }),
+      },
+      {
+        id: "complete-tool-result",
+        branch_id: "main",
+        kind: "tool_result",
+        call_id: "complete-read",
+        output_json: JSON.stringify({ content: "读取完成" }),
+        is_error: false,
+      },
+      {
+        id: "complete-final",
+        branch_id: "main",
+        kind: "message",
+        role: "assistant",
+        text: "已完成：过程归档交互已落地。",
+        timestamp: endedAt,
+      },
+    ]);
+    await useTasksStore.getState().refreshDetail(taskId);
+    useAppStore.getState().openRoom(taskId);
   });
 
-  const layout = await page.evaluate(async () => {
-    const { useAppStore } = await import("/src/store/app.ts");
-    const app = document.querySelector("#app");
-    if (!(app instanceof HTMLElement)) throw new Error("#app is missing");
-    const rect = app.getBoundingClientRect();
-    return {
-      zoomLevel: useAppStore.getState().zoomLevel,
-      rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
-      viewport: { width: innerWidth, height: innerHeight },
-      inlineSize: { width: app.style.width, height: app.style.height, zoom: app.style.zoom },
+  const toggle = page.getByRole("button", { name: "耗时 1分 13秒" });
+  await toggle.waitFor({ state: "visible" });
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator(".timeline-process-body").count(), 0, "the completed process should not remain mounted by default");
+  await page.getByText("已完成：过程归档交互已落地。", { exact: true }).waitFor({ state: "visible" });
+
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await toggle.getAttribute("aria-expanded"), "true");
+  await page.locator(".timeline-process-body").waitFor({ state: "visible" });
+  await page.getByText("我先核对相关实现，再执行定向修改。", { exact: true }).waitFor({ state: "visible" });
+  await page.locator(".timeline-process-body .timeline-activity-event").waitFor({ state: "visible" });
+
+  await page.evaluate(() => {
+    window.__timelineScrollCalls = [];
+    window.__timelineOriginalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollIntoView(options) {
+      window.__timelineScrollCalls.push({
+        options,
+        className: this instanceof HTMLElement ? this.className : "",
+      });
     };
   });
+  const traceAnchor = page.locator(".timeline-process-body .timeline-trace-anchor").first();
+  assert.match(await traceAnchor.getAttribute("aria-label"), /^定位到/);
+  const anchorBox = await traceAnchor.boundingBox();
+  assert.ok(anchorBox && Math.abs(anchorBox.width - 20) < 0.5 && Math.abs(anchorBox.height - 20) < 0.5,
+    `the trace anchor must keep a precise, non-obstructive hit target: ${JSON.stringify(anchorBox)}`);
+  const restingColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
+  await traceAnchor.hover();
+  const hoverColor = await traceAnchor.evaluate((element) => getComputedStyle(element).color);
+  assert.notEqual(hoverColor, restingColor, "hover must visibly distinguish an interactive trace node");
+  await traceAnchor.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await traceAnchor.evaluate((element) => document.activeElement === element), true,
+    "the trace anchor must remain keyboard focused after navigation");
+  assert.equal(await traceAnchor.locator("xpath=..").evaluate((element) => element.classList.contains("is-trace-target")), true,
+    "selecting a trace node should visibly acknowledge the target activity");
+  const scrollCall = await page.evaluate(() => window.__timelineScrollCalls.at(-1));
+  assert.deepEqual(scrollCall.options, { behavior: "smooth", block: "center", inline: "nearest" });
+  assert.match(scrollCall.className, /timeline-(?:activity|context|subagent)-event/);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await traceAnchor.click();
+  assert.equal(await page.evaluate(() => window.__timelineScrollCalls.at(-1).options.behavior), "auto",
+    "reduced motion must make trace navigation immediate");
+  await page.evaluate(() => {
+    Element.prototype.scrollIntoView = window.__timelineOriginalScrollIntoView;
+    delete window.__timelineOriginalScrollIntoView;
+  });
 
-  assert.equal(layout.zoomLevel, 110);
-  assert.equal(layout.inlineSize.width, "", "CSS zoom already compensates an auto block width");
-  assert.equal(layout.inlineSize.zoom, "1.1");
-  assert.match(layout.inlineSize.height, /vh$/, "the explicit viewport height needs inverse vh compensation");
-  assert.ok(Math.abs(layout.rect.left) <= 1 && Math.abs(layout.rect.top) <= 1, "the zoomed shell must stay anchored to the webview origin");
-  assert.ok(
-    Math.abs(layout.rect.right - layout.viewport.width) <= 1,
-    `zoom must not leave an uncovered strip on the right: ${JSON.stringify(layout)}`,
-  );
-  assert.ok(
-    Math.abs(layout.rect.bottom - layout.viewport.height) <= 1,
-    `zoom must not leave an uncovered strip at the bottom: ${JSON.stringify(layout)}`,
-  );
+  await toggle.click();
+  assert.equal(await toggle.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.locator(".timeline-process-body").count(), 0);
+  await page.getByText("已完成：过程归档交互已落地。", { exact: true }).waitFor({ state: "visible" });
+  await page.close();
+});
 
-  for (const level of [80, 200, 100]) {
-    await page.evaluate(async (nextLevel) => {
-      const { useAppStore } = await import("/src/store/app.ts");
-      useAppStore.getState().setZoom(nextLevel);
-    }, level);
-    await page.waitForFunction(async (nextLevel) => {
-      const { useAppStore } = await import("/src/store/app.ts");
-      return useAppStore.getState().zoomLevel === nextLevel;
-    }, level);
-    const bounds = await page.locator("#app").evaluate((app) => {
-      const rect = app.getBoundingClientRect();
-      return { right: rect.right, bottom: rect.bottom, width: innerWidth, height: innerHeight };
-    });
-    assert.ok(Math.abs(bounds.right - bounds.width) <= 1, `${level}% zoom must cover the webview width`);
-    assert.ok(Math.abs(bounds.bottom - bounds.height) <= 1, `${level}% zoom must cover the webview height`);
-  }
+test("appearance preferences stay flat and expose only theme and companion controls", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setThemeMode("light");
+    useAppStore.getState().setSettingsPane("preferences");
+  });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "studio-light");
+
+  const preferences = page.locator(".settings-preferences");
+  await preferences.waitFor({ state: "visible" });
+  assert.equal(await preferences.locator(".settings-sheet").count(), 0, "preferences should not sit inside a generic card");
+  assert.equal(await preferences.getByText("界面缩放", { exact: true }).count(), 0);
+  assert.equal(await preferences.getByText("无障碍", { exact: true }).count(), 0);
+  assert.equal(await preferences.getByText("文本差异视图", { exact: true }).count(), 0);
+
+  const themeChoices = preferences.getByRole("radio").filter({ has: page.locator(".theme-option-copy") });
+  assert.equal(await themeChoices.count(), 3);
+  assert.equal(await themeChoices.evaluateAll((choices) =>
+    choices.filter((choice) => choice.getAttribute("aria-checked") === "true").length
+  ), 1, "exactly one theme should be selected");
+  assert.equal(await preferences.locator(".preference-row").count(), 4, "companion options should use four aligned rows");
+  await preferences.getByRole("switch", { name: "显示小助手", exact: true }).waitFor({ state: "visible" });
+
+  const shapeTypography = await page.evaluate(() => {
+    const title = document.querySelector("#set-companion-shape-label");
+    const supporting = title?.nextElementSibling;
+    const control = document.querySelector(".preference-segmented .chipbtn");
+    if (!(title instanceof HTMLElement) || !(supporting instanceof HTMLElement) || !(control instanceof HTMLElement)) {
+      throw new Error("companion shape typography is missing");
+    }
+    const titleStyle = getComputedStyle(title);
+    const supportingStyle = getComputedStyle(supporting);
+    const controlStyle = getComputedStyle(control);
+    const colorProbe = document.createElement("span");
+    colorProbe.style.color = "var(--fg-muted)";
+    document.body.append(colorProbe);
+    const mutedColor = getComputedStyle(colorProbe).color;
+    colorProbe.remove();
+    return {
+      titleFontFamily: titleStyle.fontFamily,
+      titleFontSize: titleStyle.fontSize,
+      titleFontWeight: titleStyle.fontWeight,
+      supportingColor: supportingStyle.color,
+      mutedColor,
+      supportingFontSize: supportingStyle.fontSize,
+      controlFontFamily: controlStyle.fontFamily,
+      controlFontSize: controlStyle.fontSize,
+    };
+  });
+  assert.equal(shapeTypography.titleFontSize, "14px");
+  assert.equal(shapeTypography.titleFontWeight, "500");
+  assert.equal(shapeTypography.supportingColor, shapeTypography.mutedColor, "light supporting copy should use the readable muted tone");
+  assert.equal(shapeTypography.supportingFontSize, "12px");
+  assert.equal(shapeTypography.controlFontFamily, shapeTypography.titleFontFamily, "Chinese segmented labels should use the UI font rather than monospace fallback");
+  assert.equal(shapeTypography.controlFontSize, "12px");
+
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    useAppStore.getState().setThemeMode("dark");
+  });
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "obsidian");
+  const darkTypography = await page.evaluate(() => {
+    const title = document.querySelector("#set-companion-shape-label");
+    const supporting = title?.nextElementSibling;
+    const control = document.querySelector(".preference-segmented .chipbtn");
+    if (!(title instanceof HTMLElement) || !(supporting instanceof HTMLElement) || !(control instanceof HTMLElement)) {
+      throw new Error("dark companion shape typography is missing");
+    }
+    const colorProbe = document.createElement("span");
+    colorProbe.style.color = "var(--fg-faint)";
+    document.body.append(colorProbe);
+    const faintColor = getComputedStyle(colorProbe).color;
+    colorProbe.remove();
+    return {
+      titleFontSize: getComputedStyle(title).fontSize,
+      supportingColor: getComputedStyle(supporting).color,
+      faintColor,
+      supportingFontSize: getComputedStyle(supporting).fontSize,
+      controlFontFamily: getComputedStyle(control).fontFamily,
+      titleFontFamily: getComputedStyle(title).fontFamily,
+    };
+  });
+  assert.equal(darkTypography.titleFontSize, "14px");
+  assert.equal(darkTypography.supportingColor, darkTypography.faintColor, "dark supporting copy should retain the existing faint tone");
+  assert.equal(darkTypography.supportingFontSize, "12px");
+  assert.equal(darkTypography.controlFontFamily, darkTypography.titleFontFamily);
+
+  const removedState = await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const state = useAppStore.getState();
+    const app = document.querySelector("#app");
+    if (!(app instanceof HTMLElement)) throw new Error("#app is missing");
+    return {
+      hasZoom: Object.prototype.hasOwnProperty.call(state, "zoomLevel"),
+      hasAccessibleDiff: Object.prototype.hasOwnProperty.call(state, "accessibleDiffMode"),
+      inlineZoom: app.style.zoom,
+    };
+  });
+  assert.equal(removedState.hasZoom, false);
+  assert.equal(removedState.hasAccessibleDiff, false);
+  assert.equal(removedState.inlineZoom, "");
 
   await page.close();
 });
 
-test("knowledge and instructions replaces the standalone project-files module", async () => {
+test("knowledge and instructions lives in Settings and keeps project-scoped navigation", async () => {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
 
   assert.equal(await page.locator(".sidebar-nav-item").filter({ hasText: "项目文件" }).count(), 0);
-  await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).click();
+  assert.equal(await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).count(), 0, "knowledge must not remain a first-level rail destination");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "知识与指令", exact: true }).click();
   const center = page.getByRole("region", { name: "知识与指令" });
   await center.waitFor({ state: "visible" });
   await center.getByRole("tab", { name: "记忆", exact: true }).waitFor({ state: "visible" });
@@ -1061,7 +1580,15 @@ test("knowledge and instructions replaces the standalone project-files module", 
   await center.getByRole("button", { name: "全局", exact: true }).waitFor({ state: "visible" });
   await center.getByRole("button", { name: "r-code", exact: true }).waitFor({ state: "visible" });
   await center.getByRole("tab", { name: "Skills", exact: true }).click();
-  await center.getByRole("heading", { name: "工作流 Skills", exact: true }).waitFor({ state: "visible" });
+  await center.getByRole("heading", { name: "全局 Skills", exact: true }).waitFor({ state: "visible" });
+  await page.evaluate(async () => {
+    const { useAppStore } = await import("/src/store/app.ts");
+    const { useTasksStore } = await import("/src/store/tasks.ts");
+    useTasksStore.getState().setCurrentProject("D:/project/rust/api-server");
+    useAppStore.getState().openKnowledge("memory");
+  });
+  await page.waitForFunction(() => document.querySelector('[aria-label="api-server"]')?.getAttribute("aria-pressed") === "true");
+  assert.equal(await center.getByRole("tab", { name: "记忆", exact: true }).getAttribute("aria-selected"), "true");
   assert.equal(await page.locator(".file-workspace").count(), 0);
 
   await page.close();
@@ -1238,8 +1765,7 @@ test("standalone Project Files exposes file-only actions and consumes task refer
   assert.equal(referenceState.pending, null, "the matching request must be acknowledged");
   assert.equal(referenceState.sent, 0, "adding a reference must not send a message");
 
-  await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).click();
-  await page.locator("#main-content > .scene-knowledge").waitFor({ state: "visible" });
+  await openKnowledgeSettings(page);
   await page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" }).locator(".sidebar-task").click();
   await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
   assert.equal(
@@ -1303,6 +1829,38 @@ test("task Files keeps highlighted deep links, dirty drafts, and existing file w
     assert.equal(await activeLine.getAttribute("aria-current"), "location");
     assert.equal(await preview.locator('.file-code-line[data-line="1"] > i').innerText(), "1", "preview must expose line numbers");
     assert.ok(await preview.locator(".tok-kw").count(), "task preview must use the shared syntax token classes");
+    const rootSourceFolder = workbench.locator(".files-tree-row").filter({ hasText: "src" });
+    const rootAssetsFolder = workbench.locator(".files-tree-row").filter({ hasText: "assets" });
+    const treeArrowGeometry = await Promise.all([rootSourceFolder, rootAssetsFolder].map((row) => (
+      row.evaluate((element) => {
+        const arrow = element.querySelector(".files-tree-arrow");
+        const svg = arrow?.querySelector("svg");
+        const rowRect = element.getBoundingClientRect();
+        const arrowRect = arrow?.getBoundingClientRect();
+        const svgRect = svg?.getBoundingClientRect();
+        return {
+          expanded: element.getAttribute("aria-expanded"),
+          arrowLeft: arrowRect?.left,
+          arrowWidth: arrowRect?.width,
+          arrowCenterOffset: arrowRect ? (arrowRect.top + arrowRect.height / 2) - (rowRect.top + rowRect.height / 2) : null,
+          svgWidth: svgRect?.width,
+          svgHeight: svgRect?.height,
+          path: svg?.querySelector("path")?.getAttribute("d"),
+        };
+      })
+    )));
+    assert.deepEqual(treeArrowGeometry.map((item) => item.expanded), ["true", "false"]);
+    assert.equal(treeArrowGeometry[0].path, treeArrowGeometry[1].path, "open and closed folders must share one centered glyph");
+    assert.equal(treeArrowGeometry[0].arrowLeft, treeArrowGeometry[1].arrowLeft, "same-depth folder arrows must align horizontally");
+    assert.deepEqual(
+      treeArrowGeometry.map(({ arrowWidth, svgWidth, svgHeight }) => ({ arrowWidth, svgWidth, svgHeight })),
+      [{ arrowWidth: 12, svgWidth: 11, svgHeight: 11 }, { arrowWidth: 12, svgWidth: 11, svgHeight: 11 }],
+      "open and closed folder glyphs must keep identical geometry",
+    );
+    assert.ok(
+      treeArrowGeometry.every(({ arrowCenterOffset }) => Math.abs(arrowCenterOffset ?? Number.POSITIVE_INFINITY) <= 0.5),
+      "folder arrows must stay centered on their rows",
+    );
     await page.waitForFunction(() => (document.querySelector(".files-code-preview")?.scrollTop ?? 0) > 0);
     assert.equal(await workbench.locator(".files-textarea").count(), 0, "text files must start in preview mode");
 
@@ -1851,9 +2409,7 @@ test("legacy memory notices stay metadata-only and preserve workspace identity",
       assert.deepEqual(Object.keys(response).sort(), ["exists", "git_tracking"]);
     }
 
-    await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).click();
-    const center = page.getByRole("region", { name: "知识与指令" });
-    await center.waitFor({ state: "visible" });
+    const center = await openKnowledgeSettings(page);
     await center.getByRole("tab", { name: "记忆", exact: true }).click();
 
     const scenarios = [
@@ -2308,7 +2864,7 @@ test("sidebar plus creates and opens a durable task before background preparatio
     });
     globalThis.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
-        if (["cmd_project_conversation_create", "cmd_task_prepare", "cmd_agent_send"].includes(command)) {
+        if (["cmd_task_create", "cmd_project_conversation_create", "cmd_task_prepare", "cmd_agent_send"].includes(command)) {
           globalThis.__rCodeNewConversationCalls.push(command);
         }
         if (command === "cmd_task_prepare") await prepareGate;
@@ -2326,9 +2882,11 @@ test("sidebar plus creates and opens a durable task before background preparatio
       const { useAppStore } = await import("/src/store/app.ts");
       const { useTasksStore } = await import("/src/store/tasks.ts");
       const taskId = useAppStore.getState().currentTaskId;
+      const task = useTasksStore.getState().tasks.find((candidate) => candidate.id === taskId);
       return {
         taskId,
-        task: useTasksStore.getState().tasks.find((task) => task.id === taskId),
+        task,
+        workspacePath: task?.workspace_path ?? null,
         calls: [...globalThis.__rCodeNewConversationCalls],
       };
     });
@@ -2336,11 +2894,17 @@ test("sidebar plus creates and opens a durable task before background preparatio
     assert.ok(taskId);
     assert.equal(created.task?.title, "新对话");
     assert.equal(created.task?.state, "idle");
-    assert.deepEqual(created.calls, ["cmd_project_conversation_create", "cmd_task_prepare"]);
+    assert.equal(created.workspacePath, null, "global new-conversation entry must create a floating conversation");
+    assert.deepEqual(created.calls, ["cmd_task_create", "cmd_task_prepare"]);
     assert.equal(
-      await page.locator(".sidebar-task-row.active").filter({ hasText: "新对话" }).count(),
+      await page.locator(".sidebar-recent .sidebar-task").filter({ hasText: "新对话" }).count(),
       1,
-      "the empty task should be visible and selected before the first prompt",
+      "the floating conversation should appear in the recent section",
+    );
+    assert.equal(
+      await page.locator(".sidebar-projects .sidebar-task").filter({ hasText: "新对话" }).count(),
+      0,
+      "a floating conversation must not be duplicated under any project",
     );
     await page.evaluate(() => globalThis.__rCodeReleasePrepare?.());
 
@@ -2349,7 +2913,7 @@ test("sidebar plus creates and opens a durable task before background preparatio
     await composer.press("Enter");
     await page.waitForFunction(() => globalThis.__rCodeNewConversationCalls?.includes("cmd_agent_send"));
     const callsAfterSend = await page.evaluate(() => [...globalThis.__rCodeNewConversationCalls]);
-    assert.equal(callsAfterSend.filter((command) => command === "cmd_project_conversation_create").length, 1);
+    assert.equal(callsAfterSend.filter((command) => command === "cmd_task_create").length, 1);
   } finally {
     await page.evaluate(async (id) => {
       globalThis.__rCodeReleasePrepare?.();
@@ -2417,13 +2981,12 @@ test("project add opens project management while conversation entries persist nu
     await page.getByRole("button", { name: "新建任务", exact: true }).click();
     await waitForActiveTitle("新对话");
 
-    await page.getByRole("button", { name: "新对话", exact: true }).click();
-    await waitForActiveTitle("新对话 2");
-
     const createFromProjectMenu = async () => {
       await page.getByRole("button", { name: "r-code 项目操作", exact: true }).click();
       await page.getByRole("menuitem", { name: "新建对话", exact: true }).click();
     };
+    await createFromProjectMenu();
+    await waitForActiveTitle("新对话 2");
     await createFromProjectMenu();
     await waitForActiveTitle("新对话 3");
 
@@ -2856,15 +3419,14 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
     assert.equal(await page.locator("#set-quality-reviewer").inputValue(), "r_code");
     assert.equal(await page.getByRole("textbox", { name: "主 Agent 协作 Prompt" }).count(), 0, "prompts must no longer be split across Settings");
 
-    await page.locator(".sidebar-nav-item").filter({ hasText: "知识与指令" }).click();
-    const center = page.getByRole("region", { name: "知识与指令" });
+    const center = await openKnowledgeSettings(page);
     await center.getByRole("tab", { name: "协作 Prompt", exact: true }).click();
-    const mainPrompt = page.getByRole("textbox", { name: "主 Agent 协作 Prompt" });
-    const childPrompt = page.getByRole("textbox", { name: "子代理协作 Prompt" });
+    const mainPrompt = page.getByRole("textbox", { name: "主 Agent", exact: true });
+    const childPrompt = page.getByRole("textbox", { name: "子代理", exact: true });
     await mainPrompt.fill("主代理负责统筹，只有必要时才委派。");
     await childPrompt.fill("子代理只完成边界清晰的子任务并返回摘要。");
-    await page.getByRole("button", { name: "保存并应用 Prompt" }).click();
-    await page.getByText("协作 Prompt 已保存并应用", { exact: true }).waitFor({ state: "visible" });
+    await page.getByRole("button", { name: "保存并应用", exact: true }).click();
+    await page.getByText("全局协作 Prompt 已保存，所有项目会自动继承。", { exact: true }).waitFor({ state: "visible" });
 
     await center.getByRole("tab", { name: "记忆", exact: true }).click();
     await center.getByRole("tab", { name: "协作 Prompt", exact: true }).click();
@@ -2886,6 +3448,205 @@ test("agent coordination prompts can be edited, saved, and restored", async () =
   }
 });
 
+test("project prompts merge explicitly and project Skills promote into inherited global Skills", async () => {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+  const workspacePath = "D:/project/rust/r-code";
+  const skillName = "project-scope-check";
+
+  try {
+    await page.evaluate(async (path) => {
+      const { useAppStore } = await import("/src/store/app.ts");
+      const { useTasksStore } = await import("/src/store/tasks.ts");
+      useTasksStore.getState().setCurrentProject(path);
+      useAppStore.getState().openKnowledge("prompts");
+    }, workspacePath);
+    const center = page.getByRole("region", { name: "知识与指令" });
+    await center.waitFor({ state: "visible" });
+    assert.equal(await center.getByRole("button", { name: "r-code", exact: true }).getAttribute("aria-pressed"), "true");
+
+    const append = center.getByRole("button", { name: /追加/ });
+    const override = center.getByRole("button", { name: /覆盖/ });
+    assert.equal(await append.getAttribute("aria-pressed"), "true");
+    await override.click();
+    await center.getByRole("textbox", { name: "主 Agent", exact: true }).fill("项目主 Agent 规则");
+    await center.getByRole("textbox", { name: "子代理", exact: true }).fill("项目子代理规则");
+    await center.getByRole("button", { name: "保存并应用", exact: true }).click();
+    await center.getByText("r-code 的协作 Prompt 已保存并应用。", { exact: true }).waitFor();
+    const effective = await page.evaluate(async (path) => {
+      const { knowledgePromptsGet } = await import("/src/lib/ipc.ts");
+      return knowledgePromptsGet(path);
+    }, workspacePath);
+    assert.equal(effective.project.mode, "override");
+    assert.equal(effective.effective.main_agent, "项目主 Agent 规则");
+
+    await center.getByRole("tab", { name: "Skills", exact: true }).click();
+    await center.getByRole("button", { name: "新建项目 Skill", exact: true }).click();
+    await center.getByRole("textbox", { name: "调用名", exact: true }).fill(skillName);
+    await center.getByRole("textbox", { name: "简介", exact: true }).fill("验证项目 Skill 同步");
+    await center.getByRole("textbox", { name: "Skill 指令", exact: true }).fill("先验证，再返回项目结果。");
+    await center.getByRole("button", { name: "保存 Skill", exact: true }).click();
+    await center.getByText(`项目 Skill /${skillName} 已保存，仅在 r-code 中可用。`, { exact: true }).waitFor();
+    await center.getByRole("button", { name: "同步到全局", exact: true }).click();
+    await center.getByText(`/${skillName} 已同步到全局；项目副本已移除，当前项目改为自动继承。`, { exact: true }).waitFor();
+    assert.equal(await center.getByRole("tab", { name: /继承自全局/ }).getAttribute("aria-selected"), "true");
+    await center.getByRole("button", { name: new RegExp(`/${skillName}`) }).waitFor({ state: "visible" });
+
+    const catalog = await page.evaluate(async (path) => {
+      const { workflowSkillsList } = await import("/src/lib/ipc.ts");
+      return workflowSkillsList(path);
+    }, workspacePath);
+    const matching = catalog.filter((skill) => skill.name === skillName);
+    assert.equal(matching.length, 1);
+    assert.equal(matching[0].scope, "global");
+    assert.equal(matching[0].inherited, true);
+  } finally {
+    await page.evaluate(async ({ path, name }) => {
+      const { knowledgePromptsReset, workflowSkillDelete, workflowSkillsList } = await import("/src/lib/ipc.ts");
+      await knowledgePromptsReset(path);
+      const skill = (await workflowSkillsList()).find((item) => item.name === name);
+      if (skill) await workflowSkillDelete(skill.id, "global");
+    }, { path: workspacePath, name: skillName }).catch(() => {});
+    await page.close();
+  }
+});
+
+test("subagent trees derive depth safely and PeerMessage activity never retains message content", async () => {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const contract = await page.evaluate(async () => {
+    const { activityTraceReducer, createActivityTraceState } = await import("/src/components/room/activity.ts");
+    const { buildLiveEntries, buildSubagentForest, flattenSubagentForest } = await import("/src/components/room/SubagentWorkbench.tsx");
+    const child = (id, parentRunId = null) => ({
+      id,
+      parentRunId,
+      label: id,
+      runtimeKind: "native",
+      model: "test-model",
+      accessMode: "read_only",
+      requireApproval: false,
+      routingReason: null,
+      status: "running",
+      phase: "requesting",
+      detail: null,
+      startedAt: 1,
+      lastEventAt: 1,
+      endedAt: null,
+      events: [],
+    });
+
+    const roots = buildSubagentForest([
+      child("child", "main-run"),
+      child("grandchild", "child"),
+    ], ["main-run"]);
+    const legacy = buildSubagentForest([child("legacy-a"), child("legacy-b")]);
+    const guarded = buildSubagentForest([
+      child("orphan", "missing-parent"),
+      child("cycle-a", "cycle-b"),
+      child("cycle-b", "cycle-a"),
+      child("self-cycle", "self-cycle"),
+    ], ["main-run"]);
+
+    const scope = {
+      run_id: "child",
+      agent_id: "child",
+      parent_run_id: "main-run",
+      agent_kind: "subagent",
+      runtime_kind: "native",
+      model: "test-model",
+    };
+    const queued = activityTraceReducer(createActivityTraceState(), {
+      type: "event",
+      at: 10,
+      event: {
+        type: "scoped",
+        scope,
+        event: {
+          type: "peer_message",
+          message_id: "peer-1",
+          sender_agent_id: "child",
+          recipient_agent_id: "grandchild",
+          status: "queued",
+          content_chars: 37,
+          // An unknown legacy/host field must be ignored rather than copied into ActivityTraceState.
+          content_preview: "SECRET_SHOULD_NEVER_REACH_UI",
+        },
+      },
+    });
+    const delivered = activityTraceReducer(queued, {
+      type: "event",
+      at: 11,
+      event: {
+        type: "scoped",
+        scope,
+        event: {
+          type: "peer_message",
+          message_id: "peer-1",
+          sender_agent_id: "child",
+          recipient_agent_id: "grandchild",
+          status: "delivered",
+          content_chars: 37,
+        },
+      },
+    });
+    const peer = delivered.subagents[0];
+    return {
+      tree: flattenSubagentForest(roots).map((node) => ({
+        id: node.child.id,
+        depth: node.depth,
+        descendants: node.descendantCount,
+        anomaly: node.anomaly,
+      })),
+      legacy: flattenSubagentForest(legacy).map((node) => ({ depth: node.depth, anomaly: node.anomaly })),
+      guarded: flattenSubagentForest(guarded).map((node) => ({ id: node.child.id, depth: node.depth, anomaly: node.anomaly })),
+      peer: {
+        parentRunId: peer.parentRunId,
+        detail: peer.detail,
+        events: peer.events.map((event) => ({
+          kind: event.kind,
+          status: event.peerStatus,
+          sender: event.peerSenderAgentId,
+          recipient: event.peerRecipientAgentId,
+          chars: event.peerContentChars,
+          detail: event.detail,
+        })),
+        liveEntries: buildLiveEntries(peer.events, peer.status),
+      },
+      leaked: JSON.stringify(delivered).includes("SECRET_SHOULD_NEVER_REACH_UI"),
+    };
+  });
+
+  assert.deepEqual(contract.tree, [
+    { id: "child", depth: 1, descendants: 1, anomaly: null },
+    { id: "grandchild", depth: 2, descendants: 0, anomaly: null },
+  ]);
+  assert.deepEqual(contract.legacy, [
+    { depth: 1, anomaly: null },
+    { depth: 1, anomaly: null },
+  ], "legacy one-level data must remain two ordinary roots");
+  assert.deepEqual(contract.guarded, [
+    { id: "orphan", depth: 1, anomaly: "orphan" },
+    { id: "cycle-a", depth: 1, anomaly: "cycle" },
+    { id: "cycle-b", depth: 1, anomaly: "cycle" },
+    { id: "self-cycle", depth: 1, anomaly: "cycle" },
+  ]);
+  assert.equal(contract.peer.events.length, 1, "queued/delivered updates must merge by message_id");
+  assert.deepEqual(contract.peer.events[0], {
+    kind: "peer_message",
+    status: "delivered",
+    sender: "child",
+    recipient: "grandchild",
+    chars: 37,
+    detail: null,
+  });
+  assert.equal(contract.peer.parentRunId, "main-run");
+  assert.match(contract.peer.detail, /child → grandchild/);
+  assert.match(contract.peer.liveEntries[0].text, /发送消息（37 字符） · child → grandchild · 已送达/);
+  assert.equal(contract.leaked, false);
+  await page.close();
+});
+
 test("subagents open in deduplicated tabs while the overview stays available", async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -2902,6 +3663,8 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   const tabs = tablist.getByRole("tab");
   const activeSubagent = page.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 检查并发边界" });
   const completedSubagent = page.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 核对锁顺序" });
+  const nativeChild = page.locator(".subagent-list-row").filter({ hasText: "R-Code 子代理 · 规划验证" });
+  const nativeGrandchild = page.locator(".subagent-list-row").filter({ hasText: "R-Code 孙代理 · 运行定向测试" });
 
   await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
   await page.evaluate(async () => {
@@ -2919,6 +3682,18 @@ test("subagents open in deduplicated tabs while the overview stays available", a
     });
   });
   const workbench = page.getByTestId("workbench-panel");
+  const backToOverview = workbench.getByRole("button", { name: "返回运行与子代理", exact: true });
+  await backToOverview.waitFor({ state: "visible" });
+  await backToOverview.click();
+  await page.getByTestId("subagent-list").waitFor({ state: "visible" });
+  assert.equal(
+    await tablist.getByRole("tab", { name: "Codex CLI · 检查并发边界", exact: true }).count(),
+    1,
+    "returning to the overview must keep the opened subagent tab",
+  );
+  await tablist.getByRole("tab", { name: "Codex CLI · 检查并发边界", exact: true }).click();
+  await page.getByTestId("subagent-detail").waitFor({ state: "visible" });
+
   const summaryTab = workbench.getByRole("tab", { name: /^运行与子代理/ });
   await summaryTab.waitFor({ state: "visible" });
   assert.deepEqual(
@@ -2935,6 +3710,17 @@ test("subagents open in deduplicated tabs while the overview stays available", a
   assert.equal(await completedSectionToggle.getAttribute("aria-expanded"), "false", "completed subagents are collapsed by default");
   assert.equal(await activeSubagent.isVisible(), true);
   assert.equal(await completedSubagent.isVisible(), false);
+  await nativeGrandchild.waitFor({ state: "visible" });
+  assert.equal(await nativeChild.getAttribute("data-tree-depth"), "1");
+  assert.equal(await nativeGrandchild.getAttribute("data-tree-depth"), "2");
+  assert.match(await nativeChild.locator(".subagent-tree-facts").innerText(), /深度 1.*槽位 1.*R-Code.*gpt-5\.6-terra/s);
+  assert.match(await nativeChild.locator(".subagent-tree-facts").innerText(), /可继续委派.*可实时消息/s);
+  assert.match(await activeSubagent.locator(".subagent-tree-facts").innerText(), /叶节点/);
+  assert.equal(
+    await nativeChild.getByRole("button", { name: /停止R-Code 子代理 · 规划验证及其 1 个后代/ }).count(),
+    1,
+    "an intermediate node must expose recursive branch cancellation",
+  );
 
   await completedSectionToggle.click();
   assert.equal(await completedSectionToggle.getAttribute("aria-expanded"), "true");
@@ -3041,6 +3827,45 @@ test("subagents open in deduplicated tabs while the overview stays available", a
     "closing the appended file tab must return to its subagent session",
   );
 
+  await page.close();
+});
+
+test("recursive subagent cancellation stops descendants but leaves siblings running", async () => {
+  const page = await browser.newPage({ viewport: { width: 1200, height: 800 } });
+  await page.goto(baseUrl, { waitUntil: "networkidle" });
+
+  const taskRow = page.locator(".sidebar-task-row").filter({ hasText: "修复任务队列并发问题" });
+  await taskRow.locator(".sidebar-task").click();
+  await page.locator("#main-content > .scene-room").waitFor({ state: "visible" });
+  await page.locator(".timeline-subagent-chip").filter({ hasText: "Codex CLI · 检查并发边界" }).click();
+
+  const workbench = page.getByTestId("workbench-panel");
+  await workbench.getByRole("tab", { name: /^运行与子代理/ }).click();
+  const parent = workbench.locator(".subagent-list-row").filter({ hasText: "R-Code 子代理 · 规划验证" });
+  const grandchild = workbench.locator(".subagent-list-row").filter({ hasText: "R-Code 孙代理 · 运行定向测试" });
+  const sibling = workbench.locator(".subagent-list-row").filter({ hasText: "Codex CLI · 检查并发边界" });
+  await parent.getByRole("button", { name: /停止R-Code 子代理 · 规划验证及其 1 个后代/ }).click();
+
+  await page.waitForFunction(() => {
+    const rows = [...document.querySelectorAll(".subagent-list-row")];
+    const stopped = (label) => rows.find((row) => row.textContent?.includes(label))?.classList.contains("status-cancelled");
+    return stopped("R-Code 子代理 · 规划验证") && stopped("R-Code 孙代理 · 运行定向测试");
+  });
+  assert.equal(await parent.evaluate((row) => row.classList.contains("status-cancelled")), true);
+  assert.equal(await grandchild.evaluate((row) => row.classList.contains("status-cancelled")), true);
+  assert.equal(await sibling.evaluate((row) => row.classList.contains("status-running")), true);
+
+  const persisted = await page.evaluate(async () => {
+    const { browserMockDetails } = await import("/src/lib/mock-data.ts");
+    return browserMockDetails["mock-task-queue"].runs
+      .filter((run) => run.id.endsWith("native-child") || run.id.endsWith("native-grandchild") || run.id.endsWith("codex-active"))
+      .map((run) => ({ id: run.id, state: run.review_state, ended: run.ended_at != null }));
+  });
+  assert.deepEqual(persisted, [
+    { id: "mock-task-queue-codex-active", state: "pending", ended: false },
+    { id: "mock-task-queue-native-child", state: "aborted", ended: true },
+    { id: "mock-task-queue-native-grandchild", state: "aborted", ended: true },
+  ]);
   await page.close();
 });
 

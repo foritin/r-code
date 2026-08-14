@@ -97,6 +97,20 @@ test("MCP management is redacted, independently busy, and confirmation-bound", a
   await page.getByRole("button", { name: "工具与连接", exact: true }).click();
   await page.getByText("内置联网工具", { exact: true }).waitFor();
 
+  await page.getByRole("button", { name: "自定义", exact: true }).click();
+  const customEditor = page.locator(".mcp-editor");
+  await customEditor.getByLabel("传输").selectOption("streamable_http");
+  const serviceAddress = customEditor.getByLabel(/服务地址/);
+  assert.equal(
+    await serviceAddress.getAttribute("placeholder"),
+    "https://example.com/mcp 或 http://127.0.0.1:27200/mcp",
+  );
+  assert.match(
+    await customEditor.innerText(),
+    /远程服务必须使用 HTTPS；HTTP 仅允许 localhost、127\.0\.0\.1 或 \[::1\] 本机回环地址/,
+  );
+  await customEditor.getByRole("button", { name: "取消", exact: true }).click();
+
   const generated = page.locator(".mcp-server-row").filter({ hasText: "generated-demo" });
   assert.equal(await generated.count(), 1);
   assert.match(await generated.innerText(), /由 R-Code 生成/);

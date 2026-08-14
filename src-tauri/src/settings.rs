@@ -26,11 +26,50 @@ use r_code_core::error::ProductError;
 use r_code_core::secret::EncryptedFileSecretStore;
 #[cfg(all(not(test), not(target_os = "macos")))]
 use r_code_core::secret::SecretStore;
+use serde::{Deserialize, Serialize};
 
-#[cfg(all(not(test), not(target_os = "macos")))]
-const SECRET_SERVICE: &str = "r-code";
 const AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
+const INTERNAL_SECRET_ACCOUNT_PREFIX: &str = "__r_code_internal_secret_v1__:";
+const PROJECT_KNOWLEDGE_DIR: &str = "project-knowledge";
+const PROJECT_AGENT_PROMPTS_FILE: &str = "agent-prompts.toml";
 const MAX_AGENT_PROMPT_CHARS: usize = 20_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectPromptMode {
+    #[default]
+    Append,
+    Override,
+}
+
+/// Project-specific collaboration guidance lives under R-Code AppData. It is keyed by the
+/// canonical workspace path and never creates `.r-code` files inside the user's repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectAgentPromptPolicy {
+    #[serde(default)]
+    pub mode: ProjectPromptMode,
+    #[serde(default)]
+    pub main_agent: String,
+    #[serde(default)]
+    pub subagent: String,
+}
+
+impl Default for ProjectAgentPromptPolicy {
+    fn default() -> Self {
+        Self {
+            mode: ProjectPromptMode::Append,
+            main_agent: String::new(),
+            subagent: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredProjectAgentPrompts {
+    workspace_path: String,
+    #[serde(flatten)]
+    prompts: ProjectAgentPromptPolicy,
+}
 
 trait ProviderCredentialBackend: Send + Sync {
     fn set(&self, provider: &str, value: &str) -> Result<(), ProductError>;
@@ -107,15 +146,18 @@ struct OsProviderCredentialBackend;
 #[cfg(all(not(test), not(target_os = "macos")))]
 impl ProviderCredentialBackend for OsProviderCredentialBackend {
     fn set(&self, provider: &str, value: &str) -> Result<(), ProductError> {
-        SecretStore::new(SECRET_SERVICE).store(&SettingsService::secret_key(provider), value)
+        SecretStore::new(crate::app_paths::credential_service_name())
+            .store(&SettingsService::secret_key(provider), value)
     }
 
     fn get(&self, provider: &str) -> Result<Option<String>, ProductError> {
-        SecretStore::new(SECRET_SERVICE).get(&SettingsService::secret_key(provider))
+        SecretStore::new(crate::app_paths::credential_service_name())
+            .get(&SettingsService::secret_key(provider))
     }
 
     fn delete(&self, provider: &str) -> Result<(), ProductError> {
-        SecretStore::new(SECRET_SERVICE).delete(&SettingsService::secret_key(provider))
+        SecretStore::new(crate::app_paths::credential_service_name())
+            .delete(&SettingsService::secret_key(provider))
     }
 }
 
@@ -268,6 +310,113 @@ impl SettingsService {
         Ok(prompts)
     }
 
+    /// Root for user-local project knowledge. Child directories use an opaque path digest so a
+    /// Windows drive prefix, separator or project name can never become part of an AppData path.
+    pub fn project_knowledge_root(&self) -> PathBuf {
+        self.config_dir.join(PROJECT_KNOWLEDGE_DIR)
+    }
+
+    pub fn project_knowledge_dir(&self, workspace_path: &str) -> Result<PathBuf, ProductError> {
+        let identity = normalized_workspace_identity(workspace_path)?;
+        let digest = blake3::hash(identity.as_bytes()).to_hex().to_string();
+        Ok(self.project_knowledge_root().join(&digest[..32]))
+    }
+
+    pub fn project_agent_prompts_path(
+        &self,
+        workspace_path: &str,
+    ) -> Result<PathBuf, ProductError> {
+        Ok(self
+            .project_knowledge_dir(workspace_path)?
+            .join(PROJECT_AGENT_PROMPTS_FILE))
+    }
+
+    pub fn load_project_agent_prompts(
+        &self,
+        workspace_path: &str,
+    ) -> Result<ProjectAgentPromptPolicy, ProductError> {
+        let path = self.project_agent_prompts_path(workspace_path)?;
+        if !path.exists() {
+            return Ok(ProjectAgentPromptPolicy::default());
+        }
+        let content = std::fs::read_to_string(&path).map_err(|error| {
+            ProductError::ConfigError(format!("read {}: {error}", path.display()))
+        })?;
+        let stored: StoredProjectAgentPrompts = toml::from_str(&content).map_err(|error| {
+            ProductError::ConfigError(format!("parse {}: {error}", path.display()))
+        })?;
+        if normalized_workspace_identity(&stored.workspace_path)?
+            != normalized_workspace_identity(workspace_path)?
+        {
+            return Err(ProductError::ConfigError(format!(
+                "project prompt scope does not match workspace: {}",
+                path.display()
+            )));
+        }
+        Self::validate_project_agent_prompts(&stored.prompts)?;
+        Ok(stored.prompts)
+    }
+
+    pub fn save_project_agent_prompts(
+        &self,
+        workspace_path: &str,
+        prompts: &ProjectAgentPromptPolicy,
+    ) -> Result<(), ProductError> {
+        Self::validate_project_agent_prompts(prompts)?;
+        let path = self.project_agent_prompts_path(workspace_path)?;
+        let parent = path.parent().ok_or_else(|| {
+            ProductError::ConfigError("project prompt path has no parent directory".into())
+        })?;
+        std::fs::create_dir_all(parent)?;
+        let content = toml::to_string_pretty(&StoredProjectAgentPrompts {
+            workspace_path: workspace_path.to_string(),
+            prompts: prompts.clone(),
+        })
+        .map_err(|error| ProductError::ConfigError(format!("serialize prompts: {error}")))?;
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+        use std::io::Write as _;
+        temporary.write_all(content.as_bytes())?;
+        temporary.as_file().sync_all()?;
+        temporary
+            .persist(&path)
+            .map_err(|error| ProductError::from(error.error))?;
+        Ok(())
+    }
+
+    pub fn reset_project_agent_prompts(
+        &self,
+        workspace_path: &str,
+    ) -> Result<ProjectAgentPromptPolicy, ProductError> {
+        let path = self.project_agent_prompts_path(workspace_path)?;
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(ProjectAgentPromptPolicy::default())
+    }
+
+    /// Resolve the actual role prompts frozen into a run. Global guidance is always available;
+    /// project guidance either follows it or deliberately replaces it for this workspace.
+    pub fn resolve_agent_prompts(
+        &self,
+        workspace_path: Option<&str>,
+    ) -> Result<AgentPromptPolicy, ProductError> {
+        let global = self.load_agent_prompts()?;
+        let Some(workspace_path) = workspace_path else {
+            return Ok(global);
+        };
+        let project = self.load_project_agent_prompts(workspace_path)?;
+        Ok(match project.mode {
+            ProjectPromptMode::Append => AgentPromptPolicy {
+                main_agent: append_project_prompt(&global.main_agent, &project.main_agent),
+                subagent: append_project_prompt(&global.subagent, &project.subagent),
+            },
+            ProjectPromptMode::Override => AgentPromptPolicy {
+                main_agent: project.main_agent,
+                subagent: project.subagent,
+            },
+        })
+    }
+
     fn validate_agent_prompts(prompts: &AgentPromptPolicy) -> Result<(), ProductError> {
         for (label, value) in [
             ("main_agent", prompts.main_agent.as_str()),
@@ -281,6 +430,27 @@ impl SettingsService {
             if value.chars().count() > MAX_AGENT_PROMPT_CHARS {
                 return Err(ProductError::ConfigError(format!(
                     "agent prompt '{label}' exceeds {MAX_AGENT_PROMPT_CHARS} characters"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_project_agent_prompts(
+        prompts: &ProjectAgentPromptPolicy,
+    ) -> Result<(), ProductError> {
+        for (label, value) in [
+            ("main_agent", prompts.main_agent.as_str()),
+            ("subagent", prompts.subagent.as_str()),
+        ] {
+            if value.contains('\0') {
+                return Err(ProductError::ConfigError(format!(
+                    "project agent prompt '{label}' contains a null character"
+                )));
+            }
+            if value.chars().count() > MAX_AGENT_PROMPT_CHARS {
+                return Err(ProductError::ConfigError(format!(
+                    "project agent prompt '{label}' exceeds {MAX_AGENT_PROMPT_CHARS} characters"
                 )));
             }
         }
@@ -387,11 +557,7 @@ impl SettingsService {
 
     /// 持久化 Provider API key。macOS 使用本地 AEAD 文件；空值代表删除已有凭据。
     pub fn set_provider_secret(&self, provider: &str, value: &str) -> Result<(), ProductError> {
-        if provider.trim().is_empty() {
-            return Err(ProductError::ConfigError(
-                "provider name cannot be empty".to_string(),
-            ));
-        }
+        Self::validate_provider_secret_name(provider)?;
         if value.trim().is_empty() {
             self.credentials.delete(provider)
         } else {
@@ -401,7 +567,57 @@ impl SettingsService {
 
     /// 读取 Provider 已保存的密钥；不会将值记录到日志。
     pub fn provider_secret(&self, provider: &str) -> Result<Option<String>, ProductError> {
+        Self::validate_provider_secret_name(provider)?;
         self.credentials.get(provider)
+    }
+
+    /// Store product-internal key material in a credential namespace that no user Provider ID can
+    /// address. Values never pass through config serialization or environment hydration.
+    pub(crate) fn set_internal_secret(&self, key: &str, value: &str) -> Result<(), ProductError> {
+        if value.is_empty() {
+            return Err(ProductError::SecretError(
+                "internal secret value cannot be empty".into(),
+            ));
+        }
+        self.credentials
+            .set(&Self::internal_secret_account(key)?, value)
+    }
+
+    /// Read product-internal key material without exposing the reserved account through Provider
+    /// credential APIs.
+    pub(crate) fn internal_secret(&self, key: &str) -> Result<Option<String>, ProductError> {
+        self.credentials.get(&Self::internal_secret_account(key)?)
+    }
+
+    fn validate_provider_secret_name(provider: &str) -> Result<(), ProductError> {
+        if provider.trim().is_empty() {
+            return Err(ProductError::ConfigError(
+                "provider name cannot be empty".to_string(),
+            ));
+        }
+        if provider
+            .to_ascii_lowercase()
+            .starts_with(INTERNAL_SECRET_ACCOUNT_PREFIX)
+        {
+            return Err(ProductError::ConfigError(
+                "provider name uses a reserved internal namespace".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn internal_secret_account(key: &str) -> Result<String, ProductError> {
+        if key.is_empty()
+            || key.len() > 128
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            return Err(ProductError::SecretError(
+                "invalid internal secret account".into(),
+            ));
+        }
+        Ok(format!("{INTERNAL_SECRET_ACCOUNT_PREFIX}{key}"))
     }
 
     /// 将旧版 TOML 中的明文 api_key 迁移至当前平台凭据后端。
@@ -497,6 +713,31 @@ impl SettingsService {
             .validate()
             .map_err(|e| ProductError::ConfigError(e.to_string()))
     }
+}
+
+fn normalized_workspace_identity(workspace_path: &str) -> Result<String, ProductError> {
+    let value = workspace_path.trim();
+    if value.is_empty() || value.contains('\0') {
+        return Err(ProductError::ConfigError(
+            "project knowledge requires a non-empty workspace path".into(),
+        ));
+    }
+    #[cfg(target_os = "windows")]
+    return Ok(value.replace('/', "\\").to_ascii_lowercase());
+    #[cfg(not(target_os = "windows"))]
+    Ok(value.to_string())
+}
+
+fn append_project_prompt(global: &str, project: &str) -> String {
+    let project = project.trim();
+    if project.is_empty() {
+        return global.to_string();
+    }
+    let global = global.trim_end();
+    if global.is_empty() {
+        return project.to_string();
+    }
+    format!("{global}\n\nProject-specific collaboration guidance:\n{project}")
 }
 
 fn provider_env_name(name: &str) -> Option<String> {
@@ -834,6 +1075,64 @@ memories_dir = "{m}"
         let reset = svc.reset_agent_prompts().unwrap();
         assert_eq!(reset, AgentPromptPolicy::default());
         assert_eq!(svc.load_agent_prompts().unwrap(), reset);
+    }
+
+    #[test]
+    fn project_prompts_append_or_override_without_touching_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let config_dir = tmp.path().join("app-data");
+        let svc = SettingsService::new(config_dir.clone());
+        svc.save_agent_prompts(&AgentPromptPolicy {
+            main_agent: "global main".into(),
+            subagent: "global child".into(),
+        })
+        .unwrap();
+
+        let workspace_text = workspace.to_string_lossy();
+        svc.save_project_agent_prompts(
+            &workspace_text,
+            &ProjectAgentPromptPolicy {
+                mode: ProjectPromptMode::Append,
+                main_agent: "project main".into(),
+                subagent: "project child".into(),
+            },
+        )
+        .unwrap();
+        let appended = svc.resolve_agent_prompts(Some(&workspace_text)).unwrap();
+        assert!(appended.main_agent.contains("global main"));
+        assert!(appended.main_agent.contains("project main"));
+        assert!(appended.subagent.contains("global child"));
+        assert!(appended.subagent.contains("project child"));
+        assert!(!workspace.join(".r-code").exists());
+        assert!(svc
+            .project_agent_prompts_path(&workspace_text)
+            .unwrap()
+            .starts_with(&config_dir));
+
+        svc.save_project_agent_prompts(
+            &workspace_text,
+            &ProjectAgentPromptPolicy {
+                mode: ProjectPromptMode::Override,
+                main_agent: "only project main".into(),
+                subagent: "only project child".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            svc.resolve_agent_prompts(Some(&workspace_text)).unwrap(),
+            AgentPromptPolicy {
+                main_agent: "only project main".into(),
+                subagent: "only project child".into(),
+            }
+        );
+
+        svc.reset_project_agent_prompts(&workspace_text).unwrap();
+        assert_eq!(
+            svc.resolve_agent_prompts(Some(&workspace_text)).unwrap(),
+            svc.load_agent_prompts().unwrap()
+        );
     }
 
     #[test]

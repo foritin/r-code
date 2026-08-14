@@ -9,6 +9,7 @@ import type {
   AgentEvent,
   AgentEventScope,
   AgentSendMode,
+  PeerMessageDeliveryStatus,
   PermissionRequest,
   QueuedMessage,
   SubagentAccessMode,
@@ -36,7 +37,8 @@ export type ActivitySubagentEventKind =
   | "tool_result"
   | "message"
   | "reasoning"
-  | "plan";
+  | "plan"
+  | "peer_message";
 
 /** 子代理的公开动作记录；只保存后端已分类的信息和最终可见文本摘要。 */
 export interface ActivitySubagentEvent {
@@ -48,6 +50,12 @@ export interface ActivitySubagentEvent {
   detail: string | null;
   /** 后端已脱敏、截断的工具结果；仅 tool_result 事件设置。 */
   outputJson?: string | null;
+  /** PeerMessage queued/delivered 以稳定消息 ID 合并为一条可观察活动。 */
+  peerMessageId?: string;
+  peerStatus?: PeerMessageDeliveryStatus;
+  peerSenderAgentId?: string;
+  peerRecipientAgentId?: string;
+  peerContentChars?: number;
   at: number;
   isError?: boolean;
 }
@@ -55,6 +63,8 @@ export interface ActivitySubagentEvent {
 /** 一个子代理的可观察状态；只保存 Provider 明确公开给客户端的 reasoning 文本。 */
 export interface ActivitySubagent {
   id: string;
+  /** null 兼容旧的一层快照；树深度永远由前端安全推导，不信任外部 depth。 */
+  parentRunId: string | null;
   label: string;
   runtimeKind: AgentRun["runtime_kind"];
   model: string | null;
@@ -197,6 +207,9 @@ function applyEvent(state: ActivityTraceState, event: AgentEvent, at: number): A
       };
     case "plan":
       return { ...base, phase: "finalizing", label: "正在更新可见计划" };
+    case "peer_message":
+      // PeerMessage 必须带 sender scope 才能归属到具体节点；裸事件只做向前兼容。
+      return base;
     case "subagent_lifecycle":
       // 生命周期事件必须带 scoped 包装才会影响某一张子代理卡；裸事件只保留为审计兼容。
       return base;
@@ -223,6 +236,7 @@ function applyScopedEvent(
   const accessMode = scope.access_mode ?? prior?.accessMode ?? "read_only";
   const child: ActivitySubagent = {
     id: scope.run_id,
+    parentRunId: safeIdentifier(scope.parent_run_id) ?? prior?.parentRunId ?? null,
     label: scope.agent_label?.trim() || prior?.label || "子代理",
     runtimeKind: scope.runtime_kind ?? prior?.runtimeKind ?? "native",
     model: scope.model?.trim() || prior?.model || null,
@@ -302,6 +316,9 @@ function applyScopedEvent(
       child.detail = "正在整理结果";
       appendChildEvent(child, "plan", "计划", `已更新 ${event.steps.length} 个步骤`, at);
       break;
+    case "peer_message":
+      appendChildPeerMessage(child, event, at);
+      break;
     case "state":
       if (event.state === "interrupted") {
         child.status = "cancelled";
@@ -360,6 +377,45 @@ function isTerminalChildStatus(status: SubagentStatus): boolean {
 function safeChildDetail(value: string | undefined): string | null {
   if (!value) return null;
   return value.trim().replace(/\s+/g, " ").slice(0, 120) || null;
+}
+
+function safeIdentifier(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.trim().slice(0, 160) || null;
+}
+
+function appendChildPeerMessage(
+  child: ActivitySubagent,
+  event: Extract<AgentEvent, { type: "peer_message" }>,
+  at: number,
+) {
+  const messageId = safeIdentifier(event.message_id) ?? `${child.id}:peer:${at}`;
+  const sender = safeIdentifier(event.sender_agent_id) ?? child.id;
+  const recipient = safeIdentifier(event.recipient_agent_id);
+  const status: PeerMessageDeliveryStatus = event.status === "delivered" ? "delivered" : "queued";
+  const contentChars = typeof event.content_chars === "number" && Number.isFinite(event.content_chars)
+    ? Math.max(0, Math.floor(event.content_chars))
+    : undefined;
+  const label = status === "delivered" ? "PeerMessage 已送达" : "PeerMessage 已排队";
+  const existingIndex = child.events.findIndex(
+    (item) => item.kind === "peer_message" && item.peerMessageId === messageId,
+  );
+  const entry: ActivitySubagentEvent = {
+    id: `${child.id}:peer:${messageId}`,
+    kind: "peer_message",
+    label,
+    detail: null,
+    at,
+    peerMessageId: messageId,
+    peerStatus: status,
+    peerSenderAgentId: sender,
+    ...(recipient ? { peerRecipientAgentId: recipient } : {}),
+    ...(contentChars !== undefined ? { peerContentChars: contentChars } : {}),
+  };
+  child.events = existingIndex < 0
+    ? [...child.events, entry].slice(-60)
+    : child.events.map((item, index) => index === existingIndex ? entry : item);
+  child.detail = `${label} · ${sender} → ${recipient ?? "目标子代理"}${contentChars !== undefined ? ` · ${contentChars} 字符` : ""}`;
 }
 
 function compareSubagents(left: ActivitySubagent, right: ActivitySubagent): number {
@@ -582,6 +638,7 @@ function mergePersistedSubagents(
     const accessMode = run.access_mode ?? prior?.accessMode ?? "read_only";
     live.set(run.id, {
       id: run.id,
+      parentRunId: run.parent_run_id?.trim() || prior?.parentRunId || null,
       label: run.agent_label?.trim() || "子代理",
       runtimeKind: run.runtime_kind,
       model: run.model || null,

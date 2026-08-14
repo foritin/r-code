@@ -587,36 +587,56 @@ fn r7_t4_desktop_verification_app_wiring() {
 }
 
 // ============================================================================
-// R7-t5: 可访问性 -- 缩放 80-200%、键盘流、aria-live
+// R7-t5: 桌面缩放快捷键、键盘流、aria-live
 // ============================================================================
 
 #[test]
-fn r7_t5_accessibility_zoom_support() {
-    // 缩放由 store/app.ts 实现（zoomLevel 80-200 + setZoom/zoomIn/zoomOut/zoomReset）
-    let store = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("frontend/src/store/app.ts"),
-    )
-    .unwrap();
-    for api in ["setZoom", "zoomIn", "zoomOut", "zoomReset"] {
-        assert!(store.contains(api), "zoom API should exist: {api}");
-    }
-    assert!(store.contains("Math.max(80"), "zoom lower bound 80");
-    assert!(store.contains("Math.min(200"), "zoom upper bound 200");
+fn r7_t5_native_desktop_zoom_shortcuts() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    // 设置页有缩放滑块与复位
+    // 主配置覆盖 Windows/Linux；macOS 的窗口数组会被平台配置覆盖，因此也必须
+    // 显式启用。Tauri 会分别映射 Ctrl 与 Command，并处理 + / - / 0。
+    for config in ["tauri.conf.json", "tauri.macos.conf.json"] {
+        let raw = std::fs::read_to_string(manifest_dir.join(config)).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let windows = value
+            .pointer("/app/windows")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert!(
+            windows.iter().all(|window| {
+                window
+                    .get("zoomHotkeysEnabled")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+            }),
+            "{config} should enable native desktop zoom hotkeys"
+        );
+    }
+
+    // macOS/Linux 的 Tauri polyfill 会调用 set_webview_zoom，因此主窗口必须
+    // 获得对应权限；Windows 同步保留该权限，避免平台配置漂移。
+    let capability =
+        std::fs::read_to_string(manifest_dir.join("capabilities/default.json")).unwrap();
+    let capability: serde_json::Value = serde_json::from_str(&capability).unwrap();
+    let permissions = capability
+        .get("permissions")
+        .and_then(serde_json::Value::as_array)
+        .unwrap();
+    assert!(
+        permissions.iter().any(|permission| {
+            permission.as_str() == Some("core:webview:allow-set-webview-zoom")
+        }),
+        "main window should allow native webview zoom"
+    );
+
+    // 产品设置页不再提供缩放控件；标准桌面快捷键独立保留。
     let settings = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("frontend/src/components/scenes/SettingsScene.tsx"),
+        manifest_dir.join("frontend/src/components/scenes/SettingsScene.tsx"),
     )
     .unwrap();
-    assert!(
-        settings.contains("setZoom"),
-        "settings should expose zoom slider"
-    );
-    assert!(
-        settings.contains("zoomReset"),
-        "settings should expose zoom reset"
-    );
+    assert!(!settings.contains("setZoom"));
+    assert!(!settings.contains("zoomReset"));
 }
 
 #[test]

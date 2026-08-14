@@ -243,6 +243,7 @@ test("main and child activity use semantic collapsed groups and runtime-specific
       { kind: "agent", id: "final-answer", t: 3, text: "修改与验证已完成。", streaming: false },
     ])[0].items.map((entry) => ({
       kind: entry.kind,
+      groupKind: entry.kind === "tool_group" ? entry.groupKind : null,
       label: entry.kind === "context" ? entry.label : null,
       detail: entry.kind === "context" ? entry.detail : null,
       text: entry.kind === "agent" ? entry.text : null,
@@ -299,15 +300,27 @@ test("main and child activity use semantic collapsed groups and runtime-specific
     { kind: "tool_group", groupKind: "file", count: 2 },
   ]);
   assert.deepEqual(result.mainGroups, [["lookup", 2], ["command", 2]]);
-  assert.deepEqual(result.narratedTurn.filter((entry) => entry.kind === "context"), [{
-    kind: "context",
-    label: "执行过程说明 · 2 段",
-    detail: "现在修改文件。\n\n接着运行验证。",
-    text: null,
-  }]);
+  assert.deepEqual(result.narratedTurn.filter((entry) => entry.kind === "context"), []);
+  assert.deepEqual(
+    result.narratedTurn.map((entry) => entry.kind === "agent" ? entry.text : `${entry.kind}:${entry.groupKind}`),
+    [
+      "现在修改文件。",
+      "已定位 [实现文件](src/main.rs#L2C3)。",
+      "tool_group:lookup",
+      "接着运行验证。",
+      "tool_group:command",
+      "修改与验证已完成。",
+    ],
+    "public progress updates must stay in chronological order around their tool activity",
+  );
   assert.deepEqual(
     result.narratedTurn.filter((entry) => entry.kind === "agent").map((entry) => entry.text),
-    ["已定位 [实现文件](src/main.rs#L2C3)。", "修改与验证已完成。"],
+    [
+      "现在修改文件。",
+      "已定位 [实现文件](src/main.rs#L2C3)。",
+      "接着运行验证。",
+      "修改与验证已完成。",
+    ],
   );
   assert.deepEqual(result.identities.map(({ runtime, glyph }) => [runtime, glyph]), [
     ["rcode", "rcode"],

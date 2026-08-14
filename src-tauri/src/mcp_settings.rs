@@ -24,9 +24,8 @@ use crate::security_config::mcp_credential_account;
 
 const SETTINGS_FILE: &str = "mcp-servers.toml";
 const REGISTRY_CACHE_FILE: &str = "mcp-registry-cache.json";
+const MANAGED_SOURCES_DIR: &str = "mcp-sources";
 const SETTINGS_SCHEMA_VERSION: u32 = 1;
-#[cfg(not(target_os = "macos"))]
-const SECRET_SERVICE: &str = "r-code";
 pub const RESEARCH_SERVER_ID: &str = "r-code-research";
 type MigratedMcpServer = (McpServerConfig, Vec<(SecretRef, String)>);
 
@@ -119,15 +118,15 @@ struct OsCredentialBackend;
 #[cfg(not(target_os = "macos"))]
 impl McpCredentialBackend for OsCredentialBackend {
     fn set(&self, account: &str, value: &str) -> Result<(), ProductError> {
-        SecretStore::new(SECRET_SERVICE).store(account, value)
+        SecretStore::new(crate::app_paths::credential_service_name()).store(account, value)
     }
 
     fn get(&self, account: &str) -> Result<Option<String>, ProductError> {
-        SecretStore::new(SECRET_SERVICE).get(account)
+        SecretStore::new(crate::app_paths::credential_service_name()).get(account)
     }
 
     fn delete(&self, account: &str) -> Result<(), ProductError> {
-        SecretStore::new(SECRET_SERVICE).delete(account)
+        SecretStore::new(crate::app_paths::credential_service_name()).delete(account)
     }
 }
 
@@ -244,6 +243,13 @@ impl McpSettingsService {
     /// Cache is intentionally separate from settings so Registry corruption never blocks startup.
     pub fn registry_cache_path(&self) -> PathBuf {
         self.config_dir.join(REGISTRY_CACHE_FILE)
+    }
+
+    /// Application-owned source root for MCP servers created through the built-in workflow.
+    /// Callers may import a reviewed workspace artifact here, but model-controlled paths never
+    /// select a destination outside this root.
+    pub fn managed_sources_root(&self) -> PathBuf {
+        self.config_dir.join(MANAGED_SOURCES_DIR)
     }
 
     pub fn secret_store(&self) -> McpSecretStore {

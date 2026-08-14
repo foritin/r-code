@@ -1,7 +1,10 @@
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use async_trait::async_trait;
@@ -23,6 +26,36 @@ impl DnsResolver for FakeDns {
     }
 }
 
+struct SequencedDns {
+    responses: Mutex<VecDeque<Result<Vec<IpAddr>, WebError>>>,
+    request_count: AtomicUsize,
+}
+
+impl SequencedDns {
+    fn new(responses: impl IntoIterator<Item = Result<Vec<IpAddr>, WebError>>) -> Self {
+        Self {
+            responses: Mutex::new(responses.into_iter().collect()),
+            request_count: AtomicUsize::new(0),
+        }
+    }
+
+    fn request_count(&self) -> usize {
+        self.request_count.load(Ordering::Relaxed)
+    }
+}
+
+#[async_trait]
+impl DnsResolver for SequencedDns {
+    async fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, WebError> {
+        self.request_count.fetch_add(1, Ordering::Relaxed);
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(Err(WebError::DnsLookup))
+    }
+}
+
 #[derive(Default)]
 struct FakeHttp {
     requests: Mutex<Vec<WebHttpRequest>>,
@@ -32,6 +65,10 @@ struct FakeHttp {
 impl FakeHttp {
     fn push(&self, response: WebHttpResponse) {
         self.responses.lock().unwrap().push_back(Ok(response));
+    }
+
+    fn push_error(&self, error: WebError) {
+        self.responses.lock().unwrap().push_back(Err(error));
     }
 
     fn request_count(&self) -> usize {
@@ -242,6 +279,182 @@ async fn binary_mime_is_rejected() {
         client.fetch("https://example.test/file", None).await,
         Err(WebError::UnsupportedMime(_))
     ));
+}
+
+#[tokio::test]
+async fn transient_transport_failure_is_retried_before_success() {
+    let http = Arc::new(FakeHttp::default());
+    http.push_error(WebError::Timeout);
+    http.push(response(200, "text/plain", "recovered"));
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        public_dns(&["example.test"]),
+        http.clone(),
+    );
+
+    let fetched = client
+        .fetch("https://example.test/article", None)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.content, "recovered");
+    assert_eq!(http.request_count(), 2);
+}
+
+#[tokio::test]
+async fn transient_dns_failure_is_retried_before_success() {
+    let http = Arc::new(FakeHttp::default());
+    http.push(response(200, "text/plain", "resolved"));
+    let dns = Arc::new(SequencedDns::new([
+        Err(WebError::DnsLookup),
+        Ok(vec![IpAddr::V4(Ipv4Addr::new(93, 184, 216, 34))]),
+    ]));
+    let client = WebClient::with_adapters(
+        WebSearchConfiguration::jina(None),
+        WebLimits {
+            timeout_ms: 500,
+            max_bytes: 4_096,
+            max_chars: 2_000,
+            max_redirects: 2,
+            max_results: 5,
+        },
+        dns.clone(),
+        http.clone(),
+    );
+
+    let fetched = client
+        .fetch("https://example.test/article", None)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.content, "resolved");
+    assert_eq!(dns.request_count(), 2);
+    assert_eq!(http.request_count(), 1);
+}
+
+#[tokio::test]
+async fn transient_http_status_is_retried_before_success() {
+    let http = Arc::new(FakeHttp::default());
+    http.push(response(503, "text/plain", "busy"));
+    http.push(response(200, "text/plain", "ready"));
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        public_dns(&["example.test"]),
+        http.clone(),
+    );
+
+    let fetched = client
+        .fetch("https://example.test/article", None)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.content, "ready");
+    assert_eq!(http.request_count(), 2);
+}
+
+#[tokio::test]
+async fn not_found_is_not_retried_or_sent_to_reader() {
+    let http = Arc::new(FakeHttp::default());
+    http.push(response(404, "text/plain", "missing"));
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        public_dns(&["example.test", "r.jina.ai"]),
+        http.clone(),
+    );
+
+    assert!(matches!(
+        client.fetch("https://example.test/missing", None).await,
+        Err(WebError::NotFound)
+    ));
+    assert_eq!(http.request_count(), 1);
+}
+
+#[tokio::test]
+async fn challenge_status_uses_reader_without_forwarding_credentials() {
+    let http = Arc::new(FakeHttp::default());
+    http.push(response(412, "text/html", "challenge"));
+    http.push(response(200, "text/plain", "reader copy"));
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        public_dns(&["example.test", "r.jina.ai"]),
+        http.clone(),
+    );
+
+    let fetched = client
+        .fetch("https://example.test/article?lang=zh", None)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.url, "https://example.test/article?lang=zh");
+    assert_eq!(fetched.content, "reader copy");
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].url.host_str(), Some("r.jina.ai"));
+    assert!(requests[1]
+        .url
+        .as_str()
+        .contains("https://example.test/article?lang=zh"));
+    assert_eq!(
+        requests[1].headers.get("accept").map(String::as_str),
+        Some("text/plain")
+    );
+    assert!(!requests[1].headers.contains_key("authorization"));
+    assert!(!requests[1].headers.contains_key("cookie"));
+    assert!(!requests[1].headers.contains_key("x-subscription-token"));
+}
+
+#[tokio::test]
+async fn redirect_challenge_uses_reader_after_bounded_original_requests() {
+    let http = Arc::new(FakeHttp::default());
+    for _ in 0..3 {
+        http.push(WebHttpResponse {
+            status: 302,
+            headers: BTreeMap::from([("location".to_string(), "/challenge".to_string())]),
+            body: Vec::new(),
+            truncated: false,
+        });
+    }
+    http.push(response(200, "text/plain", "reader recovered"));
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        public_dns(&["example.test", "r.jina.ai"]),
+        http.clone(),
+    );
+
+    let fetched = client
+        .fetch("https://example.test/article", None)
+        .await
+        .unwrap();
+
+    assert_eq!(fetched.content, "reader recovered");
+    let requests = http.requests.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(requests[3].url.host_str(), Some("r.jina.ai"));
+}
+
+#[tokio::test]
+async fn blocked_target_never_reaches_reader_fallback() {
+    let http = Arc::new(FakeHttp::default());
+    let client = client(
+        WebSearchConfiguration::jina(None),
+        HashMap::from([
+            (
+                "private.test".to_string(),
+                vec!["127.0.0.1".parse().unwrap()],
+            ),
+            (
+                "r.jina.ai".to_string(),
+                vec!["93.184.216.34".parse().unwrap()],
+            ),
+        ]),
+        http.clone(),
+    );
+
+    assert!(matches!(
+        client.fetch("https://private.test/secret", None).await,
+        Err(WebError::BlockedAddress)
+    ));
+    assert_eq!(http.request_count(), 0);
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ import { useTasksStore } from "./tasks";
 /**
  * 全局应用状态（Zustand）。
  * 场景（scene）对应 activity 列入口；Room 由 openRoom(taskId) 进入。
- * 主题写入 <html data-theme>，缩放写入 #app zoom。
+ * 主题写入 <html data-theme>。
  */
 
 export type Scene =
@@ -56,7 +56,13 @@ export interface TaskFileReferenceRequest {
   requestId: number;
   path: string;
 }
-export type SettingsPane = "providers" | "agents" | "tools" | "preferences" | "diagnostics" | "codex";
+export type SettingsPane = "providers" | "agents" | "tools" | "knowledge" | "preferences" | "diagnostics" | "subagents";
+export type LegacySettingsPane = "codex";
+
+/** 兼容旧深链/调用方；store 内部不再把 Codex 当作顶级设置模块身份。 */
+export function normalizeSettingsPane(pane: SettingsPane | LegacySettingsPane): SettingsPane {
+  return pane === "codex" ? "subagents" : pane;
+}
 export type KnowledgeTab = "memory" | "prompts" | "skills";
 
 interface AppState {
@@ -95,10 +101,6 @@ interface AppState {
   deckDensity: "cards" | "rows";
   /** 外观模式（亮/暗/跟随系统） */
   themeMode: ThemeMode;
-  /** 窗口缩放 80-200（A11Y-003） */
-  zoomLevel: number;
-  /** 无障碍 Diff 文本模式（A11Y-005） */
-  accessibleDiffMode: boolean;
 
   setScene: (scene: Scene) => void;
   goBack: () => void;
@@ -121,7 +123,7 @@ interface AppState {
   restoreWorkbench: () => void;
   toggleWorkbenchFocus: () => void;
   expandReview: () => void;
-  setSettingsPane: (pane: SettingsPane) => void;
+  setSettingsPane: (pane: SettingsPane | LegacySettingsPane) => void;
   openKnowledge: (tab?: KnowledgeTab) => void;
   openMcpSettings: (marketQuery?: string | null, serverId?: string | null) => void;
   clearMcpFocus: () => void;
@@ -132,11 +134,6 @@ interface AppState {
   setRailWidth: (width: number) => void;
   setDeckDensity: (d: "cards" | "rows") => void;
   setThemeMode: (mode: ThemeMode) => void;
-  setZoom: (level: number) => void;
-  zoomIn: () => void;
-  zoomOut: () => void;
-  zoomReset: () => void;
-  toggleDiffMode: () => void;
 }
 
 const RAIL_KEY = "r-code.rail.collapsed";
@@ -296,13 +293,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   railWidth: readRailWidth(),
   deckDensity: "cards",
   themeMode: readThemeMode(),
-  zoomLevel: 100,
-  accessibleDiffMode: false,
 
-  setScene: (scene) => set((state) => navigateTo(state, {
-    scene,
-    currentTaskId: scene === "room" ? state.currentTaskId : null,
-    workspacePath: useTasksStore.getState().currentProjectId,
+  setScene: (scene) => set((state) => ({
+    ...navigateTo(state, {
+      scene: scene === "knowledge" ? "settings" : scene,
+      currentTaskId: scene === "room" ? state.currentTaskId : null,
+      workspacePath: useTasksStore.getState().currentProjectId,
+    }),
+    ...(scene === "knowledge" ? { settingsPane: "knowledge" as const } : {}),
   })),
   goBack: () => {
     const state = get();
@@ -523,20 +521,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       mode: "docked",
       launcherOpen: false,
     }))),
-  setSettingsPane: (settingsPane) => set((state) => ({
+  setSettingsPane: (pane) => set((state) => ({
     ...navigateTo(state, {
       scene: "settings",
       currentTaskId: null,
       workspacePath: useTasksStore.getState().currentProjectId,
     }),
-    settingsPane,
+    settingsPane: normalizeSettingsPane(pane),
   })),
   openKnowledge: (knowledgeTab = "memory") => set((state) => ({
     ...navigateTo(state, {
-      scene: "knowledge",
+      scene: "settings",
       currentTaskId: null,
       workspacePath: useTasksStore.getState().currentProjectId,
     }),
+    settingsPane: "knowledge",
     knowledgeTab,
   })),
   openMcpSettings: (mcpMarketQuery = null, mcpFocusServerId = null) => set((state) => ({
@@ -581,9 +580,4 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     set({ themeMode });
   },
-  setZoom: (level) => set({ zoomLevel: Math.max(80, Math.min(200, level)) }),
-  zoomIn: () => set((s) => ({ zoomLevel: Math.min(200, s.zoomLevel + 10) })),
-  zoomOut: () => set((s) => ({ zoomLevel: Math.max(80, s.zoomLevel - 10) })),
-  zoomReset: () => set({ zoomLevel: 100 }),
-  toggleDiffMode: () => set((s) => ({ accessibleDiffMode: !s.accessibleDiffMode })),
 }));

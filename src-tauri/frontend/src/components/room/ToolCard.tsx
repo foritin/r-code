@@ -15,7 +15,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { highlight } from "../../lib/highlight";
 import { COPIED_RESET_MS, copyText } from "../../lib/clipboard";
-import { toolVerb } from "../../lib/format";
+import { displayPathsInText, toolVerb } from "../../lib/format";
 import { mcpMarketInstall, mcpToggle } from "../../lib/ipc";
 import type { McpLaunchPreview, McpMarketInstallRequest } from "../../lib/types";
 import { useAppStore } from "../../store/app";
@@ -120,7 +120,12 @@ export const ToolPayloadDetails = memo(function ToolPayloadDetails({
 }: Pick<ToolCardProps, "inputJson" | "outputJson" | "state"> & { toolName?: string }) {
   const openMcpSettings = useAppStore((store) => store.openMcpSettings);
   const input = useMemo(() => formatToolPayload(inputJson, "input"), [inputJson]);
-  const output = useMemo(() => formatToolPayload(outputJson, "output"), [outputJson]);
+  const output = useMemo(() => {
+    const view = formatToolPayload(outputJson, "output");
+    if (!view || state !== "fail") return view;
+    const text = displayPathsInText(view.text);
+    return text === view.text ? view : { ...view, text };
+  }, [outputJson, state]);
   const mcpSuggestion = useMemo(() => readMcpSuggestion(toolName, outputJson), [toolName, outputJson]);
   const mcpConfirmation = useMemo(
     () => readMcpConfirmation(toolName, outputJson),
@@ -290,7 +295,7 @@ function McpLaunchPlan({ preview }: { preview: McpLaunchPreview }) {
   }
   return (
     <div className="tcard-mcp-launch">
-      <span>远程 HTTPS</span>
+      <span>{transport.url.startsWith("http://") ? "本机 HTTP" : "远程 HTTPS"}</span>
       <pre>{`地址: ${transport.url}`}</pre>
       {transport.header_names.length > 0 && <small>凭据请求头：{transport.header_names.join("、")}</small>}
     </div>
@@ -309,7 +314,7 @@ export function hasMcpSettingsActionPayload(
   toolName: string | null | undefined,
   raw: string | null | undefined,
 ): boolean {
-  if (toolName !== "mcp_create_draft" && toolName !== "mcp_prepare_enable") return false;
+  if (toolName !== "mcp_create_draft" && toolName !== "mcp_save_draft" && toolName !== "mcp_prepare_enable") return false;
   return Boolean(raw
     && raw.length <= 128_000
     && /"status"\s*:\s*"(?:draft_created|manual_enable_required)"/.test(raw)
@@ -324,7 +329,9 @@ function readMcpSettingsAction(
   try {
     const value: unknown = JSON.parse(raw as string);
     if (!isRecord(value) || value.action !== "open_mcp_settings") return null;
-    const expectedStatus = toolName === "mcp_create_draft" ? "draft_created" : "manual_enable_required";
+    const expectedStatus = toolName === "mcp_create_draft" || toolName === "mcp_save_draft"
+      ? "draft_created"
+      : "manual_enable_required";
     if (value.status !== expectedStatus) return null;
     const serverId = typeof value.server_id === "string" ? value.server_id.trim() : "";
     if (!serverId) return null;

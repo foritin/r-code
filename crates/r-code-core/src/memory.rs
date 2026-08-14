@@ -56,6 +56,8 @@ pub enum MemoryScope {
 pub enum GlobalMemoryAuthorization {
     Manual,
     ApprovedCandidate,
+    /// Created directly by the coding agent through the `save_memory` tool.
+    Agent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -63,6 +65,8 @@ pub enum GlobalMemoryAuthorization {
 pub enum ProjectMemoryOrigin {
     Manual,
     AutomaticReview,
+    /// Created directly by the coding agent through the `save_memory` tool.
+    Agent,
     Undo,
 }
 

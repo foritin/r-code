@@ -74,6 +74,18 @@ pub enum ProductError {
     #[error("permission error: {0}")]
     PermissionError(String),
 
+    /// 模型可以根据稳定错误码和上下文自行修正的工具错误。
+    ///
+    /// `details` 只允许放入可直接返回给模型的非敏感诊断信息。普通数据库、凭据和
+    /// IPC 错误仍使用各自的错误变体，不能借此绕过上层的脱敏逻辑。
+    #[error("{message}")]
+    RecoverableToolError {
+        tool: String,
+        code: String,
+        message: String,
+        details: serde_json::Value,
+    },
+
     /// Provider 正常结束了一个模型回合，但没有返回任何可持久化的 assistant 内容。
     ///
     /// 这是可被运行协调层精确识别的协议结果：若前序工具已经执行，协调层可以进行
@@ -122,6 +134,21 @@ impl From<ProductError> for hermes_error::Error {
             ProductError::ConfigError(msg) => Self::Config(msg),
             ProductError::StateMachineError(msg) => Self::Internal(format!("state machine: {msg}")),
             ProductError::PermissionError(msg) => Self::PermissionDenied(msg),
+            ProductError::RecoverableToolError {
+                tool,
+                code,
+                message,
+                details,
+            } => Self::ToolHost(
+                serde_json::json!({
+                    "status": "error",
+                    "tool": tool,
+                    "code": code,
+                    "message": message,
+                    "details": details,
+                })
+                .to_string(),
+            ),
             ProductError::EmptyAssistantResponse => {
                 Self::Other("模型服务未返回可显示内容，请重试或检查模型线路配置".to_string())
             }

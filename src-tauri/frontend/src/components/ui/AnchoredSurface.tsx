@@ -252,11 +252,20 @@ export function AnchoredSurface({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(reposition);
     };
+    const scheduleForAncestorScroll = (event: Event) => {
+      const target = event.target;
+      // `scroll` does not bubble, but the capture listener below still observes the
+      // surface's own scrolling. Re-measuring temporarily removes max-height, which
+      // makes WebView2 clamp scrollTop back to zero. Only ancestor/page scrolling can
+      // move the anchor; scrolling inside the floating surface must keep its position.
+      if (target instanceof Node && ownRef.current?.contains(target)) return;
+      schedule();
+    };
 
     reposition();
     schedule();
     window.addEventListener("resize", schedule);
-    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("scroll", scheduleForAncestorScroll, true);
     window.visualViewport?.addEventListener("resize", schedule);
     window.visualViewport?.addEventListener("scroll", schedule);
 
@@ -268,7 +277,7 @@ export function AnchoredSurface({
       cancelAnimationFrame(frame);
       observer?.disconnect();
       window.removeEventListener("resize", schedule);
-      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("scroll", scheduleForAncestorScroll, true);
       window.visualViewport?.removeEventListener("resize", schedule);
       window.visualViewport?.removeEventListener("scroll", schedule);
     };

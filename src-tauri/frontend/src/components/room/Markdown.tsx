@@ -233,6 +233,7 @@ function CodeBlock({ node, className }: { node: MdCode; className?: string }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const resetTimer = useRef<number | null>(null);
+  const previousValue = useRef(node.value);
 
   useEffect(
     () => () => {
@@ -252,9 +253,10 @@ function CodeBlock({ node, className }: { node: MdCode; className?: string }) {
   const tokens = useMemo(() => highlight(renderedValue, node.lang), [renderedValue, node.lang]);
 
   useEffect(() => {
-    // Streaming can replace a block in place. Never keep an expanded state from an older, longer
-    // code payload after the source itself changes.
-    setExpanded(false);
+    // 流式输出会持续向同一个代码块追加内容，用户手动展开后必须保持展开。
+    // 只有内容缩短或被非前缀替换时，才视为同位置换成了另一份代码并恢复默认折叠。
+    if (!node.value.startsWith(previousValue.current)) setExpanded(false);
+    previousValue.current = node.value;
   }, [node.value]);
 
   const onCopy = useCallback(() => {

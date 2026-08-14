@@ -12,7 +12,7 @@ import {
   workspaceChoose,
   workspaceSetAccessMode,
 } from "../../lib/ipc";
-import { errText } from "../../lib/format";
+import { displayPath, errText } from "../../lib/format";
 import {
   announceRuntimeSettingsChanged,
   ONBOARDING_OPEN_EVENT,
@@ -604,7 +604,7 @@ export function OnboardingCampaign() {
                 </div>
                 <section className="onboarding-workspace-object">
                   <span>{selectedWorkspace ? "本次工作区" : "本地代码边界"}</span>
-                  <strong title={selectedWorkspace?.canonical_path}>{selectedWorkspace?.canonical_path ?? (scope === "chat" ? "不读取本地文件" : "尚未选择")}</strong>
+                  <strong title={selectedWorkspace ? displayPath(selectedWorkspace.canonical_path) : undefined}>{selectedWorkspace ? displayPath(selectedWorkspace.canonical_path) : scope === "chat" ? "不读取本地文件" : "尚未选择"}</strong>
                   <button type="button" hidden={scope === "chat"} disabled={busy} onClick={() => void chooseWorkspace()}>{selectedWorkspace ? "更换" : "选择文件夹"}</button>
                 </section>
                 <div className="onboarding-access-pick" role="radiogroup" aria-label="项目权限">

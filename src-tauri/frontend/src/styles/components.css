@@ -178,6 +178,36 @@
 .model-config-error { display: flex; align-items: center; gap: var(--sp-4); padding: var(--sp-4); color: var(--danger); font-size: var(--text-sm); }
 .model-config-error > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 
+/* DeepSeek 模型胶囊悬停时的余额浮层。 */
+.provider-balance-tooltip {
+  display: grid;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: var(--lh-normal);
+  white-space: nowrap;
+}
+.provider-balance-total {
+  font-weight: var(--weight-strong);
+  font-variant-numeric: tabular-nums;
+}
+.provider-balance-detail {
+  color: var(--fg-faint);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+.provider-balance-loading {
+  color: var(--fg-muted);
+}
+.provider-balance-error {
+  color: var(--danger);
+  max-width: 260px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 /* Composer attachments: picker accepts readable files; paste intentionally accepts images only. */
 .composer-attachments {
   display: flex;
@@ -451,6 +481,13 @@
   font-weight: 650;
   letter-spacing: 0;
 }
+.attachment-chip.is-deferred {
+  border-color:var(--border-strong);
+  background:var(--bg-chip);
+}
+.attachment-chip.is-deferred .attachment-thumbnail,
+.attachment-chip.is-deferred .attachment-file-icon { opacity:.78; }
+.attachment-chip.is-deferred.is-native-ocr .attachment-copy small { color:var(--fg-muted); }
 .message-attachment-summary {
   display: flex;
   flex-wrap: wrap;

@@ -80,8 +80,16 @@ bash ./dev.sh --bootstrap-only
 After bootstrap, the development launch is equivalent to:
 
 ```bash
-cargo tauri dev
+cargo tauri dev --config src-tauri/tauri.dev.conf.json
 ```
+
+The development process always uses the `R-Code Dev` identity with isolated
+AppData, WebView, SQLite, logs, credentials, Codex/Claude configuration, and npm
+global prefix, so it can run beside an installed `R-Code`. Even a bare
+`cargo tauri dev` is protected by a runtime flavor guard and cannot open
+production data. The development updater reads only the separate
+`dev-latest.json` channel; source changes continue to hot reload through
+Vite/Tauri.
 
 Initialize only the required product submodule manually with:
 

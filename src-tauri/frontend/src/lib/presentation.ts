@@ -35,6 +35,12 @@ export function isPartialSuccess(detail?: TaskDetail): boolean {
     && latestMainRun.summary?.trim() === PARTIAL_SUCCESS_RUN_SUMMARY;
 }
 
+/** 最新主运行已经结束，但 transcript 中保留了运行错误。 */
+export function isCompletedWithError(detail?: TaskDetail): boolean {
+  const latestMainRun = detail?.runs.find((run) => run.agent_kind === "main");
+  return latestMainRun?.ended_at != null && latestMainRun.review_state === "failed";
+}
+
 export function reviewAttentionDescription(detail?: TaskDetail): string {
   const count = detail?.changes.length ?? 0;
   return isPartialSuccess(detail)
@@ -47,7 +53,7 @@ export function taskTitle(task: Task): string {
 }
 
 export function workspaceName(path: string | null, workspaces: readonly Workspace[]): string {
-  if (!path) return "未归属项目";
+  if (!path) return "用户路径";
   return workspaces.find((workspace) => workspace.canonical_path === path)?.display_name
     ?? path.split(/[\\/]/).filter(Boolean).pop()
     ?? path;
@@ -79,13 +85,16 @@ export function taskStateLabel(state: TaskState, detail?: TaskDetail): string {
   if (state === "review_ready") return "等待审查";
   if (state === "interrupted") return "已中止";
   if (state === "archived") return "已归档";
+  if (state === "idle" && isCompletedWithError(detail)) return "已完成（含错误）";
   return "已完成";
 }
 
 export function activeRun(detail?: TaskDetail): AgentRun | undefined {
   return detail?.runs.find((run) => run.ended_at === null)
-    ?? detail?.runs.filter((run) => run.agent_kind === "main").slice(-1)[0]
-    ?? detail?.runs.slice(-1)[0];
+    // 后端按 started_at DESC 返回运行记录，因此第一个主运行才是最近一次。
+    // 取数组尾部会在多轮对话后把活动摘要倒退到最早的一轮。
+    ?? detail?.runs.find((run) => run.agent_kind === "main")
+    ?? detail?.runs[0];
 }
 
 /** 页面中没有后端当前动作字段时，使用 task state 的可解释回退。 */
@@ -98,6 +107,7 @@ export function taskActivity(task: Task, detail?: TaskDetail): string {
   if (task.state === "in_progress") return "正在推进任务";
   if (task.state === "review_ready") return "变更已准备好审查";
   if (task.state === "interrupted") return "任务已停止";
+  if (task.state === "idle" && isCompletedWithError(detail)) return "运行已结束，详情中保留了错误";
   return "等待下一步";
 }
 

@@ -254,7 +254,7 @@ export function MemoryPanel({ workspace, config }: { workspace: Workspace | null
       <header className="knowledge-panel-head">
         <div>
           <h2>{workspace ? `${workspace.display_name} 的项目记忆` : "全局记忆"}</h2>
-          <p>{workspace ? "只对这个项目生效。" : "跨项目使用；新的全局候选需要你确认。"}</p>
+          <p>{workspace ? "这里管理项目专属记忆；启用时同时自动继承全局记忆。" : "跨项目使用；新的全局候选需要你确认。"}</p>
         </div>
         <div className="memory-head-actions">
           <button className="memory-icon-button" title="刷新" aria-label="刷新记忆" disabled={busy != null} onClick={() => void load()}><IconRefresh width={14} height={14} /></button>

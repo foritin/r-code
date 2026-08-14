@@ -35,6 +35,12 @@ use crate::{
 };
 
 const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
+/// Process startup plus the MCP initialize/initialized handshake. A server that cannot establish
+/// a protocol session inside this window is treated as unavailable instead of pinning the Agent.
+pub const MCP_INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
+/// `tools/list` is metadata discovery and should complete quickly even when individual tools are
+/// long-running. Keep it separate from the tool-call budget so catalog refresh cannot hang.
+pub const MCP_LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Error)]
 pub enum McpClientError {
@@ -52,6 +58,10 @@ pub enum McpClientError {
     UnsafeWindowsLauncher(String),
     #[error("failed to initialize MCP session: {0}")]
     Initialize(String),
+    #[error("MCP initialize timed out after {0} seconds")]
+    InitializeTimeout(u64),
+    #[error("MCP connection timed out after {0} seconds")]
+    ConnectionTimeout(u64),
     #[error("MCP session is closed")]
     Closed,
     #[error("MCP tool arguments must be a JSON object")]
@@ -60,6 +70,10 @@ pub enum McpClientError {
     Cancelled,
     #[error("MCP request failed: {0}")]
     Request(String),
+    #[error("MCP tools/list timed out after {0} seconds")]
+    ListToolsTimeout(u64),
+    #[error("MCP tool '{0}' timed out after {1} seconds")]
+    ToolCallTimeout(String, u64),
     #[error("MCP session shutdown failed: {0}")]
     Shutdown(String),
 }
@@ -72,8 +86,8 @@ pub trait SecretResolver: Send + Sync {
 #[derive(Default)]
 pub struct EmptySecretResolver;
 
-/// 单个 MCP 工具调用的最大时长（F2）。超过即报超时错误，避免子代理/主 agent
-/// 因 MCP 服务端无响应而无限挂起——宿主取消无法打断进行中的请求。
+/// 单个 MCP 工具调用的最终兜底时长（F2）。保留原有的 5 分钟窗口，避免误伤合法的
+/// 长工具；用户中断会优先发送协议级 `notifications/cancelled`，只有失联服务才走此兜底。
 pub const MCP_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 const MCP_ABORT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
 const MCP_CANCEL_NOTIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -97,6 +111,8 @@ pub trait McpClientSession: Send + Sync {
     ) -> Result<ToolCallOutcome, McpClientError> {
         let call = self.call_tool(name, args);
         tokio::pin!(call);
+        let deadline = tokio::time::sleep(MCP_CALL_TIMEOUT);
+        tokio::pin!(deadline);
         loop {
             if abort
                 .as_ref()
@@ -104,12 +120,15 @@ pub trait McpClientSession: Send + Sync {
             {
                 return Err(McpClientError::Cancelled);
             }
-            if abort.is_none() {
-                return call.await;
-            }
             tokio::select! {
                 result = &mut call => return result,
-                _ = tokio::time::sleep(MCP_ABORT_POLL_INTERVAL) => {}
+                _ = &mut deadline => {
+                    return Err(McpClientError::ToolCallTimeout(
+                        name.to_string(),
+                        MCP_CALL_TIMEOUT.as_secs(),
+                    ));
+                }
+                _ = tokio::time::sleep(MCP_ABORT_POLL_INTERVAL), if abort.is_some() => {}
             }
         }
     }
@@ -162,15 +181,29 @@ impl RmcpConnector {
         T: rmcp::transport::IntoTransport<RoleClient, E, A>,
         E: std::error::Error + Send + Sync + 'static,
     {
-        let service = Self::client_info()
-            .serve_with_lifecycle(
-                transport,
-                rmcp::ClientLifecycleMode::Auto {
-                    preferred_versions: vec![ProtocolVersion::V_2026_07_28],
-                    legacy_version: Some(ProtocolVersion::V_2025_11_25),
-                },
-            )
+        self.serve_with_timeout(transport, MCP_INITIALIZE_TIMEOUT)
             .await
+    }
+
+    async fn serve_with_timeout<T, E, A>(
+        &self,
+        transport: T,
+        timeout: Duration,
+    ) -> Result<RmcpSession, McpClientError>
+    where
+        T: rmcp::transport::IntoTransport<RoleClient, E, A>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let initialize = Self::client_info().serve_with_lifecycle(
+            transport,
+            rmcp::ClientLifecycleMode::Auto {
+                preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+                legacy_version: Some(ProtocolVersion::V_2025_11_25),
+            },
+        );
+        let service = tokio::time::timeout(timeout, initialize)
+            .await
+            .map_err(|_| McpClientError::InitializeTimeout(timeout.as_secs()))?
             .map_err(|error| McpClientError::Initialize(error.to_string()))?;
         Ok(RmcpSession::new(service))
     }
@@ -186,6 +219,9 @@ impl RmcpConnector {
         for (name, reference) in env {
             process.env(name, self.resolve_secret(reference).await?);
         }
+        // Host invariants win over inherited and user-supplied text-mode settings. JSON-RPC stdio
+        // is UTF-8 bytes on every platform; in particular, Python must not inherit Windows GBK.
+        apply_platform_stdio_environment(&mut process);
         let transport = TokioChildProcess::new(process)
             .map_err(|error| McpClientError::ProcessStart(error.to_string()))?;
         self.serve(transport).await
@@ -222,7 +258,23 @@ fn build_stdio_process(
 
     let mut process = tokio::process::Command::new(command);
     process.args(args);
+    apply_platform_stdio_environment(&mut process);
     Ok(process)
+}
+
+fn apply_platform_stdio_environment(process: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        process
+            .env("PYTHONUTF8", "1")
+            .env("PYTHONIOENCODING", "utf-8")
+            .env("PYTHONUNBUFFERED", "1")
+            .env("R_CODE_MCP_STDIO_ENCODING", "utf-8")
+            .env_remove("PYTHONLEGACYWINDOWSSTDIO");
+    }
+
+    #[cfg(not(windows))]
+    let _ = process;
 }
 
 #[cfg(windows)]
@@ -308,10 +360,9 @@ impl McpClientSession for RmcpSession {
         if self.is_closed() {
             return Err(McpClientError::Closed);
         }
-        let tools = self
-            .peer
-            .list_all_tools()
+        let tools = tokio::time::timeout(MCP_LIST_TOOLS_TIMEOUT, self.peer.list_all_tools())
             .await
+            .map_err(|_| McpClientError::ListToolsTimeout(MCP_LIST_TOOLS_TIMEOUT.as_secs()))?
             .map_err(|error| McpClientError::Request(error.to_string()))?;
         Ok(tools
             .into_iter()
@@ -405,7 +456,10 @@ impl McpClientSession for RmcpSession {
                     handle.cancel(Some("R-Code MCP tool timeout".to_string())),
                 )
                 .await;
-                return Err(McpClientError::Request(format!("MCP 工具 {name} 调用超时")));
+                return Err(McpClientError::ToolCallTimeout(
+                    name.to_string(),
+                    MCP_CALL_TIMEOUT.as_secs(),
+                ));
             }
         };
         let result = match response {
@@ -457,6 +511,47 @@ impl McpClientSession for RmcpSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::{ServerHandler, ServiceExt};
+
+    #[derive(Clone)]
+    struct UnicodeSchemaServer;
+
+    impl ServerHandler for UnicodeSchemaServer {
+        fn get_info(&self) -> rmcp::model::ServerInfo {
+            rmcp::model::ServerInfo::new(
+                rmcp::model::ServerCapabilities::builder()
+                    .enable_tools()
+                    .build(),
+            )
+        }
+
+        async fn list_tools(
+            &self,
+            _request: Option<rmcp::model::PaginatedRequestParams>,
+            _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "路径": {
+                        "type": "string",
+                        "description": "资料库路径…可使用 → 分隔层级"
+                    }
+                }
+            })
+            .as_object()
+            .expect("fixture schema is an object")
+            .clone();
+            Ok(rmcp::model::ListToolsResult {
+                tools: vec![rmcp::model::Tool::new(
+                    "list_vault_files",
+                    "列出资料库文件…并返回 路径 → 文件",
+                    Arc::new(schema),
+                )],
+                ..Default::default()
+            })
+        }
+    }
 
     struct DropFlag(Arc<AtomicBool>);
 
@@ -538,6 +633,59 @@ mod tests {
         assert!(!completed.load(Ordering::SeqCst));
     }
 
+    #[tokio::test]
+    async fn initialize_is_bounded_when_a_stdio_peer_never_responds() {
+        let (_server_transport, client_transport) = tokio::io::duplex(4_096);
+        let connector = RmcpConnector::new(Arc::new(EmptySecretResolver));
+
+        let error = match connector
+            .serve_with_timeout(client_transport, Duration::from_millis(20))
+            .await
+        {
+            Ok(_) => panic!("a silent MCP peer must not hold initialize forever"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, McpClientError::InitializeTimeout(_)));
+    }
+
+    #[tokio::test]
+    async fn unicode_tool_schema_survives_utf8_json_rpc_framing() {
+        let (server_transport, client_transport) = tokio::io::duplex(16 * 1_024);
+        let server = tokio::spawn(async move {
+            UnicodeSchemaServer
+                .serve(server_transport)
+                .await
+                .expect("start unicode fixture server")
+                .waiting()
+                .await
+                .expect("unicode fixture server remains valid");
+        });
+        let connector = RmcpConnector::new(Arc::new(EmptySecretResolver));
+        let session = connector
+            .serve(client_transport)
+            .await
+            .expect("initialize unicode fixture");
+
+        let tools = session
+            .list_tools("obsidian")
+            .await
+            .expect("tools/list with Unicode metadata must decode");
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "list_vault_files");
+        assert_eq!(tools[0].description, "列出资料库文件…并返回 路径 → 文件");
+        assert_eq!(
+            tools[0].input_schema["properties"]["路径"]["description"],
+            "资料库路径…可使用 → 分隔层级"
+        );
+
+        session.close().await.expect("close unicode fixture client");
+        tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("fixture server stops when the client closes")
+            .expect("fixture server task joins");
+    }
+
     #[test]
     fn stdio_arguments_remain_separate_and_never_form_a_shell_string() {
         let args = vec![
@@ -571,6 +719,37 @@ mod tests {
             ));
         }
         assert!(build_stdio_process("C:\\tools\\server.exe", &[]).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_stdio_process_forces_utf8_python_pipes() {
+        let process = build_stdio_process("C:\\tools\\server.exe", &[]).unwrap();
+        let environment = process
+            .as_std()
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(environment.get("PYTHONUTF8"), Some(&Some("1".to_string())));
+        assert_eq!(
+            environment.get("PYTHONIOENCODING"),
+            Some(&Some("utf-8".to_string()))
+        );
+        assert_eq!(
+            environment.get("PYTHONUNBUFFERED"),
+            Some(&Some("1".to_string()))
+        );
+        assert_eq!(
+            environment.get("R_CODE_MCP_STDIO_ENCODING"),
+            Some(&Some("utf-8".to_string()))
+        );
+        assert_eq!(environment.get("PYTHONLEGACYWINDOWSSTDIO"), Some(&None));
     }
 
     #[cfg(target_os = "macos")]

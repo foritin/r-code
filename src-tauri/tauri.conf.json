@@ -23,6 +23,7 @@
         "minHeight": 640,
         "center": true,
         "resizable": true,
+        "zoomHotkeysEnabled": true,
         "decorations": false
       }
     ],

@@ -6,8 +6,18 @@ param(
     [switch]$SkipInnerBuild
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
+if (-not $cargoCommand) {
+    throw "Rust Cargo is required to build the branded installer"
+}
+$rustcCommand = Get-Command rustc -ErrorAction SilentlyContinue
+if (-not $rustcCommand) {
+    throw "Rust rustc is required to detect the Windows build architecture"
+}
+
 $cargoToml = Get-Content -LiteralPath (Join-Path $repoRoot "Cargo.toml") -Raw
 $versionMatch = [regex]::Match($cargoToml, '(?ms)\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
 if (-not $versionMatch.Success) {
@@ -25,8 +35,25 @@ if ($LASTEXITCODE -ne 0) {
     throw "Branded installer frontend validation failed with exit code $LASTEXITCODE"
 }
 
-if ($Target -and $Target -notmatch 'windows') {
-    throw "The branded installer can only be built for a Windows target"
+$architectureTarget = $Target
+if (-not $architectureTarget) {
+    $rustcVersion = & $rustcCommand.Source -vV
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to query the native Rust host target (rustc exited with $LASTEXITCODE)"
+    }
+    $hostLine = @($rustcVersion | Where-Object { $_ -match '^host:\s*(\S+)\s*$' })
+    if ($hostLine.Count -ne 1) {
+        throw "Unable to read the native Rust host target from rustc -vV"
+    }
+    $architectureTarget = [regex]::Match($hostLine[0], '^host:\s*(\S+)\s*$').Groups[1].Value
+}
+
+$windowsTargetMatch = [regex]::Match(
+    $architectureTarget,
+    '^(x86_64|aarch64|i686|i586)-[^-]+-windows-(msvc|gnu|gnullvm)$'
+)
+if (-not $windowsTargetMatch.Success) {
+    throw "The branded installer requires a Windows Rust target, got: $architectureTarget"
 }
 
 $targetRoot = Join-Path $repoRoot "target"
@@ -36,9 +63,10 @@ if ($Target) {
     $releaseRoot = Join-Path $targetRoot "release"
 }
 
-$architecture = if ($Target -match '^aarch64') {
+$targetArchitecture = $windowsTargetMatch.Groups[1].Value
+$architecture = if ($targetArchitecture -eq "aarch64") {
     "arm64"
-} elseif ($Target -match '^(i686|i586)') {
+} elseif ($targetArchitecture -in @("i686", "i586")) {
     "x86"
 } else {
     "x64"
@@ -55,7 +83,7 @@ if (-not $SkipInnerBuild) {
         if ($Target) {
             $tauriArgs += @("--target", $Target)
         }
-        & cargo @tauriArgs
+        & $cargoCommand.Source @tauriArgs
         if ($LASTEXITCODE -ne 0) {
             throw "Tauri NSIS build failed with exit code $LASTEXITCODE"
         }
@@ -69,11 +97,7 @@ if (-not $InnerInstaller) {
     $expectedName = "R-Code_${version}_${architecture}-setup.exe"
     $candidate = Join-Path $nsisDirectory $expectedName
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-        $matches = @(Get-ChildItem -LiteralPath $nsisDirectory -Filter "R-Code_${version}_*-setup.exe" -File -ErrorAction SilentlyContinue)
-        if ($matches.Count -ne 1) {
-            throw "Expected exactly one NSIS payload in $nsisDirectory, found $($matches.Count)"
-        }
-        $candidate = $matches[0].FullName
+        throw "Expected NSIS payload not found: $candidate"
     }
     $InnerInstaller = $candidate
 }
@@ -82,7 +106,7 @@ if (-not (Test-Path -LiteralPath $InnerInstaller -PathType Leaf)) {
     throw "NSIS payload not found: $InnerInstaller"
 }
 
-$buildArgs = @("build", "--release", "-p", "r-code-installer", "--bin")
+$buildArgs = @("build", "--release", "-p", "r-code-installer", "--bins")
 if ($Target) {
     $targetArgs = @("--target", $Target)
 } else {
@@ -91,13 +115,9 @@ if ($Target) {
 
 Push-Location $repoRoot
 try {
-    & cargo @buildArgs "r-code-installer" @targetArgs
+    & $cargoCommand.Source @buildArgs @targetArgs
     if ($LASTEXITCODE -ne 0) {
-        throw "Branded installer build failed with exit code $LASTEXITCODE"
-    }
-    & cargo @buildArgs "r-code-installer-pack" @targetArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Installer packer build failed with exit code $LASTEXITCODE"
+        throw "Branded installer binaries build failed with exit code $LASTEXITCODE"
     }
 } finally {
     Pop-Location

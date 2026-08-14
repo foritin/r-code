@@ -4,6 +4,7 @@ import { IconCodexSubagent, IconSubagent } from "../icons";
 
 export const RCODE_SUBAGENT_COLORS = ["#58c7a4", "#45a8b7", "#6d9ed4"] as const;
 export const CODEX_SUBAGENT_COLORS = ["#df765d", "#d99a51", "#c8789f"] as const;
+export const EXTERNAL_SUBAGENT_COLORS = ["#8a7bd1", "#6f8fc7", "#9b72b0"] as const;
 
 type SubagentAvatarSize = "xs" | "sm" | "md";
 
@@ -26,8 +27,16 @@ export function SubagentAvatar({
   size = "md",
   className = "",
 }: SubagentAvatarProps) {
-  const runtimeFamily = runtimeKind === "native" ? "rcode" : "codex";
-  const palette = runtimeFamily === "rcode" ? RCODE_SUBAGENT_COLORS : CODEX_SUBAGENT_COLORS;
+  const runtimeFamily = runtimeKind === "native"
+    ? "rcode"
+    : runtimeKind === "codex_exec" || runtimeKind === "codex_mcp"
+      ? "codex"
+      : "external";
+  const palette = runtimeFamily === "rcode"
+    ? RCODE_SUBAGENT_COLORS
+    : runtimeFamily === "codex"
+      ? CODEX_SUBAGENT_COLORS
+      : EXTERNAL_SUBAGENT_COLORS;
   const colorIndex = identity ? stableIdentityIndex(identity) : Math.abs(index);
   const color = palette[colorIndex % palette.length];
   return (

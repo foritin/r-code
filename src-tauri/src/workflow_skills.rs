@@ -106,14 +106,51 @@ pub struct WorkflowSkillDraft {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowSkillScope {
+    Global,
+    Project,
+}
+
+/// UI/runtime catalog entry. Built-ins and global custom Skills are inherited by every project;
+/// project Skills remain in AppData and are only exposed inside their owning workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScopedWorkflowSkill {
+    #[serde(flatten)]
+    pub skill: WorkflowSkill,
+    pub scope: WorkflowSkillScope,
+    pub inherited: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScopedWorkflowSkillDraft {
+    #[serde(flatten)]
+    pub draft: WorkflowSkillDraft,
+    pub scope: WorkflowSkillScope,
+}
+
 #[derive(Debug, Clone)]
 pub struct WorkflowSkillCatalog {
     root: PathBuf,
+    scope: WorkflowSkillScope,
 }
 
 impl WorkflowSkillCatalog {
+    /// Global catalog. Global writes also scan every AppData project catalog so a newly created
+    /// global invocation can never shadow a project Skill after inheritance.
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            scope: WorkflowSkillScope::Global,
+        }
+    }
+
+    pub fn new_project(root: PathBuf) -> Self {
+        Self {
+            root,
+            scope: WorkflowSkillScope::Project,
+        }
     }
 
     pub fn list(&self) -> Result<Vec<WorkflowSkill>, ProductError> {
@@ -152,6 +189,14 @@ impl WorkflowSkillCatalog {
         Ok(skills)
     }
 
+    pub fn list_custom(&self) -> Result<Vec<WorkflowSkill>, ProductError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .filter(|skill| skill.source == WorkflowSkillSource::Custom)
+            .collect())
+    }
+
     pub fn save(&self, draft: WorkflowSkillDraft) -> Result<WorkflowSkill, ProductError> {
         let id = match draft.source {
             WorkflowSkillSource::Builtin => draft.id.clone().ok_or_else(|| {
@@ -175,6 +220,9 @@ impl WorkflowSkillCatalog {
         validate_skill(&skill)?;
         let existing = self.list()?;
         ensure_unique_names(&existing, Some(&skill))?;
+        if self.scope == WorkflowSkillScope::Global {
+            self.ensure_no_project_name_collision(&skill, None)?;
+        }
         let path = match skill.source {
             WorkflowSkillSource::Builtin => {
                 let default = builtins()
@@ -246,6 +294,70 @@ impl WorkflowSkillCatalog {
         let path = self.custom_path(id)?;
         if path.exists() {
             std::fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
+    /// Move a project Skill into the global catalog with one same-filesystem rename. The source
+    /// disappears at the exact point the destination appears, avoiding the copy/delete split-brain
+    /// state that made a successful "sync" look duplicated after a crash.
+    pub fn promote_custom_to(
+        &self,
+        id: &str,
+        target: &WorkflowSkillCatalog,
+    ) -> Result<WorkflowSkill, ProductError> {
+        let source_path = self.custom_path(id)?;
+        if !source_path.exists() {
+            return Err(ProductError::ConfigError(format!(
+                "project skill not found: {id}"
+            )));
+        }
+        let skill = read_skill(&source_path)?;
+        validate_skill(&skill)?;
+        let existing = target.list()?;
+        ensure_unique_names(&existing, Some(&skill))?;
+        target.ensure_no_project_name_collision(&skill, Some(&self.root))?;
+        let target_path = target.custom_path(id)?;
+        if target_path.exists() {
+            return Err(ProductError::ConfigError(format!(
+                "global skill id already exists: {id}"
+            )));
+        }
+        let parent = target_path.parent().ok_or_else(|| {
+            ProductError::ConfigError("global skill path has no parent directory".into())
+        })?;
+        std::fs::create_dir_all(parent)?;
+        std::fs::rename(&source_path, &target_path)?;
+        read_skill(&target_path)
+    }
+
+    fn ensure_no_project_name_collision(
+        &self,
+        candidate: &WorkflowSkill,
+        excluded_root: Option<&Path>,
+    ) -> Result<(), ProductError> {
+        let Some(config_dir) = self.root.parent() else {
+            return Ok(());
+        };
+        let projects = config_dir.join("project-knowledge");
+        if !projects.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(projects)? {
+            let root = entry?.path().join("workflow-skills");
+            if excluded_root.is_some_and(|excluded| excluded == root.as_path()) || !root.exists() {
+                continue;
+            }
+            if WorkflowSkillCatalog::new_project(root)
+                .list_custom()?
+                .iter()
+                .any(|skill| skill.name == candidate.name)
+            {
+                return Err(ProductError::ConfigError(format!(
+                    "skill name is already used by a project skill: {}",
+                    candidate.name
+                )));
+            }
         }
         Ok(())
     }
@@ -359,8 +471,8 @@ fn builtins() -> Vec<WorkflowSkill> {
         ),
         builtin(
             "mcp-creator",
-            "创建或封装一个 MCP Server，完成源码与离线验证后保存为待用户审核的禁用草稿。",
-            "当用户要求创建 MCP Server、把 API/CLI/数据库封装成 MCP，或修改既有 MCP 实现时使用。先根据当前项目和用户目标确定最小工具集、输入输出 Schema、只读/写入边界、传输方式与凭据环境变量；优先使用官方 MCP SDK，默认只读和最小权限，不把任何密钥写入源码、参数、日志或草稿。把实现放在当前项目内，补充错误处理、超时、输出限额与单元测试。可以编译、静态检查和运行不启动服务的单元测试；不得启动服务、执行 MCP 握手、tools/list、注册、启用或持久运行进程。验证成功后调用 mcp_create_draft，传入当前项目内已存在的 source_path、唯一 server_id、显示信息和精确启动配置；该工具只会创建关闭状态的草稿。不得调用 mcp_prepare_enable，也不得声称服务已经运行。只有工具返回 status=draft_created 才能宣告草稿创建成功；最后明确告知用户服务尚未启用，并引导用户前往“设置 → 工具与连接”审核启动方案、配置凭据并亲自打开滑钮。更新已有服务时不得覆盖现有 ID，改用新的草稿 ID 交由用户审核。",
+            "优先通过 mcp_save_draft 保存已有 MCP 的禁用直连配置；确需自研时再离线验证并导入用户数据目录。",
+            "当用户要求接入、创建或修改 MCP Server 时使用。先识别本机操作系统并检查已有 HTTP endpoint、原生可执行文件和已保存配置；已有服务能够用 stdio 或 streamable HTTP 直连时，优先新增或修改配置，不创建桥接服务。明文 HTTP 只使用显式 127.0.0.1、localhost 或 [::1] 回环地址；Windows stdio 使用原生可执行文件与 UTF-8 JSON-RPC 管道，不生成依赖 GBK 文本模式的桥。只有确实没有可复用实现时才自研：确定最小工具集、Schema、只读/写入边界、传输与凭据环境变量；优先官方 MCP SDK，默认最小权限，不把密钥写入源码、参数、日志或草稿。补充错误处理、分层超时、输出限额与单元测试；可以编译、静态检查和运行不启动服务的测试，但不得启动服务、执行握手、tools/list、注册、启用或持久运行进程。验证成功后，将新源码写入工作区专用的 `.r-code-mcp-staging/<server_id>` 暂存目录，并创建内容严格为 `r-code-mcp-staging-v1\\nserver_id=<server_id>\\n` 的 `.r-code-mcp-staging-v1` 标记；再调用 mcp_create_draft，传入该 source_path、唯一 server_id、精确启动配置与 cleanup_source_after_import=true。工具会把源码原子导入 R-Code 的 AppData/Application Support 托管目录、改写本地启动路径，并且仅在目录结构、显式清理开关和标记全部匹配时清理专用暂存副本；已有项目源码必须传 cleanup_source_after_import=false，绝不删除。不得调用 mcp_prepare_enable，也不得声称服务已经运行。只有工具返回 status=draft_created 才能宣告草稿创建成功；最后明确告知用户服务仍为关闭状态，引导其前往“设置 → 工具与连接”审核配置、凭据并亲自打开滑钮。更新已有服务优先修改原配置；只有新的自研实现才使用新的唯一草稿 ID。",
         ),
         builtin(
             "review-changes",
@@ -548,6 +660,90 @@ mod tests {
             .unwrap()
             .iter()
             .any(|skill| skill.id == custom.id));
+    }
+
+    #[test]
+    fn project_skill_promotes_to_global_with_one_move_and_keeps_unique_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let global = WorkflowSkillCatalog::new(temp.path().join("global"));
+        let project = WorkflowSkillCatalog::new_project(
+            temp.path()
+                .join("project-knowledge/project-a/workflow-skills"),
+        );
+        let local = project
+            .save_custom_from_tool(
+                "project-release",
+                "release this project",
+                "verify the project and prepare its release",
+                true,
+            )
+            .unwrap();
+
+        let promoted = project.promote_custom_to(&local.id, &global).unwrap();
+        assert_eq!(promoted.id, local.id);
+        assert!(!project
+            .list_custom()
+            .unwrap()
+            .iter()
+            .any(|skill| skill.id == local.id));
+        assert!(global
+            .list_custom()
+            .unwrap()
+            .iter()
+            .any(|skill| skill.id == local.id));
+
+        let duplicate = project
+            .save_custom_from_tool(
+                "project-release",
+                "duplicate",
+                "this must not replace the promoted global skill",
+                true,
+            )
+            .unwrap();
+        assert!(project.promote_custom_to(&duplicate.id, &global).is_err());
+        assert!(project
+            .list_custom()
+            .unwrap()
+            .iter()
+            .any(|skill| skill.id == duplicate.id));
+    }
+
+    #[test]
+    fn global_save_rejects_names_already_used_by_any_project_catalog() {
+        let temp = tempfile::tempdir().unwrap();
+        let global = WorkflowSkillCatalog::new(temp.path().join("workflow-skills"));
+        let project = WorkflowSkillCatalog::new_project(
+            temp.path()
+                .join("project-knowledge/project-b/workflow-skills"),
+        );
+        project
+            .save_custom_from_tool(
+                "shared-name",
+                "project only",
+                "remain available only in this project",
+                true,
+            )
+            .unwrap();
+
+        let error = global
+            .save_custom_from_tool(
+                "shared-name",
+                "global duplicate",
+                "must not shadow the project invocation",
+                true,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("project skill"));
+        assert!(global
+            .list_custom()
+            .unwrap()
+            .iter()
+            .all(|skill| skill.name != "shared-name"));
+        assert!(project
+            .list_custom()
+            .unwrap()
+            .iter()
+            .any(|skill| skill.name == "shared-name"));
     }
 
     #[tokio::test]

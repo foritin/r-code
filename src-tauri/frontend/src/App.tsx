@@ -36,9 +36,6 @@ const InboxScene = lazy(() =>
 const ProjectsScene = lazy(() =>
   import("./components/scenes/ProjectsScene").then((module) => ({ default: module.ProjectsScene })),
 );
-const KnowledgeScene = lazy(() =>
-  import("./components/scenes/KnowledgeScene").then((module) => ({ default: module.KnowledgeScene })),
-);
 const EditorScene = lazy(() =>
   import("./components/scenes/EditorScene").then((module) => ({ default: module.EditorScene })),
 );
@@ -53,13 +50,10 @@ const SearchOverlay = lazy(() =>
  * R-Code 应用根组件。
  * 紧凑标题栏 / 单一会话侧栏 / 主工作区（场景切换）。
  * 主题（亮/暗/跟随系统）解析后写入 <html data-theme>。
- * CSS zoom 会自动重排块级宽度，但会把显式的 100vh 再缩放一次；因此宽度保持
- * auto，仅用反向 vh 补偿高度，让根节点在 80%-200% 都铺满 WebView。
  */
 export default function App() {
   const scene = useAppStore((s) => s.scene);
   const themeMode = useAppStore((s) => s.themeMode);
-  const zoomLevel = useAppStore((s) => s.zoomLevel);
   const searchOpen = useAppStore((s) => s.searchOpen);
   const railCollapsed = useAppStore((s) => s.railCollapsed);
   const railWidth = useAppStore((s) => s.railWidth);
@@ -67,9 +61,6 @@ export default function App() {
   const setScene = useAppStore((s) => s.setScene);
   const goHome = useAppStore((s) => s.goHome);
   const toggleSearch = useAppStore((s) => s.toggleSearch);
-  const zoomIn = useAppStore((s) => s.zoomIn);
-  const zoomOut = useAppStore((s) => s.zoomOut);
-  const zoomReset = useAppStore((s) => s.zoomReset);
   const refreshTasks = useTasksStore((s) => s.refreshTasks);
   const refreshWorkspaces = useTasksStore((s) => s.refreshWorkspaces);
 
@@ -80,9 +71,6 @@ export default function App() {
     settings: () => setScene("settings"),
     toggleRail,
     shortcuts: () => window.dispatchEvent(new Event("r-code:shortcuts")),
-    zoomIn,
-    zoomOut,
-    zoomReset,
   });
 
   // 主题解析：light → studio-light；dark → obsidian；system → 跟随 OS（含变化监听）
@@ -119,20 +107,15 @@ export default function App() {
   // 后台任务跑完 / 权限卡住时播报（不在场就完全无感的那部分）
   useTaskCompletionToasts();
 
-  const appScale = zoomLevel / 100;
-
   return (
     <div
       id="app"
       className={`app-shell r-code-signature scene-${scene}${railCollapsed ? " rail-is-collapsed" : ""}${isMacPlatform() ? " platform-macos" : ""}`}
       style={{
-        zoom: appScale,
-        height: `${100 / appScale}vh`,
-        "--rc-app-scale": appScale,
         "--rc-rail-preferred-w": `${railWidth}px`,
         // The browser resolves this against the grid's current inline size, so resize
         // restoration is immediate and independent of React's resize-event scheduling.
-        "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px / var(--rc-app-scale))))`,
+        "--rc-rail-w": `max(${MIN_RAIL_WIDTH}px, min(${MAX_RAIL_WIDTH}px, var(--rc-rail-preferred-w), calc(100% - ${MIN_MAIN_WIDTH}px)))`,
       } as CSSProperties}
     >
       <a className="skip-link" href="#main-content">跳到主内容</a>
@@ -149,7 +132,6 @@ export default function App() {
           {scene === "room" && <RoomScene />}
           {scene === "inbox" && <InboxScene />}
           {scene === "projects" && <ProjectsScene />}
-          {scene === "knowledge" && <KnowledgeScene />}
           {scene === "editor" && <EditorScene />}
           {scene === "settings" && <SettingsScene />}
         </Suspense>

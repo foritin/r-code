@@ -45,6 +45,14 @@ import type {
   ProviderCatalog,
   ProviderModelsInput,
   ProviderModelsResponse,
+  ProviderBalanceInput,
+  ProviderBalanceResponse,
+  SubagentPoolConfig,
+  SubagentPoolSnapshot,
+  SubagentProviderCatalogSnapshot,
+  SubagentProviderProbeBatchResponse,
+  SubagentProviderProbeRequest,
+  SubagentProviderProbeResponse,
   CodexCliPreferences,
   CodexIntegrationStatus,
   RtkStatus,
@@ -105,6 +113,10 @@ import { browserMockInvoke } from "./browser-mock-runtime";
 export const PROJECT_CONVERSATION_LIMIT_REACHED_CODE =
   "PROJECT_CONVERSATION_LIMIT_REACHED";
 
+/** RTK 安装后二进制被安全软件（通常为 Windows Defender）拦截或隔离。 */
+export const RTK_BLOCKED_BY_SECURITY_SOFTWARE =
+  "RTK_BLOCKED_BY_SECURITY_SOFTWARE";
+
 interface CommandErrorPayload {
   code: string;
   message: string;
@@ -121,6 +133,16 @@ export class IpcCommandError extends Error {
     this.code = payload.code;
     this.limit = payload.limit;
   }
+}
+
+const LEGACY_COMPANION_ENSURE_MISSING_ERROR =
+  "Command cmd_companion_ensure not found";
+
+function isLegacyCompanionEnsureMissing(cause: unknown): boolean {
+  if (typeof cause === "string") return cause === LEGACY_COMPANION_ENSURE_MISSING_ERROR;
+  if (cause instanceof Error) return cause.message === LEGACY_COMPANION_ENSURE_MISSING_ERROR;
+  if (typeof cause !== "object" || cause == null) return false;
+  return (cause as Record<string, unknown>).message === LEGACY_COMPANION_ENSURE_MISSING_ERROR;
 }
 
 function commandErrorPayload(cause: unknown): CommandErrorPayload | null {
@@ -150,6 +172,18 @@ async function ipc<T>(command: string, args?: Record<string, unknown>): Promise<
 // ---------- 系统 ----------
 export const ping = () => ipc<boolean>("ping");
 export const appQuit = () => ipc<void>("cmd_app_quit");
+export const companionEnsure = async (): Promise<boolean> => {
+  try {
+    return await ipc<boolean>("cmd_companion_ensure");
+  } catch (cause) {
+    // Vite can hot-reload this frontend while the already-running native host still predates the
+    // ensure command. That host created the companion during startup, so preserve the existing
+    // window until the next normal application restart. Never mask any other IPC/window failure.
+    if (!isLegacyCompanionEnsureMissing(cause)) throw cause;
+    console.info("Companion recovery command is unavailable in the running legacy host; using its startup-created window.");
+    return true;
+  }
+};
 export const platformCapabilities = () => ipc<PlatformCapabilities>("cmd_platform_capabilities");
 
 // ---------- 任务 ----------
@@ -469,17 +503,38 @@ export const gitCommitTask = (taskId: string, message: string) =>
 export const gitPushTask = (taskId: string) =>
   ipc<import("./types").GitPushResult>("cmd_git_push_task", { taskId });
 
-export const workflowSkillsList = () =>
-  ipc<import("./types").WorkflowSkill[]>("cmd_workflow_skills_list");
+export const workflowSkillsList = (workspacePath?: string | null) =>
+  ipc<import("./types").WorkflowSkill[]>("cmd_workflow_skills_list", { workspacePath: workspacePath ?? null });
 
-export const workflowSkillSave = (draft: import("./types").WorkflowSkillDraft) =>
-  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_save", { draft });
+export const workflowSkillSave = (draft: import("./types").WorkflowSkillDraft, workspacePath?: string | null) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_save", { draft, workspacePath: workspacePath ?? null });
 
 export const workflowSkillReset = (id: string) =>
   ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_reset", { id });
 
-export const workflowSkillDelete = (id: string) =>
-  ipc<void>("cmd_workflow_skill_delete", { id });
+export const workflowSkillDelete = (id: string, scope: import("./types").WorkflowSkillScope, workspacePath?: string | null) =>
+  ipc<void>("cmd_workflow_skill_delete", { id, scope, workspacePath: workspacePath ?? null });
+
+export const workflowSkillSyncToGlobal = (id: string, workspacePath: string) =>
+  ipc<import("./types").WorkflowSkill>("cmd_workflow_skill_sync_to_global", { id, workspacePath });
+
+export const knowledgePromptsGet = (workspacePath?: string | null) =>
+  ipc<import("./types").KnowledgePromptSnapshot>("cmd_knowledge_prompts_get", { workspacePath: workspacePath ?? null });
+
+export const knowledgePromptsSave = (
+  workspacePath: string | null,
+  mode: import("./types").ProjectPromptMode,
+  mainAgent: string,
+  subagent: string,
+) => ipc<import("./types").KnowledgePromptSnapshot>("cmd_knowledge_prompts_save", {
+  workspacePath,
+  mode,
+  mainAgent,
+  subagent,
+});
+
+export const knowledgePromptsReset = (workspacePath?: string | null) =>
+  ipc<import("./types").KnowledgePromptSnapshot>("cmd_knowledge_prompts_reset", { workspacePath: workspacePath ?? null });
 
 export const changeRequest = async (taskId: string, message: string) => {
   try {
@@ -490,8 +545,8 @@ export const changeRequest = async (taskId: string, message: string) => {
   }
 };
 
-export const changeDiff = (taskId: string, path: string) =>
-  ipc<ChangeDiff>("cmd_change_diff", { taskId, path });
+export const changeDiff = (taskId: string, path: string, runId?: string | null) =>
+  ipc<ChangeDiff>("cmd_change_diff", { taskId, path, runId: runId ?? null });
 
 // ---------- 验证 ----------
 export const runVerification = (taskId: string, command: string) =>
@@ -1017,6 +1072,10 @@ export const providerCatalog = async () => {
 export const providerModels = (request: ProviderModelsInput) =>
   ipc<ProviderModelsResponse>("cmd_provider_models", { request });
 
+/** 模型胶囊悬停时按需读取 DeepSeek 官方账户余额。 */
+export const providerBalance = (request: ProviderBalanceInput) =>
+  ipc<ProviderBalanceResponse>("cmd_provider_balance", { request });
+
 export const settingsSet = (key: string, value: unknown) =>
   ipc<void>("cmd_settings_set", { key, value }).then(afterSettingsMutation);
 
@@ -1029,12 +1088,38 @@ export const settingsSelectProvider = (name: string) =>
 export const settingsDeleteProvider = (name: string) =>
   ipc<void>("cmd_settings_delete_provider", { name }).then(afterProviderMutation);
 
+// ---------- 子代理 Provider 候选池 ----------
+
+/** 只返回已配置的全局 API Provider 与受信任 Codex CLI，不触发联网探测。 */
+export const subagentProviderCatalog = () =>
+  ipc<SubagentProviderCatalogSnapshot>("cmd_subagent_provider_catalog");
+
+/** 用户显式触发的单来源最小连通测试；Host 不接受前端伪造的健康布尔值。 */
+export const subagentProviderTest = (request: SubagentProviderProbeRequest) =>
+  ipc<SubagentProviderProbeResponse>("cmd_subagent_provider_test", { request });
+
+/** 有界批测，逐项返回成功或脱敏失败，不因单项失败取消其他来源。 */
+export const subagentProviderTestBatch = (requests: SubagentProviderProbeRequest[]) =>
+  ipc<SubagentProviderProbeBatchResponse>("cmd_subagent_provider_test_batch", { requests });
+
+/** global-only、带 revision 的候选池与健康快照。 */
+export const subagentPoolSnapshot = () =>
+  ipc<SubagentPoolSnapshot>("cmd_subagent_pool_snapshot");
+
+/** 按旧 revision 原子替换整个候选池；冲突或任一无效槽位会整次拒绝。 */
+export const subagentPoolSave = (revision: string, pool: SubagentPoolConfig) =>
+  ipc<SubagentPoolSnapshot>("cmd_subagent_pool_save", { revision, pool });
+
 /** RTK is app-scoped: status never mutates system PATH or the user's global Codex files. */
 export const rtkStatus = () => ipc<RtkStatus>("cmd_rtk_status");
 
 /** Enabling may install a verified official release; disabling only renames the policy marker. */
 export const rtkSetEnabled = (enabled: boolean) =>
   ipc<RtkStatus>("cmd_rtk_set_enabled", { enabled });
+
+/** 打开 Windows 安全中心「排除项」页，用于在被 Defender 隔离后由用户手动放行 RTK。 */
+export const rtkOpenSecurityExclusions = () =>
+  ipc<void>("cmd_rtk_open_security_exclusions");
 
 let codexIntegrationStatusRequest: Promise<CodexIntegrationStatus> | null = null;
 let codexIntegrationStatusRequestForced = false;
