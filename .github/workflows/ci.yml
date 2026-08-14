@@ -72,7 +72,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan committed changes for verified secrets
-        uses: trufflesecurity/trufflehog@0f58ae7c5036094a1e3e750d18772af92821b503 # v3.90.5
+        uses: trufflesecurity/trufflehog@6f3c981e7b77f235fd2702dd74af25fc4b72bf11 # v3.96.0
         with:
           # Scan the reachable history, not only the latest diff: a key removed
           # in a later commit is still exposed. Pin the Action and OCI image.
